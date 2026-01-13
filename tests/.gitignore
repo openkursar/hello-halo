@@ -1,0 +1,10 @@
+# Test results and reports
+e2e/results/
+e2e/report/
+
+# Coverage reports
+coverage/
+
+# Playwright artifacts
+playwright-report/
+test-results/

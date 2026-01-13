@@ -1,0 +1,28 @@
+/**
+ * Overlay-specific styles
+ *
+ * This file provides minimal styles for the overlay SPA.
+ * IMPORTANT: Do not set any background color on html/body -
+ * the overlay must be transparent to show content behind it.
+ */
+
+/* Reset and ensure transparency */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  background: transparent !important;
+  background-color: transparent !important;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+}
+
+/* Basic utility classes for overlay components */
+.fixed { position: fixed; }
+.inset-0 { top: 0; right: 0; bottom: 0; left: 0; }
+.pointer-events-none { pointer-events: none; }
+.pointer-events-auto { pointer-events: auto; }

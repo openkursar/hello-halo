@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- CSP is relaxed for development (Vite HMR needs ws: connections) -->
+    <!-- Production build will have stricter CSP -->
+    <title>Halo Overlay</title>
+    <style>
+      /* Transparent background for overlay */
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        overflow: hidden;
+      }
+      /* Anti-flash: apply theme before render */
+      html.light #root { /* Light theme styles if needed */ }
+    </style>
+    <script>
+      // Apply theme from main window
+      (function() {
+        try {
+          var theme = localStorage.getItem('halo-theme');
+          if (theme === 'light') {
+            document.documentElement.classList.add('light');
+          } else if (theme === 'system') {
+            if (!window.matchMedia('(prefers-color-scheme: dark)').matches) {
+              document.documentElement.classList.add('light');
+            }
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./overlay-main.tsx"></script>
+  </body>
+</html>

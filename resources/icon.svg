@@ -1,0 +1,27 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Stronger blue gradient: from-primary/45 to transparent -->
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.5"/>
+      <stop offset="70%" stop-color="#3b82f6" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Dark background inside the ring -->
+  <circle cx="512" cy="512" r="408" fill="#0a0a0a"/>
+
+  <!-- Inner gradient circle - stronger blue -->
+  <circle cx="512" cy="512" r="326" fill="url(#grad)"/>
+
+  <!-- Thin outer ring -->
+  <circle
+    cx="512"
+    cy="512"
+    r="420"
+    fill="none"
+    stroke="#3b82f6"
+    stroke-width="24"
+    stroke-opacity="0.6"
+  />
+</svg>

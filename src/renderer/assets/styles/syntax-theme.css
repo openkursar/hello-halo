@@ -1,0 +1,146 @@
+/* ============================================
+   Syntax Highlighting Theme (GitHub Dark style)
+   For highlight.js code blocks
+   ============================================ */
+
+/* Base code styling */
+pre code.hljs {
+  display: block;
+  overflow-x: auto;
+  padding: 0;
+}
+
+code.hljs {
+  padding: 3px 5px;
+}
+
+.hljs {
+  color: #e6edf3;
+  background: transparent;
+}
+
+/* Comments */
+.hljs-comment,
+.hljs-quote {
+  color: #8b949e;
+  font-style: italic;
+}
+
+/* Keywords */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-type {
+  color: #ff7b72;
+}
+
+/* Strings */
+.hljs-string,
+.hljs-attr,
+.hljs-template-tag,
+.hljs-template-variable {
+  color: #a5d6ff;
+}
+
+/* Numbers, constants */
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-bullet {
+  color: #79c0ff;
+}
+
+/* Functions */
+.hljs-title,
+.hljs-title.function_,
+.hljs-section {
+  color: #d2a8ff;
+}
+
+/* Classes, types */
+.hljs-title.class_,
+.hljs-class .hljs-title {
+  color: #ffa657;
+}
+
+/* Built-in */
+.hljs-built_in {
+  color: #ffa657;
+}
+
+/* Attributes */
+.hljs-attribute,
+.hljs-symbol {
+  color: #79c0ff;
+}
+
+/* Tags (HTML/XML) */
+.hljs-tag {
+  color: #7ee787;
+}
+
+.hljs-name {
+  color: #7ee787;
+}
+
+/* Regex, special */
+.hljs-regexp,
+.hljs-link {
+  color: #a5d6ff;
+}
+
+/* Meta */
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-meta .hljs-string {
+  color: #ffa657;
+}
+
+/* Deletion (diff) */
+.hljs-deletion {
+  color: #ffa198;
+  background-color: rgba(255, 129, 130, 0.15);
+}
+
+/* Addition (diff) */
+.hljs-addition {
+  color: #7ee787;
+  background-color: rgba(46, 160, 67, 0.15);
+}
+
+/* Emphasis */
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}
+
+/* Params */
+.hljs-params {
+  color: #e6edf3;
+}
+
+/* Punctuation */
+.hljs-punctuation {
+  color: #8b949e;
+}
+
+/* Property (JSON keys, object properties) */
+.hljs-property {
+  color: #79c0ff;
+}
+
+/* Selector (CSS) */
+.hljs-selector-class {
+  color: #7ee787;
+}
+
+.hljs-selector-id {
+  color: #79c0ff;
+}
+
+.hljs-selector-attr,
+.hljs-selector-pseudo {
+  color: #d2a8ff;
+}

@@ -1,0 +1,139 @@
+/* ============================================
+   AI Browser Task Card - Sci-Fi Effects
+   Visual effects for browser automation tasks
+   ============================================ */
+
+/* Browser task card container */
+.browser-task-card {
+  position: relative;
+}
+
+/* Scanline sweep animation - AI is "scanning" the page */
+@keyframes scanline-sweep {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+
+.scanline-sweep {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 30%;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    hsl(var(--primary) / 0.03) 20%,
+    hsl(var(--primary) / 0.08) 50%,
+    hsl(var(--primary) / 0.03) 80%,
+    transparent 100%
+  );
+  animation: scanline-sweep 3s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Border glow animation */
+@keyframes border-glow {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 8px hsl(var(--primary) / 0.1),
+      0 0 8px hsl(var(--primary) / 0.1);
+    border-color: hsl(var(--primary) / 0.2);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 16px hsl(var(--primary) / 0.15),
+      0 0 16px hsl(var(--primary) / 0.2);
+    border-color: hsl(var(--primary) / 0.4);
+  }
+}
+
+.animate-border-glow {
+  animation: border-glow 2s ease-in-out infinite;
+}
+
+/* Pulse dot for active indicator */
+@keyframes pulse-dot {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.5);
+    opacity: 0.5;
+  }
+}
+
+.browser-task-card .animate-pulse {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+/* Step item entrance animation */
+@keyframes step-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.browser-task-card .step-item {
+  animation: step-enter 0.3s ease-out;
+}
+
+/* Data stream effect in background */
+@keyframes data-stream {
+  0% {
+    background-position: 0% 0%;
+  }
+  100% {
+    background-position: 0% 100%;
+  }
+}
+
+.browser-task-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0px,
+    transparent 2px,
+    hsl(var(--primary) / 0.02) 2px,
+    hsl(var(--primary) / 0.02) 4px
+  );
+  background-size: 100% 8px;
+  animation: data-stream 20s linear infinite;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 0;
+}
+
+.browser-task-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Hover effect on view button */
+.browser-task-card button:not(:disabled):hover {
+  box-shadow: 0 0 16px hsl(var(--primary) / 0.3);
+}
+
+/* Transition for expanding/collapsing steps */
+.browser-task-card .max-h-48 {
+  transition: max-height 0.3s ease-out;
+}

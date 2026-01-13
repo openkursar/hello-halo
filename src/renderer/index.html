@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' https://hm.baidu.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: halo-file: https://hm.baidu.com; connect-src 'self' https://*.anthropic.com https://hm.baidu.com https://*.google-analytics.com"
+    />
+  <title>Halo - AI that gets things done</title>
+    <style>
+      /* Anti-flash: set background before CSS loads */
+      html, body, #root { background-color: #0a0a0a; }
+      html.light, html.light body, html.light #root { background-color: #ffffff; }
+    </style>
+    <script>
+      // Anti-flash: apply theme before render (default: dark)
+      (function() {
+        try {
+          var theme = localStorage.getItem('halo-theme');
+          if (theme === 'light') {
+            document.documentElement.classList.add('light');
+          } else if (theme === 'system') {
+            // system: check preference
+            if (!window.matchMedia('(prefers-color-scheme: dark)').matches) {
+              document.documentElement.classList.add('light');
+            }
+          }
+          // default (no localStorage or 'dark'): stay dark, do nothing
+        } catch (e) {}
+      })();
+    </script>
+    <!-- Baidu Tongji Analytics SDK -->
+    <script>
+      var _hmt = _hmt || [];
+      (function() {
+        // Skip Baidu Analytics in remote access mode to prevent leaking sensitive info (token, URL)
+        // Detection: Electron env has nodeIntegration or preload-injected APIs, remote browsers don't
+        var isElectron = typeof process !== 'undefined' || navigator.userAgent.includes('Electron');
+        if (!isElectron) {
+          console.log('[Analytics] Remote mode detected, Baidu Analytics disabled for security');
+          return;
+        }
+        var hm = document.createElement("script");
+        hm.src = "https://hm.baidu.com/hm.js?ba1b0224eb934176ead125ffccc8861b";
+        var s = document.getElementsByTagName("script")[0];
+        s.parentNode.insertBefore(hm, s);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

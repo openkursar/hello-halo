@@ -1,0 +1,324 @@
+/* ============================================
+   VS Code Style Canvas Tabs
+   Chrome-style elastic width tab bar
+   ============================================ */
+
+/* Tab bar container */
+.canvas-tab-bar {
+  height: 38px;
+  background: hsl(var(--muted) / 0.5);
+  border-bottom: 1px solid hsl(var(--border));
+  display: flex;
+  align-items: stretch;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+/* Tab list container - scrollable area for tabs + new button */
+.canvas-tab-list {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.canvas-tab-list::-webkit-scrollbar {
+  display: none;
+}
+
+/* Single tab item - Chrome-style elastic width */
+.canvas-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 10px;
+  min-width: 36px;  /* Minimum: just icon visible */
+  max-width: 200px;
+  width: 160px;     /* Preferred width, will shrink */
+  height: 100%;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, width 0.15s ease;
+  border: none;
+  outline: none;
+  user-select: none;
+  flex-shrink: 1;   /* Allow shrinking */
+  flex-grow: 0;
+  overflow: hidden; /* Chrome-style: clip content when too narrow */
+}
+
+/* Tab right separator line */
+.canvas-tab::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: hsl(var(--border) / 0.6);
+  transition: opacity 0.15s ease;
+}
+
+/* Hide separator for last tab and active tab neighbors */
+.canvas-tab:last-of-type::after,
+.canvas-tab.active::after,
+.canvas-tab.active + .canvas-tab::after {
+  opacity: 0;
+}
+
+/* Also hide separator when next tab is active (CSS :has) */
+.canvas-tab:has(+ .canvas-tab.active)::after {
+  opacity: 0;
+}
+
+/* Active tab style */
+.canvas-tab.active {
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+}
+
+/* Active tab top highlight bar */
+.canvas-tab.active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: hsl(var(--primary));
+  z-index: 2;
+}
+
+/* Active tab bottom "punch through" effect - covers border */
+.canvas-tab.active .canvas-tab-punch {
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: hsl(var(--card));
+  z-index: 1;
+}
+
+/* Tab hover state */
+.canvas-tab:not(.active):hover {
+  background: hsl(var(--secondary) / 0.8);
+  color: hsl(var(--foreground) / 0.9);
+}
+
+/* Tab icon - fixed size, never shrinks */
+.canvas-tab-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Tab title - clips instead of ellipsis for cleaner look when compressed */
+.canvas-tab-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.3;  /* Enough space for descenders (g, y, p, q, j) */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;  /* No ellipsis - cleaner when compressed */
+  mask-image: linear-gradient(to right, black 80%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black 80%, transparent 100%);
+}
+
+/* Show full title on hover */
+.canvas-tab:hover .canvas-tab-title {
+  mask-image: none;
+  -webkit-mask-image: none;
+  text-overflow: ellipsis;
+}
+
+/* Tab actions container - Chrome style: hidden when tab too narrow */
+.canvas-tab-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  overflow: hidden;  /* Clip close button when no space */
+}
+
+/* Show actions on hover or when active */
+.canvas-tab:hover .canvas-tab-actions,
+.canvas-tab.active .canvas-tab-actions {
+  opacity: 1;
+}
+
+/* Close button - fixed size */
+.canvas-tab-close {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;  /* Never shrink */
+  min-height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: inherit;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.canvas-tab-close:hover {
+  background: hsl(var(--destructive) / 0.15);
+  color: hsl(var(--destructive));
+}
+
+.canvas-tab-close:active {
+  transform: scale(0.9);
+  background: hsl(var(--destructive) / 0.25);
+}
+
+/* Refresh button */
+.canvas-tab-refresh {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: inherit;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.canvas-tab-refresh:hover {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+/* Dirty indicator (unsaved changes) */
+.canvas-tab-dirty {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+/* Tab dragging state */
+.canvas-tab.dragging {
+  opacity: 0.5;
+  transform: scale(0.98);
+}
+
+/* Tab drop target indicator */
+.canvas-tab.drop-target::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: hsl(var(--primary));
+  border-radius: 1px;
+  z-index: 3;
+}
+
+/* Tab bar action buttons (close all, maximize) - always at far right */
+.canvas-tab-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  flex-shrink: 0;
+  border-left: 1px solid hsl(var(--border) / 0.5);
+}
+
+.canvas-tab-bar-action {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: hsl(var(--muted-foreground) / 0.7);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.canvas-tab-bar-action:hover {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+.canvas-tab-bar-action.danger:hover {
+  background: hsl(var(--destructive) / 0.1);
+  color: hsl(var(--destructive));
+}
+
+/* New tab button - inside tab list, follows tabs */
+.canvas-tab-new {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: hsl(var(--muted-foreground) / 0.6);
+  transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.canvas-tab-new:hover {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+/* VS Code style tab animations - adapted for elastic width */
+@keyframes vscode-tab-appear {
+  from {
+    opacity: 0;
+    width: 0;
+    min-width: 0;
+    padding: 0;
+  }
+  to {
+    opacity: 1;
+    width: 160px;
+    min-width: 36px;
+    padding: 0 4px 0 10px;
+  }
+}
+
+@keyframes vscode-tab-close {
+  from {
+    opacity: 1;
+    width: 160px;
+    min-width: 36px;
+    padding: 0 4px 0 10px;
+  }
+  to {
+    opacity: 0;
+    width: 0;
+    min-width: 0;
+    padding: 0;
+  }
+}
+
+.canvas-tab.appearing {
+  animation: vscode-tab-appear 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  overflow: hidden;
+}
+
+.canvas-tab.closing {
+  animation: vscode-tab-close 0.15s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  overflow: hidden;
+  pointer-events: none;
+  flex-shrink: 0;  /* Don't shrink during close animation */
+}

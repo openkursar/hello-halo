@@ -1,0 +1,130 @@
+diff --git a/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs b/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
+index 1e1c3e4..fb4d469 100755
+--- a/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
++++ b/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
+@@ -13174,9 +13174,7 @@ class ProcessTransport {
+           args.push(`--${flag}`, value);
+         }
+       }
+-      if (!env.CLAUDE_CODE_ENTRYPOINT) {
+-        env.CLAUDE_CODE_ENTRYPOINT = "sdk-ts";
+-      }
++      // [PATCHED] Removed CLAUDE_CODE_ENTRYPOINT to appear as native CLI
+       delete env.NODE_OPTIONS;
+       if (env.DEBUG_CLAUDE_AGENT_SDK) {
+         env.DEBUG = "1";
+@@ -13986,38 +13984,54 @@ class SessionImpl {
+       pathToClaudeCodeExecutable = join4(dirname2, "cli.js");
+     }
+     const processEnv = { ...options.env ?? process.env };
+-    if (!processEnv.CLAUDE_CODE_ENTRYPOINT) {
+-      processEnv.CLAUDE_CODE_ENTRYPOINT = "sdk-ts";
++    // [PATCHED] Removed CLAUDE_CODE_ENTRYPOINT to appear as native CLI
++    // Process SDK-type MCP servers: extract instances to pass to Query
++    // This mirrors what query() does at lines 26786-26799
++    const sdkMcpServers = new Map;
++    const processedMcpServers = {};
++    if (options.mcpServers) {
++      for (const [name, config] of Object.entries(options.mcpServers)) {
++        if (config.type === "sdk" && "instance" in config) {
++          sdkMcpServers.set(name, config.instance);
++          processedMcpServers[name] = { type: "sdk", name };
++        } else {
++          processedMcpServers[name] = config;
++        }
++      }
+     }
+     this.abortController = createAbortController();
+     const transport = new ProcessTransport({
+       abortController: this.abortController,
+       pathToClaudeCodeExecutable,
++      cwd: options.cwd,
++      stderr: options.stderr,
+       env: processEnv,
+       executable: options.executable ?? (isRunningWithBun() ? "bun" : "node"),
+       executableArgs: options.executableArgs ?? [],
+-      extraArgs: {},
+-      maxThinkingTokens: undefined,
+-      maxTurns: undefined,
+-      maxBudgetUsd: undefined,
++      extraArgs: options.extraArgs ?? {},
++      customSystemPrompt: options.systemPrompt?.append ?? "",
++      maxThinkingTokens: options.maxThinkingTokens ?? undefined,
++      maxTurns: options.maxTurns ?? undefined,
++      maxBudgetUsd: options.maxBudgetUsd ?? undefined,
+       model: options.model,
+-      fallbackModel: undefined,
+-      permissionMode: "default",
+-      allowDangerouslySkipPermissions: false,
+-      continueConversation: false,
++      fallbackModel: options.fallbackModel ?? undefined,
++      permissionMode: options.permissionMode ?? "default",
++      allowDangerouslySkipPermissions: options.allowDangerouslySkipPermissions ?? false,
++      continueConversation: options.continueConversation ?? false,
+       resume: options.resume,
+-      settingSources: [],
+-      allowedTools: [],
+-      disallowedTools: [],
+-      mcpServers: {},
+-      strictMcpConfig: false,
+-      canUseTool: false,
+-      hooks: false,
+-      includePartialMessages: false,
+-      forkSession: false,
+-      resumeSessionAt: undefined
++      settingSources: options.settingSources ?? [],
++      allowedTools: options.allowedTools ?? [],
++      disallowedTools: options.disallowedTools ?? [],
++      mcpServers: processedMcpServers,
++      strictMcpConfig: options.strictMcpConfig ?? false,
++      canUseTool: options.canUseTool ?? false,
++      hooks: options.hooks ?? false,
++      includePartialMessages: options.includePartialMessages ?? true,
++      forkSession: options.forkSession ?? false,
++      resumeSessionAt: options.resumeSessionAt ?? undefined
+     });
+-    this.query = new Query(transport, false, undefined, undefined, this.abortController, new Map);
++    // Pass the extracted SDK MCP server instances to Query
++    this.query = new Query(transport, false, options.canUseTool, options.hooks, this.abortController, sdkMcpServers);
+     this.query.streamInput(this.inputStream);
+   }
+   async send(message) {
+@@ -14053,6 +14067,18 @@ class SessionImpl {
+       }
+     }
+   }
++  async interrupt() {
++    return this.query.interrupt();
++  }
++  async setModel(model) {
++    return this.query.setModel(model);
++  }
++  async setMaxThinkingTokens(maxThinkingTokens) {
++    return this.query.setMaxThinkingTokens(maxThinkingTokens);
++  }
++  async setPermissionMode(mode) {
++    return this.query.setPermissionMode(mode);
++  }
+   close() {
+     if (this.closed) {
+       return;
+@@ -26725,7 +26751,7 @@ function query({
+     const dirname2 = join5(filename, "..");
+     pathToClaudeCodeExecutable = join5(dirname2, "cli.js");
+   }
+-  process.env.CLAUDE_AGENT_SDK_VERSION = "0.1.76";
++  // [PATCHED] Removed CLAUDE_AGENT_SDK_VERSION to appear as native CLI
+   const {
+     abortController = createAbortController(),
+     additionalDirectories = [],
+@@ -26767,9 +26793,7 @@ function query({
+   if (!processEnv) {
+     processEnv = { ...process.env };
+   }
+-  if (!processEnv.CLAUDE_CODE_ENTRYPOINT) {
+-    processEnv.CLAUDE_CODE_ENTRYPOINT = "sdk-ts";
+-  }
++  // [PATCHED] Removed CLAUDE_CODE_ENTRYPOINT to appear as native CLI
+   if (enableFileCheckpointing) {
+     processEnv.CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING = "true";
+   }

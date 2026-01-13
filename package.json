@@ -1,0 +1,188 @@
+{
+  "name": "halo",
+  "version": "1.2.1",
+  "description": "AI that gets things done",
+  "type": "module",
+  "main": "./out/main/index.mjs",
+  "author": "Halo Team",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "postinstall": "patch-package && electron-builder install-app-deps",
+    "build:mac": "npm run build && electron-builder --mac",
+    "build:win": "npm run build && electron-builder --win",
+    "build:win-x64": "npm run build && electron-builder --win --x64",
+    "prepare:win-x64": "node scripts/prepare-cloudflared-win-x64.mjs",
+    "build:linux": "npm run build && electron-builder --linux",
+    "icons": "bash scripts/generate-icons.sh",
+    "release": "npm run build && electron-builder --mac --win --publish always",
+    "release:mac": "npm run build && electron-builder --mac --publish always",
+    "release:win": "npm run build && electron-builder --win --publish always",
+    "release:linux": "npm run build && electron-builder --linux --publish always",
+    "test": "npm run test:check && npm run test:unit",
+    "test:check": "node tests/check/binaries.mjs",
+    "test:check:mac": "node tests/check/binaries.mjs --platform mac",
+    "test:check:win": "node tests/check/binaries.mjs --platform win",
+    "test:unit": "vitest run --config tests/vitest.config.ts",
+    "test:unit:watch": "vitest --config tests/vitest.config.ts",
+    "test:e2e": "playwright test --config tests/playwright.config.ts",
+    "test:e2e:smoke": "playwright test --config tests/playwright.config.ts --project=smoke",
+    "test:e2e:headed": "playwright test --config tests/playwright.config.ts --headed",
+    "i18n:extract": "i18next",
+    "i18n:translate": "node scripts/translate-i18n.mjs",
+    "i18n": "npm run i18n:extract && npm run i18n:translate"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.76",
+    "@anthropic-ai/claude-code": "latest",
+    "@anthropic-ai/sdk": "latest",
+    "@electron-toolkit/preload": "^3.0.0",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@types/diff": "^7.0.2",
+    "cloudflared": "^0.7.1",
+    "clsx": "^2.1.0",
+    "diff": "^8.0.2",
+    "electron-updater": "^6.6.2",
+    "express": "^5.1.0",
+    "fix-path": "^5.0.0",
+    "highlight.js": "^11.11.1",
+    "i18next": "^25.7.4",
+    "lucide-react": "^0.555.0",
+    "qrcode": "^1.5.4",
+    "react": "^18.2.0",
+    "react-arborist": "^3.4.3",
+    "react-diff-viewer-continued": "^3.4.0",
+    "react-dom": "^18.2.0",
+    "react-i18next": "^16.5.2",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^2.2.0",
+    "uuid": "^13.0.0",
+    "ws": "^8.18.3",
+    "zod": "^3.24.1",
+    "zustand": "^4.5.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "@types/express": "^5.0.5",
+    "@types/node": "^20.10.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@types/uuid": "^11.0.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^4.2.0",
+    "autoprefixer": "^10.4.16",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.0",
+    "electron-vite": "^2.0.0",
+    "i18next-parser": "^9.3.0",
+    "patch-package": "^8.0.1",
+    "playwright": "^1.57.0",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.3.0",
+    "vite": "^5.0.0",
+    "vitest": "^1.6.1"
+  },
+  "build": {
+    "appId": "com.halo.app",
+    "productName": "Halo",
+    "releaseInfo": {
+      "releaseNotesFile": ".release-notes-current.md"
+    },
+    "afterPack": "./scripts/afterPack.cjs",
+    "directories": {
+      "buildResources": "resources"
+    },
+    "files": [
+      "out/**/*",
+      "resources/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/cloudflared/**/*"
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "openkursar",
+      "repo": "hello-halo",
+      "releaseType": "release"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "resources/icon.icns",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "notarize": false,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 130,
+          "y": 180
+        },
+        {
+          "x": 410,
+          "y": 180,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 270,
+          "y": 120,
+          "type": "file",
+          "path": "resources/README.txt"
+        }
+      ]
+    },
+    "win": {
+      "icon": "resources/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "linux": {
+      "icon": "resources/linux",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}
