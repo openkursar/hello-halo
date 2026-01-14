@@ -493,7 +493,11 @@ export async function ensureSessionWarm(
       ANTHROPIC_BASE_URL: anthropicBaseUrl,
       // Ensure localhost bypasses proxy
       NO_PROXY: 'localhost,127.0.0.1',
-      no_proxy: 'localhost,127.0.0.1'
+      no_proxy: 'localhost,127.0.0.1',
+      // Disable unnecessary API requests
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      DISABLE_TELEMETRY: '1',
+      DISABLE_COST_WARNINGS: '1'
     },
     extraArgs: {
       'dangerously-skip-permissions': null
@@ -754,7 +758,11 @@ export async function testMcpConnections(mainWindow?: BrowserWindow | null): Pro
           ANTHROPIC_API_KEY: anthropicApiKey,
           ANTHROPIC_BASE_URL: anthropicBaseUrl,
           NO_PROXY: 'localhost,127.0.0.1',
-          no_proxy: 'localhost,127.0.0.1'
+          no_proxy: 'localhost,127.0.0.1',
+          // Disable unnecessary API requests
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+          DISABLE_TELEMETRY: '1',
+          DISABLE_COST_WARNINGS: '1'
         },
         permissionMode: 'bypassPermissions',
         abortController,
@@ -1072,7 +1080,11 @@ export async function sendMessage(
         ANTHROPIC_BASE_URL: anthropicBaseUrl,
         // Ensure localhost bypasses proxy
         NO_PROXY: 'localhost,127.0.0.1',
-        no_proxy: 'localhost,127.0.0.1'
+        no_proxy: 'localhost,127.0.0.1',
+        // Disable unnecessary API requests
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        DISABLE_TELEMETRY: '1',
+        DISABLE_COST_WARNINGS: '1'
       },
       extraArgs: {
         'dangerously-skip-permissions': null
