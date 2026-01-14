@@ -230,13 +230,13 @@ export function ApiSetup() {
                     ))}
                   </select>
                 )}
-                <div className="mt-1 flex items-center justify-between">
+                <div className="mt-1 flex items-center justify-between gap-4">
                   <span className="text-xs text-muted-foreground">
                     {useCustomModel
                       ? t('Enter official Claude model name')
-                      : AVAILABLE_MODELS.find((m) => m.id === model)?.description}
+                      : t(AVAILABLE_MODELS.find((m) => m.id === model)?.description || '')}
                   </span>
-                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground/70 cursor-pointer hover:text-muted-foreground transition-colors">
+                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground/70 cursor-pointer hover:text-muted-foreground transition-colors whitespace-nowrap shrink-0">
                     <input
                       type="checkbox"
                       checked={useCustomModel}
