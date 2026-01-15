@@ -294,10 +294,9 @@
   "Model": "模型",
   "Modified": "已修改",
   "More options (zoom)": "更多选项(缩放)",
+  "More options (zoom, developer tools)": "更多选项(缩放、开发者工具)",
   "Most powerful model, great for complex reasoning and architecture decisions": "最强大的模型，擅长复杂的推理和架构决策",
   "e.g.": "例如",
-  "More options (zoom, developer tools)": "更多选项(缩放、开发者工具)",
-  "More options (zoom)": "更多选项(缩放)",
   "More than chat": "不止于聊天",
   "My Project": "我的项目",
   "Natural language interface": "自然语言界面",
@@ -532,6 +531,5 @@
   "{{count}} weeks ago_one": "{{count}} 周前",
   "{{count}} weeks ago_other": "{{count}} 周前",
   "← → to switch files": "← → 切换文件",
-  "🤖 AI Browser": "🤖 AI 浏览器",
-  "Zoom out (-)": "缩小 (-)"
+  "🤖 AI Browser": "🤖 AI 浏览器"
 }
