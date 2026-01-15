@@ -264,6 +264,10 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
 
   // Handle key press
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Ignore key events during IME composition (Chinese/Japanese/Korean input)
+    // This prevents Enter from sending the message while confirming IME candidates
+    if (e.nativeEvent.isComposing) return
+
     // Mobile: Enter for newline, send via button only
     // PC: Enter to send, Shift+Enter for newline
     if (e.key === 'Enter' && !e.shiftKey && !isMobile()) {

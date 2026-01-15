@@ -11,7 +11,9 @@ import {
   disableTunnel,
   getRemoteAccessStatus,
   generateQRCode,
-  onRemoteAccessStatusChange
+  onRemoteAccessStatusChange,
+  setCustomPassword,
+  regeneratePassword
 } from '../services/remote.service'
 
 let mainWindow: BrowserWindow | null = null
@@ -92,6 +94,32 @@ export function registerRemoteHandlers(window: BrowserWindow | null): void {
   onRemoteAccessStatusChange((status) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('remote:status-change', status)
+    }
+  })
+
+  // Set custom password
+  ipcMain.handle('remote:set-password', async (_event, password: string) => {
+    try {
+      const result = setCustomPassword(password)
+      if (result.success) {
+        return { success: true, data: getRemoteAccessStatus() }
+      } else {
+        return { success: false, error: result.error }
+      }
+    } catch (error: unknown) {
+      const err = error as Error
+      return { success: false, error: err.message }
+    }
+  })
+
+  // Regenerate random password
+  ipcMain.handle('remote:regenerate-password', async () => {
+    try {
+      regeneratePassword()
+      return { success: true, data: getRemoteAccessStatus() }
+    } catch (error: unknown) {
+      const err = error as Error
+      return { success: false, error: err.message }
     }
   })
 

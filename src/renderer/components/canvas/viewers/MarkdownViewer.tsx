@@ -138,7 +138,7 @@ export function MarkdownViewer({ tab, onScrollChange }: MarkdownViewerProps) {
         className="flex-1 overflow-auto"
       >
         {viewMode === 'rendered' ? (
-          <div className="prose prose-invert prose-sm max-w-none p-6">
+          <div className="prose dark:prose-invert prose-sm max-w-none p-6">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
@@ -243,6 +243,7 @@ function SourceView({ content }: { content: string }) {
  * Copy button for code blocks
  */
 function CopyButton({ text }: { text: string }) {
+  const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
