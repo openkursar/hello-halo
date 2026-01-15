@@ -59,6 +59,10 @@ export function SettingsPage() {
   const [isEnablingTunnel, setIsEnablingTunnel] = useState(false)
   const [qrCode, setQrCode] = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
+  const [isEditingPassword, setIsEditingPassword] = useState(false)
+  const [customPassword, setCustomPassword] = useState('')
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [isSavingPassword, setIsSavingPassword] = useState(false)
 
   // System settings state
   const [autoLaunch, setAutoLaunch] = useState(config?.system?.autoLaunch || false)
@@ -284,7 +288,7 @@ export function SettingsPage() {
             <div className="flex items-center gap-3 mb-4">
               <div className="w-8 h-8 rounded-lg bg-[#da7756]/20 flex items-center justify-center">
                 <svg className="w-5 h-5 text-[#da7756]" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M4.709 15.955l4.72-2.647.08-.08 2.726-1.529.08-.08 6.206-3.48a.25.25 0 00.125-.216V6.177a.25.25 0 00-.375-.217l-6.206 3.48-.08.08-2.726 1.53-.08.079-4.72 2.647a.25.25 0 00-.125.217v1.746c0 .18.193.294.354.216h.001zm13.937-3.584l-4.72 2.647-.08.08-2.726 1.529-.08.08-6.206 3.48a.25.25 0 00-.125.216v1.746a.25.25 0 00.375.217l6.206-3.48.08-.08 2.726-1.53.08-.079 4.72-2.647a.25.25 0 00.125-.217v-1.746a.25.25 0 00-.375-.216z"/>
+                  <path d="M4.709 15.955l4.72-2.647.08-.08 2.726-1.529.08-.08 6.206-3.48a.25.25 0 00.125-.216V6.177a.25.25 0 00-.375-.217l-6.206 3.48-.08.08-2.726 1.53-.08.079-4.72 2.647a.25.25 0 00-.125.217v1.746c0 .18.193.294.354.216h.001zm13.937-3.584l-4.72 2.647-.08.08-2.726 1.529-.08.08-6.206 3.48a.25.25 0 00-.125.216v1.746a.25.25 0 00.375.217l6.206-3.48.08-.08 2.726-1.53.08-.079 4.72-2.647a.25.25 0 00.125-.217v-1.746a.25.25 0 00-.375-.216z" />
                 </svg>
               </div>
               <div>
@@ -452,9 +456,8 @@ export function SettingsPage() {
 
                 {validationResult && (
                   <span
-                    className={`text-sm flex items-center gap-1 ${
-                      validationResult.valid ? 'text-green-500' : 'text-red-500'
-                    }`}
+                    className={`text-sm flex items-center gap-1 ${validationResult.valid ? 'text-green-500' : 'text-red-500'
+                      }`}
                   >
                     {validationResult.valid ? (
                       <>
@@ -550,11 +553,10 @@ export function SettingsPage() {
                   <button
                     key={themeMode}
                     onClick={() => handleThemeChange(themeMode)}
-                    className={`px-4 py-2 rounded-lg transition-colors ${
-                      theme === themeMode
-                        ? 'bg-primary/20 text-primary border border-primary'
-                        : 'bg-secondary hover:bg-secondary/80'
-                    }`}
+                    className={`px-4 py-2 rounded-lg transition-colors ${theme === themeMode
+                      ? 'bg-primary/20 text-primary border border-primary'
+                      : 'bg-secondary hover:bg-secondary/80'
+                      }`}
                   >
                     {themeMode === 'light' ? t('Light') : themeMode === 'dark' ? t('Dark') : t('Follow System')}
                   </button>
@@ -614,9 +616,8 @@ export function SettingsPage() {
                     />
                     <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
                       <div
-                        className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
-                          autoLaunch ? 'translate-x-5' : 'translate-x-0.5'
-                        } mt-0.5`}
+                        className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${autoLaunch ? 'translate-x-5' : 'translate-x-0.5'
+                          } mt-0.5`}
                       />
                     </div>
                   </label>
@@ -654,9 +655,8 @@ export function SettingsPage() {
                     />
                     <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
                       <div
-                        className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
-                          minimizeToTray ? 'translate-x-5' : 'translate-x-0.5'
-                        } mt-0.5`}
+                        className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${minimizeToTray ? 'translate-x-5' : 'translate-x-0.5'
+                          } mt-0.5`}
                       />
                     </div>
                   </label>
@@ -727,9 +727,8 @@ export function SettingsPage() {
                   />
                   <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
                     <div
-                      className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
-                        remoteStatus?.enabled ? 'translate-x-5' : 'translate-x-0.5'
-                      } mt-0.5`}
+                      className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${remoteStatus?.enabled ? 'translate-x-5' : 'translate-x-0.5'
+                        } mt-0.5`}
                     />
                   </div>
                 </label>
@@ -772,25 +771,94 @@ export function SettingsPage() {
                       </div>
                     )}
 
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-muted-foreground">{t('Access Password')}</span>
-                      <div className="flex items-center gap-2">
-                        <code className="text-sm bg-background px-2 py-1 rounded font-mono tracking-wider">
-                          {showPassword ? remoteStatus.server.token : '••••••'}
-                        </code>
-                        <button
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="text-xs text-muted-foreground hover:text-foreground"
-                        >
-                          {showPassword ? t('Hide') : t('Show')}
-                        </button>
-                        <button
-                          onClick={() => copyToClipboard(remoteStatus.server.token || '')}
-                          className="text-xs text-muted-foreground hover:text-foreground"
-                        >
-                          {t('Copy')}
-                        </button>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-muted-foreground">{t('Access Password')}</span>
+                        {!isEditingPassword ? (
+                          <div className="flex items-center gap-2">
+                            <code className="text-sm bg-background px-2 py-1 rounded font-mono tracking-wider">
+                              {showPassword ? remoteStatus.server.token : '••••••••'}
+                            </code>
+                            <button
+                              onClick={() => setShowPassword(!showPassword)}
+                              className="text-xs text-muted-foreground hover:text-foreground"
+                            >
+                              {showPassword ? t('Hide') : t('Show')}
+                            </button>
+                            <button
+                              onClick={() => copyToClipboard(remoteStatus.server.token || '')}
+                              className="text-xs text-muted-foreground hover:text-foreground"
+                            >
+                              {t('Copy')}
+                            </button>
+                            <button
+                              onClick={() => {
+                                setIsEditingPassword(true)
+                                setCustomPassword('')
+                                setPasswordError(null)
+                              }}
+                              className="text-xs text-primary hover:text-primary/80"
+                            >
+                              {t('Edit')}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={customPassword}
+                              onChange={(e) => {
+                                setCustomPassword(e.target.value)
+                                setPasswordError(null)
+                              }}
+                              placeholder={t('4-32 characters')}
+                              maxLength={32}
+                              className="w-32 px-2 py-1 text-sm bg-input rounded border border-border focus:border-primary focus:outline-none"
+                            />
+                            <button
+                              onClick={async () => {
+                                if (customPassword.length < 4) {
+                                  setPasswordError(t('Password too short'))
+                                  return
+                                }
+                                setIsSavingPassword(true)
+                                setPasswordError(null)
+                                try {
+                                  const res = await api.setRemotePassword(customPassword)
+                                  if (res.success) {
+                                    setIsEditingPassword(false)
+                                    setCustomPassword('')
+                                    loadRemoteStatus()
+                                  } else {
+                                    setPasswordError(res.error || t('Failed to set password'))
+                                  }
+                                } catch (error) {
+                                  setPasswordError(t('Failed to set password'))
+                                } finally {
+                                  setIsSavingPassword(false)
+                                }
+                              }}
+                              disabled={isSavingPassword || customPassword.length < 4}
+                              className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50"
+                            >
+                              {isSavingPassword ? t('Saving...') : t('Save')}
+                            </button>
+                            <button
+                              onClick={() => {
+                                setIsEditingPassword(false)
+                                setCustomPassword('')
+                                setPasswordError(null)
+                              }}
+                              className="text-xs text-muted-foreground hover:text-foreground"
+                            >
+                              {t('Cancel')}
+                            </button>
+                          </div>
+                        )}
                       </div>
+                      {passwordError && (
+                        <p className="text-xs text-red-500">{passwordError}</p>
+                      )}
                     </div>
 
                     {remoteStatus.clients > 0 && (
@@ -813,19 +881,18 @@ export function SettingsPage() {
                       <button
                         onClick={handleToggleTunnel}
                         disabled={isEnablingTunnel}
-                        className={`px-4 py-2 rounded-lg text-sm transition-colors ${
-                          remoteStatus.tunnel.status === 'running'
-                            ? 'bg-red-500/20 text-red-500 hover:bg-red-500/30'
-                            : 'bg-primary/20 text-primary hover:bg-primary/30'
-                        }`}
+                        className={`px-4 py-2 rounded-lg text-sm transition-colors ${remoteStatus.tunnel.status === 'running'
+                          ? 'bg-red-500/20 text-red-500 hover:bg-red-500/30'
+                          : 'bg-primary/20 text-primary hover:bg-primary/30'
+                          }`}
                       >
                         {isEnablingTunnel
                           ? t('Connecting...')
                           : remoteStatus.tunnel.status === 'running'
-                          ? t('Stop Tunnel')
-                          : remoteStatus.tunnel.status === 'starting'
-                          ? t('Connecting...')
-                          : t('Start Tunnel')}
+                            ? t('Stop Tunnel')
+                            : remoteStatus.tunnel.status === 'starting'
+                              ? t('Connecting...')
+                              : t('Start Tunnel')}
                       </button>
                     </div>
 

@@ -20,6 +20,29 @@ export function generateAccessToken(): string {
 }
 
 /**
+ * Set a custom access token (user-defined password)
+ * @param token The custom password to set (4-32 characters)
+ * @returns true if set successfully, false if validation failed
+ */
+export function setCustomAccessToken(token: string): boolean {
+  // Validate: 4-32 alphanumeric characters
+  if (!token || token.length < 4 || token.length > 32) {
+    console.log('[Auth] Custom token rejected: length must be 4-32 characters')
+    return false
+  }
+
+  // Allow alphanumeric characters only for simplicity
+  if (!/^[a-zA-Z0-9]+$/.test(token)) {
+    console.log('[Auth] Custom token rejected: only alphanumeric characters allowed')
+    return false
+  }
+
+  accessToken = token
+  console.log('[Auth] Custom access token set')
+  return true
+}
+
+/**
  * Get current access token
  */
 export function getAccessToken(): string | null {

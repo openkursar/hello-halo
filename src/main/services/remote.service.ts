@@ -18,6 +18,7 @@ import {
   onTunnelStatusChange
 } from './tunnel.service'
 import { getConfig, saveConfig } from './config.service'
+import { setCustomAccessToken, generateAccessToken } from '../http/auth'
 
 export interface RemoteAccessStatus {
   enabled: boolean
@@ -205,3 +206,45 @@ export async function generateQRCode(includeToken: boolean = false): Promise<str
     return null
   }
 }
+
+/**
+ * Set a custom password for remote access
+ * @param password Custom password (4-32 alphanumeric characters)
+ * @returns Object with success status and optional error message
+ */
+export function setCustomPassword(password: string): { success: boolean; error?: string } {
+  if (!isServerRunning()) {
+    return { success: false, error: 'Remote access is not enabled' }
+  }
+
+  const result = setCustomAccessToken(password)
+  if (result) {
+    console.log('[Remote] Custom password set successfully')
+    // Notify status change
+    if (statusCallback) {
+      statusCallback(getRemoteAccessStatus())
+    }
+    return { success: true }
+  } else {
+    return { success: false, error: 'Password must be 4-32 alphanumeric characters' }
+  }
+}
+
+/**
+ * Regenerate a random password for remote access
+ */
+export function regeneratePassword(): void {
+  if (!isServerRunning()) {
+    console.log('[Remote] Cannot regenerate password: remote access not enabled')
+    return
+  }
+
+  generateAccessToken()
+  console.log('[Remote] Password regenerated')
+
+  // Notify status change
+  if (statusCallback) {
+    statusCallback(getRemoteAccessStatus())
+  }
+}
+

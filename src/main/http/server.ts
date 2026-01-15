@@ -381,7 +381,7 @@ function getRemoteLoginPage(): string {
 
     <p>Enter access code to connect to your desktop</p>
     <div class="input-group">
-      <input type="text" id="token" maxlength="6" placeholder="000000" autocomplete="off">
+      <input type="text" id="token" maxlength="32" placeholder="000000" autocomplete="off">
     </div>
     <button onclick="login()" style="margin-top: 1rem; width: 100%; max-width: 300px;">Connect</button>
     <p id="error" class="error"></p>
@@ -391,8 +391,8 @@ function getRemoteLoginPage(): string {
       const token = document.getElementById('token').value;
       const error = document.getElementById('error');
 
-      if (!token || token.length !== 6) {
-        error.textContent = 'Please enter 6-digit access code';
+      if (!token || token.length < 4) {
+        error.textContent = 'Please enter access code';
         return;
       }
 

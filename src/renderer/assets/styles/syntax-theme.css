@@ -14,6 +14,9 @@ code.hljs {
   padding: 3px 5px;
 }
 
+/* ============================================
+   Dark Theme (default)
+   ============================================ */
 .hljs {
   color: #e6edf3;
   background: transparent;
@@ -143,4 +146,138 @@ code.hljs {
 .hljs-selector-attr,
 .hljs-selector-pseudo {
   color: #d2a8ff;
+}
+
+/* ============================================
+   Light Theme
+   ============================================ */
+.light .hljs {
+  color: #24292f;
+  background: transparent;
+}
+
+/* Comments */
+.light .hljs-comment,
+.light .hljs-quote {
+  color: #57606a;
+  font-style: italic;
+}
+
+/* Keywords */
+.light .hljs-keyword,
+.light .hljs-selector-tag,
+.light .hljs-type {
+  color: #cf222e;
+}
+
+/* Strings */
+.light .hljs-string,
+.light .hljs-attr,
+.light .hljs-template-tag,
+.light .hljs-template-variable {
+  color: #0a3069;
+}
+
+/* Numbers, constants */
+.light .hljs-number,
+.light .hljs-literal,
+.light .hljs-variable,
+.light .hljs-bullet {
+  color: #0550ae;
+}
+
+/* Functions */
+.light .hljs-title,
+.light .hljs-title.function_,
+.light .hljs-section {
+  color: #8250df;
+}
+
+/* Classes, types */
+.light .hljs-title.class_,
+.light .hljs-class .hljs-title {
+  color: #953800;
+}
+
+/* Built-in */
+.light .hljs-built_in {
+  color: #953800;
+}
+
+/* Attributes */
+.light .hljs-attribute,
+.light .hljs-symbol {
+  color: #0550ae;
+}
+
+/* Tags (HTML/XML) */
+.light .hljs-tag {
+  color: #116329;
+}
+
+.light .hljs-name {
+  color: #116329;
+}
+
+/* Regex, special */
+.light .hljs-regexp,
+.light .hljs-link {
+  color: #0a3069;
+}
+
+/* Meta */
+.light .hljs-meta,
+.light .hljs-meta .hljs-keyword,
+.light .hljs-meta .hljs-string {
+  color: #953800;
+}
+
+/* Deletion (diff) */
+.light .hljs-deletion {
+  color: #82071e;
+  background-color: rgba(255, 129, 130, 0.15);
+}
+
+/* Addition (diff) */
+.light .hljs-addition {
+  color: #116329;
+  background-color: rgba(46, 160, 67, 0.15);
+}
+
+/* Emphasis */
+.light .hljs-emphasis {
+  font-style: italic;
+}
+
+.light .hljs-strong {
+  font-weight: bold;
+}
+
+/* Params */
+.light .hljs-params {
+  color: #24292f;
+}
+
+/* Punctuation */
+.light .hljs-punctuation {
+  color: #57606a;
+}
+
+/* Property (JSON keys, object properties) */
+.light .hljs-property {
+  color: #0550ae;
+}
+
+/* Selector (CSS) */
+.light .hljs-selector-class {
+  color: #116329;
+}
+
+.light .hljs-selector-id {
+  color: #0550ae;
+}
+
+.light .hljs-selector-attr,
+.light .hljs-selector-pseudo {
+  color: #8250df;
 }

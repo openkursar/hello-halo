@@ -486,6 +486,20 @@ export const api = {
     return window.halo.getRemoteQRCode(includeToken)
   },
 
+  setRemotePassword: async (password: string): Promise<ApiResponse> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.setRemotePassword(password)
+  },
+
+  regenerateRemotePassword: async (): Promise<ApiResponse> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.regenerateRemotePassword()
+  },
+
   // ===== System Settings (Electron only) =====
   getAutoLaunch: async (): Promise<ApiResponse> => {
     if (!isElectron()) {
@@ -556,7 +570,7 @@ export const api = {
 
   onWindowMaximizeChange: (callback: (isMaximized: boolean) => void) => {
     if (!isElectron()) {
-      return () => {} // No-op in remote mode
+      return () => { } // No-op in remote mode
     }
     return window.halo.onWindowMaximizeChange(callback)
   },
@@ -803,7 +817,7 @@ export const api = {
     releaseNotes?: string | { version: string; note: string }[]
   }) => void) => {
     if (!isElectron()) {
-      return () => {} // No-op in remote mode
+      return () => { } // No-op in remote mode
     }
     return window.halo.onUpdaterStatus(callback)
   },
@@ -826,7 +840,7 @@ export const api = {
 
   onCanvasExitMaximized: (callback: () => void) => {
     if (!isElectron()) {
-      return () => {} // No-op in remote mode
+      return () => { } // No-op in remote mode
     }
     return window.halo.onCanvasExitMaximized(callback)
   },

@@ -120,6 +120,8 @@ export interface HaloAPI {
   disableTunnel: () => Promise<IpcResponse>
   getRemoteStatus: () => Promise<IpcResponse>
   getRemoteQRCode: (includeToken?: boolean) => Promise<IpcResponse>
+  setRemotePassword: (password: string) => Promise<IpcResponse>
+  regenerateRemotePassword: () => Promise<IpcResponse>
   onRemoteStatusChange: (callback: (data: unknown) => void) => () => void
 
   // System Settings
@@ -332,6 +334,8 @@ const api: HaloAPI = {
   disableTunnel: () => ipcRenderer.invoke('remote:tunnel:disable'),
   getRemoteStatus: () => ipcRenderer.invoke('remote:status'),
   getRemoteQRCode: (includeToken) => ipcRenderer.invoke('remote:qrcode', includeToken),
+  setRemotePassword: (password) => ipcRenderer.invoke('remote:set-password', password),
+  regenerateRemotePassword: () => ipcRenderer.invoke('remote:regenerate-password'),
   onRemoteStatusChange: (callback) => createEventListener('remote:status-change', callback),
 
   // System Settings
