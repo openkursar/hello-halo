@@ -1491,6 +1491,25 @@ export async function sendMessage(
       })
     } else {
       console.log(`[Agent][${conversationId}] WARNING: No text content after SDK query completed`)
+      // CRITICAL: Still send complete event to unblock frontend
+      // This can happen if content_block_stop is missing from SDK response
+
+      // Fallback: Try to use currentStreamingText if available (content_block_stop was missed)
+      const fallbackContent = currentStreamingText || ''
+      if (fallbackContent) {
+        console.log(`[Agent][${conversationId}] Using fallback content from currentStreamingText: ${fallbackContent.length} chars`)
+        updateLastMessage(spaceId, conversationId, {
+          content: fallbackContent,
+          thoughts: sessionState.thoughts.length > 0 ? [...sessionState.thoughts] : undefined,
+          tokenUsage: tokenUsage || undefined
+        })
+      }
+
+      sendToRenderer('agent:complete', spaceId, conversationId, {
+        type: 'complete',
+        duration: 0,
+        tokenUsage  // Include token usage data
+      })
     }
   } catch (error: unknown) {
     const err = error as Error
