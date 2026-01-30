@@ -71,6 +71,15 @@ export function SettingsPage() {
   // API Key visibility state
   const [showApiKey, setShowApiKey] = useState(false)
 
+  // Feishu integration state
+  const [feishuAppId, setFeishuAppId] = useState('')
+  const [feishuAppSecret, setFeishuAppSecret] = useState('')
+  const [feishuEnabled, setFeishuEnabled] = useState(false)
+  const [feishuConfigured, setFeishuConfigured] = useState(false)
+  const [isSavingFeishu, setIsSavingFeishu] = useState(false)
+  const [feishuSaveResult, setFeishuSaveResult] = useState<{ success: boolean; message?: string } | null>(null)
+  const [showFeishuSecret, setShowFeishuSecret] = useState(false)
+
   // Load remote access status
   useEffect(() => {
     loadRemoteStatus()
@@ -90,6 +99,11 @@ export function SettingsPage() {
     loadSystemSettings()
   }, [])
 
+  // Load Feishu config
+  useEffect(() => {
+    loadFeishuConfig()
+  }, [])
+
   const loadSystemSettings = async () => {
     try {
       const [autoLaunchRes, minimizeRes] = await Promise.all([
@@ -104,6 +118,74 @@ export function SettingsPage() {
       }
     } catch (error) {
       console.error('[Settings] Failed to load system settings:', error)
+    }
+  }
+
+  const loadFeishuConfig = async () => {
+    try {
+      const [statusRes, configRes] = await Promise.all([
+        api.getFeishuStatus(),
+        api.getFeishuConfig()
+      ])
+      if (statusRes.success && statusRes.data) {
+        const status = statusRes.data as { configured: boolean; enabled: boolean }
+        setFeishuConfigured(status.configured)
+        setFeishuEnabled(status.enabled)
+      }
+      if (configRes.success && configRes.data) {
+        const config = configRes.data as { appId: string; hasSecret: boolean; enabled: boolean }
+        setFeishuAppId(config.appId || '')
+        setFeishuEnabled(config.enabled)
+      }
+    } catch (error) {
+      console.error('[Settings] Failed to load Feishu config:', error)
+    }
+  }
+
+  const handleSaveFeishuConfig = async () => {
+    setIsSavingFeishu(true)
+    setFeishuSaveResult(null)
+    try {
+      const configToSave: { appId?: string; appSecret?: string; enabled?: boolean } = {
+        appId: feishuAppId,
+        enabled: feishuEnabled
+      }
+      // Only include secret if it was changed (not empty)
+      if (feishuAppSecret) {
+        configToSave.appSecret = feishuAppSecret
+      }
+      const result = await api.saveFeishuConfig(configToSave)
+      if (result.success) {
+        setFeishuSaveResult({ success: true, message: t('Saved') })
+        setFeishuAppSecret('') // Clear secret field after save
+        loadFeishuConfig() // Reload to get updated status
+      } else {
+        setFeishuSaveResult({ success: false, message: result.error || t('Save failed') })
+      }
+    } catch (error) {
+      setFeishuSaveResult({ success: false, message: t('Save failed') })
+    } finally {
+      setIsSavingFeishu(false)
+    }
+  }
+
+  // Auto-save Feishu enabled toggle (toggles should save immediately)
+  const handleFeishuEnabledToggle = async (enabled: boolean) => {
+    setFeishuEnabled(enabled)
+    try {
+      console.log('[Settings] Auto-saving Feishu enabled:', enabled)
+      const result = await api.saveFeishuConfig({ enabled })
+      if (result.success) {
+        console.log('[Settings] Feishu enabled saved successfully')
+      } else {
+        console.error('[Settings] Failed to save Feishu enabled:', result.error)
+        // Revert on failure
+        setFeishuEnabled(!enabled)
+      }
+    } catch (error) {
+      console.error('[Settings] Error saving Feishu enabled:', error)
+      // Revert on failure
+      setFeishuEnabled(!enabled)
     }
   }
 
@@ -945,6 +1027,122 @@ export function SettingsPage() {
                   )}
                 </>
               )}
+            </div>
+          </section>
+
+          {/* Feishu Integration Section */}
+          <section className="bg-card rounded-xl border border-border p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center">
+                <svg className="w-5 h-5 text-blue-500" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-lg font-medium">{t('Feishu Integration')}</h2>
+                <p className="text-xs text-muted-foreground">{t('Connect Feishu bot to control Halo remotely')}</p>
+              </div>
+              {feishuConfigured && (
+                <span className="ml-auto text-xs px-2 py-1 rounded-full bg-green-500/20 text-green-500">
+                  {t('Configured')}
+                </span>
+              )}
+            </div>
+
+            {/* Info banner */}
+            <div className="bg-muted/50 rounded-lg p-3 mb-4 text-sm text-muted-foreground">
+              <p>{t('Create a Feishu app at')} <a href="https://open.feishu.cn" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">open.feishu.cn</a></p>
+              <p className="mt-1">{t('Webhook URL')}: <code className="bg-background px-1 rounded">{'{your-tunnel-url}'}/api/feishu/webhook</code></p>
+            </div>
+
+            <div className="space-y-4">
+              {/* Enable Toggle */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">{t('Enable Feishu Bot')}</p>
+                  <p className="text-sm text-muted-foreground">{t('Receive messages from Feishu')}</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={feishuEnabled}
+                    onChange={(e) => handleFeishuEnabledToggle(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
+                    <div
+                      className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${feishuEnabled ? 'translate-x-5' : 'translate-x-0.5'} mt-0.5`}
+                    />
+                  </div>
+                </label>
+              </div>
+
+              {/* App ID */}
+              <div>
+                <label className="block text-sm text-muted-foreground mb-2">App ID</label>
+                <input
+                  type="text"
+                  value={feishuAppId}
+                  onChange={(e) => setFeishuAppId(e.target.value)}
+                  placeholder="cli_xxxxxxxxxx"
+                  className="w-full px-4 py-2 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors"
+                />
+              </div>
+
+              {/* App Secret */}
+              <div>
+                <label className="block text-sm text-muted-foreground mb-2">App Secret</label>
+                <div className="relative">
+                  <input
+                    type={showFeishuSecret ? 'text' : 'password'}
+                    value={feishuAppSecret}
+                    onChange={(e) => setFeishuAppSecret(e.target.value)}
+                    placeholder={feishuConfigured ? '••••••••••••••••' : 'Enter App Secret'}
+                    className="w-full px-4 py-2 pr-12 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowFeishuSecret(!showFeishuSecret)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showFeishuSecret ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+                {feishuConfigured && (
+                  <p className="mt-1 text-xs text-muted-foreground">{t('Leave empty to keep existing secret')}</p>
+                )}
+              </div>
+
+              {/* Save Button */}
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={handleSaveFeishuConfig}
+                  disabled={isSavingFeishu || !feishuAppId}
+                  className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {isSavingFeishu ? t('Saving...') : t('Save')}
+                </button>
+
+                {feishuSaveResult && (
+                  <span className={`text-sm flex items-center gap-1 ${feishuSaveResult.success ? 'text-green-500' : 'text-red-500'}`}>
+                    {feishuSaveResult.success ? (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        {feishuSaveResult.message}
+                      </>
+                    ) : (
+                      <>
+                        <XCircle className="w-4 h-4" />
+                        {feishuSaveResult.message}
+                      </>
+                    )}
+                  </span>
+                )}
+              </div>
             </div>
           </section>
 

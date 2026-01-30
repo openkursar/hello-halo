@@ -13,6 +13,7 @@ import { createConnection } from 'net'
 import { authMiddleware, generateAccessToken, getAccessToken, clearAccessToken, validateToken } from './auth'
 import { initWebSocket, shutdownWebSocket, getClientCount } from './websocket'
 import { registerApiRoutes } from './routes'
+import { registerFeishuRoutes } from './routes/feishu'
 
 // Vite dev server URL
 const VITE_DEV_SERVER = 'http://localhost:5173'
@@ -79,6 +80,9 @@ export async function startHttpServer(
       }
     })
   })
+
+  // Register Feishu routes (public, before auth middleware)
+  registerFeishuRoutes(expressApp)
 
   // Auth middleware for API routes
   expressApp.use('/api', authMiddleware)

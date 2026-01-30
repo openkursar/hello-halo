@@ -75,6 +75,12 @@ interface HaloConfig {
     path: string | null
     skipped: boolean
   }
+  // Feishu bot integration
+  feishu?: {
+    appId: string
+    appSecret: string
+    enabled: boolean
+  }
 }
 
 // MCP server configuration types

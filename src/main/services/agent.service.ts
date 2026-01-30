@@ -56,6 +56,11 @@ import {
   AI_BROWSER_SYSTEM_PROMPT,
   createAIBrowserMcpServer
 } from './ai-browser'
+import {
+  getSessionByConversation,
+  relayAgentResponse,
+  getFeishuConfig
+} from '../controllers/feishu.controller'
 
 // Cached path to headless Electron binary (outside .app bundle to prevent Dock icon on macOS)
 let headlessElectronPath: string | null = null
@@ -1489,6 +1494,28 @@ export async function sendMessage(
         duration: 0,
         tokenUsage  // Include token usage data
       })
+
+      // Relay response to Feishu if this conversation is linked to a Feishu chat
+      const feishuConfig = getFeishuConfig()
+      console.log(`[Agent][${conversationId}] Feishu config: enabled=${feishuConfig.enabled}`)
+      if (feishuConfig.enabled) {
+        const feishuSession = getSessionByConversation(conversationId)
+        console.log(`[Agent][${conversationId}] Feishu session lookup: ${feishuSession ? 'found' : 'not found'}`)
+        if (feishuSession) {
+          console.log(`[Agent][${conversationId}] Relaying response to Feishu chat: ${feishuSession.chatId}`)
+          relayAgentResponse(feishuSession.chatId, lastTextContent)
+            .then(result => {
+              if (result.success) {
+                console.log(`[Agent][${conversationId}] Successfully relayed to Feishu`)
+              } else {
+                console.error(`[Agent][${conversationId}] Feishu relay failed:`, result.error)
+              }
+            })
+            .catch(err => {
+              console.error(`[Agent][${conversationId}] Failed to relay to Feishu:`, err)
+            })
+        }
+      }
     } else {
       console.log(`[Agent][${conversationId}] WARNING: No text content after SDK query completed`)
       // CRITICAL: Still send complete event to unblock frontend
@@ -1510,6 +1537,28 @@ export async function sendMessage(
         duration: 0,
         tokenUsage  // Include token usage data
       })
+
+      // Relay fallback response to Feishu if this conversation is linked to a Feishu chat
+      if (fallbackContent) {
+        const feishuConfig = getFeishuConfig()
+        if (feishuConfig.enabled) {
+          const feishuSession = getSessionByConversation(conversationId)
+          if (feishuSession) {
+            console.log(`[Agent][${conversationId}] Relaying fallback response to Feishu chat: ${feishuSession.chatId}`)
+            relayAgentResponse(feishuSession.chatId, fallbackContent)
+              .then(result => {
+                if (result.success) {
+                  console.log(`[Agent][${conversationId}] Successfully relayed fallback to Feishu`)
+                } else {
+                  console.error(`[Agent][${conversationId}] Feishu fallback relay failed:`, result.error)
+                }
+              })
+              .catch(err => {
+                console.error(`[Agent][${conversationId}] Failed to relay fallback to Feishu:`, err)
+              })
+          }
+        }
+      }
     }
   } catch (error: unknown) {
     const err = error as Error

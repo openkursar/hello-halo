@@ -962,6 +962,39 @@ export const api = {
     }
     return window.halo.onBootstrapExtendedReady(callback)
   },
+
+  // ===== Feishu Integration =====
+  getFeishuStatus: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.getFeishuStatus()
+    }
+    return httpRequest('GET', '/api/feishu/status')
+  },
+
+  getFeishuConfig: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.getFeishuConfig()
+    }
+    return httpRequest('GET', '/api/feishu/config')
+  },
+
+  saveFeishuConfig: async (config: {
+    appId?: string
+    appSecret?: string
+    enabled?: boolean
+  }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.saveFeishuConfig(config)
+    }
+    return httpRequest('POST', '/api/feishu/config', config)
+  },
+
+  sendFeishuMessage: async (chatId: string, message: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.sendFeishuMessage(chatId, message)
+    }
+    return httpRequest('POST', '/api/feishu/send', { chatId, message })
+  },
 }
 
 // Export type for the API

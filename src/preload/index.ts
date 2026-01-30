@@ -236,6 +236,12 @@ export interface HaloAPI {
 
   // Bootstrap lifecycle events
   onBootstrapExtendedReady: (callback: (data: { timestamp: number; duration: number }) => void) => () => void
+
+  // Feishu Integration
+  getFeishuStatus: () => Promise<IpcResponse>
+  getFeishuConfig: () => Promise<IpcResponse>
+  saveFeishuConfig: (config: { appId?: string; appSecret?: string; enabled?: boolean }) => Promise<IpcResponse>
+  sendFeishuMessage: (chatId: string, message: string) => Promise<IpcResponse>
 }
 
 interface IpcResponse<T = unknown> {
@@ -435,6 +441,12 @@ const api: HaloAPI = {
 
   // Bootstrap lifecycle events
   onBootstrapExtendedReady: (callback) => createEventListener('bootstrap:extended-ready', callback as (data: unknown) => void),
+
+  // Feishu Integration
+  getFeishuStatus: () => ipcRenderer.invoke('feishu:status'),
+  getFeishuConfig: () => ipcRenderer.invoke('feishu:config'),
+  saveFeishuConfig: (config) => ipcRenderer.invoke('feishu:save-config', config),
+  sendFeishuMessage: (chatId, message) => ipcRenderer.invoke('feishu:send', chatId, message),
 }
 
 contextBridge.exposeInMainWorld('halo', api)

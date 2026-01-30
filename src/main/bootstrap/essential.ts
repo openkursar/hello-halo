@@ -26,6 +26,7 @@ import { registerConversationHandlers } from '../ipc/conversation'
 import { registerAgentHandlers } from '../ipc/agent'
 import { registerArtifactHandlers } from '../ipc/artifact'
 import { registerSystemHandlers } from '../ipc/system'
+import { registerFeishuHandlers } from '../ipc/feishu'
 import { registerUpdaterHandlers, initAutoUpdater } from '../services/updater.service'
 
 /**
@@ -57,6 +58,9 @@ export function initializeEssentialServices(mainWindow: BrowserWindow): void {
 
   // Artifact: File list is displayed in the right sidebar
   registerArtifactHandlers()
+
+  // Feishu: Bot integration for remote control
+  registerFeishuHandlers()
 
   // System: Window controls (maximize, minimize, tray) are basic functionality
   registerSystemHandlers(mainWindow)
