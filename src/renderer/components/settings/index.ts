@@ -20,6 +20,3 @@ export { AboutSection } from './AboutSection'
 
 // Existing Components
 export { McpServerList } from './McpServerList'
-
-// Legacy (v1) - kept for backward compatibility, prefer AISourcesSection
-export { AIModelSection } from './AIModelSection'

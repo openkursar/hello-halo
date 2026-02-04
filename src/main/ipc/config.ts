@@ -91,13 +91,14 @@ export function registerConfigHandlers(): void {
   // Validate API connection via SDK
   ipcMain.handle(
     'config:validate-api',
-    async (_event, apiKey: string, apiUrl: string, provider: string) => {
-      console.log('[Settings] config:validate-api - Validating:', provider, apiUrl ? `(url: ${apiUrl.slice(0, 30)}...)` : '(default url)')
+    async (_event, apiKey: string, apiUrl: string, provider: string, model?: string) => {
+      console.log('[Settings] config:validate-api - Validating:', provider, apiUrl ? `(url: ${apiUrl.slice(0, 30)}...)` : '(default url)', model ? `(model: ${model})` : '(no model)')
       try {
         const result = await validateApiConnection({
           apiKey,
           apiUrl,
-          provider: provider as 'anthropic' | 'openai'
+          provider: provider as 'anthropic' | 'openai',
+          model
         })
         console.log('[Settings] config:validate-api - Result:', result.valid ? 'valid' : 'invalid')
         return { success: true, data: result }

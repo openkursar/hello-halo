@@ -47,13 +47,15 @@ export function setConfig(updates: Record<string, unknown>): ControllerResponse 
 export async function validateApi(
   apiKey: string,
   apiUrl: string,
-  provider: string
+  provider: string,
+  model?: string
 ): Promise<ControllerResponse> {
   try {
     const result = await validateApiConnection({
       apiKey,
       apiUrl,
-      provider: provider as 'anthropic' | 'openai'
+      provider: provider as 'anthropic' | 'openai',
+      model
     })
     return {
       success: result.valid,

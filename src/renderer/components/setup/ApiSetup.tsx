@@ -164,7 +164,7 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
     try {
       // 1. First validate the API connection
       const effectiveApiUrl = apiUrl || 'https://api.anthropic.com'
-      const result = await api.validateApi(apiKey, effectiveApiUrl, provider)
+      const result = await api.validateApi(apiKey, effectiveApiUrl, provider, model)
 
       if (!result.success || !result.data?.valid) {
         // Validation failed, show error, don't save

@@ -77,7 +77,9 @@ export function ProviderSelector({
     message?: string
   } | null>(null)
 
-  const [fetchedModels, setFetchedModels] = useState<ModelOption[]>([])
+  const [fetchedModels, setFetchedModels] = useState<ModelOption[]>(
+    editingSource?.availableModels || []
+  )
   const [modelSearchQuery, setModelSearchQuery] = useState('')
   const [showModelDropdown, setShowModelDropdown] = useState(false)
 
@@ -152,6 +154,27 @@ export function ProviderSelector({
     setProviderSearchQuery('')
   }
 
+  // Handle delete model from list
+  const handleDeleteModel = (modelId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    const models = fetchedModels.length > 0 ? fetchedModels : (currentProvider?.models || [])
+    const newModels = models.filter(m => m.id !== modelId)
+    setFetchedModels(newModels)
+
+    // If deleted model was selected, switch to first available
+    if (selectedModel === modelId && newModels.length > 0) {
+      setSelectedModel(newModels[0].id)
+    }
+  }
+
+  // Check if model can be deleted
+  // Rules: only allow deletion when there are user-fetched/edited models AND more than 1 model
+  const canDeleteModel = (): boolean => {
+    // Only allow deletion if we have fetched models (user-added, not provider defaults)
+    // and there's more than 1 model (keep at least one)
+    return fetchedModels.length > 1
+  }
+
   // Fetch models from API
   const handleFetchModels = async () => {
     if (!apiKey || !apiUrl) {
@@ -220,7 +243,7 @@ export function ProviderSelector({
     }
   }
 
-  // Handle save
+  // Handle save (direct save without validation)
   const handleSave = async () => {
     if (!apiKey) {
       setValidationResult({ valid: false, message: t('Please enter API Key') })
@@ -238,22 +261,6 @@ export function ProviderSelector({
     setValidationResult(null)
 
     try {
-      const validationResponse = await api.validateApi(
-        apiKey,
-        apiUrl,
-        isAnthropicProvider(selectedProvider) ? 'anthropic' : 'openai'
-      )
-
-      if (!validationResponse.success || !validationResponse.data?.valid) {
-        setValidationResult({
-          valid: false,
-          message: validationResponse.data?.message || validationResponse.error || t('Connection failed')
-        })
-        return
-      }
-
-      const normalizedUrl = validationResponse.data.normalizedUrl || apiUrl
-
       const availableModels: ModelOption[] = fetchedModels.length > 0
         ? fetchedModels
         : (currentProvider?.models || [{ id: finalModel, name: finalModel }])
@@ -269,8 +276,8 @@ export function ProviderSelector({
         name: sourceName || currentProvider?.name || selectedProvider,
         provider: selectedProvider,
         authType: 'api-key',
-        apiUrl: normalizedUrl,
-        apiType: editingSource?.apiType || currentProvider?.apiType,  // Inherit from provider preset
+        apiUrl: apiUrl || currentProvider?.apiUrl || 'https://api.openai.com',
+        apiType: editingSource?.apiType || currentProvider?.apiType,
         apiKey,
         model: finalModel,
         availableModels,
@@ -280,10 +287,50 @@ export function ProviderSelector({
 
       await onSave(source)
 
-      setValidationResult({ valid: true, message: t('Saved successfully') })
+      setValidationResult({ valid: true, message: t('Saved') })
     } catch (error) {
       console.error('[ProviderSelector] Save failed:', error)
       setValidationResult({ valid: false, message: t('Save failed') })
+    } finally {
+      setIsValidating(false)
+    }
+  }
+
+  // Handle test connection (optional validation)
+  const handleTestConnection = async () => {
+    if (!apiKey) {
+      setValidationResult({ valid: false, message: t('Please enter API Key') })
+      return
+    }
+
+    const finalModel = showCustomModel && customModelInput ? customModelInput : selectedModel
+
+    setIsValidating(true)
+    setValidationResult(null)
+
+    try {
+      const validationResponse = await api.validateApi(
+        apiKey,
+        apiUrl,
+        isAnthropicProvider(selectedProvider) ? 'anthropic' : 'openai',
+        finalModel
+      )
+
+      if (!validationResponse.success || !validationResponse.data?.valid) {
+        setValidationResult({
+          valid: false,
+          message: validationResponse.data?.message || validationResponse.error || t('Connection failed')
+        })
+      } else {
+        const normalizedUrl = validationResponse.data.normalizedUrl || apiUrl
+        if (normalizedUrl !== apiUrl) {
+          setApiUrl(normalizedUrl)
+        }
+        setValidationResult({ valid: true, message: t('Connection successful') })
+      }
+    } catch (error) {
+      console.error('[ProviderSelector] Test failed:', error)
+      setValidationResult({ valid: false, message: t('Connection failed') })
     } finally {
       setIsValidating(false)
     }
@@ -559,27 +606,45 @@ export function ProviderSelector({
 
                     {/* Model list */}
                     <div className="max-h-48 overflow-y-auto">
-                      {filteredModels.map(model => (
-                        <button
-                          key={model.id}
-                          onClick={() => {
-                            setSelectedModel(model.id)
-                            setShowModelDropdown(false)
-                            setModelSearchQuery('')
-                          }}
-                          className={`w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-secondary/80 ${
-                            selectedModel === model.id ? 'bg-primary/10' : ''
-                          }`}
-                        >
-                          {selectedModel === model.id && <Check size={14} className="text-primary shrink-0" />}
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm text-foreground truncate">{model.name}</div>
-                            {model.name !== model.id && (
-                              <div className="text-xs text-muted-foreground truncate">{model.id}</div>
+                      {filteredModels.map(model => {
+                        const isSelected = selectedModel === model.id
+                        const showDelete = canDeleteModel() && !isSelected
+
+                        return (
+                          <div
+                            key={model.id}
+                            onClick={() => {
+                              setSelectedModel(model.id)
+                              setShowModelDropdown(false)
+                              setModelSearchQuery('')
+                            }}
+                            className={`w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-secondary/80 cursor-pointer ${
+                              isSelected ? 'bg-primary/10' : ''
+                            }`}
+                          >
+                            {isSelected ? (
+                              <Check size={14} className="text-primary shrink-0" />
+                            ) : (
+                              <span className="w-[14px] shrink-0" />
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm text-foreground truncate">{model.name}</div>
+                              {model.name !== model.id && (
+                                <div className="text-xs text-muted-foreground truncate">{model.id}</div>
+                              )}
+                            </div>
+                            {showDelete && (
+                              <button
+                                onClick={(e) => handleDeleteModel(model.id, e)}
+                                className="p-1 text-muted-foreground hover:text-red-500 hover:bg-red-500/10 rounded transition-colors shrink-0"
+                                title={t('Remove model')}
+                              >
+                                <X size={14} />
+                              </button>
                             )}
                           </div>
-                        </button>
-                      ))}
+                        )
+                      })}
                       {filteredModels.length === 0 && (
                         <div className="px-3 py-4 text-sm text-muted-foreground text-center">
                           {t('No models found')}
@@ -615,7 +680,7 @@ export function ProviderSelector({
           <div className="flex gap-3 pt-2">
             <button
               onClick={onCancel}
-              className="flex-1 px-4 py-2 text-muted-foreground hover:bg-secondary rounded-lg transition-colors"
+              className="flex-1 px-4 py-2 bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground rounded-lg transition-colors"
             >
               {t('Cancel')}
             </button>
@@ -627,6 +692,16 @@ export function ProviderSelector({
             >
               {isValidating && <Loader2 size={16} className="animate-spin" />}
               {editingSource ? t('Update') : t('Save')}
+            </button>
+          </div>
+          {/* Test connection link */}
+          <div className="flex justify-end pt-1">
+            <button
+              onClick={handleTestConnection}
+              disabled={isValidating || !apiKey}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+            >
+              {t('Test connection')}
             </button>
           </div>
         </div>

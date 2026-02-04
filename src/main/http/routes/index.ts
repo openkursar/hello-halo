@@ -128,8 +128,8 @@ export function registerApiRoutes(app: Express, mainWindow: BrowserWindow | null
   })
 
   app.post('/api/config/validate', async (req: Request, res: Response) => {
-    const { apiKey, apiUrl, provider } = req.body
-    const result = await configController.validateApi(apiKey, apiUrl, provider)
+    const { apiKey, apiUrl, provider, model } = req.body
+    const result = await configController.validateApi(apiKey, apiUrl, provider, model)
     res.json(result)
   })
 

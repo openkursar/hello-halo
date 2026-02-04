@@ -122,12 +122,13 @@ export const api = {
   validateApi: async (
     apiKey: string,
     apiUrl: string,
-    provider: string
+    provider: string,
+    model?: string
   ): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.validateApi(apiKey, apiUrl, provider)
+      return window.halo.validateApi(apiKey, apiUrl, provider, model)
     }
-    return httpRequest('POST', '/api/config/validate', { apiKey, apiUrl, provider })
+    return httpRequest('POST', '/api/config/validate', { apiKey, apiUrl, provider, model })
   },
 
   refreshAISourcesConfig: async (): Promise<ApiResponse> => {
