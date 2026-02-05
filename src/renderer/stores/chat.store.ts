@@ -21,7 +21,7 @@
 
 import { create } from 'zustand'
 import { api } from '../api'
-import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, CanvasContext } from '../types'
+import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, CanvasContext, AgentErrorType } from '../types'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
 
 // LRU cache size limit
@@ -42,6 +42,7 @@ interface SessionState {
   isThinking: boolean
   pendingToolApproval: ToolCall | null
   error: string | null
+  errorType: AgentErrorType | null  // Special error type for custom UI handling
   // Compact notification
   compactInfo: CompactInfo | null
   // Text block version - increments on each new text block (for StreamingBubble reset)
@@ -58,6 +59,7 @@ function createEmptySessionState(): SessionState {
     isThinking: false,
     pendingToolApproval: null,
     error: null,
+    errorType: null,
     compactInfo: null,
     textBlockVersion: 0
   }
@@ -122,11 +124,14 @@ interface ChatState {
   approveTool: (conversationId: string) => Promise<void>
   rejectTool: (conversationId: string) => Promise<void>
 
+  // Error handling
+  continueAfterInterrupt: (conversationId: string) => void
+
   // Event handlers (called from App component) - with session IDs
   handleAgentMessage: (data: AgentEventBase & { content: string; isComplete: boolean }) => void
   handleAgentToolCall: (data: AgentEventBase & ToolCall) => void
   handleAgentToolResult: (data: AgentEventBase & { toolId: string; result: string; isError: boolean }) => void
-  handleAgentError: (data: AgentEventBase & { error: string }) => void
+  handleAgentError: (data: AgentEventBase & { error: string; errorType?: AgentErrorType }) => void
   handleAgentComplete: (data: AgentEventBase) => void
   handleAgentThought: (data: AgentEventBase & { thought: Thought }) => void
   handleAgentThoughtDelta: (data: AgentEventBase & {
@@ -290,6 +295,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
           return { spaceStates: newSpaceStates, conversationCache: newCache }
         })
+
+        // Warm up V2 Session for new conversation - non-blocking
+        // This ensures first message doesn't have cold start delay
+        try {
+          api.ensureSessionWarm(spaceId, newConversation.id)
+            .catch((error) => console.error('[ChatStore] Session warm up failed:', error))
+        } catch (error) {
+          console.error('[ChatStore] Failed to trigger session warm up:', error)
+        }
 
         return newConversation
       }
@@ -513,7 +527,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
           thoughts: [],
           isThinking: true,
           pendingToolApproval: null,
-          error: null
+          error: null,
+          errorType: null,
+          compactInfo: null,
+          textBlockVersion: 0
         })
         return { sessions: newSessions }
       })
@@ -671,6 +688,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  // Continue conversation after interrupt (used by InterruptedBubble)
+  // Clears error state and sends a "continue" message to AI to resume the interrupted response
+  continueAfterInterrupt: (conversationId: string) => {
+    // First clear the error state
+    set((state) => {
+      const newSessions = new Map(state.sessions)
+      const session = newSessions.get(conversationId)
+      if (session) {
+        newSessions.set(conversationId, {
+          ...session,
+          error: null,
+          errorType: null
+        })
+      }
+      return { sessions: newSessions }
+    })
+
+    // Then send a "continue" message to AI
+    const state = get()
+    const spaceState = state.spaceStates.get(state.currentSpaceId || '')
+    if (spaceState?.currentConversationId === conversationId) {
+      state.sendMessage('continue')
+    }
+  },
+
   // Handle agent message - update session-specific streaming content
   // Supports both incremental (delta) and full (content) modes for backward compatibility
   handleAgentMessage: (data) => {
@@ -735,10 +777,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   // Handle error for a specific conversation
   handleAgentError: (data) => {
-    const { conversationId, error } = data
-    console.log(`[ChatStore] handleAgentError [${conversationId}]:`, error)
+    const { conversationId, error, errorType } = data
+    console.log(`[ChatStore] handleAgentError [${conversationId}]:`, error, errorType ? `(type: ${errorType})` : '')
 
-    // Add error thought to session
+    // Add error thought to session (only for non-interrupted errors)
+    // Interrupted errors get special UI treatment, not shown as error thought
     const errorThought: Thought = {
       id: `thought-error-${Date.now()}`,
       type: 'error',
@@ -753,9 +796,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       newSessions.set(conversationId, {
         ...session,
         error,
+        errorType: errorType || null,
         isGenerating: false,
         isThinking: false,
-        thoughts: [...session.thoughts, errorThought]
+        // Only add error thought for non-interrupted errors
+        thoughts: errorType === 'interrupted' ? session.thoughts : [...session.thoughts, errorThought]
       })
       return { sessions: newSessions }
     })

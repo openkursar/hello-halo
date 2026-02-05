@@ -17,9 +17,10 @@ import { MessageItem } from './MessageItem'
 import { ThoughtProcess } from './ThoughtProcess'
 import { CollapsedThoughtProcess } from './CollapsedThoughtProcess'
 import { CompactNotice } from './CompactNotice'
+import { InterruptedBubble } from './InterruptedBubble'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { BrowserTaskCard, isBrowserTool } from '../tool/BrowserTaskCard'
-import type { Message, Thought, CompactInfo } from '../../types'
+import type { Message, Thought, CompactInfo, AgentErrorType } from '../../types'
 import { useTranslation } from '../../i18n'
 
 interface MessageListProps {
@@ -31,6 +32,8 @@ interface MessageListProps {
   isThinking?: boolean
   compactInfo?: CompactInfo | null
   error?: string | null  // Error message to display when generation fails
+  errorType?: AgentErrorType | null  // Special error type for custom UI handling
+  onContinue?: () => void  // Callback to continue after interrupt (for InterruptedBubble)
   isCompact?: boolean  // Compact mode when Canvas is open
   textBlockVersion?: number  // Increments on each new text block (for StreamingBubble reset)
 }
@@ -261,6 +264,8 @@ export function MessageList({
   isThinking = false,
   compactInfo = null,
   error = null,
+  errorType = null,
+  onContinue,
   isCompact = false,
   textBlockVersion = 0
 }: MessageListProps) {
@@ -363,7 +368,11 @@ export function MessageList({
       )}
 
       {/* Error message - shown when generation fails (not during generation) */}
-      {!isGenerating && error && (
+      {/* Interrupted errors get special friendly UI, other errors show standard error bubble */}
+      {!isGenerating && error && errorType === 'interrupted' && (
+        <InterruptedBubble onContinue={onContinue} />
+      )}
+      {!isGenerating && error && errorType !== 'interrupted' && (
         <div className="flex justify-start animate-fade-in">
           <div className="w-[85%]">
             <div className="rounded-2xl px-4 py-3 bg-destructive/10 border border-destructive/30">

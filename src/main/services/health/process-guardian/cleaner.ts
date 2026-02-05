@@ -97,6 +97,11 @@ export async function cleanupOrphans(): Promise<CleanupResult> {
         continue
       }
 
+      // Check if process is still alive before attempting to kill
+      if (!platformOps.isProcessAlive(proc.pid)) {
+        continue
+      }
+
       try {
         await platformOps.killProcess(proc.pid, 'SIGTERM')
         result.cleaned++

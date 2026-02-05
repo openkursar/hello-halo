@@ -18,7 +18,7 @@ import { SearchHighlightBar } from './components/search/SearchHighlightBar'
 import { OnboardingOverlay } from './components/onboarding'
 import { UpdateNotification } from './components/updater/UpdateNotification'
 import { api } from './api'
-import type { AgentEventBase, Thought, ToolCall, HaloConfig } from './types'
+import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType } from './types'
 import { hasAnyAISource } from './types'
 
 // Lazy load heavy page components for better initial load performance
@@ -222,7 +222,7 @@ export default function App() {
 
     const unsubError = api.onAgentError((data) => {
       console.log('[App] Received agent:error event:', data)
-      handleAgentError(data as AgentEventBase & { error: string })
+      handleAgentError(data as AgentEventBase & { error: string; errorType?: AgentErrorType })
     })
 
     const unsubComplete = api.onAgentComplete((data) => {

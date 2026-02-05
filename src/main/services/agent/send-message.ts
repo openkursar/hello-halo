@@ -52,6 +52,9 @@ import {
 import { onAgentError, runPpidScanAndCleanup } from '../health'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
 
+// Unified fallback error suffix - guides user to check logs
+const FALLBACK_ERROR_HINT = 'Check logs in Settings > System > Logs.'
+
 // ============================================
 // Send Message
 // ============================================
@@ -232,7 +235,7 @@ export async function sendMessage(
     console.error(`[Agent][${conversationId}] Error:`, error)
 
     // Extract detailed error message from stderr if available
-    let errorMessage = err.message || 'Unknown error occurred'
+    let errorMessage = err.message || `Unknown error. ${FALLBACK_ERROR_HINT}`
 
     // Windows: Check for Git Bash related errors
     if (process.platform === 'win32') {
@@ -325,6 +328,11 @@ async function processMessageStream(
   let isStreamingTextBlock = false  // True when inside a text content block
   const STREAM_THROTTLE_MS = 30  // Throttle updates to ~33fps
 
+  // Track if SDK reported error_during_execution (for interrupted detection)
+  let hadErrorDuringExecution = false
+  // Track if we received a result message (for detecting stream interruption)
+  let receivedResult = false
+
   // Streaming block state - track active blocks by index for delta/stop correlation
   // Key: block index, Value: { type, thoughtId, content/partialJson }
   const streamingBlocks = new Map<number, {
@@ -370,17 +378,6 @@ async function processMessageStream(
 
   // Stream messages from V2 session
   for await (const sdkMessage of v2Session.stream()) {
-    // ⚠️ DEBUG: Log ALL SDK messages to trace 429 error propagation
-    console.log(`[Agent][${conversationId}] 🔵 SDK message:`, JSON.stringify({
-      type: sdkMessage.type,
-      error: (sdkMessage as any).error,
-      subtype: (sdkMessage as any).subtype,
-      is_error: (sdkMessage as any).is_error,
-      // Truncate large fields
-      message: (sdkMessage as any).message ? '[message object]' : undefined,
-      result: (sdkMessage as any).result?.slice?.(0, 100) ?? (sdkMessage as any).result
-    }))
-
     // Handle abort - check this session's controller
     if (abortController.signal.aborted) {
       console.log(`[Agent][${conversationId}] Aborted`)
@@ -795,20 +792,28 @@ async function processMessageStream(
         console.log(`[Agent][${conversationId}] Available tools: ${tools.length}`)
       }
     } else if (sdkMessage.type === 'result') {
+      receivedResult = true  // Mark that we received a result message
       if (!capturedSessionId) {
         const sessionIdFromMsg = msg.session_id || (msg.message as Record<string, unknown>)?.session_id
         capturedSessionId = sessionIdFromMsg as string
       }
 
-      // 🔑 Check for error_during_execution - this is how CLI reports API errors (429, etc.)
-      const subtype = (sdkMessage as any).subtype
-      if (subtype === 'error_during_execution') {
-        console.log(`[Agent][${conversationId}] ⚠️ SDK result with error_during_execution detected`)
-        // Create error thought to show in UI
+      // 🔑 Check for real API errors - only report if is_error=true OR errors array has content
+      // Note: subtype="error_during_execution" alone does NOT mean error - it's a normal completion state
+      const isError = (sdkMessage as any).is_error === true
+      const errors = (sdkMessage as any).errors as unknown[] | undefined
+      const hasErrors = Array.isArray(errors) && errors.length > 0
+
+      if (isError || hasErrors) {
+        // Pass through the real error from SDK
+        const realError = hasErrors
+          ? JSON.stringify(errors)
+          : ((sdkMessage as any).result || `Unknown API error. ${FALLBACK_ERROR_HINT}`)
+        console.log(`[Agent][${conversationId}] ⚠️ SDK error (is_error=${isError}, errors=${errors?.length || 0}): ${realError}`)
         const errorThought: Thought = {
           id: `thought-error-${Date.now()}`,
           type: 'error',
-          content: 'API request failed (rate limit or server error). Please try again later.',
+          content: realError,
           timestamp: new Date().toISOString()
         }
         sessionState.thoughts.push(errorThought)
@@ -816,6 +821,10 @@ async function processMessageStream(
           type: 'thought',
           thought: errorThought
         })
+      } else if ((sdkMessage as any).subtype === 'error_during_execution') {
+        // Mark as interrupted - will be used for empty response handling
+        hadErrorDuringExecution = true
+        console.log(`[Agent][${conversationId}] SDK result subtype=error_during_execution but is_error=false, errors=[] - marked as interrupted`)
       }
 
       // Extract token usage from result message
@@ -832,56 +841,71 @@ async function processMessageStream(
     console.log(`[Agent][${conversationId}] Session ID saved:`, capturedSessionId)
   }
 
-  // Ensure complete event is sent even if no result message was received
-  if (lastTextContent) {
-    console.log(`[Agent][${conversationId}] Sending final complete event with last text`)
-    // Backend saves complete message with thoughts and tokenUsage (Single Source of Truth)
+  // ========== Stream End Handling ==========
+  //
+  // Error conditions (truth table):
+  // | Case | hasContent | isInterrupted | hasErrorThought | wasAborted | Send error?    |
+  // |------|------------|---------------|-----------------|------------|----------------|
+  // | 1    | yes        | yes           | -               | -          | interrupted    |
+  // | 2    | yes        | no            | -               | -          | no             |
+  // | 3    | no         | yes           | no              | no         | interrupted    |
+  // | 4    | no         | no            | no              | no         | empty response |
+  // | 5    | no         | -             | yes             | -          | no             |
+  // | 6    | no         | -             | -               | yes        | no             |
+
+  // Merge content: prefer lastTextContent (confirmed), fallback to currentStreamingText (accumulated)
+  const finalContent = lastTextContent || currentStreamingText || ''
+  const wasAborted = abortController.signal.aborted
+  const hasErrorThought = sessionState.thoughts.some(t => t.type === 'error')
+  // Two independent interrupt reasons: SDK reported error_during_execution, or stream ended unexpectedly
+  const isInterrupted = !receivedResult || hadErrorDuringExecution
+
+  // Step 1: Save content if available
+  if (finalContent) {
+    const contentSource = lastTextContent ? 'lastTextContent' : 'currentStreamingText (fallback)'
+    console.log(`[Agent][${conversationId}] Saving content from ${contentSource}: ${finalContent.length} chars`)
     updateLastMessage(spaceId, conversationId, {
-      content: lastTextContent,
+      content: finalContent,
       thoughts: sessionState.thoughts.length > 0 ? [...sessionState.thoughts] : undefined,
-      tokenUsage: tokenUsage || undefined  // Include token usage if available
-    })
-    console.log(`[Agent][${conversationId}] Saved ${sessionState.thoughts.length} thoughts${tokenUsage ? ' with tokenUsage' : ''} to backend`)
-    sendToRenderer('agent:complete', spaceId, conversationId, {
-      type: 'complete',
-      duration: 0,
-      tokenUsage  // Include token usage data
+      tokenUsage: tokenUsage || undefined
     })
   } else {
-    console.log(`[Agent][${conversationId}] WARNING: No text content after SDK query completed`)
+    console.log(`[Agent][${conversationId}] No content to save`)
+  }
 
-    // Fallback: Try to use currentStreamingText if available (content_block_stop was missed)
-    const fallbackContent = currentStreamingText || ''
-    if (fallbackContent) {
-      console.log(`[Agent][${conversationId}] Using fallback content from currentStreamingText: ${fallbackContent.length} chars`)
-      updateLastMessage(spaceId, conversationId, {
-        content: fallbackContent,
-        thoughts: sessionState.thoughts.length > 0 ? [...sessionState.thoughts] : undefined,
-        tokenUsage: tokenUsage || undefined
-      })
-      sendToRenderer('agent:complete', spaceId, conversationId, {
-        type: 'complete',
-        duration: 0,
-        tokenUsage
-      })
+  // Step 2: Always send complete event to unblock frontend
+  sendToRenderer('agent:complete', spaceId, conversationId, {
+    type: 'complete',
+    duration: 0,
+    tokenUsage
+  })
+
+  // Step 3: Determine if interrupted error should be sent
+  const getInterruptedErrorMessage = (): string | null => {
+    if (finalContent) {
+      // Has content: only send error if interrupted (content may be incomplete)
+      return isInterrupted ? 'Model response interrupted unexpectedly.' : null
     } else {
-      // No content at all - this is an error condition
-      // Check if we already sent an error thought (SDK error was captured)
-      const hasErrorThought = sessionState.thoughts.some(t => t.type === 'error')
-      if (!hasErrorThought) {
-        // No error was captured - send generic error
-        console.log(`[Agent][${conversationId}] Empty response with no error - sending error event`)
-        sendToRenderer('agent:error', spaceId, conversationId, {
-          type: 'error',
-          error: 'Empty response from provider'
-        })
-      }
-      // Always send complete to unblock frontend
-      sendToRenderer('agent:complete', spaceId, conversationId, {
-        type: 'complete',
-        duration: 0,
-        tokenUsage
-      })
+      // No content: skip if already has error thought or user aborted
+      if (hasErrorThought || wasAborted) return null
+      return isInterrupted
+        ? 'Model response interrupted unexpectedly.'
+        : `Unexpected empty response. ${FALLBACK_ERROR_HINT}`
     }
+  }
+
+  const errorMessage = getInterruptedErrorMessage()
+  if (errorMessage) {
+    const reason = isInterrupted
+      ? (hadErrorDuringExecution ? 'error_during_execution' : 'stream interrupted')
+      : 'empty response'
+    console.log(`[Agent][${conversationId}] Sending interrupted error (${reason}, content: ${finalContent ? 'yes' : 'no'})`)
+    sendToRenderer('agent:error', spaceId, conversationId, {
+      type: 'error',
+      errorType: 'interrupted',
+      error: errorMessage
+    })
+  } else if (wasAborted) {
+    console.log(`[Agent][${conversationId}] User stopped - no error sent`)
   }
 }

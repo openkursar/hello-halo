@@ -70,15 +70,15 @@ export class Win32ProcessOps implements PlatformProcessOps {
       const forceFlag = signal === 'SIGKILL' ? '/F ' : ''
       await execAsync(`taskkill ${forceFlag}/PID ${pid} /T`, { timeout: 5000 })
       console.log(`[Health][Win32] Killed process ${pid}`)
-    } catch (error: unknown) {
-      const err = error as { message?: string }
-      // Process may have already exited
-      if (err.message?.includes('not found') || err.message?.includes('The process')) {
-        console.log(`[Health][Win32] Process ${pid} already exited`)
+    } catch {
+      // Goal-based validation: verify the process is gone regardless of error message
+      // This approach is language-agnostic and works on any Windows locale
+      if (!this.isProcessAlive(pid)) {
+        console.log(`[Health][Win32] Process ${pid} no longer exists`)
         return
       }
-      console.error(`[Health][Win32] Failed to kill process ${pid}:`, error)
-      throw error
+      // Process still alive after kill attempt - this is a real failure
+      throw new Error(`Failed to terminate process ${pid}`)
     }
   }
 

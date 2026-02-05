@@ -22,6 +22,7 @@ interface UpdateInfo {
   percent?: number
   message?: string
   releaseNotes?: string | { version: string; note: string }[]
+  downloadUrl?: string
 }
 
 // Parse release notes to array of strings
@@ -51,6 +52,7 @@ export function UpdateNotification() {
   const [notificationVersion, setNotificationVersion] = useState<string | null>(null)
   const [releaseNotes, setReleaseNotes] = useState<string[]>([])
   const [isManualDownload, setIsManualDownload] = useState(false)
+  const [downloadUrl, setDownloadUrl] = useState<string>('')
 
   useEffect(() => {
     // Listen for updater status events
@@ -62,6 +64,7 @@ export function UpdateNotification() {
         setNotificationVersion(data.version)
         setReleaseNotes(parseReleaseNotes(data.releaseNotes))
         setIsManualDownload(data.status === 'manual-download')
+        setDownloadUrl(data.downloadUrl || '')
         setDismissed(false)
       }
     })
@@ -73,12 +76,10 @@ export function UpdateNotification() {
 
   const handleInstall = () => {
     if (isManualDownload || isMac) {
-      // Open GitHub release page for manual download (macOS always, or when manual-download status)
-      if (notificationVersion) {
-        window.open(
-          `https://github.com/openkursar/hello-halo/releases/tag/v${notificationVersion}`,
-          '_blank'
-        )
+      // Open download page for manual download
+      // URL is provided by main process based on updateConfig in product.json
+      if (downloadUrl) {
+        window.open(downloadUrl, '_blank')
       }
     } else {
       // Windows auto-install

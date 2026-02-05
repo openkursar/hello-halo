@@ -442,9 +442,13 @@ export interface AgentToolResultEvent extends AgentEventBase {
   isError: boolean;
 }
 
+// Error type for special handling (e.g., interrupted response)
+export type AgentErrorType = 'interrupted';
+
 export interface AgentErrorEvent extends AgentEventBase {
   type: 'error';
   error: string;
+  errorType?: AgentErrorType;  // Special error type for custom UI handling
 }
 
 // Token usage statistics from SDK result message
