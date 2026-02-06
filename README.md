@@ -118,11 +118,19 @@ Extend capabilities with Model Context Protocol. Compatible with Claude Desktop 
   <img src="./docs/assets/mobile_chat.jpg" width="45%" alt="Mobile Chat">
 </p>
 
+AI browser Video Demo 
+
+https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
+
 ---
 
 ## Installation
 
 ### Download (Recommended)
+
+
+
+
 
 | Platform | Download | Requirements |
 |----------|----------|--------------|
