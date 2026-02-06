@@ -69,6 +69,7 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     authType: 'api-key',
     apiUrl: 'https://api.anthropic.com',
     models: [
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
       { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5' },
       { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5' }

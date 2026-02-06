@@ -86,9 +86,14 @@ export interface ModelOption {
  */
 export const AVAILABLE_MODELS: ModelOption[] = [
   {
+    id: 'claude-opus-4-6',
+    name: 'Claude Opus 4.6',
+    description: 'Most powerful model, great for complex reasoning and architecture decisions'
+  },
+  {
     id: 'claude-opus-4-5-20251101',
     name: 'Claude Opus 4.5',
-    description: 'Most powerful model, great for complex reasoning and architecture decisions'
+    description: 'great for complex reasoning and architecture decisions'
   },
   {
     id: 'claude-sonnet-4-5-20250929',
