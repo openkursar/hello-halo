@@ -52,12 +52,29 @@ export function registerConfigHandlers(): void {
   ipcMain.handle('config:set', async (_event, updates: Record<string, unknown>) => {
     // Log what's being updated (without sensitive data)
     const updateKeys = Object.keys(updates)
-    const aiSourcesCurrentId = (updates.aiSources as any)?.currentId
+    const incomingAiSources = (updates.aiSources as AISourcesConfig | undefined)
+    const aiSourcesCurrentId = incomingAiSources?.currentId
     console.log('[Settings] config:set - Saving:', updateKeys.join(', '), aiSourcesCurrentId ? `(currentId: ${aiSourcesCurrentId})` : '')
+
+    // Log detailed source info for debugging provider configuration issues
+    if (incomingAiSources?.sources) {
+      const currentSource = incomingAiSources.sources.find(s => s.id === aiSourcesCurrentId)
+      if (currentSource) {
+        console.log('[Settings] config:set - Current source:', {
+          name: currentSource.name,
+          provider: currentSource.provider,
+          apiUrl: currentSource.apiUrl,
+          model: currentSource.model,
+          hasApiKey: !!currentSource.apiKey,
+          availableModels: currentSource.availableModels?.length || 0
+        })
+      }
+      console.log('[Settings] config:set - Total sources:', incomingAiSources.sources.length,
+        'names:', incomingAiSources.sources.map(s => s.name).join(', '))
+    }
 
     try {
       const processedUpdates = { ...updates }
-      const incomingAiSources = processedUpdates.aiSources as AISourcesConfig | undefined
 
       // v2 format: aiSources is replaced entirely (sources array is the source of truth)
       // No deep merging needed - frontend manages the complete sources array

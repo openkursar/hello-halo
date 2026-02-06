@@ -149,14 +149,14 @@ export function ModelSelector() {
 
   // Get available models for a source
   const getModelsForSource = (source: AISource): ModelOption[] => {
-    // For Anthropic providers, use predefined models
-    if (isAnthropicProvider(source.provider)) {
-      return AVAILABLE_MODELS
-    }
-
-    // For other providers, use source's available models
+    // If source has its own available models (user fetched or configured), use them
     if (source.availableModels && source.availableModels.length > 0) {
       return source.availableModels
+    }
+
+    // For Anthropic providers without custom models, use predefined defaults
+    if (isAnthropicProvider(source.provider)) {
+      return AVAILABLE_MODELS
     }
 
     // Fallback: return current model as single option

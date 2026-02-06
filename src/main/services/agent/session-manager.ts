@@ -13,7 +13,7 @@ import os from 'os'
 import { existsSync, copyFileSync, mkdirSync } from 'fs'
 import { app } from 'electron'
 import { unstable_v2_createSession } from '@anthropic-ai/claude-agent-sdk'
-import { getConfig, onApiConfigChange } from '../config.service'
+import { getConfig, onApiConfigChange, getCredentialsGeneration } from '../config.service'
 import { getConversation } from '../conversation.service'
 import type {
   V2SDKSession,
@@ -374,16 +374,26 @@ export async function getOrCreateV2Session(
       console.log(`[Agent][${conversationId}] Session transport not ready (process dead), recreating...`)
       closeV2SessionForRebuild(conversationId)
       // Fall through to create new session
-    } else if (config && needsSessionRebuild(existing, config)) {
-      // Config changed (e.g., aiBrowser toggle), need to rebuild
-      console.log(`[Agent][${conversationId}] Config changed (aiBrowser: ${existing.config.aiBrowserEnabled} → ${config.aiBrowserEnabled}), rebuilding session...`)
-      closeV2SessionForRebuild(conversationId)
-      // Fall through to create new session
     } else {
-      // Session is alive and config is compatible, reuse it
-      console.log(`[Agent][${conversationId}] Reusing existing V2 session`)
-      existing.lastUsedAt = Date.now()
-      return existing.session
+      // Check if credentials have changed since session was created
+      // This catches race conditions where session was created with stale credentials
+      // (e.g., warm-up started before config save completed)
+      const currentGen = getCredentialsGeneration()
+      if (existing.credentialsGeneration !== currentGen) {
+        console.log(`[Agent][${conversationId}] Credentials changed (gen ${existing.credentialsGeneration} → ${currentGen}), recreating session`)
+        closeV2SessionForRebuild(conversationId)
+        // Fall through to create new session
+      } else if (config && needsSessionRebuild(existing, config)) {
+        // Config changed (e.g., aiBrowser toggle), need to rebuild
+        console.log(`[Agent][${conversationId}] Config changed (aiBrowser: ${existing.config.aiBrowserEnabled} → ${config.aiBrowserEnabled}), rebuilding session...`)
+        closeV2SessionForRebuild(conversationId)
+        // Fall through to create new session
+      } else {
+        // Session is alive and config is compatible, reuse it
+        console.log(`[Agent][${conversationId}] Reusing existing V2 session`)
+        existing.lastUsedAt = Date.now()
+        return existing.session
+      }
     }
   }
 
@@ -438,14 +448,16 @@ export async function getOrCreateV2Session(
   // This is event-driven (better than polling) - when process dies, we clean up immediately
   registerProcessExitListener(session, conversationId)
 
-  // Store session with config
+  // Store session with config and current credentials generation
+  // Generation is used to detect stale credentials on session reuse
   v2Sessions.set(conversationId, {
     session,
     spaceId,
     conversationId,
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
-    config: config || { aiBrowserEnabled: false }
+    config: config || { aiBrowserEnabled: false },
+    credentialsGeneration: getCredentialsGeneration()
   })
 
   // Start cleanup if not already running

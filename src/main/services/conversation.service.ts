@@ -354,9 +354,18 @@ export function updateConversation(
   conversationId: string,
   updates: Partial<Conversation>
 ): Conversation | null {
-  const conversation = getConversation(spaceId, conversationId)
+  const conversationsDir = getConversationsDir(spaceId)
+  const filePath = join(conversationsDir, `${conversationId}.json`)
 
-  if (!conversation) {
+  if (!existsSync(filePath)) {
+    return null
+  }
+
+  let conversation: Conversation
+  try {
+    conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
+  } catch (error) {
+    console.error(`[Conversation] Failed to read conversation ${conversationId}:`, error)
     return null
   }
 
@@ -366,8 +375,7 @@ export function updateConversation(
     updatedAt: new Date().toISOString()
   }
 
-  const conversationsDir = getConversationsDir(spaceId)
-  writeFileSync(join(conversationsDir, `${conversationId}.json`), JSON.stringify(updated, null, 2))
+  writeFileSync(filePath, JSON.stringify(updated, null, 2))
 
   // Update index (title or other metadata may have changed)
   updateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(updated))
@@ -377,10 +385,18 @@ export function updateConversation(
 
 // Add a message to a conversation
 export function addMessage(spaceId: string, conversationId: string, message: Omit<Message, 'id' | 'timestamp'>): Message {
-  const conversation = getConversation(spaceId, conversationId)
+  const conversationsDir = getConversationsDir(spaceId)
+  const filePath = join(conversationsDir, `${conversationId}.json`)
 
-  if (!conversation) {
+  if (!existsSync(filePath)) {
     throw new Error('Conversation not found')
+  }
+
+  let conversation: Conversation
+  try {
+    conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
+  } catch (error) {
+    throw new Error(`Failed to read conversation: ${error}`)
   }
 
   const newMessage: Message = {
@@ -398,8 +414,7 @@ export function addMessage(spaceId: string, conversationId: string, message: Omi
     conversation.title = message.content.slice(0, 50) + (message.content.length > 50 ? '...' : '')
   }
 
-  const conversationsDir = getConversationsDir(spaceId)
-  writeFileSync(join(conversationsDir, `${conversationId}.json`), JSON.stringify(conversation, null, 2))
+  writeFileSync(filePath, JSON.stringify(conversation, null, 2))
 
   // Update index with new messageCount and preview
   updateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
@@ -413,9 +428,22 @@ export function updateLastMessage(
   conversationId: string,
   updates: Partial<Message>
 ): Message | null {
-  const conversation = getConversation(spaceId, conversationId)
+  const conversationsDir = getConversationsDir(spaceId)
+  const filePath = join(conversationsDir, `${conversationId}.json`)
 
-  if (!conversation || conversation.messages.length === 0) {
+  if (!existsSync(filePath)) {
+    return null
+  }
+
+  let conversation: Conversation
+  try {
+    conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
+  } catch (error) {
+    console.error(`[Conversation] Failed to read conversation ${conversationId}:`, error)
+    return null
+  }
+
+  if (conversation.messages.length === 0) {
     return null
   }
 
@@ -426,8 +454,7 @@ export function updateLastMessage(
     Object.assign(lastMessage, updates)
     conversation.updatedAt = new Date().toISOString()
 
-    const conversationsDir = getConversationsDir(spaceId)
-    writeFileSync(join(conversationsDir, `${conversationId}.json`), JSON.stringify(conversation, null, 2))
+    writeFileSync(filePath, JSON.stringify(conversation, null, 2))
 
     // Update index (preview may have changed)
     updateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
@@ -455,12 +482,17 @@ export function deleteConversation(spaceId: string, conversationId: string): boo
 
 // Save session ID for a conversation
 export function saveSessionId(spaceId: string, conversationId: string, sessionId: string): void {
-  const conversation = getConversation(spaceId, conversationId)
+  const conversationsDir = getConversationsDir(spaceId)
+  const filePath = join(conversationsDir, `${conversationId}.json`)
 
-  if (conversation) {
+  if (!existsSync(filePath)) return
+
+  try {
+    const conversation: Conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
     conversation.sessionId = sessionId
-    const conversationsDir = getConversationsDir(spaceId)
-    writeFileSync(join(conversationsDir, `${conversationId}.json`), JSON.stringify(conversation, null, 2))
+    writeFileSync(filePath, JSON.stringify(conversation, null, 2))
+  } catch (error) {
+    console.error(`[Conversation] Failed to save session ID for ${conversationId}:`, error)
   }
 }
 

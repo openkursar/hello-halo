@@ -174,7 +174,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     }
   },
 
-  // Refresh current space stats
+  // Refresh current space data
   refreshCurrentSpace: async () => {
     const currentSpace = get().currentSpace
 

@@ -1,29 +1,25 @@
 /**
  * Space Service - Manages workspaces/spaces
  *
- * PERFORMANCE OPTIMIZED:
- * - Async stats calculation
- * - Fast estimation for large directories
- * - Caching for repeated access
+ * Architecture:
+ * - spaces-index.json (v2) stores id -> path mapping for O(1) lookups
+ * - Module-level registry Map is the in-memory working copy of the index
+ * - Lazy-loaded on first access; auto-migrates from v1 format if needed
+ * - Mutations (create/delete) update both memory and disk atomically
  */
 
 import { shell } from 'electron'
-import { join, basename } from 'path'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync } from 'fs'
+import { join } from 'path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync, renameSync } from 'fs'
 import { getHaloDir, getTempSpacePath, getSpacesDir } from './config.service'
 import { v4 as uuidv4 } from 'uuid'
 
 // Re-export config helper for backward compatibility with existing imports
 export { getSpacesDir } from './config.service'
 
-// Cache for space stats to avoid repeated scanning
-interface StatsCache {
-  artifactCount: number
-  conversationCount: number
-  timestamp: number
-}
-const statsCache = new Map<string, StatsCache>()
-const STATS_CACHE_TTL = 30000 // 30 seconds
+// ============================================================================
+// Types
+// ============================================================================
 
 interface Space {
   id: string
@@ -33,20 +29,14 @@ interface Space {
   isTemp: boolean
   createdAt: string
   updatedAt: string
-  stats: {
-    artifactCount: number
-    conversationCount: number
-  }
   preferences?: SpacePreferences
 }
 
-// Layout preferences for a space
 interface SpaceLayoutPreferences {
   artifactRailExpanded?: boolean
   chatWidth?: number
 }
 
-// All space preferences
 interface SpacePreferences {
   layout?: SpaceLayoutPreferences
 }
@@ -60,181 +50,168 @@ interface SpaceMeta {
   preferences?: SpacePreferences
 }
 
-// Space index for tracking custom path spaces
-interface SpaceIndex {
-  customPaths: string[]  // Array of paths to spaces outside ~/.halo/spaces/
+// ============================================================================
+// Space Index (v2) — id -> path registry
+// ============================================================================
+
+interface SpaceIndexEntry {
+  path: string
 }
+
+interface SpaceIndexV2 {
+  version: 2
+  spaces: Record<string, SpaceIndexEntry>
+}
+
+// Module-level registry: in-memory working copy of spaces-index.json
+let registry: Map<string, SpaceIndexEntry> | null = null
+
+// LRU cache for Space objects (avoids repeated meta.json reads)
+const MAX_SPACE_CACHE_SIZE = 10
+const spaceCache = new Map<string, Space>()
 
 function getSpaceIndexPath(): string {
   return join(getHaloDir(), 'spaces-index.json')
 }
 
-function loadSpaceIndex(): SpaceIndex {
+/**
+ * Get the registry Map (lazy-loaded).
+ * First call loads from disk and auto-migrates v1 format if needed.
+ */
+function getRegistry(): Map<string, SpaceIndexEntry> {
+  if (!registry) {
+    registry = loadSpaceIndex()
+  }
+  return registry
+}
+
+/**
+ * Load space index from disk. Handles v2, v1 (migration), and missing file.
+ */
+function loadSpaceIndex(): Map<string, SpaceIndexEntry> {
   const indexPath = getSpaceIndexPath()
+  const map = new Map<string, SpaceIndexEntry>()
+
+  // Try to read existing file
+  let raw: Record<string, unknown> | null = null
   if (existsSync(indexPath)) {
     try {
-      return JSON.parse(readFileSync(indexPath, 'utf-8'))
+      raw = JSON.parse(readFileSync(indexPath, 'utf-8'))
     } catch {
-      return { customPaths: [] }
+      console.warn('[Space] spaces-index.json corrupted, will rebuild')
     }
   }
-  return { customPaths: [] }
+
+  // v2: direct load
+  if (raw && raw.version === 2 && raw.spaces && typeof raw.spaces === 'object') {
+    const spaces = raw.spaces as Record<string, SpaceIndexEntry>
+    for (const [id, entry] of Object.entries(spaces)) {
+      if (entry && typeof entry.path === 'string') {
+        map.set(id, { path: entry.path })
+      }
+    }
+    console.log(`[Space] Index v2 loaded: ${map.size} spaces`)
+    return map
+  }
+
+  // v1 or missing: one-time migration via full scan
+  console.log('[Space] Migrating space index to v2...')
+  const oldCustomPaths: string[] = Array.isArray((raw as Record<string, unknown>)?.customPaths)
+    ? (raw as { customPaths: string[] }).customPaths
+    : []
+
+  // Scan default spaces directory
+  const spacesDir = getSpacesDir()
+  if (existsSync(spacesDir)) {
+    try {
+      for (const dir of readdirSync(spacesDir)) {
+        const spacePath = join(spacesDir, dir)
+        try {
+          if (!statSync(spacePath).isDirectory()) continue
+        } catch { continue }
+        const meta = tryReadMeta(spacePath)
+        if (meta) {
+          map.set(meta.id, { path: spacePath })
+        }
+      }
+    } catch (error) {
+      console.error('[Space] Error scanning spaces directory:', error)
+    }
+  }
+
+  // Scan old custom paths
+  for (const customPath of oldCustomPaths) {
+    if (existsSync(customPath)) {
+      const meta = tryReadMeta(customPath)
+      if (meta && !map.has(meta.id)) {
+        map.set(meta.id, { path: customPath })
+      }
+    }
+  }
+
+  // Persist v2 format
+  persistIndex(map)
+  console.log(`[Space] Index v2 migration complete: ${map.size} spaces`)
+  return map
 }
 
-function saveSpaceIndex(index: SpaceIndex): void {
-  const indexPath = getSpaceIndexPath()
-  writeFileSync(indexPath, JSON.stringify(index, null, 2))
-}
-
-function addToSpaceIndex(path: string): void {
-  const index = loadSpaceIndex()
-  if (!index.customPaths.includes(path)) {
-    index.customPaths.push(path)
-    saveSpaceIndex(index)
+/**
+ * Try to read SpaceMeta from a path. Returns null on any failure.
+ */
+function tryReadMeta(spacePath: string): SpaceMeta | null {
+  const metaPath = join(spacePath, '.halo', 'meta.json')
+  if (!existsSync(metaPath)) return null
+  try {
+    return JSON.parse(readFileSync(metaPath, 'utf-8'))
+  } catch {
+    return null
   }
 }
 
-function removeFromSpaceIndex(path: string): void {
-  const index = loadSpaceIndex()
-  index.customPaths = index.customPaths.filter(p => p !== path)
-  saveSpaceIndex(index)
+/**
+ * Persist the registry Map to disk (atomic write via tmp + rename).
+ */
+function persistIndex(map: Map<string, SpaceIndexEntry>): void {
+  const data: SpaceIndexV2 = {
+    version: 2,
+    spaces: Object.fromEntries(map)
+  }
+  const indexPath = getSpaceIndexPath()
+  const tmpPath = indexPath + '.tmp'
+  try {
+    // Ensure parent directory exists
+    const dir = getHaloDir()
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true })
+    }
+    writeFileSync(tmpPath, JSON.stringify(data, null, 2))
+    renameSync(tmpPath, indexPath)
+  } catch (error) {
+    console.error('[Space] Failed to persist index:', error)
+    // Clean up tmp file if rename failed
+    try { if (existsSync(tmpPath)) rmSync(tmpPath) } catch { /* ignore */ }
+  }
 }
+
+// ============================================================================
+// Halo Temp Space
+// ============================================================================
 
 const HALO_SPACE: Space = {
   id: 'halo-temp',
   name: 'Halo',
-  icon: 'sparkles',  // Maps to Lucide Sparkles icon
+  icon: 'sparkles',
   path: '',
   isTemp: true,
   createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-  stats: {
-    artifactCount: 0,
-    conversationCount: 0
-  }
+  updatedAt: new Date().toISOString()
 }
 
-// Get all valid space paths (for security checks)
-export function getAllSpacePaths(): string[] {
-  const paths: string[] = []
-
-  // Add temp space path
-  paths.push(getTempSpacePath())
-
-  // Add default spaces directory
-  const spacesDir = getSpacesDir()
-  if (existsSync(spacesDir)) {
-    const dirs = readdirSync(spacesDir)
-    for (const dir of dirs) {
-      const spacePath = join(spacesDir, dir)
-      if (statSync(spacePath).isDirectory()) {
-        paths.push(spacePath)
-      }
-    }
-  }
-
-  // Add custom path spaces from index
-  const index = loadSpaceIndex()
-  for (const customPath of index.customPaths) {
-    if (existsSync(customPath)) {
-      paths.push(customPath)
-    }
-  }
-
-  return paths
-}
-
-/**
- * Get space stats (sync version, with caching)
- * Uses cache to avoid repeated expensive scans
- */
-function getSpaceStats(spacePath: string): { artifactCount: number; conversationCount: number } {
-  // Check cache first
-  const cached = statsCache.get(spacePath)
-  const now = Date.now()
-  if (cached && now - cached.timestamp < STATS_CACHE_TTL) {
-    return { artifactCount: cached.artifactCount, conversationCount: cached.conversationCount }
-  }
-
-  const startTime = performance.now()
-
-  // Fast estimation: only count top-level items for artifacts
-  // This is much faster than recursive counting for large projects
-  let artifactCount = 0
-  let conversationCount = 0
-
-  // Determine artifact directory based on space type
-  const isTemp = spacePath === getTempSpacePath()
-  const artifactsDir = isTemp ? join(spacePath, 'artifacts') : spacePath
-
-  // Count artifacts - fast estimation (top-level only for non-temp, or artifacts folder for temp)
-  if (existsSync(artifactsDir)) {
-    try {
-      const items = readdirSync(artifactsDir)
-      // For temp space, count all non-hidden files in artifacts folder
-      // For regular space, count top-level items (excluding .halo and common ignored dirs)
-      const ignoredDirs = new Set(['.halo', '.git', 'node_modules', '__pycache__', 'dist', 'build'])
-      artifactCount = items.filter(item =>
-        !item.startsWith('.') && (isTemp || !ignoredDirs.has(item))
-      ).length
-    } catch (error) {
-      console.error(`[Space] Error counting artifacts:`, error)
-    }
-  }
-
-  // Count conversations - this is already fast (just .json files in one directory)
-  const conversationsDir = isTemp
-    ? join(spacePath, 'conversations')
-    : join(spacePath, '.halo', 'conversations')
-
-  if (existsSync(conversationsDir)) {
-    try {
-      const indexPath = join(conversationsDir, 'index.json')
-      if (existsSync(indexPath)) {
-        // Use index.json for fast count (already has conversation metadata)
-        const indexContent = readFileSync(indexPath, 'utf-8')
-        const index = JSON.parse(indexContent)
-        conversationCount = Array.isArray(index) ? index.length : Object.keys(index).length
-      } else {
-        // Fallback: count .json files
-        conversationCount = readdirSync(conversationsDir).filter(f =>
-          f.endsWith('.json') && f !== 'index.json'
-        ).length
-      }
-    } catch (error) {
-      console.error(`[Space] Error counting conversations:`, error)
-    }
-  }
-
-  // Update cache
-  statsCache.set(spacePath, {
-    artifactCount,
-    conversationCount,
-    timestamp: now
-  })
-
-  const elapsed = performance.now() - startTime
-  console.log(`[Space] ⏱️ getSpaceStats completed: ${artifactCount} artifacts, ${conversationCount} conversations in ${elapsed.toFixed(1)}ms (path=${spacePath})`)
-
-  return { artifactCount, conversationCount }
-}
-
-/**
- * Invalidate stats cache for a space
- */
-export function invalidateStatsCache(spacePath: string): void {
-  statsCache.delete(spacePath)
-}
-
-// Get Halo temp space
 export function getHaloSpace(): Space {
   const tempPath = getTempSpacePath()
-  const stats = getSpaceStats(tempPath)
 
-  // Load preferences if they exist
-  const metaPath = join(tempPath, '.halo', 'meta.json')
   let preferences: SpacePreferences | undefined
-
+  const metaPath = join(tempPath, '.halo', 'meta.json')
   if (existsSync(metaPath)) {
     try {
       const meta: SpaceMeta = JSON.parse(readFileSync(metaPath, 'utf-8'))
@@ -247,83 +224,132 @@ export function getHaloSpace(): Space {
   return {
     ...HALO_SPACE,
     path: tempPath,
-    stats,
     preferences
   }
 }
 
-// Helper to load a space from a path
+// ============================================================================
+// Core Space Functions
+// ============================================================================
+
+/**
+ * Load a space from a filesystem path (reads meta.json).
+ */
 function loadSpaceFromPath(spacePath: string): Space | null {
   const metaPath = join(spacePath, '.halo', 'meta.json')
 
-  if (existsSync(metaPath)) {
-    try {
-      const meta: SpaceMeta = JSON.parse(readFileSync(metaPath, 'utf-8'))
-      const stats = getSpaceStats(spacePath)
+  if (!existsSync(metaPath)) return null
 
-      return {
-        id: meta.id,
-        name: meta.name,
-        icon: meta.icon,
-        path: spacePath,
-        isTemp: false,
-        createdAt: meta.createdAt,
-        updatedAt: meta.updatedAt,
-        stats,
-        preferences: meta.preferences
-      }
-    } catch (error) {
-      console.error(`Failed to read space meta for ${spacePath}:`, error)
+  try {
+    const meta: SpaceMeta = JSON.parse(readFileSync(metaPath, 'utf-8'))
+
+    return {
+      id: meta.id,
+      name: meta.name,
+      icon: meta.icon,
+      path: spacePath,
+      isTemp: false,
+      createdAt: meta.createdAt,
+      updatedAt: meta.updatedAt,
+      preferences: meta.preferences
     }
+  } catch (error) {
+    console.error(`[Space] Failed to read space meta for ${spacePath}:`, error)
+    return null
   }
-  return null
 }
 
-// List all spaces (including custom path spaces)
+/**
+ * Get a specific space by ID. Uses LRU cache to avoid repeated disk reads.
+ */
+export function getSpace(spaceId: string): Space | null {
+  if (spaceId === 'halo-temp') {
+    return getHaloSpace()
+  }
+
+  // Check LRU cache (move to end if hit, maintaining LRU order)
+  if (spaceCache.has(spaceId)) {
+    const cached = spaceCache.get(spaceId)!
+    spaceCache.delete(spaceId)
+    spaceCache.set(spaceId, cached)
+    return cached
+  }
+
+  const entry = getRegistry().get(spaceId)
+  if (!entry) return null
+
+  // Validate path still exists (user may have deleted folder externally)
+  if (!existsSync(join(entry.path, '.halo', 'meta.json'))) {
+    console.warn(`[Space] Space ${spaceId} path invalid (${entry.path}), removing from index`)
+    getRegistry().delete(spaceId)
+    persistIndex(getRegistry())
+    return null
+  }
+
+  const space = loadSpaceFromPath(entry.path)
+  if (!space) return null
+
+  // Add to LRU cache, evict oldest if full
+  spaceCache.set(spaceId, space)
+  if (spaceCache.size > MAX_SPACE_CACHE_SIZE) {
+    const oldest = spaceCache.keys().next().value
+    if (oldest) spaceCache.delete(oldest)
+  }
+
+  return space
+}
+
+/**
+ * List all spaces. Iterates registry, reads meta.json for each.
+ * Does NOT calculate stats (callers request stats separately if needed).
+ */
 export function listSpaces(): Space[] {
-  const spacesDir = getSpacesDir()
   const spaces: Space[] = []
-  const loadedPaths = new Set<string>()
+  let dirty = false
 
-  // Load spaces from default directory
-  if (existsSync(spacesDir)) {
-    const dirs = readdirSync(spacesDir)
-
-    for (const dir of dirs) {
-      const spacePath = join(spacesDir, dir)
-      const space = loadSpaceFromPath(spacePath)
-      if (space) {
-        spaces.push(space)
-        loadedPaths.add(spacePath)
-      }
+  for (const [id, entry] of getRegistry()) {
+    const space = loadSpaceFromPath(entry.path)
+    if (space) {
+      spaces.push(space)
+    } else {
+      // Path no longer valid, clean up
+      console.warn(`[Space] Space ${id} at ${entry.path} no longer valid, removing from index`)
+      getRegistry().delete(id)
+      dirty = true
     }
   }
 
-  // Load spaces from custom paths (indexed)
-  const index = loadSpaceIndex()
-  for (const customPath of index.customPaths) {
-    if (!loadedPaths.has(customPath) && existsSync(customPath)) {
-      const space = loadSpaceFromPath(customPath)
-      if (space) {
-        spaces.push(space)
-        loadedPaths.add(customPath)
-      }
-    }
+  if (dirty) {
+    persistIndex(getRegistry())
   }
 
-  // Sort by updatedAt (most recent first)
   spaces.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-
   return spaces
 }
 
-// Create a new space
+/**
+ * Get all valid space paths (for security checks).
+ * Reads from registry instead of scanning filesystem.
+ */
+export function getAllSpacePaths(): string[] {
+  const paths: string[] = [getTempSpacePath()]
+
+  for (const entry of getRegistry().values()) {
+    if (existsSync(entry.path)) {
+      paths.push(entry.path)
+    }
+  }
+
+  return paths
+}
+
+/**
+ * Create a new space. Registers in both memory and disk index.
+ */
 export function createSpace(input: { name: string; icon: string; customPath?: string }): Space {
   const id = uuidv4()
   const now = new Date().toISOString()
-  const isCustomPath = !!input.customPath
 
-  // Determine space path
   let spacePath: string
   if (input.customPath) {
     spacePath = input.customPath
@@ -347,10 +373,9 @@ export function createSpace(input: { name: string; icon: string; customPath?: st
 
   writeFileSync(join(spacePath, '.halo', 'meta.json'), JSON.stringify(meta, null, 2))
 
-  // Register custom path in index
-  if (isCustomPath) {
-    addToSpaceIndex(spacePath)
-  }
+  // Register in index (memory + disk)
+  getRegistry().set(id, { path: spacePath })
+  persistIndex(getRegistry())
 
   return {
     id,
@@ -359,17 +384,14 @@ export function createSpace(input: { name: string; icon: string; customPath?: st
     path: spacePath,
     isTemp: false,
     createdAt: now,
-    updatedAt: now,
-    stats: {
-      artifactCount: 0,
-      conversationCount: 0
-    }
+    updatedAt: now
   }
 }
 
-// Delete a space
+/**
+ * Delete a space. Removes from both memory and disk index.
+ */
 export function deleteSpace(spaceId: string): boolean {
-  // Find the space first
   const space = getSpace(spaceId)
   if (!space || space.isTemp) {
     return false
@@ -386,35 +408,30 @@ export function deleteSpace(spaceId: string): boolean {
       if (existsSync(haloDir)) {
         rmSync(haloDir, { recursive: true, force: true })
       }
-      // Remove from index
-      removeFromSpaceIndex(spacePath)
     } else {
       // For default path spaces, delete the entire folder
       rmSync(spacePath, { recursive: true, force: true })
     }
+
+    // Unregister from index (memory + disk) and invalidate cache
+    getRegistry().delete(spaceId)
+    spaceCache.delete(spaceId)
+    persistIndex(getRegistry())
+
     return true
   } catch (error) {
-    console.error(`Failed to delete space ${spaceId}:`, error)
+    console.error(`[Space] Failed to delete space ${spaceId}:`, error)
     return false
   }
 }
 
-// Get a specific space by ID
-export function getSpace(spaceId: string): Space | null {
-  if (spaceId === 'halo-temp') {
-    return getHaloSpace()
-  }
-
-  const spaces = listSpaces()
-  return spaces.find(s => s.id === spaceId) || null
-}
-
-// Open space folder in file explorer
+/**
+ * Open space folder in file explorer.
+ */
 export function openSpaceFolder(spaceId: string): boolean {
   const space = getSpace(spaceId)
 
   if (space) {
-    // For temp space, open artifacts folder
     if (space.isTemp) {
       const artifactsPath = join(space.path, 'artifacts')
       if (existsSync(artifactsPath)) {
@@ -430,7 +447,9 @@ export function openSpaceFolder(spaceId: string): boolean {
   return false
 }
 
-// Update space metadata
+/**
+ * Update space metadata. Returns updated space directly (no redundant getSpace call).
+ */
 export function updateSpace(spaceId: string, updates: { name?: string; icon?: string }): Space | null {
   const space = getSpace(spaceId)
 
@@ -449,14 +468,30 @@ export function updateSpace(spaceId: string, updates: { name?: string; icon?: st
 
     writeFileSync(metaPath, JSON.stringify(meta, null, 2))
 
-    return getSpace(spaceId)
+    // Build updated space and refresh cache
+    const updatedSpace: Space = {
+      id: space.id,
+      name: meta.name,
+      icon: meta.icon,
+      path: space.path,
+      isTemp: false,
+      createdAt: meta.createdAt,
+      updatedAt: meta.updatedAt,
+      preferences: meta.preferences
+    }
+    spaceCache.set(spaceId, updatedSpace)
+
+    return updatedSpace
   } catch (error) {
-    console.error('Failed to update space:', error)
+    console.error('[Space] Failed to update space:', error)
     return null
   }
 }
 
-// Update space preferences (layout settings, etc.)
+/**
+ * Update space preferences (layout settings, etc.).
+ * Returns updated space directly (no redundant getSpace call).
+ */
 export function updateSpacePreferences(
   spaceId: string,
   preferences: Partial<SpacePreferences>
@@ -467,10 +502,7 @@ export function updateSpacePreferences(
     return null
   }
 
-  // For temp space, store preferences in a special location
-  const metaPath = space.isTemp
-    ? join(space.path, '.halo', 'meta.json')
-    : join(space.path, '.halo', 'meta.json')
+  const metaPath = join(space.path, '.halo', 'meta.json')
 
   try {
     // Ensure .halo directory exists for temp space
@@ -484,7 +516,6 @@ export function updateSpacePreferences(
     if (existsSync(metaPath)) {
       meta = JSON.parse(readFileSync(metaPath, 'utf-8'))
     } else {
-      // Create new meta for temp space
       meta = {
         id: space.id,
         name: space.name,
@@ -510,14 +541,31 @@ export function updateSpacePreferences(
 
     console.log(`[Space] Updated preferences for ${spaceId}:`, preferences)
 
-    return getSpace(spaceId)
+    // Build updated space and refresh cache (skip temp space)
+    const updatedSpace: Space = {
+      id: space.id,
+      name: meta.name,
+      icon: meta.icon,
+      path: space.path,
+      isTemp: space.isTemp,
+      createdAt: meta.createdAt,
+      updatedAt: meta.updatedAt,
+      preferences: meta.preferences
+    }
+    if (!space.isTemp) {
+      spaceCache.set(spaceId, updatedSpace)
+    }
+
+    return updatedSpace
   } catch (error) {
-    console.error('Failed to update space preferences:', error)
+    console.error('[Space] Failed to update space preferences:', error)
     return null
   }
 }
 
-// Get space preferences only (lightweight, without full space load)
+/**
+ * Get space preferences only (lightweight, without full space load).
+ */
 export function getSpacePreferences(spaceId: string): SpacePreferences | null {
   const space = getSpace(spaceId)
 
@@ -534,12 +582,15 @@ export function getSpacePreferences(spaceId: string): SpacePreferences | null {
     }
     return null
   } catch (error) {
-    console.error('Failed to get space preferences:', error)
+    console.error('[Space] Failed to get space preferences:', error)
     return null
   }
 }
 
-// Write onboarding artifact - saves a file to the space's artifacts folder
+// ============================================================================
+// Onboarding Functions
+// ============================================================================
+
 export function writeOnboardingArtifact(spaceId: string, fileName: string, content: string): boolean {
   const space = getSpace(spaceId)
   if (!space) {
@@ -548,15 +599,12 @@ export function writeOnboardingArtifact(spaceId: string, fileName: string, conte
   }
 
   try {
-    // Determine artifacts directory based on space type
     const artifactsDir = space.isTemp
       ? join(space.path, 'artifacts')
-      : space.path  // For regular spaces, save to root
+      : space.path
 
-    // Ensure artifacts directory exists
     mkdirSync(artifactsDir, { recursive: true })
 
-    // Write the file
     const filePath = join(artifactsDir, fileName)
     writeFileSync(filePath, content, 'utf-8')
 
@@ -568,7 +616,6 @@ export function writeOnboardingArtifact(spaceId: string, fileName: string, conte
   }
 }
 
-// Save onboarding conversation - creates a conversation with the mock messages
 export function saveOnboardingConversation(
   spaceId: string,
   userMessage: string,
@@ -585,15 +632,12 @@ export function saveOnboardingConversation(
     const conversationId = uuidv4()
     const now = new Date().toISOString()
 
-    // Determine conversations directory
     const conversationsDir = space.isTemp
       ? join(space.path, 'conversations')
       : join(space.path, '.halo', 'conversations')
 
-    // Ensure directory exists
     mkdirSync(conversationsDir, { recursive: true })
 
-    // Create conversation data
     const conversation = {
       id: conversationId,
       title: 'Welcome to Halo',
@@ -615,7 +659,6 @@ export function saveOnboardingConversation(
       ]
     }
 
-    // Write conversation file
     const filePath = join(conversationsDir, `${conversationId}.json`)
     writeFileSync(filePath, JSON.stringify(conversation, null, 2), 'utf-8')
 

@@ -189,6 +189,9 @@ export interface V2SessionInfo {
   lastUsedAt: number
   // Track config at session creation time for rebuild detection
   config: SessionConfig
+  // Credentials generation at session creation time
+  // Used to detect stale credentials (session created before config change)
+  credentialsGeneration: number
 }
 
 // ============================================

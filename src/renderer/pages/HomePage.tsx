@@ -228,14 +228,6 @@ export function HomePage() {
                 <p className="text-sm text-muted-foreground mt-1">
                   {t('Aimless time, ideas will crystallize here')}
                 </p>
-                {(haloSpace.stats.artifactCount > 0 || haloSpace.stats.conversationCount > 0) && (
-                  <p className="text-xs text-muted-foreground mt-2">
-                    {t('{{count}} artifacts · {{conversations}} conversations', {
-                      count: haloSpace.stats.artifactCount,
-                      conversations: haloSpace.stats.conversationCount
-                    })}
-                  </p>
-                )}
               </div>
             </div>
           </div>
@@ -291,12 +283,6 @@ export function HomePage() {
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground mt-2">
-                  {t('{{count}} artifacts · {{conversations}} conversations', {
-                    count: space.stats.artifactCount,
-                    conversations: space.stats.conversationCount
-                  })}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
                   {formatTimeAgo(space.updatedAt)}{t('active')}
                 </p>
               </div>

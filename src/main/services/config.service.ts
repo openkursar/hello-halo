@@ -201,6 +201,26 @@ function migrateEncryptedCredentials(): void {
 type ApiConfigChangeHandler = () => void
 const apiConfigChangeHandlers: ApiConfigChangeHandler[] = []
 
+// ============================================================================
+// CREDENTIALS GENERATION COUNTER
+// ============================================================================
+// A monotonically increasing counter that increments whenever API credentials change.
+// Sessions record their generation at creation time. When reusing a session, we compare
+// generations - if different, the session was created with stale credentials and must
+// be recreated. This is a standard cache invalidation pattern (similar to database
+// optimistic locking) that provides deterministic correctness regardless of async timing.
+// ============================================================================
+
+let credentialsGeneration = 0
+
+/**
+ * Get the current credentials generation counter.
+ * Sessions compare this value to detect stale credentials.
+ */
+export function getCredentialsGeneration(): number {
+  return credentialsGeneration
+}
+
 /**
  * Register a callback to be notified when API config changes.
  * Used by agent.service to invalidate sessions on config change.
@@ -716,6 +736,12 @@ export function saveConfig(config: Partial<HaloConfig>): HaloConfig {
       (config.api.provider !== currentConfig.api.provider ||
         config.api.apiKey !== currentConfig.api.apiKey ||
         config.api.apiUrl !== currentConfig.api.apiUrl)
+
+    if (apiChanged || aiSourcesChanged) {
+      // Increment credentials generation counter - sessions will detect stale credentials
+      credentialsGeneration++
+      console.log(`[Config] Credentials generation: ${credentialsGeneration}`)
+    }
 
     if ((apiChanged || aiSourcesChanged) && apiConfigChangeHandlers.length > 0) {
       console.log('[Config] API config changed, notifying subscribers...')

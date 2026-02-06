@@ -180,11 +180,6 @@ export interface HaloConfig {
 // Space Types
 // ============================================
 
-export interface SpaceStats {
-  artifactCount: number;
-  conversationCount: number;
-}
-
 // Layout preferences for a space (persisted to meta.json)
 export interface SpaceLayoutPreferences {
   artifactRailExpanded?: boolean;  // Whether rail stays expanded when canvas is open
@@ -204,7 +199,6 @@ export interface Space {
   isTemp: boolean;
   createdAt: string;
   updatedAt: string;
-  stats: SpaceStats;
   preferences?: SpacePreferences;  // User preferences for this space
 }
 

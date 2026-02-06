@@ -41,13 +41,6 @@ describe('Space Service', () => {
       expect(fs.existsSync(haloSpace.path)).toBe(true)
     })
 
-    it('should include stats', () => {
-      const haloSpace = getHaloSpace()
-
-      expect(haloSpace.stats).toBeDefined()
-      expect(typeof haloSpace.stats.artifactCount).toBe('number')
-      expect(typeof haloSpace.stats.conversationCount).toBe('number')
-    })
   })
 
   describe('listSpaces', () => {

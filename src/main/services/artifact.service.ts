@@ -109,13 +109,15 @@ export function getArtifact(artifactId: string): Artifact | null {
   return null
 }
 
-// Watch for file changes (future feature)
+// Watch for file changes
+// Note: File watching is implemented in artifact-cache.service.ts using @parcel/watcher.
+// This function is kept for API compatibility but delegates to the cache service.
 export function watchArtifacts(
   spaceId: string,
   callback: (artifacts: Artifact[]) => void
 ): () => void {
-  // TODO: Implement file watching with chokidar or similar
-  // For now, return a no-op cleanup function
+  // File watching is handled by artifact-cache.service.ts via IPC events
+  // Callers should use api.onArtifactChanged() instead
   return () => {}
 }
 

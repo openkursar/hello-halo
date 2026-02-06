@@ -116,6 +116,69 @@ const BINARY_DEPENDENCIES = [
         return { valid: false, info: 'cannot read file' }
       }
     }
+  },
+
+  // @parcel/watcher - Native file system watcher (same engine as VS Code)
+  // Each platform has a separate npm package with prebuilt .node binaries.
+  {
+    name: 'Mac arm64 @parcel/watcher',
+    path: 'node_modules/@parcel/watcher-darwin-arm64',
+    platform: 'mac-arm64',
+    fix: 'npm install @parcel/watcher',
+    validate: (dirPath) => {
+      try {
+        const files = fs.readdirSync(dirPath, { recursive: true }).map(String)
+        const nodeFile = files.find(f => f.endsWith('.node'))
+        return { valid: !!nodeFile, info: nodeFile || 'no .node file found' }
+      } catch {
+        return { valid: false, info: 'cannot read directory' }
+      }
+    }
+  },
+  {
+    name: 'Mac x64 @parcel/watcher',
+    path: 'node_modules/@parcel/watcher-darwin-x64',
+    platform: 'mac-x64',
+    fix: 'npm install @parcel/watcher',
+    validate: (dirPath) => {
+      try {
+        const files = fs.readdirSync(dirPath, { recursive: true }).map(String)
+        const nodeFile = files.find(f => f.endsWith('.node'))
+        return { valid: !!nodeFile, info: nodeFile || 'no .node file found' }
+      } catch {
+        return { valid: false, info: 'cannot read directory' }
+      }
+    }
+  },
+  {
+    name: 'Windows x64 @parcel/watcher',
+    path: 'node_modules/@parcel/watcher-win32-x64',
+    platform: 'win',
+    fix: 'npm install @parcel/watcher',
+    validate: (dirPath) => {
+      try {
+        const files = fs.readdirSync(dirPath, { recursive: true }).map(String)
+        const nodeFile = files.find(f => f.endsWith('.node'))
+        return { valid: !!nodeFile, info: nodeFile || 'no .node file found' }
+      } catch {
+        return { valid: false, info: 'cannot read directory' }
+      }
+    }
+  },
+  {
+    name: 'Linux x64 @parcel/watcher',
+    path: 'node_modules/@parcel/watcher-linux-x64-glibc',
+    platform: 'linux',
+    fix: 'npm install @parcel/watcher',
+    validate: (dirPath) => {
+      try {
+        const files = fs.readdirSync(dirPath, { recursive: true }).map(String)
+        const nodeFile = files.find(f => f.endsWith('.node'))
+        return { valid: !!nodeFile, info: nodeFile || 'no .node file found' }
+      } catch {
+        return { valid: false, info: 'cannot read directory' }
+      }
+    }
   }
 ]
 
