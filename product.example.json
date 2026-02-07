@@ -2,6 +2,11 @@
   "$schema": "./product.schema.json",
   "name": "Halo",
   "version": "1.0.0",
+  "updateConfig": {
+    "provider": "github",
+    "owner": "openkursar",
+    "repo": "hello-halo"
+  },
   "authProviders": [
     {
       "type": "github-copilot",

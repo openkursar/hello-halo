@@ -169,58 +169,26 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
 
         {/* Info banner */}
         <div className="bg-muted/50 rounded-lg p-3 mb-4 text-sm text-muted-foreground">
-          {t('We recommend full trust mode - use natural language to control Halo. UI-based permission settings coming in future versions.')}
+          {t('We recommend full trust mode - use natural language to control Halo.')}
         </div>
 
-        <div className="space-y-4 opacity-50">
-          {/* File Access */}
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-medium">{t('File Read/Write')}</p>
-              <p className="text-sm text-muted-foreground">{t('Allow AI to read and create files')}</p>
-            </div>
-            <select
-              value="allow"
+        {/* Trust Mode - always on */}
+        <div className="flex items-center justify-between opacity-50">
+          <div>
+            <p className="font-medium">{t('Trust Mode')}</p>
+            <p className="text-sm text-muted-foreground">{t('Automatically execute all operations')}</p>
+          </div>
+          <label className="relative inline-flex items-center cursor-not-allowed">
+            <input
+              type="checkbox"
+              checked={true}
               disabled
-              className="px-3 py-1 bg-input rounded-lg border border-border cursor-not-allowed"
-            >
-              <option value="allow">{t('Allow')}</option>
-            </select>
-          </div>
-
-          {/* Command Execution */}
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-medium">{t('Execute Commands')}</p>
-              <p className="text-sm text-muted-foreground">{t('Allow AI to execute terminal commands')}</p>
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-primary rounded-full">
+              <div className="w-5 h-5 bg-white rounded-full shadow-md transform translate-x-5 mt-0.5" />
             </div>
-            <select
-              value="allow"
-              disabled
-              className="px-3 py-1 bg-input rounded-lg border border-border cursor-not-allowed"
-            >
-              <option value="allow">{t('Allow')}</option>
-            </select>
-          </div>
-
-          {/* Trust Mode */}
-          <div className="flex items-center justify-between pt-4 border-t border-border">
-            <div>
-              <p className="font-medium">{t('Trust Mode')}</p>
-              <p className="text-sm text-muted-foreground">{t('Automatically execute all operations')}</p>
-            </div>
-            <label className="relative inline-flex items-center cursor-not-allowed">
-              <input
-                type="checkbox"
-                checked={true}
-                disabled
-                className="sr-only peer"
-              />
-              <div className="w-11 h-6 bg-primary rounded-full">
-                <div className="w-5 h-5 bg-white rounded-full shadow-md transform translate-x-5 mt-0.5" />
-              </div>
-            </label>
-          </div>
+          </label>
         </div>
       </section>
 

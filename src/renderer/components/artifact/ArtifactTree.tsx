@@ -12,7 +12,7 @@ import { useState, useCallback, useEffect, useMemo, createContext, useContext, u
 import { Tree, NodeRendererProps, NodeApi } from 'react-arborist'
 import { api } from '../../api'
 import { useCanvasStore } from '../../stores/canvas.store'
-import type { ArtifactTreeNode, ArtifactChangeEvent } from '../../types'
+import type { ArtifactTreeNode, ArtifactTreeUpdateEvent } from '../../types'
 import { FileIcon } from '../icons/ToolIcons'
 import { ChevronRight, ChevronDown, Download, Eye, Loader2 } from 'lucide-react'
 import { useIsGenerating } from '../../stores/chat.store'
@@ -97,6 +97,12 @@ interface LazyLoadContextType {
 }
 const LazyLoadContext = createContext<LazyLoadContextType | null>(null)
 
+// Get parent directory path (client-side helper, same logic as backend getParentPath)
+function getParentPathClient(filePath: string): string {
+  const lastSep = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
+  return lastSep > 0 ? filePath.substring(0, lastSep) : filePath
+}
+
 function transformToArboristData(nodes: ArtifactTreeNode[]): TreeNodeData[] {
   return nodes.map(node => ({
     id: node.id,
@@ -177,63 +183,61 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
     return []
   }, [spaceId])
 
-  // Handle file change events from watcher
-  const handleArtifactChange = useCallback((event: ArtifactChangeEvent) => {
+  // Handle tree update events from watcher (pre-computed data, zero IPC round-trips)
+  const handleTreeUpdate = useCallback((event: ArtifactTreeUpdateEvent) => {
     if (event.spaceId !== spaceId) return
 
-    console.log('[ArtifactTree] Artifact changed:', event.type, event.relativePath)
+    console.log('[ArtifactTree] Tree update:', event.updatedDirs.length, 'dirs,', event.changes.length, 'changes')
 
-    // For simplicity, refresh the affected part of the tree
-    // More sophisticated incremental updates could be implemented
-    // Use regex to support both / and \ (Windows compatibility)
-    const lastSepIndex = Math.max(event.path.lastIndexOf('/'), event.path.lastIndexOf('\\'))
-    const parentPath = lastSepIndex > 0 ? event.path.substring(0, lastSepIndex) : ''
+    if (event.updatedDirs.length === 0) {
+      // No tracked dirs updated — may be a root-level change, refresh tree
+      const hasRootChange = event.changes.some(c => {
+        const lastSep = Math.max(c.path.lastIndexOf('/'), c.path.lastIndexOf('\\'))
+        const parent = lastSep > 0 ? c.path.substring(0, lastSep) : ''
+        // Root-level if parent is empty or matches the space root
+        return !parent || parent === c.path
+      })
+      if (hasRootChange) {
+        setTimeout(loadTree, 100)
+      }
+      return
+    }
 
     setTreeData(prev => {
-      // If the change is at root level, trigger a refresh
-      if (!parentPath || parentPath === event.path) {
-        // Defer refresh to avoid state update during render
-        setTimeout(loadTree, 100)
-        return prev
-      }
+      let updated = prev
 
-      // Check if the parent folder was previously loaded (likely expanded)
-      // and schedule a reload if so
-      const findAndCheckNode = (nodes: TreeNodeData[]): boolean => {
-        for (const node of nodes) {
-          if (node.path === parentPath && node.childrenLoaded) {
-            return true
-          }
-          if (node.children && findAndCheckNode(node.children)) {
-            return true
-          }
-        }
-        return false
-      }
-      const needsReload = findAndCheckNode(prev)
+      for (const { dirPath, children } of event.updatedDirs) {
+        const transformedChildren = transformToArboristData(children as ArtifactTreeNode[])
 
-      // Find and refresh the parent folder's children
-      const refreshNode = (nodes: TreeNodeData[]): TreeNodeData[] => {
-        return nodes.map(node => {
-          if (node.path === parentPath && node.childrenLoaded) {
-            // Mark as needing refresh
-            return { ...node, childrenLoaded: false }
-          }
-          if (node.children) {
-            return { ...node, children: refreshNode(node.children) }
-          }
-          return node
+        // Check if this is the root directory (parent of top-level nodes)
+        const isRoot = prev.length > 0 && prev.some(n => {
+          const parentOfNode = getParentPathClient(n.path)
+          return parentOfNode === dirPath
         })
+
+        if (isRoot || (prev.length === 0 && transformedChildren.length > 0)) {
+          // Root update: replace entire tree data
+          updated = transformedChildren
+        } else {
+          // Walk the tree to find the node matching dirPath and replace its children
+          const updateNodeInTree = (nodes: TreeNodeData[]): TreeNodeData[] => {
+            return nodes.map(node => {
+              if (node.path === dirPath) {
+                return { ...node, children: transformedChildren, childrenLoaded: true }
+              }
+              if (node.children) {
+                return { ...node, children: updateNodeInTree(node.children) }
+              }
+              return node
+            })
+          }
+          updated = updateNodeInTree(updated)
+        }
       }
 
-      // If the folder was expanded, schedule a reload after state update
-      if (needsReload) {
-        setTimeout(() => loadChildren(parentPath), 100)
-      }
-
-      return refreshNode(prev)
+      return updated
     })
-  }, [spaceId, loadTree, loadChildren])
+  }, [spaceId, loadTree])
 
   // Initialize watcher and subscribe to changes
   useEffect(() => {
@@ -244,25 +248,26 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
       console.error('[ArtifactTree] Failed to init watcher:', err)
     })
 
-    // Subscribe to change events
-    const cleanup = api.onArtifactChanged(handleArtifactChange)
+    // Subscribe to tree update events (pre-computed data, zero IPC round-trips)
+    const cleanup = api.onArtifactTreeUpdate(handleTreeUpdate)
     watcherInitialized.current = true
 
     return () => {
       cleanup()
       watcherInitialized.current = false
     }
-  }, [spaceId, handleArtifactChange])
+  }, [spaceId, handleTreeUpdate])
 
   // Load on mount and when space changes
   useEffect(() => {
     loadTree()
   }, [loadTree])
 
-  // Refresh when generation completes (debounced)
+  // Refresh when generation completes (safety net — watcher pushes updates in real-time,
+  // but this catches any edge cases where watcher events were missed)
   useEffect(() => {
     if (!isGenerating) {
-      const timer = setTimeout(loadTree, 500)
+      const timer = setTimeout(loadTree, 2000)
       return () => clearTimeout(timer)
     }
   }, [isGenerating, loadTree])

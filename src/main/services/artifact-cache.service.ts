@@ -111,6 +111,16 @@ export interface ArtifactChangeEvent {
 }
 
 /**
+ * Tree update event pushed to renderer with pre-computed data.
+ * The renderer can apply these directly without any IPC round-trips.
+ */
+export interface ArtifactTreeUpdateEvent {
+  spaceId: string
+  updatedDirs: Array<{ dirPath: string; children: CachedTreeNode[] }>
+  changes: ArtifactChangeEvent[]
+}
+
+/**
  * Space cache entry
  */
 interface SpaceCache {
@@ -120,8 +130,9 @@ interface SpaceCache {
   ignoreFilter: Ignore | null
   // Cache for flat list (only top-level items for card view)
   flatItems: Map<string, CachedArtifact>
-  // Cache for tree structure (with lazy-loaded children)
-  treeNodes: Map<string, CachedTreeNode>
+  // Cache for tree structure: key = directory absolute path, value = sorted children
+  // Only directories in loadedDirs (or root) have entries
+  treeNodes: Map<string, CachedTreeNode[]>
   // Track loaded directories for lazy loading
   loadedDirs: Set<string>
   // Last update timestamp
@@ -185,6 +196,49 @@ function sortByName(a: CachedArtifact, b: CachedArtifact): number {
   if (a.type === 'folder' && b.type !== 'folder') return -1
   if (a.type !== 'folder' && b.type === 'folder') return 1
   return a.name.localeCompare(b.name)
+}
+
+/**
+ * Get parent directory path from a file path.
+ * Supports both / and \ separators.
+ */
+function getParentPath(filePath: string): string {
+  const lastSep = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
+  return lastSep > 0 ? filePath.substring(0, lastSep) : filePath
+}
+
+/**
+ * Sort tree nodes: folders first, then alphabetically by name.
+ * Mutates and returns the array for convenience.
+ */
+function sortTreeNodes(nodes: CachedTreeNode[]): CachedTreeNode[] {
+  return nodes.sort((a, b) => {
+    if (a.type === 'folder' && b.type !== 'folder') return -1
+    if (a.type !== 'folder' && b.type === 'folder') return 1
+    return a.name.localeCompare(b.name)
+  })
+}
+
+/**
+ * Create a CachedTreeNode from a CachedArtifact.
+ * Used by watcher events to insert new items into treeNodes cache.
+ */
+function createTreeNodeFromArtifact(
+  artifact: CachedArtifact,
+  depth: number
+): CachedTreeNode {
+  return {
+    id: generateId(),
+    name: artifact.name,
+    type: artifact.type,
+    path: artifact.path,
+    relativePath: artifact.relativePath,
+    extension: artifact.extension,
+    icon: artifact.icon,
+    depth,
+    children: artifact.type === 'folder' ? [] : undefined,
+    childrenLoaded: false
+  }
 }
 
 /**
@@ -557,23 +611,58 @@ async function initWatcher(cache: SpaceCache): Promise<void> {
 }
 
 /**
- * Process a single watcher event and emit change notifications.
+ * Recursively remove a directory and all its descendant entries from treeNodes and loadedDirs.
+ * Called when a tracked directory is deleted.
+ */
+function removeTreeNodeDescendants(cache: SpaceCache, dirPath: string): void {
+  // Remove the directory's own children entry
+  cache.treeNodes.delete(dirPath)
+  cache.loadedDirs.delete(dirPath)
+
+  // Find and remove all descendant entries (keys that start with dirPath + separator)
+  const prefix = dirPath + sep
+  for (const key of Array.from(cache.treeNodes.keys())) {
+    if (key.startsWith(prefix)) {
+      cache.treeNodes.delete(key)
+      cache.loadedDirs.delete(key)
+    }
+  }
+}
+
+/**
+ * Process a single watcher event: update flatItems + incrementally update treeNodes.
+ *
+ * Key design: treeNodes is a dir->children map. For each event, we only touch the
+ * parent directory's children array if the parent is tracked (i.e. has been expanded).
+ * If the parent is NOT tracked, we skip treeNodes update entirely — the scan will
+ * happen on first expand via loadDirectoryChildren().
  */
 async function processWatcherEvent(cache: SpaceCache, event: WatcherEvent): Promise<void> {
   const { path: filePath, type: eventType } = event
   const relativePath = relative(cache.rootPath, filePath)
+  const parentDir = getParentPath(filePath)
+  const parentIsTracked = cache.treeNodes.has(parentDir)
 
   if (eventType === 'delete') {
     // For deletes, we can't stat to check if it was a directory.
-    // Check if we had it cached as a directory, otherwise treat as file.
+    // Check caches to determine type.
     const wasCachedDir = cache.loadedDirs.has(filePath) ||
       cache.flatItems.get(filePath)?.type === 'folder'
-
     const changeType = wasCachedDir ? 'unlinkDir' : 'unlink'
 
+    // 1. Remove from flatItems
     cache.flatItems.delete(filePath)
-    cache.treeNodes.delete(filePath)
-    cache.loadedDirs.delete(filePath)
+
+    // 2. If parent is tracked: filter out the deleted path from parent's children
+    if (parentIsTracked) {
+      const parentChildren = cache.treeNodes.get(parentDir)!
+      cache.treeNodes.set(parentDir, parentChildren.filter(n => n.path !== filePath))
+    }
+
+    // 3. If deleted path was a directory: remove its treeNodes entry + all descendants
+    if (wasCachedDir) {
+      removeTreeNodeDescendants(cache, filePath)
+    }
 
     emitChange({
       type: changeType,
@@ -584,14 +673,42 @@ async function processWatcherEvent(cache: SpaceCache, event: WatcherEvent): Prom
     return
   }
 
-  // For create/update, stat the file to get metadata (watcher events need stat)
+  // For create/update, stat the file to get metadata
   const artifact = await createArtifactFromPath(filePath, cache.rootPath, cache.spaceId)
   if (!artifact) return
 
   const isDir = artifact.type === 'folder'
   const changeType = mapEventType(event, isDir)
 
+  // 1. Update flatItems
   addToFlatItemsCache(cache, filePath, artifact)
+
+  // 2. Incremental treeNodes update (only if parent dir is tracked/expanded)
+  if (parentIsTracked) {
+    const parentChildren = cache.treeNodes.get(parentDir)!
+    // Calculate depth from relative path
+    const relPath = relative(cache.rootPath, filePath)
+    const depth = relPath ? relPath.split(/[\\/]/).length - 1 : 0
+
+    // Upsert: check if node already exists (handles duplicate create events from OS,
+    // e.g. FSEvents may fire create+create across two callback batches for a single file)
+    const existingIdx = parentChildren.findIndex(n => n.path === filePath)
+
+    if (existingIdx !== -1) {
+      // Node exists: replace in-place, preserving children/childrenLoaded for expanded folders
+      const existing = parentChildren[existingIdx]
+      const updatedNode = createTreeNodeFromArtifact(artifact, depth)
+      if (existing.type === 'folder' && updatedNode.type === 'folder') {
+        updatedNode.children = existing.children
+        updatedNode.childrenLoaded = existing.childrenLoaded
+      }
+      parentChildren[existingIdx] = updatedNode
+    } else {
+      // New node: insert and re-sort
+      parentChildren.push(createTreeNodeFromArtifact(artifact, depth))
+      sortTreeNodes(parentChildren)
+    }
+  }
 
   emitChange({
     type: changeType,
@@ -606,40 +723,73 @@ async function processWatcherEvent(cache: SpaceCache, event: WatcherEvent): Prom
 // Debounced IPC Broadcasting
 // ============================================
 
-// Pending events to be broadcast (grouped by spaceId)
-const pendingBroadcastEvents = new Map<string, ArtifactChangeEvent[]>()
+// Pending events to be broadcast (grouped by spaceId, deduped by path)
+// Outer key: spaceId, inner key: file path → last event for that path
+const pendingBroadcastEvents = new Map<string, Map<string, ArtifactChangeEvent>>()
 let broadcastTimer: ReturnType<typeof setTimeout> | null = null
 const BROADCAST_DEBOUNCE_MS = 150
 
 /**
- * Flush pending events to all clients
+ * Flush pending events to all clients.
+ *
+ * Smart batching: for each spaceId, collect unique parent directories that are tracked
+ * in treeNodes and build an `updatedDirs` payload with pre-computed children.
+ * This means 5 file changes in `/src/components/` become 1 `artifact:tree-update`
+ * with 1 `updatedDirs` entry.
+ *
+ * Also sends individual `artifact:changed` events for backwards compatibility (card view).
  */
 function flushPendingBroadcasts(): void {
   if (pendingBroadcastEvents.size === 0) return
 
-  // Collect all events
-  const allEvents: ArtifactChangeEvent[] = []
-  for (const events of pendingBroadcastEvents.values()) {
-    allEvents.push(...events)
-  }
-  pendingBroadcastEvents.clear()
+  for (const [spaceId, eventsMap] of pendingBroadcastEvents.entries()) {
+    const dedupedEvents = Array.from(eventsMap.values())
+    const cache = cacheMap.get(spaceId)
 
-  // Broadcast batched events
-  if (allEvents.length === 1) {
-    // Single event - send as before for backwards compatibility
-    broadcastToAllClients('artifact:changed', allEvents[0] as unknown as Record<string, unknown>)
-  } else {
-    // Multiple events - send as batch
-    broadcastToAllClients('artifact:changed-batch', { events: allEvents } as unknown as Record<string, unknown>)
-    // Also send individual events for backwards compatibility
-    for (const event of allEvents) {
+    // Build updatedDirs: collect unique parent dirs that are tracked in treeNodes
+    const updatedDirs: Array<{ dirPath: string; children: CachedTreeNode[] }> = []
+
+    if (cache) {
+      const seenDirs = new Set<string>()
+      for (const event of dedupedEvents) {
+        const parentDir = getParentPath(event.path)
+        if (!seenDirs.has(parentDir) && cache.treeNodes.has(parentDir)) {
+          seenDirs.add(parentDir)
+          // Read pre-computed children directly from cache (O(1))
+          updatedDirs.push({
+            dirPath: parentDir,
+            children: cache.treeNodes.get(parentDir)!
+          })
+        }
+      }
+    }
+
+    // Emit tree-update event with pre-computed data (primary channel for tree view)
+    if (updatedDirs.length > 0 || dedupedEvents.length > 0) {
+      const treeUpdateEvent: ArtifactTreeUpdateEvent = {
+        spaceId,
+        updatedDirs,
+        changes: dedupedEvents
+      }
+      broadcastToAllClients('artifact:tree-update', treeUpdateEvent as unknown as Record<string, unknown>)
+    }
+
+    // Also send individual artifact:changed events for backwards compat (card view)
+    for (const event of dedupedEvents) {
       broadcastToAllClients('artifact:changed', event as unknown as Record<string, unknown>)
     }
   }
+
+  pendingBroadcastEvents.clear()
 }
 
 /**
- * Emit change event to all listeners (with debounced IPC broadcast)
+ * Emit change event to all listeners (with debounced IPC broadcast).
+ *
+ * Dedup: within a single debounce window, only the LAST event per path is kept.
+ * This normalizes duplicate OS events (e.g. @parcel/watcher firing create+create
+ * for atomic save) before they reach any downstream consumer (tree view, card view).
+ * Same approach as VS Code's file watcher coalescing.
  */
 function emitChange(event: ArtifactChangeEvent): void {
   // Notify registered listeners immediately (internal callbacks)
@@ -651,10 +801,12 @@ function emitChange(event: ArtifactChangeEvent): void {
     }
   }
 
-  // Queue event for debounced broadcast
-  const existing = pendingBroadcastEvents.get(event.spaceId) || []
-  existing.push(event)
-  pendingBroadcastEvents.set(event.spaceId, existing)
+  // Queue event for debounced broadcast, deduplicating by path.
+  // Use a Map<path, event> so duplicate paths naturally collapse to last-write-wins.
+  if (!pendingBroadcastEvents.has(event.spaceId)) {
+    pendingBroadcastEvents.set(event.spaceId, new Map())
+  }
+  pendingBroadcastEvents.get(event.spaceId)!.set(event.path, event)
 
   // Reset debounce timer
   if (broadcastTimer) {
@@ -845,42 +997,65 @@ async function scanDirectoryRecursive(
 }
 
 /**
- * Get artifacts as tree structure (lazy loading)
+ * Get artifacts as tree structure (lazy loading).
+ * Returns cached children for rootPath on cache hit (Map.get, O(1)).
+ * On miss, scans disk once and populates the cache.
  */
 export async function listArtifactsTree(
   spaceId: string,
   rootPath: string
 ): Promise<CachedTreeNode[]> {
-  console.log(`[ArtifactCache] listArtifactsTree for space: ${spaceId}`)
-
   // Ensure cache is initialized
   if (!cacheMap.has(spaceId)) {
     await initSpaceCache(spaceId, rootPath)
   }
 
   const cache = cacheMap.get(spaceId)!
+
+  // Cache hit: return immediately (O(1) Map.get)
+  const cached = cache.treeNodes.get(rootPath)
+  if (cached) {
+    console.log(`[ArtifactCache] listArtifactsTree CACHE HIT: ${cached.length} nodes`)
+    return cached
+  }
+
   if (!cache.ignoreFilter) {
     cache.ignoreFilter = loadIgnoreRules(rootPath)
   }
 
-  // Scan root level only, with .gitignore filtering
-  return scanDirectoryTreeShallow(rootPath, rootPath, 0, cache.ignoreFilter)
+  // Cache miss: scan root level only, then populate cache
+  console.log(`[ArtifactCache] listArtifactsTree CACHE MISS, scanning: ${rootPath}`)
+  const nodes = await scanDirectoryTreeShallow(rootPath, rootPath, 0, cache.ignoreFilter)
+
+  // Store in cache (rootPath -> children)
+  cache.treeNodes.set(rootPath, nodes)
+  cache.loadedDirs.add(rootPath)
+
+  return nodes
 }
 
 /**
- * Load children for a specific directory (lazy loading)
+ * Load children for a specific directory (lazy loading).
+ * Returns cached children on cache hit (O(1)).
+ * On miss, scans disk and populates cache. Re-checks cache after async scan
+ * to handle race condition where watcher populated the cache during the await.
  */
 export async function loadDirectoryChildren(
   spaceId: string,
   dirPath: string,
   rootPath: string
 ): Promise<CachedTreeNode[]> {
-  console.log(`[ArtifactCache] Loading children for: ${dirPath}`)
-
   let cache = cacheMap.get(spaceId)
   if (!cache) {
     await initSpaceCache(spaceId, rootPath)
     cache = cacheMap.get(spaceId)!
+  }
+
+  // Cache hit: return immediately
+  const cached = cache.treeNodes.get(dirPath)
+  if (cached) {
+    console.log(`[ArtifactCache] loadDirectoryChildren CACHE HIT: ${cached.length} nodes (${dirPath})`)
+    return cached
   }
 
   if (!cache.ignoreFilter) {
@@ -888,12 +1063,24 @@ export async function loadDirectoryChildren(
   }
 
   // Calculate depth based on relative path
-  const relativePath = relative(rootPath, dirPath)
-  const depth = relativePath ? relativePath.split(/[\\/]/).length : 0
+  const relPath = relative(rootPath, dirPath)
+  const depth = relPath ? relPath.split(/[\\/]/).length : 0
 
+  // Cache miss: scan from disk
+  console.log(`[ArtifactCache] loadDirectoryChildren CACHE MISS, scanning: ${dirPath}`)
   const children = await scanDirectoryTreeShallow(dirPath, rootPath, depth + 1, cache.ignoreFilter)
 
-  // Mark directory as loaded
+  // Race condition guard: watcher may have populated the cache during the await.
+  // Prefer watcher's version since it's more up-to-date.
+  const watcherVersion = cache.treeNodes.get(dirPath)
+  if (watcherVersion) {
+    console.log(`[ArtifactCache] loadDirectoryChildren: watcher populated cache during scan, using watcher version`)
+    cache.loadedDirs.add(dirPath)
+    return watcherVersion
+  }
+
+  // Store in cache
+  cache.treeNodes.set(dirPath, children)
   cache.loadedDirs.add(dirPath)
 
   return children

@@ -143,7 +143,6 @@ export interface SessionState {
   abortController: AbortController
   spaceId: string
   conversationId: string
-  pendingPermissionResolve: ((approved: boolean) => void) | null
   thoughts: Thought[]  // Backend accumulates thoughts (Single Source of Truth)
 }
 

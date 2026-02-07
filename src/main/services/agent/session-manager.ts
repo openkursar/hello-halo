@@ -601,7 +601,6 @@ export function createSessionState(
     abortController,
     spaceId,
     conversationId,
-    pendingPermissionResolve: null,
     thoughts: []
   }
 }

@@ -69,12 +69,6 @@ export {
 } from './session-manager'
 
 // ============================================
-// Permission Handling
-// ============================================
-
-export { handleToolApproval } from './permission-handler'
-
-// ============================================
 // MCP Management
 // ============================================
 

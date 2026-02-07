@@ -844,14 +844,15 @@ async function processMessageStream(
   // ========== Stream End Handling ==========
   //
   // Error conditions (truth table):
-  // | Case | hasContent | isInterrupted | hasErrorThought | wasAborted | Send error?    |
-  // |------|------------|---------------|-----------------|------------|----------------|
-  // | 1    | yes        | yes           | -               | -          | interrupted    |
-  // | 2    | yes        | no            | -               | -          | no             |
-  // | 3    | no         | yes           | no              | no         | interrupted    |
-  // | 4    | no         | no            | no              | no         | empty response |
-  // | 5    | no         | -             | yes             | -          | no             |
-  // | 6    | no         | -             | -               | yes        | no             |
+  // | Case | hasContent | isInterrupted | hasErrorThought | wasAborted | Send error?      |
+  // |------|------------|---------------|-----------------|------------|------------------|
+  // | 1a   | yes        | -             | -               | yes        | stopped by user  |
+  // | 1b   | yes        | yes           | -               | no         | interrupted      |
+  // | 2    | yes        | no            | -               | no         | no               |
+  // | 3    | no         | yes           | no              | no         | interrupted      |
+  // | 4    | no         | no            | no              | no         | empty response   |
+  // | 5    | no         | -             | yes             | -          | no               |
+  // | 6    | no         | -             | -               | yes        | no               |
 
   // Merge content: prefer lastTextContent (confirmed), fallback to currentStreamingText (accumulated)
   const finalContent = lastTextContent || currentStreamingText || ''
@@ -883,7 +884,8 @@ async function processMessageStream(
   // Step 3: Determine if interrupted error should be sent
   const getInterruptedErrorMessage = (): string | null => {
     if (finalContent) {
-      // Has content: only send error if interrupted (content may be incomplete)
+      // Has content: user aborted shows friendly message, other interrupts show warning
+      if (wasAborted) return 'Stopped by user.'
       return isInterrupted ? 'Model response interrupted unexpectedly.' : null
     } else {
       // No content: skip if already has error thought or user aborted

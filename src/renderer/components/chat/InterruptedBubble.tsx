@@ -6,11 +6,12 @@ import { AlertTriangle, MessageSquare } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 
 interface InterruptedBubbleProps {
+  error?: string
   onContinue?: () => void
   className?: string
 }
 
-export function InterruptedBubble({ onContinue, className = '' }: InterruptedBubbleProps) {
+export function InterruptedBubble({ error, onContinue, className = '' }: InterruptedBubbleProps) {
   const { t } = useTranslation()
 
   return (
@@ -27,7 +28,7 @@ export function InterruptedBubble({ onContinue, className = '' }: InterruptedBub
 
           {/* Description */}
           <p className="mt-2 text-sm text-amber-600/80 dark:text-amber-400/80">
-            {t('The response was interrupted unexpectedly. You can continue the conversation.')}
+            {error || t('The response was interrupted unexpectedly. You can continue the conversation.')}
           </p>
 
           {/* Action button */}

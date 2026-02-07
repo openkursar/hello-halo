@@ -7,7 +7,6 @@ import { BrowserWindow } from 'electron'
 import {
   sendMessage as agentSendMessage,
   stopGeneration as agentStopGeneration,
-  handleToolApproval as agentHandleToolApproval,
   isGenerating,
   getActiveSessions,
   getSessionState as agentGetSessionState,
@@ -70,29 +69,17 @@ export function stopGeneration(conversationId?: string): ControllerResponse {
 }
 
 /**
- * Approve tool execution for a conversation
+ * Approve tool execution - no-op (all permissions auto-allowed)
  */
-export function approveTool(conversationId: string): ControllerResponse {
-  try {
-    agentHandleToolApproval(conversationId, true)
-    return { success: true }
-  } catch (error: unknown) {
-    const err = error as Error
-    return { success: false, error: err.message }
-  }
+export function approveTool(_conversationId: string): ControllerResponse {
+  return { success: true }
 }
 
 /**
- * Reject tool execution for a conversation
+ * Reject tool execution - no-op (all permissions auto-allowed)
  */
-export function rejectTool(conversationId: string): ControllerResponse {
-  try {
-    agentHandleToolApproval(conversationId, false)
-    return { success: true }
-  } catch (error: unknown) {
-    const err = error as Error
-    return { success: false, error: err.message }
-  }
+export function rejectTool(_conversationId: string): ControllerResponse {
+  return { success: true }
 }
 
 /**

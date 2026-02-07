@@ -370,7 +370,7 @@ export function MessageList({
       {/* Error message - shown when generation fails (not during generation) */}
       {/* Interrupted errors get special friendly UI, other errors show standard error bubble */}
       {!isGenerating && error && errorType === 'interrupted' && (
-        <InterruptedBubble onContinue={onContinue} />
+        <InterruptedBubble error={error} onContinue={onContinue} />
       )}
       {!isGenerating && error && errorType !== 'interrupted' && (
         <div className="flex justify-start animate-fade-in">

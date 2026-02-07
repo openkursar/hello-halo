@@ -465,6 +465,25 @@ export const api = {
     return onEvent('artifact:changed', callback)
   },
 
+  // Subscribe to tree update events (pre-computed data, zero IPC round-trips)
+  onArtifactTreeUpdate: (callback: (data: {
+    spaceId: string
+    updatedDirs: Array<{ dirPath: string; children: unknown[] }>
+    changes: Array<{
+      type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir'
+      path: string
+      relativePath: string
+      spaceId: string
+      item?: unknown
+    }>
+  }) => void) => {
+    if (isElectron()) {
+      return window.halo.onArtifactTreeUpdate(callback)
+    }
+    // In remote mode, use WebSocket events
+    return onEvent('artifact:tree-update', callback)
+  },
+
   openArtifact: async (filePath: string): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.openArtifact(filePath)

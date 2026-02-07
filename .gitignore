@@ -15,7 +15,7 @@ out
 
 # E2E test results
 tests/e2e/results/
-.claude/
+
 
 # Local docs
 local_docs/

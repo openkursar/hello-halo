@@ -3,7 +3,7 @@
  */
 
 import { ipcMain } from 'electron'
-import { sendMessage, stopGeneration, handleToolApproval, getSessionState, ensureSessionWarm, testMcpConnections } from '../services/agent'
+import { sendMessage, stopGeneration, getSessionState, ensureSessionWarm, testMcpConnections } from '../services/agent'
 import { getMainWindow } from '../services/window.service'
 
 export function registerAgentHandlers(): void {
@@ -50,27 +50,9 @@ export function registerAgentHandlers(): void {
     }
   })
 
-  // Approve tool execution for a specific conversation
-  ipcMain.handle('agent:approve-tool', async (_event, conversationId: string) => {
-    try {
-      handleToolApproval(conversationId, true)
-      return { success: true }
-    } catch (error: unknown) {
-      const err = error as Error
-      return { success: false, error: err.message }
-    }
-  })
-
-  // Reject tool execution for a specific conversation
-  ipcMain.handle('agent:reject-tool', async (_event, conversationId: string) => {
-    try {
-      handleToolApproval(conversationId, false)
-      return { success: true }
-    } catch (error: unknown) {
-      const err = error as Error
-      return { success: false, error: err.message }
-    }
-  })
+  // Approve/reject tool execution - no-op (all permissions auto-allowed)
+  ipcMain.handle('agent:approve-tool', async () => ({ success: true }))
+  ipcMain.handle('agent:reject-tool', async () => ({ success: true }))
 
   // Get current session state for recovery after refresh
   ipcMain.handle('agent:get-session-state', async (_event, conversationId: string) => {

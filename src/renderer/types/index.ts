@@ -335,6 +335,13 @@ export interface ArtifactChangeEvent {
   item?: Artifact | ArtifactTreeNode;
 }
 
+// Tree update event pushed from main process with pre-computed data
+export interface ArtifactTreeUpdateEvent {
+  spaceId: string;
+  updatedDirs: Array<{ dirPath: string; children: ArtifactTreeNode[] }>;
+  changes: ArtifactChangeEvent[];
+}
+
 // View mode for artifact display
 export type ArtifactViewMode = 'card' | 'tree';
 

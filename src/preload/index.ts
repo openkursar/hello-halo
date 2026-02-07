@@ -134,6 +134,17 @@ export interface HaloAPI {
     spaceId: string
     item?: unknown
   }) => void) => () => void
+  onArtifactTreeUpdate: (callback: (data: {
+    spaceId: string
+    updatedDirs: Array<{ dirPath: string; children: unknown[] }>
+    changes: Array<{
+      type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir'
+      path: string
+      relativePath: string
+      spaceId: string
+      item?: unknown
+    }>
+  }) => void) => () => void
   openArtifact: (filePath: string) => Promise<IpcResponse>
   showArtifactInFolder: (filePath: string) => Promise<IpcResponse>
   readArtifactContent: (filePath: string) => Promise<IpcResponse>
@@ -384,6 +395,7 @@ const api: HaloAPI = {
   loadArtifactChildren: (spaceId, dirPath) => ipcRenderer.invoke('artifact:load-children', spaceId, dirPath),
   initArtifactWatcher: (spaceId) => ipcRenderer.invoke('artifact:init-watcher', spaceId),
   onArtifactChanged: (callback) => createEventListener('artifact:changed', callback as (data: unknown) => void),
+  onArtifactTreeUpdate: (callback) => createEventListener('artifact:tree-update', callback as (data: unknown) => void),
   openArtifact: (filePath) => ipcRenderer.invoke('artifact:open', filePath),
   showArtifactInFolder: (filePath) => ipcRenderer.invoke('artifact:show-in-folder', filePath),
   readArtifactContent: (filePath) => ipcRenderer.invoke('artifact:read-content', filePath),
