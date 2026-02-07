@@ -15,7 +15,6 @@ import { useCanvasStore } from '../../stores/canvas.store'
 import type { ArtifactTreeNode, ArtifactTreeUpdateEvent } from '../../types'
 import { FileIcon } from '../icons/ToolIcons'
 import { ChevronRight, ChevronDown, Download, Eye, Loader2 } from 'lucide-react'
-import { useIsGenerating } from '../../stores/chat.store'
 import { useTranslation } from '../../i18n'
 import { canOpenInCanvas } from '../../constants/file-types'
 
@@ -119,7 +118,6 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
   const { t } = useTranslation()
   const [treeData, setTreeData] = useState<TreeNodeData[]>([])
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set())
-  const isGenerating = useIsGenerating()
   const treeHeight = useTreeHeight()
   const watcherInitialized = useRef(false)
 
@@ -190,16 +188,8 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
     console.log('[ArtifactTree] Tree update:', event.updatedDirs.length, 'dirs,', event.changes.length, 'changes')
 
     if (event.updatedDirs.length === 0) {
-      // No tracked dirs updated — may be a root-level change, refresh tree
-      const hasRootChange = event.changes.some(c => {
-        const lastSep = Math.max(c.path.lastIndexOf('/'), c.path.lastIndexOf('\\'))
-        const parent = lastSep > 0 ? c.path.substring(0, lastSep) : ''
-        // Root-level if parent is empty or matches the space root
-        return !parent || parent === c.path
-      })
-      if (hasRootChange) {
-        setTimeout(loadTree, 100)
-      }
+      // No tracked dirs affected — watcher event for an unloaded directory, ignore.
+      // The correct data will be fetched on-demand when user expands that directory.
       return
     }
 
@@ -207,7 +197,27 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
       let updated = prev
 
       for (const { dirPath, children } of event.updatedDirs) {
-        const transformedChildren = transformToArboristData(children as ArtifactTreeNode[])
+        const incomingChildren = transformToArboristData(children as ArtifactTreeNode[])
+
+        // Merge incoming children with existing nodes: preserve id, children, and
+        // childrenLoaded from already-present nodes so react-arborist keeps its
+        // open/closed state (it tracks state by node id).
+        const mergeChildren = (incoming: TreeNodeData[], existing: TreeNodeData[]): TreeNodeData[] => {
+          const existingByPath = new Map(existing.map(n => [n.path, n]))
+          return incoming.map(node => {
+            const prev = existingByPath.get(node.path)
+            if (prev) {
+              // Preserve id (react-arborist key), children & childrenLoaded (expanded state)
+              return {
+                ...node,
+                id: prev.id,
+                children: prev.childrenLoaded && prev.children ? prev.children : node.children,
+                childrenLoaded: prev.childrenLoaded || node.childrenLoaded,
+              }
+            }
+            return node
+          })
+        }
 
         // Check if this is the root directory (parent of top-level nodes)
         const isRoot = prev.length > 0 && prev.some(n => {
@@ -215,15 +225,16 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
           return parentOfNode === dirPath
         })
 
-        if (isRoot || (prev.length === 0 && transformedChildren.length > 0)) {
-          // Root update: replace entire tree data
-          updated = transformedChildren
+        if (isRoot || (prev.length === 0 && incomingChildren.length > 0)) {
+          // Root update: merge with existing top-level nodes
+          updated = mergeChildren(incomingChildren, updated)
         } else {
-          // Walk the tree to find the node matching dirPath and replace its children
+          // Walk the tree to find the node matching dirPath and merge its children
           const updateNodeInTree = (nodes: TreeNodeData[]): TreeNodeData[] => {
             return nodes.map(node => {
               if (node.path === dirPath) {
-                return { ...node, children: transformedChildren, childrenLoaded: true }
+                const merged = mergeChildren(incomingChildren, node.children || [])
+                return { ...node, children: merged, childrenLoaded: true }
               }
               if (node.children) {
                 return { ...node, children: updateNodeInTree(node.children) }
@@ -237,7 +248,7 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
 
       return updated
     })
-  }, [spaceId, loadTree])
+  }, [spaceId])
 
   // Initialize watcher and subscribe to changes
   useEffect(() => {
@@ -263,14 +274,8 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
     loadTree()
   }, [loadTree])
 
-  // Refresh when generation completes (safety net — watcher pushes updates in real-time,
-  // but this catches any edge cases where watcher events were missed)
-  useEffect(() => {
-    if (!isGenerating) {
-      const timer = setTimeout(loadTree, 2000)
-      return () => clearTimeout(timer)
-    }
-  }, [isGenerating, loadTree])
+  // Note: no safety-net refresh here. The watcher + incremental update pipeline is the
+  // single source of truth. A full loadTree would destroy expanded folder state.
 
   // Lazy load context value
   const lazyLoadValue = useMemo(() => ({

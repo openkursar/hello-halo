@@ -1,17 +1,18 @@
 // ============================================================================
-// beforePack hook - Pre-packaging validation
+// beforePack hook - Pre-packaging validation & native module preparation
 //
-// Runs before electron-builder packages the app. Any validation failure
-// throws an error and aborts the build, preventing broken builds from
-// reaching users.
+// Runs before electron-builder packages the app. Performs two jobs:
+//   1. Validates product.json configuration
+//   2. Prepares platform-specific native modules for cross-platform builds
 //
-// To add a new check:
+// To add a new validation check:
 //   1. Write a function: function checkXxx(productConfig) { ... }
 //   2. Add it to the CHECKS array below
 // ============================================================================
 
 const fs = require('fs');
 const path = require('path');
+const nativeModules = require('./native-modules.cjs');
 
 // ============================================================================
 // Validation checks
@@ -115,4 +116,10 @@ module.exports = async function(context) {
   }
 
   console.log(`[beforePack] product.json OK (${CHECKS.length} checks passed)`);
+
+  // ===========================================================================
+  // Native module preparation
+  // ===========================================================================
+  const projectRoot = path.join(__dirname, '..');
+  nativeModules.prepare(projectRoot, context.electronPlatformName, context.arch);
 };

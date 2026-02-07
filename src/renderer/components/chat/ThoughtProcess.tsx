@@ -210,9 +210,7 @@ const ThoughtItem = memo(function ThoughtItem({ thought, isLast }: { thought: Th
         <div className={`w-7 h-7 rounded-full flex items-center justify-center ${
           thought.isError || thought.toolResult?.isError ? 'bg-destructive/20' : isStreaming ? 'bg-primary/20' : 'bg-primary/10'
         } ${thought.toolResult?.isError ? 'text-destructive' : color}`}>
-          {isStreaming && thought.type === 'thinking' ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : hasToolResult ? (
+          {hasToolResult ? (
             thought.toolResult!.isError ? <XCircle size={14} /> : <CheckCircle2 size={14} />
           ) : (
             <Icon size={14} />

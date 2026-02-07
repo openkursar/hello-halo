@@ -241,7 +241,7 @@ export function CollapsedThoughtProcess({ thoughts }: CollapsedThoughtProcessPro
           {/* TodoCard at bottom - only one instance */}
           {latestTodos && latestTodos.length > 0 && (
             <div className={`px-3 ${displayThoughts.length > 0 ? 'mt-2 pt-2 border-t border-border/20' : ''}`}>
-              <TodoCard todos={latestTodos} />
+              <TodoCard todos={latestTodos} isAgentActive={false} />
             </div>
           )}
 

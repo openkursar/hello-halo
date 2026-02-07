@@ -1,10 +1,16 @@
-// afterPack hook - Execute professional ad-hoc signing after packaging, before DMG creation
-// Prevents users from seeing "damaged app" prompts
+// afterPack hook - Post-packaging tasks
+//   1. Restore native modules backed up by beforePack (for sequential multi-platform builds)
+//   2. Execute professional ad-hoc signing for macOS (prevents "damaged app" prompts)
 const { execSync } = require('child_process');
 const path = require('path');
+const nativeModules = require('./native-modules.cjs');
 
 module.exports = async function(context) {
-  // Only process macOS
+  // Restore native modules for subsequent platform builds
+  const projectRoot = path.join(__dirname, '..');
+  nativeModules.restore(projectRoot);
+
+  // macOS ad-hoc signing (other platforms skip)
   if (context.electronPlatformName !== 'darwin') {
     return;
   }

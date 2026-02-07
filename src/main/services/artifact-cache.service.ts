@@ -127,6 +127,10 @@ interface SpaceCache {
   spaceId: string
   rootPath: string
   subscription: AsyncSubscription | null
+  // Tracks in-flight watcher initialization to prevent duplicate subscriptions.
+  // Without this, concurrent calls to initWatcher() can race past the
+  // `if (cache.subscription)` guard before the first subscribe() resolves.
+  watcherPromise: Promise<void> | null
   ignoreFilter: Ignore | null
   // Cache for flat list (only top-level items for card view)
   flatItems: Map<string, CachedArtifact>
@@ -528,6 +532,11 @@ async function initWatcher(cache: SpaceCache): Promise<void> {
     return // Already initialized
   }
 
+  // Prevent concurrent initialization — return the in-flight promise if one exists
+  if (cache.watcherPromise) {
+    return cache.watcherPromise
+  }
+
   // Disk root detection - skip watcher to prevent system freeze
   if (isDiskRoot(cache.rootPath)) {
     console.warn(`[ArtifactCache] Disk root detected (${cache.rootPath}), skipping watcher initialization`)
@@ -536,78 +545,87 @@ async function initWatcher(cache: SpaceCache): Promise<void> {
 
   console.log(`[ArtifactCache] Initializing native watcher for space: ${cache.spaceId} at ${cache.rootPath}`)
 
-  // Load .gitignore rules for this workspace
-  cache.ignoreFilter = loadIgnoreRules(cache.rootPath)
+  // Store the promise so concurrent callers can await/deduplicate
+  const doInit = async (): Promise<void> => {
+    // Load .gitignore rules for this workspace
+    cache.ignoreFilter = loadIgnoreRules(cache.rootPath)
 
-  try {
-    const subscription = await watcher.subscribe(
-      cache.rootPath,
-      async (err, events) => {
-        if (err) {
-          console.error(`[ArtifactCache] Watcher error for ${cache.spaceId}:`, err)
-          return
-        }
-
-        // Filter events first
-        const filteredEvents = events.filter(event => {
-          const relativePath = relative(cache.rootPath, event.path)
-          if (cache.ignoreFilter && isIgnored(cache.ignoreFilter, relativePath)) {
-            return false
-          }
-          if (shouldHide(event.path)) {
-            return false
-          }
-          return true
-        })
-
-        if (filteredEvents.length === 0) return
-
-        // Group events by path to ensure same-path events are processed sequentially
-        const eventsByPath = new Map<string, WatcherEvent[]>()
-        for (const event of filteredEvents) {
-          const existing = eventsByPath.get(event.path) || []
-          existing.push(event)
-          eventsByPath.set(event.path, existing)
-        }
-
-        // Process different paths in parallel, same path events sequentially
-        await Promise.all(
-          Array.from(eventsByPath.entries()).map(async ([, pathEvents]) => {
-            // Process events for the same path sequentially to maintain order
-            for (const event of pathEvents) {
-              await processWatcherEvent(cache, event)
-            }
-          })
-        )
-      },
-      {
-        // @parcel/watcher ignore: paths matched in C++ layer, never reach JS.
-        // CPP_LEVEL_IGNORE_DIRS contains universally-safe directories that are
-        // NEVER user content (node_modules, __pycache__, .gradle, etc.).
-        // Project-specific ignoring is handled by .gitignore filter above.
-        ignore: CPP_LEVEL_IGNORE_DIRS.map(dir => join(cache.rootPath, dir))
-      }
-    )
-
-    cache.subscription = subscription
-    console.log(`[ArtifactCache] Native watcher active for space: ${cache.spaceId}`)
-  } catch (error) {
-    console.error(`[ArtifactCache] Failed to start native watcher for ${cache.spaceId}:`, error)
-
-    // Notify renderer about the degraded state
     try {
-      const mainWindow = getMainWindow()
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('artifact:watcher-error', {
-          spaceId: cache.spaceId,
-          error: 'WATCHER_INIT_FAILED',
-          message: 'File watcher initialization failed. File changes will not be detected automatically.'
-        })
+      const subscription = await watcher.subscribe(
+        cache.rootPath,
+        async (err, events) => {
+          if (err) {
+            console.error(`[ArtifactCache] Watcher error for ${cache.spaceId}:`, err)
+            return
+          }
+
+          // Filter events first
+          const filteredEvents = events.filter(event => {
+            const relativePath = relative(cache.rootPath, event.path)
+            if (cache.ignoreFilter && isIgnored(cache.ignoreFilter, relativePath)) {
+              return false
+            }
+            if (shouldHide(event.path)) {
+              return false
+            }
+            return true
+          })
+
+          if (filteredEvents.length === 0) return
+
+          // Group events by path to ensure same-path events are processed sequentially
+          const eventsByPath = new Map<string, WatcherEvent[]>()
+          for (const event of filteredEvents) {
+            const existing = eventsByPath.get(event.path) || []
+            existing.push(event)
+            eventsByPath.set(event.path, existing)
+          }
+
+          // Process different paths in parallel, same path events sequentially
+          await Promise.all(
+            Array.from(eventsByPath.entries()).map(async ([, pathEvents]) => {
+              // Process events for the same path sequentially to maintain order
+              for (const event of pathEvents) {
+                await processWatcherEvent(cache, event)
+              }
+            })
+          )
+        },
+        {
+          // @parcel/watcher ignore: paths matched in C++ layer, never reach JS.
+          // CPP_LEVEL_IGNORE_DIRS contains universally-safe directories that are
+          // NEVER user content (node_modules, __pycache__, .gradle, etc.).
+          // Project-specific ignoring is handled by .gitignore filter above.
+          ignore: CPP_LEVEL_IGNORE_DIRS.map(dir => join(cache.rootPath, dir))
+        }
+      )
+
+      cache.subscription = subscription
+      console.log(`[ArtifactCache] Native watcher active for space: ${cache.spaceId}`)
+    } catch (error) {
+      console.error(`[ArtifactCache] Failed to start native watcher for ${cache.spaceId}:`, error)
+
+      // Notify renderer about the degraded state
+      try {
+        const mainWindow = getMainWindow()
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('artifact:watcher-error', {
+            spaceId: cache.spaceId,
+            error: 'WATCHER_INIT_FAILED',
+            message: 'File watcher initialization failed. File changes will not be detected automatically.'
+          })
+        }
+      } catch (e) {
+        // Ignore notification errors
       }
-    } catch (e) {
-      // Ignore notification errors
+    } finally {
+      // Clear the promise so future calls (after destroy/re-init) can proceed
+      cache.watcherPromise = null
     }
   }
+
+  cache.watcherPromise = doInit()
+  return cache.watcherPromise
 }
 
 /**
@@ -834,6 +852,7 @@ export async function initSpaceCache(spaceId: string, rootPath: string): Promise
     spaceId,
     rootPath,
     subscription: null,
+    watcherPromise: null,
     ignoreFilter: null,
     flatItems: new Map(),
     treeNodes: new Map(),
@@ -859,7 +878,7 @@ export async function ensureSpaceCache(spaceId: string, rootPath: string): Promi
     return
   }
 
-  if (!cache.subscription) {
+  if (!cache.subscription && !cache.watcherPromise) {
     initWatcher(cache).catch(error => {
       console.error(`[ArtifactCache] Background watcher init failed for ${spaceId}:`, error)
     })
@@ -874,6 +893,12 @@ export async function destroySpaceCache(spaceId: string): Promise<void> {
   if (!cache) return
 
   console.log(`[ArtifactCache] Destroying cache for space: ${spaceId}`)
+
+  // Wait for any in-flight initialization before destroying
+  if (cache.watcherPromise) {
+    await cache.watcherPromise.catch(() => {})
+    cache.watcherPromise = null
+  }
 
   if (cache.subscription) {
     try {

@@ -190,6 +190,70 @@ function migrateEncryptedCredentials(): void {
 }
 
 // ============================================================================
+// AI SOURCES V1 → V2 MIGRATION (ONE-TIME, PERSISTED)
+// ============================================================================
+// v1 stored aiSources as { current, custom: { apiKey, ... }, [provider]: { ... } }
+// v2 uses { version: 2, currentId, sources: AISource[] }
+//
+// Previously, migrateAiSourcesToV2() ran inside every getConfig() call without
+// persisting results to disk, generating a new UUID each time. This caused:
+// 1. Redundant migration on every config read (~6+ times during startup)
+// 2. Different currentId seen by different callers (UUID instability)
+//
+// This function runs once at startup and writes the result to disk, so
+// subsequent getConfig() calls see version:2 and skip migration entirely.
+// ============================================================================
+
+/**
+ * One-time migration: convert v1 aiSources to v2 format and persist to disk.
+ *
+ * Reads the config file directly (like migrateEncryptedCredentials), applies
+ * the migration, and writes back. After this, the file has version:2 and
+ * migrateAiSourcesToV2() in getConfig() becomes a no-op (isV2AiSources check).
+ *
+ * Safe to call multiple times — skips if already v2.
+ */
+function migrateAiSourcesToV2OnDisk(): void {
+  const configPath = getConfigPath()
+
+  if (!existsSync(configPath)) {
+    return // No config file, nothing to migrate
+  }
+
+  let parsed: Record<string, any>
+  try {
+    const content = readFileSync(configPath, 'utf-8')
+    parsed = JSON.parse(content)
+  } catch (error) {
+    console.error('[Config Migration] Failed to read config for v2 aiSources migration:', error)
+    return
+  }
+
+  // Already v2 — nothing to do
+  if (isV2AiSources(parsed?.aiSources)) {
+    return
+  }
+
+  // Run the existing migration logic (produces v2 in-memory)
+  const migrated = migrateAiSourcesToV2(parsed)
+
+  // Only persist if migration produced sources or the file had v1 data
+  // (even an empty sources array with version:2 is valid — means nothing to migrate)
+  parsed.aiSources = migrated
+
+  try {
+    writeFileSync(configPath, JSON.stringify(parsed, null, 2))
+    console.log('[Config Migration] Persisted v2 aiSources to disk:', {
+      sourceCount: migrated.sources.length,
+      currentId: migrated.currentId
+    })
+  } catch (error) {
+    console.error('[Config Migration] Failed to persist v2 aiSources:', error)
+    // Non-fatal: getConfig() will still do in-memory migration as fallback
+  }
+}
+
+// ============================================================================
 // API Config Change Notification (Callback Pattern)
 // ============================================================================
 // When API config changes (provider/apiKey/apiUrl), subscribers are notified.
@@ -652,6 +716,12 @@ export async function initializeApp(): Promise<void> {
   // This must run before any service reads the config to ensure decryption
   // happens at the file level, not at read time where failures cause issues.
   migrateEncryptedCredentials()
+
+  // Migrate aiSources from v1 to v2 format (one-time, persisted to disk)
+  // This must run after migrateEncryptedCredentials() so apiKeys are already plaintext.
+  // Previously, migration ran inside every getConfig() call without persisting,
+  // generating new UUIDs each time and causing inconsistent currentIds.
+  migrateAiSourcesToV2OnDisk()
 }
 
 // Get configuration

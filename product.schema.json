@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Halo Product Configuration",
+  "description": "Configuration for Halo build variants (public/internal)",
+  "type": "object",
+  "required": ["name", "version", "updateConfig", "authProviders"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string",
+      "description": "Product name"
+    },
+    "version": {
+      "type": "string",
+      "description": "Product version"
+    },
+    "updateConfig": {
+      "type": "object",
+      "description": "Auto-update configuration",
+      "required": ["provider"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["github", "generic"],
+          "description": "Update provider type"
+        },
+        "url": {
+          "type": "string",
+          "description": "URL for generic provider (empty string = disabled)"
+        },
+        "owner": {
+          "type": "string",
+          "description": "GitHub repository owner (required for github provider)"
+        },
+        "repo": {
+          "type": "string",
+          "description": "GitHub repository name (required for github provider)"
+        }
+      },
+      "if": {
+        "properties": { "provider": { "const": "github" } }
+      },
+      "then": {
+        "required": ["provider", "owner", "repo"]
+      }
+    },
+    "authProviders": {
+      "type": "array",
+      "description": "Authentication provider configurations",
+      "items": {
+        "type": "object",
+        "required": ["type", "enabled"],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "displayName": {},
+          "description": {},
+          "icon": {
+            "type": "string"
+          },
+          "iconBgColor": {
+            "type": "string"
+          },
+          "recommended": {
+            "type": "boolean"
+          },
+          "builtin": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}
