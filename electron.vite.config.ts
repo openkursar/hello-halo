@@ -57,7 +57,9 @@ export default defineConfig({
       sourcemap: true,
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/main/index.ts')
+          index: resolve(__dirname, 'src/main/index.ts'),
+          // File watcher worker — runs in a separate child process
+          'worker/file-watcher/index': resolve(__dirname, 'src/worker/file-watcher/index.ts')
         },
         output: {
           format: 'es',

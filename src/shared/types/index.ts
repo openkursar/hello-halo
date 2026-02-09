@@ -48,3 +48,6 @@ export {
 
 // Health System types
 export * from './health'
+
+// Artifact types (shared between main process and file-watcher worker)
+export * from './artifact'
