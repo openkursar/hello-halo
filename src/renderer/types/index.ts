@@ -313,17 +313,19 @@ export interface Artifact {
 }
 
 // Tree node structure for developer view
+// Mirrors CachedTreeNode from main process — no conversion needed across IPC
 export interface ArtifactTreeNode {
   id: string;
   name: string;
   type: ArtifactType;
   path: string;
+  relativePath: string;
   extension: string;
   icon: string;
   size?: number;
-  children?: ArtifactTreeNode[];
   depth: number;
-  childrenLoaded?: boolean;  // For lazy loading - indicates if children have been fetched
+  children?: ArtifactTreeNode[];
+  childrenLoaded: boolean;
 }
 
 // Artifact change event from file watcher

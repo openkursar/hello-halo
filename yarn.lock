@@ -873,7 +873,7 @@
     "@nodelib/fs.scandir" "2.1.5"
     fastq "^1.6.0"
 
-"@parcel/watcher-darwin-arm64@2.5.6":
+"@parcel/watcher-darwin-arm64@^2.5.6", "@parcel/watcher-darwin-arm64@2.5.6":
   version "2.5.6"
   resolved "https://registry.npmmirror.com/@parcel/watcher-darwin-arm64/-/watcher-darwin-arm64-2.5.6.tgz"
   integrity sha512-Z2ZdrnwyXvvvdtRHLmM4knydIdU9adO3D4n/0cVipF3rRiwP+3/sfzpAwA/qKFL6i1ModaabkU7IbpeMBgiVEA==

@@ -38,20 +38,6 @@ export interface Artifact {
   size?: number
 }
 
-// Tree node structure for developer view
-export interface ArtifactTreeNode {
-  id: string
-  name: string
-  type: 'file' | 'folder'
-  path: string
-  extension: string
-  icon: string
-  size?: number
-  children?: ArtifactTreeNode[]
-  depth: number
-  childrenLoaded?: boolean  // For lazy loading - indicates if children have been fetched
-}
-
 // Get working directory for a space
 function getWorkingDir(spaceId: string): string {
   if (spaceId === 'halo-temp') {
@@ -125,7 +111,7 @@ export function watchArtifacts(
  * List artifacts as tree structure (lazy loading)
  * Only loads root level initially, children are loaded on demand
  */
-export async function listArtifactsTree(spaceId: string): Promise<ArtifactTreeNode[]> {
+export async function listArtifactsTree(spaceId: string): Promise<CachedTreeNode[]> {
   console.log(`[Artifact] listArtifactsTree for space: ${spaceId}`)
 
   const workDir = getWorkingDir(spaceId)
@@ -135,10 +121,7 @@ export async function listArtifactsTree(spaceId: string): Promise<ArtifactTreeNo
     return []
   }
 
-  const cachedNodes = await listArtifactsTreeCached(spaceId, workDir)
-
-  // Convert to ArtifactTreeNode format
-  const nodes: ArtifactTreeNode[] = cachedNodes.map(cn => convertToTreeNode(cn))
+  const nodes = await listArtifactsTreeCached(spaceId, workDir)
 
   console.log(`[Artifact] Found ${nodes.length} root nodes`)
   return nodes
@@ -150,7 +133,7 @@ export async function listArtifactsTree(spaceId: string): Promise<ArtifactTreeNo
 export async function loadTreeChildren(
   spaceId: string,
   dirPath: string
-): Promise<ArtifactTreeNode[]> {
+): Promise<CachedTreeNode[]> {
   console.log(`[Artifact] loadTreeChildren for: ${dirPath}`)
 
   const workDir = getWorkingDir(spaceId)
@@ -176,29 +159,10 @@ export async function loadTreeChildren(
   }
 
   try {
-    const cachedNodes = await loadDirectoryChildren(spaceId, dirPath, workDir)
-    return cachedNodes.map(cn => convertToTreeNode(cn))
+    return await loadDirectoryChildren(spaceId, dirPath, workDir)
   } catch (error) {
     console.error(`[Artifact] loadTreeChildren error:`, error)
     return []
-  }
-}
-
-/**
- * Convert CachedTreeNode to ArtifactTreeNode
- */
-function convertToTreeNode(cn: CachedTreeNode): ArtifactTreeNode {
-  return {
-    id: cn.id,
-    name: cn.name,
-    type: cn.type,
-    path: cn.path,
-    extension: cn.extension,
-    icon: cn.icon,
-    size: cn.size,
-    depth: cn.depth,
-    children: cn.children?.map(child => convertToTreeNode(child)),
-    childrenLoaded: cn.childrenLoaded
   }
 }
 

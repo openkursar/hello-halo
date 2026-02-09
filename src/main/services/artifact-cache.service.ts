@@ -745,7 +745,7 @@ async function processWatcherEvent(cache: SpaceCache, event: WatcherEvent): Prom
 // Outer key: spaceId, inner key: file path → last event for that path
 const pendingBroadcastEvents = new Map<string, Map<string, ArtifactChangeEvent>>()
 let broadcastTimer: ReturnType<typeof setTimeout> | null = null
-const BROADCAST_DEBOUNCE_MS = 150
+const BROADCAST_DEBOUNCE_MS = 500
 
 /**
  * Flush pending events to all clients.
