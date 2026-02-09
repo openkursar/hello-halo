@@ -13,29 +13,21 @@ import type {
   HealthSystemState,
   HealthStatus,
   HealthEvent,
-  StartupCheckResult,
   RecoveryResult
 } from './types'
 import {
   markInstanceStart,
-  getCurrentInstanceId,
-  markCleanExit,
-  cleanupOrphans,
-  getRegistryStats
+  markCleanExit
 } from './process-guardian'
 import {
-  runStartupChecks,
   startFallbackPolling,
   stopFallbackPolling,
   isPollingActive,
   onHealthEvent,
   emitHealthEvent,
-  emitStartupCheck,
   emitRendererCrash,
   emitRendererUnresponsive,
-  emitAgentError,
-  getRecentEvents,
-  getErrorCount
+  emitAgentError
 } from './health-checker'
 import {
   executeRecovery,
@@ -112,36 +104,24 @@ export async function initializeHealthSystem(): Promise<void> {
       injectSessionCleanup(closeAllSessionsFn)
     }
 
-    // Run startup checks
-    const startupResult = await safeExecute(
-      'startup-checks',
-      () => runStartupChecks()
-    )
-
-    if (startupResult) {
-      systemState.lastStartupCheck = startupResult
-      systemState.status = startupResult.status
-
-      emitStartupCheck(startupResult.status, startupResult.duration)
-
-      // Notify renderer of startup check completion
-      sendToRenderer('health:status-change', {
-        status: startupResult.status,
-        previousStatus: 'healthy',
-        reason: 'Startup checks complete',
-        timestamp: Date.now()
-      })
-    }
+    // Startup checks disabled - waste CPU/time for diagnostics that don't trigger recovery.
+    // Issues are caught naturally when they matter:
+    // - Config errors -> agent startup fails -> emitAgentError -> critical event
+    // - Port conflicts -> remote access fails -> user sees error
+    // - Disk full -> file write fails -> user sees error
+    // - Orphan processes -> cleanupOrphans() already handles this
+    //
+    // Event-driven checks (runtime) are still active for actual error recovery.
 
     // Register health event handler for automatic recovery
     onHealthEvent(handleHealthEvent)
 
-    // Start fallback polling
+    // Start fallback polling (runtime checks only)
     startFallbackPolling(handleStatusChange)
 
     systemState.isPollingActive = true
 
-    console.log('[Health][Orchestrator] Health system initialized')
+    console.log('[Health][Orchestrator] Health system initialized (event-driven mode)')
   } catch (error) {
     handleSelfError(error as Error)
   }
@@ -429,22 +409,6 @@ export function getHealthStatus(): {
 // ============================================
 // Self-Protection
 // ============================================
-
-/**
- * Safely execute a function with error handling
- */
-async function safeExecute<T>(
-  name: string,
-  fn: () => Promise<T>
-): Promise<T | null> {
-  try {
-    return await fn()
-  } catch (error) {
-    console.error(`[Health][Orchestrator] ${name} failed:`, error)
-    handleSelfError(error as Error)
-    return null
-  }
-}
 
 /**
  * Handle errors in the health system itself

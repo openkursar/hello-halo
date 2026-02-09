@@ -44,7 +44,9 @@ export async function runStartupChecks(): Promise<StartupCheckResult> {
     // Log probe results
     for (const probe of probes) {
       const icon = probe.healthy ? '✓' : probe.severity === 'critical' ? '✗' : '⚠'
-      console.log(`[Health][Startup] ${icon} ${probe.name}: ${probe.message}`)
+      const errors = probe.data?.errors as string[] | undefined
+      const detail = !probe.healthy && errors?.length ? ` (${errors.join(', ')})` : ''
+      console.log(`[Health][Startup] ${icon} ${probe.name}: ${probe.message}${detail}`)
     }
 
     // Determine overall status

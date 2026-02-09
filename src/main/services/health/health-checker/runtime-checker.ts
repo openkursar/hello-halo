@@ -9,7 +9,6 @@
 
 import type { HealthStatus, ImmediateCheckResult, ProcessCheckStatus, ServiceCheckStatus } from '../types'
 import { checkOpenAIRouter, checkHttpServer } from './probes/service-probe'
-import { runQuickHealthCheck } from './startup-checker'
 import { getCurrentProcesses, unregisterProcess, getRegistryStats } from '../process-guardian'
 import { getPlatformOps } from '../process-guardian/platform'
 import { getRouterInfo } from '../../../openai-compat-router'
@@ -354,16 +353,10 @@ async function doImmediateCheck(): Promise<ImmediateCheckResult> {
     }
 
     // ========================================
-    // Step 5: Config Check
+    // Step 5: Config Check - DISABLED
     // ========================================
-    try {
-      const configCheck = await runQuickHealthCheck()
-      if (!configCheck.healthy) {
-        issues.push(`Config: ${configCheck.message}`)
-      }
-    } catch (error) {
-      console.error('[Health][Runtime] Config check failed:', error)
-    }
+    // Config errors are caught naturally when agent starts (emitAgentError -> critical event)
+    // No need to waste CPU polling for config issues every 120s
 
     // ========================================
     // Step 6: Memory Check

@@ -25,20 +25,23 @@ export async function collectDiagnosticReport(): Promise<DiagnosticReport> {
 
   // Get AI source info (sanitized)
   const aiSources = config.aiSources
-  const currentSource = aiSources?.current || 'custom'
   let provider = 'unknown'
   let hasApiKey = false
   let apiUrlHost = ''
+  let currentSourceName = 'none'
 
-  if (currentSource === 'custom') {
-    const custom = aiSources?.custom
-    provider = custom?.provider || 'anthropic'
-    hasApiKey = !!(custom?.apiKey && custom.apiKey.length > 0)
-    apiUrlHost = custom?.apiUrl ? new URL(custom.apiUrl).hostname : 'api.anthropic.com'
-  } else if (aiSources?.[currentSource]) {
-    provider = 'oauth'
-    const oauthConfig = aiSources[currentSource] as unknown as Record<string, unknown>
-    hasApiKey = !!(oauthConfig?.accessToken)
+  if (aiSources?.version === 2 && Array.isArray(aiSources.sources)) {
+    const currentSource = aiSources.sources.find(s => s.id === aiSources.currentId)
+    if (currentSource) {
+      currentSourceName = currentSource.provider || 'unknown'
+      provider = currentSource.provider || 'unknown'
+      if (currentSource.authType === 'api-key') {
+        hasApiKey = !!(currentSource.apiKey && currentSource.apiKey.length > 0)
+        apiUrlHost = currentSource.apiUrl ? new URL(currentSource.apiUrl).hostname : ''
+      } else if (currentSource.authType === 'oauth') {
+        hasApiKey = !!(currentSource.accessToken)
+      }
+    }
   }
 
   // Build raw report
@@ -49,7 +52,7 @@ export async function collectDiagnosticReport(): Promise<DiagnosticReport> {
     arch: process.arch,
 
     config: {
-      currentSource,
+      currentSource: currentSourceName,
       provider,
       hasApiKey,
       apiUrlHost,
@@ -59,14 +62,13 @@ export async function collectDiagnosticReport(): Promise<DiagnosticReport> {
     processes: {
       registered: registryStats.totalProcesses,
       orphansFound: registryStats.orphanProcesses,
-      orphansCleaned: healthState.lastStartupCheck?.probes
-        .find(p => p.name === 'process')?.data?.zombiesKilled as number || 0
+      // Note: Startup checks disabled - orphan cleanup handled by process-guardian cleaner
+      orphansCleaned: 0
     },
 
     health: {
-      lastCheckTime: healthState.lastStartupCheck
-        ? new Date(healthState.lastStartupCheck.timestamp).toISOString()
-        : 'never',
+      // Startup checks disabled - event-driven health monitoring only
+      lastCheckTime: 'disabled',
       consecutiveFailures: healthState.consecutiveFailures,
       recoveryAttempts: healthState.recoveryAttempts
     },
