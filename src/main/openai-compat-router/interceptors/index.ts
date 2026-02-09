@@ -6,17 +6,23 @@
 
 export * from './types'
 export { warmupInterceptor } from './warmup'
+export { preflightInterceptor } from './preflight'
 
 import type { RequestInterceptor, OpenAIRequest, InterceptorContext, InterceptorResult } from './types'
 import { warmupInterceptor } from './warmup'
+import { preflightInterceptor } from './preflight'
 
 /**
  * Default interceptor chain - order matters!
  * First matching interceptor wins.
+ *
+ * Chain order rationale:
+ *   1. warmup — exact string match ("Warmup"), cheapest check
+ *   2. preflight — tools.length check + system prompt match, short-circuits CC SDK internal calls
  */
 const defaultInterceptors: RequestInterceptor[] = [
   warmupInterceptor,
-  // Add more interceptors here as needed
+  preflightInterceptor,
 ]
 
 /**

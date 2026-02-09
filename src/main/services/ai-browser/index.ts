@@ -1,4 +1,4 @@
-/**
+/**		      	    				  	  	  	 		 		       	 	 	         	 	    					 
  * AI Browser Module - Main Entry Point
  *
  * This module provides AI-controlled browser capabilities for Halo.

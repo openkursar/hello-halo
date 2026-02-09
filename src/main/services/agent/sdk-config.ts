@@ -208,7 +208,7 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
     allowedTools: [...DEFAULT_ALLOWED_TOOLS],
     // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/
     settingSources: ['user', 'project'],
-    permissionMode: 'acceptEdits' as const,
+    permissionMode: 'bypassPermissions' as const,
     canUseTool: createCanUseTool(),
     // Requires SDK patch: enable token-level streaming (stream_event)
     includePartialMessages: true,

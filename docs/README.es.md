@@ -245,6 +245,16 @@ Licencia MIT — ver [LICENSE](../LICENSE) para detalles.
 
 ---
 
+## ¿Inspirado por Halo?
+
+Si este proyecto despertó una idea o te ayudó a construir algo genial:
+
+- **Danos una estrella** — ayuda a otros a encontrar Halo
+- **Comparte tu historia** — nos encanta saber qué construiste
+- **Enlázanos** — por ejemplo `Inspired by [Halo](https://github.com/openkursar/hello-halo)`
+
+---
+
 ## La Historia Detrás de Halo
 
 Hace unos meses, comenzó con una simple frustración: **Quería usar Claude Code, pero estaba atrapado en reuniones todo el día.**

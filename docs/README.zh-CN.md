@@ -257,6 +257,16 @@ MIT 许可证 — 详见 [LICENSE](../LICENSE)。
 
 ---
 
+## 受到 Halo 的启发？
+
+如果本项目给了你灵感，或帮你构建了很酷的东西：
+
+- **给我们一个 Star** — 帮助更多人发现 Halo
+- **分享你的故事** — 我们很想知道你做了什么
+- **提及我们** — 例如 `Inspired by [Halo](https://github.com/openkursar/hello-halo)`
+
+---
+
 ## Halo 背后的故事
 
 几个月前，一切始于一个简单的困扰：**我想用 Claude Code，但整天都在开会。**
