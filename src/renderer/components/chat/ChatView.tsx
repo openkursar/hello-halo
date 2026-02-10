@@ -41,7 +41,8 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     getCurrentSession,
     sendMessage,
     stopGeneration,
-    continueAfterInterrupt
+    continueAfterInterrupt,
+    answerQuestion
   } = useChatStore()
 
   // Onboarding state
@@ -152,7 +153,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const currentConversation = getCurrentConversation()
   const { isLoadingConversation } = useChatStore()
   const session = getCurrentSession()
-  const { isGenerating, streamingContent, isStreaming, thoughts, isThinking, compactInfo, error, errorType, textBlockVersion } = session
+  const { isGenerating, streamingContent, isStreaming, thoughts, isThinking, compactInfo, error, errorType, textBlockVersion, pendingQuestion } = session
 
   // Scrollable container ref
   const containerRef = useRef<HTMLDivElement>(null)
@@ -165,7 +166,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   } = useSmartScroll({
     containerRef,
     threshold: 100,
-    deps: [currentConversation?.messages, streamingContent, thoughts, mockStreamingContent],
+    deps: [currentConversation?.messages, streamingContent, thoughts, mockStreamingContent, pendingQuestion],
     behavior: isStreaming ? 'instant' : 'smooth'
   })
 
@@ -310,6 +311,8 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
               onContinue={currentConversation ? () => continueAfterInterrupt(currentConversation.id) : undefined}
               isCompact={isCompact}
               textBlockVersion={textBlockVersion}
+              pendingQuestion={pendingQuestion}
+              onAnswerQuestion={currentConversation ? (answers) => answerQuestion(currentConversation.id, answers) : undefined}
             />
           )}
         </div>

@@ -1,22 +1,28 @@
-/**		      	    				  	  	  	 		 		       	 	 	         	 	    					 
+/**
  * Conversation Service - Manages chat conversations
  *
- * Performance optimization: Uses index.json for fast listing
- * - listConversations returns lightweight metadata (ConversationMeta)
- * - getConversation loads full conversation on-demand
- * - Index is auto-rebuilt on first access if missing
+ * Performance optimization:
+ * - Uses index.json for fast listing (ConversationMeta only)
+ * - getConversation loads conversation on-demand, with lazy migration
+ * - Thoughts are stored separately in {id}.thoughts.json (v2 format)
+ *   to reduce main file size from ~3.5MB to ~90KB
+ * - Atomic writes (write .tmp then rename) for crash safety
  */
 
 import { join } from 'path'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'fs'
-import { getTempSpacePath } from './config.service'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync } from 'fs'
 import { getSpace } from './space.service'
 import { v4 as uuidv4 } from 'uuid'
 
-// Thought types for agent reasoning
+// ============================================================================
+// Type Definitions
+// ============================================================================
+
+type ThoughtType = 'thinking' | 'text' | 'tool_use' | 'tool_result' | 'system' | 'result' | 'error'
+
 interface Thought {
   id: string
-  type: 'thinking' | 'text' | 'tool_use' | 'tool_result' | 'system' | 'result' | 'error'
+  type: ThoughtType
   content: string
   timestamp: string
   toolName?: string
@@ -24,21 +30,26 @@ interface Thought {
   toolOutput?: string
   isError?: boolean
   duration?: number
+  isStreaming?: boolean
+  isReady?: boolean
+  toolResult?: {
+    output: string
+    isError: boolean
+    timestamp: string
+  }
 }
 
-// Image attachment types for multi-modal messages
 type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
 
 interface ImageAttachment {
   id: string
   type: 'image'
   mediaType: ImageMediaType
-  data: string  // Base64 encoded
+  data: string
   name?: string
   size?: number
 }
 
-// Token usage statistics stored with assistant messages (matches renderer TokenUsage shape)
 interface TokenUsage {
   inputTokens: number
   outputTokens: number
@@ -48,15 +59,21 @@ interface TokenUsage {
   contextWindow: number
 }
 
+interface ThoughtsSummary {
+  count: number
+  types: Partial<Record<ThoughtType, number>>
+}
+
 interface Message {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: string
   toolCalls?: ToolCall[]
-  thoughts?: Thought[]  // Agent reasoning process for this message
-  images?: ImageAttachment[]  // Attached images for multi-modal messages
-  tokenUsage?: TokenUsage  // Optional token usage stats for assistant messages
+  thoughts?: Thought[] | null  // null = stored separately, undefined = none, Array = loaded/inline
+  thoughtsSummary?: ThoughtsSummary
+  images?: ImageAttachment[]
+  tokenUsage?: TokenUsage
 }
 
 interface ToolCall {
@@ -69,7 +86,6 @@ interface ToolCall {
   progress?: number
 }
 
-// Lightweight metadata for conversation list (no messages)
 export interface ConversationMeta {
   id: string
   spaceId: string
@@ -77,16 +93,22 @@ export interface ConversationMeta {
   createdAt: string
   updatedAt: string
   messageCount: number
-  preview?: string  // Last message preview (truncated)
+  preview?: string
 }
 
-// Full conversation with messages
 interface Conversation extends ConversationMeta {
   messages: Message[]
   sessionId?: string
+  version?: number  // 2 = thoughts stored separately
 }
 
-// Index file structure
+// Thoughts file structure
+interface ThoughtsFile {
+  version: 1
+  conversationId: string
+  messages: Record<string, Thought[]>  // messageId -> thoughts[]
+}
+
 interface ConversationIndex {
   version: number
   updatedAt: string
@@ -95,17 +117,97 @@ interface ConversationIndex {
 
 const INDEX_VERSION = 1
 const PREVIEW_LENGTH = 50
+const CONVERSATION_FORMAT_VERSION = 2
+
+// ============================================================================
+// Atomic File Operations
+// ============================================================================
+
+/**
+ * Write file atomically: write to .tmp first, then rename.
+ * rename() on the same filesystem is atomic on POSIX and near-atomic on Windows.
+ */
+function atomicWriteFileSync(filePath: string, data: string): void {
+  const tmpPath = filePath + '.tmp'
+  writeFileSync(tmpPath, data)
+  renameSync(tmpPath, filePath)
+}
+
+// ============================================================================
+// Thoughts Summary Computation
+// ============================================================================
+
+function computeThoughtsSummary(thoughts: Thought[]): ThoughtsSummary {
+  const types: Partial<Record<ThoughtType, number>> = {}
+  for (const t of thoughts) {
+    types[t.type] = (types[t.type] || 0) + 1
+  }
+  let duration: number | undefined
+  if (thoughts.length >= 2) {
+    const first = new Date(thoughts[0].timestamp).getTime()
+    const last = new Date(thoughts[thoughts.length - 1].timestamp).getTime()
+    duration = (last - first) / 1000
+  }
+  return { count: thoughts.length, types, duration }
+}
+
+// ============================================================================
+// Migration: v1 (inline thoughts) -> v2 (separated thoughts)
+// ============================================================================
+
+/**
+ * Migrate a single conversation from v1 to v2 format.
+ * - Extracts thoughts from messages into a separate .thoughts.json file
+ * - Replaces inline thoughts with null and adds thoughtsSummary
+ * - Sets version to 2
+ *
+ * Safety:
+ * - Idempotent: safe to run multiple times
+ * - Writes thoughts file FIRST, then updates main file
+ * - If crash between the two writes, next read detects v1 and re-migrates
+ */
+function migrateConversationV1toV2(conversationsDir: string, conversation: Conversation): void {
+  const mainPath = join(conversationsDir, `${conversation.id}.json`)
+  const thoughtsPath = join(conversationsDir, `${conversation.id}.thoughts.json`)
+
+  // Step 1: Extract thoughts from all messages
+  const thoughtsData: Record<string, Thought[]> = {}
+  let hasAnyThoughts = false
+
+  for (const message of conversation.messages) {
+    if (Array.isArray(message.thoughts) && message.thoughts.length > 0) {
+      thoughtsData[message.id] = message.thoughts
+      message.thoughtsSummary = computeThoughtsSummary(message.thoughts)
+      message.thoughts = null
+      hasAnyThoughts = true
+    }
+  }
+
+  // Step 2: Write thoughts file first (if there are thoughts)
+  if (hasAnyThoughts) {
+    const thoughtsFile: ThoughtsFile = {
+      version: 1,
+      conversationId: conversation.id,
+      messages: thoughtsData
+    }
+    atomicWriteFileSync(thoughtsPath, JSON.stringify(thoughtsFile))
+    console.log(`[Conversation] Migration: wrote thoughts file for ${conversation.id} (${Object.keys(thoughtsData).length} messages)`)
+  }
+
+  // Step 3: Update main file with version marker
+  conversation.version = CONVERSATION_FORMAT_VERSION
+  atomicWriteFileSync(mainPath, JSON.stringify(conversation, null, 2))
+  console.log(`[Conversation] Migration: updated main file for ${conversation.id} to v2`)
+}
 
 // ============================================================================
 // Index Management Functions
 // ============================================================================
 
-// Get index file path for a space
 function getIndexPath(conversationsDir: string): string {
   return join(conversationsDir, 'index.json')
 }
 
-// Read index file, returns null if not exists or invalid
 function readIndex(conversationsDir: string): ConversationIndex | null {
   const indexPath = getIndexPath(conversationsDir)
 
@@ -117,7 +219,6 @@ function readIndex(conversationsDir: string): ConversationIndex | null {
     const content = readFileSync(indexPath, 'utf-8')
     const index: ConversationIndex = JSON.parse(content)
 
-    // Version check - rebuild if version mismatch
     if (index.version !== INDEX_VERSION) {
       console.log(`[Conversation] Index version mismatch (${index.version} vs ${INDEX_VERSION}), will rebuild`)
       return null
@@ -130,7 +231,6 @@ function readIndex(conversationsDir: string): ConversationIndex | null {
   }
 }
 
-// Write index file
 function writeIndex(conversationsDir: string, conversations: ConversationMeta[]): void {
   const indexPath = getIndexPath(conversationsDir)
 
@@ -148,7 +248,6 @@ function writeIndex(conversationsDir: string, conversations: ConversationMeta[])
   }
 }
 
-// Extract metadata from a full conversation
 function toMeta(conversation: Conversation): ConversationMeta {
   const lastMessage = conversation.messages[conversation.messages.length - 1]
   let preview: string | undefined
@@ -171,7 +270,16 @@ function toMeta(conversation: Conversation): ConversationMeta {
   }
 }
 
-// Full scan: read all conversation files and build metadata list
+/**
+ * Check if a filename is a conversation main file (not thoughts, not index, not tmp).
+ */
+function isConversationFile(filename: string): boolean {
+  return filename.endsWith('.json')
+    && filename !== 'index.json'
+    && !filename.endsWith('.thoughts.json')
+    && !filename.endsWith('.tmp')
+}
+
 function fullScanConversations(conversationsDir: string, spaceId: string): ConversationMeta[] {
   console.log(`[Conversation] Full scan started for ${conversationsDir}`)
   const metas: ConversationMeta[] = []
@@ -180,7 +288,7 @@ function fullScanConversations(conversationsDir: string, spaceId: string): Conve
     return metas
   }
 
-  const files = readdirSync(conversationsDir).filter(f => f.endsWith('.json') && f !== 'index.json')
+  const files = readdirSync(conversationsDir).filter(isConversationFile)
 
   for (const file of files) {
     try {
@@ -192,14 +300,12 @@ function fullScanConversations(conversationsDir: string, spaceId: string): Conve
     }
   }
 
-  // Sort by updatedAt (most recent first)
   metas.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
 
   console.log(`[Conversation] Full scan completed: ${metas.length} conversations`)
   return metas
 }
 
-// Rebuild index from scratch (async, non-blocking)
 function rebuildIndexAsync(conversationsDir: string, spaceId: string): void {
   setImmediate(() => {
     try {
@@ -212,17 +318,15 @@ function rebuildIndexAsync(conversationsDir: string, spaceId: string): void {
   })
 }
 
-// Update a single entry in the index
 function updateIndexEntry(
   conversationsDir: string,
   spaceId: string,
   conversationId: string,
-  meta: ConversationMeta | null  // null means delete
+  meta: ConversationMeta | null
 ): void {
   const index = readIndex(conversationsDir)
 
   if (!index) {
-    // No index, trigger full rebuild
     rebuildIndexAsync(conversationsDir, spaceId)
     return
   }
@@ -230,19 +334,15 @@ function updateIndexEntry(
   const existingIndex = index.conversations.findIndex(c => c.id === conversationId)
 
   if (meta === null) {
-    // Delete entry
     if (existingIndex !== -1) {
       index.conversations.splice(existingIndex, 1)
     }
   } else if (existingIndex !== -1) {
-    // Update existing entry
     index.conversations[existingIndex] = meta
   } else {
-    // Add new entry
     index.conversations.unshift(meta)
   }
 
-  // Re-sort by updatedAt
   index.conversations.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
 
   writeIndex(conversationsDir, index.conversations)
@@ -252,11 +352,7 @@ function updateIndexEntry(
 // Core Functions
 // ============================================================================
 
-// Get conversations directory for a space
 function getConversationsDir(spaceId: string): string {
-  console.log(`[Conversation] getConversationsDir called with spaceId: ${spaceId}`)
-
-  // Use getSpace to find the space (supports both default and custom paths)
   const space = getSpace(spaceId)
 
   if (!space) {
@@ -268,7 +364,6 @@ function getConversationsDir(spaceId: string): string {
   const convDir = space.isTemp
     ? join(space.path, 'conversations')
     : join(space.path, '.halo', 'conversations')
-  console.log(`[Conversation] Found space "${space.name}", conversations dir: ${convDir}`)
   return convDir
 }
 
@@ -276,18 +371,13 @@ function getConversationsDir(spaceId: string): string {
 export function listConversations(spaceId: string): ConversationMeta[] {
   const conversationsDir = getConversationsDir(spaceId)
 
-  // Strategy 1: Try to read from index
   const index = readIndex(conversationsDir)
   if (index) {
-    console.log(`[Conversation] Using index: ${index.conversations.length} conversations`)
     return index.conversations
   }
 
-  // Strategy 2: Fallback to full scan + async index rebuild
-  console.log(`[Conversation] No index found, performing full scan`)
   const metas = fullScanConversations(conversationsDir, spaceId)
 
-  // Trigger async index rebuild for next time
   if (metas.length > 0) {
     writeIndex(conversationsDir, metas)
   }
@@ -295,7 +385,7 @@ export function listConversations(spaceId: string): ConversationMeta[] {
   return metas
 }
 
-// Create a new conversation
+// Create a new conversation (always v2 format)
 export function createConversation(spaceId: string, title?: string): Conversation {
   const id = uuidv4()
   const now = new Date().toISOString()
@@ -307,7 +397,8 @@ export function createConversation(spaceId: string, title?: string): Conversatio
     createdAt: now,
     updatedAt: now,
     messageCount: 0,
-    messages: []
+    messages: [],
+    version: CONVERSATION_FORMAT_VERSION
   }
 
   const conversationsDir = getConversationsDir(spaceId)
@@ -316,36 +407,55 @@ export function createConversation(spaceId: string, title?: string): Conversatio
     mkdirSync(conversationsDir, { recursive: true })
   }
 
-  writeFileSync(join(conversationsDir, `${id}.json`), JSON.stringify(conversation, null, 2))
+  atomicWriteFileSync(join(conversationsDir, `${id}.json`), JSON.stringify(conversation, null, 2))
 
-  // Update index
   updateIndexEntry(conversationsDir, spaceId, id, toMeta(conversation))
 
   return conversation
 }
 
-// Get a specific conversation
+/**
+ * Get a specific conversation.
+ * - Detects format version and triggers lazy migration if needed.
+ * - v2 format: thoughts are NOT included (they're in the separate file).
+ *   Messages with thoughts have thoughts=null and thoughtsSummary set.
+ */
 export function getConversation(spaceId: string, conversationId: string): Conversation | null {
-  console.log(`[Conversation] getConversation called - spaceId: ${spaceId}, conversationId: ${conversationId}`)
-  
   const conversationsDir = getConversationsDir(spaceId)
   const filePath = join(conversationsDir, `${conversationId}.json`)
-  
-  console.log(`[Conversation] Looking for file: ${filePath}`)
-  console.log(`[Conversation] File exists: ${existsSync(filePath)}`)
 
-  if (existsSync(filePath)) {
+  if (!existsSync(filePath)) {
+    return null
+  }
+
+  let conversation: Conversation
+  try {
+    conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
+  } catch (error) {
+    console.error(`[Conversation] Failed to read conversation ${conversationId}:`, error)
+    return null
+  }
+
+  // Format detection and lazy migration
+  if (conversation.version !== CONVERSATION_FORMAT_VERSION) {
+    console.log(`[Conversation] Detected v1 format for ${conversationId}, migrating...`)
     try {
-      const conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
-      console.log(`[Conversation] Found conversation: ${conversation.title}`)
-      return conversation
+      migrateConversationV1toV2(conversationsDir, conversation)
     } catch (error) {
-      console.error('Failed to read conversation:', error)
+      console.error(`[Conversation] Migration failed for ${conversationId}, falling back to original:`, error)
+      // Migration mutates the object in-place before writing files.
+      // If file write fails, the in-memory object is in a half-mutated state (thoughts=null but no file).
+      // Re-read the original v1 data from disk so the user still sees their inline thoughts.
+      try {
+        conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
+      } catch (readError) {
+        console.error(`[Conversation] Failed to re-read original for ${conversationId}:`, readError)
+        return null
+      }
     }
   }
 
-  console.log(`[Conversation] Conversation not found`)
-  return null
+  return conversation
 }
 
 // Update a conversation
@@ -375,15 +485,17 @@ export function updateConversation(
     updatedAt: new Date().toISOString()
   }
 
-  writeFileSync(filePath, JSON.stringify(updated, null, 2))
+  atomicWriteFileSync(filePath, JSON.stringify(updated, null, 2))
 
-  // Update index (title or other metadata may have changed)
   updateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(updated))
 
   return updated
 }
 
-// Add a message to a conversation
+/**
+ * Add a message to a conversation.
+ * User messages never have thoughts, so only the main file is written.
+ */
 export function addMessage(spaceId: string, conversationId: string, message: Omit<Message, 'id' | 'timestamp'>): Message {
   const conversationsDir = getConversationsDir(spaceId)
   const filePath = join(conversationsDir, `${conversationId}.json`)
@@ -414,15 +526,28 @@ export function addMessage(spaceId: string, conversationId: string, message: Omi
     conversation.title = message.content.slice(0, 50) + (message.content.length > 50 ? '...' : '')
   }
 
-  writeFileSync(filePath, JSON.stringify(conversation, null, 2))
+  // Ensure version is set for new writes
+  if (!conversation.version) {
+    conversation.version = CONVERSATION_FORMAT_VERSION
+  }
 
-  // Update index with new messageCount and preview
+  atomicWriteFileSync(filePath, JSON.stringify(conversation, null, 2))
+
   updateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
 
   return newMessage
 }
 
-// Update the last message (for streaming and saving thoughts)
+/**
+ * Update the last message (for streaming completion and saving thoughts).
+ *
+ * If updates include thoughts:
+ * 1. Compute thoughtsSummary and store in main file
+ * 2. Write thoughts to separate .thoughts.json file
+ * 3. Set thoughts=null in main file
+ *
+ * This keeps the main file small (~90KB) while thoughts (~3.5MB) are separate.
+ */
 export function updateLastMessage(
   spaceId: string,
   conversationId: string,
@@ -450,20 +575,90 @@ export function updateLastMessage(
   const lastMessage = conversation.messages[conversation.messages.length - 1]
 
   // Only update assistant messages
-  if (lastMessage.role === 'assistant') {
-    Object.assign(lastMessage, updates)
-    conversation.updatedAt = new Date().toISOString()
-
-    writeFileSync(filePath, JSON.stringify(conversation, null, 2))
-
-    // Update index (preview may have changed)
-    updateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
+  if (lastMessage.role !== 'assistant') {
+    return lastMessage
   }
+
+  // Extract thoughts from updates for separate storage
+  const thoughtsToStore = Array.isArray(updates.thoughts) && updates.thoughts.length > 0
+    ? updates.thoughts
+    : null
+
+  // Apply updates to the message (except thoughts, handled separately)
+  const { thoughts: _thoughts, ...otherUpdates } = updates
+  Object.assign(lastMessage, otherUpdates)
+
+  // Handle thoughts separation
+  if (thoughtsToStore) {
+    // Compute summary for the main file
+    lastMessage.thoughtsSummary = computeThoughtsSummary(thoughtsToStore)
+    lastMessage.thoughts = null  // Marker: thoughts exist but stored separately
+
+    // Write thoughts file first (crash safety: if this succeeds but main fails,
+    // next migration will re-extract from the still-inline thoughts)
+    const thoughtsPath = join(conversationsDir, `${conversationId}.thoughts.json`)
+
+    // Read existing thoughts file to merge (may have thoughts from previous messages)
+    let thoughtsFile: ThoughtsFile
+    try {
+      if (existsSync(thoughtsPath)) {
+        thoughtsFile = JSON.parse(readFileSync(thoughtsPath, 'utf-8'))
+      } else {
+        thoughtsFile = { version: 1, conversationId, messages: {} }
+      }
+    } catch {
+      thoughtsFile = { version: 1, conversationId, messages: {} }
+    }
+
+    thoughtsFile.messages[lastMessage.id] = thoughtsToStore
+    atomicWriteFileSync(thoughtsPath, JSON.stringify(thoughtsFile))
+  }
+
+  // Ensure version is set
+  if (!conversation.version) {
+    conversation.version = CONVERSATION_FORMAT_VERSION
+  }
+
+  conversation.updatedAt = new Date().toISOString()
+
+  atomicWriteFileSync(filePath, JSON.stringify(conversation, null, 2))
+
+  updateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
 
   return lastMessage
 }
 
-// Delete a conversation
+/**
+ * Get thoughts for a specific message (lazy loading from .thoughts.json).
+ * Returns the thoughts array, or empty array if not found.
+ */
+export function getMessageThoughts(
+  spaceId: string,
+  conversationId: string,
+  messageId: string
+): Thought[] {
+  const conversationsDir = getConversationsDir(spaceId)
+  const thoughtsPath = join(conversationsDir, `${conversationId}.thoughts.json`)
+
+  if (!existsSync(thoughtsPath)) {
+    console.log(`[Conversation] No thoughts file for ${conversationId}, returning empty`)
+    return []
+  }
+
+  try {
+    const thoughtsFile: ThoughtsFile = JSON.parse(readFileSync(thoughtsPath, 'utf-8'))
+    const thoughts = thoughtsFile.messages[messageId] || []
+    console.log(`[Conversation] Loaded ${thoughts.length} thoughts for ${conversationId}/${messageId}`)
+    return thoughts
+  } catch (error) {
+    console.error(`[Conversation] Failed to read thoughts for ${conversationId}/${messageId}:`, error)
+    return []
+  }
+}
+
+/**
+ * Delete a conversation and its associated thoughts file.
+ */
 export function deleteConversation(spaceId: string, conversationId: string): boolean {
   const conversationsDir = getConversationsDir(spaceId)
   const filePath = join(conversationsDir, `${conversationId}.json`)
@@ -471,7 +666,22 @@ export function deleteConversation(spaceId: string, conversationId: string): boo
   if (existsSync(filePath)) {
     rmSync(filePath)
 
-    // Update index (remove entry)
+    // Also delete thoughts file if it exists
+    const thoughtsPath = join(conversationsDir, `${conversationId}.thoughts.json`)
+    if (existsSync(thoughtsPath)) {
+      try {
+        rmSync(thoughtsPath)
+      } catch (error) {
+        console.error(`[Conversation] Failed to delete thoughts file for ${conversationId}:`, error)
+      }
+    }
+
+    // Clean up any leftover tmp files
+    const tmpMain = filePath + '.tmp'
+    const tmpThoughts = thoughtsPath + '.tmp'
+    if (existsSync(tmpMain)) try { rmSync(tmpMain) } catch { /* ignore */ }
+    if (existsSync(tmpThoughts)) try { rmSync(tmpThoughts) } catch { /* ignore */ }
+
     updateIndexEntry(conversationsDir, spaceId, conversationId, null)
 
     return true
@@ -490,7 +700,7 @@ export function saveSessionId(spaceId: string, conversationId: string, sessionId
   try {
     const conversation: Conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
     conversation.sessionId = sessionId
-    writeFileSync(filePath, JSON.stringify(conversation, null, 2))
+    atomicWriteFileSync(filePath, JSON.stringify(conversation, null, 2))
   } catch (error) {
     console.error(`[Conversation] Failed to save session ID for ${conversationId}:`, error)
   }

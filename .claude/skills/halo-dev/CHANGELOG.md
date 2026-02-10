@@ -6,6 +6,59 @@
 
 ---
 
+## Centralized Space Data Storage
+
+Separates data storage path from project working directory. Previously, custom-path spaces stored Halo data (`.halo/`) inside the user's project directory, requiring manual `.gitignore` and risking data leakage. Now all space data is centralized under `~/.halo/spaces/{uuid}/`.
+
+**Key change**: `Space` object now has two path concepts:
+- `path`: Data storage (always `~/.halo/spaces/{uuid}/`)
+- `workingDir`: Optional project directory (agent cwd, artifact root, file explorer)
+
+**Design decisions**:
+- UUID-based directory names (stable across renames, no character conflicts)
+- No migration of existing spaces (old custom-path spaces continue working as-is)
+- `workingDir || path` pattern used in all working directory consumers
+
+**Affected files**:
+- `src/main/services/space.service.ts` — `createSpace`, `deleteSpace`, `openSpaceFolder`, `getAllSpacePaths`, type definitions
+- `src/main/services/agent/helpers.ts` — `getWorkingDir` uses `workingDir`
+- `src/main/services/artifact.service.ts` — `getWorkingDir` uses `workingDir`
+- `src/main/services/onboarding.service.ts` — Artifacts written to `workingDir`
+- `src/main/http/routes/index.ts` — `getWorkingDir` uses `workingDir`
+- `src/renderer/types/index.ts` — `Space` interface adds `workingDir`
+- `src/renderer/pages/HomePage.tsx` — Delete confirmation logic updated
+
+---
+
+## Conversation Thoughts Separation
+
+Performance optimization: Separate thoughts data (~3.5MB, 97% of conversation file size) into dedicated `.thoughts.json` files for lazy loading.
+
+**Three-state `thoughts` field**:
+- `undefined` = no thoughts
+- `null` = stored separately (not loaded)
+- `Thought[]` = loaded/inline
+
+**Key components**:
+- `ThoughtsSummary` in message: `count`, `types`, `duration` for collapsed display without loading
+- `LazyCollapsedThoughtProcess`: Shows summary bar, loads full thoughts on user click
+- Lazy migration: v1 (inline) -> v2 (separated), triggered on first conversation read
+
+**Affected files**:
+- `src/main/services/conversation.service.ts` — Atomic writes, thoughts separation, migration, `getMessageThoughts`
+- `src/main/ipc/conversation.ts` — `conversation:get-thoughts` handler
+- `src/main/controllers/conversation.controller.ts` — `getMessageThoughts` controller
+- `src/preload/index.ts` — `getMessageThoughts` API
+- `src/renderer/api/index.ts` — `getMessageThoughts` with IPC/HTTP transport
+- `src/main/http/routes/index.ts` — GET thoughts endpoint
+- `src/renderer/stores/chat.store.ts` — `loadMessageThoughts` with cache
+- `src/renderer/components/chat/MessageItem.tsx` — Lazy loading support
+- `src/renderer/components/chat/MessageList.tsx` — Dual rendering paths (inline/separated)
+- `src/renderer/components/chat/CollapsedThoughtProcess.tsx` — `LazyCollapsedThoughtProcess`
+- `src/renderer/types/index.ts` — `ThoughtsSummary`, `Message.thoughts` nullable, `Conversation.version`
+
+---
+
 ## AI Sources Multi-Provider Architecture
 
 Extensible AI provider authentication architecture. The core defines only abstract interfaces; concrete Provider implementations are independent.

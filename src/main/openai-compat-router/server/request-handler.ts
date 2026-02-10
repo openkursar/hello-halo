@@ -219,11 +219,37 @@ async function fetchAnthropicUpstream(
 // ============================================================================
 
 /**
+ * Headers that must NOT be forwarded from upstream response to client.
+ * These are hop-by-hop or transport-level headers managed by Node/Express.
+ */
+const RESPONSE_HOP_BY_HOP = new Set([
+  'connection',
+  'transfer-encoding',
+  'content-length',
+  'content-encoding',
+  'keep-alive',
+])
+
+/**
+ * Forward all upstream response headers to the client, skipping hop-by-hop headers.
+ * This ensures the proxy is fully transparent at the HTTP header level.
+ */
+function forwardResponseHeaders(upstreamResp: globalThis.Response, res: ExpressResponse): void {
+  upstreamResp.headers.forEach((value, key) => {
+    if (!RESPONSE_HOP_BY_HOP.has(key.toLowerCase())) {
+      res.setHeader(key, value)
+    }
+  })
+}
+
+/**
  * Handle Anthropic passthrough request — zero format conversion.
  *
  * Proxies the Anthropic request directly to the upstream Anthropic API.
  * For streaming responses, pipes the upstream SSE body directly to the client
  * without parsing or transforming any events.
+ *
+ * Response headers and status codes are forwarded transparently from upstream.
  */
 async function handleAnthropicPassthrough(
   anthropicRequest: AnthropicRequest,
@@ -263,23 +289,26 @@ async function handleAnthropicPassthrough(
     )
     console.log(`[RequestHandler] Anthropic upstream response: ${upstreamResp.status}`)
 
-    // Handle errors
+    // Handle errors — forward upstream response transparently (status + headers + body)
     if (!upstreamResp.ok) {
       const errorText = await upstreamResp.text().catch(() => '')
-      const { type: errorType, message: errorMessage } = getUpstreamError(upstreamResp.status, errorText)
       console.error(`[RequestHandler] Anthropic error ${upstreamResp.status}: ${errorText.slice(0, 200)}`)
-      return sendError(res, errorType, errorMessage)
+
+      res.status(upstreamResp.status)
+      forwardResponseHeaders(upstreamResp, res)
+      res.setHeader('Content-Type', 'application/json')
+      res.end(errorText)
+      return
     }
 
     // Streaming: pipe upstream body directly to client (zero parsing)
     if (anthropicRequest.stream && upstreamResp.body) {
+      // Forward all upstream headers first (request-id, x-ratelimit-*, retry-after, etc.)
+      forwardResponseHeaders(upstreamResp, res)
+      // Override transport headers for SSE
       res.setHeader('Content-Type', 'text/event-stream')
       res.setHeader('Cache-Control', 'no-cache')
       res.setHeader('Connection', 'keep-alive')
-
-      // Copy relevant upstream headers
-      const requestId = upstreamResp.headers.get('request-id')
-      if (requestId) res.setHeader('request-id', requestId)
 
       // Pipe the ReadableStream directly — no parsing, no transformation
       const reader = upstreamResp.body.getReader()
@@ -300,11 +329,13 @@ async function handleAnthropicPassthrough(
     }
 
     // Non-streaming: forward JSON response as-is
-    const body = await upstreamResp.json()
+    const body = await upstreamResp.text()
     if (debug) {
-      console.log(`[RequestHandler] Anthropic response:\n${JSON.stringify(body, null, 2)}`)
+      console.log(`[RequestHandler] Anthropic response:\n${body.slice(0, 2000)}`)
     }
-    res.json(body)
+    forwardResponseHeaders(upstreamResp, res)
+    res.setHeader('Content-Type', 'application/json')
+    res.end(body)
   } catch (error: any) {
     if (error?.name === 'AbortError') {
       console.error('[RequestHandler] Anthropic passthrough AbortError (timeout or client disconnect)')

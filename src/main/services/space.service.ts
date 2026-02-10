@@ -30,6 +30,7 @@ interface Space {
   createdAt: string
   updatedAt: string
   preferences?: SpacePreferences
+  workingDir?: string  // Project directory for custom spaces (agent cwd, artifacts, file explorer)
 }
 
 interface SpaceLayoutPreferences {
@@ -48,6 +49,7 @@ interface SpaceMeta {
   createdAt: string
   updatedAt: string
   preferences?: SpacePreferences
+  workingDir?: string  // Project directory for custom spaces
 }
 
 // ============================================================================
@@ -251,7 +253,8 @@ function loadSpaceFromPath(spacePath: string): Space | null {
       isTemp: false,
       createdAt: meta.createdAt,
       updatedAt: meta.updatedAt,
-      preferences: meta.preferences
+      preferences: meta.preferences,
+      workingDir: meta.workingDir
     }
   } catch (error) {
     console.error(`[Space] Failed to read space meta for ${spacePath}:`, error)
@@ -334,9 +337,14 @@ export function listSpaces(): Space[] {
 export function getAllSpacePaths(): string[] {
   const paths: string[] = [getTempSpacePath()]
 
-  for (const entry of getRegistry().values()) {
+  for (const [, entry] of getRegistry()) {
     if (existsSync(entry.path)) {
       paths.push(entry.path)
+    }
+    // Include workingDir for project-linked spaces (agent/artifact operations happen there)
+    const meta = tryReadMeta(entry.path)
+    if (meta?.workingDir && existsSync(meta.workingDir)) {
+      paths.push(meta.workingDir)
     }
   }
 
@@ -350,12 +358,11 @@ export function createSpace(input: { name: string; icon: string; customPath?: st
   const id = uuidv4()
   const now = new Date().toISOString()
 
-  let spacePath: string
-  if (input.customPath) {
-    spacePath = input.customPath
-  } else {
-    spacePath = join(getSpacesDir(), input.name)
-  }
+  // Data always stored centrally under ~/.halo/spaces/{id}/
+  const spacePath = join(getSpacesDir(), id)
+
+  // customPath is stored as workingDir (agent cwd, artifact root, file explorer)
+  const workingDir = input.customPath || undefined
 
   // Create directories
   mkdirSync(spacePath, { recursive: true })
@@ -368,7 +375,8 @@ export function createSpace(input: { name: string; icon: string; customPath?: st
     name: input.name,
     icon: input.icon,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    workingDir
   }
 
   writeFileSync(join(spacePath, '.halo', 'meta.json'), JSON.stringify(meta, null, 2))
@@ -377,6 +385,8 @@ export function createSpace(input: { name: string; icon: string; customPath?: st
   getRegistry().set(id, { path: spacePath })
   persistIndex(getRegistry())
 
+  console.log(`[Space] Created space ${id}: path=${spacePath}${workingDir ? `, workingDir=${workingDir}` : ''}`)
+
   return {
     id,
     name: input.name,
@@ -384,7 +394,8 @@ export function createSpace(input: { name: string; icon: string; customPath?: st
     path: spacePath,
     isTemp: false,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    workingDir
   }
 }
 
@@ -399,18 +410,18 @@ export function deleteSpace(spaceId: string): boolean {
 
   const spacePath = space.path
   const spacesDir = getSpacesDir()
-  const isCustomPath = !spacePath.startsWith(spacesDir)
+  const isCentralized = spacePath.startsWith(spacesDir)
 
   try {
-    if (isCustomPath) {
-      // For custom path spaces, only delete the .halo folder (preserve user's files)
+    if (isCentralized) {
+      // Centralized storage (new spaces + default spaces): delete entire folder
+      rmSync(spacePath, { recursive: true, force: true })
+    } else {
+      // Legacy custom path spaces: only delete .halo folder (preserve user's files)
       const haloDir = join(spacePath, '.halo')
       if (existsSync(haloDir)) {
         rmSync(haloDir, { recursive: true, force: true })
       }
-    } else {
-      // For default path spaces, delete the entire folder
-      rmSync(spacePath, { recursive: true, force: true })
     }
 
     // Unregister from index (memory + disk) and invalidate cache
@@ -439,7 +450,9 @@ export function openSpaceFolder(spaceId: string): boolean {
         return true
       }
     } else {
-      shell.openPath(space.path)
+      // Open workingDir (project folder) if available, otherwise data path
+      const targetPath = space.workingDir || space.path
+      shell.openPath(targetPath)
       return true
     }
   }
@@ -477,7 +490,8 @@ export function updateSpace(spaceId: string, updates: { name?: string; icon?: st
       isTemp: false,
       createdAt: meta.createdAt,
       updatedAt: meta.updatedAt,
-      preferences: meta.preferences
+      preferences: meta.preferences,
+      workingDir: meta.workingDir
     }
     spaceCache.set(spaceId, updatedSpace)
 
@@ -550,7 +564,8 @@ export function updateSpacePreferences(
       isTemp: space.isTemp,
       createdAt: meta.createdAt,
       updatedAt: meta.updatedAt,
-      preferences: meta.preferences
+      preferences: meta.preferences,
+      workingDir: meta.workingDir
     }
     if (!space.isTemp) {
       spaceCache.set(spaceId, updatedSpace)
@@ -601,7 +616,7 @@ export function writeOnboardingArtifact(spaceId: string, fileName: string, conte
   try {
     const artifactsDir = space.isTemp
       ? join(space.path, 'artifacts')
-      : space.path
+      : (space.workingDir || space.path)
 
     mkdirSync(artifactsDir, { recursive: true })
 

@@ -246,9 +246,10 @@ Key types:
 | `HaloConfig` | App config: `api`, `aiSources`, `permissions`, `appearance`, `system`, `remoteAccess`, `mcpServers` |
 | `AISourcesConfig` | Multi-provider: `current`, `oauth`, `custom`, dynamic providers |
 | `ConversationMeta` | Lightweight list item (no messages) |
-| `Conversation` | Full conversation with `messages` and `sessionId` |
-| `Message` | Contains `content`, `toolCalls`, `thoughts`, `images`, `tokenUsage` |
+| `Conversation` | Full conversation with `messages`, `sessionId`, and `version` |
+| `Message` | Contains `content`, `toolCalls`, `thoughts` (null=separated), `images`, `tokenUsage`, `thoughtsSummary` |
 | `Thought` | Agent reasoning: `thinking`, `text`, `tool_use`, `tool_result` |
+| `ThoughtsSummary` | Lightweight summary: `count`, `types`, `duration` (for collapsed display without loading thoughts) |
 | `Artifact` / `ArtifactTreeNode` | Files in space |
 | `McpServerConfig` | MCP server: `stdio` / `http` / `sse` types |
 | `CanvasContext` | AI awareness of open Canvas tabs |
@@ -656,21 +657,31 @@ Halo uses the local filesystem for data storage (no external database/backend):
 ```
 ~/.halo/
 ├── config.json                 # Global config (API/permissions/theme/remote access/etc.)
-├── spaces-index.json           # Records custom-path spaces (customPaths)
+├── spaces-index.json           # Space ID -> path registry (v2 format)
 ├── temp/                       # Halo temporary space (id: halo-temp)
 │   ├── artifacts/              # Temporary space artifacts
-│   └── conversations/          # Temporary space conversations (with index.json)
-└── spaces/                     # Default dedicated spaces directory
-    └── <spaceName>/
-        ├── .halo/
-        │   ├── meta.json       # Space metadata (id/name/icon/timestamps)
-        │   └── conversations/  # Conversation storage (with index.json)
-        └── <user files / agent outputs...>
+│   └── conversations/          # Temporary space conversations
+└── spaces/                     # All dedicated spaces (centralized storage)
+    └── <uuid>/                 # Space identified by UUID
+        └── .halo/
+            ├── meta.json       # Space metadata (id/name/icon/timestamps/workingDir)
+            └── conversations/  # Conversation storage
+                ├── <id>.json           # Conversation data (lightweight, no thoughts)
+                └── <id>.thoughts.json  # Separated thoughts data (lazy-loaded)
 ```
 
+### Space Path Architecture
+
+Spaces have two distinct paths:
+- **`path`** (data path): Always centralized under `~/.halo/spaces/{uuid}/`. Used for conversations, meta.json, and all persisted data.
+- **`workingDir`** (optional): The user's project directory for custom/project-linked spaces. Used as agent cwd, artifact scanning root, and file explorer target.
+
+For default spaces (no custom path), `workingDir` is undefined and `path` serves both purposes.
+
 Notes:
-- **Custom-path spaces**: Also create `.halo/` in the target directory; deleting the space only removes `.halo/` (preserves user files).
-- **Lazy-loaded conversations**: `conversation.service.ts` uses `index.json` for fast listing; full conversation data (`<conversationId>.json`) is loaded only when entering a conversation.
+- **Legacy custom-path spaces**: Created before centralized storage, `path` points to the project directory with `.halo/` inside it. These continue to work without migration.
+- **Lazy-loaded conversations**: `conversation.service.ts` uses `index.json` for fast listing; full conversation data is loaded only when entering a conversation.
+- **Thoughts separation**: Thoughts data (~97% of file size) stored in separate `.thoughts.json` files, loaded on-demand when user clicks to expand.
 
 ## Theme System
 

@@ -21,7 +21,7 @@
 
 import { create } from 'zustand'
 import { api } from '../api'
-import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, CanvasContext, AgentErrorType } from '../types'
+import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, CanvasContext, AgentErrorType, PendingQuestion, Question } from '../types'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
 
 // LRU cache size limit
@@ -47,6 +47,8 @@ interface SessionState {
   compactInfo: CompactInfo | null
   // Text block version - increments on each new text block (for StreamingBubble reset)
   textBlockVersion: number
+  // Pending question from AskUserQuestion tool
+  pendingQuestion: PendingQuestion | null
 }
 
 // Create empty session state
@@ -61,7 +63,8 @@ function createEmptySessionState(): SessionState {
     error: null,
     errorType: null,
     compactInfo: null,
-    textBlockVersion: 0
+    textBlockVersion: 0,
+    pendingQuestion: null
   }
 }
 
@@ -146,6 +149,13 @@ interface ChatState {
     isToolResult?: boolean
   }) => void
   handleAgentCompact: (data: AgentEventBase & { trigger: 'manual' | 'auto'; preTokens: number }) => void
+
+  // AskUserQuestion handlers
+  handleAskQuestion: (data: AgentEventBase & { id: string; questions: Question[] }) => void
+  answerQuestion: (conversationId: string, answers: Record<string, string>) => Promise<void>
+
+  // Thoughts lazy loading
+  loadMessageThoughts: (spaceId: string, conversationId: string, messageId: string) => Promise<Thought[]>
 
   // Cleanup
   reset: () => void
@@ -530,7 +540,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           error: null,
           errorType: null,
           compactInfo: null,
-          textBlockVersion: 0
+          textBlockVersion: 0,
+          pendingQuestion: null
         })
         return { sessions: newSessions }
       })
@@ -643,7 +654,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
             newSessions.set(targetId, {
               ...session,
               isGenerating: false,
-              isThinking: false
+              isThinking: false,
+              // Mark pending question as cancelled on stop
+              pendingQuestion: session.pendingQuestion?.status === 'active'
+                ? { ...session.pendingQuestion, status: 'cancelled' as const }
+                : session.pendingQuestion
             })
           }
           return { sessions: newSessions }
@@ -800,7 +815,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         isGenerating: false,
         isThinking: false,
         // Only add error thought for non-interrupted errors
-        thoughts: errorType === 'interrupted' ? session.thoughts : [...session.thoughts, errorThought]
+        thoughts: errorType === 'interrupted' ? session.thoughts : [...session.thoughts, errorThought],
+        // Mark pending question as cancelled on error
+        pendingQuestion: session.pendingQuestion?.status === 'active'
+          ? { ...session.pendingQuestion, status: 'cancelled' as const }
+          : session.pendingQuestion
       })
       return { sessions: newSessions }
     })
@@ -875,7 +894,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ...currentSession,
               isGenerating: false,
               streamingContent: '',
-              compactInfo: null  // Clear temporary compact notification
+              compactInfo: null,  // Clear temporary compact notification
+              pendingQuestion: null  // Clear pending question
             })
           }
 
@@ -898,7 +918,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ...currentSession,
             isGenerating: false,
             streamingContent: '',
-            compactInfo: null  // Clear temporary compact notification
+            compactInfo: null,  // Clear temporary compact notification
+            pendingQuestion: null  // Clear pending question
           })
         }
         return { sessions: newSessions }
@@ -1006,6 +1027,103 @@ export const useChatStore = create<ChatState>((set, get) => ({
       })
       return { sessions: newSessions }
     })
+  },
+
+  // Handle AskUserQuestion - set pending question on session
+  handleAskQuestion: (data) => {
+    const { conversationId, id, questions } = data
+    console.log(`[ChatStore] handleAskQuestion [${conversationId}]: id=${id}, questions=${questions?.length || 0}`)
+
+    set((state) => {
+      const newSessions = new Map(state.sessions)
+      const session = newSessions.get(conversationId) || createEmptySessionState()
+
+      newSessions.set(conversationId, {
+        ...session,
+        pendingQuestion: {
+          id,
+          questions: questions || [],
+          status: 'active'
+        }
+      })
+      return { sessions: newSessions }
+    })
+  },
+
+  // Answer a pending AskUserQuestion
+  answerQuestion: async (conversationId: string, answers: Record<string, string>) => {
+    const session = get().sessions.get(conversationId)
+    if (!session?.pendingQuestion) {
+      console.warn(`[ChatStore] No pending question for conversation: ${conversationId}`)
+      return
+    }
+
+    const { id } = session.pendingQuestion
+
+    try {
+      await api.answerQuestion({ conversationId, id, answers })
+
+      // Mark as answered
+      set((state) => {
+        const newSessions = new Map(state.sessions)
+        const currentSession = newSessions.get(conversationId)
+        if (currentSession?.pendingQuestion) {
+          newSessions.set(conversationId, {
+            ...currentSession,
+            pendingQuestion: {
+              ...currentSession.pendingQuestion,
+              status: 'answered',
+              answers
+            }
+          })
+        }
+        return { sessions: newSessions }
+      })
+    } catch (error) {
+      console.error('[ChatStore] Failed to answer question:', error)
+    }
+  },
+
+  // Load thoughts for a specific message (lazy loading from separated storage)
+  // Returns the thoughts array and updates the conversation cache so subsequent reads are instant
+  loadMessageThoughts: async (spaceId: string, conversationId: string, messageId: string): Promise<Thought[]> => {
+    // Check if already loaded in cache
+    const cached = get().conversationCache.get(conversationId)
+    if (cached) {
+      const msg = cached.messages.find(m => m.id === messageId)
+      if (msg && Array.isArray(msg.thoughts)) {
+        console.log(`[ChatStore] Thoughts cache hit for ${conversationId}/${messageId}: ${msg.thoughts.length} thoughts`)
+        return msg.thoughts  // Already loaded
+      }
+    }
+
+    console.log(`[ChatStore] Loading thoughts for ${conversationId}/${messageId}...`)
+    try {
+      const response = await api.getMessageThoughts(spaceId, conversationId, messageId)
+      if (response.success && response.data) {
+        const thoughts = response.data as Thought[]
+        console.log(`[ChatStore] Loaded ${thoughts.length} thoughts for ${conversationId}/${messageId}, updating cache`)
+
+        // Update the conversation cache with loaded thoughts
+        set((state) => {
+          const newCache = new Map(state.conversationCache)
+          const conversation = newCache.get(conversationId)
+          if (conversation) {
+            const updatedMessages = conversation.messages.map(m =>
+              m.id === messageId ? { ...m, thoughts } : m
+            )
+            newCache.set(conversationId, { ...conversation, messages: updatedMessages })
+          }
+          return { conversationCache: newCache }
+        })
+
+        return thoughts
+      }
+    } catch (error) {
+      console.error(`[ChatStore] Failed to load thoughts for ${conversationId}/${messageId}:`, error)
+    }
+
+    return []
   },
 
   // Reset all state (use sparingly - e.g., logout)

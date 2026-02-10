@@ -20,6 +20,7 @@ import {
   Sparkles,
   Copy,
   Check,
+  Loader2,
 } from 'lucide-react'
 import { getToolIcon } from '../icons/ToolIcons'
 import { BrowserTaskCard, isBrowserTool } from '../tool/BrowserTaskCard'
@@ -28,8 +29,9 @@ import { FileChangesFooter } from '../diff'
 import { MessageImages } from './ImageAttachmentPreview'
 import { TokenUsageIndicator } from './TokenUsageIndicator'
 import { truncateText, getToolFriendlyFormat } from './thought-utils'
-import type { Message, Thought } from '../../types'
+import type { Message, Thought, ThoughtsSummary } from '../../types'
 import { useTranslation } from '../../i18n'
+import { useChatStore } from '../../stores/chat.store'
 
 interface MessageItemProps {
   message: Message
@@ -41,29 +43,73 @@ interface MessageItemProps {
 }
 
 // Collapsible thought history component
-function ThoughtHistory({ thoughts }: { thoughts: Thought[] }) {
+// Supports both inline thoughts (Thought[]) and lazy-loaded thoughts (null + summary)
+interface ThoughtHistoryProps {
+  thoughts: Thought[] | null
+  thoughtsSummary?: ThoughtsSummary
+  onLoadThoughts?: () => Promise<Thought[]>
+}
+
+function ThoughtHistory({ thoughts, thoughtsSummary, onLoadThoughts }: ThoughtHistoryProps) {
   const [isExpanded, setIsExpanded] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [loadedThoughts, setLoadedThoughts] = useState<Thought[] | null>(null)
   const { t } = useTranslation()
 
+  // Use loaded thoughts if available, otherwise inline thoughts
+  const resolvedThoughts = loadedThoughts ?? thoughts
+
   // Filter out result type (final reply is in message bubble)
-  const displayThoughts = thoughts.filter(t => t.type !== 'result')
+  const displayThoughts = resolvedThoughts
+    ? resolvedThoughts.filter(t => t.type !== 'result')
+    : null
 
-  if (displayThoughts.length === 0) return null
+  // For loaded thoughts, compute stats from actual data
+  // For separated thoughts (null), use the summary
+  const thinkingCount = displayThoughts
+    ? displayThoughts.filter(t => t.type === 'thinking').length
+    : (thoughtsSummary?.types.thinking || 0)
+  const toolCount = displayThoughts
+    ? displayThoughts.filter(t => t.type === 'tool_use').length
+    : (thoughtsSummary?.types.tool_use || 0)
+  const totalCount = displayThoughts
+    ? displayThoughts.length
+    : ((thoughtsSummary?.count || 0) - (thoughtsSummary?.types.result || 0))
 
-  // Stats
-  const thinkingCount = thoughts.filter(t => t.type === 'thinking').length
-  const toolCount = thoughts.filter(t => t.type === 'tool_use').length
+  // Nothing to show
+  if (totalCount === 0) return null
+
+  const handleToggle = async () => {
+    if (!isExpanded && thoughts === null && !loadedThoughts && onLoadThoughts) {
+      // Lazy load thoughts from separated storage
+      setIsLoading(true)
+      try {
+        const loaded = await onLoadThoughts()
+        setLoadedThoughts(loaded)
+      } catch (err) {
+        console.error('[ThoughtHistory] Failed to load thoughts:', err)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    setIsExpanded(!isExpanded)
+  }
 
   return (
     <div className="mt-3 border-t border-border/30 pt-2">
       <button
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={handleToggle}
         className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full"
+        disabled={isLoading}
       >
-        <ChevronRight
-          size={12}
-          className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-        />
+        {isLoading ? (
+          <Loader2 size={12} className="animate-spin" />
+        ) : (
+          <ChevronRight
+            size={12}
+            className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+          />
+        )}
         <span>{t('View thought process')}</span>
         <span className="text-muted-foreground/50">
           ({thinkingCount > 0 && `${thinkingCount} ${t('thoughts')}`}
@@ -72,7 +118,7 @@ function ThoughtHistory({ thoughts }: { thoughts: Thought[] }) {
         </span>
       </button>
 
-      {isExpanded && (
+      {isExpanded && displayThoughts && (
         <div className="mt-2 space-y-2 animate-slide-down">
           {displayThoughts.map((thought, index) => (
             <ThoughtItem key={`${thought.id}-${index}`} thought={thought} />
@@ -193,6 +239,15 @@ export function MessageItem({ message, previousCost = 0, hideThoughts = false, i
   const isStreaming = (message as any).isStreaming
   const [copied, setCopied] = useState(false)
   const { t } = useTranslation()
+  const { loadMessageThoughts, currentSpaceId, currentConversationId } = useChatStore(s => ({
+    loadMessageThoughts: s.loadMessageThoughts,
+    currentSpaceId: s.currentSpaceId,
+    currentConversationId: s.getCurrentSpaceState().currentConversationId,
+  }))
+
+  // Whether thoughts are stored separately (null = separated, not yet loaded)
+  const hasThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0
+  const hasSeparatedThoughts = message.thoughts === null && !!message.thoughtsSummary
 
   // Handle copying message content to clipboard
   const handleCopyMessage = useCallback(async () => {
@@ -208,9 +263,10 @@ export function MessageItem({ message, previousCost = 0, hideThoughts = false, i
 
   // Extract browser tools from thoughts (tool_use type with browser tool names)
   // Note: Tool calls are stored in thoughts, not in message.toolCalls
+  // When thoughts are stored separately (null), browser tools won't show until thoughts are loaded
   const browserToolCalls = useMemo(() => {
-    const thoughts = message.thoughts || []
-    return thoughts
+    if (!Array.isArray(message.thoughts)) return []
+    return message.thoughts
       .filter(t => t.type === 'tool_use' && t.toolName && isBrowserTool(t.toolName))
       .map(t => ({
         id: t.id,
@@ -273,13 +329,23 @@ export function MessageItem({ message, previousCost = 0, hideThoughts = false, i
       )}
 
       {/* Thought history - only for assistant messages with thoughts (when not hidden) */}
-      {!hideThoughts && !isUser && message.thoughts && message.thoughts.length > 0 && (
-        <ThoughtHistory thoughts={message.thoughts} />
+      {/* Supports both inline thoughts (v1/loaded) and separated thoughts (v2, lazy loaded on expand) */}
+      {!hideThoughts && !isUser && (hasThoughts || hasSeparatedThoughts) && (
+        <ThoughtHistory
+          thoughts={message.thoughts ?? null}
+          thoughtsSummary={message.thoughtsSummary}
+          onLoadThoughts={
+            hasSeparatedThoughts && currentSpaceId && currentConversationId
+              ? () => loadMessageThoughts(currentSpaceId, currentConversationId, message.id)
+              : undefined
+          }
+        />
       )}
 
-      {/* File changes footer - only for assistant messages with thoughts */}
-      {!isUser && message.thoughts && message.thoughts.length > 0 && (
-        <FileChangesFooter thoughts={message.thoughts} />
+      {/* File changes footer - only for assistant messages with loaded thoughts */}
+      {/* Not shown when thoughts are separated (null) until user expands thought history */}
+      {!isUser && hasThoughts && (
+        <FileChangesFooter thoughts={message.thoughts!} />
       )}
 
       {/* Token usage indicator + copy button - only for completed assistant messages with tokenUsage */}

@@ -8,6 +8,7 @@
 import { useState, useMemo } from 'react'
 import {
   Lightbulb,
+  Loader2,
   XCircle,
   ChevronRight,
   ChevronUp,
@@ -22,7 +23,7 @@ import {
   getThoughtLabelKey,
   getToolFriendlyFormat,
 } from './thought-utils'
-import type { Thought } from '../../types'
+import type { Thought, ThoughtsSummary } from '../../types'
 import { getCurrentLanguage, useTranslation } from '../../i18n'
 
 interface CollapsedThoughtProcessProps {
@@ -260,6 +261,64 @@ export function CollapsedThoughtProcess({ thoughts }: CollapsedThoughtProcessPro
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * LazyCollapsedThoughtProcess - For separated thoughts (v2 format).
+ * Shows a collapsed summary bar initially, loads full thoughts on first expand,
+ * then renders the full CollapsedThoughtProcess.
+ */
+interface LazyCollapsedThoughtProcessProps {
+  thoughtsSummary: ThoughtsSummary
+  onLoadThoughts: () => Promise<Thought[]>
+}
+
+export function LazyCollapsedThoughtProcess({ thoughtsSummary, onLoadThoughts }: LazyCollapsedThoughtProcessProps) {
+  const { t } = useTranslation()
+  const [loadedThoughts, setLoadedThoughts] = useState<Thought[] | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+
+  // Once loaded, render the full CollapsedThoughtProcess
+  if (loadedThoughts) {
+    return <CollapsedThoughtProcess thoughts={loadedThoughts} />
+  }
+
+  const duration = thoughtsSummary.duration
+
+  const handleClick = async () => {
+    console.log('[LazyCollapsedThoughtProcess] User clicked to load thoughts')
+    setIsLoading(true)
+    try {
+      const thoughts = await onLoadThoughts()
+      console.log(`[LazyCollapsedThoughtProcess] Loaded ${thoughts.length} thoughts, rendering full view`)
+      setLoadedThoughts(thoughts)
+    } catch (err) {
+      console.error('[LazyCollapsedThoughtProcess] Failed to load thoughts:', err)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return (
+    <div className="mb-2">
+      <button
+        onClick={handleClick}
+        disabled={isLoading}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all duration-200 w-full bg-muted/30 hover:bg-muted/50 border border-transparent"
+      >
+        {isLoading ? (
+          <Loader2 size={12} className="text-muted-foreground animate-spin" />
+        ) : (
+          <ChevronRight size={12} className="text-muted-foreground" />
+        )}
+        <Lightbulb size={14} className="text-primary" />
+        <span className="text-muted-foreground">{t('Thought process')}</span>
+        <div className="flex items-center gap-1.5 text-muted-foreground/60">
+          {duration != null && <span>{duration.toFixed(1)}s</span>}
+        </div>
+      </button>
     </div>
   )
 }

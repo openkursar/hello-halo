@@ -15,13 +15,15 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { MessageItem } from './MessageItem'
 import { ThoughtProcess } from './ThoughtProcess'
-import { CollapsedThoughtProcess } from './CollapsedThoughtProcess'
+import { CollapsedThoughtProcess, LazyCollapsedThoughtProcess } from './CollapsedThoughtProcess'
 import { CompactNotice } from './CompactNotice'
 import { InterruptedBubble } from './InterruptedBubble'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { BrowserTaskCard, isBrowserTool } from '../tool/BrowserTaskCard'
-import type { Message, Thought, CompactInfo, AgentErrorType } from '../../types'
+import { AskUserQuestionCard } from './AskUserQuestionCard'
+import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion } from '../../types'
 import { useTranslation } from '../../i18n'
+import { useChatStore } from '../../stores/chat.store'
 
 interface MessageListProps {
   messages: Message[]
@@ -36,6 +38,8 @@ interface MessageListProps {
   onContinue?: () => void  // Callback to continue after interrupt (for InterruptedBubble)
   isCompact?: boolean  // Compact mode when Canvas is open
   textBlockVersion?: number  // Increments on each new text block (for StreamingBubble reset)
+  pendingQuestion?: PendingQuestion | null  // Active question from AskUserQuestion tool
+  onAnswerQuestion?: (answers: Record<string, string>) => void  // Callback when user answers
 }
 
 /**
@@ -267,9 +271,16 @@ export function MessageList({
   errorType = null,
   onContinue,
   isCompact = false,
-  textBlockVersion = 0
+  textBlockVersion = 0,
+  pendingQuestion = null,
+  onAnswerQuestion
 }: MessageListProps) {
   const { t } = useTranslation()
+  const { loadMessageThoughts, currentSpaceId, currentConversationId } = useChatStore(s => ({
+    loadMessageThoughts: s.loadMessageThoughts,
+    currentSpaceId: s.currentSpaceId,
+    currentConversationId: s.getCurrentSpaceState().currentConversationId,
+  }))
 
   // Filter out empty assistant placeholder message during generation
   // (Backend adds empty assistant message as placeholder, we show streaming content instead)
@@ -318,14 +329,28 @@ export function MessageList({
       {/* Render completed messages - thoughts shown above assistant messages */}
       {displayMessages.map((message, index) => {
         const previousCost = getPreviousCost(index)
+        const hasInlineThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0
+        const hasSeparatedThoughts = message.thoughts === null && !!message.thoughtsSummary
+
         // Show collapsed thoughts ABOVE assistant messages, in same container for consistent width
-        if (message.role === 'assistant' && message.thoughts && message.thoughts.length > 0) {
+        if (message.role === 'assistant' && (hasInlineThoughts || hasSeparatedThoughts)) {
           return (
             <div key={message.id} className="flex justify-start">
               {/* Fixed width container - prevents width jumping when content changes */}
               <div className="w-[85%]">
                 {/* Collapsed thought process above the message */}
-                <CollapsedThoughtProcess thoughts={message.thoughts} />
+                {hasInlineThoughts ? (
+                  <CollapsedThoughtProcess thoughts={message.thoughts as Thought[]} />
+                ) : (
+                  <LazyCollapsedThoughtProcess
+                    thoughtsSummary={message.thoughtsSummary!}
+                    onLoadThoughts={
+                      currentSpaceId && currentConversationId
+                        ? () => loadMessageThoughts(currentSpaceId, currentConversationId, message.id)
+                        : () => Promise.resolve([])
+                    }
+                  />
+                )}
                 {/* Then the message itself (without embedded thoughts) */}
                 <MessageItem message={message} previousCost={previousCost} hideThoughts isInContainer />
               </div>
@@ -363,6 +388,14 @@ export function MessageList({
               thoughts={thoughts}
               textBlockVersion={textBlockVersion}
             />
+
+            {/* AskUserQuestion card - shown when AI needs user input */}
+            {pendingQuestion && onAnswerQuestion && (
+              <AskUserQuestionCard
+                pendingQuestion={pendingQuestion}
+                onAnswer={onAnswerQuestion}
+              />
+            )}
           </div>
         </div>
       )}

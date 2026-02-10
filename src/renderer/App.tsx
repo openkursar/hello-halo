@@ -18,7 +18,7 @@ import { SearchHighlightBar } from './components/search/SearchHighlightBar'
 import { OnboardingOverlay } from './components/onboarding'
 import { UpdateNotification } from './components/updater/UpdateNotification'
 import { api } from './api'
-import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType } from './types'
+import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, Question } from './types'
 import { hasAnyAISource } from './types'
 
 // Lazy load heavy page components for better initial load performance
@@ -81,6 +81,7 @@ export default function App() {
     handleAgentThought,
     handleAgentThoughtDelta,
     handleAgentCompact,
+    handleAskQuestion,
     currentSpaceId,
     setCurrentSpace: setChatCurrentSpace,
     loadConversations,
@@ -235,6 +236,12 @@ export default function App() {
       handleAgentCompact(data as AgentEventBase & { trigger: 'manual' | 'auto'; preTokens: number })
     })
 
+    // AskUserQuestion - AI needs user input to continue
+    const unsubAskQuestion = api.onAgentAskQuestion((data) => {
+      console.log('[App] Received agent:ask-question event:', data)
+      handleAskQuestion(data as AgentEventBase & { id: string; questions: Question[] })
+    })
+
     // MCP status updates (global - not per-conversation)
     const unsubMcpStatus = api.onAgentMcpStatus((data) => {
       console.log('[App] Received agent:mcp-status event:', data)
@@ -253,6 +260,7 @@ export default function App() {
       unsubError()
       unsubComplete()
       unsubCompact()
+      unsubAskQuestion()
       unsubMcpStatus()
     }
   }, [
@@ -264,6 +272,7 @@ export default function App() {
     handleAgentThought,
     handleAgentThoughtDelta,
     handleAgentCompact,
+    handleAskQuestion,
     setMcpStatus
   ])
 

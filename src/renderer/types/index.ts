@@ -200,6 +200,7 @@ export interface Space {
   createdAt: string;
   updatedAt: string;
   preferences?: SpacePreferences;  // User preferences for this space
+  workingDir?: string;  // Project directory for custom spaces (agent cwd, artifacts, file explorer)
 }
 
 export interface CreateSpaceInput {
@@ -229,6 +230,7 @@ export interface ConversationMeta {
 export interface Conversation extends ConversationMeta {
   messages: Message[];
   sessionId?: string;
+  version?: number;  // Format version: 2 = thoughts separated into .thoughts.json
 }
 
 // ============================================
@@ -280,13 +282,21 @@ export interface ImageContentBlock {
 
 export type MessageContentBlock = TextContentBlock | ImageContentBlock;
 
+// Summary of thoughts for a message (used when thoughts are stored separately)
+export interface ThoughtsSummary {
+  count: number;
+  types: Partial<Record<ThoughtType, number>>;
+  duration?: number;  // seconds, from first to last thought timestamp
+}
+
 export interface Message {
   id: string;
   role: MessageRole;
   content: string;  // Text content (for backward compatibility)
   timestamp: string;
   toolCalls?: ToolCall[];
-  thoughts?: Thought[];  // Agent's reasoning process for this message
+  thoughts?: Thought[] | null;  // null = stored separately (not loaded), undefined = none, Array = loaded
+  thoughtsSummary?: ThoughtsSummary;  // Present when thoughts are stored separately
   isStreaming?: boolean;
   images?: ImageAttachment[];  // Attached images
   tokenUsage?: TokenUsage;  // Token usage for this assistant message
@@ -478,6 +488,31 @@ export interface AgentThoughtEvent extends AgentEventBase {
 export interface CompactInfo {
   trigger: 'manual' | 'auto';
   preTokens: number;
+}
+
+// ============================================
+// AskUserQuestion Types
+// ============================================
+
+export interface QuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface Question {
+  question: string;        // Question text
+  header: string;          // Short label chip (max 12 chars)
+  options: QuestionOption[]; // 2-4 options
+  multiSelect: boolean;    // Whether multiple selections allowed
+}
+
+export type AskQuestionStatus = 'active' | 'answered' | 'cancelled';
+
+export interface PendingQuestion {
+  id: string;                        // Unique ID (toolUseId or timestamp)
+  questions: Question[];             // 1-4 questions
+  status: AskQuestionStatus;
+  answers?: Record<string, string>;  // User answers {"0": "JWT Tokens", "1": "PostgreSQL"}
 }
 
 export interface AgentCompactEvent extends AgentEventBase {

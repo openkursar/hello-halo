@@ -319,6 +319,20 @@ export const api = {
     )
   },
 
+  getMessageThoughts: async (
+    spaceId: string,
+    conversationId: string,
+    messageId: string
+  ): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.getMessageThoughts(spaceId, conversationId, messageId)
+    }
+    return httpRequest(
+      'GET',
+      `/api/spaces/${spaceId}/conversations/${conversationId}/messages/${messageId}/thoughts`
+    )
+  },
+
   // ===== Agent =====
   sendMessage: async (request: {
     spaceId: string
@@ -406,6 +420,18 @@ export const api = {
     return httpRequest('POST', '/api/agent/warm', { spaceId, conversationId }).catch(() => ({
       success: false // Warm-up failure should not block
     }))
+  },
+
+  // Answer a pending AskUserQuestion
+  answerQuestion: async (data: {
+    conversationId: string
+    id: string
+    answers: Record<string, string>
+  }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.answerQuestion(data)
+    }
+    return httpRequest('POST', '/api/agent/answer-question', data)
   },
 
   // Test MCP server connections
@@ -723,6 +749,8 @@ export const api = {
     onEvent('agent:mcp-status', callback),
   onAgentCompact: (callback: (data: unknown) => void) =>
     onEvent('agent:compact', callback),
+  onAgentAskQuestion: (callback: (data: unknown) => void) =>
+    onEvent('agent:ask-question', callback),
   onRemoteStatusChange: (callback: (data: unknown) => void) =>
     onEvent('remote:status-change', callback),
 

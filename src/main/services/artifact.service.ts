@@ -47,7 +47,7 @@ function getWorkingDir(spaceId: string): string {
 
   const space = getSpace(spaceId)
   if (space) {
-    return space.path
+    return space.workingDir || space.path
   }
 
   return getTempSpacePath()

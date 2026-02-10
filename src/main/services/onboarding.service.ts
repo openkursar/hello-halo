@@ -35,8 +35,9 @@ export function writeOnboardingArtifact(
   }
 
   try {
-    // Determine artifacts directory
-    const artifactsDir = join(space.path, 'artifacts')
+    // Determine artifacts directory (use workingDir for project-based spaces)
+    const baseDir = space.workingDir || space.path
+    const artifactsDir = join(baseDir, 'artifacts')
 
     // Ensure directory exists
     if (!existsSync(artifactsDir)) {

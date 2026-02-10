@@ -68,6 +68,11 @@ export interface HaloAPI {
     conversationId: string,
     updates: Record<string, unknown>
   ) => Promise<IpcResponse>
+  getMessageThoughts: (
+    spaceId: string,
+    conversationId: string,
+    messageId: string
+  ) => Promise<IpcResponse>
 
   // Agent
   sendMessage: (request: {
@@ -109,6 +114,7 @@ export interface HaloAPI {
   getSessionState: (conversationId: string) => Promise<IpcResponse>
   ensureSessionWarm: (spaceId: string, conversationId: string) => Promise<IpcResponse>
   testMcpConnections: () => Promise<{ success: boolean; servers: unknown[]; error?: string }>
+  answerQuestion: (data: { conversationId: string; id: string; answers: Record<string, string> }) => Promise<IpcResponse>
 
   // Event listeners
   onAgentMessage: (callback: (data: unknown) => void) => () => void
@@ -121,6 +127,7 @@ export interface HaloAPI {
   onAgentThoughtDelta: (callback: (data: unknown) => void) => () => void
   onAgentMcpStatus: (callback: (data: unknown) => void) => () => void
   onAgentCompact: (callback: (data: unknown) => void) => () => void
+  onAgentAskQuestion: (callback: (data: unknown) => void) => () => void
 
   // Artifact
   listArtifacts: (spaceId: string) => Promise<IpcResponse>
@@ -367,6 +374,8 @@ const api: HaloAPI = {
     ipcRenderer.invoke('conversation:add-message', spaceId, conversationId, message),
   updateLastMessage: (spaceId, conversationId, updates) =>
     ipcRenderer.invoke('conversation:update-last-message', spaceId, conversationId, updates),
+  getMessageThoughts: (spaceId, conversationId, messageId) =>
+    ipcRenderer.invoke('conversation:get-thoughts', spaceId, conversationId, messageId),
 
   // Agent
   sendMessage: (request) => ipcRenderer.invoke('agent:send-message', request),
@@ -376,6 +385,7 @@ const api: HaloAPI = {
   getSessionState: (conversationId) => ipcRenderer.invoke('agent:get-session-state', conversationId),
   ensureSessionWarm: (spaceId, conversationId) => ipcRenderer.invoke('agent:ensure-session-warm', spaceId, conversationId),
   testMcpConnections: () => ipcRenderer.invoke('agent:test-mcp'),
+  answerQuestion: (data) => ipcRenderer.invoke('agent:answer-question', data),
 
   // Event listeners
   onAgentMessage: (callback) => createEventListener('agent:message', callback),
@@ -388,6 +398,7 @@ const api: HaloAPI = {
   onAgentThoughtDelta: (callback) => createEventListener('agent:thought-delta', callback),
   onAgentMcpStatus: (callback) => createEventListener('agent:mcp-status', callback),
   onAgentCompact: (callback) => createEventListener('agent:compact', callback),
+  onAgentAskQuestion: (callback) => createEventListener('agent:ask-question', callback),
 
   // Artifact
   listArtifacts: (spaceId) => ipcRenderer.invoke('artifact:list', spaceId),

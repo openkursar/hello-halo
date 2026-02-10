@@ -3,7 +3,7 @@
  */
 
 import { ipcMain } from 'electron'
-import { sendMessage, stopGeneration, getSessionState, ensureSessionWarm, testMcpConnections } from '../services/agent'
+import { sendMessage, stopGeneration, getSessionState, ensureSessionWarm, testMcpConnections, resolveQuestion } from '../services/agent'
 import { getMainWindow } from '../services/window.service'
 
 export function registerAgentHandlers(): void {
@@ -78,6 +78,30 @@ export function registerAgentHandlers(): void {
       return { success: false, error: err.message }
     }
   })
+
+  // Answer a pending AskUserQuestion
+  ipcMain.handle(
+    'agent:answer-question',
+    async (
+      _event,
+      data: {
+        conversationId: string
+        id: string
+        answers: Record<string, string>
+      }
+    ) => {
+      try {
+        const resolved = resolveQuestion(data.id, data.answers)
+        if (!resolved) {
+          return { success: false, error: 'No pending question found for this ID' }
+        }
+        return { success: true }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
+      }
+    }
+  )
 
   // Test MCP server connections
   ipcMain.handle('agent:test-mcp', async () => {

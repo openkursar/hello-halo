@@ -137,11 +137,12 @@ export function getWorkingDir(spaceId: string): string {
   }
 
   const space = getSpace(spaceId)
-  console.log(`[Agent] getSpace result:`, space ? { id: space.id, name: space.name, path: space.path } : null)
+  console.log(`[Agent] getSpace result:`, space ? { id: space.id, name: space.name, path: space.path, workingDir: space.workingDir } : null)
 
   if (space) {
-    console.log(`[Agent] Using space path: ${space.path}`)
-    return space.path
+    const dir = space.workingDir || space.path
+    console.log(`[Agent] Using space working dir: ${dir}`)
+    return dir
   }
 
   console.log(`[Agent] WARNING: Space not found, falling back to temp path`)

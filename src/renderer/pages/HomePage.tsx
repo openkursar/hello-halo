@@ -135,10 +135,10 @@ export function HomePage() {
     const space = spaces.find(s => s.id === spaceId)
     if (!space) return
 
-    // Check if it's a custom path (not under default spaces directory)
-    const isCustomPath = !space.path.includes('/.halo/spaces/')
+    // Check if it's a project-linked space (custom path)
+    const isProjectSpace = !!space.workingDir || !space.path.includes('/.halo/spaces/')
 
-    const message = isCustomPath
+    const message = isProjectSpace
       ? t('Are you sure you want to delete this space?\n\nOnly Halo data (conversation history) will be deleted, your project files will be kept.')
       : t('Are you sure you want to delete this space?\n\nAll conversations and files in the space will be deleted.')
 

@@ -10,7 +10,8 @@ import {
   isGenerating,
   getActiveSessions,
   getSessionState as agentGetSessionState,
-  testMcpConnections as agentTestMcpConnections
+  testMcpConnections as agentTestMcpConnections,
+  resolveQuestion
 } from '../services/agent'
 
 // Image attachment type for multi-modal messages
@@ -112,6 +113,26 @@ export function listActiveSessions(): ControllerResponse<string[]> {
 export function getSessionState(conversationId: string): ControllerResponse {
   try {
     return { success: true, data: agentGetSessionState(conversationId) }
+  } catch (error: unknown) {
+    const err = error as Error
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Answer a pending AskUserQuestion
+ */
+export function answerQuestion(
+  conversationId: string,
+  id: string,
+  answers: Record<string, string>
+): ControllerResponse {
+  try {
+    const resolved = resolveQuestion(id, answers)
+    if (!resolved) {
+      return { success: false, error: `No pending question found for id: ${id}` }
+    }
+    return { success: true }
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }

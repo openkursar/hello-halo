@@ -13,6 +13,7 @@ import type { ApiCredentials } from './types'
 import { inferOpenAIWireApi } from './helpers'
 import { buildSystemPrompt, DEFAULT_ALLOWED_TOOLS } from './system-prompt'
 import { createCanUseTool } from './permission-handler'
+import { sendToRenderer } from './helpers'
 
 // ============================================
 // Configuration
@@ -284,11 +285,22 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
     // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/
     settingSources: ['user', 'project'],
     permissionMode: 'bypassPermissions' as const,
-    canUseTool: createCanUseTool(),
+    canUseTool: createCanUseTool({
+      sendToRenderer,
+      spaceId,
+      conversationId
+    }),
     // Requires SDK patch: enable token-level streaming (stream_event)
     includePartialMessages: true,
     executable: electronPath,
-    executableArgs: ['--no-warnings']
+    executableArgs: ['--no-warnings'],
+    // OS-level sandbox: lets the kernel enforce file/network boundaries per command,
+    // eliminating the need for LLM-based bash_extract_prefix calls (~30-60s on slow models).
+    // macOS: sandbox-exec (Seatbelt), Linux: kernel sandboxing. Windows: not supported (falls back to preflight interceptor).
+    sandbox: {
+      enabled: true,
+      autoAllowBashIfSandboxed: true,
+    }
   }
 
   // Add MCP servers if provided

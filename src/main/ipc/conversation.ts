@@ -10,7 +10,8 @@ import {
   updateConversation,
   deleteConversation,
   addMessage,
-  updateLastMessage
+  updateLastMessage,
+  getMessageThoughts
 } from '../services/conversation.service'
 
 export function registerConversationHandlers(): void {
@@ -103,6 +104,25 @@ export function registerConversationHandlers(): void {
       try {
         const message = updateLastMessage(spaceId, conversationId, updates)
         return { success: true, data: message }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
+      }
+    }
+  )
+
+  // Get thoughts for a specific message (lazy loading)
+  ipcMain.handle(
+    'conversation:get-thoughts',
+    async (
+      _event,
+      spaceId: string,
+      conversationId: string,
+      messageId: string
+    ) => {
+      try {
+        const thoughts = getMessageThoughts(spaceId, conversationId, messageId)
+        return { success: true, data: thoughts }
       } catch (error: unknown) {
         const err = error as Error
         return { success: false, error: err.message }

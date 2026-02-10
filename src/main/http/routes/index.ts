@@ -32,7 +32,7 @@ function getWorkingDir(spaceId: string): string {
     return join(getTempSpacePath(), 'artifacts')
   }
   const space = getSpace(spaceId)
-  return space ? space.path : getTempSpacePath()
+  return space ? (space.workingDir || space.path) : getTempSpacePath()
 }
 
 // Helper: collect all files in a directory recursively for tar-like output
@@ -253,6 +253,15 @@ export function registerApiRoutes(app: Express, mainWindow: BrowserWindow | null
     res.json(result)
   })
 
+  app.get('/api/spaces/:spaceId/conversations/:conversationId/messages/:messageId/thoughts', async (req: Request, res: Response) => {
+    const result = conversationController.getMessageThoughts(
+      req.params.spaceId,
+      req.params.conversationId,
+      req.params.messageId
+    )
+    res.json(result)
+  })
+
   // ===== Agent Routes =====
   app.post('/api/agent/message', async (req: Request, res: Response) => {
     const { spaceId, conversationId, message, resumeSessionId, images, thinkingEnabled, aiBrowserEnabled } = req.body
@@ -299,6 +308,13 @@ export function registerApiRoutes(app: Express, mainWindow: BrowserWindow | null
   // Get session state for recovery after refresh
   app.get('/api/agent/session/:conversationId', async (req: Request, res: Response) => {
     const result = agentController.getSessionState(req.params.conversationId)
+    res.json(result)
+  })
+
+  // Answer a pending AskUserQuestion
+  app.post('/api/agent/answer-question', async (req: Request, res: Response) => {
+    const { conversationId, id, answers } = req.body
+    const result = agentController.answerQuestion(conversationId, id, answers)
     res.json(result)
   })
 
