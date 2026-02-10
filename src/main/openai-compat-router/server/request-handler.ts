@@ -1,8 +1,14 @@
 /**
  * Request Handler
  *
- * Core logic for handling Anthropic -> OpenAI -> Anthropic conversion.
- * URL is the single source of truth - no inference, no override.
+ * Core logic for handling API requests through the router.
+ *
+ * Supports two modes:
+ *   1. OpenAI conversion: Anthropic -> OpenAI -> Backend -> OpenAI -> Anthropic
+ *   2. Anthropic passthrough: Anthropic -> Backend -> Anthropic (zero conversion)
+ *
+ * Interceptors run BEFORE any format conversion, on the native Anthropic request.
+ * URL is the single source of truth for OpenAI mode - no inference, no override.
  */
 
 import type { Response as ExpressResponse } from 'express'
@@ -25,6 +31,14 @@ import { applyProviderAdapter } from './provider-adapters'
 export interface RequestHandlerOptions {
   debug?: boolean
   timeoutMs?: number
+  /** Anthropic SDK headers from the incoming request (anthropic-version, anthropic-beta, etc.) */
+  sdkHeaders?: Record<string, string>
+  /** Raw query string from the incoming request URL (e.g., "beta=true") */
+  queryString?: string
+  /** Raw request body buffer captured before JSON parsing */
+  rawBody?: Buffer
+  /** Whether interceptors modified the request (set internally) */
+  requestModified?: boolean
 }
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
@@ -76,6 +90,10 @@ function getUpstreamError(status: number, errorText: string): { type: string; me
     if (json?.error?.type) {
       return { type: json.error.type, message: json.error.message || '' }
     }
+    // Anthropic format: { error: { type, message } }
+    if (json?.error?.message) {
+      return { type: json.error.type || getErrorTypeFromStatus(status), message: json.error.message }
+    }
   } catch {
     // Not JSON, ignore
   }
@@ -109,8 +127,12 @@ function sendError(
   })
 }
 
+// ============================================================================
+// Upstream Fetch
+// ============================================================================
+
 /**
- * Make upstream request
+ * Make upstream request with OpenAI-style Authorization header
  */
 async function fetchUpstream(
   targetUrl: string,
@@ -150,24 +172,174 @@ async function fetchUpstream(
 }
 
 /**
- * Handle messages request
+ * Make upstream request with Anthropic-style x-api-key header.
+ *
+ * Header merge order (later wins):
+ *   1. SDK headers (anthropic-version, anthropic-beta from the SDK's request)
+ *   2. User custom headers (from provider config)
+ *   3. Required headers (Content-Type, x-api-key — always set)
+ *
+ * @param bodyOrBuffer - Pre-serialized Buffer (raw body) or object to JSON.stringify
  */
-export async function handleMessagesRequest(
+async function fetchAnthropicUpstream(
+  targetUrl: string,
+  apiKey: string,
+  bodyOrBuffer: Buffer | unknown,
+  timeoutMs: number,
+  sdkHeaders?: Record<string, string>,
+  customHeaders?: Record<string, string>
+): Promise<globalThis.Response> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => {
+    console.log('[RequestHandler] Anthropic passthrough timeout, aborting...')
+    controller.abort()
+  }, timeoutMs)
+
+  try {
+    const headers: Record<string, string> = {
+      ...(sdkHeaders || {}),
+      ...(customHeaders || {}),
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+    }
+
+    return await fetch(targetUrl, {
+      method: 'POST',
+      headers,
+      body: Buffer.isBuffer(bodyOrBuffer) ? bodyOrBuffer : JSON.stringify(bodyOrBuffer),
+      signal: controller.signal
+    })
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+// ============================================================================
+// Anthropic Passthrough Handler
+// ============================================================================
+
+/**
+ * Handle Anthropic passthrough request — zero format conversion.
+ *
+ * Proxies the Anthropic request directly to the upstream Anthropic API.
+ * For streaming responses, pipes the upstream SSE body directly to the client
+ * without parsing or transforming any events.
+ */
+async function handleAnthropicPassthrough(
   anthropicRequest: AnthropicRequest,
   config: BackendConfig,
   res: ExpressResponse,
-  options: RequestHandlerOptions = {}
+  options: RequestHandlerOptions
+): Promise<void> {
+  const { debug = false, timeoutMs = DEFAULT_TIMEOUT_MS, sdkHeaders, queryString, rawBody, requestModified } = options
+  const { url: backendUrl, key: apiKey, model, headers: customHeaders } = config
+
+  // Append SDK query string to upstream URL (e.g., ?beta=true)
+  const targetUrl = queryString ? `${backendUrl}?${queryString}` : backendUrl
+
+  // Override model if specified in config
+  // This mutates the parsed object, so rawBody can't be used
+  const modelOverridden = !!(model && model !== anthropicRequest.model)
+  if (model) {
+    anthropicRequest.model = model
+  }
+
+  const toolCount = anthropicRequest.tools?.length ?? 0
+  console.log(`[RequestHandler] Anthropic passthrough tools=${toolCount}`)
+  console.log(`[RequestHandler] POST ${targetUrl} (stream=${anthropicRequest.stream ?? false})`)
+
+  // Use raw body buffer when neither interceptors nor model override modified the request.
+  // This avoids a JSON.stringify round-trip — the upstream receives byte-identical body from SDK.
+  const canUseRawBody = rawBody && !requestModified && !modelOverridden
+  const fetchBody: Buffer | unknown = canUseRawBody ? rawBody : anthropicRequest
+
+  if (debug) {
+    console.log(`[RequestHandler] Raw body forwarding: ${canUseRawBody ? 'yes' : 'no (modified)'}`)
+  }
+
+  try {
+    const upstreamResp = await fetchAnthropicUpstream(
+      targetUrl, apiKey, fetchBody, timeoutMs, sdkHeaders, customHeaders
+    )
+    console.log(`[RequestHandler] Anthropic upstream response: ${upstreamResp.status}`)
+
+    // Handle errors
+    if (!upstreamResp.ok) {
+      const errorText = await upstreamResp.text().catch(() => '')
+      const { type: errorType, message: errorMessage } = getUpstreamError(upstreamResp.status, errorText)
+      console.error(`[RequestHandler] Anthropic error ${upstreamResp.status}: ${errorText.slice(0, 200)}`)
+      return sendError(res, errorType, errorMessage)
+    }
+
+    // Streaming: pipe upstream body directly to client (zero parsing)
+    if (anthropicRequest.stream && upstreamResp.body) {
+      res.setHeader('Content-Type', 'text/event-stream')
+      res.setHeader('Cache-Control', 'no-cache')
+      res.setHeader('Connection', 'keep-alive')
+
+      // Copy relevant upstream headers
+      const requestId = upstreamResp.headers.get('request-id')
+      if (requestId) res.setHeader('request-id', requestId)
+
+      // Pipe the ReadableStream directly — no parsing, no transformation
+      const reader = upstreamResp.body.getReader()
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          res.write(value)
+        }
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') {
+          console.error('[RequestHandler] Anthropic stream pipe error:', err?.message)
+        }
+      } finally {
+        res.end()
+      }
+      return
+    }
+
+    // Non-streaming: forward JSON response as-is
+    const body = await upstreamResp.json()
+    if (debug) {
+      console.log(`[RequestHandler] Anthropic response:\n${JSON.stringify(body, null, 2)}`)
+    }
+    res.json(body)
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      console.error('[RequestHandler] Anthropic passthrough AbortError (timeout or client disconnect)')
+      return sendError(res, 'timeout_error', 'Request timed out')
+    }
+    console.error('[RequestHandler] Anthropic passthrough error:', error?.message || error)
+    return sendError(res, 'api_error', error?.message || 'Internal error')
+  }
+}
+
+// ============================================================================
+// OpenAI Conversion Handler
+// ============================================================================
+
+/**
+ * Handle OpenAI-compatible request — full format conversion pipeline.
+ *
+ * Converts Anthropic -> OpenAI, proxies to backend, converts OpenAI -> Anthropic.
+ */
+async function handleOpenAIConversion(
+  anthropicRequest: AnthropicRequest,
+  config: BackendConfig,
+  res: ExpressResponse,
+  options: RequestHandlerOptions
 ): Promise<void> {
   const { debug = false, timeoutMs = DEFAULT_TIMEOUT_MS } = options
   const { url: backendUrl, key: apiKey, model, headers: customHeaders, apiType: configApiType } = config
-  console.log('[RequestHandler]handleMessagesRequest',backendUrl)
+
   // Validate URL has valid endpoint suffix
   if (!isValidEndpointUrl(backendUrl)) {
     return sendError(res, 'invalid_request_error', getEndpointUrlError(backendUrl))
   }
 
   // Get API type from URL suffix, or use config override (guaranteed non-null after validation)
-  const apiType = configApiType || getApiTypeFromUrl(backendUrl)!
+  const apiType = configApiType === 'anthropic_passthrough' ? 'chat_completions' : (configApiType || getApiTypeFromUrl(backendUrl)!)
 
   // Override model if specified in config
   if (model) {
@@ -182,8 +354,6 @@ export async function handleMessagesRequest(
 
   // Use request queue to prevent concurrent requests
   const queueKey = generateQueueKey(backendUrl, apiKey)
-
- 
 
   await withRequestQueue(queueKey, async () => {
     try {
@@ -202,27 +372,13 @@ export async function handleMessagesRequest(
       console.log(`[RequestHandler] wire=${apiType} tools=${toolCount}`)
       console.log(`[RequestHandler] POST ${backendUrl} (stream=${wantStream ?? false})`)
 
-      // Run through interceptor chain
-      const interceptResult = await runInterceptors(
-        openaiRequest as any,
-        { originalModel: anthropicRequest.model, res }
-      )
-
-      // If interceptor sent a response, we're done
-      if (interceptResult.intercepted && 'responded' in interceptResult) {
-        return
-      }
-
-      // Use potentially modified request from interceptors
-      const interceptedRequest = interceptResult.request
-
       // Build headers: start with custom headers from config
       const requestHeaders: Record<string, string> = { ...(customHeaders || {}) }
 
       // Apply provider-specific transformations (e.g., Groq temperature fix, OpenRouter headers)
       const adapter = applyProviderAdapter(
         backendUrl,
-        interceptedRequest as Record<string, unknown>,
+        openaiRequest as Record<string, unknown>,
         requestHeaders
       )
       if (adapter && debug) {
@@ -230,8 +386,7 @@ export async function handleMessagesRequest(
       }
 
       // Make upstream request - URL is used directly, no modification
-      // console.log(`[RequestHandler] Request body:\n${JSON.stringify(interceptedRequest, null, 2)}`)
-      let upstreamResp = await fetchUpstream(backendUrl, apiKey, interceptedRequest, timeoutMs, undefined, requestHeaders)
+      let upstreamResp = await fetchUpstream(backendUrl, apiKey, openaiRequest, timeoutMs, undefined, requestHeaders)
       console.log(`[RequestHandler] Upstream response: ${upstreamResp.status}`)
 
       // Handle errors - use upstream error type if available, else map from status
@@ -286,7 +441,9 @@ export async function handleMessagesRequest(
 
       // Handle non-streaming response
       const openaiResponse = await upstreamResp.json()
-      console.log(`[RequestHandler] Response body:\n${JSON.stringify(openaiResponse, null, 2)}`)
+      if (debug) {
+        console.log(`[RequestHandler] Response body:\n${JSON.stringify(openaiResponse, null, 2)}`)
+      }
       const anthropicResponse = apiType === 'responses'
         ? convertOpenAIResponsesToAnthropic(openaiResponse)
         : convertOpenAIChatToAnthropic(openaiResponse, anthropicRequest.model)
@@ -303,6 +460,53 @@ export async function handleMessagesRequest(
       return sendError(res, 'api_error', error?.message || 'Internal error')
     }
   })
+}
+
+// ============================================================================
+// Main Entry Point
+// ============================================================================
+
+/**
+ * Handle messages request — unified entry point for all providers.
+ *
+ * Flow:
+ *   1. Run interceptors on Anthropic-format request (before any conversion)
+ *   2. Route to appropriate handler based on apiType:
+ *      - anthropic_passthrough: direct proxy, zero conversion
+ *      - chat_completions/responses: full OpenAI conversion pipeline
+ */
+export async function handleMessagesRequest(
+  anthropicRequest: AnthropicRequest,
+  config: BackendConfig,
+  res: ExpressResponse,
+  options: RequestHandlerOptions = {}
+): Promise<void> {
+  const { url: backendUrl, apiType: configApiType } = config
+  console.log('[RequestHandler] handleMessagesRequest', backendUrl)
+
+  // Run interceptors on Anthropic-format request (before any conversion)
+  const interceptResult = await runInterceptors(
+    anthropicRequest,
+    { originalModel: anthropicRequest.model, res }
+  )
+
+  // If interceptor sent a response, we're done
+  if (interceptResult.intercepted && 'responded' in interceptResult) {
+    return
+  }
+
+  // Use potentially modified request from interceptors
+  const request = interceptResult.request
+
+  // Route based on apiType
+  if (configApiType === 'anthropic_passthrough') {
+    return handleAnthropicPassthrough(request, config, res, {
+      ...options,
+      requestModified: interceptResult.intercepted
+    })
+  }
+
+  return handleOpenAIConversion(request, config, res, options)
 }
 
 /**

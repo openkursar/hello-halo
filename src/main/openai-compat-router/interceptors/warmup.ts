@@ -5,21 +5,20 @@
  * These serve no real purpose for LLM APIs, so we intercept and return a mock response.
  */
 
-import type { RequestInterceptor, OpenAIRequest, InterceptorContext, InterceptorResult } from './types'
+import type { AnthropicRequest } from '../types'
+import type { RequestInterceptor, InterceptorContext, InterceptorResult } from './types'
 
 /**
- * Extract user message text from various content formats
+ * Extract user message text from Anthropic message content formats
  */
-function getUserMessageText(message: OpenAIRequest['messages'][number]): string | null {
-  const content = message.content
-
+function getUserMessageText(content: AnthropicRequest['messages'][number]['content']): string | null {
   if (typeof content === 'string') {
     return content
   }
 
   if (Array.isArray(content)) {
-    const textBlock = content.find((b) => b.type === 'text')
-    return textBlock?.text ?? null
+    const textBlock = content.find((b) => typeof b === 'object' && b.type === 'text')
+    return textBlock && 'text' in textBlock ? (textBlock.text as string) : null
   }
 
   return null
@@ -28,13 +27,13 @@ function getUserMessageText(message: OpenAIRequest['messages'][number]): string 
 /**
  * Check if the last user message is exactly "Warmup"
  */
-function isWarmupRequest(request: OpenAIRequest): boolean {
+function isWarmupRequest(request: AnthropicRequest): boolean {
   if (!request.messages?.length) return false
 
   const lastUserMsg = [...request.messages].reverse().find((m) => m.role === 'user')
   if (!lastUserMsg) return false
 
-  const text = getUserMessageText(lastUserMsg)
+  const text = getUserMessageText(lastUserMsg.content)
   return text?.trim() === 'Warmup'
 }
 
@@ -106,11 +105,11 @@ function sendMockResponse(context: InterceptorContext): void {
 export const warmupInterceptor: RequestInterceptor = {
   name: 'warmup',
 
-  shouldIntercept(request: OpenAIRequest): boolean {
+  shouldIntercept(request: AnthropicRequest): boolean {
     return isWarmupRequest(request)
   },
 
-  intercept(_request: OpenAIRequest, context: InterceptorContext): InterceptorResult {
+  intercept(_request: AnthropicRequest, context: InterceptorContext): InterceptorResult {
     console.log('[Interceptor:warmup] Intercepting Warmup request, returning mock response...')
     sendMockResponse(context)
     return { handled: true, responded: true }

@@ -1,25 +1,16 @@
 /**
  * Request Interceptor Types
  *
- * Interceptors can modify requests before they are sent upstream,
- * or short-circuit the request entirely by returning a response.
+ * Interceptors operate on Anthropic Messages API format (the SDK's native format).
+ * This ensures interceptors work identically for all providers — both Anthropic
+ * passthrough and OpenAI-compatible backends — without format-dependent branching.
+ *
+ * Interceptors run BEFORE any format conversion, so they always see the original
+ * Anthropic request and respond in Anthropic SSE format.
  */
 
 import type { Response as ExpressResponse } from 'express'
-
-/**
- * OpenAI-format request (after conversion from Anthropic)
- */
-export interface OpenAIRequest {
-  model: string
-  messages: Array<{
-    role: string
-    content: string | Array<{ type: string; text?: string; [key: string]: unknown }>
-  }>
-  stream?: boolean
-  tools?: unknown[]
-  [key: string]: unknown
-}
+import type { AnthropicRequest } from '../types'
 
 /**
  * Context passed to interceptors
@@ -35,9 +26,9 @@ export interface InterceptorContext {
  * Result of an interceptor execution
  */
 export type InterceptorResult =
-  | { handled: false }                          // Continue to next interceptor
-  | { handled: true; modified?: OpenAIRequest } // Modified request, continue processing
-  | { handled: true; responded: true }          // Response already sent, stop processing
+  | { handled: false }                              // Continue to next interceptor
+  | { handled: true; modified?: AnthropicRequest }  // Modified request, continue processing
+  | { handled: true; responded: true }              // Response already sent, stop processing
 
 /**
  * Request interceptor interface
@@ -49,7 +40,7 @@ export interface RequestInterceptor {
   /**
    * Check if this interceptor should handle the request
    */
-  shouldIntercept(request: OpenAIRequest, context: InterceptorContext): boolean
+  shouldIntercept(request: AnthropicRequest, context: InterceptorContext): boolean
 
   /**
    * Handle the request
@@ -57,5 +48,5 @@ export interface RequestInterceptor {
    * - Return { handled: true, modified: request } to modify and continue
    * - Return { handled: true, responded: true } if response was sent
    */
-  intercept(request: OpenAIRequest, context: InterceptorContext): InterceptorResult | Promise<InterceptorResult>
+  intercept(request: AnthropicRequest, context: InterceptorContext): InterceptorResult | Promise<InterceptorResult>
 }

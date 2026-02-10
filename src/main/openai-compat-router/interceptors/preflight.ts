@@ -22,7 +22,8 @@
  * Background: https://github.com/anthropics/claude-code/issues/1249
  */
 
-import type { RequestInterceptor, OpenAIRequest, InterceptorContext, InterceptorResult } from './types'
+import type { AnthropicRequest, AnthropicSystemBlock } from '../types'
+import type { RequestInterceptor, InterceptorContext, InterceptorResult } from './types'
 
 // ============================================================================
 // Fingerprint Definitions
@@ -78,23 +79,23 @@ const FINGERPRINTS: PreflightFingerprint[] = [
 // ============================================================================
 
 /**
- * Extract text content from a message's content field.
+ * Extract system prompt text from an Anthropic request.
  *
- * Handles both formats produced by the Anthropic→OpenAI converter:
- *   - string content (from Anthropic string system prompts)
- *   - Array<{type: 'text', text: string}> (from Anthropic system block arrays)
+ * Handles both formats the SDK may send:
+ *   - string: direct system prompt text
+ *   - Array<AnthropicSystemBlock>: array of typed blocks (extract text blocks)
  */
-function getMessageText(message: OpenAIRequest['messages'][number]): string {
-  const { content } = message
+function getSystemText(request: AnthropicRequest): string {
+  const { system } = request
 
-  if (typeof content === 'string') {
-    return content
+  if (typeof system === 'string') {
+    return system
   }
 
-  if (Array.isArray(content)) {
-    return content
+  if (Array.isArray(system)) {
+    return (system as AnthropicSystemBlock[])
       .filter((block) => block.type === 'text' && block.text)
-      .map((block) => block.text as string)
+      .map((block) => block.text)
       .join('\n')
   }
 
@@ -106,21 +107,17 @@ function getMessageText(message: OpenAIRequest['messages'][number]): string {
  *
  * Check order is optimized for minimal overhead on non-matching requests:
  *   1. tools array length (O(1) integer comparison) -- filters out ~90% of requests
- *   2. System message existence (array scan for role='system')
+ *   2. System prompt existence and text extraction
  *   3. System text substring match (String.includes, native V8 Boyer-Moore)
  *
  * @returns The matching fingerprint, or null if no match
  */
-function matchFingerprint(request: OpenAIRequest): PreflightFingerprint | null {
+function matchFingerprint(request: AnthropicRequest): PreflightFingerprint | null {
   // Fast reject: main agent loop requests always carry tools (20+)
   if (request.tools && request.tools.length > 0) return null
 
-  // Extract system message text
-  if (!request.messages?.length) return null
-  const systemMsg = request.messages.find((m) => m.role === 'system')
-  if (!systemMsg) return null
-
-  const systemText = getMessageText(systemMsg)
+  // Extract system prompt text
+  const systemText = getSystemText(request)
   if (!systemText) return null
 
   // Match against registered fingerprints
@@ -139,11 +136,6 @@ function matchFingerprint(request: OpenAIRequest): PreflightFingerprint | null {
  * CC SDK internal calls always use streaming (via Cd/SW9 functions in cli.js).
  * The response format must match Anthropic's Messages API streaming protocol
  * exactly, since the SDK parses it as a standard Anthropic response.
- *
- * The CC SDK (cli.js subprocess) calls ANTHROPIC_BASE_URL which points to our
- * router. The router normally converts responses from OpenAI→Anthropic format,
- * but interceptors bypass this pipeline entirely and respond in Anthropic format
- * directly.
  */
 function sendMockAnthropicResponse(
   context: InterceptorContext,
@@ -222,11 +214,11 @@ function sendMockAnthropicResponse(
 export const preflightInterceptor: RequestInterceptor = {
   name: 'preflight',
 
-  shouldIntercept(request: OpenAIRequest): boolean {
+  shouldIntercept(request: AnthropicRequest): boolean {
     return matchFingerprint(request) !== null
   },
 
-  intercept(request: OpenAIRequest, context: InterceptorContext): InterceptorResult {
+  intercept(request: AnthropicRequest, context: InterceptorContext): InterceptorResult {
     const fp = matchFingerprint(request)
     if (!fp) {
       // Safety: should never reach here (shouldIntercept guards this)

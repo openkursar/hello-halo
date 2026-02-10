@@ -142,7 +142,7 @@ export interface AISource {
   /** API endpoint URL (base URL, e.g., https://api.openai.com/v1) */
   apiUrl: string
   /** API type for OpenAI compatible providers (default: chat_completions) */
-  apiType?: 'chat_completions' | 'responses'
+  apiType?: 'chat_completions' | 'responses' | 'anthropic_passthrough'
 
   // ===== Authentication Credentials (Based on authType) =====
   /** API Key (for authType = 'api-key') */
@@ -237,7 +237,7 @@ export interface BackendRequestConfig {
   key: string
   model?: string
   headers?: Record<string, string>
-  apiType?: 'chat_completions' | 'responses'
+  apiType?: 'chat_completions' | 'responses' | 'anthropic_passthrough'
   forceStream?: boolean
   filterContent?: boolean
 }

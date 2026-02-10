@@ -150,34 +150,17 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
     }
   }
 
-  // Handle save and enter - validate before save
+  // Handle save and enter - save directly without mandatory validation
   const handleSaveAndEnter = async () => {
     if (!apiKey.trim()) {
       setError(t('Please enter API Key'))
       return
     }
 
-    setIsValidating(true)
     setError(null)
-    setValidationResult(null)
 
     try {
-      // 1. First validate the API connection
       const effectiveApiUrl = apiUrl || 'https://api.anthropic.com'
-      const result = await api.validateApi(apiKey, effectiveApiUrl, provider, model)
-
-      if (!result.success || !result.data?.valid) {
-        // Validation failed, show error, don't save
-        setValidationResult({
-          valid: false,
-          message: result.data?.message || result.error || t('Connection failed')
-        })
-        setIsValidating(false)
-        return
-      }
-
-      // 2. Validation passed, use normalized URL from backend
-      const normalizedUrl = result.data.normalizedUrl || effectiveApiUrl
       const now = new Date().toISOString()
 
       // Build v2 AISource
@@ -189,7 +172,7 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
         name: builtin?.name || (providerType === 'anthropic' ? 'Claude API' : 'Custom API'),
         provider: providerType,
         authType: 'api-key',
-        apiUrl: normalizedUrl,
+        apiUrl: effectiveApiUrl,
         apiKey,
         model,
         availableModels: fetchedModels.length > 0
@@ -212,7 +195,7 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
         api: {
           provider: providerType,
           apiKey,
-          apiUrl: normalizedUrl,
+          apiUrl: effectiveApiUrl,
           model,
           availableModels: fetchedModels
         },
@@ -226,11 +209,45 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
 
       // Enter Halo
       setView('home')
-    } catch (err) {
+    } catch {
+      setError(t('Save failed'))
+    }
+  }
+
+  // Optional: test API connection without blocking save
+  const handleTestConnection = async () => {
+    if (!apiKey.trim()) {
+      setError(t('Please enter API Key'))
+      return
+    }
+
+    setIsValidating(true)
+    setError(null)
+    setValidationResult(null)
+
+    try {
+      const effectiveApiUrl = apiUrl || 'https://api.anthropic.com'
+      const result = await api.validateApi(apiKey, effectiveApiUrl, provider, model)
+
+      if (!result.success || !result.data?.valid) {
+        setValidationResult({
+          valid: false,
+          message: result.data?.message || result.error || t('Connection failed')
+        })
+      } else {
+        // Auto-correct URL if backend normalized it
+        const normalizedUrl = result.data.normalizedUrl || effectiveApiUrl
+        if (normalizedUrl !== apiUrl) {
+          setApiUrl(normalizedUrl)
+        }
+        setValidationResult({ valid: true, message: t('Connection successful') })
+      }
+    } catch {
       setValidationResult({
         valid: false,
         message: t('Connection failed')
       })
+    } finally {
       setIsValidating(false)
     }
   }
@@ -491,24 +508,33 @@ export function ApiSetup({ onBack, showBack = false }: ApiSetupProps) {
         )}
 
         {/* Validation result */}
-        {validationResult && !validationResult.valid && (
-          <div className="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30">
-            <p className="text-sm text-red-500 flex items-center gap-2">
-              <XCircle className="w-4 h-4 shrink-0" />
+        {validationResult && (
+          <div className={`mt-4 p-3 rounded-lg ${validationResult.valid ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
+            <p className={`text-sm flex items-center gap-2 ${validationResult.valid ? 'text-green-500' : 'text-red-500'}`}>
+              {validationResult.valid ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <XCircle className="w-4 h-4 shrink-0" />}
               <span>{validationResult.message}</span>
             </p>
           </div>
         )}
 
-        {/* Save button */}
-        <button
-          onClick={handleSaveAndEnter}
-          disabled={isValidating}
-          className="w-full mt-6 px-8 py-3 bg-primary text-primary-foreground rounded-lg btn-primary disabled:opacity-50 flex items-center justify-center gap-2"
-        >
-          {isValidating && <Loader2 className="w-4 h-4 animate-spin" />}
-          {isValidating ? t('Validating...') : t('Save and enter')}
-        </button>
+        {/* Buttons */}
+        <div className="mt-6 flex gap-3">
+          <button
+            onClick={handleTestConnection}
+            disabled={isValidating}
+            className="px-4 py-3 bg-secondary text-foreground rounded-lg border border-border hover:bg-secondary/80 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 whitespace-nowrap"
+          >
+            {isValidating && <Loader2 className="w-4 h-4 animate-spin" />}
+            {isValidating ? t('Testing...') : t('Test connection')}
+          </button>
+          <button
+            onClick={handleSaveAndEnter}
+            disabled={isValidating}
+            className="flex-1 px-8 py-3 bg-primary text-primary-foreground rounded-lg btn-primary disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {t('Save and enter')}
+          </button>
+        </div>
       </div>
     </div>
   )

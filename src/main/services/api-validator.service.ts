@@ -16,6 +16,7 @@ import { unstable_v2_createSession } from '@anthropic-ai/claude-agent-sdk'
 import { app } from 'electron'
 import { ensureOpenAICompatRouter, encodeBackendConfig, normalizeApiUrl } from '../openai-compat-router'
 import type { BackendConfig } from '../openai-compat-router'
+import { getCleanUserEnv } from './agent/sdk-config'
 import { AVAILABLE_MODELS } from '../../shared/types/ai-sources'
 import { getHeadlessElectronPath } from './agent/helpers'
 
@@ -97,7 +98,7 @@ export async function validateApiConnection(params: ValidateApiParams): Promise<
       cwd: app.getPath('temp'),
       abortController,
       env: {
-        ...process.env,
+        ...getCleanUserEnv(),
         ELECTRON_RUN_AS_NODE: 1,
         ELECTRON_NO_ATTACH_CONSOLE: 1,
         ANTHROPIC_API_KEY: anthropicApiKey,

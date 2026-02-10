@@ -2,13 +2,16 @@
  * Request Interceptors
  *
  * Centralized interceptor management for request processing pipeline.
+ * Interceptors operate on Anthropic Messages API format (the SDK's native format)
+ * and run BEFORE any format conversion to OpenAI.
  */
 
 export * from './types'
 export { warmupInterceptor } from './warmup'
 export { preflightInterceptor } from './preflight'
 
-import type { RequestInterceptor, OpenAIRequest, InterceptorContext, InterceptorResult } from './types'
+import type { AnthropicRequest } from '../types'
+import type { RequestInterceptor, InterceptorContext } from './types'
 import { warmupInterceptor } from './warmup'
 import { preflightInterceptor } from './preflight'
 
@@ -33,12 +36,12 @@ const defaultInterceptors: RequestInterceptor[] = [
  * @returns { intercepted: true, responded: true } if response was already sent
  */
 export async function runInterceptors(
-  request: OpenAIRequest,
+  request: AnthropicRequest,
   context: InterceptorContext,
   interceptors: RequestInterceptor[] = defaultInterceptors
 ): Promise<
-  | { intercepted: false; request: OpenAIRequest }
-  | { intercepted: true; request: OpenAIRequest }
+  | { intercepted: false; request: AnthropicRequest }
+  | { intercepted: true; request: AnthropicRequest }
   | { intercepted: true; responded: true }
 > {
   let currentRequest = request

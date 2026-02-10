@@ -15,6 +15,21 @@ import { buildSystemPrompt, DEFAULT_ALLOWED_TOOLS } from './system-prompt'
 import { createCanUseTool } from './permission-handler'
 
 // ============================================
+// Configuration
+// ============================================
+
+/**
+ * When true, Anthropic requests route through the local router for interceptor
+ * coverage (warmup, preflight, etc.) with zero-conversion passthrough.
+ * When false, Anthropic requests go directly to the API via the SDK's built-in
+ * HTTP client — no router, no interceptors, no overhead.
+ *
+ * Toggle this to A/B test proxy overhead vs direct SDK performance.
+ * OpenAI/OAuth providers always route through the router regardless of this flag.
+ */
+const PROXY_ANTHROPIC = true
+
+// ============================================
 // Types
 // ============================================
 
@@ -80,6 +95,12 @@ export interface BaseSdkOptionsParams {
 export async function resolveCredentialsForSdk(
   credentials: ApiCredentials
 ): Promise<ResolvedSdkCredentials> {
+  // Experimental: route Anthropic through local router for interceptor coverage
+  if (PROXY_ANTHROPIC && credentials.provider === 'anthropic') {
+    return resolveAnthropicPassthrough(credentials)
+  }
+
+  // ── Original logic (identical to pre-optimization code) ──
   // Start with direct values
   let anthropicBaseUrl = credentials.baseUrl
   let anthropicApiKey = credentials.apiKey
@@ -119,44 +140,98 @@ export async function resolveCredentialsForSdk(
   }
 }
 
+/**
+ * Resolve Anthropic credentials via local router passthrough (experimental).
+ * Isolated from the main path — only called when PROXY_ANTHROPIC = true.
+ */
+async function resolveAnthropicPassthrough(
+  credentials: ApiCredentials
+): Promise<ResolvedSdkCredentials> {
+  const router = await ensureOpenAICompatRouter({ debug: false })
+  const configUrl = credentials.baseUrl.replace(/\/+$/, '') + '/v1/messages'
+
+  const anthropicApiKey = encodeBackendConfig({
+    url: configUrl,
+    key: credentials.apiKey,
+    model: credentials.model,
+    headers: credentials.customHeaders,
+    apiType: 'anthropic_passthrough',
+    forceStream: credentials.forceStream,
+    filterContent: credentials.filterContent
+  })
+
+  console.log(`[SDK Config] Anthropic passthrough: routing via ${router.baseUrl}`)
+
+  return {
+    anthropicBaseUrl: router.baseUrl,
+    anthropicApiKey,
+    sdkModel: credentials.model || 'claude-opus-4-5-20251101',
+    displayModel: credentials.model
+  }
+}
+
 // ============================================
 // Environment Variables
 // ============================================
 
 /**
- * Build SDK environment variables.
- *
- * This is a pure function that constructs the env object
- * needed by the Claude Code subprocess.
- *
- * @param params - Environment parameters
- * @returns Environment variables object
+ * Prefixes to strip from inherited env before spawning CC subprocess.
+ * Prevents leaked vars (ANTHROPIC_AUTH_TOKEN, OPENAI_API_KEY, CLAUDE_CODE_SSE_PORT, etc.)
+ * from overriding Halo's explicit configuration.
+ */
+const AI_SDK_ENV_PREFIXES = ['ANTHROPIC_', 'OPENAI_', 'CLAUDE_']
+
+/**
+ * Copy of process.env with all AI SDK variables removed.
+ */
+export function getCleanUserEnv(): Record<string, string | undefined> {
+  const env = { ...process.env }
+  for (const key of Object.keys(env)) {
+    if (AI_SDK_ENV_PREFIXES.some(prefix => key.startsWith(prefix))) {
+      delete env[key]
+    }
+  }
+  return env
+}
+
+/**
+ * Build env for CC subprocess.
+ * Inherits user env (PATH, HOME, SSH, proxy, etc.) for toolchain compat,
+ * strips AI SDK vars, then sets exactly what CC needs.
  */
 export function buildSdkEnv(params: SdkEnvParams): Record<string, string | number> {
-  return {
-    // Inherit user env: PATH (git, node, python), HOME (config), HTTP_PROXY, LANG, SSH_AUTH_SOCK
-    ...process.env,
+  const env: Record<string, string | number | undefined> = {
+    ...getCleanUserEnv(),
 
-    // Electron-specific: Run as Node.js process without GUI
+    // Electron: run as Node.js process
     ELECTRON_RUN_AS_NODE: 1,
     ELECTRON_NO_ATTACH_CONSOLE: 1,
 
-    // API credentials for Claude Code
+    // API credentials
     ANTHROPIC_API_KEY: params.anthropicApiKey,
     ANTHROPIC_BASE_URL: params.anthropicBaseUrl,
 
-    // Use Halo's own config directory to avoid conflicts with CC's ~/.claude
+    // Halo's own config dir (avoid conflicts with CC's ~/.claude)
     CLAUDE_CONFIG_DIR: path.join(app.getPath('userData'), 'claude-config'),
 
-    // Ensure localhost bypasses proxy (for OpenAI compat router)
+    // Localhost bypasses proxy (for OpenAI compat router)
     NO_PROXY: 'localhost,127.0.0.1',
     no_proxy: 'localhost,127.0.0.1',
 
-    // Disable unnecessary API requests
+    // Disable non-essential traffic
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     DISABLE_TELEMETRY: '1',
-    DISABLE_COST_WARNINGS: '1'
+    DISABLE_COST_WARNINGS: '1',
+    CLAUDE_CODE_DISABLE_COMMAND_INJECTION_CHECK: '1',
+
+    // Performance: skip warmup calls + raise V8 heap ceiling
+    CLAUDE_CODE_REMOTE: 'true',
+
+    // Performance: skip file snapshot I/O (Halo doesn't expose /rewind)
+    CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING: '1',
   }
+
+  return env as Record<string, string | number>
 }
 
 // ============================================
