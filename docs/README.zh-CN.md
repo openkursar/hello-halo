@@ -141,8 +141,11 @@
 git clone https://github.com/openkursar/hello-halo.git
 cd hello-halo
 npm install
+npm run prepare        # 下载当前平台的二进制依赖
 npm run dev
 ```
+
+> 打包所有平台的安装包前，请先运行 `npm run prepare:all` 下载全部平台的二进制依赖。
 
 ---
 
@@ -225,6 +228,7 @@ Halo 开源是因为 AI 应该人人可及。
 git clone https://github.com/openkursar/hello-halo.git
 cd hello-halo
 npm install
+npm run prepare        # 下载当前平台的二进制依赖
 npm run dev
 ```
 

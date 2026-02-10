@@ -150,8 +150,11 @@ For developers who want to contribute or customize:
 git clone https://github.com/openkursar/hello-halo.git
 cd hello-halo
 npm install
+npm run prepare        # Download binary dependencies for your platform
 npm run dev
 ```
+
+> To build for all platforms, run `npm run prepare:all` first to download binaries for every target platform.
 
 ---
 
@@ -234,6 +237,7 @@ We welcome contributions of all kinds:
 git clone https://github.com/openkursar/hello-halo.git
 cd hello-halo
 npm install
+npm run prepare        # Download binary dependencies for your platform
 npm run dev
 ```
 

@@ -92,7 +92,8 @@ halo/
 │   │       │   ├── index.ts
 │   │       │   └── evasions/      # 15 evasion modules
 │   │       ├── artifact.service.ts
-│   │       ├── artifact-cache.service.ts
+│   │       ├── artifact-cache.service.ts  # In-memory cache + IPC broadcast (no fs I/O)
+│   │       ├── watcher-host.service.ts    # Manages file-watcher worker process
 │   │       ├── browser-view.service.ts
 │   │       ├── config.service.ts
 │   │       ├── conversation.service.ts
@@ -109,6 +110,21 @@ halo/
 │   │       ├── tunnel.service.ts
 │   │       ├── updater.service.ts
 │   │       └── window.service.ts
+│   │
+│   ├── worker/                      # Utility processes (separate OS processes)
+│   │   └── file-watcher/           # File system watcher + scanner
+│   │       ├── index.ts            # Worker entry point (child_process.fork)
+│   │       ├── watcher.ts          # @parcel/watcher subscription + event coalescing
+│   │       └── scanner.ts          # readdir + .gitignore filtering
+│   │
+│   ├── shared/
+│   │   ├── types/
+│   │   │   ├── artifact.ts         # CachedTreeNode, CachedArtifact (cross-process)
+│   │   │   └── ...
+│   │   ├── protocol/
+│   │   │   └── file-watcher.protocol.ts  # Main <-> Worker message types
+│   │   └── constants/
+│   │       └── ignore-patterns.ts
 │   │
 │   ├── preload/
 │   │   └── index.ts               # ~300 lines, exposes HaloAPI

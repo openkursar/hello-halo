@@ -106,6 +106,8 @@ function prepare(projectRoot, electronPlatformName, arch) {
 
       fs.mkdirSync(backupScopeDir, { recursive: true });
       fs.renameSync(src, dest);
+      // Leave empty directory so electron-builder's scandir doesn't ENOENT
+      fs.mkdirSync(src);
       moved.push(`${entry.scope}/${item.name}`);
     }
 

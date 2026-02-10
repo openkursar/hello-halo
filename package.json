@@ -16,10 +16,6 @@
     "build:win-x64": "npm run build && electron-builder --win --x64",
     "prepare": "node scripts/prepare-binaries.mjs",
     "prepare:all": "node scripts/prepare-binaries.mjs --platform all",
-    "prepare:mac-arm64": "node scripts/prepare-cloudflared-mac-arm64.mjs",
-    "prepare:mac-x64": "node scripts/prepare-cloudflared-mac-x64.mjs",
-    "prepare:win-x64": "node scripts/prepare-cloudflared-win-x64.mjs",
-    "prepare:linux-x64": "node scripts/prepare-cloudflared-linux-x64.mjs",
     "build:mac-x64": "npm run build && electron-builder --mac --x64",
     "build:linux": "npm run build && electron-builder --linux",
     "icons": "bash scripts/generate-icons.sh",
@@ -132,6 +128,7 @@
   "build": {
     "appId": "com.halo.app",
     "productName": "Halo",
+    "npmRebuild": false,
     "beforePack": "./scripts/beforePack.cjs",
     "afterPack": "./scripts/afterPack.cjs",
     "directories": {
