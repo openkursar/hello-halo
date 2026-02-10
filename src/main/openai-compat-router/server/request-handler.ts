@@ -120,7 +120,7 @@ function sendError(
   res.status(status)
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('request-id', `req_${Date.now()}`)
-  res.setHeader('retry-after', '1')
+  res.setHeader('retry-after', '3')
   res.json({
     type: 'error',
     error: { type: errorType, message }
@@ -296,7 +296,8 @@ async function handleAnthropicPassthrough(
 
       res.status(upstreamResp.status)
       forwardResponseHeaders(upstreamResp, res)
-      res.setHeader('Content-Type', 'application/json')
+      // Business policy: override retry-after for faster client recovery
+      res.setHeader('retry-after', '3')
       res.end(errorText)
       return
     }
@@ -334,7 +335,6 @@ async function handleAnthropicPassthrough(
       console.log(`[RequestHandler] Anthropic response:\n${body.slice(0, 2000)}`)
     }
     forwardResponseHeaders(upstreamResp, res)
-    res.setHeader('Content-Type', 'application/json')
     res.end(body)
   } catch (error: any) {
     if (error?.name === 'AbortError') {
