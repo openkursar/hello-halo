@@ -5,7 +5,7 @@
  * TodoWrite is rendered separately at the bottom (only one instance)
  */
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, type RefObject } from 'react'
 import {
   Lightbulb,
   Loader2,
@@ -23,11 +23,13 @@ import {
   getThoughtLabelKey,
   getToolFriendlyFormat,
 } from './thought-utils'
+import { useLazyVisible } from '../../hooks/useLazyVisible'
 import type { Thought, ThoughtsSummary } from '../../types'
 import { getCurrentLanguage, useTranslation } from '../../i18n'
 
 interface CollapsedThoughtProcessProps {
   thoughts: Thought[]
+  defaultExpanded?: boolean
 }
 
 
@@ -152,10 +154,32 @@ function ThoughtItem({ thought }: { thought: Thought }) {
   )
 }
 
-export function CollapsedThoughtProcess({ thoughts }: CollapsedThoughtProcessProps) {
+// Lazy wrapper for historical thought items — defers rendering until scrolled into view
+const COLLAPSED_THOUGHT_ESTIMATED_HEIGHT = 36
+
+function LazyCollapsedThoughtItem({
+  thought,
+  scrollContainerRef,
+}: {
+  thought: Thought
+  scrollContainerRef: RefObject<HTMLDivElement | null>
+}) {
+  const [ref, isVisible] = useLazyVisible('150px', scrollContainerRef)
+
+  if (isVisible) {
+    return <ThoughtItem thought={thought} />
+  }
+
+  return (
+    <div ref={ref} style={{ minHeight: COLLAPSED_THOUGHT_ESTIMATED_HEIGHT }} className="border-b border-border/20 last:border-b-0" />
+  )
+}
+
+export function CollapsedThoughtProcess({ thoughts, defaultExpanded = false }: CollapsedThoughtProcessProps) {
   const { t } = useTranslation()
-  const [isExpanded, setIsExpanded] = useState(true)
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded)
   const [isMaximized, setIsMaximized] = useState(false)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
 
   // Get latest todo data (only render one TodoCard at bottom)
   const latestTodos = useMemo(() => {
@@ -230,11 +254,15 @@ export function CollapsedThoughtProcess({ thoughts }: CollapsedThoughtProcessPro
       {/* Expanded content */}
       {isExpanded && (
         <div className="mt-1 py-2 bg-muted/20 rounded-lg border border-border/30 animate-slide-down thought-content">
-          {/* Thought items */}
+          {/* Thought items — lazy-loaded: only items near the scroll viewport are rendered */}
           {displayThoughts.length > 0 && (
-            <div className={`${isMaximized ? 'max-h-[80vh]' : 'max-h-[300px]'} scrollbar-overlay px-3 transition-all duration-200`}>
+            <div ref={scrollContainerRef} className={`${isMaximized ? 'max-h-[80vh]' : 'max-h-[300px]'} scrollbar-overlay px-3 transition-all duration-200`}>
               {displayThoughts.map((thought, index) => (
-                <ThoughtItem key={`${thought.id}-${index}`} thought={thought} />
+                <LazyCollapsedThoughtItem
+                  key={`${thought.id}-${index}`}
+                  thought={thought}
+                  scrollContainerRef={scrollContainerRef}
+                />
               ))}
             </div>
           )}
@@ -280,9 +308,9 @@ export function LazyCollapsedThoughtProcess({ thoughtsSummary, onLoadThoughts }:
   const [loadedThoughts, setLoadedThoughts] = useState<Thought[] | null>(null)
   const [isLoading, setIsLoading] = useState(false)
 
-  // Once loaded, render the full CollapsedThoughtProcess
+  // Once loaded, render expanded — user explicitly clicked to load thoughts
   if (loadedThoughts) {
-    return <CollapsedThoughtProcess thoughts={loadedThoughts} />
+    return <CollapsedThoughtProcess thoughts={loadedThoughts} defaultExpanded />
   }
 
   const duration = thoughtsSummary.duration

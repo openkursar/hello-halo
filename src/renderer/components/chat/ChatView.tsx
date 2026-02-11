@@ -2,7 +2,7 @@
  * Chat View - Main chat interface
  * Uses session-based state for multi-conversation support
  * Supports onboarding mode with mock AI response
- * Features smart auto-scroll (stops when user reads history)
+ * Features smart auto-scroll via react-virtuoso (stops when user reads history)
  *
  * Layout modes:
  * - Full width (isCompact=false): Centered content with max-width
@@ -14,8 +14,8 @@ import { useSpaceStore } from '../../stores/space.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { useAIBrowserStore } from '../../stores/ai-browser.store'
-import { useSmartScroll } from '../../hooks/useSmartScroll'
 import { MessageList } from './MessageList'
+import type { MessageListHandle } from './MessageList'
 import { InputArea } from './InputArea'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { Sparkles } from '../icons/ToolIcons'
@@ -70,7 +70,20 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     }
   }, [isOnboarding])
 
+  // MessageList ref for scroll control (Virtuoso-based)
+  const messageListRef = useRef<MessageListHandle>(null)
+
+  // Scroll-to-bottom button visibility — driven by Virtuoso's atBottomStateChange
+  const [showScrollButton, setShowScrollButton] = useState(false)
+  const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
+    setShowScrollButton(!atBottom)
+  }, [])
+
   // Handle search result navigation - scroll to message and highlight search term
+  // With Virtuoso, we first scroll the target message into view by index,
+  // then apply DOM-based highlighting once it's rendered.
+  const displayMessagesRef = useRef<{ id: string }[]>([])
+
   useEffect(() => {
     const handleNavigateToMessage = (event: Event) => {
       const customEvent = event as CustomEvent<{ messageId: string; query: string }>
@@ -82,50 +95,63 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
       document.querySelectorAll('.search-highlight').forEach(el => {
         el.classList.remove('search-highlight')
       })
-      // Replace each mark element with its text content (preserving surrounding content)
       document.querySelectorAll('.search-term-highlight').forEach(el => {
         const textNode = document.createTextNode(el.textContent || '')
         el.replaceWith(textNode)
       })
 
-      // Find the message element
-      const messageElement = document.querySelector(`[data-message-id="${messageId}"]`)
-      if (!messageElement) {
-        console.warn(`[ChatView] Message element not found for ID: ${messageId}`)
+      // Find message index in displayMessages
+      const messageIndex = displayMessagesRef.current.findIndex(m => m.id === messageId)
+      if (messageIndex === -1) {
+        console.warn(`[ChatView] Message not found in displayMessages for ID: ${messageId}`)
         return
       }
 
-      console.log(`[ChatView] Found message element, scrolling and highlighting`)
+      // Scroll to the message via Virtuoso
+      messageListRef.current?.scrollToIndex(messageIndex, 'smooth')
 
-      // Scroll into view smoothly
-      messageElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
-
-      // Add highlight animation
-      messageElement.classList.add('search-highlight')
-      setTimeout(() => {
-        messageElement.classList.remove('search-highlight')
-      }, 2000)
-
-      // Highlight search terms in the message (simple text highlight)
-      const contentElement = messageElement.querySelector('[data-message-content]')
-      if (contentElement && query) {
-        try {
-          // Create a regexp with word boundaries
-          const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')
-          const originalHTML = contentElement.innerHTML
-
-          // Only highlight if we have content and haven't already highlighted
-          if (!originalHTML.includes('search-term-highlight')) {
-            contentElement.innerHTML = originalHTML.replace(
-              regex,
-              '<mark class="search-term-highlight bg-yellow-400/30 font-semibold rounded px-0.5">$1</mark>'
-            )
-            console.log(`[ChatView] Highlighted search term: "${query}"`)
+      // Wait for Virtuoso to render the item, then apply DOM highlighting
+      const applyHighlight = (retries = 0) => {
+        const messageElement = document.querySelector(`[data-message-id="${messageId}"]`)
+        if (!messageElement) {
+          if (retries < 10) {
+            setTimeout(() => applyHighlight(retries + 1), 100)
+          } else {
+            console.warn(`[ChatView] Message element not found after scrollToIndex for ID: ${messageId}`)
           }
-        } catch (error) {
-          console.error(`[ChatView] Error highlighting search term:`, error)
+          return
+        }
+
+        console.log(`[ChatView] Found message element, highlighting`)
+
+        // Add highlight animation
+        messageElement.classList.add('search-highlight')
+        setTimeout(() => {
+          messageElement.classList.remove('search-highlight')
+        }, 2000)
+
+        // Highlight search terms in the message (simple text highlight)
+        const contentElement = messageElement.querySelector('[data-message-content]')
+        if (contentElement && query) {
+          try {
+            const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi')
+            const originalHTML = contentElement.innerHTML
+
+            if (!originalHTML.includes('search-term-highlight')) {
+              contentElement.innerHTML = originalHTML.replace(
+                regex,
+                '<mark class="search-term-highlight bg-yellow-400/30 font-semibold rounded px-0.5">$1</mark>'
+              )
+              console.log(`[ChatView] Highlighted search term: "${query}"`)
+            }
+          } catch (error) {
+            console.error(`[ChatView] Error highlighting search term:`, error)
+          }
         }
       }
+
+      // Small delay to allow Virtuoso to scroll and render
+      setTimeout(() => applyHighlight(), 150)
     }
 
     // Clear all search highlights when requested
@@ -134,7 +160,6 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
       document.querySelectorAll('.search-highlight').forEach(el => {
         el.classList.remove('search-highlight')
       })
-      // Replace each mark element with its text content (preserving surrounding content)
       document.querySelectorAll('.search-term-highlight').forEach(el => {
         const textNode = document.createTextNode(el.textContent || '')
         el.replaceWith(textNode)
@@ -154,21 +179,6 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const { isLoadingConversation } = useChatStore()
   const session = getCurrentSession()
   const { isGenerating, streamingContent, isStreaming, thoughts, isThinking, compactInfo, error, errorType, textBlockVersion, pendingQuestion } = session
-
-  // Scrollable container ref
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  // Smart auto-scroll: only scrolls when user is at bottom
-  const {
-    showScrollButton,
-    scrollToBottom,
-    handleScroll
-  } = useSmartScroll({
-    containerRef,
-    threshold: 100,
-    deps: [currentConversation?.messages, streamingContent, thoughts, mockStreamingContent, pendingQuestion],
-    behavior: isStreaming ? 'instant' : 'smooth'
-  })
 
   const onboardingPrompt = getOnboardingPrompt(t)
   const onboardingResponse = getOnboardingAiResponse(t)
@@ -209,7 +219,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
 
       // Also save the conversation to disk
       await api.saveOnboardingConversation(currentSpace.id, onboardingPrompt, onboardingResponse)
-      
+
       // Small delay to ensure file system has synced
       await new Promise(resolve => setTimeout(resolve, 200))
     } catch (err) {
@@ -259,6 +269,9 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
       ]
     : realMessages
 
+  // Keep displayMessagesRef in sync for search navigation
+  displayMessagesRef.current = displayMessages
+
   const displayStreamingContent = mockStreamingContent || streamingContent
   const displayIsGenerating = isMockAnimating || isGenerating
   const displayIsThinking = isMockThinking || isThinking
@@ -283,12 +296,10 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     >
       {/* Messages area wrapper - relative for button positioning */}
       <div className="flex-1 relative overflow-hidden">
-        {/* Scrollable messages container */}
+        {/* Virtuoso manages its own scroll container */}
         <div
-          ref={containerRef}
-          onScroll={handleScroll}
           className={`
-            h-full overflow-auto py-6
+            h-full
             transition-[padding] duration-300 ease-out
             ${isCompact ? 'px-3' : 'px-4'}
           `}
@@ -299,6 +310,8 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
             <EmptyState isTemp={currentSpace?.isTemp || false} isCompact={isCompact} />
           ) : (
             <MessageList
+              key={currentConversation?.id ?? 'empty'}
+              ref={messageListRef}
               messages={displayMessages}
               streamingContent={displayStreamingContent}
               isGenerating={displayIsGenerating}
@@ -313,6 +326,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
               textBlockVersion={textBlockVersion}
               pendingQuestion={pendingQuestion}
               onAnswerQuestion={currentConversation ? (answers) => answerQuestion(currentConversation.id, answers) : undefined}
+              onAtBottomStateChange={handleAtBottomStateChange}
             />
           )}
         </div>
@@ -320,7 +334,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
         {/* Scroll to bottom button - positioned outside scroll container */}
         <ScrollToBottomButton
           visible={showScrollButton && hasMessages}
-          onClick={() => scrollToBottom('smooth')}
+          onClick={() => messageListRef.current?.scrollToBottom('auto')}
         />
       </div>
 

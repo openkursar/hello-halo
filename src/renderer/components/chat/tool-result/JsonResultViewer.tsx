@@ -10,7 +10,7 @@
 
 import { useState, useCallback, useMemo } from 'react'
 import { Copy, Check, ChevronDown, ChevronUp, Braces } from 'lucide-react'
-import { highlightCodeSync } from '../../../lib/highlight-loader'
+import { useAsyncHighlight } from '../../../hooks/useAsyncHighlight'
 import { useTranslation } from '../../../i18n'
 import type { ViewerBaseProps } from './types'
 import { truncateToLines } from './detection'
@@ -44,10 +44,8 @@ export function JsonResultViewer({
 
   const displayContent = isExpanded ? formattedJson : previewContent
 
-  // Highlight JSON
-  const highlightedJson = useMemo(() => {
-    return highlightCodeSync(displayContent, 'json')
-  }, [displayContent])
+  // Async highlight: shows plain text instantly, then swaps in highlighted HTML
+  const highlightedJson = useAsyncHighlight(displayContent, 'json')
 
   // Copy handler
   const handleCopy = useCallback(async () => {

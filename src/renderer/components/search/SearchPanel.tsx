@@ -220,39 +220,20 @@ export function SearchPanel({ isOpen, onClose }: SearchPanelProps) {
       // Close search panel
       onClose()
 
-      // Step 5: Wait for conversation data to load before navigating to message
-      // Poll for message element until it exists in DOM
-      let retries = 0
-      const maxRetries = 50 // 50 * 100ms = 5 seconds max wait
-
-      const waitForMessageElement = async () => {
-        while (retries < maxRetries) {
-          // Check if message element exists in DOM
-          const messageElement = document.querySelector(`[data-message-id="${result.messageId}"]`)
-          if (messageElement) {
-            console.log(`[Search] Message element found on retry ${retries}, navigating to message`)
-            // Dispatch scroll-to-message event with search query for highlighting
-            const event = new CustomEvent('search:navigate-to-message', {
-              detail: {
-                messageId: result.messageId,
-                query: searchedQuery
-              }
-            })
-            window.dispatchEvent(event)
-            return
+      // Step 5: Dispatch navigation event for ChatView to handle
+      // ChatView uses Virtuoso scrollToIndex to bring the message into viewport,
+      // then applies DOM highlighting — no need to pre-check DOM existence here.
+      // Small delay to let conversation data load and MessageList mount.
+      setTimeout(() => {
+        console.log(`[Search] Dispatching navigate-to-message for: ${result.messageId}`)
+        const event = new CustomEvent('search:navigate-to-message', {
+          detail: {
+            messageId: result.messageId,
+            query: searchedQuery
           }
-
-          retries++
-          if (retries % 10 === 0) {
-            console.log(`[Search] Waiting for message element... (${retries}/${maxRetries})`)
-          }
-          await new Promise(resolve => setTimeout(resolve, 100))
-        }
-
-        console.warn(`[Search] Message element not found after ${maxRetries} retries, navigation failed`)
-      }
-
-      waitForMessageElement()
+        })
+        window.dispatchEvent(event)
+      }, 300)
     } catch (error) {
       console.error(`[Search] Error navigating to result:`, error)
     }

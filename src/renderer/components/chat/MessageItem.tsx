@@ -8,7 +8,7 @@
  * - When complete: indicator fades out smoothly
  */
 
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, memo } from 'react'
 import {
   Lightbulb,
   Wrench,
@@ -234,7 +234,7 @@ function ThoughtItem({ thought }: { thought: Thought }) {
   )
 }
 
-export function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false }: MessageItemProps) {
+export const MessageItem = memo(function MessageItem({ message, previousCost = 0, hideThoughts = false, isInContainer = false, isWorking = false, isWaitingMore = false }: MessageItemProps) {
   const isUser = message.role === 'user'
   const isStreaming = (message as any).isStreaming
   const [copied, setCopied] = useState(false)
@@ -394,4 +394,4 @@ export function MessageItem({ message, previousCost = 0, hideThoughts = false, i
       {bubble}
     </div>
   )
-}
+})

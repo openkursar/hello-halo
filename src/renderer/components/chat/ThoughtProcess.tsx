@@ -6,7 +6,7 @@
  * to keep it always visible and avoid duplicate renders
  */
 
-import { useState, useRef, useEffect, useMemo, memo } from 'react'
+import { useState, useRef, useEffect, useMemo, memo, type RefObject } from 'react'
 import {
   CheckCircle2,
   XCircle,
@@ -25,6 +25,7 @@ import {
   getToolFriendlyFormat,
 } from './thought-utils'
 import { useSmartScroll } from '../../hooks/useSmartScroll'
+import { useLazyVisible } from '../../hooks/useLazyVisible'
 import type { Thought } from '../../types'
 import { useTranslation } from '../../i18n'
 
@@ -332,6 +333,33 @@ const ThoughtItem = memo(function ThoughtItem({ thought, isLast }: { thought: Th
   )
 })
 
+// Lazy wrapper: defers rendering of ThoughtItem until it enters the scroll viewport.
+// Once visible, stays rendered permanently (no unmount on scroll-away).
+// Estimated height placeholder prevents layout jumps.
+const THOUGHT_ITEM_ESTIMATED_HEIGHT = 60
+
+function LazyThoughtItem({
+  thought,
+  isLast,
+  scrollContainerRef,
+  eager = false,
+}: {
+  thought: Thought
+  isLast: boolean
+  scrollContainerRef: RefObject<HTMLDivElement | null>
+  eager?: boolean
+}) {
+  const [ref, isVisible] = useLazyVisible('200px', scrollContainerRef, eager)
+
+  if (isVisible) {
+    return <ThoughtItem thought={thought} isLast={isLast} />
+  }
+
+  return (
+    <div ref={ref} style={{ minHeight: THOUGHT_ITEM_ESTIMATED_HEIGHT }} />
+  )
+}
+
 export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
   // Start collapsed, but auto-expand when streaming starts
   const [isExpanded, setIsExpanded] = useState(false)
@@ -472,13 +500,24 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
                 onScroll={handleScroll}
                 className={`px-4 pt-3 ${isMaximized ? 'max-h-[80vh]' : 'max-h-[300px]'} overflow-auto scrollbar-overlay transition-all duration-200`}
               >
-                {displayThoughts.map((thought, index) => (
-                  <ThoughtItem
-                    key={thought.id}
-                    thought={thought}
-                    isLast={index === displayThoughts.length - 1 && !latestTodos && !isThinking}
-                  />
-                ))}
+                {displayThoughts.map((thought, index) => {
+                  const isLast = index === displayThoughts.length - 1 && !latestTodos && !isThinking
+                  // Last 3 items render eagerly (near the scroll bottom where the
+                  // user is watching during streaming). The rest lazy-load via IO.
+                  // Using a single component type for all items avoids React
+                  // unmount/remount when an item shifts from "recent" to "old"
+                  // as new thoughts arrive — which previously caused 1-2 frame flicker.
+                  const isRecentItem = index >= displayThoughts.length - 3
+                  return (
+                    <LazyThoughtItem
+                      key={thought.id}
+                      thought={thought}
+                      isLast={isLast}
+                      scrollContainerRef={contentRef}
+                      eager={isRecentItem}
+                    />
+                  )
+                })}
               </div>
             )}
 

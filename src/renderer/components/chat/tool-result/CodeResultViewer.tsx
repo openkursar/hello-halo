@@ -10,7 +10,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { Copy, Check, ChevronDown, ChevronUp, FileText } from 'lucide-react'
-import { highlightCodeSync } from '../../../lib/highlight-loader'
+import { useAsyncHighlight } from '../../../hooks/useAsyncHighlight'
 import { useTranslation } from '../../../i18n'
 import type { ViewerBaseProps } from './types'
 import { countLines, truncateToLines, removeLineNumberPrefix } from './detection'
@@ -45,10 +45,8 @@ export function CodeResultViewer({
 
   const displayContent = isExpanded ? cleanedOutput : previewContent
 
-  // Highlight code
-  const highlightedCode = useMemo(() => {
-    return highlightCodeSync(displayContent, language)
-  }, [displayContent, language])
+  // Async highlight: shows plain text instantly, then swaps in highlighted HTML
+  const highlightedCode = useAsyncHighlight(displayContent, language)
 
   // Copy handler - copy cleaned content
   const handleCopy = useCallback(async () => {
