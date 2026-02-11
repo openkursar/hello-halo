@@ -5,13 +5,15 @@
 // ========================================
 // LOGGING INITIALIZATION (must be first)
 // ========================================
-// Initialize electron-log for renderer process
-// Logs are sent to main process via IPC and written to the same log file
-// This replaces console.log/warn/error globally
-import log from 'electron-log/renderer.js'
-
-// Replace global console with electron-log (performance: direct replacement, no wrapper)
-Object.assign(console, log.functions)
+// Initialize electron-log only in Electron environment.
+// In remote browser mode, native console is used since there's no IPC transport.
+// Uses the same detection pattern as src/renderer/api/transport.ts:isElectron()
+// Non-blocking: don't use top-level await to avoid blocking module graph in Vite dev mode
+if (typeof window !== 'undefined' && 'halo' in window) {
+  import('electron-log/renderer.js').then(({ default: log }) => {
+    Object.assign(console, log.functions)
+  })
+}
 
 import ReactDOM from 'react-dom/client'
 import App from './App'
