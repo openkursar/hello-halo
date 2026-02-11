@@ -11,11 +11,10 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { Copy, Check, Code, Eye, ExternalLink, Pencil } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeRaw from 'rehype-raw'
-import { highlightCodeSync } from '../../../lib/highlight-loader'
+import { Streamdown } from 'streamdown'
+import 'streamdown/styles.css'
 import { api } from '../../../api'
+import { highlightCodeSync } from '../../../lib/highlight-loader'
 import type { CanvasTab } from '../../../stores/canvas.store'
 import { useTranslation } from '../../../i18n'
 
@@ -193,9 +192,9 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
       >
         {viewMode === 'rendered' ? (
           <div className="prose prose-invert max-w-none p-6 sm:p-8">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={[rehypeRaw]}
+            <Streamdown
+              mode="static"
+              controls={false}
               components={{
                 // Code block container - uses not-prose to escape prose styles
                 // for CopyButton positioning (styles must be defined here, not in config)
@@ -209,24 +208,18 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
                     </div>
                   )
                 },
-                // Handle code element - only process code blocks for syntax highlighting
-                // Inline code styling is handled by tailwind.config.cjs (:not(pre) > code)
-                code({ node, inline, className, children, ...props }: any) {
-                  // Inline code - let prose styles handle it
-                  if (inline) {
+                // Code syntax highlighting via highlight.js
+                code({ className, children, ...props }: any) {
+                  const match = /language-(\w+)/.exec(className || '')
+                  if (!match) {
+                    // Inline code - let prose styles handle it
                     return <code {...props}>{children}</code>
                   }
-
-                  // Code block - apply syntax highlighting
-                  const match = /language-(\w+)/.exec(className || '')
-                  const language = match ? match[1] : ''
-                  const code = String(children).replace(/\n$/, '')
-                  const highlighted = highlightCodeSync(code, language)
-
+                  const language = match[1]
                   return (
                     <code
-                      className={`hljs ${language ? `language-${language}` : ''}`}
-                      dangerouslySetInnerHTML={{ __html: highlighted }}
+                      className={`hljs language-${language}`}
+                      dangerouslySetInnerHTML={{ __html: highlightCodeSync(String(children).replace(/\n$/, ''), language) }}
                     />
                   )
                 },
@@ -239,7 +232,7 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
                   )
                 },
                 // Links - add target="_blank" (styling from tailwind.config.cjs)
-                a({ href, children }) {
+                a({ href, children }: any) {
                   return (
                     <a href={href} target="_blank" rel="noopener noreferrer">
                       {children}
@@ -247,7 +240,7 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
                   )
                 },
                 // Style images - resolve relative paths using halo-file:// protocol
-                img({ src, alt }) {
+                img({ src, alt }: any) {
                   return (
                     <img
                       src={resolveImageSrc(src, basePath)}
@@ -261,7 +254,7 @@ export function MarkdownViewer({ tab, onScrollChange, onEditRequest }: MarkdownV
               }}
             >
               {content}
-            </ReactMarkdown>
+            </Streamdown>
           </div>
         ) : (
           <SourceView content={content} />
