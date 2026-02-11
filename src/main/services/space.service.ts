@@ -292,6 +292,8 @@ export function getSpace(spaceId: string): Space | null {
   const space = loadSpaceFromPath(entry.path)
   if (!space) return null
 
+  console.log(`[Space] Loaded "${space.name}" (${spaceId}): path=${entry.path}, workingDir=${space.workingDir ?? '(none)'}`)
+
   // Add to LRU cache, evict oldest if full
   spaceCache.set(spaceId, space)
   if (spaceCache.size > MAX_SPACE_CACHE_SIZE) {

@@ -115,6 +115,7 @@ export async function listArtifactsTree(spaceId: string): Promise<CachedTreeNode
   console.log(`[Artifact] listArtifactsTree for space: ${spaceId}`)
 
   const workDir = getWorkingDir(spaceId)
+  console.log(`[Artifact] listArtifactsTree workDir resolved: ${workDir}`)
 
   if (!existsSync(workDir)) {
     console.log(`[Artifact] Directory does not exist: ${workDir}`)
@@ -123,7 +124,7 @@ export async function listArtifactsTree(spaceId: string): Promise<CachedTreeNode
 
   const nodes = await listArtifactsTreeCached(spaceId, workDir)
 
-  console.log(`[Artifact] Found ${nodes.length} root nodes`)
+  console.log(`[Artifact] listArtifactsTree result: ${nodes.length} root nodes`)
   return nodes
 }
 
@@ -137,6 +138,7 @@ export async function loadTreeChildren(
   console.log(`[Artifact] loadTreeChildren for: ${dirPath}`)
 
   const workDir = getWorkingDir(spaceId)
+  console.log(`[Artifact] loadTreeChildren workDir resolved: ${workDir}`)
 
   if (!existsSync(dirPath)) {
     console.log(`[Artifact] Directory does not exist: ${dirPath}`)
@@ -150,7 +152,7 @@ export async function loadTreeChildren(
     // Must use sep suffix to prevent /workspace_tmp matching /workspace
     const realWorkDirWithSep = realWorkDir.endsWith(sep) ? realWorkDir : realWorkDir + sep
     if (realPath !== realWorkDir && !realPath.startsWith(realWorkDirWithSep)) {
-      console.warn(`[Artifact] Path traversal blocked: ${dirPath}`)
+      console.warn(`[Artifact] Path traversal blocked: ${dirPath} (realPath=${realPath}, workDir=${realWorkDir})`)
       return []
     }
   } catch {
@@ -159,7 +161,9 @@ export async function loadTreeChildren(
   }
 
   try {
-    return await loadDirectoryChildren(spaceId, dirPath, workDir)
+    const result = await loadDirectoryChildren(spaceId, dirPath, workDir)
+    console.log(`[Artifact] loadTreeChildren result: ${result.length} children for ${dirPath}`)
+    return result
   } catch (error) {
     console.error(`[Artifact] loadTreeChildren error:`, error)
     return []

@@ -209,14 +209,17 @@ export async function scanDirectoryTreeShallow(
       return a.name.localeCompare(b.name)
     })
 
+    let ignoredCount = 0
+    let hiddenCount = 0
     for (const entry of entries) {
-      if (shouldHide(entry.name)) continue
+      if (shouldHide(entry.name)) { hiddenCount++; continue }
       if (ig) {
         const entryRelative = relative(rootPath, join(dirPath, entry.name))
-        if (isIgnored(ig, entryRelative)) continue
+        if (isIgnored(ig, entryRelative)) { ignoredCount++; continue }
       }
       nodes.push(createTreeNodeFromDirent(entry, dirPath, rootPath, depth))
     }
+    console.log(`[Scanner] scanTreeShallow: ${dirPath} — ${entries.length} entries, ${nodes.length} visible, ${ignoredCount} ignored, ${hiddenCount} hidden`)
   } catch (error) {
     console.error(`[Scanner] Failed to scan tree ${dirPath}:`, error)
   }

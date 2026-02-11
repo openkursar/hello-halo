@@ -413,7 +413,7 @@ export async function listArtifacts(
   rootPath: string,
   maxDepth: number = 1
 ): Promise<CachedArtifact[]> {
-  console.log(`[ArtifactCache] listArtifacts for space: ${spaceId}`)
+  console.debug(`[ArtifactCache] listArtifacts for space: ${spaceId}`)
 
   // Disk root detection - degrade to prevent system freeze
   if (isDiskRoot(rootPath)) {
@@ -431,7 +431,7 @@ export async function listArtifacts(
   // If cache is fresh (within 5 seconds), return cached items
   const now = Date.now()
   if (cache.flatItems.size > 0 && now - cache.lastUpdate < 5000) {
-    console.log(`[ArtifactCache] Returning cached ${cache.flatItems.size} items`)
+    console.debug(`[ArtifactCache] Returning cached ${cache.flatItems.size} items`)
     return Array.from(cache.flatItems.values())
       .sort((a, b) => sortByName(a, b))
   }
@@ -468,12 +468,12 @@ export async function listArtifactsTree(
   // Cache hit: return immediately (O(1) Map.get)
   const cached = cache.treeNodes.get(rootPath)
   if (cached) {
-    console.log(`[ArtifactCache] listArtifactsTree CACHE HIT: ${cached.length} nodes`)
+    console.debug(`[ArtifactCache] listArtifactsTree CACHE HIT: ${cached.length} nodes`)
     return cached
   }
 
   // Cache miss: scan via worker
-  console.log(`[ArtifactCache] listArtifactsTree CACHE MISS, scanning: ${rootPath}`)
+  console.debug(`[ArtifactCache] listArtifactsTree CACHE MISS, scanning: ${rootPath}`)
   const nodes = await scanTreeViaWorker(spaceId, rootPath, rootPath, 0)
 
   // Store in cache
@@ -503,7 +503,7 @@ export async function loadDirectoryChildren(
   // Cache hit: return immediately
   const cached = cache.treeNodes.get(dirPath)
   if (cached) {
-    console.log(`[ArtifactCache] loadDirectoryChildren CACHE HIT: ${cached.length} nodes (${dirPath})`)
+    console.debug(`[ArtifactCache] loadDirectoryChildren CACHE HIT: ${cached.length} nodes (${dirPath})`)
     return cached
   }
 
@@ -512,14 +512,15 @@ export async function loadDirectoryChildren(
   const depth = relPath ? relPath.split(/[\\/]/).length : 0
 
   // Cache miss: scan via worker
-  console.log(`[ArtifactCache] loadDirectoryChildren CACHE MISS, scanning: ${dirPath}`)
+  console.debug(`[ArtifactCache] loadDirectoryChildren CACHE MISS, scanning: ${dirPath} (depth=${depth + 1}, rootPath=${rootPath})`)
   const children = await scanTreeViaWorker(spaceId, dirPath, rootPath, depth + 1)
+  console.debug(`[ArtifactCache] loadDirectoryChildren scan result: ${children.length} nodes for ${dirPath}`)
 
   // Race condition guard: watcher may have populated the cache during the await.
   // Prefer watcher's version since it's more up-to-date.
   const watcherVersion = cache.treeNodes.get(dirPath)
   if (watcherVersion) {
-    console.log(`[ArtifactCache] loadDirectoryChildren: watcher populated cache during scan, using watcher version`)
+    console.debug(`[ArtifactCache] loadDirectoryChildren: watcher populated cache during scan, using watcher version (${watcherVersion.length} nodes)`)
     cache.loadedDirs.add(dirPath)
     return watcherVersion
   }
@@ -527,6 +528,7 @@ export async function loadDirectoryChildren(
   // Store in cache
   cache.treeNodes.set(dirPath, children)
   cache.loadedDirs.add(dirPath)
+  console.debug(`[ArtifactCache] loadDirectoryChildren cached: ${children.length} nodes for ${dirPath}`)
 
   return children
 }

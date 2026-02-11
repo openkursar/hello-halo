@@ -148,9 +148,12 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
   const treeHeight = useTreeHeight()
   const watcherInitialized = useRef(false)
 
+  // Whether the initial IPC load has completed (distinguishes "loading" from "truly empty")
+  const [hasLoaded, setHasLoaded] = useState(false)
+
   // Mutable tree data + path→node index (avoids full-tree immutable copies)
-  const treeDataRef = useRef<ArtifactTreeNode[]>([])
   const nodeIndex = useRef<Map<string, ArtifactTreeNode>>(new Map())
+  const treeDataRef = useRef<ArtifactTreeNode[]>([])
   // Revision counter — incrementing triggers react-arborist to pick up mutated data
   const [revision, setRevision] = useState(0)
 
@@ -161,16 +164,23 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
     if (!spaceId) return
 
     try {
+      console.log('[ArtifactTree] loadTree START, spaceId:', spaceId)
       const response = await api.listArtifactsTree(spaceId)
+      console.log('[ArtifactTree] loadTree IPC response: success=%s, nodeCount=%d',
+        response.success, response.data?.length ?? 0)
       if (response.success && response.data) {
         const nodes = response.data as ArtifactTreeNode[]
         treeDataRef.current = nodes
         nodeIndex.current.clear()
         indexNodes(nodes, nodeIndex.current)
         setRevision(r => r + 1)
+      } else {
+        console.warn('[ArtifactTree] loadTree: response not successful or no data', response)
       }
     } catch (error) {
       console.error('[ArtifactTree] Failed to load tree:', error)
+    } finally {
+      setHasLoaded(true)
     }
   }, [spaceId])
 
@@ -179,9 +189,12 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
     if (!spaceId) return
 
     try {
+      console.log('[ArtifactTree] loadChildren START: %s', dirPath)
       setLoadingPaths(prev => new Set(prev).add(dirPath))
       const response = await api.loadArtifactChildren(spaceId, dirPath)
 
+      console.log('[ArtifactTree] loadChildren IPC response: success=%s, childCount=%d, path=%s',
+        response.success, response.data?.length ?? 0, dirPath)
       if (response.success && response.data) {
         const children = response.data as ArtifactTreeNode[]
         const parent = nodeIndex.current.get(dirPath)
@@ -190,7 +203,14 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
           parent.childrenLoaded = true
           indexNodes(children, nodeIndex.current)
           setRevision(r => r + 1)
+          console.log('[ArtifactTree] loadChildren OK: %d children attached to "%s", hasChildren=%s',
+            children.length, parent.name, Array.isArray(parent.children))
+        } else {
+          console.warn('[ArtifactTree] loadChildren: parent NOT in nodeIndex — path=%s, indexSize=%d',
+            dirPath, nodeIndex.current.size)
         }
+      } else {
+        console.warn('[ArtifactTree] loadChildren: response not successful or empty — path=%s', dirPath)
       }
     } catch (error) {
       console.error('[ArtifactTree] Failed to load children:', error)
@@ -261,7 +281,12 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
     loadingPaths
   }), [loadChildren, loadingPaths])
 
+  // Three-state empty check: loading → show nothing; loaded & empty → "No files"
   if (treeData.length === 0) {
+    if (!hasLoaded) {
+      // Still loading — render empty container to avoid "No files" flash
+      return null
+    }
     return (
       <div className="flex flex-col items-center justify-center h-full text-center px-2">
         <div className="w-10 h-10 rounded-lg border border-dashed border-muted-foreground/30 flex items-center justify-center mb-2">
@@ -323,10 +348,14 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
   // Handle folder toggle with lazy loading
   const handleToggle = useCallback(async () => {
     if (!isFolder) return
+    console.log('[ArtifactTree] handleToggle: name="%s", isOpen=%s, isLeaf=%s, childrenLoaded=%s, dataChildren=%s',
+      data.name, node.isOpen, node.isLeaf, data.childrenLoaded,
+      Array.isArray(data.children) ? data.children.length : String(data.children))
     if (!node.isOpen && !data.childrenLoaded && lazyLoad) {
       await lazyLoad.loadChildren(data.path)
     }
     node.toggle()
+    console.log('[ArtifactTree] handleToggle DONE: name="%s", toggled to open=%s', data.name, !node.isOpen)
   }, [isFolder, node, data.childrenLoaded, data.path, lazyLoad])
 
   // Handle click — open in canvas, system app, or download
