@@ -1,5 +1,5 @@
 diff --git a/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs b/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
-index 1e1c3e4..e9360ef 100755
+index 1e1c3e4..7184a43 100755
 --- a/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
 +++ b/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
 @@ -13020,6 +13020,10 @@ class ProcessTransport {
@@ -24,7 +24,7 @@ index 1e1c3e4..e9360ef 100755
        delete env.NODE_OPTIONS;
        if (env.DEBUG_CLAUDE_AGENT_SDK) {
          env.DEBUG = "1";
-@@ -13986,38 +13988,66 @@ class SessionImpl {
+@@ -13986,38 +13988,67 @@ class SessionImpl {
        pathToClaudeCodeExecutable = join4(dirname2, "cli.js");
      }
      const processEnv = { ...options.env ?? process.env };
@@ -95,7 +95,8 @@ index 1e1c3e4..e9360ef 100755
 +      hooks: options.hooks ?? false,
 +      includePartialMessages: options.includePartialMessages ?? true,
 +      forkSession: options.forkSession ?? false,
-+      resumeSessionAt: options.resumeSessionAt ?? undefined
++      resumeSessionAt: options.resumeSessionAt ?? undefined,
++      sandbox: options.sandbox
      });
 -    this.query = new Query(transport, false, undefined, undefined, this.abortController, new Map);
 +    // [PATCHED] Build initConfig to pass systemPrompt to Query (mirrors query() behavior)
@@ -112,7 +113,7 @@ index 1e1c3e4..e9360ef 100755
      this.query.streamInput(this.inputStream);
    }
    async send(message) {
-@@ -14053,6 +14083,22 @@ class SessionImpl {
+@@ -14053,6 +14084,22 @@ class SessionImpl {
        }
      }
    }
@@ -135,7 +136,7 @@ index 1e1c3e4..e9360ef 100755
    close() {
      if (this.closed) {
        return;
-@@ -26725,7 +26771,7 @@ function query({
+@@ -26725,7 +26772,7 @@ function query({
      const dirname2 = join5(filename, "..");
      pathToClaudeCodeExecutable = join5(dirname2, "cli.js");
    }
@@ -144,7 +145,7 @@ index 1e1c3e4..e9360ef 100755
    const {
      abortController = createAbortController(),
      additionalDirectories = [],
-@@ -26767,9 +26813,7 @@ function query({
+@@ -26767,9 +26814,7 @@ function query({
    if (!processEnv) {
      processEnv = { ...process.env };
    }

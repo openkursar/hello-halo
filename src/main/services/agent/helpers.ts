@@ -132,16 +132,14 @@ export function getWorkingDir(spaceId: string): string {
     if (!existsSync(artifactsDir)) {
       mkdirSync(artifactsDir, { recursive: true })
     }
-    console.log(`[Agent] Using temp space artifacts dir: ${artifactsDir}`)
+    console.log(`[Agent] [temp] Using temp space artifacts dir: ${artifactsDir}`)
     return artifactsDir
   }
 
   const space = getSpace(spaceId)
-  console.log(`[Agent] getSpace result:`, space ? { id: space.id, name: space.name, path: space.path, workingDir: space.workingDir } : null)
-
   if (space) {
     const dir = space.workingDir || space.path
-    console.log(`[Agent] Using space working dir: ${dir}`)
+    console.log(`[Agent] Space "${space.name}" (${space.id}): path=${space.path}, workingDir=${space.workingDir ?? '(none)'}, resolved=${dir}`)
     return dir
   }
 

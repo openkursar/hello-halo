@@ -22,24 +22,24 @@ log.transports.file.level = 'info'           // Always log info+ to file
 log.transports.console.level = isDev ? 'debug' : 'info'
 log.transports.file.maxSize = 5 * 1024 * 1024 // 5MB per file, auto-rotate
 
-// Catch unhandled errors and log them
+// Handle EPIPE errors gracefully (must be registered BEFORE electron-log's errorHandler)
+// electron-log's startCatching() registers its own uncaughtException handler that shows
+// an Electron error dialog. By registering our EPIPE filter first, we intercept EPIPE
+// errors before they reach electron-log's handler, preventing unwanted error popups.
+process.on('uncaughtException', (error) => {
+  if (error.message?.includes('EPIPE')) {
+    log.warn('[Main] Ignored EPIPE error during shutdown')
+    return
+  }
+  // Non-EPIPE errors: fall through to electron-log's handler (registered below via startCatching).
+  // Node.js calls all registered uncaughtException handlers in order — no need to re-throw.
+})
+
+// Catch unhandled errors and log them (after EPIPE filter is in place)
 log.errorHandler.startCatching()
 
 // Replace global console with electron-log (performance: direct replacement, no wrapper)
 Object.assign(console, log.functions)
-
-// Handle EPIPE errors gracefully
-// These occur when SDK child processes are terminated during app shutdown
-// Especially common in E2E tests when app is forcefully closed
-process.on('uncaughtException', (error) => {
-  // Ignore EPIPE errors during shutdown (common with SDK child processes)
-  if (error.message?.includes('EPIPE')) {
-    console.warn('[Main] Ignored EPIPE error during shutdown')
-    return
-  }
-  // Re-throw other errors to show the default Electron error dialog
-  throw error
-})
 
 // Fix PATH for macOS GUI apps
 // GUI apps don't inherit shell environment variables (.zshrc, .bash_profile, etc.)

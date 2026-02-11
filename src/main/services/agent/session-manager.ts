@@ -379,13 +379,27 @@ export async function getOrCreateV2Session(
       // This catches race conditions where session was created with stale credentials
       // (e.g., warm-up started before config save completed)
       const currentGen = getCredentialsGeneration()
-      if (existing.credentialsGeneration !== currentGen) {
-        console.log(`[Agent][${conversationId}] Credentials changed (gen ${existing.credentialsGeneration} → ${currentGen}), recreating session`)
-        closeV2SessionForRebuild(conversationId)
-        // Fall through to create new session
-      } else if (config && needsSessionRebuild(existing, config)) {
-        // Config changed (e.g., aiBrowser toggle), need to rebuild
-        console.log(`[Agent][${conversationId}] Config changed (aiBrowser: ${existing.config.aiBrowserEnabled} → ${config.aiBrowserEnabled}), rebuilding session...`)
+      const needsCredentialRebuild = existing.credentialsGeneration !== currentGen
+      const needsConfigRebuild = config && needsSessionRebuild(existing, config)
+
+      if (needsCredentialRebuild || needsConfigRebuild) {
+        // If a request is in flight for this conversation, defer rebuild to avoid
+        // killing the active session (same strategy as invalidateAllSessions)
+        if (activeSessions.has(conversationId)) {
+          const reason = needsCredentialRebuild
+            ? `credentials (gen ${existing.credentialsGeneration} → ${currentGen})`
+            : `config (aiBrowser: ${existing.config.aiBrowserEnabled} → ${config!.aiBrowserEnabled})`
+          console.log(`[Agent][${conversationId}] ${reason} changed but request in flight, deferring rebuild`)
+          pendingInvalidations.add(conversationId)
+          existing.lastUsedAt = Date.now()
+          return existing.session
+        }
+
+        if (needsCredentialRebuild) {
+          console.log(`[Agent][${conversationId}] Credentials changed (gen ${existing.credentialsGeneration} → ${currentGen}), recreating session`)
+        } else {
+          console.log(`[Agent][${conversationId}] Config changed (aiBrowser: ${existing.config.aiBrowserEnabled} → ${config!.aiBrowserEnabled}), rebuilding session...`)
+        }
         closeV2SessionForRebuild(conversationId)
         // Fall through to create new session
       } else {

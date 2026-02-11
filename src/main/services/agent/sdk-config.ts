@@ -7,6 +7,7 @@
  */
 
 import path from 'path'
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs'
 import { app } from 'electron'
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../openai-compat-router'
 import type { ApiCredentials } from './types'
@@ -172,6 +173,42 @@ async function resolveAnthropicPassthrough(
 }
 
 // ============================================
+// Sandbox Settings (written to settings.json)
+// ============================================
+
+const SANDBOX_CONFIG = { enabled: true, autoAllowBashIfSandboxed: true }
+let sandboxSettingsWritten = false
+
+/**
+ * Ensure sandbox config exists in CLAUDE_CONFIG_DIR/settings.json.
+ *
+ * By writing sandbox to the userSettings file, the CLI reads it natively
+ * without needing --settings flag. This avoids the CLI writing a temp file
+ * to $TMPDIR and chokidar watching the entire tmpdir (which crashes on
+ * macOS due to Unix socket files like CloudClient).
+ *
+ * Runs once per process lifetime — subsequent calls are no-ops.
+ */
+function ensureSandboxSettings(configDir: string): void {
+  if (sandboxSettingsWritten) return
+  mkdirSync(configDir, { recursive: true })
+  const settingsPath = path.join(configDir, 'settings.json')
+  try {
+    let settings: Record<string, any> = {}
+    if (existsSync(settingsPath)) {
+      settings = JSON.parse(readFileSync(settingsPath, 'utf-8'))
+    }
+    if (JSON.stringify(settings.sandbox) !== JSON.stringify(SANDBOX_CONFIG)) {
+      settings.sandbox = SANDBOX_CONFIG
+      writeFileSync(settingsPath, JSON.stringify(settings, null, 2))
+    }
+  } catch (err) {
+    console.error('[SDK Config] Failed to write sandbox settings:', err)
+  }
+  sandboxSettingsWritten = true
+}
+
+// ============================================
 // Environment Variables
 // ============================================
 
@@ -213,7 +250,11 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
     ANTHROPIC_BASE_URL: params.anthropicBaseUrl,
 
     // Halo's own config dir (avoid conflicts with CC's ~/.claude)
-    CLAUDE_CONFIG_DIR: path.join(app.getPath('userData'), 'claude-config'),
+    CLAUDE_CONFIG_DIR: (() => {
+      const configDir = path.join(app.getPath('userData'), 'claude-config')
+      ensureSandboxSettings(configDir)
+      return configDir
+    })(),
 
     // Localhost bypasses proxy (for OpenAI compat router)
     NO_PROXY: 'localhost,127.0.0.1',
@@ -230,6 +271,10 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
 
     // Performance: skip file snapshot I/O (Halo doesn't expose /rewind)
     CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING: '1',
+
+    // debug flag to claude code sdk
+    // DEBUG: '1',
+    // DEBUG_CLAUDE_AGENT_SDK: '1',
   }
 
   return env as Record<string, string | number>
@@ -259,6 +304,8 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
     stderrHandler,
     mcpServers
   } = params
+
+  console.log(`[SDK Config] buildBaseSdkOptions: workDir="${workDir}", spaceId="${spaceId}"`)
 
   // Build environment variables
   const env = buildSdkEnv({
@@ -294,13 +341,9 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
     includePartialMessages: true,
     executable: electronPath,
     executableArgs: ['--no-warnings'],
-    // OS-level sandbox: lets the kernel enforce file/network boundaries per command,
-    // eliminating the need for LLM-based bash_extract_prefix calls (~30-60s on slow models).
-    // macOS: sandbox-exec (Seatbelt), Linux: kernel sandboxing. Windows: not supported (falls back to preflight interceptor).
-    sandbox: {
-      enabled: true,
-      autoAllowBashIfSandboxed: true,
-    }
+    // Sandbox config is written to CLAUDE_CONFIG_DIR/settings.json (see ensureSandboxSettings)
+    // instead of passing via SDK's sandbox option → --settings flag → tmpdir temp file.
+    // This avoids CLI creating a temp file and chokidar watching the entire tmpdir.
   }
 
   // Add MCP servers if provided
