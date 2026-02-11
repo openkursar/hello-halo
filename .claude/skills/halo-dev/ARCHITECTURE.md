@@ -744,6 +744,15 @@ No need to manually write translation files — translation is automated.
 
 Run `npm run i18n` before commit.
 
+## Logging
+
+**Production logging requirements:**
+- **Must ensure full-process logging in production** to trace every execution stage of the program
+- Log all process stages and execution steps throughout the entire flow
+- Include timestamps, context information, and error stack traces
+- Use structured logging for easier filtering and analysis
+- Keep logging lightweight — avoid any unnecessary computation solely for log output
+
 ## Tech Stack
 
 | Layer | Technology |
