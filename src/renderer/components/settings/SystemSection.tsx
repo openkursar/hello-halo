@@ -23,6 +23,7 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
 
   // System settings state
   const [autoLaunch, setAutoLaunch] = useState(config?.system?.autoLaunch || false)
+  const [taskCompleteNotify, setTaskCompleteNotify] = useState(config?.notifications?.taskComplete || false)
 
   // Health diagnostics state
   const [isRunningDiagnostics, setIsRunningDiagnostics] = useState(false)
@@ -60,6 +61,22 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
     } catch (error) {
       console.error('[SystemSection] Failed to set auto launch:', error)
       setAutoLaunch(!enabled) // Revert on error
+    }
+  }
+
+  // Handle notification toggle
+  const handleTaskNotifyChange = async (enabled: boolean) => {
+    setTaskCompleteNotify(enabled)
+    try {
+      const updatedConfig = {
+        ...config,
+        notifications: { ...config?.notifications, taskComplete: enabled }
+      } as HaloConfig
+      await api.setConfig({ notifications: updatedConfig.notifications })
+      setConfig(updatedConfig)
+    } catch (error) {
+      console.error('[SystemSection] Failed to update notification settings:', error)
+      setTaskCompleteNotify(!enabled) // Revert on error
     }
   }
 
@@ -224,6 +241,31 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
                 <div
                   className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
                     autoLaunch ? 'translate-x-5' : 'translate-x-0.5'
+                  } mt-0.5`}
+                />
+              </div>
+            </label>
+          </div>
+
+          {/* Task Complete Notification */}
+          <div className="flex items-center justify-between pt-4 border-t border-border">
+            <div className="flex-1">
+              <p className="font-medium">{t('Task Notifications')}</p>
+              <p className="text-sm text-muted-foreground">
+                {t('Notify when a task completes in the background')}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={taskCompleteNotify}
+                onChange={(e) => handleTaskNotifyChange(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
+                <div
+                  className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
+                    taskCompleteNotify ? 'translate-x-5' : 'translate-x-0.5'
                   } mt-0.5`}
                 />
               </div>

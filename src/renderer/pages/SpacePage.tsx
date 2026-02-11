@@ -34,7 +34,9 @@ import { useLayoutPreferences, LAYOUT_DEFAULTS } from '../hooks/useLayoutPrefere
 import { useWindowMaximize } from '../components/canvas/viewers/useWindowMaximize'
 import { PanelLeftClose, PanelLeft, X, MessageSquare } from 'lucide-react'
 import { SearchIcon } from '../components/search/SearchIcon'
+import { PulseBeacon, PulseInlinePanel } from '../components/pulse'
 import { useSearchShortcuts } from '../hooks/useSearchShortcuts'
+import { usePulseMode } from '../hooks/usePulseMode'
 import { useTranslation } from '../i18n'
 import { useIsMobile } from '../hooks/useIsMobile'
 
@@ -50,10 +52,12 @@ export function SpacePage() {
     getCurrentConversationId,
     isLoading,
     loadConversations,
+    preloadAllSpaceConversations,
     createConversation,
     selectConversation,
     deleteConversation,
-    renameConversation
+    renameConversation,
+    toggleStarConversation
   } = useChatStore()
 
   // Get current data from store
@@ -73,6 +77,10 @@ export function SpacePage() {
 
   // Mobile detection
   const isMobile = useIsMobile()
+
+  // Pulse mode: determines which Pulse form to render
+  const pulseMode = usePulseMode({ isConversationListOpen: showConversationList })
+  const [pulseCollapsed, setPulseCollapsed] = useState(false)
 
   // Window maximize state
   const { isMaximized } = useWindowMaximize()
@@ -177,11 +185,24 @@ export function SpacePage() {
     const initSpace = async () => {
       await loadConversations(currentSpace.id)
 
+      // Preload other spaces' conversations in background for PULSE global visibility
+      const { haloSpace, spaces } = useSpaceStore.getState()
+      const allSpaceIds = [
+        ...(haloSpace ? [haloSpace.id] : []),
+        ...spaces.map(s => s.id)
+      ].filter(id => id !== currentSpace.id)
+      preloadAllSpaceConversations(allSpaceIds)
+
       // After loading, check if we need to select or create a conversation
       const store = useChatStore.getState()
       const spaceState = store.getSpaceState(currentSpace.id)
 
-      if (spaceState.conversations.length > 0) {
+      // Consume pending Pulse navigation (cross-space jump from PulseList)
+      const pendingNav = store.pendingPulseNavigation
+      if (pendingNav) {
+        useChatStore.setState({ pendingPulseNavigation: null })
+        selectConversation(pendingNav)
+      } else if (spaceState.conversations.length > 0) {
         // If no conversation selected, select the first one
         if (!spaceState.currentConversationId) {
           selectConversation(spaceState.conversations[0].id)
@@ -233,6 +254,13 @@ export function SpacePage() {
   const handleRenameConversation = async (conversationId: string, newTitle: string) => {
     if (currentSpace) {
       await renameConversation(currentSpace.id, conversationId, newTitle)
+    }
+  }
+
+  // Handle star/unstar conversation
+  const handleStarConversation = async (conversationId: string, starred: boolean) => {
+    if (currentSpace) {
+      await toggleStarConversation(currentSpace.id, conversationId, starred)
     }
   }
 
@@ -328,12 +356,16 @@ export function SpacePage() {
                   onNew={handleNewConversation}
                   onDelete={handleDeleteConversation}
                   onRename={handleRenameConversation}
+                  onStar={handleStarConversation}
                   spaceName={currentSpace.isTemp ? t('Halo Space') : currentSpace.name}
                   onToggleSidebar={() => setShowConversationList(!showConversationList)}
                   isSidebarVisible={showConversationList}
                 />
               </div>
             )}
+
+            {/* Pulse Beacon - only shown in degraded mode (narrow window / mobile) */}
+            {pulseMode === 'beacon' && <PulseBeacon />}
           </>
         }
         right={
@@ -392,6 +424,8 @@ export function SpacePage() {
             onNew={handleNewConversation}
             onDelete={handleDeleteConversation}
             onRename={handleRenameConversation}
+            onStar={handleStarConversation}
+            showPulse={pulseMode === 'sidebar'}
           />
         )}
 
@@ -414,6 +448,14 @@ export function SpacePage() {
                 }}
               >
                 <ChatView isCompact={isCanvasOpen} />
+
+                {/* Pulse Inline Panel - Form A: absolute overlay, no layout shift */}
+                {pulseMode === 'inline' && (
+                  <PulseInlinePanel
+                    collapsed={pulseCollapsed}
+                    onCollapsedChange={setPulseCollapsed}
+                  />
+                )}
 
                 {/* Drag handle for chat width - only when canvas is open */}
                 {isCanvasOpen && (

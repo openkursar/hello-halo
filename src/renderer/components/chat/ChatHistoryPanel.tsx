@@ -11,6 +11,8 @@ import { X } from 'lucide-react'
 import type { ConversationMeta } from '../../types'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { useConversationTaskStatus } from '../../stores/chat.store'
+import { TaskStatusDot } from '../pulse/TaskStatusDot'
 
 interface ChatHistoryPanelProps {
   conversations: ConversationMeta[]
@@ -19,6 +21,7 @@ interface ChatHistoryPanelProps {
   onNew: () => void
   onDelete?: (id: string) => void
   onRename?: (id: string, newTitle: string) => void
+  onStar?: (id: string, starred: boolean) => void
   spaceName: string
   /** Callback to toggle sidebar visibility */
   onToggleSidebar?: () => void
@@ -61,6 +64,7 @@ export function ChatHistoryPanel({
   onNew,
   onDelete,
   onRename,
+  onStar,
   spaceName,
   onToggleSidebar,
   isSidebarVisible
@@ -257,11 +261,14 @@ export function ChatHistoryPanel({
                       </button>
                     </div>
                   ) : (
-                    <p className={`text-sm font-medium truncate ${
-                      conv.id === currentConversationId ? 'text-primary' : 'text-foreground'
-                    }`}>
-                      {conv.title || getConversationPreview(conv, t)}
-                    </p>
+                    <div className="flex items-center gap-1.5">
+                      <HistoryItemStatusDot conversationId={conv.id} />
+                      <p className={`text-sm font-medium truncate ${
+                        conv.id === currentConversationId ? 'text-primary' : 'text-foreground'
+                      }`}>
+                        {conv.title || getConversationPreview(conv, t)}
+                      </p>
+                    </div>
                   )}
 
                   {/* Meta info */}
@@ -285,6 +292,26 @@ export function ChatHistoryPanel({
                 {/* Action buttons (on hover for desktop, always visible on mobile) */}
                 {editingId !== conv.id && (
                   <div className={`flex items-center gap-1 transition-all ${isMobile ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                    {/* Star button */}
+                    {onStar && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onStar(conv.id, !conv.starred)
+                        }}
+                        className={`p-1.5 rounded transition-colors ${
+                          conv.starred
+                            ? 'text-amber-400'
+                            : 'text-muted-foreground/30 hover:text-amber-400'
+                        }`}
+                        title={conv.starred ? t('Unstar') : t('Star')}
+                      >
+                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill={conv.starred ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                        </svg>
+                      </button>
+                    )}
+
                     {/* Edit button */}
                     {onRename && (
                       <button
@@ -495,4 +522,10 @@ export function ChatHistoryPanel({
       )}
     </div>
   )
+}
+
+/** Extracted sub-component so useConversationTaskStatus hook is called per conversation */
+function HistoryItemStatusDot({ conversationId }: { conversationId: string }) {
+  const status = useConversationTaskStatus(conversationId)
+  return <TaskStatusDot status={status} size="sm" />
 }

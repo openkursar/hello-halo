@@ -94,6 +94,7 @@ export interface ConversationMeta {
   updatedAt: string
   messageCount: number
   preview?: string
+  starred?: boolean
 }
 
 interface Conversation extends ConversationMeta {
@@ -241,7 +242,7 @@ function writeIndex(conversationsDir: string, conversations: ConversationMeta[])
   }
 
   try {
-    writeFileSync(indexPath, JSON.stringify(index, null, 2))
+    atomicWriteFileSync(indexPath, JSON.stringify(index, null, 2))
     console.log(`[Conversation] Index written with ${conversations.length} conversations`)
   } catch (error) {
     console.error('[Conversation] Failed to write index:', error)
@@ -259,7 +260,7 @@ function toMeta(conversation: Conversation): ConversationMeta {
     }
   }
 
-  return {
+  const meta: ConversationMeta = {
     id: conversation.id,
     spaceId: conversation.spaceId,
     title: conversation.title,
@@ -268,6 +269,47 @@ function toMeta(conversation: Conversation): ConversationMeta {
     messageCount: conversation.messages.length,
     preview
   }
+
+  if (conversation.starred) {
+    meta.starred = true
+  }
+
+  return meta
+}
+
+/**
+ * Toggle starred status on a conversation.
+ * Updates both the conversation file and the index.
+ */
+export function toggleStarConversation(
+  spaceId: string,
+  conversationId: string,
+  starred: boolean
+): ConversationMeta | null {
+  const conversationsDir = getConversationsDir(spaceId)
+  const filePath = join(conversationsDir, `${conversationId}.json`)
+
+  if (!existsSync(filePath)) {
+    return null
+  }
+
+  let conversation: Conversation
+  try {
+    conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
+  } catch (error) {
+    console.error(`[Conversation] Failed to read conversation ${conversationId}:`, error)
+    return null
+  }
+
+  conversation.starred = starred || undefined  // Don't persist false, just remove the key
+  conversation.updatedAt = new Date().toISOString()
+
+  atomicWriteFileSync(filePath, JSON.stringify(conversation, null, 2))
+
+  const meta = toMeta(conversation)
+  updateIndexEntry(conversationsDir, spaceId, conversationId, meta)
+
+  return meta
 }
 
 /**

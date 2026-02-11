@@ -333,6 +333,21 @@ export const api = {
     )
   },
 
+  toggleStarConversation: async (
+    spaceId: string,
+    conversationId: string,
+    starred: boolean
+  ): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.toggleStarConversation(spaceId, conversationId, starred)
+    }
+    return httpRequest(
+      'POST',
+      `/api/spaces/${spaceId}/conversations/${conversationId}/star`,
+      { starred }
+    )
+  },
+
   // ===== Agent =====
   sendMessage: async (request: {
     spaceId: string

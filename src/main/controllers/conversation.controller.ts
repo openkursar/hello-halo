@@ -11,7 +11,8 @@ import {
   deleteConversation as serviceDeleteConversation,
   addMessage as serviceAddMessage,
   updateLastMessage as serviceUpdateLastMessage,
-  getMessageThoughts as serviceGetMessageThoughts
+  getMessageThoughts as serviceGetMessageThoughts,
+  toggleStarConversation as serviceToggleStarConversation
 } from '../services/conversation.service'
 
 export interface ControllerResponse<T = unknown> {
@@ -143,6 +144,26 @@ export function getMessageThoughts(
   try {
     const thoughts = serviceGetMessageThoughts(spaceId, conversationId, messageId)
     return { success: true, data: thoughts }
+  } catch (error: unknown) {
+    const err = error as Error
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Toggle starred status on a conversation
+ */
+export function toggleStarConversation(
+  spaceId: string,
+  conversationId: string,
+  starred: boolean
+): ControllerResponse {
+  try {
+    const meta = serviceToggleStarConversation(spaceId, conversationId, starred)
+    if (meta) {
+      return { success: true, data: meta }
+    }
+    return { success: false, error: 'Conversation not found' }
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }

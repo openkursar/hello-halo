@@ -28,6 +28,10 @@
           }
           // default (no localStorage or 'dark'): stay dark, do nothing
         } catch (e) {}
+        // Platform class for conditional CSS (e.g. backdrop-filter only on GPU-enabled platforms)
+        if (navigator.userAgent.indexOf('Windows') !== -1) {
+          document.documentElement.classList.add('platform-win');
+        }
       })();
     </script>
     <!-- Baidu Tongji Analytics SDK -->

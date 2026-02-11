@@ -21,7 +21,7 @@
 
 import { create } from 'zustand'
 import { api } from '../api'
-import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, CanvasContext, AgentErrorType, PendingQuestion, Question } from '../types'
+import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, CanvasContext, AgentErrorType, PendingQuestion, Question, TaskStatus, PulseItem } from '../types'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
 
 // LRU cache size limit
@@ -88,8 +88,15 @@ interface ChatState {
   // This persists across space switches - background tasks keep running
   sessions: Map<string, SessionState>
 
+  // Pulse: tracks conversations that completed while user was not viewing them
+  // Map<conversationId, { spaceId: string; title: string }>
+  unseenCompletions: Map<string, { spaceId: string; title: string }>
+
   // Current space pointer
   currentSpaceId: string | null
+
+  // Pulse: pending cross-space navigation target (set by navigateToConversation, consumed by SpacePage init)
+  pendingPulseNavigation: string | null
 
   // Artifacts (per space)
   artifacts: Artifact[]
@@ -114,10 +121,12 @@ interface ChatState {
 
   // Conversation actions
   loadConversations: (spaceId: string) => Promise<void>
+  preloadAllSpaceConversations: (spaceIds: string[]) => void
   createConversation: (spaceId: string) => Promise<Conversation | null>
   selectConversation: (conversationId: string) => void
   deleteConversation: (spaceId: string, conversationId: string) => Promise<boolean>
   renameConversation: (spaceId: string, conversationId: string, newTitle: string) => Promise<boolean>
+  toggleStarConversation: (spaceId: string, conversationId: string, starred: boolean) => Promise<boolean>
 
   // Messaging
   sendMessage: (content: string, images?: ImageAttachment[], aiBrowserEnabled?: boolean, thinkingEnabled?: boolean) => Promise<void>
@@ -171,7 +180,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   spaceStates: new Map<string, SpaceState>(),
   conversationCache: new Map<string, Conversation>(),
   sessions: new Map<string, SessionState>(),
+  unseenCompletions: new Map<string, { spaceId: string; title: string }>(),
   currentSpaceId: null,
+  pendingPulseNavigation: null,
   artifacts: [],
   isLoading: false,
   isLoadingConversation: false,
@@ -265,6 +276,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  // Preload conversation metadata for all spaces (background, non-blocking).
+  // Ensures PULSE can see starred conversations from spaces the user hasn't visited yet.
+  preloadAllSpaceConversations: (spaceIds: string[]) => {
+    const { spaceStates } = get()
+    const unloaded = spaceIds.filter(id => !spaceStates.has(id))
+    if (unloaded.length === 0) return
+
+    // Fire-and-forget: load each unloaded space in parallel
+    for (const spaceId of unloaded) {
+      api.listConversations(spaceId)
+        .then((response) => {
+          if (response.success && response.data) {
+            const conversations = response.data as ConversationMeta[]
+            set((state) => {
+              // Don't overwrite if another load already populated this space
+              if (state.spaceStates.has(spaceId)) return state
+              const newSpaceStates = new Map(state.spaceStates)
+              newSpaceStates.set(spaceId, {
+                conversations,
+                currentConversationId: null
+              })
+              return { spaceStates: newSpaceStates }
+            })
+          }
+        })
+        .catch((err) => console.error(`[ChatStore] Preload failed for space ${spaceId}:`, err))
+    }
+  },
+
   // Create new conversation
   createConversation: async (spaceId) => {
     try {
@@ -339,14 +379,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Subscribe to conversation events (for remote mode)
     api.subscribeToConversation(conversationId)
 
-    // Update the pointer first
+    // Update the pointer first + clear unseen completion for this conversation
     set((state) => {
       const newSpaceStates = new Map(state.spaceStates)
       newSpaceStates.set(currentSpaceId, {
         ...spaceState,
         currentConversationId: conversationId
       })
-      return { spaceStates: newSpaceStates }
+      // Clear unseen completion when user views this conversation
+      const newUnseenCompletions = new Map(state.unseenCompletions)
+      newUnseenCompletions.delete(conversationId)
+      return { spaceStates: newSpaceStates, unseenCompletions: newUnseenCompletions }
     })
 
     // Load full conversation if not in cache
@@ -434,6 +477,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const newCache = new Map(state.conversationCache)
           newCache.delete(conversationId)
 
+          // Clean up unseen completions
+          const newUnseenCompletions = new Map(state.unseenCompletions)
+          newUnseenCompletions.delete(conversationId)
+
           // Update space state
           const newSpaceStates = new Map(state.spaceStates)
           const existingState = newSpaceStates.get(spaceId) || createEmptySpaceState()
@@ -450,7 +497,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return {
             spaceStates: newSpaceStates,
             sessions: newSessions,
-            conversationCache: newCache
+            conversationCache: newCache,
+            unseenCompletions: newUnseenCompletions
           }
         })
 
@@ -508,6 +556,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return false
     } catch (error) {
       console.error('Failed to rename conversation:', error)
+      return false
+    }
+  },
+
+  // Toggle star on a conversation
+  toggleStarConversation: async (spaceId, conversationId, starred) => {
+    try {
+      const response = await api.toggleStarConversation(spaceId, conversationId, starred)
+      if (response.success) {
+        set((state) => {
+          // Update cache if exists
+          const newCache = new Map(state.conversationCache)
+          const cached = newCache.get(conversationId)
+          if (cached) {
+            newCache.set(conversationId, { ...cached, starred: starred || undefined })
+          }
+
+          // Update space state metadata
+          const newSpaceStates = new Map(state.spaceStates)
+          const existingState = newSpaceStates.get(spaceId)
+          if (existingState) {
+            newSpaceStates.set(spaceId, {
+              ...existingState,
+              conversations: existingState.conversations.map((c) =>
+                c.id === conversationId ? { ...c, starred: starred || undefined } : c
+              )
+            })
+          }
+
+          return { spaceStates: newSpaceStates, conversationCache: newCache }
+        })
+        return true
+      }
+      return false
+    } catch (error) {
+      console.error('Failed to toggle star:', error)
       return false
     }
   },
@@ -831,6 +915,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const { spaceId, conversationId } = data
     console.log(`[ChatStore] handleAgentComplete [${conversationId}]`)
 
+    // Check if user is currently viewing this conversation
+    const state = get()
+    const currentSpaceState = state.currentSpaceId ? state.spaceStates.get(state.currentSpaceId) : null
+    const isUserViewingThisConversation =
+      state.currentSpaceId === spaceId &&
+      currentSpaceState?.currentConversationId === conversationId
+
+    // Track unseen completion if user is not viewing this conversation
+    if (!isUserViewingThisConversation) {
+      // Find the conversation title from any space state
+      let title = 'Conversation'
+      for (const [, ss] of state.spaceStates) {
+        const meta = ss.conversations.find(c => c.id === conversationId)
+        if (meta) { title = meta.title; break }
+      }
+      set((s) => {
+        const newUnseenCompletions = new Map(s.unseenCompletions)
+        newUnseenCompletions.set(conversationId, { spaceId, title })
+        return { unseenCompletions: newUnseenCompletions }
+      })
+    }
+
     // First, just stop streaming indicator but keep isGenerating=true
     // This keeps the streaming bubble visible during backend load
     set((state) => {
@@ -864,7 +970,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           messageCount: updatedConversation.messages?.length || 0,
           preview: updatedConversation.messages?.length
             ? updatedConversation.messages[updatedConversation.messages.length - 1].content.slice(0, 50)
-            : undefined
+            : undefined,
+          starred: updatedConversation.starred
         }
 
         // Now atomically: update cache, metadata, AND clear session state
@@ -1132,7 +1239,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       spaceStates: new Map(),
       conversationCache: new Map(),
       sessions: new Map(),
+      unseenCompletions: new Map(),
       currentSpaceId: null,
+      pendingPulseNavigation: null,
       artifacts: [],
       isLoadingConversation: false
     })
@@ -1160,5 +1269,234 @@ export function useIsGenerating(): boolean {
     if (!spaceState?.currentConversationId) return false
     const session = state.sessions.get(spaceState.currentConversationId)
     return session?.isGenerating ?? false
+  })
+}
+
+/**
+ * Derive task status for a conversation from session state and unseen completions
+ */
+export function deriveTaskStatus(
+  session: SessionState | undefined,
+  hasUnseenCompletion: boolean
+): TaskStatus {
+  if (session) {
+    if (session.pendingToolApproval || session.pendingQuestion?.status === 'active') return 'waiting'
+    if (session.error && session.errorType !== 'interrupted') return 'error'
+    if (session.isGenerating) return 'generating'
+  }
+  if (hasUnseenCompletion) return 'completed-unseen'
+  return 'idle'
+}
+
+/**
+ * Selector: Get task status for a specific conversation
+ */
+export function useConversationTaskStatus(conversationId: string | undefined): TaskStatus {
+  return useChatStore((state) => {
+    if (!conversationId) return 'idle'
+    const session = state.sessions.get(conversationId)
+    const hasUnseen = state.unseenCompletions.has(conversationId)
+    return deriveTaskStatus(session, hasUnseen)
+  })
+}
+
+/**
+ * Selector: Get all Pulse items (active tasks + unseen completions + starred conversations)
+ * Sorted by priority: waiting > generating > completed-unseen > starred-idle
+ */
+export function usePulseItems(): PulseItem[] {
+  return useChatStore(
+    (state) => {
+      const items: PulseItem[] = []
+      const addedIds = new Set<string>()
+
+      // Helper to find space name
+      const getSpaceName = (spaceId: string): string => {
+        // Check conversations in space states for the space name
+        // Space name is not directly in state, use spaceId as fallback
+        return spaceId === 'halo-temp' ? 'Halo' : spaceId
+      }
+
+      // 1. Collect all active sessions (generating, waiting, error)
+      for (const [conversationId, session] of state.sessions) {
+        const hasUnseen = state.unseenCompletions.has(conversationId)
+        const status = deriveTaskStatus(session, hasUnseen)
+        if (status === 'idle') continue
+
+        // Find conversation meta across all spaces
+        let meta: ConversationMeta | undefined
+        for (const [, ss] of state.spaceStates) {
+          meta = ss.conversations.find(c => c.id === conversationId)
+          if (meta) break
+        }
+        if (!meta) continue
+
+        items.push({
+          conversationId,
+          spaceId: meta.spaceId,
+          spaceName: getSpaceName(meta.spaceId),
+          title: meta.title,
+          status,
+          starred: !!meta.starred,
+          updatedAt: meta.updatedAt
+        })
+        addedIds.add(conversationId)
+      }
+
+      // 2. Collect unseen completions not already added
+      for (const [conversationId, info] of state.unseenCompletions) {
+        if (addedIds.has(conversationId)) continue
+
+        // Find meta
+        let meta: ConversationMeta | undefined
+        for (const [, ss] of state.spaceStates) {
+          meta = ss.conversations.find(c => c.id === conversationId)
+          if (meta) break
+        }
+
+        items.push({
+          conversationId,
+          spaceId: info.spaceId,
+          spaceName: getSpaceName(info.spaceId),
+          title: meta?.title || info.title,
+          status: 'completed-unseen',
+          starred: !!meta?.starred,
+          updatedAt: meta?.updatedAt || new Date().toISOString()
+        })
+        addedIds.add(conversationId)
+      }
+
+      // 3. Collect starred conversations not already added
+      for (const [, ss] of state.spaceStates) {
+        for (const conv of ss.conversations) {
+          if (!conv.starred || addedIds.has(conv.id)) continue
+          items.push({
+            conversationId: conv.id,
+            spaceId: conv.spaceId,
+            spaceName: getSpaceName(conv.spaceId),
+            title: conv.title,
+            status: 'idle',
+            starred: true,
+            updatedAt: conv.updatedAt
+          })
+          addedIds.add(conv.id)
+        }
+      }
+
+      // Sort by priority: waiting > generating > completed-unseen > error > idle
+      const priorityOrder: Record<TaskStatus, number> = {
+        'waiting': 0,
+        'generating': 1,
+        'completed-unseen': 2,
+        'error': 3,
+        'idle': 4
+      }
+
+      items.sort((a, b) => {
+        const pa = priorityOrder[a.status]
+        const pb = priorityOrder[b.status]
+        if (pa !== pb) return pa - pb
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      })
+
+      return items
+    },
+    // Structural equality: prevent re-renders when pulse items haven't actually changed.
+    // Without this, every store update (including per-token streaming) creates a new array
+    // reference, causing all Pulse UI components to re-render unnecessarily.
+    (a, b) => {
+      if (a.length !== b.length) return false
+      return a.every((item, i) =>
+        item.conversationId === b[i].conversationId &&
+        item.status === b[i].status &&
+        item.starred === b[i].starred &&
+        item.title === b[i].title &&
+        item.updatedAt === b[i].updatedAt
+      )
+    }
+  )
+}
+
+/**
+ * Selector: Get the count of pulse items (active tasks + unseen + starred)
+ * Used by PulseBeacon/InlinePanel/SidebarSection to show/hide and display count.
+ *
+ * Must mirror usePulseItems logic exactly — uses countedIds to avoid
+ * double-counting while ensuring starred conversations with idle sessions
+ * are still included.
+ */
+export function usePulseCount(): number {
+  return useChatStore((state) => {
+    let count = 0
+    const countedIds = new Set<string>()
+
+    // 1. Count active sessions (non-idle)
+    for (const [conversationId, session] of state.sessions) {
+      const hasUnseen = state.unseenCompletions.has(conversationId)
+      const status = deriveTaskStatus(session, hasUnseen)
+      if (status !== 'idle') {
+        count++
+        countedIds.add(conversationId)
+      }
+    }
+
+    // 2. Count unseen completions not already counted
+    for (const [conversationId] of state.unseenCompletions) {
+      if (!countedIds.has(conversationId)) {
+        count++
+        countedIds.add(conversationId)
+      }
+    }
+
+    // 3. Count starred conversations not already counted
+    for (const [, ss] of state.spaceStates) {
+      for (const conv of ss.conversations) {
+        if (conv.starred && !countedIds.has(conv.id)) {
+          count++
+          countedIds.add(conv.id)
+        }
+      }
+    }
+
+    return count
+  })
+}
+
+/**
+ * Selector: Get the dominant beacon color based on most urgent status
+ * Returns: 'waiting' | 'completed' | 'generating' | 'error' | null
+ */
+export function usePulseBeaconStatus(): 'waiting' | 'completed' | 'generating' | 'error' | null {
+  return useChatStore((state) => {
+    let hasWaiting = false
+    let hasCompleted = false
+    let hasGenerating = false
+    let hasError = false
+
+    // Check all sessions
+    for (const [conversationId, session] of state.sessions) {
+      const hasUnseen = state.unseenCompletions.has(conversationId)
+      const status = deriveTaskStatus(session, hasUnseen)
+      if (status === 'waiting') hasWaiting = true
+      if (status === 'completed-unseen') hasCompleted = true
+      if (status === 'generating') hasGenerating = true
+      if (status === 'error') hasError = true
+    }
+
+    // Check unseen completions
+    if (state.unseenCompletions.size > 0) hasCompleted = true
+
+    // Priority: waiting > completed > generating > error
+    if (hasWaiting) return 'waiting'
+    if (hasCompleted) return 'completed'
+    if (hasGenerating) return 'generating'
+    if (hasError) return 'error'
+
+    // Check if there are starred items (no beacon color for idle starred)
+    for (const [, ss] of state.spaceStates) {
+      if (ss.conversations.some(c => c.starred)) return null
+    }
+
+    return null
   })
 }

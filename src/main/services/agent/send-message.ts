@@ -12,6 +12,7 @@
 import { BrowserWindow } from 'electron'
 import { getConfig } from '../config.service'
 import { getConversation, saveSessionId, addMessage, updateLastMessage } from '../conversation.service'
+import { notifyTaskComplete } from '../notification.service'
 import {
   AI_BROWSER_SYSTEM_PROMPT,
   createAIBrowserMcpServer
@@ -222,6 +223,9 @@ export async function sendMessage(
       abortController,
       t0
     )
+
+    // System notification for task completion (if window not focused)
+    notifyTaskComplete(conversation?.title || 'Conversation')
 
   } catch (error: unknown) {
     const err = error as Error

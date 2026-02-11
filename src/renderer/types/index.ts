@@ -4,6 +4,7 @@
 
 // Import values needed in this file's scope
 import {
+  AISourcesConfig,
   DEFAULT_MODEL,
   getCurrentModelName,
   hasAnyAISource
@@ -165,6 +166,10 @@ export interface McpServerStatus {
   error?: string;
 }
 
+export interface NotificationConfig {
+  taskComplete: boolean;  // System notification when a task completes
+}
+
 export interface HaloConfig {
   api: ApiConfig;  // Legacy, kept for backward compatibility
   aiSources: AISourcesConfig;  // v2 format: { version: 2, currentId, sources: [] }
@@ -173,6 +178,7 @@ export interface HaloConfig {
   system: SystemConfig;
   remoteAccess: RemoteAccessConfig;
   mcpServers: McpServersConfig;  // MCP servers configuration
+  notifications?: NotificationConfig;  // Pulse notification preferences
   isFirstLaunch: boolean;
 }
 
@@ -223,6 +229,25 @@ export interface ConversationMeta {
   updatedAt: string;
   messageCount: number;
   preview?: string;  // Last message preview (truncated)
+  starred?: boolean; // Pinned to Pulse panel for quick access
+}
+
+// ============================================
+// Pulse Types (Task Status & Quick Navigation)
+// ============================================
+
+// Derived task status for a conversation
+export type TaskStatus = 'generating' | 'waiting' | 'completed-unseen' | 'error' | 'idle';
+
+// Item in the Pulse panel
+export interface PulseItem {
+  conversationId: string;
+  spaceId: string;
+  spaceName: string;
+  title: string;
+  status: TaskStatus;
+  starred: boolean;
+  updatedAt: string;
 }
 
 // Full conversation with messages

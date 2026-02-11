@@ -262,6 +262,17 @@ export function registerApiRoutes(app: Express, mainWindow: BrowserWindow | null
     res.json(result)
   })
 
+  // Toggle starred status
+  app.post('/api/spaces/:spaceId/conversations/:conversationId/star', async (req: Request, res: Response) => {
+    const { starred } = req.body
+    const result = conversationController.toggleStarConversation(
+      req.params.spaceId,
+      req.params.conversationId,
+      starred
+    )
+    res.json(result)
+  })
+
   // ===== Agent Routes =====
   app.post('/api/agent/message', async (req: Request, res: Response) => {
     const { spaceId, conversationId, message, resumeSessionId, images, thinkingEnabled, aiBrowserEnabled } = req.body

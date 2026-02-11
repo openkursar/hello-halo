@@ -73,6 +73,11 @@ export interface HaloAPI {
     conversationId: string,
     messageId: string
   ) => Promise<IpcResponse>
+  toggleStarConversation: (
+    spaceId: string,
+    conversationId: string,
+    starred: boolean
+  ) => Promise<IpcResponse>
 
   // Agent
   sendMessage: (request: {
@@ -376,6 +381,8 @@ const api: HaloAPI = {
     ipcRenderer.invoke('conversation:update-last-message', spaceId, conversationId, updates),
   getMessageThoughts: (spaceId, conversationId, messageId) =>
     ipcRenderer.invoke('conversation:get-thoughts', spaceId, conversationId, messageId),
+  toggleStarConversation: (spaceId, conversationId, starred) =>
+    ipcRenderer.invoke('conversation:toggle-star', spaceId, conversationId, starred),
 
   // Agent
   sendMessage: (request) => ipcRenderer.invoke('agent:send-message', request),
