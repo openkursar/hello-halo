@@ -402,38 +402,20 @@ export default function App() {
         console.log(`[App] Selecting conversation: ${conversationId}`)
         await selectConversation(conversationId)
 
-        // Step 4: Wait for message element to render and navigate
-        console.log(`[App] Waiting for message element: ${messageId}`)
-        let retries = 0
-        const maxRetries = 50
-
-        const waitAndNavigate = async () => {
-          while (retries < maxRetries) {
-            const messageElement = document.querySelector(`[data-message-id="${messageId}"]`)
-            if (messageElement) {
-              console.log(`[App] Message element found, dispatching navigate event`)
-              // Dispatch the actual navigation event
-              const navEvent = new CustomEvent('search:navigate-to-message', {
-                detail: {
-                  messageId,
-                  query
-                }
-              })
-              window.dispatchEvent(navEvent)
-              return
+        // Step 4: Dispatch navigation event for ChatView to handle
+        // ChatView uses Virtuoso scrollToIndex to bring the message into viewport,
+        // then applies DOM highlighting — no need to pre-check DOM existence here.
+        // Small delay to let conversation data load and MessageList mount.
+        setTimeout(() => {
+          console.log(`[App] Dispatching navigate-to-message for: ${messageId}`)
+          const navEvent = new CustomEvent('search:navigate-to-message', {
+            detail: {
+              messageId,
+              query
             }
-
-            retries++
-            if (retries % 10 === 0) {
-              console.log(`[App] Waiting for message... (${retries}/${maxRetries})`)
-            }
-            await new Promise(resolve => setTimeout(resolve, 100))
-          }
-
-          console.warn(`[App] Message element not found after retries`)
-        }
-
-        waitAndNavigate()
+          })
+          window.dispatchEvent(navEvent)
+        }, 300)
       } catch (error) {
         console.error(`[App] Error navigating to result:`, error)
       }
