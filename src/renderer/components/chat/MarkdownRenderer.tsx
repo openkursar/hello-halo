@@ -9,12 +9,10 @@
  * - ~8x faster first-paint on large documents
  */
 
-import { useState, useCallback, memo, useRef } from 'react'
+import { memo } from 'react'
 import { Streamdown } from 'streamdown'
 import 'streamdown/styles.css'
-import { Check, Copy } from 'lucide-react'
-import { useTranslation } from '../../i18n'
-import { highlightCodeSync } from '../../lib/highlight-loader'
+import { useCodePlugin } from '../../lib/streamdown-plugins'
 
 interface MarkdownRendererProps {
   content: string
@@ -23,86 +21,8 @@ interface MarkdownRendererProps {
   mode?: 'streaming' | 'static'
 }
 
-// Code block with copy button
-function CodeBlock({
-  children,
-  className,
-  ...props
-}: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode }) {
-  const { t } = useTranslation()
-  const [copied, setCopied] = useState(false)
-  const codeRef = useRef<HTMLElement>(null)
-
-  // Extract language from className (format: language-xxx)
-  const match = /language-(\w+)/.exec(className || '')
-  const language = match ? match[1] : ''
-
-  const handleCopy = useCallback(async () => {
-    // Read text from the actual rendered DOM element
-    // This correctly handles syntax highlight <span> elements
-    const text = codeRef.current?.textContent || ''
-    await navigator.clipboard.writeText(text.replace(/\n$/, ''))
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }, [])
-
-  // Inline code (no language class, short content)
-  if (!className) {
-    return (
-      <code
-        className="px-1.5 py-0.5 mx-0.5 bg-secondary/80 text-primary rounded text-[0.9em] font-mono whitespace-pre-wrap"
-        {...props}
-      >
-        {children}
-      </code>
-    )
-  }
-
-  // Code block
-  // Use theme-aware colors: dark mode uses GitHub Dark, light mode uses GitHub Light
-  return (
-    <div className="group relative my-3 rounded-xl overflow-hidden border border-border/50 bg-card">
-      {/* Header with language and copy button */}
-      <div className="flex items-center justify-between px-4 py-2 bg-secondary border-b border-border/30">
-        <span className="text-xs text-muted-foreground/70 font-mono uppercase tracking-wide">
-          {language || 'code'}
-        </span>
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground/60
-            hover:text-foreground hover:bg-white/5 [.light_&]:hover:bg-black/5 rounded-md transition-all"
-          title={t('Copy code')}
-        >
-          {copied ? (
-            <>
-              <Check size={14} className="text-green-400" />
-              <span className="text-green-400">{t('Copied')}</span>
-            </>
-          ) : (
-            <>
-              <Copy size={14} />
-              <span className="opacity-0 group-hover:opacity-100 transition-opacity">{t('Copy')}</span>
-            </>
-          )}
-        </button>
-      </div>
-
-      {/* Code content - highlighted via highlight.js */}
-      <pre className="p-4 overflow-x-auto">
-        <code
-          ref={codeRef}
-          className={`hljs ${language ? `language-${language}` : ''} text-sm font-mono leading-relaxed`}
-          dangerouslySetInnerHTML={{ __html: highlightCodeSync(String(children).replace(/\n$/, ''), language) }}
-        />
-      </pre>
-    </div>
-  )
-}
-
 // Custom components for markdown elements
 const components = {
-  // Code blocks and inline code
-  code: CodeBlock,
 
   // Paragraphs
   p: ({ children }: { children?: React.ReactNode }) => (
@@ -199,6 +119,8 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   className = '',
   mode = 'static',
 }: MarkdownRendererProps) {
+  const codePlugin = useCodePlugin()
+
   if (!content) return null
 
   return (
@@ -206,7 +128,8 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
       <Streamdown
         mode={mode}
         components={components as any}
-        controls={false}
+        controls={{ code: true }}
+        plugins={codePlugin ? { code: codePlugin } : undefined}
       >
         {content}
       </Streamdown>

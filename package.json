@@ -68,6 +68,7 @@
     "@lezer/highlight": "^1.2.3",
     "@parcel/watcher": "^2.5.6",
     "@replit/codemirror-lang-svelte": "^6.0.0",
+    "@streamdown/code": "^1.0.2",
     "@tailwindcss/typography": "^0.5.19",
     "@types/diff": "^7.0.2",
     "cloudflared": "^0.7.1",
