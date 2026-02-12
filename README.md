@@ -41,7 +41,7 @@ Experience the full power of an AI Agent without touching the terminal. Halo bri
 
 For developers comfortable with CLI, that's fine. But for designers, PMs, students, and anyone who just wants AI to *do things* — the terminal is a wall.
 
-**Halo breaks down that wall.**
+**Halo is the first to break down that wall.**
 
 We took 100% of Claude Code's Agent capabilities and wrapped them in a visual interface that anyone can use. Same power, zero friction.
 
@@ -217,7 +217,8 @@ The barrier isn't AI capability anymore. **It's accessibility.** Halo removes th
 - [x] AI Browser (CDP-based)
 - [x] MCP Server support
 - [ ] Plugin system
-- [ ] Voice input
+- [ ] Visual Git with AI-assisted review
+- [ ] AI-powered file search
 
 ---
 

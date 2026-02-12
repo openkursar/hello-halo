@@ -40,7 +40,7 @@ Erlebe die volle Kraft eines AI Agents, ohne das Terminal zu berühren. Halo bie
 
 Für Entwickler, die sich mit CLI wohlfühlen, ist das in Ordnung. Aber für Designer, PMs, Studenten und alle, die einfach wollen, dass KI *Dinge erledigt* — das Terminal ist eine Hürde.
 
-**Halo überwindet diese Hürde.**
+**Halo ist der erste, der diese Hürde überwindet.**
 
 Wir haben 100% der Agent-Fähigkeiten von Claude Code genommen und sie in eine visuelle Oberfläche verpackt, die jeder nutzen kann. Gleiche Leistung, null Reibung.
 
@@ -205,7 +205,8 @@ Die Hürde ist nicht mehr die KI-Fähigkeit. **Es ist die Zugänglichkeit.** Hal
 - [x] KI-Browser (CDP-basiert)
 - [x] MCP-Server-Unterstützung
 - [ ] Plugin-System
-- [ ] Spracheingabe
+- [ ] Visuelles Git mit KI-gestützter Code-Review
+- [ ] KI-gestützte Dateisuche
 
 ---
 

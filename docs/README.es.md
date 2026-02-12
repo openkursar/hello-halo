@@ -40,7 +40,7 @@ Experimenta todo el poder de un AI Agent sin tocar la terminal. Halo ofrece una 
 
 Para desarrolladores cómodos con CLI, está bien. Pero para diseñadores, PMs, estudiantes, y cualquiera que solo quiera que la IA *haga cosas* — la terminal es una barrera.
 
-**Halo rompe esa barrera.**
+**Halo es el primero en romper esa barrera.**
 
 Tomamos el 100% de las capacidades de Agent de Claude Code y las envolvimos en una interfaz visual que cualquiera puede usar. Mismo poder, cero fricción.
 
@@ -205,7 +205,8 @@ La barrera ya no es la capacidad de la IA. **Es la accesibilidad.** Halo elimina
 - [x] Navegador IA (basado en CDP)
 - [x] Soporte de servidor MCP
 - [ ] Sistema de plugins
-- [ ] Entrada por voz
+- [ ] Git visual con revisión asistida por IA
+- [ ] Búsqueda de archivos potenciada por IA
 
 ---
 
