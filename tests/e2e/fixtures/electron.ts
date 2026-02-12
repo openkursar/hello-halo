@@ -8,12 +8,14 @@
  *   HALO_TEST_API_KEY   - API key for testing (required for chat tests)
  *   HALO_TEST_API_URL   - API URL (default: https://api.anthropic.com)
  *   HALO_TEST_MODEL     - Model to use (default: claude-haiku-4-5-20251001)
+ *   HALO_TEST_PROVIDER  - Provider ID (default: anthropic)
  */
 
 import { test as base, ElectronApplication, Page } from '@playwright/test'
 import { _electron as electron } from 'playwright'
 import path from 'path'
 import fs from 'fs'
+import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 
 // ESM compatibility: __dirname is not available in ES modules
@@ -22,8 +24,23 @@ const __dirname = path.dirname(__filename)
 
 // Test configuration from environment variables
 const TEST_API_KEY = process.env.HALO_TEST_API_KEY || ''
-const TEST_API_URL = process.env.HALO_TEST_API_URL || 'https://api.anthropic.com'
-const TEST_MODEL = process.env.HALO_TEST_MODEL || 'claude-haiku-4-5-20251001'
+const TEST_API_URL = process.env.HALO_TEST_API_URL || ''
+const TEST_MODEL = process.env.HALO_TEST_MODEL || ''
+const TEST_PROVIDER = process.env.HALO_TEST_PROVIDER || ''
+const TEST_OAUTH_SOURCE = process.env.HALO_TEST_OAUTH_SOURCE || ''
+
+// Validate: if API key is set, the other three must also be set
+if (TEST_API_KEY && (!TEST_API_URL || !TEST_MODEL || !TEST_PROVIDER)) {
+  const missing = [
+    !TEST_API_URL && 'HALO_TEST_API_URL',
+    !TEST_MODEL && 'HALO_TEST_MODEL',
+    !TEST_PROVIDER && 'HALO_TEST_PROVIDER'
+  ].filter(Boolean)
+  throw new Error(
+    `HALO_TEST_API_KEY is set but missing: ${missing.join(', ')}. ` +
+    'All four env vars must be configured together in .env.local'
+  )
+}
 
 // Types for the fixture
 interface ElectronFixtures {
@@ -71,13 +88,54 @@ function createTestConfigDir(appPath: string): string {
   fs.mkdirSync(path.join(tempDir, 'artifacts'), { recursive: true })
   fs.mkdirSync(path.join(tempDir, 'conversations'), { recursive: true })
 
-  // Create config.json with API credentials from environment variables
-  const config = {
-    api: {
-      provider: 'anthropic',
-      apiKey: TEST_API_KEY,
+  // Build v2 aiSources config directly (skip legacy migration at startup)
+  const sourceId = crypto.randomUUID()
+  const now = new Date().toISOString()
+
+  // Build sources array from environment variables
+  const sources = []
+
+  // Add API key source if configured
+  if (TEST_API_KEY) {
+    sources.push({
+      id: sourceId,
+      name: 'E2E Test Source',
+      provider: TEST_PROVIDER,
+      authType: 'api-key',
       apiUrl: TEST_API_URL,
-      model: TEST_MODEL
+      apiKey: TEST_API_KEY,
+      model: TEST_MODEL,
+      availableModels: [{ id: TEST_MODEL, name: TEST_MODEL }],
+      createdAt: now,
+      updatedAt: now
+    })
+  }
+
+  // Add OAuth source if configured
+  if (TEST_OAUTH_SOURCE) {
+    try {
+      const oauthSource = JSON.parse(TEST_OAUTH_SOURCE)
+      sources.push(oauthSource)
+      console.log(`[E2E] Loaded OAuth source: ${oauthSource.provider}`)
+    } catch (err) {
+      console.warn('[E2E] Failed to parse HALO_TEST_OAUTH_SOURCE:', err.message)
+    }
+  }
+
+  // Create config.json with both legacy api field and v2 aiSources format
+  const config = {
+    // Legacy api field (still required by HaloConfig for backward compatibility)
+    api: {
+      provider: TEST_PROVIDER || 'anthropic',
+      apiKey: TEST_API_KEY,
+      apiUrl: TEST_API_URL || 'https://api.anthropic.com',
+      model: TEST_MODEL || 'claude-haiku-4-5-20251001'
+    },
+    // v2 aiSources format (used by actual app logic)
+    aiSources: {
+      version: 2,
+      currentId: sources.length > 0 ? sources[0].id : null,
+      sources
     },
     permissions: {
       fileAccess: 'allow',
@@ -166,6 +224,10 @@ export const test = base.extend<ElectronFixtures>({
         // Use test-specific config directory
         HOME: testConfigDir,
         USERPROFILE: testConfigDir,
+        // Point app config to the test .halo dir directly.
+        // config.service.ts checks HALO_DATA_DIR first (highest priority),
+        // bypassing the .halo vs .halo-dev dev-mode logic.
+        HALO_DATA_DIR: path.join(testConfigDir, '.halo'),
         // Disable hardware acceleration for CI
         ELECTRON_DISABLE_GPU: '1',
         // Mark as E2E test
