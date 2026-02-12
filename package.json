@@ -112,6 +112,7 @@
     "@vitejs/plugin-react": "^4.2.0",
     "autoprefixer": "^10.4.16",
     "cross-env": "^10.1.0",
+    "dotenv": "^17.2.4",
     "electron": "^28.0.0",
     "electron-builder": "24.13.1",
     "electron-vite": "^2.0.0",

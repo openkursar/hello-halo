@@ -211,7 +211,7 @@ test.describe('Remote Access', () => {
     await window.waitForTimeout(2000)
 
     // Verify it's enabled (LAN URL visible)
-    await window.waitForSelector('text=/本机地址/i', { timeout: 10000 })
+    await window.waitForSelector('text=/本地地址|局域网地址/i', { timeout: 10000 })
 
     // Now click again to disable
     await clickRemoteToggle(window)

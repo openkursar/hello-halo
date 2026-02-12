@@ -345,8 +345,8 @@ function createWindow(): void {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  // Open DevTools in development
-  if (is.dev) {
+  // Open DevTools in development (skip during E2E to avoid viewport interference)
+  if (is.dev && !process.env.HALO_E2E_TEST) {
     mainWindow.webContents.openDevTools()
   }
 }
