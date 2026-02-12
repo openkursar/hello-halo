@@ -32,37 +32,18 @@ interface ElectronFixtures {
 }
 
 /**
- * Get the path to the built application
+ * Get the app entry point path.
+ * Requires "npm run build" to produce out/main/index.mjs.
  */
-function getAppPath(): string {
+function getAppEntryPath(): string {
   const projectRoot = path.resolve(__dirname, '../../..')
+  const appEntryPath = path.join(projectRoot, 'out/main/index.mjs')
 
-  if (process.platform === 'darwin') {
-    // macOS: Check for arm64 first
-    const arm64Path = path.join(projectRoot, 'dist/mac-arm64/Halo.app/Contents/MacOS/Halo')
-    const x64Path = path.join(projectRoot, 'dist/mac/Halo.app/Contents/MacOS/Halo')
-
-    if (fs.existsSync(arm64Path)) {
-      return arm64Path
-    }
-    if (fs.existsSync(x64Path)) {
-      return x64Path
-    }
-
-    throw new Error('Built app not found. Run "npm run build && npm run build:mac" first.')
-  } else if (process.platform === 'win32') {
-    const winPath = path.join(projectRoot, 'dist/win-unpacked/Halo.exe')
-    if (fs.existsSync(winPath)) {
-      return winPath
-    }
-    throw new Error('Built app not found. Run "npm run build && npm run build:win" first.')
-  } else {
-    const linuxPath = path.join(projectRoot, 'dist/linux-unpacked/halo')
-    if (fs.existsSync(linuxPath)) {
-      return linuxPath
-    }
-    throw new Error('Built app not found. Run "npm run build && npm run build:linux" first.')
+  if (!fs.existsSync(appEntryPath)) {
+    throw new Error('Built app not found. Run "npm run build" first.')
   }
+
+  return appEntryPath
 }
 
 /**
@@ -166,18 +147,22 @@ function cleanupTestConfigDir(testDir: string): void {
 export const test = base.extend<ElectronFixtures>({
   // Electron application instance
   electronApp: async ({}, use) => {
-    const appPath = getAppPath()
-    const testConfigDir = createTestConfigDir(appPath)
+    const appEntryPath = getAppEntryPath()
+    const testConfigDir = createTestConfigDir(appEntryPath)
 
-    console.log(`[E2E] Launching app: ${appPath}`)
+    console.log(`[E2E] App entry: ${appEntryPath}`)
     console.log(`[E2E] Test config dir: ${testConfigDir}`)
 
-    // Launch Electron app with test environment
+    // Build a clean env without ELECTRON_RUN_AS_NODE.
+    // Halo sets ELECTRON_RUN_AS_NODE=1 for its child processes (Claude Agent SDK),
+    // which forces Electron into plain Node.js mode. E2E tests inherit this env var,
+    // but Playwright needs Electron in full app mode to connect via CDP.
+    const { ELECTRON_RUN_AS_NODE: _, ...cleanEnv } = process.env
+
     const app = await electron.launch({
-      executablePath: appPath,
-      args: [],
+      args: [appEntryPath],
       env: {
-        ...process.env,
+        ...cleanEnv,
         // Use test-specific config directory
         HOME: testConfigDir,
         USERPROFILE: testConfigDir,

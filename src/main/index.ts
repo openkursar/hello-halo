@@ -63,8 +63,9 @@ app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
 
 // Single instance lock: Prevent multiple instances of the application
 // Must be called before app.whenReady()
-// Skip in development mode to allow restart without killing process
-const gotTheLock = !app.isPackaged ? true : app.requestSingleInstanceLock()
+// Skip in development mode and E2E tests to allow multiple instances
+const gotTheLock =
+  !app.isPackaged || process.env.HALO_E2E_TEST ? true : app.requestSingleInstanceLock()
 
 if (!gotTheLock) {
   // Another instance is already running, exit immediately
