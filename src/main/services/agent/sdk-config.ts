@@ -176,7 +176,25 @@ async function resolveAnthropicPassthrough(
 // Sandbox Settings (written to settings.json)
 // ============================================
 
-const SANDBOX_CONFIG = { enabled: true, autoAllowBashIfSandboxed: true }
+/**
+ * Sandbox configuration
+ *
+ * Sandbox is enabled primarily for performance optimization (skips some runtime checks).
+ * Network and filesystem access are intentionally permissive - the goal is not strict
+ * security isolation, but rather to enable SDK's internal optimizations.
+ *
+ * Security note: SDK has built-in filesystem restrictions (e.g., protecting Halo config files)
+ * that are separate from these sandbox settings.
+ */
+const SANDBOX_CONFIG = {
+  enabled: true,
+  autoAllowBashIfSandboxed: true,
+  network: {
+    allowedDomains: ['*'],        // Allow all domains
+    allowAllUnixSockets: true,    // Allow Docker, databases, etc.
+    allowLocalBinding: true       // Allow starting local servers
+  }
+}
 let sandboxSettingsWritten = false
 
 /**
