@@ -60,7 +60,46 @@ function getAppEntryPath(): string {
     throw new Error('Built app not found. Run "npm run build" first.')
   }
 
+  // Ensure product.json exists in out/main/ so auth-loader can find providers.
+  // In E2E, app.getAppPath() returns out/main/, not project root.
+  ensureProductJson(projectRoot)
+
   return appEntryPath
+}
+
+/**
+ * Copy product.json to out/main/ with absolute provider paths.
+ * This is needed because app.getAppPath() returns out/main/ in E2E,
+ * and auth-loader resolves provider paths relative to product.json location.
+ */
+function ensureProductJson(projectRoot: string): void {
+  const srcProductJson = path.join(projectRoot, 'product.json')
+  const destDir = path.join(projectRoot, 'out/main')
+  const destProductJson = path.join(destDir, 'product.json')
+
+  if (!fs.existsSync(srcProductJson)) return
+
+  try {
+    const product = JSON.parse(fs.readFileSync(srcProductJson, 'utf-8'))
+
+    // Rewrite provider paths to be relative to out/main/ (where product.json will live)
+    // auth-loader resolves paths via: join(dirname(productJsonPath), cleanPath)
+    if (product.authProviders) {
+      for (const provider of product.authProviders) {
+        if (provider.path && provider.path.startsWith('./')) {
+          // Original path is relative to project root, e.g. "./halo-local/dist/..."
+          // We need it relative to out/main/, e.g. "../../halo-local/dist/..."
+          const absolutePath = path.resolve(projectRoot, provider.path)
+          provider.path = path.relative(destDir, absolutePath)
+        }
+      }
+    }
+
+    fs.writeFileSync(destProductJson, JSON.stringify(product, null, 2))
+    console.log(`[E2E] Wrote product.json to out/main/ with adjusted provider paths`)
+  } catch (err) {
+    console.warn('[E2E] Failed to copy product.json:', err)
+  }
 }
 
 /**
