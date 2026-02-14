@@ -16,4 +16,4 @@ export { DiffContent } from './DiffContent'
 export type { FileChange, FileChanges, FileChangeType, DiffModalState, EditChunk } from './types'
 
 // Utils
-export { extractFileChanges, hasFileChanges, getAllFileChanges, formatStats } from './utils'
+export { extractFileChanges, hasFileChanges, getAllFileChanges, formatStats, toFileChangesSummary, extractFileChangesSummary, summaryToFileChanges } from './utils'

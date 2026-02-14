@@ -342,10 +342,18 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
         />
       )}
 
-      {/* File changes footer - only for assistant messages with loaded thoughts */}
-      {/* Not shown when thoughts are separated (null) until user expands thought history */}
-      {!isUser && hasThoughts && (
-        <FileChangesFooter thoughts={message.thoughts!} />
+      {/* File changes footer - shows immediately from metadata, or from loaded thoughts */}
+      {/* Diff content is lazy-loaded from thoughts when user clicks a file */}
+      {!isUser && (message.metadata?.fileChanges || hasThoughts) && (
+        <FileChangesFooter
+          fileChangesSummary={message.metadata?.fileChanges}
+          thoughts={message.thoughts}
+          onLoadThoughts={
+            hasSeparatedThoughts && currentSpaceId && currentConversationId
+              ? () => loadMessageThoughts(currentSpaceId, currentConversationId, message.id)
+              : undefined
+          }
+        />
       )}
 
       {/* Token usage indicator + copy button - only for completed assistant messages with tokenUsage */}

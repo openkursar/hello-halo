@@ -13,6 +13,10 @@ import { join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync } from 'fs'
 import { getSpace } from './space.service'
 import { v4 as uuidv4 } from 'uuid'
+import type { FileChangesSummary } from '../../shared/file-changes'
+
+// Re-export for existing consumers
+export type { FileChangesSummary } from '../../shared/file-changes'
 
 // ============================================================================
 // Type Definitions
@@ -74,6 +78,9 @@ interface Message {
   thoughtsSummary?: ThoughtsSummary
   images?: ImageAttachment[]
   tokenUsage?: TokenUsage
+  metadata?: {
+    fileChanges?: FileChangesSummary
+  }
 }
 
 interface ToolCall {

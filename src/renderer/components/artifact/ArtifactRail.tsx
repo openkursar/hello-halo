@@ -29,10 +29,11 @@ const isWebMode = api.isRemoteMode()
 const VIEW_MODE_STORAGE_KEY = 'halo:artifact-view-mode'
 
 // Width constraints (in pixels) - Desktop only
-const MIN_WIDTH = 180
+const MIN_WIDTH = 200
 const MAX_WIDTH = 400
-const DEFAULT_WIDTH = 240
+const DEFAULT_WIDTH = 300
 const COLLAPSED_WIDTH = 48
+const clampWidth = (v: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, v))
 
 interface ArtifactRailProps {
   spaceId: string
@@ -41,6 +42,9 @@ interface ArtifactRailProps {
   // External control props for Canvas integration
   externalExpanded?: boolean        // Controlled expanded state from parent
   onExpandedChange?: (expanded: boolean) => void  // Callback when user toggles
+  // Width persistence
+  initialWidth?: number             // Persisted width from config
+  onWidthChange?: (width: number) => void  // Callback when user finishes resizing
 }
 
 // Load initial view mode from storage
@@ -91,7 +95,9 @@ export function ArtifactRail({
   isTemp,
   onOpenFolder,
   externalExpanded,
-  onExpandedChange
+  onExpandedChange,
+  initialWidth,
+  onWidthChange
 }: ArtifactRailProps) {
   const { t } = useTranslation()
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
@@ -101,11 +107,23 @@ export function ArtifactRail({
   const isExpanded = isControlled ? externalExpanded : internalExpanded
 
   const [isLoading, setIsLoading] = useState(false)
-  const [width, setWidth] = useState(DEFAULT_WIDTH)
+  const [width, setWidth] = useState(initialWidth != null ? clampWidth(initialWidth) : DEFAULT_WIDTH)
+  const widthRef = useRef(width)
   const [isDragging, setIsDragging] = useState(false)
+
+  // Sync width when initialWidth arrives from async config load
+  useEffect(() => {
+    if (initialWidth !== undefined && !isDragging) {
+      const clamped = clampWidth(initialWidth)
+      setWidth(clamped)
+      widthRef.current = clamped
+    }
+  }, [initialWidth, isDragging])
   const [viewMode, setViewMode] = useState<ArtifactViewMode>(getInitialViewMode)
   const [mobileOverlayOpen, setMobileOverlayOpen] = useState(false)
   const railRef = useRef<HTMLDivElement>(null)
+  const onWidthChangeRef = useRef(onWidthChange)
+  onWidthChangeRef.current = onWidthChange
   const isGenerating = useIsGenerating()
   const { isActive: isOnboarding, currentStep, completeOnboarding } = useOnboardingStore()
   const isMobile = useIsMobile()
@@ -181,10 +199,12 @@ export function ArtifactRail({
       const newWidth = window.innerWidth - e.clientX
       const clampedWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, newWidth))
       setWidth(clampedWidth)
+      widthRef.current = clampedWidth
     }
 
     const handleMouseUp = () => {
       setIsDragging(false)
+      onWidthChangeRef.current?.(widthRef.current)
     }
 
     document.addEventListener('mousemove', handleMouseMove)

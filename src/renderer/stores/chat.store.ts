@@ -22,10 +22,14 @@
 import { create } from 'zustand'
 import { api } from '../api'
 import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, CanvasContext, AgentErrorType, PendingQuestion, Question, TaskStatus, PulseItem } from '../types'
+import { PULSE_READ_GRACE_PERIOD_MS } from '../types'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
 
 // LRU cache size limit
 const CONVERSATION_CACHE_SIZE = 10
+
+// Store-level timer for pulseReadAt cleanup (independent of UI components)
+let _pulseCleanupTimer: ReturnType<typeof setTimeout> | null = null
 
 // Per-space state (conversations metadata belong to a space)
 interface SpaceState {
@@ -91,6 +95,10 @@ interface ChatState {
   // Pulse: tracks conversations that completed while user was not viewing them
   // Map<conversationId, { spaceId: string; title: string }>
   unseenCompletions: Map<string, { spaceId: string; title: string }>
+
+  // Pulse: tracks read timestamps for grace period display (60s before removal)
+  // Map<conversationId, { readAt: number; originalStatus: 'completed-unseen' | 'error'; spaceId: string; title: string }>
+  pulseReadAt: Map<string, { readAt: number; originalStatus: 'completed-unseen' | 'error'; spaceId: string; title: string }>
 
   // Current space pointer
   currentSpaceId: string | null
@@ -166,6 +174,9 @@ interface ChatState {
   // Thoughts lazy loading
   loadMessageThoughts: (spaceId: string, conversationId: string, messageId: string) => Promise<Thought[]>
 
+  // Pulse cleanup
+  cleanupPulseReadAt: () => void
+
   // Cleanup
   reset: () => void
   resetSpace: (spaceId: string) => void
@@ -181,6 +192,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversationCache: new Map<string, Conversation>(),
   sessions: new Map<string, SessionState>(),
   unseenCompletions: new Map<string, { spaceId: string; title: string }>(),
+  pulseReadAt: new Map<string, { readAt: number; originalStatus: 'completed-unseen' | 'error'; spaceId: string; title: string }>(),
   currentSpaceId: null,
   pendingPulseNavigation: null,
   artifacts: [],
@@ -379,18 +391,64 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Subscribe to conversation events (for remote mode)
     api.subscribeToConversation(conversationId)
 
-    // Update the pointer first + clear unseen completion for this conversation
+    // Update the pointer + move unseen/error items to readAt grace period
     set((state) => {
       const newSpaceStates = new Map(state.spaceStates)
       newSpaceStates.set(currentSpaceId, {
         ...spaceState,
         currentConversationId: conversationId
       })
-      // Clear unseen completion when user views this conversation
+
       const newUnseenCompletions = new Map(state.unseenCompletions)
-      newUnseenCompletions.delete(conversationId)
-      return { spaceStates: newSpaceStates, unseenCompletions: newUnseenCompletions }
+      const newPulseReadAt = new Map(state.pulseReadAt)
+      const newSessions = new Map(state.sessions)
+      const now = Date.now()
+
+      // If this conversation had an unseen completion, move to readAt grace period
+      const unseenInfo = newUnseenCompletions.get(conversationId)
+      if (unseenInfo) {
+        newPulseReadAt.set(conversationId, {
+          readAt: now,
+          originalStatus: 'completed-unseen',
+          spaceId: unseenInfo.spaceId,
+          title: unseenInfo.title
+        })
+        newUnseenCompletions.delete(conversationId)
+      }
+
+      // If this conversation had an error session, move to readAt grace period and clear error
+      const session = newSessions.get(conversationId)
+      if (session?.error && session.errorType !== 'interrupted') {
+        // Find conversation meta for title/spaceId
+        let meta: ConversationMeta | undefined
+        for (const [, ss] of state.spaceStates) {
+          meta = ss.conversations.find(c => c.id === conversationId)
+          if (meta) break
+        }
+        newPulseReadAt.set(conversationId, {
+          readAt: now,
+          originalStatus: 'error',
+          spaceId: meta?.spaceId || currentSpaceId,
+          title: meta?.title || 'Conversation'
+        })
+        // Clear error from session so deriveTaskStatus returns idle
+        newSessions.set(conversationId, {
+          ...session,
+          error: null,
+          errorType: null
+        })
+      }
+
+      return {
+        spaceStates: newSpaceStates,
+        unseenCompletions: newUnseenCompletions,
+        pulseReadAt: newPulseReadAt,
+        sessions: newSessions
+      }
     })
+
+    // Ensure store-level cleanup is scheduled (independent of sidebar mount state)
+    get().cleanupPulseReadAt()
 
     // Load full conversation if not in cache
     if (!conversationCache.has(conversationId)) {
@@ -481,6 +539,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const newUnseenCompletions = new Map(state.unseenCompletions)
           newUnseenCompletions.delete(conversationId)
 
+          // Clean up pulse read-at grace period
+          const newPulseReadAt = new Map(state.pulseReadAt)
+          newPulseReadAt.delete(conversationId)
+
           // Update space state
           const newSpaceStates = new Map(state.spaceStates)
           const existingState = newSpaceStates.get(spaceId) || createEmptySpaceState()
@@ -498,7 +560,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             spaceStates: newSpaceStates,
             sessions: newSessions,
             conversationCache: newCache,
-            unseenCompletions: newUnseenCompletions
+            unseenCompletions: newUnseenCompletions,
+            pulseReadAt: newPulseReadAt
           }
         })
 
@@ -1233,13 +1296,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return []
   },
 
+  // Remove expired pulse readAt entries and schedule next cleanup
+  cleanupPulseReadAt: () => {
+    if (_pulseCleanupTimer) { clearTimeout(_pulseCleanupTimer); _pulseCleanupTimer = null }
+    const now = Date.now()
+    const state = get()
+    const newPulseReadAt = new Map(state.pulseReadAt)
+    let changed = false
+    for (const [id, info] of newPulseReadAt) {
+      if (now - info.readAt >= PULSE_READ_GRACE_PERIOD_MS) {
+        newPulseReadAt.delete(id)
+        changed = true
+      }
+    }
+    if (changed) {
+      set({ pulseReadAt: newPulseReadAt })
+    }
+    // Schedule next cleanup if entries remain
+    if (newPulseReadAt.size > 0) {
+      let earliest = Infinity
+      for (const [, info] of newPulseReadAt) {
+        earliest = Math.min(earliest, info.readAt)
+      }
+      const delay = Math.max(0, earliest + PULSE_READ_GRACE_PERIOD_MS - now)
+      _pulseCleanupTimer = setTimeout(() => get().cleanupPulseReadAt(), delay)
+    }
+  },
+
   // Reset all state (use sparingly - e.g., logout)
   reset: () => {
+    if (_pulseCleanupTimer) { clearTimeout(_pulseCleanupTimer); _pulseCleanupTimer = null }
     set({
       spaceStates: new Map(),
       conversationCache: new Map(),
       sessions: new Map(),
       unseenCompletions: new Map(),
+      pulseReadAt: new Map(),
       currentSpaceId: null,
       pendingPulseNavigation: null,
       artifacts: [],
@@ -1383,6 +1475,25 @@ export function usePulseItems(): PulseItem[] {
         }
       }
 
+      // 4. Collect read items in grace period (within grace period of being read)
+      const now = Date.now()
+      for (const [conversationId, info] of state.pulseReadAt) {
+        if (addedIds.has(conversationId)) continue
+        if (now - info.readAt >= PULSE_READ_GRACE_PERIOD_MS) continue
+
+        items.push({
+          conversationId,
+          spaceId: info.spaceId,
+          spaceName: getSpaceName(info.spaceId),
+          title: info.title,
+          status: info.originalStatus,
+          starred: false,
+          updatedAt: new Date(info.readAt).toISOString(),
+          readAt: info.readAt
+        })
+        addedIds.add(conversationId)
+      }
+
       // Sort by priority: waiting > generating > completed-unseen > error > idle
       const priorityOrder: Record<TaskStatus, number> = {
         'waiting': 0,
@@ -1411,7 +1522,8 @@ export function usePulseItems(): PulseItem[] {
         item.status === b[i].status &&
         item.starred === b[i].starred &&
         item.title === b[i].title &&
-        item.updatedAt === b[i].updatedAt
+        item.updatedAt === b[i].updatedAt &&
+        item.readAt === b[i].readAt
       )
     }
   )
@@ -1419,7 +1531,7 @@ export function usePulseItems(): PulseItem[] {
 
 /**
  * Selector: Get the count of pulse items (active tasks + unseen + starred)
- * Used by PulseBeacon/InlinePanel/SidebarSection to show/hide and display count.
+ * Used by SidebarToggle and PulseSidebarSection to show/hide and display count.
  *
  * Must mirror usePulseItems logic exactly — uses countedIds to avoid
  * double-counting while ensuring starred conversations with idle sessions
@@ -1455,6 +1567,15 @@ export function usePulseCount(): number {
           count++
           countedIds.add(conv.id)
         }
+      }
+    }
+
+    // 4. Count read items in grace period
+    const now = Date.now()
+    for (const [conversationId, info] of state.pulseReadAt) {
+      if (!countedIds.has(conversationId) && now - info.readAt < PULSE_READ_GRACE_PERIOD_MS) {
+        count++
+        countedIds.add(conversationId)
       }
     }
 

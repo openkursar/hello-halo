@@ -61,7 +61,7 @@ export function Header({ left, right, className = '' }: HeaderProps) {
       `.trim().replace(/\s+/g, ' ')}
     >
       {/* Left side: Interactive elements need no-drag to allow clicks */}
-      <div className="flex items-center gap-2 sm:gap-3 min-w-0 overflow-hidden">
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         <div className="no-drag flex items-center gap-2 sm:gap-3">
           {left}
         </div>

@@ -1,16 +1,16 @@
 /**
- * PulseSidebarSection - Form B: Pulse section embedded in ConversationList
+ * PulseSidebarSection - Pinned section embedded in ConversationList
  *
  * Renders as a collapsible top block inside ConversationList sidebar.
  * Width follows ConversationList (not fixed independently).
  * Component is self-contained — ConversationList just renders it at the top.
  *
- * Collapsed: Title row "Pulse (3) ▼"
- * Expanded: Title row + PulseList
+ * Collapsed: Pin icon + count ▼
+ * Expanded: Pin icon + count + PulseList
  */
 
 import { useState, useCallback } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, Pin } from 'lucide-react'
 import { usePulseCount } from '../../stores/chat.store'
 import { useTranslation } from '../../i18n'
 import { PulseList } from './PulseList'
@@ -35,15 +35,14 @@ export function PulseSidebarSection() {
       {/* Header — always visible */}
       <button
         onClick={handleToggle}
+        title={t('Shows active tasks, pending actions, and pinned conversations across all spaces. Completed or errored tasks auto-hide 1 minute after viewing.')}
         className="w-full flex items-center gap-2 px-3 py-2 hover:bg-secondary/30 transition-colors"
       >
         {collapsed
           ? <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
           : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
         }
-        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-          Pulse
-        </span>
+        <Pin className="w-3.5 h-3.5 text-muted-foreground" />
         <span className="text-xs text-muted-foreground/60 tabular-nums">
           {count}
         </span>

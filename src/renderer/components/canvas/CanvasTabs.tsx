@@ -301,17 +301,6 @@ export function CanvasTabs({
 
       {/* Right-side action buttons */}
       <div className="canvas-tab-bar-actions">
-        {/* Close all tabs button */}
-        {onCloseAll && tabs.length > 0 && (
-          <button
-            onClick={onCloseAll}
-            className="canvas-tab-bar-action danger"
-            title={t('Close all tabs')}
-          >
-            <XCircle className="w-4 h-4" />
-          </button>
-        )}
-
         {/* Maximize/Minimize toggle button */}
         {onToggleMaximize && (
           <button
@@ -324,6 +313,17 @@ export function CanvasTabs({
             ) : (
               <Maximize2 className="w-4 h-4" />
             )}
+          </button>
+        )}
+
+        {/* Close all tabs button */}
+        {onCloseAll && tabs.length > 0 && (
+          <button
+            onClick={onCloseAll}
+            className="canvas-tab-bar-action danger"
+            title={t('Close all tabs')}
+          >
+            <XCircle className="w-5 h-5" />
           </button>
         )}
       </div>

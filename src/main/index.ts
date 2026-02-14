@@ -303,6 +303,7 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     console.log('[Main] ready-to-show event fired')
+    mainWindow?.maximize()
     mainWindow?.show()
   })
 

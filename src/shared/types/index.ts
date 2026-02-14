@@ -51,3 +51,7 @@ export * from './health'
 
 // Artifact types (shared between main process and file-watcher worker)
 export * from './artifact'
+
+// File changes types (shared between main process agent and renderer diff)
+export type { FileChangesSummary, ThoughtLike } from '../file-changes'
+export { countChangedLines, calculateDiffStats, extractFileChangesSummaryFromThoughts } from '../file-changes'

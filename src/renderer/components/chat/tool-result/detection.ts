@@ -125,11 +125,10 @@ export function getLanguageFromPath(filePath: string): string | undefined {
 }
 
 /**
- * Check if content looks like JSON
+ * Check if content looks like JSON (valid only)
  */
 export function looksLikeJson(content: string): boolean {
   const trimmed = content.trim()
-  // Must start with { or [ and be valid JSON
   if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
     return false
   }
@@ -138,6 +137,32 @@ export function looksLikeJson(content: string): boolean {
     return true
   } catch {
     return false
+  }
+}
+
+/**
+ * Check if content looks like structured data (JSON or JSON-like).
+ *
+ * Broader than looksLikeJson — also catches truncated or malformed JSON
+ * that would trigger catastrophic regex backtracking in downstream markdown
+ * parsers (marked's inline link regex on `[{...` patterns).
+ *
+ * Used as a safety gate before routing content to markdown rendering.
+ */
+export function looksLikeStructuredData(content: string): boolean {
+  const trimmed = content.trim()
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    return false
+  }
+  // Valid JSON — definitely structured data
+  try {
+    JSON.parse(trimmed)
+    return true
+  } catch {
+    // Truncated/malformed JSON: [{"key": or {"key": patterns
+    // Common in tool outputs that get cut off
+    const head = trimmed.slice(0, 200)
+    return /^\[?\s*\{\s*"/.test(head)
   }
 }
 
@@ -173,6 +198,8 @@ export function detectContentType(
     return 'plaintext'
   }
 
+  // Note: Read/Bash/Grep/Glob output arrives as plain text (string content block).
+  // Task/WebSearch/WebFetch/LSP output arrives as JSON (array/object content block, stringified by message-utils).
   switch (toolName) {
     case 'Read':
     case 'Edit':
@@ -190,24 +217,14 @@ export function detectContentType(
       return 'file-list'
 
     case 'WebFetch':
-      // WebFetch can return JSON or Markdown/HTML content
-      if (looksLikeJson(output)) {
-        return 'json'
-      }
-      return 'markdown'
-
     case 'Task':
-      return 'markdown'
-
     case 'WebSearch':
-      return 'markdown'
-
     case 'LSP':
       return 'json'
 
     default:
       // For unknown tools, try to detect content type
-      if (looksLikeJson(output)) {
+      if (looksLikeStructuredData(output)) {
         return 'json'
       }
       if (looksLikeMarkdown(output)) {

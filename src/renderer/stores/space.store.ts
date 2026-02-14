@@ -43,12 +43,13 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
   loadHaloSpace: async () => {
     try {
       const response = await api.getHaloSpace()
+      console.log('[SpaceStore] getHaloSpace: success=%s id=%s', response.success, (response.data as Space)?.id)
 
       if (response.success && response.data) {
         set({ haloSpace: response.data as Space })
       }
     } catch (error) {
-      console.error('Failed to load Halo space:', error)
+      console.error('[SpaceStore] Failed to load Halo space:', error)
     }
   },
 
@@ -61,6 +62,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
       await get().loadHaloSpace()
 
       const response = await api.listSpaces()
+      console.log('[SpaceStore] listSpaces: success=%s count=%d', response.success, Array.isArray(response.data) ? (response.data as Space[]).length : 0)
 
       if (response.success && response.data) {
         set({ spaces: response.data as Space[] })
@@ -68,7 +70,7 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
         set({ error: response.error || 'Failed to load spaces' })
       }
     } catch (error) {
-      console.error('Failed to load spaces:', error)
+      console.error('[SpaceStore] Failed to load spaces:', error)
       set({ error: 'Failed to load spaces' })
     } finally {
       set({ isLoading: false })

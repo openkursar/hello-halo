@@ -1,6 +1,3 @@
-export { PulseBeacon } from './PulseBeacon'
-export { PulsePanel } from './PulsePanel'
 export { PulseList, navigateToConversation } from './PulseList'
-export { PulseInlinePanel, PULSE_PANEL_WIDTH } from './PulseInlinePanel'
 export { PulseSidebarSection } from './PulseSidebarSection'
 export { TaskStatusDot } from './TaskStatusDot'

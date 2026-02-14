@@ -88,8 +88,12 @@ export interface BaseSdkOptionsParams {
  * Resolve API credentials for SDK use.
  *
  * This function handles the complexity of different providers:
- * - Anthropic: Direct pass-through
+ * - Anthropic: Routed through OpenAI compat router (PROXY_ANTHROPIC=true)
  * - OpenAI/OAuth: Route through OpenAI compat router with encoded config
+ *
+ * Important: The model is encoded into the apiKey (ANTHROPIC_API_KEY env var)
+ * at session creation time. Model changes require session rebuild — they cannot
+ * be switched dynamically via setModel(). See config.service.ts getAiSourcesSignature().
  *
  * @param credentials - Raw API credentials from getApiCredentials()
  * @returns Resolved credentials ready for SDK

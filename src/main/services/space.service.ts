@@ -223,11 +223,13 @@ export function getHaloSpace(): Space {
     }
   }
 
-  return {
+  const result = {
     ...HALO_SPACE,
     path: tempPath,
     preferences
   }
+  console.log('[Space] getHaloSpace result: id=%s path=%s', result.id, result.path)
+  return result
 }
 
 // ============================================================================
@@ -329,6 +331,7 @@ export function listSpaces(): Space[] {
   }
 
   spaces.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+  console.log('[Space] listSpaces: registry=%d result=%d', getRegistry().size, spaces.length)
   return spaces
 }
 

@@ -25,7 +25,8 @@ import {
 import {
   scanDirectoryTreeShallow,
   scanDirectoryRecursive,
-  loadIgnoreRules
+  loadIgnoreRules,
+  loadTreeIgnoreRules
 } from './scanner'
 
 // --- Messaging ---
@@ -63,9 +64,10 @@ async function handleMessage(msg: MainToWorkerMessage): Promise<void> {
       }
 
       case 'scan-dir': {
-        const ig = loadIgnoreRules(msg.rootPath)
-
         if (msg.mode === 'tree') {
+          // Tree scanning: lightweight rules (no .gitignore) so gitignored
+          // files remain visible, matching VS Code file explorer behavior.
+          const ig = loadTreeIgnoreRules()
           const nodes = await scanDirectoryTreeShallow(
             msg.dirPath, msg.rootPath, msg.depth, ig
           )
@@ -77,6 +79,7 @@ async function handleMessage(msg: MainToWorkerMessage): Promise<void> {
             nodes
           })
         } else {
+          const ig = loadIgnoreRules(msg.rootPath)
           const artifacts = await scanDirectoryRecursive(
             msg.dirPath, msg.rootPath, msg.spaceId,
             msg.maxDepth ?? 1, 0, ig

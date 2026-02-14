@@ -67,6 +67,10 @@ export function isDiskRoot(path: string): boolean {
 
 // --- .gitignore ---
 
+/**
+ * Full ignore rules: ALWAYS_IGNORE_DIRS + BASELINE_IGNORE_PATTERNS + .gitignore.
+ * Used by the watcher for event filtering (performance-critical path).
+ */
 export function loadIgnoreRules(rootPath: string): Ignore {
   const ig = ignore()
   ig.add(ALWAYS_IGNORE_DIRS)
@@ -81,6 +85,19 @@ export function loadIgnoreRules(rootPath: string): Ignore {
       console.warn(`[Scanner] Failed to read .gitignore:`, error)
     }
   }
+  return ig
+}
+
+/**
+ * Lightweight ignore rules: ALWAYS_IGNORE_DIRS + BASELINE_IGNORE_PATTERNS only.
+ * Used by tree scanning so gitignored files remain visible (matching VS Code behavior).
+ * The watcher still uses full rules — gitignored files won't auto-update but will
+ * appear correctly on expand/refresh.
+ */
+export function loadTreeIgnoreRules(): Ignore {
+  const ig = ignore()
+  ig.add(ALWAYS_IGNORE_DIRS)
+  ig.add(BASELINE_IGNORE_PATTERNS)
   return ig
 }
 

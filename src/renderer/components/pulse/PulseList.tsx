@@ -1,13 +1,13 @@
 /**
  * PulseList - Shared presentational component for rendering pulse task items
  *
- * Pure list rendering of active tasks, unseen completions, and starred conversations.
- * Used by PulseInlinePanel (Form A), PulseSidebarSection (Form B), and PulsePanel (Form C).
+ * Pure list rendering of active tasks, unseen completions, and pinned conversations.
+ * Used by PulseSidebarSection in the conversation list sidebar.
  *
  * Responsibilities:
- * - Renders grouped items (active first, then starred idle)
+ * - Renders grouped items (active first, then pinned idle)
  * - Status indicators per item
- * - Star/unstar toggle
+ * - Pin/unpin toggle
  * - Cross-space navigation on click
  * - Empty state
  *
@@ -28,7 +28,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   'waiting': 'Waiting for input',
   'completed-unseen': 'Completed',
   'error': 'Error',
-  'idle': 'Starred',
+  'idle': 'Pinned',
 }
 
 /**
@@ -90,20 +90,22 @@ export function PulseList({ maxHeight = '360px', onItemClick, compact = false }:
     onItemClick?.()
   }, [onItemClick])
 
-  const handleToggleStar = useCallback((e: React.MouseEvent, item: PulseItem) => {
+  // Pin/Unpin: UI uses "Pin" terminology, backend API uses "Star" (starred field).
+  // The mapping is: Pin = starred:true, Unpin = starred:false.
+  const handleTogglePin = useCallback((e: React.MouseEvent, item: PulseItem) => {
     e.stopPropagation()
     useChatStore.getState().toggleStarConversation(item.spaceId, item.conversationId, !item.starred)
   }, [])
 
   const activeItems = items.filter(i => i.status !== 'idle')
-  const starredIdleItems = items.filter(i => i.status === 'idle')
+  const pinnedIdleItems = items.filter(i => i.status === 'idle')
 
   if (items.length === 0) {
     return (
       <div className="px-4 py-6 text-center">
         <p className="text-sm text-muted-foreground">{t('No active tasks')}</p>
         <p className="text-xs text-muted-foreground/60 mt-1">
-          {t('Tasks and starred conversations appear here')}
+          {t('Tasks and pinned conversations appear here')}
         </p>
       </div>
     )
@@ -112,51 +114,54 @@ export function PulseList({ maxHeight = '360px', onItemClick, compact = false }:
   const py = compact ? 'py-1.5' : 'py-2.5'
   const px = compact ? 'px-3' : 'px-4'
 
-  const renderItem = (item: PulseItem) => (
-    <div
-      key={item.conversationId}
-      onClick={() => handleItemClick(item)}
-      className={`pulse-item flex items-center gap-3 ${px} ${py} cursor-pointer`}
-    >
-      {/* Status dot */}
-      <TaskStatusDot status={item.status} size="md" />
-
-      {/* Content */}
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate text-foreground">
-          {item.title}
-        </p>
-        <div className="flex items-center gap-1.5 mt-0.5">
-          <span className="text-xs text-muted-foreground truncate">
-            {item.spaceName}
-          </span>
-          <span className="text-muted-foreground/30 text-xs">·</span>
-          <span className={`text-xs ${
-            item.status === 'waiting' ? 'text-yellow-500' :
-            item.status === 'error' ? 'text-red-500' :
-            item.status === 'completed-unseen' ? 'text-green-500' :
-            item.status === 'generating' ? 'text-blue-500' :
-            'text-muted-foreground'
-          }`}>
-            {t(STATUS_LABEL[item.status])}
-          </span>
-        </div>
-      </div>
-
-      {/* Star toggle */}
-      <button
-        onClick={(e) => handleToggleStar(e, item)}
-        className={`p-1 rounded transition-colors flex-shrink-0 ${
-          item.starred
-            ? 'text-yellow-500 hover:text-yellow-400'
-            : 'text-muted-foreground/40 hover:text-yellow-500'
-        }`}
-        title={item.starred ? t('Unstar') : t('Star')}
+  const renderItem = (item: PulseItem) => {
+    const isRead = !!item.readAt
+    return (
+      <div
+        key={item.conversationId}
+        onClick={() => handleItemClick(item)}
+        className={`pulse-item flex items-center gap-3 ${px} ${py} cursor-pointer ${isRead ? 'opacity-50' : ''}`}
       >
-        <Star className={`w-3.5 h-3.5 ${item.starred ? 'fill-current' : ''}`} />
-      </button>
-    </div>
-  )
+        {/* Status dot */}
+        <TaskStatusDot status={item.status} size="md" />
+
+        {/* Content */}
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium truncate text-foreground">
+            {item.title}
+          </p>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <span className="text-xs text-muted-foreground truncate">
+              {item.spaceName}
+            </span>
+            <span className="text-muted-foreground/30 text-xs">·</span>
+            <span className={`text-xs ${
+              item.status === 'waiting' ? 'text-yellow-500' :
+              item.status === 'error' ? 'text-red-500' :
+              item.status === 'completed-unseen' ? 'text-green-500' :
+              item.status === 'generating' ? 'text-blue-500' :
+              'text-muted-foreground'
+            }`}>
+              {t(STATUS_LABEL[item.status])}
+            </span>
+          </div>
+        </div>
+
+        {/* Pin toggle */}
+        <button
+          onClick={(e) => handleTogglePin(e, item)}
+          className={`p-1 rounded transition-colors flex-shrink-0 ${
+            item.starred
+              ? 'text-yellow-500 hover:text-yellow-400'
+              : 'text-muted-foreground/40 hover:text-yellow-500'
+          }`}
+          title={item.starred ? t('Unpin') : t('Pin')}
+        >
+          <Star className={`w-3.5 h-3.5 ${item.starred ? 'fill-current' : ''}`} />
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="overflow-auto scrollbar-thin" style={{ maxHeight }}>
@@ -168,14 +173,14 @@ export function PulseList({ maxHeight = '360px', onItemClick, compact = false }:
       )}
 
       {/* Divider */}
-      {activeItems.length > 0 && starredIdleItems.length > 0 && (
+      {activeItems.length > 0 && pinnedIdleItems.length > 0 && (
         <div className="mx-4 border-t border-border/30" />
       )}
 
-      {/* Starred idle items */}
-      {starredIdleItems.length > 0 && (
+      {/* Pinned idle items */}
+      {pinnedIdleItems.length > 0 && (
         <div className="py-1">
-          {starredIdleItems.map(renderItem)}
+          {pinnedIdleItems.map(renderItem)}
         </div>
       )}
     </div>

@@ -1,33 +1,39 @@
 /**
  * FileChangesFooter - Displays file changes summary at the bottom of message bubble
- * Layer 1: Minimal stats bar that expands to show file list
  *
  * Design principles:
  * - Non-intrusive: Only shows when there are changes
- * - Gentle: Blends with message bubble, not visually aggressive
  * - Progressive disclosure: Stats → File list → Full diff modal
+ *
+ * Data strategy:
+ * - Summary data (from metadata.fileChanges) for immediate stats display
+ * - Full diff data (from thoughts) loaded on-demand when user clicks a file
+ * - This keeps the main message file small while still showing stats instantly
  */
 
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import {
   FileText,
   FilePlus,
   ChevronDown,
-  ExternalLink,
+  Loader2,
 } from 'lucide-react'
 import { FileChangesList } from './FileChangesList'
 import { DiffModal } from './DiffModal'
-import { extractFileChanges, hasFileChanges, getAllFileChanges } from './utils'
-import type { Thought } from '../../types'
-import type { FileChange } from './types'
+import { extractFileChanges, hasFileChanges, getAllFileChanges, summaryToFileChanges } from './utils'
+import type { Thought, FileChangesSummary } from '../../types'
+import type { FileChange, FileChanges as FileChangesType } from './types'
 import { useTranslation } from '../../i18n'
 
 interface FileChangesFooterProps {
-  thoughts: Thought[]
+  fileChangesSummary?: FileChangesSummary  // From metadata: immediate stats display
+  thoughts?: Thought[] | null              // From message: full diff content if loaded
+  onLoadThoughts?: () => Promise<Thought[]>  // Lazy load thoughts for diff content
 }
 
-export function FileChangesFooter({ thoughts }: FileChangesFooterProps) {
+export function FileChangesFooter({ fileChangesSummary, thoughts, onLoadThoughts }: FileChangesFooterProps) {
   const [isExpanded, setIsExpanded] = useState(false)
+  const [isLoadingDiff, setIsLoadingDiff] = useState(false)
   const [modalState, setModalState] = useState<{
     isOpen: boolean
     file: FileChange | null
@@ -39,50 +45,139 @@ export function FileChangesFooter({ thoughts }: FileChangesFooterProps) {
   })
   const { t } = useTranslation()
 
-  // Extract file changes from thoughts
-  const fileChanges = useMemo(() => extractFileChanges(thoughts), [thoughts])
-  const allFiles = useMemo(() => getAllFileChanges(fileChanges), [fileChanges])
+  // Full file changes with diff content (from thoughts)
+  const fullFileChangesRef = useRef<FileChangesType | null>(null)
+  const isLoadingRef = useRef(false)
 
-  // Handle file click - open modal
-  const handleFileClick = useCallback((file: FileChange) => {
-    const index = allFiles.findIndex(f => f.id === file.id)
-    setModalState({
-      isOpen: true,
-      file,
-      index: index >= 0 ? index : 0
-    })
-  }, [allFiles])
+  // Sync full data when thoughts become available (inline or after lazy load)
+  useEffect(() => {
+    if (Array.isArray(thoughts) && thoughts.length > 0) {
+      const extracted = extractFileChanges(thoughts)
+      if (hasFileChanges(extracted)) {
+        fullFileChangesRef.current = extracted
+      }
+    }
+  }, [thoughts])
 
-  // Navigate to previous/next file in modal
+  // Display data: lightweight summary for stats bar and file list
+  // Pure computation — no side effects
+  const displayChanges = useMemo(() => {
+    if (Array.isArray(thoughts) && thoughts.length > 0) {
+      const extracted = extractFileChanges(thoughts)
+      if (hasFileChanges(extracted)) return extracted
+    }
+    if (fileChangesSummary) return summaryToFileChanges(fileChangesSummary)
+    return null
+  }, [fileChangesSummary, thoughts])
+
+  const allDisplayFiles = useMemo(
+    () => displayChanges ? getAllFileChanges(displayChanges) : [],
+    [displayChanges]
+  )
+
+  // Memoize allFiles for DiffModal to avoid unnecessary re-renders
+  const modalAllFiles = useMemo(
+    () => fullFileChangesRef.current ? getAllFileChanges(fullFileChangesRef.current) : allDisplayFiles,
+    // Re-derive when display files change (which happens when thoughts load)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allDisplayFiles, thoughts]
+  )
+
+  // Load full diff data on demand
+  const loadFullFileChanges = useCallback(async (): Promise<FileChangesType | null> => {
+    if (fullFileChangesRef.current) return fullFileChangesRef.current
+
+    if (Array.isArray(thoughts) && thoughts.length > 0) {
+      const extracted = extractFileChanges(thoughts)
+      if (hasFileChanges(extracted)) {
+        fullFileChangesRef.current = extracted
+        return extracted
+      }
+    }
+
+    if (!onLoadThoughts) return null
+
+    const loaded = await onLoadThoughts()
+    if (loaded.length > 0) {
+      const extracted = extractFileChanges(loaded)
+      if (hasFileChanges(extracted)) {
+        fullFileChangesRef.current = extracted
+        return extracted
+      }
+    }
+
+    return null
+  }, [thoughts, onLoadThoughts])
+
+  // Open modal with the correct file from full data
+  const openModalWithFile = useCallback((targetFile: string, fullChanges: FileChangesType | null, fallbackFile: FileChange, fallbackIndex: number) => {
+    if (fullChanges) {
+      const fullFiles = getAllFileChanges(fullChanges)
+      const matched = fullFiles.find(f => f.file === targetFile)
+      const matchedIndex = fullFiles.findIndex(f => f.file === targetFile)
+      setModalState({
+        isOpen: true,
+        file: matched || fallbackFile,
+        index: matchedIndex >= 0 ? matchedIndex : fallbackIndex
+      })
+    } else {
+      setModalState({ isOpen: true, file: fallbackFile, index: fallbackIndex })
+    }
+  }, [])
+
+  // Handle file click: load full diff if needed, then open modal
+  const handleFileClick = useCallback(async (file: FileChange) => {
+    const fallbackIndex = Math.max(0, allDisplayFiles.findIndex(f => f.file === file.file))
+
+    // Fast path: full data already cached
+    if (fullFileChangesRef.current) {
+      openModalWithFile(file.file, fullFileChangesRef.current, file, fallbackIndex)
+      return
+    }
+
+    // Guard against concurrent loads
+    if (isLoadingRef.current) return
+    isLoadingRef.current = true
+    setIsLoadingDiff(true)
+
+    try {
+      const fullChanges = await loadFullFileChanges()
+      openModalWithFile(file.file, fullChanges, file, fallbackIndex)
+    } catch (error) {
+      console.error('[FileChangesFooter] Failed to load diff:', error)
+      // Fallback: open with summary data (stats only)
+      setModalState({ isOpen: true, file, index: fallbackIndex })
+    } finally {
+      isLoadingRef.current = false
+      setIsLoadingDiff(false)
+    }
+  }, [allDisplayFiles, loadFullFileChanges, openModalWithFile])
+
+  // Navigate in modal
   const handleNavigate = useCallback((direction: 'prev' | 'next') => {
+    const files = fullFileChangesRef.current
+      ? getAllFileChanges(fullFileChangesRef.current)
+      : allDisplayFiles
+
     const newIndex = direction === 'prev'
       ? Math.max(0, modalState.index - 1)
-      : Math.min(allFiles.length - 1, modalState.index + 1)
+      : Math.min(files.length - 1, modalState.index + 1)
 
-    setModalState(prev => ({
-      ...prev,
-      file: allFiles[newIndex],
-      index: newIndex
-    }))
-  }, [allFiles, modalState.index])
+    setModalState(prev => ({ ...prev, file: files[newIndex], index: newIndex }))
+  }, [allDisplayFiles, modalState.index])
 
-  // Close modal
   const handleCloseModal = useCallback(() => {
     setModalState(prev => ({ ...prev, isOpen: false }))
   }, [])
 
-  // Don't render if no changes
-  if (!hasFileChanges(fileChanges)) {
-    return null
-  }
+  if (!displayChanges) return null
 
-  const { edits, writes, totalFiles } = fileChanges
+  const { edits, writes } = displayChanges
 
   return (
     <>
-      {/* Footer bar - attached to message bubble bottom */}
       <div className="border-t border-border/30 mt-3 pt-2">
-        {/* Stats bar - clickable to expand */}
+        {/* Stats bar */}
         <button
           onClick={() => setIsExpanded(!isExpanded)}
           className={`
@@ -93,17 +188,10 @@ export function FileChangesFooter({ thoughts }: FileChangesFooterProps) {
           `}
         >
           <div className="flex items-center gap-3">
-            {/* Icon */}
             <div className="flex items-center gap-1 text-muted-foreground">
-              {edits.length > 0 && (
-                <FileText size={14} className="text-amber-400/70" />
-              )}
-              {writes.length > 0 && (
-                <FilePlus size={14} className="text-green-400/70" />
-              )}
+              {edits.length > 0 && <FileText size={14} className="text-amber-400/70" />}
+              {writes.length > 0 && <FilePlus size={14} className="text-green-400/70" />}
             </div>
-
-            {/* Stats text */}
             <span className="text-muted-foreground">
               {edits.length > 0 && (
                 <span>
@@ -120,9 +208,8 @@ export function FileChangesFooter({ thoughts }: FileChangesFooterProps) {
               )}
             </span>
           </div>
-
-          {/* Expand indicator */}
           <div className="flex items-center gap-1 text-muted-foreground/60">
+            {isLoadingDiff && <Loader2 size={12} className="animate-spin" />}
             <span className="text-[10px]">{isExpanded ? t('Collapse') : t('View')}</span>
             <ChevronDown
               size={14}
@@ -131,22 +218,18 @@ export function FileChangesFooter({ thoughts }: FileChangesFooterProps) {
           </div>
         </button>
 
-        {/* Expanded file list */}
+        {/* File list */}
         {isExpanded && (
           <div className="mt-2 animate-slide-down">
-            <FileChangesList
-              changes={fileChanges}
-              onFileClick={handleFileClick}
-            />
+            <FileChangesList changes={displayChanges} onFileClick={handleFileClick} />
           </div>
         )}
       </div>
 
-      {/* Diff modal */}
       <DiffModal
         isOpen={modalState.isOpen}
         file={modalState.file}
-        allFiles={allFiles}
+        allFiles={modalAllFiles}
         currentIndex={modalState.index}
         onClose={handleCloseModal}
         onNavigate={handleNavigate}

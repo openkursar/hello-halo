@@ -4,7 +4,9 @@
  */
 
 import type { Thought } from '../../types'
+import type { FileChangesSummary } from '../../types'
 import type { FileChange, FileChanges, EditChunk } from './types'
+import { calculateDiffStats } from '../../../shared/file-changes'
 
 // Re-export EditChunk for DiffContent
 export type { EditChunk } from './types'
@@ -15,39 +17,6 @@ export type { EditChunk } from './types'
 export function getFileName(path: string): string {
   const parts = path.split(/[/\\]/)
   return parts[parts.length - 1] || path
-}
-
-/**
- * Calculate line diff statistics
- */
-export function calculateDiffStats(oldStr: string, newStr: string): { added: number; removed: number } {
-  const oldLines = oldStr ? oldStr.split('\n') : []
-  const newLines = newStr ? newStr.split('\n') : []
-
-  // Simple line count difference
-  // For more accurate diff, we'd use a proper diff algorithm
-  const added = Math.max(0, newLines.length - oldLines.length + countChangedLines(oldStr, newStr))
-  const removed = Math.max(0, oldLines.length - newLines.length + countChangedLines(oldStr, newStr))
-
-  return {
-    added: Math.max(1, Math.ceil(added / 2)),
-    removed: Math.max(oldStr ? 1 : 0, Math.ceil(removed / 2))
-  }
-}
-
-/**
- * Count significantly changed lines (rough estimate)
- */
-function countChangedLines(oldStr: string, newStr: string): number {
-  if (!oldStr || !newStr) return 0
-  const oldLines = new Set(oldStr.split('\n').map(l => l.trim()).filter(Boolean))
-  const newLines = new Set(newStr.split('\n').map(l => l.trim()).filter(Boolean))
-
-  let changes = 0
-  for (const line of newLines) {
-    if (!oldLines.has(line)) changes++
-  }
-  return changes
 }
 
 /**
@@ -188,4 +157,68 @@ export function formatStats(stats: { added: number; removed: number }): string {
   if (stats.added > 0) parts.push(`+${stats.added}`)
   if (stats.removed > 0) parts.push(`-${stats.removed}`)
   return parts.join(' ') || '+0'
+}
+
+/**
+ * Convert full FileChanges to lightweight FileChangesSummary
+ * for storage in message.metadata
+ */
+export function toFileChangesSummary(fileChanges: FileChanges): FileChangesSummary {
+  return {
+    edited: fileChanges.edits.map(e => ({
+      file: e.file,
+      added: e.stats.added,
+      removed: e.stats.removed
+    })),
+    created: fileChanges.writes.map(w => ({
+      file: w.file,
+      lines: w.stats.added
+    })),
+    totalFiles: fileChanges.totalFiles,
+    totalAdded: fileChanges.totalAdded,
+    totalRemoved: fileChanges.totalRemoved
+  }
+}
+
+/**
+ * Extract file changes summary from thoughts.
+ * Returns undefined if no file changes found.
+ */
+export function extractFileChangesSummary(thoughts: Thought[]): FileChangesSummary | undefined {
+  const fileChanges = extractFileChanges(thoughts)
+  if (!hasFileChanges(fileChanges)) {
+    return undefined
+  }
+  return toFileChangesSummary(fileChanges)
+}
+
+/**
+ * Convert FileChangesSummary back to FileChanges for display components.
+ * The resulting FileChange objects have no diff content (oldString/newString),
+ * so the diff modal won't show actual diffs — only stats and file names.
+ */
+export function summaryToFileChanges(summary: FileChangesSummary): FileChanges {
+  const edits: FileChange[] = summary.edited.map((e, i) => ({
+    id: `summary-edit-${i}`,
+    file: e.file,
+    fileName: getFileName(e.file),
+    type: 'edit' as const,
+    stats: { added: e.added, removed: e.removed }
+  }))
+
+  const writes: FileChange[] = summary.created.map((w, i) => ({
+    id: `summary-write-${i}`,
+    file: w.file,
+    fileName: getFileName(w.file),
+    type: 'write' as const,
+    stats: { added: w.lines, removed: 0 }
+  }))
+
+  return {
+    edits,
+    writes,
+    totalFiles: summary.totalFiles,
+    totalAdded: summary.totalAdded,
+    totalRemoved: summary.totalRemoved
+  }
 }

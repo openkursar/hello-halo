@@ -256,6 +256,10 @@
   color: hsl(var(--foreground));
 }
 
+.canvas-tab-bar-action.danger {
+  color: hsl(var(--destructive) / 0.55);
+}
+
 .canvas-tab-bar-action.danger:hover {
   background: hsl(var(--destructive) / 0.1);
   color: hsl(var(--destructive));

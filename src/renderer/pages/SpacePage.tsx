@@ -24,25 +24,35 @@ import { ChatView } from '../components/chat/ChatView'
 import { ArtifactRail } from '../components/artifact/ArtifactRail'
 import { ConversationList } from '../components/chat/ConversationList'
 import { ChatHistoryPanel } from '../components/chat/ChatHistoryPanel'
-import { SpaceIcon } from '../components/icons/ToolIcons'
 import { Header } from '../components/layout/Header'
+import { SidebarToggle } from '../components/layout/SidebarToggle'
+import { SpaceSelector } from '../components/layout/SpaceSelector'
 import { ModelSelector } from '../components/layout/ModelSelector'
 import { ContentCanvas, CanvasToggleButton } from '../components/canvas'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
 import { api } from '../api'
 import { useLayoutPreferences, LAYOUT_DEFAULTS } from '../hooks/useLayoutPreferences'
 import { useWindowMaximize } from '../components/canvas/viewers/useWindowMaximize'
-import { PanelLeftClose, PanelLeft, X, MessageSquare } from 'lucide-react'
+import { X, MessageSquare } from 'lucide-react'
 import { SearchIcon } from '../components/search/SearchIcon'
-import { PulseBeacon, PulseInlinePanel } from '../components/pulse'
 import { useSearchShortcuts } from '../hooks/useSearchShortcuts'
-import { usePulseMode } from '../hooks/usePulseMode'
 import { useTranslation } from '../i18n'
 import { useIsMobile } from '../hooks/useIsMobile'
+import type { LayoutConfig } from '../types'
+
+/** Persist a partial layout update to both backend config and in-memory store */
+function persistLayout(update: Partial<LayoutConfig>) {
+  api.setConfig({ layout: update }).catch(err =>
+    console.error('[SpacePage] Failed to persist layout:', err)
+  )
+  const currentLayout = useAppStore.getState().config?.layout
+  useAppStore.getState().updateConfig({ layout: { ...currentLayout, ...update } })
+}
 
 export function SpacePage() {
   const { t } = useTranslation()
   const { setView, mockBashMode, gitBashInstallProgress, startGitBashInstall } = useAppStore()
+  const config = useAppStore(state => state.config)
   const { currentSpace, refreshCurrentSpace, openSpaceFolder } = useSpaceStore()
   const {
     currentSpaceId,
@@ -65,8 +75,19 @@ export function SpacePage() {
   const currentConversation = getCurrentConversation()
   const currentConversationId = getCurrentConversationId()
 
-  // Show conversation list for non-temp spaces
-  const [showConversationList, setShowConversationList] = useState(false)
+  // Show conversation list (persisted globally in config)
+  const [showConversationList, setShowConversationList] = useState(
+    config?.layout?.sidebarOpen ?? false
+  )
+
+  // Sync sidebar state when config loads asynchronously
+  const sidebarOpenInitialized = useRef(false)
+  useEffect(() => {
+    if (config?.layout?.sidebarOpen !== undefined && !sidebarOpenInitialized.current) {
+      setShowConversationList(config.layout.sidebarOpen)
+      sidebarOpenInitialized.current = true
+    }
+  }, [config?.layout?.sidebarOpen])
 
   // Canvas state - use precise selectors to minimize re-renders
   const isCanvasOpen = useCanvasIsOpen()
@@ -77,10 +98,6 @@ export function SpacePage() {
 
   // Mobile detection
   const isMobile = useIsMobile()
-
-  // Pulse mode: determines which Pulse form to render
-  const pulseMode = usePulseMode({ isConversationListOpen: showConversationList })
-  const [pulseCollapsed, setPulseCollapsed] = useState(false)
 
   // Window maximize state
   const { isMaximized } = useWindowMaximize()
@@ -216,53 +233,22 @@ export function SpacePage() {
     initSpace()
   }, [currentSpace?.id]) // Only re-run when space ID changes
 
-  // Handle back
-  const handleBack = () => {
-    setView('home')
-  }
+  // Toggle conversation list sidebar with global persistence
+  const handleToggleConversationList = useCallback(() => {
+    const newValue = !showConversationList
+    setShowConversationList(newValue)
+    persistLayout({ sidebarOpen: newValue })
+  }, [showConversationList])
 
-  // Handle new conversation
-  const handleNewConversation = async () => {
-    if (currentSpace) {
-      await createConversation(currentSpace.id)
-    }
-  }
+  // Persist sidebar width on drag end
+  const handleSidebarWidthChange = useCallback((width: number) => {
+    persistLayout({ sidebarWidth: width })
+  }, [])
 
-  // Handle open folder
-  const handleOpenFolder = () => {
-    if (currentSpace) {
-      openSpaceFolder(currentSpace.id)
-    }
-  }
-
-  if (!currentSpace) {
-    return (
-      <div className="h-full w-full flex items-center justify-center">
-        <p className="text-muted-foreground">No space selected</p>
-      </div>
-    )
-  }
-
-  // Handle delete conversation
-  const handleDeleteConversation = async (conversationId: string) => {
-    if (currentSpace) {
-      await deleteConversation(currentSpace.id, conversationId)
-    }
-  }
-
-  // Handle rename conversation
-  const handleRenameConversation = async (conversationId: string, newTitle: string) => {
-    if (currentSpace) {
-      await renameConversation(currentSpace.id, conversationId, newTitle)
-    }
-  }
-
-  // Handle star/unstar conversation
-  const handleStarConversation = async (conversationId: string, starred: boolean) => {
-    if (currentSpace) {
-      await toggleStarConversation(currentSpace.id, conversationId, starred)
-    }
-  }
+  // Persist artifact rail width on drag end
+  const handleArtifactRailWidthChange = useCallback((width: number) => {
+    persistLayout({ artifactRailWidth: width })
+  }, [])
 
   // Exit maximized mode when canvas closes
   useEffect(() => {
@@ -314,6 +300,49 @@ export function SpacePage() {
     onSearch: (scope) => openSearch(scope)
   })
 
+  // Handle new conversation
+  const handleNewConversation = async () => {
+    if (currentSpace) {
+      await createConversation(currentSpace.id)
+    }
+  }
+
+  // Handle open folder
+  const handleOpenFolder = () => {
+    if (currentSpace) {
+      openSpaceFolder(currentSpace.id)
+    }
+  }
+
+  if (!currentSpace) {
+    return (
+      <div className="h-full w-full flex items-center justify-center">
+        <p className="text-muted-foreground">No space selected</p>
+      </div>
+    )
+  }
+
+  // Handle delete conversation
+  const handleDeleteConversation = async (conversationId: string) => {
+    if (currentSpace) {
+      await deleteConversation(currentSpace.id, conversationId)
+    }
+  }
+
+  // Handle rename conversation
+  const handleRenameConversation = async (conversationId: string, newTitle: string) => {
+    if (currentSpace) {
+      await renameConversation(currentSpace.id, conversationId, newTitle)
+    }
+  }
+
+  // Handle star/unstar conversation
+  const handleStarConversation = async (conversationId: string, starred: boolean) => {
+    if (currentSpace) {
+      await toggleStarConversation(currentSpace.id, conversationId, starred)
+    }
+  }
+
   return (
     <div className="h-full w-full flex flex-col">
       {/*
@@ -332,8 +361,9 @@ export function SpacePage() {
       <Header
         left={
           <>
+            {/* Back button */}
             <button
-              onClick={handleBack}
+              onClick={() => setView('home')}
               className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -341,13 +371,11 @@ export function SpacePage() {
               </svg>
             </button>
 
-            <SpaceIcon iconId={currentSpace.icon} size={22} className="flex-shrink-0" />
-            <span className="font-medium text-sm truncate max-w-[100px] sm:max-w-[200px] hidden sm:inline">
-              {currentSpace.isTemp ? 'Halo' : currentSpace.name}
-            </span>
+            {/* Space Selector - dropdown for switching spaces (includes icon + name + back) */}
+            <SpaceSelector />
 
-            {/* Chat History Panel - integrated in header */}
-            {conversations.length > 0 && (
+            {/* Mobile: Chat History Panel as bottom sheet */}
+            {isMobile && conversations.length > 0 && (
               <div className="ml-1">
                 <ChatHistoryPanel
                   conversations={conversations}
@@ -358,19 +386,14 @@ export function SpacePage() {
                   onRename={handleRenameConversation}
                   onStar={handleStarConversation}
                   spaceName={currentSpace.isTemp ? t('Halo Space') : currentSpace.name}
-                  onToggleSidebar={() => setShowConversationList(!showConversationList)}
-                  isSidebarVisible={showConversationList}
                 />
               </div>
             )}
-
-            {/* Pulse Beacon - only shown in degraded mode (narrow window / mobile) */}
-            {pulseMode === 'beacon' && <PulseBeacon />}
           </>
         }
         right={
           <>
-            {/* New conversation button for all spaces */}
+            {/* New conversation button */}
             <button
               onClick={handleNewConversation}
               className="flex items-center gap-1.5 px-2.5 py-1 text-sm hover:bg-secondary rounded-lg transition-colors"
@@ -415,8 +438,8 @@ export function SpacePage() {
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Conversation list sidebar - hidden when maximized */}
-        {showConversationList && !isCanvasMaximized && (
+        {/* Conversation list sidebar - hidden when maximized and on mobile */}
+        {!isMobile && showConversationList && !isCanvasMaximized && (
           <ConversationList
             conversations={conversations}
             currentConversationId={currentConversationId}
@@ -425,7 +448,9 @@ export function SpacePage() {
             onDelete={handleDeleteConversation}
             onRename={handleRenameConversation}
             onStar={handleStarConversation}
-            showPulse={pulseMode === 'sidebar'}
+            onClose={handleToggleConversationList}
+            initialWidth={config?.layout?.sidebarWidth}
+            onWidthChange={handleSidebarWidthChange}
           />
         )}
 
@@ -449,12 +474,14 @@ export function SpacePage() {
               >
                 <ChatView isCompact={isCanvasOpen} />
 
-                {/* Pulse Inline Panel - Form A: absolute overlay, no layout shift */}
-                {pulseMode === 'inline' && (
-                  <PulseInlinePanel
-                    collapsed={pulseCollapsed}
-                    onCollapsedChange={setPulseCollapsed}
-                  />
+                {/* Floating sidebar toggle - shows when sidebar is closed */}
+                {!showConversationList && (
+                  <div className="absolute top-2 left-0 z-10">
+                    <SidebarToggle
+                      isOpen={false}
+                      onToggle={handleToggleConversationList}
+                    />
+                  </div>
                 )}
 
                 {/* Drag handle for chat width - only when canvas is open */}
@@ -502,6 +529,8 @@ export function SpacePage() {
             onOpenFolder={handleOpenFolder}
             externalExpanded={effectiveRailExpanded}
             onExpandedChange={setRailExpanded}
+            initialWidth={config?.layout?.artifactRailWidth}
+            onWidthChange={handleArtifactRailWidthChange}
           />
         )}
       </div>

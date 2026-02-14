@@ -170,6 +170,13 @@ export interface NotificationConfig {
   taskComplete: boolean;  // System notification when a task completes
 }
 
+// Global layout preferences (panel sizes and visibility)
+export interface LayoutConfig {
+  sidebarOpen?: boolean;          // Whether conversation list sidebar is open
+  sidebarWidth?: number;          // Conversation list sidebar width (px)
+  artifactRailWidth?: number;     // Artifact rail panel width (px)
+}
+
 export interface HaloConfig {
   api: ApiConfig;  // Legacy, kept for backward compatibility
   aiSources: AISourcesConfig;  // v2 format: { version: 2, currentId, sources: [] }
@@ -178,7 +185,8 @@ export interface HaloConfig {
   system: SystemConfig;
   remoteAccess: RemoteAccessConfig;
   mcpServers: McpServersConfig;  // MCP servers configuration
-  notifications?: NotificationConfig;  // Pulse notification preferences
+  notifications?: NotificationConfig;  // Notification preferences
+  layout?: LayoutConfig;  // Global layout preferences (panel sizes and visibility)
   isFirstLaunch: boolean;
 }
 
@@ -229,7 +237,7 @@ export interface ConversationMeta {
   updatedAt: string;
   messageCount: number;
   preview?: string;  // Last message preview (truncated)
-  starred?: boolean; // Pinned to Pulse panel for quick access
+  starred?: boolean; // Pinned conversation for quick access
 }
 
 // ============================================
@@ -248,7 +256,12 @@ export interface PulseItem {
   status: TaskStatus;
   starred: boolean;
   updatedAt: string;
+  /** Timestamp when user viewed this item; present = item is in grace period before removal */
+  readAt?: number;
 }
+
+/** Grace period for read pulse items before removal (milliseconds) */
+export const PULSE_READ_GRACE_PERIOD_MS = 60_000
 
 // Full conversation with messages
 // Loaded on-demand when selecting a conversation
@@ -314,6 +327,12 @@ export interface ThoughtsSummary {
   duration?: number;  // seconds, from first to last thought timestamp
 }
 
+/**
+ * Lightweight file changes summary stored in message metadata.
+ * Allows immediate display of file change stats without loading full thoughts.
+ */
+export type { FileChangesSummary } from '../../shared/file-changes';
+
 export interface Message {
   id: string;
   role: MessageRole;
@@ -325,6 +344,9 @@ export interface Message {
   isStreaming?: boolean;
   images?: ImageAttachment[];  // Attached images
   tokenUsage?: TokenUsage;  // Token usage for this assistant message
+  metadata?: {
+    fileChanges?: FileChangesSummary;  // Lightweight file changes for immediate display
+  };
 }
 
 // ============================================

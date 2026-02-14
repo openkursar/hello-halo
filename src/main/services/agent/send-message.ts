@@ -12,6 +12,7 @@
 import { BrowserWindow } from 'electron'
 import { getConfig } from '../config.service'
 import { getConversation, saveSessionId, addMessage, updateLastMessage } from '../conversation.service'
+import { type FileChangesSummary, extractFileChangesSummaryFromThoughts } from '../../../shared/file-changes'
 import { notifyTaskComplete } from '../notification.service'
 import {
   AI_BROWSER_SYSTEM_PROMPT,
@@ -190,11 +191,12 @@ export async function sendMessage(
     const v2Session = await getOrCreateV2Session(spaceId, conversationId, sdkOptions, sessionId, sessionConfig, workDir)
 
     // Dynamic runtime parameter adjustment (via SDK patch)
-    // These can be changed without rebuilding the session
+    // Note: Model switching is handled by session rebuild (model change triggers
+    // credentialsGeneration bump in config.service). setModel is kept for SDK
+    // compatibility but is not effective for actual model routing when all providers
+    // route through the OpenAI compat router (model is baked into ANTHROPIC_API_KEY).
     try {
-      // Set model dynamically (allows model switching without session rebuild)
-      // Note: For OpenAI-compat/OAuth providers, model is encoded in apiKey and always fresh
-      // This setModel call is mainly for pure Anthropic API sessions
+      // Set model in SDK (informational; actual model determined by session credentials)
       if (v2Session.setModel) {
         await v2Session.setModel(resolvedCredentials.sdkModel)
         console.log(`[Agent][${conversationId}] Model set: ${resolvedCredentials.sdkModel}`)
@@ -869,10 +871,26 @@ async function processMessageStream(
   if (finalContent) {
     const contentSource = lastTextContent ? 'lastTextContent' : 'currentStreamingText (fallback)'
     console.log(`[Agent][${conversationId}] Saving content from ${contentSource}: ${finalContent.length} chars`)
+
+    // Extract file changes summary for immediate display (without loading thoughts)
+    let metadata: { fileChanges?: FileChangesSummary } | undefined
+    if (sessionState.thoughts.length > 0) {
+      try {
+        const fileChangesSummary = extractFileChangesSummaryFromThoughts(sessionState.thoughts)
+        if (fileChangesSummary) {
+          metadata = { fileChanges: fileChangesSummary }
+          console.log(`[Agent][${conversationId}] File changes: ${fileChangesSummary.totalFiles} files, +${fileChangesSummary.totalAdded} -${fileChangesSummary.totalRemoved}`)
+        }
+      } catch (error) {
+        console.error(`[Agent][${conversationId}] Failed to extract file changes:`, error)
+      }
+    }
+
     updateLastMessage(spaceId, conversationId, {
       content: finalContent,
       thoughts: sessionState.thoughts.length > 0 ? [...sessionState.thoughts] : undefined,
-      tokenUsage: tokenUsage || undefined
+      tokenUsage: tokenUsage || undefined,
+      metadata
     })
   } else {
     console.log(`[Agent][${conversationId}] No content to save`)

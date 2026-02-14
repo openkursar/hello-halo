@@ -333,6 +333,12 @@ interface HaloConfig {
   isFirstLaunch: boolean
   // Analytics configuration (auto-generated on first launch)
   analytics?: AnalyticsConfig
+  // Global layout preferences (panel sizes and visibility)
+  layout?: {
+    sidebarOpen?: boolean
+    sidebarWidth?: number
+    artifactRailWidth?: number
+  }
   // Git Bash configuration (Windows only)
   gitBash?: {
     installed: boolean
@@ -639,15 +645,19 @@ function getAiSourcesSignature(aiSources?: AISourcesConfig): string {
     const currentSource = aiSources.sources.find(s => s.id === aiSources.currentId)
     if (!currentSource) return ''
 
-    // Note: model is excluded from signature because V2 Session supports dynamic model switching
-    // (via setModel method). Only changes to credentials/provider should invalidate sessions.
+    // Model is included in signature: changing model triggers session rebuild.
+    // The model is encoded into ANTHROPIC_API_KEY env var at session creation time
+    // (for all providers when routed through the OpenAI compat router), so dynamic
+    // switching via setModel() is not effective. Session rebuild is the reliable path.
+    // Performance note: if zero-latency model switching becomes needed, consider
+    // a router-side model override (Option B) instead of session rebuild.
     if (currentSource.authType === 'api-key') {
       return [
         'api-key',
         currentSource.provider || '',
         currentSource.apiUrl || '',
-        currentSource.apiKey || ''
-        // model excluded: dynamic switching supported
+        currentSource.apiKey || '',
+        currentSource.model || ''
       ].join('|')
     }
 
@@ -657,8 +667,8 @@ function getAiSourcesSignature(aiSources?: AISourcesConfig): string {
       currentSource.provider || '',
       currentSource.accessToken || '',
       currentSource.refreshToken || '',
-      currentSource.tokenExpires || ''
-      // model excluded: dynamic switching supported
+      currentSource.tokenExpires || '',
+      currentSource.model || ''
     ].join('|')
   }
 
@@ -749,7 +759,9 @@ export function getConfig(): HaloConfig {
       // mcpServers is a flat map, just use parsed value or default
       mcpServers: parsed.mcpServers || DEFAULT_CONFIG.mcpServers,
       // analytics: keep as-is (managed by analytics.service.ts)
-      analytics: parsed.analytics
+      analytics: parsed.analytics,
+      // layout: keep persisted values (panel sizes and visibility)
+      layout: parsed.layout
     }
   } catch (error) {
     console.error('Failed to read config:', error)
@@ -790,6 +802,10 @@ export function saveConfig(config: Partial<HaloConfig>): HaloConfig {
   // gitBash: replace entirely when provided (Windows only)
   if ((config as any).gitBash !== undefined) {
     (newConfig as any).gitBash = (config as any).gitBash
+  }
+  // layout: shallow merge (panel sizes and visibility)
+  if (config.layout !== undefined) {
+    newConfig.layout = { ...currentConfig.layout, ...config.layout }
   }
 
   const configPath = getConfigPath()
