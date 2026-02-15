@@ -10,6 +10,7 @@
  */
 
 import { BrowserWindow } from 'electron'
+import { is } from '@electron-toolkit/utils'
 import { getConfig } from '../config.service'
 import { getConversation, saveSessionId, addMessage, updateLastMessage } from '../conversation.service'
 import { type FileChangesSummary, extractFileChangesSummaryFromThoughts } from '../../../shared/file-changes'
@@ -405,7 +406,9 @@ async function processMessageStream(
       const elapsed = Date.now() - t1
       // For message_start, log the full event to see if it contains content structure hints
       if (event.type === 'message_start') {
-        console.log(`[Agent][${conversationId}] 🔴 +${elapsed}ms message_start FULL:`, JSON.stringify(event))
+        if (is.dev) {
+          console.log(`[Agent][${conversationId}] 🔴 +${elapsed}ms message_start FULL:`, JSON.stringify(event))
+        }
       } else {
         // console.log(`[Agent][${conversationId}] 🔴 +${elapsed}ms stream_event:`, JSON.stringify({
         //   type: event.type,
@@ -616,7 +619,9 @@ async function processMessageStream(
             }
             sendToRenderer('agent:tool-call', spaceId, conversationId, toolCall as unknown as Record<string, unknown>)
 
-            console.log(`[Agent][${conversationId}] Tool block complete [${blockState.toolName}], input: ${JSON.stringify(toolInput).substring(0, 100)}`)
+            if (is.dev) {
+              console.log(`[Agent][${conversationId}] Tool block complete [${blockState.toolName}], input: ${JSON.stringify(toolInput).substring(0, 100)}`)
+            }
           }
 
           // Clean up tracking state
@@ -793,7 +798,9 @@ async function processMessageStream(
       // SDKSystemMessage includes mcp_servers: { name: string; status: string }[]
       const mcpServers = msg.mcp_servers as Array<{ name: string; status: string }> | undefined
       if (mcpServers && mcpServers.length > 0) {
-        console.log(`[Agent][${conversationId}] MCP server status:`, JSON.stringify(mcpServers))
+        if (is.dev) {
+          console.log(`[Agent][${conversationId}] MCP server status:`, JSON.stringify(mcpServers))
+        }
         // Broadcast MCP status to frontend (global event, not conversation-specific)
         broadcastMcpStatus(mcpServers)
       }
@@ -810,29 +817,13 @@ async function processMessageStream(
         capturedSessionId = sessionIdFromMsg as string
       }
 
-      // 🔑 Check for real API errors - only report if is_error=true OR errors array has content
-      // Note: subtype="error_during_execution" alone does NOT mean error - it's a normal completion state
+      // Check for error_during_execution (interrupted) vs real errors
+      // Note: Real API errors (is_error=true) are already handled by parseSDKMessage above
+      // which creates an error thought and triggers agent:error via the thought.type === 'error' branch
       const isError = (sdkMessage as any).is_error === true
-      const errors = (sdkMessage as any).errors as unknown[] | undefined
-      const hasErrors = Array.isArray(errors) && errors.length > 0
-
-      if (isError || hasErrors) {
-        // Pass through the real error from SDK
-        const realError = hasErrors
-          ? JSON.stringify(errors)
-          : ((sdkMessage as any).result || `Unknown API error. ${FALLBACK_ERROR_HINT}`)
-        console.log(`[Agent][${conversationId}] ⚠️ SDK error (is_error=${isError}, errors=${errors?.length || 0}): ${realError}`)
-        const errorThought: Thought = {
-          id: `thought-error-${Date.now()}`,
-          type: 'error',
-          content: realError,
-          timestamp: new Date().toISOString()
-        }
-        sessionState.thoughts.push(errorThought)
-        sendToRenderer('agent:thought', spaceId, conversationId, {
-          type: 'thought',
-          thought: errorThought
-        })
+      if (isError) {
+        const errors = (sdkMessage as any).errors as unknown[] | undefined
+        console.log(`[Agent][${conversationId}] ⚠️ SDK error (is_error=${isError}, errors=${errors?.length || 0}): ${((sdkMessage as any).result || '').substring(0, 200)}`)
       } else if ((sdkMessage as any).subtype === 'error_during_execution') {
         // Mark as interrupted - will be used for empty response handling
         hadErrorDuringExecution = true

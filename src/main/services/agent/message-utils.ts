@@ -129,19 +129,12 @@ export function parseSDKMessage(message: any, displayModel?: string): Thought | 
 
   // Assistant messages (thinking, tool_use, text blocks)
   if (message.type === 'assistant') {
-    // Check for SDK error field (rate_limit, authentication_failed, billing_error, etc.)
-    // Pass through raw error message as-is - no transformation
+    // When SDK reports an error on assistant message, skip it — the subsequent result message
+    // (is_error=true) is the authoritative error source and will create the error thought.
+    // This avoids duplicate error entries in the thinking timeline.
     if (message.error) {
-      const rawErrorMessage = message.message?.error_message || message.error
-      console.log(`[parseSDKMessage] SDK assistant error: ${message.error}, message: ${rawErrorMessage}`)
-      return {
-        id: generateThoughtId(),
-        type: 'error',
-        content: rawErrorMessage,
-        timestamp,
-        isError: true,
-        errorCode: message.error
-      }
+      console.log(`[parseSDKMessage] SDK assistant error: ${message.error}, skipping (handled by result message)`)
+      return null
     }
 
     const content = message.message?.content

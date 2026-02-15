@@ -9,6 +9,8 @@ import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type { UpdateStatus } from './types'
 
+declare const __BUILD_TIME__: string
+
 export function AboutSection() {
   const { t } = useTranslation()
 
@@ -63,7 +65,7 @@ export function AboutSection() {
         <div className="flex justify-between items-center">
           <span className="text-muted-foreground">{t('Version')}</span>
           <div className="flex items-center gap-3">
-            <span>{appVersion || '-'}</span>
+            <span>{appVersion ? `${appVersion} (${__BUILD_TIME__.replace(/T(\d{2}):(\d{2}).*/, '-$1$2')})` : '-'}</span>
             <button
               onClick={handleCheckForUpdates}
               disabled={updateStatus.checking}

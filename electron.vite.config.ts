@@ -47,6 +47,13 @@ const analyticsDefine = {
   '__HALO_BAIDU_SITE_ID__': JSON.stringify(envLocal.HALO_BAIDU_SITE_ID || ''),
 }
 
+/**
+ * Build-time metadata injected into the renderer bundle
+ */
+const buildMetaDefine = {
+  '__BUILD_TIME__': JSON.stringify(new Date().toISOString()),
+}
+
 export default defineConfig({
   main: {
     plugins: [
@@ -92,6 +99,7 @@ export default defineConfig({
         }
       }
     },
+    define: buildMetaDefine,
     plugins: [react()],
     resolve: {
       alias: {

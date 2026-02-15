@@ -279,8 +279,25 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
   // Check if there are running browser tools (based on isWorking state)
   const hasBrowserActivity = isWorking && browserToolCalls.length > 0
 
+  // Error-only message (no content): render standalone error block without bubble wrapper
+  const isErrorOnly = !isUser && !message.content && !!message.error && !isWorking
+
   // Message bubble content
-  const bubble = (
+  const bubble = isErrorOnly ? (
+    <div className={`${!isInContainer ? 'w-[85%]' : 'w-full'}`}>
+      <div className="rounded-2xl px-4 py-3 bg-destructive/10 border border-destructive/30">
+        <div className="flex items-center gap-2 text-destructive">
+          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <span className="text-sm font-medium">{t('Something went wrong')}</span>
+        </div>
+        <p className="mt-1.5 text-sm text-destructive/80">{message.error}</p>
+      </div>
+    </div>
+  ) : (
     <div
       className={`rounded-2xl px-4 py-3 ${
         isUser ? 'message-user' : 'message-assistant'

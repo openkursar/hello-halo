@@ -83,7 +83,7 @@ function getActionSummaryData(thoughts: Thought[]): { key: string; params?: Reco
 // Extract filename from path (e.g., "/foo/bar/config.json" -> "config.json")
 function extractFileName(path: unknown): string {
   if (typeof path !== 'string' || !path) return 'file'
-  const name = path.split('/').pop() || path.split('\\').pop() || path
+  const name = path.split(/[/\\]/).pop() || path
   return truncateText(name, 20)
 }
 

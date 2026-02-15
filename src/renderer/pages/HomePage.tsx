@@ -77,7 +77,7 @@ export function HomePage() {
       setCustomPath(path)
       setUseCustomPath(true)
       // Extract directory name as suggested space name
-      const dirName = path.split('/').pop() || ''
+      const dirName = path.split(/[/\\]/).pop() || ''
       if (dirName && !newSpaceName.trim()) {
         setNewSpaceName(dirName)
       }
@@ -140,7 +140,7 @@ export function HomePage() {
     // - New centralized spaces with project: have workingDir
     // - Legacy custom spaces: path doesn't end with /spaces/{uuid}
     //   (centralized paths are always {haloDir}/spaces/{uuid-v4}, uuid is 36 chars)
-    const lastSegment = space.path.split('/').pop() ?? ''
+    const lastSegment = space.path.split(/[/\\]/).pop() ?? ''
     const isCentralizedSpace = space.path.includes('/spaces/') && lastSegment.length === 36
     const isProjectSpace = !!space.workingDir || !isCentralizedSpace
 
