@@ -59,7 +59,7 @@ export function MarkdownResultViewer({
       className={`
         mt-1.5 rounded-lg overflow-hidden border
         ${isError
-          ? 'border-destructive/30 bg-destructive/5'
+          ? 'border-amber-500/30 bg-amber-500/5'
           : 'border-border/30 bg-muted/20'
         }
       `}
@@ -97,7 +97,7 @@ export function MarkdownResultViewer({
           px-2.5 py-[1px]
           border-t text-[10px]
           ${isError
-            ? 'border-destructive/20 bg-destructive/10 text-destructive/60'
+            ? 'border-amber-500/20 bg-amber-500/10 text-amber-600/60'
             : 'border-border/20 bg-muted/30 text-muted-foreground/60'
           }
         `}

@@ -8,7 +8,7 @@ import {
   listSpaces as serviceListSpaces,
   createSpace as serviceCreateSpace,
   deleteSpace as serviceDeleteSpace,
-  getSpace as serviceGetSpace,
+  getSpaceWithPreferences as serviceGetSpaceWithPreferences,
   openSpaceFolder as serviceOpenSpaceFolder,
   updateSpace as serviceUpdateSpace
 } from '../services/space.service'
@@ -76,11 +76,11 @@ export function deleteSpace(spaceId: string): ControllerResponse {
 }
 
 /**
- * Get a specific space by ID
+ * Get a specific space by ID (with preferences for UI)
  */
 export function getSpace(spaceId: string): ControllerResponse {
   try {
-    const space = serviceGetSpace(spaceId)
+    const space = serviceGetSpaceWithPreferences(spaceId)
     if (space) {
       return { success: true, data: space }
     }

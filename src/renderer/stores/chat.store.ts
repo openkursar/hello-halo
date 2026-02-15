@@ -177,6 +177,10 @@ interface ChatState {
   // Pulse cleanup
   cleanupPulseReadAt: () => void
 
+  // Derived pulse state (cached, recalculated only when pulse-relevant fields change)
+  _pulseItems: PulseItem[]
+  _pulseCount: number
+
   // Cleanup
   reset: () => void
   resetSpace: (spaceId: string) => void
@@ -198,6 +202,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   artifacts: [],
   isLoading: false,
   isLoadingConversation: false,
+  _pulseItems: [],
+  _pulseCount: 0,
 
   // Get current space state
   getCurrentSpaceState: () => {
@@ -416,7 +422,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         newUnseenCompletions.delete(conversationId)
       }
 
-      // If this conversation had an error session, move to readAt grace period and clear error
+      // If this conversation had an error session, move to readAt grace period and clear session error
+      // The error is now persisted in message.error and will render from MessageItem on reload
       const session = newSessions.get(conversationId)
       if (session?.error && session.errorType !== 'interrupted') {
         // Find conversation meta for title/spaceId
@@ -431,7 +438,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           spaceId: meta?.spaceId || currentSpaceId,
           title: meta?.title || 'Conversation'
         })
-        // Clear error from session so deriveTaskStatus returns idle
+        // Clear session error — persisted error in message.error handles display after reload
         newSessions.set(conversationId, {
           ...session,
           error: null,
@@ -1057,6 +1064,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
 
           // Clear session state atomically with conversation update
+          // Error is now persisted in message.error, so clear session-level error
+          // Note: interrupted errors are sent AFTER agent:complete, so they won't be affected
           const newSessions = new Map(state.sessions)
           const currentSession = newSessions.get(conversationId)
           if (currentSession) {
@@ -1065,7 +1074,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
               isGenerating: false,
               streamingContent: '',
               compactInfo: null,  // Clear temporary compact notification
-              pendingQuestion: null  // Clear pending question
+              pendingQuestion: null,  // Clear pending question
+              error: null,  // Clear session error — now persisted in message.error
+              errorType: null
             })
           }
 
@@ -1335,7 +1346,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       currentSpaceId: null,
       pendingPulseNavigation: null,
       artifacts: [],
-      isLoadingConversation: false
+      isLoadingConversation: false,
+      _pulseItems: [],
+      _pulseCount: 0
     })
   },
 
@@ -1348,6 +1361,243 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })
   }
 }))
+
+// ==========================================
+// Derived Pulse State — recalculates only when pulse-relevant fields change.
+// During streaming, sessions change every token (streamingContent, thoughts, etc.)
+// but pulse-relevant fields (isGenerating, pendingToolApproval, error, pendingQuestion)
+// stay the same. We extract a fingerprint of only these fields and skip recalculation
+// when the fingerprint is unchanged.
+// ==========================================
+
+/**
+ * Extract a pulse-relevant fingerprint from sessions.
+ * Only includes fields that affect deriveTaskStatus().
+ */
+function _extractPulseFingerprint(sessions: Map<string, SessionState>): string {
+  const parts: string[] = []
+  for (const [id, s] of sessions) {
+    // Only include sessions that could produce non-idle status
+    if (s.isGenerating || s.pendingToolApproval || s.error || s.pendingQuestion?.status === 'active') {
+      parts.push(`${id}:${s.isGenerating ? 1 : 0}${s.pendingToolApproval ? 1 : 0}${s.error && s.errorType !== 'interrupted' ? 1 : 0}${s.pendingQuestion?.status === 'active' ? 1 : 0}`)
+    }
+  }
+  return parts.join('|')
+}
+
+/**
+ * Compute pulse items from state (same logic as the original usePulseItems selector).
+ */
+function _computePulseItems(state: ChatState): PulseItem[] {
+  const items: PulseItem[] = []
+  const addedIds = new Set<string>()
+
+  const getSpaceName = (spaceId: string): string => {
+    return spaceId === 'halo-temp' ? 'Halo' : spaceId
+  }
+
+  // 1. Active sessions
+  for (const [conversationId, session] of state.sessions) {
+    const hasUnseen = state.unseenCompletions.has(conversationId)
+    const status = deriveTaskStatus(session, hasUnseen)
+    if (status === 'idle') continue
+
+    let meta: ConversationMeta | undefined
+    for (const [, ss] of state.spaceStates) {
+      meta = ss.conversations.find(c => c.id === conversationId)
+      if (meta) break
+    }
+    if (!meta) continue
+
+    items.push({
+      conversationId,
+      spaceId: meta.spaceId,
+      spaceName: getSpaceName(meta.spaceId),
+      title: meta.title,
+      status,
+      starred: !!meta.starred,
+      updatedAt: meta.updatedAt
+    })
+    addedIds.add(conversationId)
+  }
+
+  // 2. Unseen completions
+  for (const [conversationId, info] of state.unseenCompletions) {
+    if (addedIds.has(conversationId)) continue
+    let meta: ConversationMeta | undefined
+    for (const [, ss] of state.spaceStates) {
+      meta = ss.conversations.find(c => c.id === conversationId)
+      if (meta) break
+    }
+    items.push({
+      conversationId,
+      spaceId: info.spaceId,
+      spaceName: getSpaceName(info.spaceId),
+      title: meta?.title || info.title,
+      status: 'completed-unseen',
+      starred: !!meta?.starred,
+      updatedAt: meta?.updatedAt || new Date().toISOString()
+    })
+    addedIds.add(conversationId)
+  }
+
+  // 3. Starred conversations
+  for (const [, ss] of state.spaceStates) {
+    for (const conv of ss.conversations) {
+      if (!conv.starred || addedIds.has(conv.id)) continue
+      items.push({
+        conversationId: conv.id,
+        spaceId: conv.spaceId,
+        spaceName: getSpaceName(conv.spaceId),
+        title: conv.title,
+        status: 'idle',
+        starred: true,
+        updatedAt: conv.updatedAt
+      })
+      addedIds.add(conv.id)
+    }
+  }
+
+  // 4. Read items in grace period
+  const now = Date.now()
+  for (const [conversationId, info] of state.pulseReadAt) {
+    if (addedIds.has(conversationId)) continue
+    if (now - info.readAt >= PULSE_READ_GRACE_PERIOD_MS) continue
+    items.push({
+      conversationId,
+      spaceId: info.spaceId,
+      spaceName: getSpaceName(info.spaceId),
+      title: info.title,
+      status: info.originalStatus,
+      starred: false,
+      updatedAt: new Date(info.readAt).toISOString(),
+      readAt: info.readAt
+    })
+    addedIds.add(conversationId)
+  }
+
+  // Sort by priority
+  const priorityOrder: Record<TaskStatus, number> = {
+    'waiting': 0,
+    'generating': 1,
+    'completed-unseen': 2,
+    'error': 3,
+    'idle': 4
+  }
+  items.sort((a, b) => {
+    const pa = priorityOrder[a.status]
+    const pb = priorityOrder[b.status]
+    if (pa !== pb) return pa - pb
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+  })
+
+  return items
+}
+
+/**
+ * Count pulse items (same logic as the original usePulseCount selector).
+ */
+function _computePulseCount(state: ChatState): number {
+  let count = 0
+  const countedIds = new Set<string>()
+
+  for (const [conversationId, session] of state.sessions) {
+    const hasUnseen = state.unseenCompletions.has(conversationId)
+    const status = deriveTaskStatus(session, hasUnseen)
+    if (status !== 'idle') {
+      count++
+      countedIds.add(conversationId)
+    }
+  }
+
+  for (const [conversationId] of state.unseenCompletions) {
+    if (!countedIds.has(conversationId)) {
+      count++
+      countedIds.add(conversationId)
+    }
+  }
+
+  for (const [, ss] of state.spaceStates) {
+    for (const conv of ss.conversations) {
+      if (conv.starred && !countedIds.has(conv.id)) {
+        count++
+        countedIds.add(conv.id)
+      }
+    }
+  }
+
+  const now = Date.now()
+  for (const [conversationId, info] of state.pulseReadAt) {
+    if (!countedIds.has(conversationId) && now - info.readAt < PULSE_READ_GRACE_PERIOD_MS) {
+      count++
+      countedIds.add(conversationId)
+    }
+  }
+
+  return count
+}
+
+// Track previous pulse-relevant state to avoid unnecessary recalculations
+let _prevPulseFingerprint = ''
+let _prevUnseenSize = 0
+let _prevPulseReadAtSize = 0
+let _prevStarredFingerprint = ''
+
+/**
+ * Extract a fingerprint of starred conversations across all spaces.
+ */
+function _extractStarredFingerprint(spaceStates: Map<string, SpaceState>): string {
+  const parts: string[] = []
+  for (const [, ss] of spaceStates) {
+    for (const conv of ss.conversations) {
+      if (conv.starred) {
+        parts.push(`${conv.id}:${conv.title}:${conv.updatedAt}`)
+      }
+    }
+  }
+  return parts.join('|')
+}
+
+// Subscribe to store changes and recalculate pulse only when relevant fields change
+useChatStore.subscribe((state) => {
+  const sessionFingerprint = _extractPulseFingerprint(state.sessions)
+  const unseenSize = state.unseenCompletions.size
+  const pulseReadAtSize = state.pulseReadAt.size
+  const starredFingerprint = _extractStarredFingerprint(state.spaceStates)
+
+  if (
+    sessionFingerprint === _prevPulseFingerprint &&
+    unseenSize === _prevUnseenSize &&
+    pulseReadAtSize === _prevPulseReadAtSize &&
+    starredFingerprint === _prevStarredFingerprint
+  ) {
+    return // No pulse-relevant changes
+  }
+
+  _prevPulseFingerprint = sessionFingerprint
+  _prevUnseenSize = unseenSize
+  _prevPulseReadAtSize = pulseReadAtSize
+  _prevStarredFingerprint = starredFingerprint
+
+  const newItems = _computePulseItems(state)
+  const newCount = _computePulseCount(state)
+
+  // Only update if values actually changed (avoid infinite loop)
+  const currentItems = state._pulseItems
+  const itemsChanged = newItems.length !== currentItems.length ||
+    newItems.some((item, i) =>
+      item.conversationId !== currentItems[i]?.conversationId ||
+      item.status !== currentItems[i]?.status ||
+      item.starred !== currentItems[i]?.starred ||
+      item.title !== currentItems[i]?.title ||
+      item.updatedAt !== currentItems[i]?.updatedAt ||
+      item.readAt !== currentItems[i]?.readAt
+    )
+
+  if (itemsChanged || newCount !== state._pulseCount) {
+    useChatStore.setState({ _pulseItems: newItems, _pulseCount: newCount })
+  }
+})
 
 /**
  * Selector: Get current session's isGenerating state
@@ -1393,194 +1643,53 @@ export function useConversationTaskStatus(conversationId: string | undefined): T
 }
 
 /**
- * Selector: Get all Pulse items (active tasks + unseen completions + starred conversations)
- * Sorted by priority: waiting > generating > completed-unseen > starred-idle
+ * Selector: Get task statuses for all conversations in the current space.
+ * Returns a Map of conversationId -> TaskStatus, only including non-idle entries.
+ * This replaces N individual useConversationTaskStatus subscriptions with a single one.
  */
-export function usePulseItems(): PulseItem[] {
+export function useAllConversationStatuses(): Map<string, TaskStatus> {
   return useChatStore(
     (state) => {
-      const items: PulseItem[] = []
-      const addedIds = new Set<string>()
+      const result = new Map<string, TaskStatus>()
+      const spaceState = state.currentSpaceId
+        ? state.spaceStates.get(state.currentSpaceId)
+        : null
+      if (!spaceState) return result
 
-      // Helper to find space name
-      const getSpaceName = (spaceId: string): string => {
-        // Check conversations in space states for the space name
-        // Space name is not directly in state, use spaceId as fallback
-        return spaceId === 'halo-temp' ? 'Halo' : spaceId
-      }
-
-      // 1. Collect all active sessions (generating, waiting, error)
-      for (const [conversationId, session] of state.sessions) {
-        const hasUnseen = state.unseenCompletions.has(conversationId)
+      for (const conv of spaceState.conversations) {
+        const session = state.sessions.get(conv.id)
+        const hasUnseen = state.unseenCompletions.has(conv.id)
         const status = deriveTaskStatus(session, hasUnseen)
-        if (status === 'idle') continue
-
-        // Find conversation meta across all spaces
-        let meta: ConversationMeta | undefined
-        for (const [, ss] of state.spaceStates) {
-          meta = ss.conversations.find(c => c.id === conversationId)
-          if (meta) break
-        }
-        if (!meta) continue
-
-        items.push({
-          conversationId,
-          spaceId: meta.spaceId,
-          spaceName: getSpaceName(meta.spaceId),
-          title: meta.title,
-          status,
-          starred: !!meta.starred,
-          updatedAt: meta.updatedAt
-        })
-        addedIds.add(conversationId)
-      }
-
-      // 2. Collect unseen completions not already added
-      for (const [conversationId, info] of state.unseenCompletions) {
-        if (addedIds.has(conversationId)) continue
-
-        // Find meta
-        let meta: ConversationMeta | undefined
-        for (const [, ss] of state.spaceStates) {
-          meta = ss.conversations.find(c => c.id === conversationId)
-          if (meta) break
-        }
-
-        items.push({
-          conversationId,
-          spaceId: info.spaceId,
-          spaceName: getSpaceName(info.spaceId),
-          title: meta?.title || info.title,
-          status: 'completed-unseen',
-          starred: !!meta?.starred,
-          updatedAt: meta?.updatedAt || new Date().toISOString()
-        })
-        addedIds.add(conversationId)
-      }
-
-      // 3. Collect starred conversations not already added
-      for (const [, ss] of state.spaceStates) {
-        for (const conv of ss.conversations) {
-          if (!conv.starred || addedIds.has(conv.id)) continue
-          items.push({
-            conversationId: conv.id,
-            spaceId: conv.spaceId,
-            spaceName: getSpaceName(conv.spaceId),
-            title: conv.title,
-            status: 'idle',
-            starred: true,
-            updatedAt: conv.updatedAt
-          })
-          addedIds.add(conv.id)
+        if (status !== 'idle') {
+          result.set(conv.id, status)
         }
       }
-
-      // 4. Collect read items in grace period (within grace period of being read)
-      const now = Date.now()
-      for (const [conversationId, info] of state.pulseReadAt) {
-        if (addedIds.has(conversationId)) continue
-        if (now - info.readAt >= PULSE_READ_GRACE_PERIOD_MS) continue
-
-        items.push({
-          conversationId,
-          spaceId: info.spaceId,
-          spaceName: getSpaceName(info.spaceId),
-          title: info.title,
-          status: info.originalStatus,
-          starred: false,
-          updatedAt: new Date(info.readAt).toISOString(),
-          readAt: info.readAt
-        })
-        addedIds.add(conversationId)
-      }
-
-      // Sort by priority: waiting > generating > completed-unseen > error > idle
-      const priorityOrder: Record<TaskStatus, number> = {
-        'waiting': 0,
-        'generating': 1,
-        'completed-unseen': 2,
-        'error': 3,
-        'idle': 4
-      }
-
-      items.sort((a, b) => {
-        const pa = priorityOrder[a.status]
-        const pb = priorityOrder[b.status]
-        if (pa !== pb) return pa - pb
-        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-      })
-
-      return items
+      return result
     },
-    // Structural equality: prevent re-renders when pulse items haven't actually changed.
-    // Without this, every store update (including per-token streaming) creates a new array
-    // reference, causing all Pulse UI components to re-render unnecessarily.
+    // Shallow equality: only re-render if the map content actually changed
     (a, b) => {
-      if (a.length !== b.length) return false
-      return a.every((item, i) =>
-        item.conversationId === b[i].conversationId &&
-        item.status === b[i].status &&
-        item.starred === b[i].starred &&
-        item.title === b[i].title &&
-        item.updatedAt === b[i].updatedAt &&
-        item.readAt === b[i].readAt
-      )
+      if (a.size !== b.size) return false
+      for (const [id, status] of a) {
+        if (b.get(id) !== status) return false
+      }
+      return true
     }
   )
 }
 
 /**
- * Selector: Get the count of pulse items (active tasks + unseen + starred)
- * Used by SidebarToggle and PulseSidebarSection to show/hide and display count.
- *
- * Must mirror usePulseItems logic exactly — uses countedIds to avoid
- * double-counting while ensuring starred conversations with idle sessions
- * are still included.
+ * Selector: Get all Pulse items from derived state (pre-computed, not recalculated on every store update).
+ * Recalculation is driven by the subscribe-based fingerprint watcher above.
+ */
+export function usePulseItems(): PulseItem[] {
+  return useChatStore(state => state._pulseItems)
+}
+
+/**
+ * Selector: Get the count of pulse items from derived state (pre-computed).
  */
 export function usePulseCount(): number {
-  return useChatStore((state) => {
-    let count = 0
-    const countedIds = new Set<string>()
-
-    // 1. Count active sessions (non-idle)
-    for (const [conversationId, session] of state.sessions) {
-      const hasUnseen = state.unseenCompletions.has(conversationId)
-      const status = deriveTaskStatus(session, hasUnseen)
-      if (status !== 'idle') {
-        count++
-        countedIds.add(conversationId)
-      }
-    }
-
-    // 2. Count unseen completions not already counted
-    for (const [conversationId] of state.unseenCompletions) {
-      if (!countedIds.has(conversationId)) {
-        count++
-        countedIds.add(conversationId)
-      }
-    }
-
-    // 3. Count starred conversations not already counted
-    for (const [, ss] of state.spaceStates) {
-      for (const conv of ss.conversations) {
-        if (conv.starred && !countedIds.has(conv.id)) {
-          count++
-          countedIds.add(conv.id)
-        }
-      }
-    }
-
-    // 4. Count read items in grace period
-    const now = Date.now()
-    for (const [conversationId, info] of state.pulseReadAt) {
-      if (!countedIds.has(conversationId) && now - info.readAt < PULSE_READ_GRACE_PERIOD_MS) {
-        count++
-        countedIds.add(conversationId)
-      }
-    }
-
-    return count
-  })
+  return useChatStore(state => state._pulseCount)
 }
 
 /**

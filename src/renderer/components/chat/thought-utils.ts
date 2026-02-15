@@ -77,7 +77,9 @@ export function getThoughtIcon(type: Thought['type'], toolName?: string): Lucide
  * @returns Tailwind color class string
  */
 export function getThoughtColor(type: Thought['type'], isError?: boolean): string {
-  if (isError) return 'text-destructive'
+  // Tool errors use amber (warning) instead of red (destructive) because
+  // they are internal AI feedback, not user-facing errors
+  if (isError) return 'text-amber-500'
 
   switch (type) {
     case 'thinking':

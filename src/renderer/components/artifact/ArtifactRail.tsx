@@ -14,6 +14,7 @@ import { ArtifactTree } from './ArtifactTree'
 import { api } from '../../api'
 import type { Artifact, ArtifactViewMode, ArtifactChangeEvent } from '../../types'
 import { useIsGenerating } from '../../stores/chat.store'
+import { useSpaceStore } from '../../stores/space.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { useCanvasLifecycle } from '../../hooks/useCanvasLifecycle'
 import { useCanvasStore } from '../../stores/canvas.store'
@@ -36,9 +37,6 @@ const COLLAPSED_WIDTH = 48
 const clampWidth = (v: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, v))
 
 interface ArtifactRailProps {
-  spaceId: string
-  isTemp: boolean
-  onOpenFolder: () => void
   // External control props for Canvas integration
   externalExpanded?: boolean        // Controlled expanded state from parent
   onExpandedChange?: (expanded: boolean) => void  // Callback when user toggles
@@ -91,15 +89,24 @@ function normalizeArtifactFromEvent(item: unknown, fallbackSpaceId: string): Art
 }
 
 export function ArtifactRail({
-  spaceId,
-  isTemp,
-  onOpenFolder,
   externalExpanded,
   onExpandedChange,
   initialWidth,
   onWidthChange
 }: ArtifactRailProps) {
   const { t } = useTranslation()
+
+  // Self-subscribe to space data
+  const currentSpace = useSpaceStore(state => state.currentSpace)
+  const spaceId = currentSpace?.id ?? ''
+  const isTemp = currentSpace?.isTemp ?? false
+
+  const handleOpenFolder = useCallback(() => {
+    if (spaceId) {
+      useSpaceStore.getState().openSpaceFolder(spaceId)
+    }
+  }, [spaceId])
+
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   // Use external control if provided, otherwise internal state
   const isControlled = externalExpanded !== undefined
@@ -392,7 +399,7 @@ export function ArtifactRail({
         <div className="flex items-center gap-2">
           {/* Open folder button */}
           <button
-            onClick={onOpenFolder}
+            onClick={handleOpenFolder}
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground rounded-lg transition-colors"
             title={t('Open folder (⌘⇧F)')}
           >
@@ -575,7 +582,7 @@ export function ArtifactRail({
           ) : (
             <>
               <button
-                onClick={onOpenFolder}
+                onClick={handleOpenFolder}
                 className="p-2 hover:bg-secondary rounded-lg transition-colors"
                 title={t('Open folder')}
               >

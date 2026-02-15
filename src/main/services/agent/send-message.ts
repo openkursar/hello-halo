@@ -283,6 +283,12 @@ export async function sendMessage(
       error: errorMessage
     })
 
+    // Persist error to the assistant placeholder message so it survives conversation reload
+    updateLastMessage(spaceId, conversationId, {
+      content: '',
+      error: errorMessage
+    })
+
     // Emit health event for monitoring
     onAgentError(conversationId, errorMessage)
 
@@ -867,10 +873,19 @@ async function processMessageStream(
   // Two independent interrupt reasons: SDK reported error_during_execution, or stream ended unexpectedly
   const isInterrupted = !receivedResult || hadErrorDuringExecution
 
-  // Step 1: Save content if available
-  if (finalContent) {
-    const contentSource = lastTextContent ? 'lastTextContent' : 'currentStreamingText (fallback)'
-    console.log(`[Agent][${conversationId}] Saving content from ${contentSource}: ${finalContent.length} chars`)
+  // Step 1: Save content and/or error to disk
+  // Persist when there's content OR an error thought (e.g., 429 rate limit)
+  const errorThought = hasErrorThought
+    ? sessionState.thoughts.find(t => t.type === 'error')
+    : undefined
+  if (finalContent || hasErrorThought) {
+    if (finalContent) {
+      const contentSource = lastTextContent ? 'lastTextContent' : 'currentStreamingText (fallback)'
+      console.log(`[Agent][${conversationId}] Saving content from ${contentSource}: ${finalContent.length} chars`)
+    }
+    if (hasErrorThought) {
+      console.log(`[Agent][${conversationId}] Persisting error to message: ${errorThought?.content}`)
+    }
 
     // Extract file changes summary for immediate display (without loading thoughts)
     let metadata: { fileChanges?: FileChangesSummary } | undefined
@@ -890,7 +905,8 @@ async function processMessageStream(
       content: finalContent,
       thoughts: sessionState.thoughts.length > 0 ? [...sessionState.thoughts] : undefined,
       tokenUsage: tokenUsage || undefined,
-      metadata
+      metadata,
+      error: errorThought?.content
     })
   } else {
     console.log(`[Agent][${conversationId}] No content to save`)

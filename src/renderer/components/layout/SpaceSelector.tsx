@@ -19,7 +19,7 @@ const LOAD_THROTTLE_MS = 5_000
 export function SpaceSelector() {
   const { t } = useTranslation()
   const { setView } = useAppStore()
-  const { haloSpace, spaces, currentSpace, setCurrentSpace, loadSpaces, isLoading } = useSpaceStore()
+  const { haloSpace, spaces, currentSpace, setCurrentSpace, refreshCurrentSpace, loadSpaces, isLoading } = useSpaceStore()
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const lastLoadRef = useRef(0)
@@ -82,6 +82,7 @@ export function SpaceSelector() {
       return
     }
     setCurrentSpace(space)
+    refreshCurrentSpace()  // Load full space data (preferences) from backend
     setView('space')
     setIsOpen(false)
   }

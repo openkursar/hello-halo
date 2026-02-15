@@ -347,6 +347,7 @@ export interface Message {
   metadata?: {
     fileChanges?: FileChangesSummary;  // Lightweight file changes for immediate display
   };
+  error?: string;  // Error message when assistant response failed (e.g., 429 rate limit)
 }
 
 // ============================================

@@ -72,7 +72,8 @@ interface PulseListProps {
 export function PulseList({ maxHeight = '360px', onItemClick, compact = false }: PulseListProps) {
   const { t } = useTranslation()
   const rawItems = usePulseItems()
-  const { haloSpace, spaces } = useSpaceStore()
+  const haloSpace = useSpaceStore(state => state.haloSpace)
+  const spaces = useSpaceStore(state => state.spaces)
 
   // Enrich items with proper space names from space store
   const items = useMemo(() => {

@@ -7,6 +7,10 @@
  * - Thoughts are stored separately in {id}.thoughts.json (v2 format)
  *   to reduce main file size from ~3.5MB to ~90KB
  * - Atomic writes (write .tmp then rename) for crash safety
+ * - Active conversation cache: reads are served from memory after first load,
+ *   writes update cache + disk (write-through). LRU eviction keeps memory bounded.
+ * - Index writes are debounced: multiple mutations within a short window
+ *   coalesce into a single disk write.
  */
 
 import { join } from 'path'
@@ -81,6 +85,7 @@ interface Message {
   metadata?: {
     fileChanges?: FileChangesSummary
   }
+  error?: string  // Error message when assistant response failed (e.g., 429 rate limit)
 }
 
 interface ToolCall {
@@ -126,6 +131,205 @@ interface ConversationIndex {
 const INDEX_VERSION = 1
 const PREVIEW_LENGTH = 50
 const CONVERSATION_FORMAT_VERSION = 2
+
+// ============================================================================
+// Active Conversation Cache (write-through, LRU eviction)
+// ============================================================================
+
+const CACHE_MAX_SIZE = 3  // Keep at most 3 conversations in memory (~1-6MB)
+
+/**
+ * LRU cache for active conversations.
+ * - Key: conversationId
+ * - Value: { conversation, filePath, conversationsDir, spaceId }
+ *
+ * On read: cache hit → 0 IO. Cache miss → disk read + cache store.
+ * On write: update cache + write-through to disk.
+ * On delete: evict from cache.
+ */
+const conversationCache = new Map<string, {
+  conversation: Conversation
+  filePath: string
+  conversationsDir: string
+  spaceId: string
+}>()
+
+function cachePut(
+  conversationId: string,
+  conversation: Conversation,
+  filePath: string,
+  conversationsDir: string,
+  spaceId: string
+): void {
+  // Evict oldest if at capacity
+  if (conversationCache.size >= CACHE_MAX_SIZE && !conversationCache.has(conversationId)) {
+    const oldestKey = conversationCache.keys().next().value
+    if (oldestKey) {
+      conversationCache.delete(oldestKey)
+    }
+  }
+  conversationCache.set(conversationId, { conversation, filePath, conversationsDir, spaceId })
+}
+
+function cacheEvict(conversationId: string): void {
+  conversationCache.delete(conversationId)
+}
+
+/**
+ * Get conversation from cache or disk. Returns null if not found.
+ * On cache miss, reads from disk and populates cache.
+ */
+function cachedRead(spaceId: string, conversationId: string): { conversation: Conversation; filePath: string; conversationsDir: string } | null {
+  // Cache hit
+  const cached = conversationCache.get(conversationId)
+  if (cached) {
+    // LRU touch
+    conversationCache.delete(conversationId)
+    conversationCache.set(conversationId, cached)
+    return cached
+  }
+
+  // Cache miss — read from disk
+  const conversationsDir = getConversationsDir(spaceId)
+  const filePath = join(conversationsDir, `${conversationId}.json`)
+
+  if (!existsSync(filePath)) {
+    return null
+  }
+
+  let conversation: Conversation
+  try {
+    conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
+  } catch (error) {
+    console.error(`[Conversation] Failed to read conversation ${conversationId}:`, error)
+    return null
+  }
+
+  // Lazy migration
+  if (conversation.version !== CONVERSATION_FORMAT_VERSION) {
+    console.log(`[Conversation] Detected v1 format for ${conversationId}, migrating...`)
+    try {
+      migrateConversationV1toV2(conversationsDir, conversation)
+    } catch (error) {
+      console.error(`[Conversation] Migration failed for ${conversationId}, falling back to original:`, error)
+      try {
+        conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
+      } catch (readError) {
+        console.error(`[Conversation] Failed to re-read original for ${conversationId}:`, readError)
+        return null
+      }
+    }
+  }
+
+  // Populate cache
+  cachePut(conversationId, conversation, filePath, conversationsDir, spaceId)
+  return { conversation, filePath, conversationsDir }
+}
+
+/**
+ * Write conversation to cache + disk (write-through).
+ */
+function cachedWrite(
+  conversationId: string,
+  conversation: Conversation,
+  filePath: string,
+  conversationsDir: string,
+  spaceId: string
+): void {
+  cachePut(conversationId, conversation, filePath, conversationsDir, spaceId)
+  atomicWriteFileSync(filePath, JSON.stringify(conversation, null, 2))
+}
+
+// ============================================================================
+// Index Write Debouncing
+// ============================================================================
+
+const INDEX_DEBOUNCE_MS = 500
+
+/**
+ * Per-directory pending index writes.
+ * Key: conversationsDir, Value: { timer, entries (map of convId → meta|null) }
+ */
+const pendingIndexWrites = new Map<string, {
+  timer: ReturnType<typeof setTimeout>
+  spaceId: string
+  entries: Map<string, ConversationMeta | null>
+}>()
+
+/**
+ * Schedule a debounced index update. Multiple calls within INDEX_DEBOUNCE_MS
+ * are coalesced into a single disk write.
+ */
+function debouncedUpdateIndexEntry(
+  conversationsDir: string,
+  spaceId: string,
+  conversationId: string,
+  meta: ConversationMeta | null
+): void {
+  let pending = pendingIndexWrites.get(conversationsDir)
+  if (pending) {
+    // Merge into existing batch
+    pending.entries.set(conversationId, meta)
+    // Reset timer
+    clearTimeout(pending.timer)
+  } else {
+    pending = {
+      timer: null as unknown as ReturnType<typeof setTimeout>,
+      spaceId,
+      entries: new Map([[conversationId, meta]])
+    }
+    pendingIndexWrites.set(conversationsDir, pending)
+  }
+
+  pending.timer = setTimeout(() => {
+    flushIndexWrites(conversationsDir)
+  }, INDEX_DEBOUNCE_MS)
+}
+
+/**
+ * Flush pending index writes for a directory immediately.
+ */
+function flushIndexWrites(conversationsDir: string): void {
+  const pending = pendingIndexWrites.get(conversationsDir)
+  if (!pending) return
+
+  clearTimeout(pending.timer)
+  pendingIndexWrites.delete(conversationsDir)
+
+  // Read current index once
+  const index = readIndex(conversationsDir)
+  if (!index) {
+    rebuildIndexAsync(conversationsDir, pending.spaceId)
+    return
+  }
+
+  // Apply all pending entries
+  for (const [conversationId, meta] of pending.entries) {
+    const existingIndex = index.conversations.findIndex(c => c.id === conversationId)
+
+    if (meta === null) {
+      if (existingIndex !== -1) {
+        index.conversations.splice(existingIndex, 1)
+      }
+    } else if (existingIndex !== -1) {
+      index.conversations[existingIndex] = meta
+    } else {
+      index.conversations.unshift(meta)
+    }
+  }
+
+  index.conversations.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+  writeIndex(conversationsDir, index.conversations)
+}
+
+/**
+ * Flush all pending index writes across all directories. Call on app quit.
+ */
+export function flushAllPendingIndexWrites(): void {
+  for (const conversationsDir of pendingIndexWrites.keys()) {
+    flushIndexWrites(conversationsDir)
+  }
+}
 
 // ============================================================================
 // Atomic File Operations
@@ -293,27 +497,22 @@ export function toggleStarConversation(
   conversationId: string,
   starred: boolean
 ): ConversationMeta | null {
-  const conversationsDir = getConversationsDir(spaceId)
-  const filePath = join(conversationsDir, `${conversationId}.json`)
+  const result = cachedRead(spaceId, conversationId)
+  if (!result) return null
 
-  if (!existsSync(filePath)) {
-    return null
-  }
-
-  let conversation: Conversation
-  try {
-    conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
-  } catch (error) {
-    console.error(`[Conversation] Failed to read conversation ${conversationId}:`, error)
-    return null
-  }
+  const { conversation, filePath, conversationsDir } = result
 
   conversation.starred = starred || undefined  // Don't persist false, just remove the key
   conversation.updatedAt = new Date().toISOString()
 
-  atomicWriteFileSync(filePath, JSON.stringify(conversation, null, 2))
+  cachedWrite(conversationId, conversation, filePath, conversationsDir, spaceId)
 
   const meta = toMeta(conversation)
+  // Star toggle should be reflected immediately in the list.
+  // Clear any pending debounced entry for this conversation to prevent stale meta
+  // from overwriting the star state when the debounce timer fires.
+  const pending = pendingIndexWrites.get(conversationsDir)
+  if (pending) pending.entries.delete(conversationId)
   updateIndexEntry(conversationsDir, spaceId, conversationId, meta)
 
   return meta
@@ -456,7 +655,8 @@ export function createConversation(spaceId: string, title?: string): Conversatio
     mkdirSync(conversationsDir, { recursive: true })
   }
 
-  atomicWriteFileSync(join(conversationsDir, `${id}.json`), JSON.stringify(conversation, null, 2))
+  const filePath = join(conversationsDir, `${id}.json`)
+  cachedWrite(id, conversation, filePath, conversationsDir, spaceId)
 
   updateIndexEntry(conversationsDir, spaceId, id, toMeta(conversation))
 
@@ -465,46 +665,14 @@ export function createConversation(spaceId: string, title?: string): Conversatio
 
 /**
  * Get a specific conversation.
+ * - Served from cache if available, otherwise reads from disk and caches.
  * - Detects format version and triggers lazy migration if needed.
  * - v2 format: thoughts are NOT included (they're in the separate file).
  *   Messages with thoughts have thoughts=null and thoughtsSummary set.
  */
 export function getConversation(spaceId: string, conversationId: string): Conversation | null {
-  const conversationsDir = getConversationsDir(spaceId)
-  const filePath = join(conversationsDir, `${conversationId}.json`)
-
-  if (!existsSync(filePath)) {
-    return null
-  }
-
-  let conversation: Conversation
-  try {
-    conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
-  } catch (error) {
-    console.error(`[Conversation] Failed to read conversation ${conversationId}:`, error)
-    return null
-  }
-
-  // Format detection and lazy migration
-  if (conversation.version !== CONVERSATION_FORMAT_VERSION) {
-    console.log(`[Conversation] Detected v1 format for ${conversationId}, migrating...`)
-    try {
-      migrateConversationV1toV2(conversationsDir, conversation)
-    } catch (error) {
-      console.error(`[Conversation] Migration failed for ${conversationId}, falling back to original:`, error)
-      // Migration mutates the object in-place before writing files.
-      // If file write fails, the in-memory object is in a half-mutated state (thoughts=null but no file).
-      // Re-read the original v1 data from disk so the user still sees their inline thoughts.
-      try {
-        conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
-      } catch (readError) {
-        console.error(`[Conversation] Failed to re-read original for ${conversationId}:`, readError)
-        return null
-      }
-    }
-  }
-
-  return conversation
+  const result = cachedRead(spaceId, conversationId)
+  return result ? result.conversation : null
 }
 
 // Update a conversation
@@ -513,20 +681,10 @@ export function updateConversation(
   conversationId: string,
   updates: Partial<Conversation>
 ): Conversation | null {
-  const conversationsDir = getConversationsDir(spaceId)
-  const filePath = join(conversationsDir, `${conversationId}.json`)
+  const result = cachedRead(spaceId, conversationId)
+  if (!result) return null
 
-  if (!existsSync(filePath)) {
-    return null
-  }
-
-  let conversation: Conversation
-  try {
-    conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
-  } catch (error) {
-    console.error(`[Conversation] Failed to read conversation ${conversationId}:`, error)
-    return null
-  }
+  const { conversation, filePath, conversationsDir } = result
 
   const updated: Conversation = {
     ...conversation,
@@ -534,9 +692,8 @@ export function updateConversation(
     updatedAt: new Date().toISOString()
   }
 
-  atomicWriteFileSync(filePath, JSON.stringify(updated, null, 2))
-
-  updateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(updated))
+  cachedWrite(conversationId, updated, filePath, conversationsDir, spaceId)
+  debouncedUpdateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(updated))
 
   return updated
 }
@@ -546,19 +703,12 @@ export function updateConversation(
  * User messages never have thoughts, so only the main file is written.
  */
 export function addMessage(spaceId: string, conversationId: string, message: Omit<Message, 'id' | 'timestamp'>): Message {
-  const conversationsDir = getConversationsDir(spaceId)
-  const filePath = join(conversationsDir, `${conversationId}.json`)
-
-  if (!existsSync(filePath)) {
+  const result = cachedRead(spaceId, conversationId)
+  if (!result) {
     throw new Error('Conversation not found')
   }
 
-  let conversation: Conversation
-  try {
-    conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
-  } catch (error) {
-    throw new Error(`Failed to read conversation: ${error}`)
-  }
+  const { conversation, filePath, conversationsDir } = result
 
   const newMessage: Message = {
     ...message,
@@ -580,9 +730,8 @@ export function addMessage(spaceId: string, conversationId: string, message: Omi
     conversation.version = CONVERSATION_FORMAT_VERSION
   }
 
-  atomicWriteFileSync(filePath, JSON.stringify(conversation, null, 2))
-
-  updateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
+  cachedWrite(conversationId, conversation, filePath, conversationsDir, spaceId)
+  debouncedUpdateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
 
   return newMessage
 }
@@ -602,20 +751,10 @@ export function updateLastMessage(
   conversationId: string,
   updates: Partial<Message>
 ): Message | null {
-  const conversationsDir = getConversationsDir(spaceId)
-  const filePath = join(conversationsDir, `${conversationId}.json`)
+  const result = cachedRead(spaceId, conversationId)
+  if (!result) return null
 
-  if (!existsSync(filePath)) {
-    return null
-  }
-
-  let conversation: Conversation
-  try {
-    conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
-  } catch (error) {
-    console.error(`[Conversation] Failed to read conversation ${conversationId}:`, error)
-    return null
-  }
+  const { conversation, filePath, conversationsDir } = result
 
   if (conversation.messages.length === 0) {
     return null
@@ -670,9 +809,8 @@ export function updateLastMessage(
 
   conversation.updatedAt = new Date().toISOString()
 
-  atomicWriteFileSync(filePath, JSON.stringify(conversation, null, 2))
-
-  updateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
+  cachedWrite(conversationId, conversation, filePath, conversationsDir, spaceId)
+  debouncedUpdateIndexEntry(conversationsDir, spaceId, conversationId, toMeta(conversation))
 
   return lastMessage
 }
@@ -713,6 +851,9 @@ export function deleteConversation(spaceId: string, conversationId: string): boo
   const filePath = join(conversationsDir, `${conversationId}.json`)
 
   if (existsSync(filePath)) {
+    // Evict from cache before deleting
+    cacheEvict(conversationId)
+
     rmSync(filePath)
 
     // Also delete thoughts file if it exists
@@ -731,6 +872,11 @@ export function deleteConversation(spaceId: string, conversationId: string): boo
     if (existsSync(tmpMain)) try { rmSync(tmpMain) } catch { /* ignore */ }
     if (existsSync(tmpThoughts)) try { rmSync(tmpThoughts) } catch { /* ignore */ }
 
+    // Use immediate index update for deletes (user expects instant feedback).
+    // Clear any pending debounced entry to prevent the deleted conversation
+    // from being written back into the index when the debounce timer fires.
+    const pending = pendingIndexWrites.get(conversationsDir)
+    if (pending) pending.entries.delete(conversationId)
     updateIndexEntry(conversationsDir, spaceId, conversationId, null)
 
     return true
@@ -741,18 +887,12 @@ export function deleteConversation(spaceId: string, conversationId: string): boo
 
 // Save session ID for a conversation
 export function saveSessionId(spaceId: string, conversationId: string, sessionId: string): void {
-  const conversationsDir = getConversationsDir(spaceId)
-  const filePath = join(conversationsDir, `${conversationId}.json`)
+  const result = cachedRead(spaceId, conversationId)
+  if (!result) return
 
-  if (!existsSync(filePath)) return
-
-  try {
-    const conversation: Conversation = JSON.parse(readFileSync(filePath, 'utf-8'))
-    conversation.sessionId = sessionId
-    atomicWriteFileSync(filePath, JSON.stringify(conversation, null, 2))
-  } catch (error) {
-    console.error(`[Conversation] Failed to save session ID for ${conversationId}:`, error)
-  }
+  const { conversation, filePath, conversationsDir } = result
+  conversation.sessionId = sessionId
+  cachedWrite(conversationId, conversation, filePath, conversationsDir, spaceId)
 }
 
 // Generate a default title

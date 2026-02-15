@@ -349,6 +349,10 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 }, ref) {
   const { t } = useTranslation()
   const virtuosoRef = useRef<VirtuosoHandle>(null)
+  // Native DOM scroll container — captured via Virtuoso's scrollerRef prop
+  const scrollerRef = useRef<HTMLElement | null>(null)
+  // Track at-bottom state in a ref (not state) to avoid re-renders on every scroll event
+  const isAtBottomRef = useRef(true)
   // Track which messages had their thought panel opened by the user.
   // When loadMessageThoughts updates the store, the component tree switches from
   // LazyCollapsedThoughtProcess to CollapsedThoughtProcess — this ref ensures the
@@ -366,9 +370,10 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       virtuosoRef.current?.scrollToIndex({ index, behavior, align: 'center' })
     },
     scrollToBottom: (behavior: ScrollBehavior = 'smooth') => {
-      // Use scrollTo instead of scrollToIndex to reach absolute bottom (including Footer content)
-      // scrollToIndex({ index: 'LAST' }) only scrolls to the last data item, missing Footer
-      virtuosoRef.current?.scrollTo({ top: Number.MAX_SAFE_INTEGER, behavior })
+      const el = scrollerRef.current
+      if (el) {
+        el.scrollTo({ top: el.scrollHeight, behavior })
+      }
     },
   }), [])
 
@@ -417,13 +422,42 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       }))
   }, [thoughts])
 
-  // followOutput: auto-scroll when new content arrives, but only if user is at bottom
-  const followOutput = useCallback((isAtBottom: boolean) => {
-    if (isAtBottom) {
-      return isStreaming ? 'auto' as const : 'smooth' as const
+  // Track at-bottom state via native DOM scroll events (independent of Virtuoso).
+  const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
+    isAtBottomRef.current = atBottom
+    onAtBottomStateChange?.(atBottom)
+  }, [onAtBottomStateChange])
+
+  /** Instantly snap scroll container to absolute bottom */
+  const scrollToEnd = useCallback(() => {
+    const el = scrollerRef.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+  }, [])
+
+  // --- Native DOM auto-scroll (replaces Virtuoso followOutput) ---
+
+  // 1. Mount scroll: wait for Virtuoso to finish initial layout, then snap to bottom.
+  useEffect(() => {
+    const timer = setTimeout(scrollToEnd, 300)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 2. Streaming scroll: follow content growth while AI is generating
+  useEffect(() => {
+    if (!isAtBottomRef.current || !isGenerating) return
+    requestAnimationFrame(scrollToEnd)
+  }, [streamingContent, thoughts.length, isThinking, isGenerating, pendingQuestion, scrollToEnd])
+
+  // 3. New-message scroll: when user sends a message (displayMessages grows)
+  const prevDisplayCountRef = useRef(displayMessages.length)
+  useEffect(() => {
+    const prev = prevDisplayCountRef.current
+    prevDisplayCountRef.current = displayMessages.length
+    if (displayMessages.length > prev && isAtBottomRef.current) {
+      requestAnimationFrame(scrollToEnd)
     }
-    return false as const
-  }, [isStreaming])
+  }, [displayMessages.length, scrollToEnd])
 
   // Content width class — applied per-item so Virtuoso scroll container stays full-width
   // (keeps scrollbar at the window edge, not next to message bubbles)
@@ -552,12 +586,12 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       ref={virtuosoRef}
       data={displayMessages}
       style={{ height: '100%' }}
-      followOutput={followOutput}
+      scrollerRef={(el) => { scrollerRef.current = el as HTMLElement }}
       initialTopMostItemIndex={displayMessages.length > 0 ? displayMessages.length - 1 : 0}
       defaultItemHeight={150}
       increaseViewportBy={400}
       atBottomThreshold={100}
-      atBottomStateChange={onAtBottomStateChange}
+      atBottomStateChange={handleAtBottomStateChange}
       itemContent={itemContent}
       components={components}
     />

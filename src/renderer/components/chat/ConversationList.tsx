@@ -1,17 +1,22 @@
 /**
  * Conversation List - Resizable sidebar for multiple conversations
- * Supports drag-to-resize, inline title editing, and conversation management
+ * Self-contained: subscribes to its own data from stores, no data props from parent.
+ * Supports drag-to-resize, inline title editing, and conversation management.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, memo } from 'react'
 import { createPortal } from 'react-dom'
-import type { ConversationMeta } from '../../types'
+import { Virtuoso } from 'react-virtuoso'
 import { MessageSquare, Plus } from '../icons/ToolIcons'
 import { ChevronLeft, EllipsisVertical, Pin, Pencil, Trash2 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
-import { useConversationTaskStatus } from '../../stores/chat.store'
+import { useChatStore, useAllConversationStatuses } from '../../stores/chat.store'
+import { useSpaceStore } from '../../stores/space.store'
+import { useAppStore } from '../../stores/app.store'
+import { api } from '../../api'
 import { TaskStatusDot } from '../pulse/TaskStatusDot'
 import { PulseSidebarSection } from '../pulse/PulseSidebarSection'
+import type { ConversationMeta } from '../../types'
 
 // Width constraints (in pixels)
 const MIN_WIDTH = 140
@@ -20,36 +25,38 @@ const DEFAULT_WIDTH = 260
 const clampWidth = (v: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, v))
 
 interface ConversationListProps {
-  conversations: ConversationMeta[]
-  currentConversationId?: string
-  onSelect: (id: string) => void
-  onNew: () => void
-  onDelete?: (id: string) => void
-  onRename?: (id: string, newTitle: string) => void
-  onStar?: (id: string, starred: boolean) => void
   onClose?: () => void
-  initialWidth?: number
-  onWidthChange?: (width: number) => void
+  /** Whether the sidebar is currently visible (used to skip heavy Pulse section when hidden) */
+  visible?: boolean
 }
 
-export function ConversationList({
-  conversations,
-  currentConversationId,
-  onSelect,
-  onNew,
-  onDelete,
-  onRename,
-  onStar,
+export const ConversationList = memo(function ConversationList({
   onClose,
-  initialWidth,
-  onWidthChange,
+  visible = true,
 }: ConversationListProps) {
   const { t } = useTranslation()
+
+  // Self-subscribe to data from stores (precise selectors)
+  const conversations = useChatStore(state => {
+    const spaceState = state.spaceStates.get(state.currentSpaceId ?? '')
+    return spaceState?.conversations ?? []
+  })
+  const currentConversationId = useChatStore(state => {
+    const spaceState = state.spaceStates.get(state.currentSpaceId ?? '')
+    return spaceState?.currentConversationId ?? undefined
+  })
+  const layoutConfig = useAppStore(state => state.config?.layout)
+
+  // Single batch subscription for all conversation statuses (replaces N individual hooks)
+  const conversationStatuses = useAllConversationStatuses()
+
+  // Width state - initialized from persisted config
+  const initialWidth = layoutConfig?.sidebarWidth
   const [width, setWidth] = useState(initialWidth != null ? clampWidth(initialWidth) : DEFAULT_WIDTH)
   const [isDragging, setIsDragging] = useState(false)
   const widthRef = useRef(width)
 
-  // Sync width when initialWidth arrives from async config load
+  // Sync width when config arrives asynchronously
   useEffect(() => {
     if (initialWidth !== undefined && !isDragging) {
       const clamped = clampWidth(initialWidth)
@@ -64,8 +71,6 @@ export function ConversationList({
   const containerRef = useRef<HTMLDivElement>(null)
   const editInputRef = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
-  const onWidthChangeRef = useRef(onWidthChange)
-  onWidthChangeRef.current = onWidthChange
 
   // Handle drag resize
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -87,7 +92,14 @@ export function ConversationList({
 
     const handleMouseUp = () => {
       setIsDragging(false)
-      onWidthChangeRef.current?.(widthRef.current)
+      // Persist width to in-memory store + backend config
+      const currentConfig = useAppStore.getState().config
+      if (currentConfig) {
+        useAppStore.getState().updateConfig({ layout: { ...currentConfig.layout, sidebarWidth: widthRef.current } })
+      }
+      api.setConfig({ layout: { sidebarWidth: widthRef.current } }).catch(err =>
+        console.error('[ConversationList] Failed to persist sidebar width:', err)
+      )
     }
 
     document.addEventListener('mousemove', handleMouseMove)
@@ -148,8 +160,11 @@ export function ConversationList({
 
   // Save edited title
   const handleSaveEdit = () => {
-    if (editingId && editingTitle.trim() && onRename) {
-      onRename(editingId, editingTitle.trim())
+    if (editingId && editingTitle.trim()) {
+      const spaceId = useSpaceStore.getState().currentSpace?.id
+      if (spaceId) {
+        useChatStore.getState().renameConversation(spaceId, editingId, editingTitle.trim())
+      }
     }
     setEditingId(null)
     setEditingTitle('')
@@ -172,6 +187,98 @@ export function ConversationList({
     }
   }
 
+  // Render a single conversation item (used by Virtuoso)
+  const renderConversationItem = useCallback((conversation: ConversationMeta) => (
+    <div
+      onClick={() => editingId !== conversation.id && useChatStore.getState().selectConversation(conversation.id)}
+      className={`w-full px-3 py-2 text-left hover:bg-secondary/50 transition-colors cursor-pointer group relative ${
+        conversation.id === currentConversationId ? 'bg-primary/10 border-l-2 border-primary' : ''
+      }`}
+    >
+      {/* Edit mode */}
+      {editingId === conversation.id ? (
+        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          <input
+            ref={editInputRef}
+            type="text"
+            value={editingTitle}
+            onChange={(e) => setEditingTitle(e.target.value)}
+            onKeyDown={handleEditKeyDown}
+            onBlur={handleSaveEdit}
+            className="flex-1 text-sm bg-input border border-border rounded px-2 py-1 focus:outline-none focus:border-primary min-w-0"
+            placeholder={t('Conversation title...')}
+          />
+          <button
+            onClick={handleSaveEdit}
+            className="p-1 hover:bg-primary/20 text-primary rounded transition-colors flex-shrink-0"
+            title={t('Save')}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center gap-2 relative">
+            <MessageSquare className="w-4 h-4 text-blue-500 flex-shrink-0" />
+            <span className="text-sm truncate flex-1">
+              {conversation.title}
+            </span>
+            {/* Absolutely positioned so idle placeholder doesn't steal title space */}
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none">
+              <TaskStatusDot status={conversationStatuses.get(conversation.id) ?? 'idle'} size="sm" />
+            </div>
+            {/* More button (on hover) - absolutely positioned to not take layout space */}
+            <div className="absolute -right-1 top-[calc(50%+1px)] -translate-y-1/2 hidden group-hover:block">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (menuOpenId === conversation.id) {
+                    setMenuOpenId(null)
+                    setMenuPosition(null)
+                  } else {
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                    const MENU_HEIGHT_ESTIMATE = 120
+                    const spaceBelow = window.innerHeight - rect.bottom - 4
+                    const top = spaceBelow >= MENU_HEIGHT_ESTIMATE
+                      ? rect.bottom + 4
+                      : Math.max(4, rect.top - MENU_HEIGHT_ESTIMATE - 4)
+                    setMenuPosition({ top, left: rect.right })
+                    setMenuOpenId(conversation.id)
+                  }
+                }}
+                className="px-1.5 py-1 rounded transition-colors bg-secondary text-foreground/80 hover:text-foreground hover:bg-secondary"
+                title={t('More')}
+              >
+                <EllipsisVertical className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            {/* Keep menu open even when not hovering */}
+            {menuOpenId === conversation.id && (
+              <div className="absolute -right-1 top-[calc(50%+1px)] -translate-y-1/2">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setMenuOpenId(null)
+                    setMenuPosition(null)
+                  }}
+                  className="px-1.5 py-1 rounded bg-secondary text-foreground"
+                  title={t('More')}
+                >
+                  <EllipsisVertical className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            {formatDate(conversation.updatedAt)}
+          </p>
+        </>
+      )}
+    </div>
+  ), [editingId, editingTitle, currentConversationId, conversationStatuses, menuOpenId, t])
+
   return (
     <>
     <div
@@ -193,108 +300,25 @@ export function ConversationList({
         )}
       </div>
 
-      {/* Pinned section - pinned conversations at top of sidebar */}
-      <PulseSidebarSection />
+      {/* Pinned section - pinned conversations at top of sidebar (skip when hidden to avoid pulse selector cost) */}
+      {visible && <PulseSidebarSection />}
 
-      {/* Conversation list */}
-      <div className="flex-1 py-2 overflow-auto">
-        {conversations.map((conversation) => (
-          <div
-            key={conversation.id}
-            onClick={() => editingId !== conversation.id && onSelect(conversation.id)}
-            className={`w-full px-3 py-2 text-left hover:bg-secondary/50 transition-colors cursor-pointer group relative ${
-              conversation.id === currentConversationId ? 'bg-primary/10 border-l-2 border-primary' : ''
-            }`}
-          >
-            {/* Edit mode */}
-            {editingId === conversation.id ? (
-              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                <input
-                  ref={editInputRef}
-                  type="text"
-                  value={editingTitle}
-                  onChange={(e) => setEditingTitle(e.target.value)}
-                  onKeyDown={handleEditKeyDown}
-                  onBlur={handleSaveEdit}
-                  className="flex-1 text-sm bg-input border border-border rounded px-2 py-1 focus:outline-none focus:border-primary min-w-0"
-                  placeholder={t('Conversation title...')}
-                />
-                <button
-                  onClick={handleSaveEdit}
-                  className="p-1 hover:bg-primary/20 text-primary rounded transition-colors flex-shrink-0"
-                  title={t('Save')}
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                </button>
-              </div>
-            ) : (
-              <>
-                <div className="flex items-center gap-2 relative">
-                  <MessageSquare className="w-4 h-4 text-blue-500 flex-shrink-0" />
-                  <span className="text-sm truncate flex-1">
-                    {conversation.title}
-                  </span>
-                  {/* Absolutely positioned so idle placeholder doesn't steal title space */}
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none">
-                    <ConversationStatusDot conversationId={conversation.id} />
-                  </div>
-                  {/* More button (on hover) - absolutely positioned to not take layout space */}
-                  <div className="absolute -right-1 top-[calc(50%+1px)] -translate-y-1/2 hidden group-hover:block">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        if (menuOpenId === conversation.id) {
-                          setMenuOpenId(null)
-                          setMenuPosition(null)
-                        } else {
-                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                          const MENU_HEIGHT_ESTIMATE = 120
-                          const spaceBelow = window.innerHeight - rect.bottom - 4
-                          const top = spaceBelow >= MENU_HEIGHT_ESTIMATE
-                            ? rect.bottom + 4
-                            : Math.max(4, rect.top - MENU_HEIGHT_ESTIMATE - 4)
-                          setMenuPosition({ top, left: rect.right })
-                          setMenuOpenId(conversation.id)
-                        }
-                      }}
-                      className="px-1.5 py-1 rounded transition-colors bg-secondary text-foreground/80 hover:text-foreground hover:bg-secondary"
-                      title={t('More')}
-                    >
-                      <EllipsisVertical className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                  {/* Keep menu open even when not hovering */}
-                  {menuOpenId === conversation.id && (
-                    <div className="absolute -right-1 top-[calc(50%+1px)] -translate-y-1/2">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setMenuOpenId(null)
-                          setMenuPosition(null)
-                        }}
-                        className="px-1.5 py-1 rounded bg-secondary text-foreground"
-                        title={t('More')}
-                      >
-                        <EllipsisVertical className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {formatDate(conversation.updatedAt)}
-                </p>
-              </>
-            )}
-          </div>
-        ))}
+      {/* Conversation list - virtualized for performance with large lists */}
+      <div className="flex-1 overflow-hidden">
+        <Virtuoso
+          data={conversations}
+          overscan={200}
+          itemContent={(_index, conversation) => renderConversationItem(conversation)}
+        />
       </div>
 
       {/* New conversation button */}
       <div className="p-2 border-t border-border">
         <button
-          onClick={onNew}
+          onClick={() => {
+            const spaceId = useSpaceStore.getState().currentSpace?.id
+            if (spaceId) useChatStore.getState().createConversation(spaceId)
+          }}
           className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-primary hover:bg-primary/10 rounded-lg transition-colors"
         >
           <Plus className="w-4 h-4" />
@@ -322,57 +346,47 @@ export function ConversationList({
           className="fixed z-[9999] min-w-[140px] bg-popover border border-border rounded-lg shadow-lg py-1"
           style={{ top: menuPosition.top, left: menuPosition.left, transform: 'translateX(-100%)' }}
         >
-          {onStar && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onStar(conv.id, !conv.starred)
-                setMenuOpenId(null)
-                setMenuPosition(null)
-              }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-secondary transition-colors"
-            >
-              <Pin className={`w-3.5 h-3.5 ${conv.starred ? 'text-primary' : ''}`} />
-              <span>{conv.starred ? t('Unpin') : t('Pin')}</span>
-            </button>
-          )}
-          {onRename && (
-            <button
-              onClick={(e) => {
-                handleStartEdit(e, conv)
-                setMenuOpenId(null)
-                setMenuPosition(null)
-              }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-secondary transition-colors"
-            >
-              <Pencil className="w-3.5 h-3.5" />
-              <span>{t('Rename')}</span>
-            </button>
-          )}
-          {onDelete && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onDelete(conv.id)
-                setMenuOpenId(null)
-                setMenuPosition(null)
-              }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 transition-colors"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>{t('Delete')}</span>
-            </button>
-          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              const spaceId = useSpaceStore.getState().currentSpace?.id
+              if (spaceId) useChatStore.getState().toggleStarConversation(spaceId, conv.id, !conv.starred)
+              setMenuOpenId(null)
+              setMenuPosition(null)
+            }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-secondary transition-colors"
+          >
+            <Pin className={`w-3.5 h-3.5 ${conv.starred ? 'text-primary' : ''}`} />
+            <span>{conv.starred ? t('Unpin') : t('Pin')}</span>
+          </button>
+          <button
+            onClick={(e) => {
+              handleStartEdit(e, conv)
+              setMenuOpenId(null)
+              setMenuPosition(null)
+            }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-secondary transition-colors"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+            <span>{t('Rename')}</span>
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              const spaceId = useSpaceStore.getState().currentSpace?.id
+              if (spaceId) useChatStore.getState().deleteConversation(spaceId, conv.id)
+              setMenuOpenId(null)
+              setMenuPosition(null)
+            }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 transition-colors"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>{t('Delete')}</span>
+          </button>
         </div>,
         document.body
       )
     })()}
     </>
   )
-}
-
-/** Extracted sub-component so useConversationTaskStatus hook is called per conversation */
-function ConversationStatusDot({ conversationId }: { conversationId: string }) {
-  const status = useConversationTaskStatus(conversationId)
-  return <TaskStatusDot status={status} size="sm" />
-}
+})

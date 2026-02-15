@@ -28,7 +28,7 @@ const isWebMode = api.isRemoteMode()
 export function HomePage() {
   const { t } = useTranslation()
   const { setView } = useAppStore()
-  const { haloSpace, spaces, loadSpaces, setCurrentSpace, createSpace, updateSpace, deleteSpace } = useSpaceStore()
+  const { haloSpace, spaces, loadSpaces, setCurrentSpace, refreshCurrentSpace, createSpace, updateSpace, deleteSpace } = useSpaceStore()
 
   // Dialog state
   const [showCreateDialog, setShowCreateDialog] = useState(false)
@@ -101,6 +101,7 @@ export function HomePage() {
   // Handle space click - no reset needed, SpacePage handles its own state
   const handleSpaceClick = (space: Space) => {
     setCurrentSpace(space)
+    refreshCurrentSpace()  // Load full space data (preferences) from backend
     setView('space')
   }
 

@@ -1,11 +1,17 @@
-/**		      	    				  	  	  	 		 		       	 	 	         	 	    					 
+/**
  * Space Service - Manages workspaces/spaces
  *
  * Architecture:
- * - spaces-index.json (v2) stores id -> path mapping for O(1) lookups
+ * - spaces-index.json (v3) stores space registration info (name/icon/path/timestamps)
+ * - Preferences are NOT stored in the index — they live in per-space meta.json
  * - Module-level registry Map is the in-memory working copy of the index
- * - Lazy-loaded on first access; auto-migrates from v1 format if needed
- * - Mutations (create/delete) update both memory and disk atomically
+ * - Halo temp space is unified into the registry (no special branches)
+ * - Lazy-loaded on first access; auto-migrates from v1/v2 formats if needed
+ * - Mutations (create/update/delete) update both memory and disk atomically
+ * - listSpaces() is pure memory read — zero disk I/O after startup
+ * - getSpace() is pure memory read — zero disk I/O (no preferences)
+ * - getSpaceWithPreferences() loads preferences from meta.json on demand (for IPC/UI only)
+ * - listSpaces() validates paths in batch; invalid entries are cleaned up
  */
 
 import { shell } from 'electron'
@@ -53,24 +59,26 @@ interface SpaceMeta {
 }
 
 // ============================================================================
-// Space Index (v2) — id -> path registry
+// Space Index (v3) — id -> space registration info (no preferences)
 // ============================================================================
 
 interface SpaceIndexEntry {
   path: string
+  name: string
+  icon: string
+  createdAt: string
+  updatedAt: string
+  workingDir?: string
+  isTemp?: boolean  // true only for halo-temp (not persisted to disk)
 }
 
-interface SpaceIndexV2 {
-  version: 2
+interface SpaceIndexV3 {
+  version: 3
   spaces: Record<string, SpaceIndexEntry>
 }
 
 // Module-level registry: in-memory working copy of spaces-index.json
 let registry: Map<string, SpaceIndexEntry> | null = null
-
-// LRU cache for Space objects (avoids repeated meta.json reads)
-const MAX_SPACE_CACHE_SIZE = 10
-const spaceCache = new Map<string, Space>()
 
 function getSpaceIndexPath(): string {
   return join(getHaloDir(), 'spaces-index.json')
@@ -78,7 +86,7 @@ function getSpaceIndexPath(): string {
 
 /**
  * Get the registry Map (lazy-loaded).
- * First call loads from disk and auto-migrates v1 format if needed.
+ * First call loads from disk and auto-migrates v1/v2 formats if needed.
  */
 function getRegistry(): Map<string, SpaceIndexEntry> {
   if (!registry) {
@@ -88,7 +96,22 @@ function getRegistry(): Map<string, SpaceIndexEntry> {
 }
 
 /**
- * Load space index from disk. Handles v2, v1 (migration), and missing file.
+ * Build a SpaceIndexEntry from a SpaceMeta + path (for migration only).
+ */
+function metaToEntry(meta: SpaceMeta, spacePath: string): SpaceIndexEntry {
+  return {
+    path: spacePath,
+    name: meta.name,
+    icon: meta.icon,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
+    workingDir: meta.workingDir
+  }
+}
+
+/**
+ * Load space index from disk. Handles v3 (direct), v2 (migration), v1/missing (full scan).
+ * Always registers halo-temp into the returned map.
  */
 function loadSpaceIndex(): Map<string, SpaceIndexEntry> {
   const indexPath = getSpaceIndexPath()
@@ -104,20 +127,38 @@ function loadSpaceIndex(): Map<string, SpaceIndexEntry> {
     }
   }
 
-  // v2: direct load
-  if (raw && raw.version === 2 && raw.spaces && typeof raw.spaces === 'object') {
+  // v3: direct load
+  if (raw && raw.version === 3 && raw.spaces && typeof raw.spaces === 'object') {
     const spaces = raw.spaces as Record<string, SpaceIndexEntry>
     for (const [id, entry] of Object.entries(spaces)) {
-      if (entry && typeof entry.path === 'string') {
-        map.set(id, { path: entry.path })
+      if (entry && typeof entry.path === 'string' && typeof entry.name === 'string') {
+        map.set(id, entry)
       }
     }
-    console.log(`[Space] Index v2 loaded: ${map.size} spaces`)
+    console.log(`[Space] Index v3 loaded: ${map.size} spaces`)
+    registerHaloTemp(map)
+    return map
+  }
+
+  // v2: one-time migration (read each meta.json once)
+  if (raw && raw.version === 2 && raw.spaces && typeof raw.spaces === 'object') {
+    console.log('[Space] Migrating space index v2 -> v3...')
+    const v2Spaces = raw.spaces as Record<string, { path: string }>
+    for (const [id, v2Entry] of Object.entries(v2Spaces)) {
+      if (!v2Entry || typeof v2Entry.path !== 'string') continue
+      const meta = tryReadMeta(v2Entry.path)
+      if (meta) {
+        map.set(id, metaToEntry(meta, v2Entry.path))
+      }
+    }
+    persistIndex(map)
+    console.log(`[Space] Index v3 migration complete: ${map.size} spaces`)
+    registerHaloTemp(map)
     return map
   }
 
   // v1 or missing: one-time migration via full scan
-  console.log('[Space] Migrating space index to v2...')
+  console.log('[Space] Migrating space index to v3 (full scan)...')
   const oldCustomPaths: string[] = Array.isArray((raw as Record<string, unknown>)?.customPaths)
     ? (raw as { customPaths: string[] }).customPaths
     : []
@@ -133,7 +174,7 @@ function loadSpaceIndex(): Map<string, SpaceIndexEntry> {
         } catch { continue }
         const meta = tryReadMeta(spacePath)
         if (meta) {
-          map.set(meta.id, { path: spacePath })
+          map.set(meta.id, metaToEntry(meta, spacePath))
         }
       }
     } catch (error) {
@@ -146,15 +187,32 @@ function loadSpaceIndex(): Map<string, SpaceIndexEntry> {
     if (existsSync(customPath)) {
       const meta = tryReadMeta(customPath)
       if (meta && !map.has(meta.id)) {
-        map.set(meta.id, { path: customPath })
+        map.set(meta.id, metaToEntry(meta, customPath))
       }
     }
   }
 
-  // Persist v2 format
+  // Persist v3 format
   persistIndex(map)
-  console.log(`[Space] Index v2 migration complete: ${map.size} spaces`)
+  console.log(`[Space] Index v3 migration complete: ${map.size} spaces`)
+  registerHaloTemp(map)
   return map
+}
+
+/**
+ * Register halo-temp into the registry (in-memory only, never persisted to index).
+ */
+function registerHaloTemp(map: Map<string, SpaceIndexEntry>): void {
+  const tempPath = getTempSpacePath()
+  const now = new Date().toISOString()
+  map.set('halo-temp', {
+    path: tempPath,
+    name: 'Halo',
+    icon: 'sparkles',
+    createdAt: now,
+    updatedAt: now,
+    isTemp: true
+  })
 }
 
 /**
@@ -171,12 +229,21 @@ function tryReadMeta(spacePath: string): SpaceMeta | null {
 }
 
 /**
- * Persist the registry Map to disk (atomic write via tmp + rename).
+ * Persist the registry Map to disk as v3 (atomic write via tmp + rename).
+ * Excludes halo-temp (isTemp entries are memory-only).
  */
 function persistIndex(map: Map<string, SpaceIndexEntry>): void {
-  const data: SpaceIndexV2 = {
-    version: 2,
-    spaces: Object.fromEntries(map)
+  // Filter out halo-temp before persisting
+  const persistable: Record<string, SpaceIndexEntry> = {}
+  for (const [id, entry] of map) {
+    if (!entry.isTemp) {
+      persistable[id] = entry
+    }
+  }
+
+  const data: SpaceIndexV3 = {
+    version: 3,
+    spaces: persistable
   }
   const indexPath = getSpaceIndexPath()
   const tmpPath = indexPath + '.tmp'
@@ -196,160 +263,108 @@ function persistIndex(map: Map<string, SpaceIndexEntry>): void {
 }
 
 // ============================================================================
-// Halo Temp Space
-// ============================================================================
-
-const HALO_SPACE: Space = {
-  id: 'halo-temp',
-  name: 'Halo',
-  icon: 'sparkles',
-  path: '',
-  isTemp: true,
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString()
-}
-
-export function getHaloSpace(): Space {
-  const tempPath = getTempSpacePath()
-
-  let preferences: SpacePreferences | undefined
-  const metaPath = join(tempPath, '.halo', 'meta.json')
-  if (existsSync(metaPath)) {
-    try {
-      const meta: SpaceMeta = JSON.parse(readFileSync(metaPath, 'utf-8'))
-      preferences = meta.preferences
-    } catch {
-      // Ignore parse errors
-    }
-  }
-
-  const result = {
-    ...HALO_SPACE,
-    path: tempPath,
-    preferences
-  }
-  console.log('[Space] getHaloSpace result: id=%s path=%s', result.id, result.path)
-  return result
-}
-
-// ============================================================================
 // Core Space Functions
 // ============================================================================
 
 /**
- * Load a space from a filesystem path (reads meta.json).
+ * Build a Space object from a registry entry (without preferences).
  */
-function loadSpaceFromPath(spacePath: string): Space | null {
-  const metaPath = join(spacePath, '.halo', 'meta.json')
-
-  if (!existsSync(metaPath)) return null
-
-  try {
-    const meta: SpaceMeta = JSON.parse(readFileSync(metaPath, 'utf-8'))
-
-    return {
-      id: meta.id,
-      name: meta.name,
-      icon: meta.icon,
-      path: spacePath,
-      isTemp: false,
-      createdAt: meta.createdAt,
-      updatedAt: meta.updatedAt,
-      preferences: meta.preferences,
-      workingDir: meta.workingDir
-    }
-  } catch (error) {
-    console.error(`[Space] Failed to read space meta for ${spacePath}:`, error)
-    return null
+function entryToSpace(id: string, entry: SpaceIndexEntry): Space {
+  return {
+    id,
+    name: entry.name,
+    icon: entry.icon,
+    path: entry.path,
+    isTemp: !!entry.isTemp,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    workingDir: entry.workingDir
   }
 }
 
 /**
- * Get a specific space by ID. Uses LRU cache to avoid repeated disk reads.
+ * Build a Space object with preferences loaded from meta.json.
  */
-export function getSpace(spaceId: string): Space | null {
-  if (spaceId === 'halo-temp') {
-    return getHaloSpace()
+function entryToSpaceWithPreferences(id: string, entry: SpaceIndexEntry): Space {
+  const space = entryToSpace(id, entry)
+  const meta = tryReadMeta(entry.path)
+  if (meta?.preferences) {
+    space.preferences = meta.preferences
   }
-
-  // Check LRU cache (move to end if hit, maintaining LRU order)
-  if (spaceCache.has(spaceId)) {
-    const cached = spaceCache.get(spaceId)!
-    spaceCache.delete(spaceId)
-    spaceCache.set(spaceId, cached)
-    return cached
-  }
-
-  const entry = getRegistry().get(spaceId)
-  if (!entry) return null
-
-  // Validate path still exists (user may have deleted folder externally)
-  if (!existsSync(join(entry.path, '.halo', 'meta.json'))) {
-    console.warn(`[Space] Space ${spaceId} path invalid (${entry.path}), removing from index`)
-    getRegistry().delete(spaceId)
-    persistIndex(getRegistry())
-    return null
-  }
-
-  const space = loadSpaceFromPath(entry.path)
-  if (!space) return null
-
-  console.log(`[Space] Loaded "${space.name}" (${spaceId}): path=${entry.path}, workingDir=${space.workingDir ?? '(none)'}`)
-
-  // Add to LRU cache, evict oldest if full
-  spaceCache.set(spaceId, space)
-  if (spaceCache.size > MAX_SPACE_CACHE_SIZE) {
-    const oldest = spaceCache.keys().next().value
-    if (oldest) spaceCache.delete(oldest)
-  }
-
   return space
 }
 
 /**
- * List all spaces. Iterates registry, reads meta.json for each.
- * Does NOT calculate stats (callers request stats separately if needed).
+ * Get Halo temp space. Delegates to unified getSpace().
+ */
+export function getHaloSpace(): Space {
+  return getSpace('halo-temp')!
+}
+
+/**
+ * Get a specific space by ID. Pure memory read from registry — zero disk I/O.
+ * Does NOT include preferences. Use getSpaceWithPreferences() if you need them.
+ */
+export function getSpace(spaceId: string): Space | null {
+  const entry = getRegistry().get(spaceId)
+  if (!entry) return null
+  return entryToSpace(spaceId, entry)
+}
+
+/**
+ * Get a specific space with preferences loaded from meta.json (single disk read).
+ * Use this only when preferences are needed (IPC/UI layer).
+ */
+export function getSpaceWithPreferences(spaceId: string): Space | null {
+  const entry = getRegistry().get(spaceId)
+  if (!entry) return null
+  return entryToSpaceWithPreferences(spaceId, entry)
+}
+
+/**
+ * List all spaces. Pure memory read — zero disk I/O.
+ * Validates paths in batch; removes invalid entries.
+ * Does NOT include preferences (not needed for dropdown display).
  */
 export function listSpaces(): Space[] {
   const spaces: Space[] = []
-  let dirty = false
+  const invalidIds: string[] = []
 
   for (const [id, entry] of getRegistry()) {
-    const space = loadSpaceFromPath(entry.path)
-    if (space) {
-      spaces.push(space)
-    } else {
-      // Path no longer valid, clean up
-      console.warn(`[Space] Space ${id} at ${entry.path} no longer valid, removing from index`)
-      getRegistry().delete(id)
-      dirty = true
+    if (entry.isTemp) continue  // halo-temp is returned via getHaloSpace()
+
+    if (!existsSync(entry.path)) {
+      invalidIds.push(id)
+      continue
     }
+    spaces.push(entryToSpace(id, entry))
   }
 
-  if (dirty) {
+  // Batch cleanup invalid entries
+  if (invalidIds.length > 0) {
+    for (const id of invalidIds) {
+      console.warn(`[Space] Space ${id} path invalid, removing from index`)
+      getRegistry().delete(id)
+    }
     persistIndex(getRegistry())
   }
 
   spaces.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-  console.log('[Space] listSpaces: registry=%d result=%d', getRegistry().size, spaces.length)
+  console.log('[Space] listSpaces: count=%d', spaces.length)
   return spaces
 }
 
 /**
  * Get all valid space paths (for security checks).
- * Reads from registry instead of scanning filesystem.
+ * Pure memory read from registry — zero disk I/O.
  */
 export function getAllSpacePaths(): string[] {
-  const paths: string[] = [getTempSpacePath()]
+  const paths: string[] = []
 
   for (const [, entry] of getRegistry()) {
-    if (existsSync(entry.path)) {
-      paths.push(entry.path)
-    }
-    // Include workingDir for project-linked spaces (agent/artifact operations happen there)
-    const meta = tryReadMeta(entry.path)
-    if (meta?.workingDir && existsSync(meta.workingDir)) {
-      paths.push(meta.workingDir)
+    paths.push(entry.path)
+    if (entry.workingDir) {
+      paths.push(entry.workingDir)
     }
   }
 
@@ -387,33 +402,30 @@ export function createSpace(input: { name: string; icon: string; customPath?: st
   writeFileSync(join(spacePath, '.halo', 'meta.json'), JSON.stringify(meta, null, 2))
 
   // Register in index (memory + disk)
-  getRegistry().set(id, { path: spacePath })
-  persistIndex(getRegistry())
-
-  console.log(`[Space] Created space ${id}: path=${spacePath}${workingDir ? `, workingDir=${workingDir}` : ''}`)
-
-  return {
-    id,
+  const entry: SpaceIndexEntry = {
+    path: spacePath,
     name: input.name,
     icon: input.icon,
-    path: spacePath,
-    isTemp: false,
     createdAt: now,
     updatedAt: now,
     workingDir
   }
+  getRegistry().set(id, entry)
+  persistIndex(getRegistry())
+
+  console.log(`[Space] Created space ${id}: path=${spacePath}${workingDir ? `, workingDir=${workingDir}` : ''}`)
+
+  return entryToSpace(id, entry)
 }
 
 /**
  * Delete a space. Removes from both memory and disk index.
  */
 export function deleteSpace(spaceId: string): boolean {
-  const space = getSpace(spaceId)
-  if (!space || space.isTemp) {
-    return false
-  }
+  const entry = getRegistry().get(spaceId)
+  if (!entry || entry.isTemp) return false
 
-  const spacePath = space.path
+  const spacePath = entry.path
   const spacesDir = getSpacesDir()
   const isCentralized = spacePath.startsWith(spacesDir)
 
@@ -429,9 +441,8 @@ export function deleteSpace(spaceId: string): boolean {
       }
     }
 
-    // Unregister from index (memory + disk) and invalidate cache
+    // Unregister from index (memory + disk)
     getRegistry().delete(spaceId)
-    spaceCache.delete(spaceId)
     persistIndex(getRegistry())
 
     return true
@@ -445,62 +456,55 @@ export function deleteSpace(spaceId: string): boolean {
  * Open space folder in file explorer.
  */
 export function openSpaceFolder(spaceId: string): boolean {
-  const space = getSpace(spaceId)
+  const entry = getRegistry().get(spaceId)
+  if (!entry) return false
 
-  if (space) {
-    if (space.isTemp) {
-      const artifactsPath = join(space.path, 'artifacts')
-      if (existsSync(artifactsPath)) {
-        shell.openPath(artifactsPath)
-        return true
-      }
-    } else {
-      // Open workingDir (project folder) if available, otherwise data path
-      const targetPath = space.workingDir || space.path
-      shell.openPath(targetPath)
+  if (entry.isTemp) {
+    const artifactsPath = join(entry.path, 'artifacts')
+    if (existsSync(artifactsPath)) {
+      shell.openPath(artifactsPath)
       return true
     }
+  } else {
+    // Open workingDir (project folder) if available, otherwise data path
+    const targetPath = entry.workingDir || entry.path
+    shell.openPath(targetPath)
+    return true
   }
 
   return false
 }
 
 /**
- * Update space metadata. Returns updated space directly (no redundant getSpace call).
+ * Update space metadata. Updates registry (memory + disk) and meta.json.
  */
 export function updateSpace(spaceId: string, updates: { name?: string; icon?: string }): Space | null {
-  const space = getSpace(spaceId)
-
-  if (!space || space.isTemp) {
-    return null
-  }
-
-  const metaPath = join(space.path, '.halo', 'meta.json')
+  const entry = getRegistry().get(spaceId)
+  if (!entry || entry.isTemp) return null
 
   try {
-    const meta: SpaceMeta = JSON.parse(readFileSync(metaPath, 'utf-8'))
+    // Update registry entry in memory
+    if (updates.name) entry.name = updates.name
+    if (updates.icon) entry.icon = updates.icon
+    entry.updatedAt = new Date().toISOString()
 
-    if (updates.name) meta.name = updates.name
-    if (updates.icon) meta.icon = updates.icon
-    meta.updatedAt = new Date().toISOString()
+    // Persist index
+    persistIndex(getRegistry())
 
-    writeFileSync(metaPath, JSON.stringify(meta, null, 2))
-
-    // Build updated space and refresh cache
-    const updatedSpace: Space = {
-      id: space.id,
-      name: meta.name,
-      icon: meta.icon,
-      path: space.path,
-      isTemp: false,
-      createdAt: meta.createdAt,
-      updatedAt: meta.updatedAt,
-      preferences: meta.preferences,
-      workingDir: meta.workingDir
+    // Write meta.json — read existing to preserve preferences
+    const existingMeta = tryReadMeta(entry.path)
+    const meta: SpaceMeta = {
+      id: spaceId,
+      name: entry.name,
+      icon: entry.icon,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+      preferences: existingMeta?.preferences,
+      workingDir: entry.workingDir
     }
-    spaceCache.set(spaceId, updatedSpace)
+    writeFileSync(join(entry.path, '.halo', 'meta.json'), JSON.stringify(meta, null, 2))
 
-    return updatedSpace
+    return entryToSpaceWithPreferences(spaceId, entry)
   } catch (error) {
     console.error('[Space] Failed to update space:', error)
     return null
@@ -509,74 +513,60 @@ export function updateSpace(spaceId: string, updates: { name?: string; icon?: st
 
 /**
  * Update space preferences (layout settings, etc.).
- * Returns updated space directly (no redundant getSpace call).
+ * Only writes meta.json — does NOT write index (preferences are not in the index).
  */
 export function updateSpacePreferences(
   spaceId: string,
   preferences: Partial<SpacePreferences>
 ): Space | null {
-  const space = getSpace(spaceId)
+  const entry = getRegistry().get(spaceId)
+  if (!entry) return null
 
-  if (!space) {
-    return null
-  }
-
-  const metaPath = join(space.path, '.halo', 'meta.json')
+  const metaPath = join(entry.path, '.halo', 'meta.json')
 
   try {
-    // Ensure .halo directory exists for temp space
-    const haloDir = join(space.path, '.halo')
+    // Ensure .halo directory exists
+    const haloDir = join(entry.path, '.halo')
     if (!existsSync(haloDir)) {
       mkdirSync(haloDir, { recursive: true })
     }
 
-    // Load or create meta
-    let meta: SpaceMeta
-    if (existsSync(metaPath)) {
-      meta = JSON.parse(readFileSync(metaPath, 'utf-8'))
-    } else {
-      meta = {
-        id: space.id,
-        name: space.name,
-        icon: space.icon,
-        createdAt: space.createdAt,
-        updatedAt: new Date().toISOString()
-      }
-    }
+    // Read existing meta to get current preferences
+    const existingMeta = tryReadMeta(entry.path)
+    const currentPrefs: SpacePreferences = existingMeta?.preferences || {}
 
     // Deep merge preferences
-    meta.preferences = meta.preferences || {}
-
     if (preferences.layout) {
-      meta.preferences.layout = {
-        ...meta.preferences.layout,
+      currentPrefs.layout = {
+        ...currentPrefs.layout,
         ...preferences.layout
       }
     }
 
-    meta.updatedAt = new Date().toISOString()
+    // Write meta.json with merged preferences
+    const meta: SpaceMeta = {
+      id: spaceId,
+      name: entry.name,
+      icon: entry.icon,
+      createdAt: entry.createdAt,
+      updatedAt: entry.isTemp ? entry.updatedAt : new Date().toISOString(),
+      preferences: currentPrefs,
+      workingDir: entry.workingDir
+    }
+
+    // Update updatedAt in registry for non-temp spaces
+    if (!entry.isTemp) {
+      entry.updatedAt = meta.updatedAt
+    }
 
     writeFileSync(metaPath, JSON.stringify(meta, null, 2))
 
     console.log(`[Space] Updated preferences for ${spaceId}:`, preferences)
 
-    // Build updated space and refresh cache (skip temp space)
-    const updatedSpace: Space = {
-      id: space.id,
-      name: meta.name,
-      icon: meta.icon,
-      path: space.path,
-      isTemp: space.isTemp,
-      createdAt: meta.createdAt,
-      updatedAt: meta.updatedAt,
-      preferences: meta.preferences,
-      workingDir: meta.workingDir
-    }
-    if (!space.isTemp) {
-      spaceCache.set(spaceId, updatedSpace)
-    }
-
-    return updatedSpace
+    // Return space with freshly merged preferences
+    const space = entryToSpace(spaceId, entry)
+    space.preferences = currentPrefs
+    return space
   } catch (error) {
     console.error('[Space] Failed to update space preferences:', error)
     return null
@@ -584,27 +574,14 @@ export function updateSpacePreferences(
 }
 
 /**
- * Get space preferences only (lightweight, without full space load).
+ * Get space preferences only. Reads from meta.json on demand.
  */
 export function getSpacePreferences(spaceId: string): SpacePreferences | null {
-  const space = getSpace(spaceId)
+  const entry = getRegistry().get(spaceId)
+  if (!entry) return null
 
-  if (!space) {
-    return null
-  }
-
-  const metaPath = join(space.path, '.halo', 'meta.json')
-
-  try {
-    if (existsSync(metaPath)) {
-      const meta: SpaceMeta = JSON.parse(readFileSync(metaPath, 'utf-8'))
-      return meta.preferences || null
-    }
-    return null
-  } catch (error) {
-    console.error('[Space] Failed to get space preferences:', error)
-    return null
-  }
+  const meta = tryReadMeta(entry.path)
+  return meta?.preferences || null
 }
 
 // ============================================================================

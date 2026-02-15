@@ -108,6 +108,7 @@ import {
   cleanupExtendedServices
 } from './bootstrap'
 import { initializeApp } from './services/config.service'
+import { flushAllPendingIndexWrites } from './services/conversation.service'
 import { disableRemoteAccess } from './services/remote.service'
 import { stopOpenAICompatRouter } from './openai-compat-router'
 import { manualCheckForUpdates } from './services/updater.service'
@@ -423,6 +424,9 @@ async function shutdownServices(): Promise<void> {
     return
   }
   hasShutdown = true
+
+  // Flush pending conversation index writes before shutdown
+  flushAllPendingIndexWrites()
 
   // Shutdown health system first (marks clean exit)
   shutdownHealthSystem()

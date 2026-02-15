@@ -8,7 +8,7 @@ import {
   listSpaces,
   createSpace,
   deleteSpace,
-  getSpace,
+  getSpaceWithPreferences,
   openSpaceFolder,
   updateSpace,
   updateSpacePreferences,
@@ -78,10 +78,10 @@ export function registerSpaceHandlers(): void {
     }
   })
 
-  // Get a specific space
+  // Get a specific space (with preferences for UI)
   ipcMain.handle('space:get', async (_event, spaceId: string) => {
     try {
-      const space = getSpace(spaceId)
+      const space = getSpaceWithPreferences(spaceId)
       return { success: true, data: space }
     } catch (error: unknown) {
       const err = error as Error

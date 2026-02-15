@@ -9,7 +9,7 @@
 import { useState, useRef, useEffect, useMemo, memo, type RefObject } from 'react'
 import {
   CheckCircle2,
-  XCircle,
+  AlertTriangle,
   ChevronDown,
   ChevronUp,
   Loader2,
@@ -191,12 +191,15 @@ const ThoughtItem = memo(function ThoughtItem({ thought, isLast }: { thought: Th
   const truncatedContent = needsTruncate ? displayContent.substring(0, maxPreviewLength) : displayContent
 
   // Status indicator for tool_use - now includes execution status
+  // Tool errors use warning style (amber) instead of error style (red) because
+  // these are internal AI feedback (e.g. "read file first"), not user-facing errors.
+  // The AI will auto-recover from these, so a softer visual treatment avoids misleading users.
   const getToolStatus = () => {
     if (thought.type !== 'tool_use') return null
     if (!isToolReady) return { label: t('Generating'), color: 'text-amber-400', icon: 'loading' }
     if (hasToolResult) {
       return thought.toolResult!.isError
-        ? { label: t('Failed'), color: 'text-destructive', icon: 'error' }
+        ? { label: t('Hint'), color: 'text-amber-500', icon: 'warning' }
         : { label: t('Done'), color: 'text-green-400', icon: 'success' }
     }
     return { label: t('Running'), color: 'text-blue-400', icon: 'running' }
@@ -209,10 +212,10 @@ const ThoughtItem = memo(function ThoughtItem({ thought, isLast }: { thought: Th
       {/* Timeline line */}
       <div className="flex flex-col items-center">
         <div className={`w-7 h-7 rounded-full flex items-center justify-center ${
-          thought.isError || thought.toolResult?.isError ? 'bg-destructive/20' : isStreaming ? 'bg-primary/20' : 'bg-primary/10'
-        } ${thought.toolResult?.isError ? 'text-destructive' : color}`}>
+          thought.isError || thought.toolResult?.isError ? 'bg-amber-500/20' : isStreaming ? 'bg-primary/20' : 'bg-primary/10'
+        } ${thought.toolResult?.isError ? 'text-amber-500' : color}`}>
           {hasToolResult ? (
-            thought.toolResult!.isError ? <XCircle size={14} /> : <CheckCircle2 size={14} />
+            thought.toolResult!.isError ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />
           ) : (
             <Icon size={14} />
           )}
@@ -226,7 +229,7 @@ const ThoughtItem = memo(function ThoughtItem({ thought, isLast }: { thought: Th
       <div className="flex-1 pb-4 min-w-0">
         {/* Header */}
         <div className="flex items-center gap-2 mb-1">
-          <span className={`text-xs font-medium ${thought.toolResult?.isError ? 'text-destructive' : color}`}>
+          <span className={`text-xs font-medium ${thought.toolResult?.isError ? 'text-amber-500' : color}`}>
             {(() => {
               const label = getThoughtLabelKey(thought.type)
               return label === 'AI' ? label : t(label)
