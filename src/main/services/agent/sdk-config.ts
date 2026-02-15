@@ -294,6 +294,12 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
     // Performance: skip file snapshot I/O (Halo doesn't expose /rewind)
     CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING: '1',
 
+    // Windows: pass through Git Bash path (set by git-bash.service during startup)
+    // This was stripped by getCleanUserEnv() along with all CLAUDE_* vars
+    ...(process.env.CLAUDE_CODE_GIT_BASH_PATH
+      ? { CLAUDE_CODE_GIT_BASH_PATH: process.env.CLAUDE_CODE_GIT_BASH_PATH }
+      : {}),
+
     // debug flag to claude code sdk
     // DEBUG: '1',
     // DEBUG_CLAUDE_AGENT_SDK: '1',
