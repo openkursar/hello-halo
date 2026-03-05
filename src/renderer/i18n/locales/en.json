@@ -871,6 +871,7 @@
   "Add to Queue": "Add to Queue",
   "Send after current response completes": "Send after current response completes",
   "Send queue ({{count}})": "Send queue ({{count}})",
+  "There are {{count}} messages waiting to send": "There are {{count}} messages waiting to send",
   "Remove queued message": "Remove queued message",
   "Edit queued message...": "Edit queued message...",
   "Message #{{index}}": "Message #{{index}}"

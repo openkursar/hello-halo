@@ -871,6 +871,7 @@
   "Add to Queue": "排队发送",
   "Send after current response completes": "在当前回复完全结束后发送",
   "Send queue ({{count}})": "发送队列（{{count}}）",
+  "There are {{count}} messages waiting to send": "有 {{count}} 条消息待发送",
   "Remove queued message": "撤回排队消息",
   "Edit queued message...": "编辑排队消息...",
   "Message #{{index}}": "第 {{index}} 条消息"

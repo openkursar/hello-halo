@@ -80,6 +80,7 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
   const [showSendMenu, setShowSendMenu] = useState(false)
   const [sendKeyMode, setSendKeyMode] = useState<SendKeyMode>('enter')
   const [queuedDrafts, setQueuedDrafts] = useState<QueuedSendDraft[]>([])
+  const [queueCollapsed, setQueueCollapsed] = useState(false)
   const [dispatchingDraftId, setDispatchingDraftId] = useState<string | null>(null)
   const [attachMenuElement, setAttachMenuElement] = useState<HTMLDivElement | null>(null)
   const [sendMenuElement, setSendMenuElement] = useState<HTMLDivElement | null>(null)
@@ -354,8 +355,16 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
       return
     }
 
-    await sendDraft(draft, false)
     clearComposer()
+    try {
+      await sendDraft(draft, false)
+    } catch (error) {
+      console.error('Failed to send draft', error)
+      if (!isOnboardingSendStep) {
+        setContent(draft.content)
+        setImages(draft.images)
+      }
+    }
   }
 
   const enqueueFromComposer = () => {
@@ -545,10 +554,18 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
 
         {queuedDrafts.length > 0 && (
           <div className="mb-2 space-y-2">
-            <div className="text-xs text-muted-foreground">
-              {t('Send queue ({{count}})', { count: queuedDrafts.length })}
-            </div>
-            {queuedDrafts.map((draft, index) => {
+            <button
+              onClick={() => setQueueCollapsed((prev) => !prev)}
+              className="w-full inline-flex items-center justify-between rounded-lg border border-border/50 bg-card/50 px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-card/80"
+            >
+              <span>
+                {queueCollapsed
+                  ? t('There are {{count}} messages waiting to send', { count: queuedDrafts.length })
+                  : t('Send queue ({{count}})', { count: queuedDrafts.length })}
+              </span>
+              <ChevronUp size={14} className={`transition-transform duration-200 ${queueCollapsed ? 'rotate-180' : ''}`} />
+            </button>
+            {!queueCollapsed && queuedDrafts.map((draft, index) => {
               const isDispatching = dispatchingDraftId === draft.id
               return (
                 <div
