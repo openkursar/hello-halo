@@ -20,7 +20,7 @@
  */
 
 import { useState, useRef, useEffect, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
-import { Plus, ImagePlus, Loader2, AlertCircle, Atom, Globe } from 'lucide-react'
+import { Plus, ImagePlus, Loader2, AlertCircle, Atom, Globe, Check, ChevronUp, X } from 'lucide-react'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { useAIBrowserStore } from '../../stores/ai-browser.store'
 import { getOnboardingPrompt } from '../onboarding/onboardingData'
@@ -32,8 +32,13 @@ import { SlashCommandMenu, filterSlashCommands } from './SlashCommandMenu'
 import type { SlashCommandItem } from '../../types/slash-command'
 
 interface InputAreaProps {
-  onSend: (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => void
-  onStop: () => void
+  onSend: (
+    content: string,
+    images?: ImageAttachment[],
+    thinkingEnabled?: boolean,
+    options?: { allowWhileGenerating?: boolean }
+  ) => Promise<void> | void
+  onStop: () => Promise<void> | void
   isGenerating: boolean
   placeholder?: string
   isCompact?: boolean
@@ -51,6 +56,17 @@ interface ImageError {
   message: string
 }
 
+type SendKeyMode = 'enter' | 'ctrl-enter'
+
+interface QueuedSendDraft {
+  id: string
+  content: string
+  images: ImageAttachment[]
+  thinkingEnabled: boolean
+}
+
+const SEND_KEY_MODE_STORAGE_KEY = 'halo-send-key-mode'
+
 export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [] }: InputAreaProps) {
   const { t } = useTranslation()
   const [content, setContent] = useState('')
@@ -61,12 +77,17 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
   const [imageError, setImageError] = useState<ImageError | null>(null)
   const [thinkingEnabled, setThinkingEnabled] = useState(false)  // Extended thinking mode
   const [showAttachMenu, setShowAttachMenu] = useState(false)  // Attachment menu visibility
+  const [showSendMenu, setShowSendMenu] = useState(false)
+  const [sendKeyMode, setSendKeyMode] = useState<SendKeyMode>('enter')
+  const [queuedDrafts, setQueuedDrafts] = useState<QueuedSendDraft[]>([])
+  const [dispatchingDraftId, setDispatchingDraftId] = useState<string | null>(null)
+  const [attachMenuElement, setAttachMenuElement] = useState<HTMLDivElement | null>(null)
+  const [sendMenuElement, setSendMenuElement] = useState<HTMLDivElement | null>(null)
   // Slash-command autocomplete
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const attachMenuRef = useRef<HTMLDivElement>(null)
 
   // AI Browser state
   const { enabled: aiBrowserEnabled, setEnabled: setAIBrowserEnabled } = useAIBrowserStore()
@@ -79,19 +100,40 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
     }
   }, [imageError])
 
-  // Close attachment menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (attachMenuRef.current && !attachMenuRef.current.contains(event.target as Node)) {
+      if (attachMenuElement && !attachMenuElement.contains(event.target as Node)) {
         setShowAttachMenu(false)
+      }
+      if (sendMenuElement && !sendMenuElement.contains(event.target as Node)) {
+        setShowSendMenu(false)
       }
     }
 
-    if (showAttachMenu) {
+    if (showAttachMenu || showSendMenu) {
       document.addEventListener('mousedown', handleClickOutside)
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }
-  }, [showAttachMenu])
+  }, [showAttachMenu, showSendMenu, attachMenuElement, sendMenuElement])
+
+  useEffect(() => {
+    try {
+      const savedMode = localStorage.getItem(SEND_KEY_MODE_STORAGE_KEY)
+      if (savedMode === 'enter' || savedMode === 'ctrl-enter') {
+        setSendKeyMode(savedMode)
+      }
+    } catch (error) {
+      console.error('Failed to read send key mode from localStorage', error)
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SEND_KEY_MODE_STORAGE_KEY, sendKeyMode)
+    } catch (error) {
+      console.error('Failed to save send key mode to localStorage', error)
+    }
+  }, [sendKeyMode])
 
   // Show error to user
   const showError = (message: string) => {
@@ -271,24 +313,133 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
     })
   }
 
-  // Handle send
-  const handleSend = () => {
+  const buildDraftFromComposer = (): QueuedSendDraft | null => {
     const textToSend = isOnboardingSendStep ? onboardingPrompt : content.trim()
     const hasContent = textToSend || images.length > 0
 
-    if (hasContent && !isGenerating) {
-      onSend(textToSend, images.length > 0 ? images : undefined, thinkingEnabled)
+    if (!hasContent) {
+      return null
+    }
 
-      if (!isOnboardingSendStep) {
-        setContent('')
-        setImages([])  // Clear images after send
-        // Don't reset thinkingEnabled - user might want to keep it on
-        // Reset height
-        if (textareaRef.current) {
-          textareaRef.current.style.height = 'auto'
-        }
+    return {
+      id: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      content: textToSend,
+      images,
+      thinkingEnabled
+    }
+  }
+
+  const clearComposer = () => {
+    if (!isOnboardingSendStep) {
+      setContent('')
+      setImages([])
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto'
       }
     }
+  }
+
+  const sendDraft = async (draft: QueuedSendDraft, allowWhileGenerating: boolean) => {
+    await onSend(
+      draft.content,
+      draft.images.length > 0 ? draft.images : undefined,
+      draft.thinkingEnabled,
+      { allowWhileGenerating }
+    )
+  }
+
+  const handleSendNow = async () => {
+    const draft = buildDraftFromComposer()
+    if (!draft || isGenerating) {
+      return
+    }
+
+    await sendDraft(draft, false)
+    clearComposer()
+  }
+
+  const enqueueFromComposer = () => {
+    const draft = buildDraftFromComposer()
+    if (!draft) {
+      return
+    }
+
+    setQueuedDrafts((prev) => [...prev, draft])
+    clearComposer()
+  }
+
+  const handleStopAndSend = async () => {
+    setShowSendMenu(false)
+    const draft = buildDraftFromComposer()
+    if (!draft) {
+      return
+    }
+
+    if (isGenerating) {
+      await onStop()
+    }
+
+    await sendDraft(draft, true)
+    clearComposer()
+  }
+
+  const handleAddToQueue = () => {
+    setShowSendMenu(false)
+    if (isGenerating) {
+      enqueueFromComposer()
+      return
+    }
+    void handleSendNow()
+  }
+
+  const dispatchQueuedDraft = async (draft: QueuedSendDraft, allowWhileGenerating: boolean) => {
+    setDispatchingDraftId(draft.id)
+    setQueuedDrafts((prev) => prev.filter((item) => item.id !== draft.id))
+    try {
+      await sendDraft(draft, allowWhileGenerating)
+    } catch (error) {
+      console.error('Failed to send queued draft', error)
+      setQueuedDrafts((prev) => [draft, ...prev])
+    } finally {
+      setDispatchingDraftId(null)
+    }
+  }
+
+  useEffect(() => {
+    if (dispatchingDraftId) {
+      return
+    }
+
+    const nextDraft = queuedDrafts[0]
+    if (!nextDraft) {
+      return
+    }
+
+    if (!isGenerating) {
+      void dispatchQueuedDraft(nextDraft, false)
+    }
+  }, [queuedDrafts, isGenerating, dispatchingDraftId])
+
+  const updateQueuedDraftContent = (id: string, value: string) => {
+    setQueuedDrafts((prev) => prev.map((draft) => (
+      draft.id === id
+        ? { ...draft, content: value }
+        : draft
+    )))
+  }
+
+  const removeQueuedDraft = (id: string) => {
+    setQueuedDrafts((prev) => prev.filter((draft) => draft.id !== id))
+  }
+
+  // Handle send
+  const handleSend = () => {
+    void handleSendNow()
+  }
+
+  const handleSendKeyModeChange = (mode: SendKeyMode) => {
+    setSendKeyMode(mode)
+    setShowSendMenu(false)
   }
 
   // Detect mobile device (touch + narrow screen)
@@ -340,22 +491,30 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    // Mobile: Enter for newline, send via button only
-    // PC: Enter to send, Shift+Enter for newline
     if (e.key === 'Enter' && !e.shiftKey && !isMobile()) {
-      e.preventDefault()
-      handleSend()
+      const ctrlOrMeta = e.ctrlKey || e.metaKey
+      const shouldSend = sendKeyMode === 'enter' ? !ctrlOrMeta : ctrlOrMeta
+
+      if (shouldSend) {
+        e.preventDefault()
+        if (!isGenerating) {
+          handleSend()
+        }
+        return
+      }
     }
+
     // Esc to stop
     if (e.key === 'Escape' && isGenerating) {
       e.preventDefault()
-      onStop()
+      void onStop()
     }
   }
 
   // In onboarding mode, can always send (prefilled content)
   // Can send if has text OR has images (and not processing/generating)
   const canSend = isOnboardingSendStep || ((content.trim().length > 0 || images.length > 0) && !isGenerating && !isProcessingImages)
+  const hasDraft = isOnboardingSendStep || ((content.trim().length > 0 || images.length > 0) && !isProcessingImages)
   const hasImages = images.length > 0
 
   return (
@@ -384,6 +543,51 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
           onChange={handleFileInputChange}
         />
 
+        {queuedDrafts.length > 0 && (
+          <div className="mb-2 space-y-2">
+            <div className="text-xs text-muted-foreground">
+              {t('Send queue ({{count}})', { count: queuedDrafts.length })}
+            </div>
+            {queuedDrafts.map((draft, index) => {
+              const isDispatching = dispatchingDraftId === draft.id
+              return (
+                <div
+                  key={draft.id}
+                  className="rounded-xl border border-border/60 bg-card/70 px-3 py-2"
+                >
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-xs text-muted-foreground">{t('Send after current response completes')}</span>
+                    <button
+                      onClick={() => removeQueuedDraft(draft.id)}
+                      disabled={isDispatching}
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                      title={t('Remove queued message')}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <textarea
+                    value={draft.content}
+                    onChange={(e) => updateQueuedDraftContent(draft.id, e.target.value)}
+                    disabled={isDispatching}
+                    rows={2}
+                    className="w-full resize-none rounded-lg border border-border/50 bg-background/50 px-2 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
+                    placeholder={t('Edit queued message...')}
+                  />
+                  {draft.images.length > 0 && (
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {t('Images: {{count}}', { count: draft.images.length })}
+                    </div>
+                  )}
+                  <div className="mt-1 text-xs text-muted-foreground/70">
+                    {t('Message #{{index}}', { index: index + 1 })}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
         {/* Input container */}
         <div
           className={`
@@ -392,7 +596,6 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
               ? 'ring-1 ring-primary/30 bg-card shadow-sm'
               : 'bg-secondary/50 hover:bg-secondary/70'
             }
-            ${isGenerating ? 'opacity-60' : ''}
             ${isDragOver ? 'ring-2 ring-primary/50 bg-primary/5' : ''}
           `}
           onDragOver={handleDragOver}
@@ -459,7 +662,6 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
               placeholder={placeholder || t('Type a message, let Halo help you...')}
-              disabled={isGenerating}
               readOnly={isOnboardingSendStep}
               rows={1}
               className={`w-full bg-transparent resize-none
@@ -484,9 +686,18 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
             onImageClick={handleImageButtonClick}
             imageCount={images.length}
             maxImages={MAX_IMAGES}
-            attachMenuRef={attachMenuRef}
+            attachMenuRef={setAttachMenuElement}
+            sendMenuRef={setSendMenuElement}
+            showSendMenu={showSendMenu}
+            onSendMenuToggle={() => setShowSendMenu(!showSendMenu)}
+            sendKeyMode={sendKeyMode}
+            onSendKeyModeChange={handleSendKeyModeChange}
+            hasDraft={hasDraft}
+            queuedCount={queuedDrafts.length}
             canSend={canSend}
             onSend={handleSend}
+            onStopAndSend={() => void handleStopAndSend()}
+            onAddToQueue={handleAddToQueue}
             onStop={onStop}
           />
         </div>
@@ -514,10 +725,19 @@ interface InputToolbarProps {
   onImageClick: () => void
   imageCount: number
   maxImages: number
-  attachMenuRef: React.RefObject<HTMLDivElement | null>
+  attachMenuRef: (node: HTMLDivElement | null) => void
+  sendMenuRef: (node: HTMLDivElement | null) => void
+  showSendMenu: boolean
+  onSendMenuToggle: () => void
+  sendKeyMode: SendKeyMode
+  onSendKeyModeChange: (mode: SendKeyMode) => void
+  hasDraft: boolean
+  queuedCount: number
   canSend: boolean
   onSend: () => void
-  onStop: () => void
+  onStopAndSend: () => void
+  onAddToQueue: () => void
+  onStop: () => Promise<void> | void
 }
 
 function InputToolbar({
@@ -534,8 +754,17 @@ function InputToolbar({
   imageCount,
   maxImages,
   attachMenuRef,
+  sendMenuRef,
+  showSendMenu,
+  onSendMenuToggle,
+  sendKeyMode,
+  onSendKeyModeChange,
+  hasDraft,
+  queuedCount,
   canSend,
   onSend,
+  onStopAndSend,
+  onAddToQueue,
   onStop
 }: InputToolbarProps) {
   const { t } = useTranslation()
@@ -632,38 +861,88 @@ function InputToolbar({
         )}
       </div>
 
-      {/* Right section: action button only */}
       <div className="flex items-center">
-        {isGenerating ? (
-          <button
-            onClick={onStop}
-            className="w-8 h-8 flex items-center justify-center
-              bg-destructive/10 text-destructive rounded-lg
-              hover:bg-destructive/20 active:bg-destructive/30
-              transition-all duration-150"
-            title={t('Stop generation (Esc)')}
-          >
-            <div className="w-3 h-3 border-2 border-current rounded-sm" />
-          </button>
-        ) : (
-          <button
-            data-onboarding="send-button"
-            onClick={onSend}
-            disabled={!canSend}
-            className={`
-              w-8 h-8 flex items-center justify-center rounded-lg transition-all duration-200
-              ${canSend
-                ? 'bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95'
-                : 'bg-muted/50 text-muted-foreground/40 cursor-not-allowed'
-              }
-            `}
-            title={thinkingEnabled ? t('Send (Deep Thinking)') : t('Send')}
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
-            </svg>
-          </button>
-        )}
+        <div className="inline-flex h-8 items-stretch rounded-lg border border-border/60">
+          {isGenerating ? (
+            <button
+              onClick={() => void onStop()}
+              className={`w-8 h-full flex items-center justify-center bg-destructive/10 text-destructive transition-colors duration-150 hover:bg-destructive/20 ${!isOnboarding ? 'rounded-l-lg' : 'rounded-lg'}`}
+              title={t('Stop generation (Esc)')}
+            >
+              <div className="w-3 h-3 border-2 border-current rounded-sm" />
+            </button>
+          ) : (
+            <button
+              data-onboarding="send-button"
+              onClick={onSend}
+              disabled={!canSend}
+              className={`w-8 h-full flex items-center justify-center transition-colors duration-200 ${canSend ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted/50 text-muted-foreground/40 cursor-not-allowed'} ${!isOnboarding ? 'rounded-l-lg' : 'rounded-lg'}`}
+              title={thinkingEnabled ? t('Send (Deep Thinking)') : t('Send')}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
+              </svg>
+            </button>
+          )}
+
+          {!isOnboarding && (
+            <div className="relative border-l border-border/60" ref={sendMenuRef}>
+              <button
+                onClick={onSendMenuToggle}
+                className={`w-8 h-full flex items-center justify-center rounded-r-lg transition-colors duration-150 ${canSend ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/70'} ${showSendMenu ? 'brightness-95' : ''}`}
+                title={t('Send options')}
+              >
+                <ChevronUp size={16} className={`transition-transform duration-200 ${showSendMenu ? 'rotate-180' : ''}`} />
+              </button>
+
+              {showSendMenu && (
+                <div className="absolute bottom-full right-0 mb-2 py-1.5 bg-popover border border-border rounded-xl shadow-lg min-w-[250px] z-20 animate-fade-in">
+                  <button
+                    onClick={() => onSendKeyModeChange('enter')}
+                    className="w-full px-3 py-2 flex items-center gap-2 text-sm text-foreground hover:bg-muted/50 transition-colors duration-150"
+                  >
+                    <span className="w-4 h-4 inline-flex items-center justify-center">
+                      {sendKeyMode === 'enter' ? <Check size={14} /> : null}
+                    </span>
+                    <span className="flex-1 text-left">{t('Send with Enter key')}</span>
+                  </button>
+
+                  <button
+                    onClick={() => onSendKeyModeChange('ctrl-enter')}
+                    className="w-full px-3 py-2 flex items-center gap-2 text-sm text-foreground hover:bg-muted/50 transition-colors duration-150"
+                  >
+                    <span className="w-4 h-4 inline-flex items-center justify-center">
+                      {sendKeyMode === 'ctrl-enter' ? <Check size={14} /> : null}
+                    </span>
+                    <span className="flex-1 text-left">{t('Send with Ctrl + Enter key')}</span>
+                  </button>
+
+                  <div className="my-1 h-px bg-border/70" />
+
+                  <button
+                    onClick={onStopAndSend}
+                    disabled={!hasDraft}
+                    className="w-full px-3 py-2 flex items-center gap-2 text-sm text-foreground hover:bg-muted/50 transition-colors duration-150 disabled:text-muted-foreground/40 disabled:cursor-not-allowed"
+                  >
+                    <span className="flex-1 text-left">{t('Stop and Send')}</span>
+                  </button>
+
+                  <button
+                    onClick={onAddToQueue}
+                    disabled={!hasDraft}
+                  className="w-full px-3 py-2 flex items-center gap-2 text-sm text-foreground hover:bg-muted/50 transition-colors duration-150 disabled:text-muted-foreground/40 disabled:cursor-not-allowed"
+                >
+                  <span className="flex-1 text-left">{t('Add to Queue')}</span>
+                  {queuedCount > 0 && (
+                    <span className="text-xs text-muted-foreground">{queuedCount}</span>
+                  )}
+                </button>
+
+              </div>
+            )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

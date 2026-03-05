@@ -864,5 +864,14 @@
   "Zoom in": "Zoom in",
   "Zoom in (+)": "Zoom in (+)",
   "Zoom out": "Zoom out",
-  "Zoom out (-)": "Zoom out (-)"
+  "Zoom out (-)": "Zoom out (-)",
+  "Send with Enter key": "Send with Enter key",
+  "Send with Ctrl + Enter key": "Send with Ctrl + Enter key",
+  "Stop and Send": "Stop and Send",
+  "Add to Queue": "Add to Queue",
+  "Send after current response completes": "Send after current response completes",
+  "Send queue ({{count}})": "Send queue ({{count}})",
+  "Remove queued message": "Remove queued message",
+  "Edit queued message...": "Edit queued message...",
+  "Message #{{index}}": "Message #{{index}}"
 }

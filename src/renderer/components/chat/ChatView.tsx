@@ -274,7 +274,12 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const { enabled: aiBrowserEnabled } = useAIBrowserStore()
 
   // Handle send (with optional images for multi-modal messages, optional thinking mode)
-  const handleSend = async (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => {
+  const handleSend = async (
+    content: string,
+    images?: ImageAttachment[],
+    thinkingEnabled?: boolean,
+    options?: { allowWhileGenerating?: boolean }
+  ) => {
     // In onboarding mode, intercept and play mock response
     if (isOnboarding && currentStep === 'send-message') {
       handleOnboardingSend()
@@ -282,7 +287,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     }
 
     // Can send if has text OR has images
-    if ((!content.trim() && (!images || images.length === 0)) || isGenerating) return
+    if ((!content.trim() && (!images || images.length === 0)) || (isGenerating && !options?.allowWhileGenerating)) return
 
     // Pass both AI Browser and thinking state to sendMessage
     await sendMessage(content, images, aiBrowserEnabled, thinkingEnabled)
@@ -314,7 +319,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const displayIsGenerating = isMockAnimating || isGenerating
   const displayIsThinking = isMockThinking || isThinking
   const displayIsStreaming = isStreaming  // Only real streaming (not mock)
-  const hasMessages = displayMessages.length > 0 || displayStreamingContent || displayIsThinking
+  const hasMessages = displayMessages.length > 0 || Boolean(displayStreamingContent) || displayIsThinking
 
   // Track previous compact state for smooth transitions
   const prevCompactRef = useRef(isCompact)

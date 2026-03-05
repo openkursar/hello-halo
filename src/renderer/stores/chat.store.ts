@@ -946,8 +946,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // Handle tool result for a specific conversation
   handleAgentToolResult: (data) => {
     const { conversationId, toolId } = data
-    // console.log(`[ChatStore] handleAgentToolResult [${conversationId}]:`, toolId)
-    // Tool results are tracked in thoughts, no additional state needed
+    void conversationId
+    void toolId
   },
 
   // Handle error for a specific conversation

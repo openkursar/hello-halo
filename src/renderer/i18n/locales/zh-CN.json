@@ -864,5 +864,14 @@
   "{{field}} is required": "{{field}} 为必填项",
   "{{name}} running": "{{name}} 运行中",
   "← → to switch files": "← → 切换文件",
-  "🤖 AI Browser": "🤖 AI 浏览器"
+  "🤖 AI Browser": "🤖 AI 浏览器",
+  "Send with Enter key": "按 Enter 键发送消息",
+  "Send with Ctrl + Enter key": "按 Ctrl + Enter 键发送消息",
+  "Stop and Send": "打断并发送",
+  "Add to Queue": "排队发送",
+  "Send after current response completes": "在当前回复完全结束后发送",
+  "Send queue ({{count}})": "发送队列（{{count}}）",
+  "Remove queued message": "撤回排队消息",
+  "Edit queued message...": "编辑排队消息...",
+  "Message #{{index}}": "第 {{index}} 条消息"
 }
