@@ -506,11 +506,11 @@ export const api = {
   },
 
   // ===== Artifact =====
-  listArtifacts: async (spaceId: string): Promise<ApiResponse> => {
+  listArtifacts: async (spaceId: string, maxDepth: number = 2): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.listArtifacts(spaceId)
+      return window.halo.listArtifacts(spaceId, maxDepth)
     }
-    return httpRequest('GET', `/api/spaces/${spaceId}/artifacts`)
+    return httpRequest('GET', `/api/spaces/${spaceId}/artifacts?maxDepth=${maxDepth}`)
   },
 
   listArtifactsTree: async (spaceId: string): Promise<ApiResponse> => {

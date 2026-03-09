@@ -145,7 +145,7 @@ export interface HaloAPI {
   onAgentSessionInfo: (callback: (data: unknown) => void) => () => void
 
   // Artifact
-  listArtifacts: (spaceId: string) => Promise<IpcResponse>
+  listArtifacts: (spaceId: string, maxDepth?: number) => Promise<IpcResponse>
   listArtifactsTree: (spaceId: string) => Promise<IpcResponse>
   loadArtifactChildren: (spaceId: string, dirPath: string) => Promise<IpcResponse>
   initArtifactWatcher: (spaceId: string) => Promise<IpcResponse>
@@ -496,7 +496,7 @@ const api: HaloAPI = {
   onAgentSessionInfo: (callback) => createEventListener('agent:session-info', callback),
 
   // Artifact
-  listArtifacts: (spaceId) => ipcRenderer.invoke('artifact:list', spaceId),
+  listArtifacts: (spaceId, maxDepth = 2) => ipcRenderer.invoke('artifact:list', spaceId, maxDepth),
   listArtifactsTree: (spaceId) => ipcRenderer.invoke('artifact:list-tree', spaceId),
   loadArtifactChildren: (spaceId, dirPath) => ipcRenderer.invoke('artifact:load-children', spaceId, dirPath),
   initArtifactWatcher: (spaceId) => ipcRenderer.invoke('artifact:init-watcher', spaceId),

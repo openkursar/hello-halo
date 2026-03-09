@@ -414,7 +414,10 @@ export function registerApiRoutes(app: Express): void {
   // ===== Artifact Routes =====
   app.get('/api/spaces/:spaceId/artifacts', async (req: Request, res: Response) => {
     try {
-      const artifacts = await listArtifacts(req.params.spaceId)
+      const rawMaxDepth = req.query.maxDepth
+      const parsedMaxDepth = typeof rawMaxDepth === 'string' ? Number.parseInt(rawMaxDepth, 10) : Number.NaN
+      const maxDepth = Number.isFinite(parsedMaxDepth) ? Math.max(0, parsedMaxDepth) : 2
+      const artifacts = await listArtifacts(req.params.spaceId, maxDepth)
       res.json({ success: true, data: artifacts })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })

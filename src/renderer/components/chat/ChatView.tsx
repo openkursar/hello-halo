@@ -26,7 +26,7 @@ import {
   getOnboardingPrompt,
 } from '../onboarding/onboardingData'
 import { api } from '../../api'
-import type { ImageAttachment } from '../../types'
+import type { ImageAttachment, Artifact } from '../../types'
 import type { SlashCommandItem } from '../../types/slash-command'
 import { useTranslation } from '../../i18n'
 
@@ -63,6 +63,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const [mockUserMessage, setMockUserMessage] = useState<string | null>(null)
   const [mockAiResponse, setMockAiResponse] = useState<string | null>(null)
   const [mockStreamingContent, setMockStreamingContent] = useState<string>('')
+  const [mentionArtifacts, setMentionArtifacts] = useState<Artifact[]>([])
 
   // Clear mock state when onboarding completes
   useEffect(() => {
@@ -221,6 +222,34 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const onboardingPrompt = getOnboardingPrompt(t)
   const onboardingResponse = getOnboardingAiResponse(t)
   const onboardingHtml = getOnboardingHtmlArtifact(t)
+
+  useEffect(() => {
+    if (!currentSpace?.id) {
+      setMentionArtifacts([])
+      return
+    }
+
+    let cancelled = false
+
+    const loadMentionArtifacts = async () => {
+      try {
+        const response = await api.listArtifacts(currentSpace.id, 5)
+        if (!cancelled && response.success && response.data) {
+          setMentionArtifacts(response.data as Artifact[])
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('[ChatView] Failed to load mention artifacts:', error)
+        }
+      }
+    }
+
+    loadMentionArtifacts()
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentSpace?.id])
 
   // Handle mock onboarding send
   const handleOnboardingSend = useCallback(async () => {
@@ -384,6 +413,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
         placeholder={isCompact ? t('Continue conversation...') : (currentSpace?.isTemp ? t('Say something to Halo...') : t('Continue conversation...'))}
         isCompact={isCompact}
         slashCommands={slashCommands}
+        mentionArtifacts={mentionArtifacts}
       />
     </div>
   )

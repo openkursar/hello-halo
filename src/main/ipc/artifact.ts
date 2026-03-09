@@ -21,9 +21,9 @@ import {
 // Register all artifact handlers
 export function registerArtifactHandlers(): void {
   // List artifacts in a space (flat list for card view)
-  ipcMain.handle('artifact:list', async (_event, spaceId: string) => {
+  ipcMain.handle('artifact:list', async (_event, spaceId: string, maxDepth?: number) => {
     try {
-      const artifacts = await listArtifacts(spaceId)
+      const artifacts = await listArtifacts(spaceId, maxDepth)
       return { success: true, data: artifacts }
     } catch (error) {
       console.error('[IPC] artifact:list error:', error)

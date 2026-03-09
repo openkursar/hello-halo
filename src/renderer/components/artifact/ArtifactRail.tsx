@@ -9,10 +9,19 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { ArtifactCard } from './ArtifactCard'
 import { ArtifactTree } from './ArtifactTree'
 import { api } from '../../api'
 import type { Artifact, ArtifactViewMode, ArtifactChangeEvent } from '../../types'
+
+export interface ArtifactContextMenuState {
+  x: number
+  y: number
+  path: string
+  relativePath: string
+  isFolder: boolean
+}
 import { useIsGenerating } from '../../stores/chat.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
@@ -83,6 +92,7 @@ function normalizeArtifactFromEvent(item: unknown, fallbackSpaceId: string): Art
     extension: candidate.extension || '',
     icon: candidate.icon || 'file-text',
     createdAt: candidate.createdAt || new Date().toISOString(),
+    relativePath: candidate.relativePath || candidate.name,
     preview: undefined,
     size: typeof candidate.size === 'number' ? candidate.size : undefined
   }
@@ -107,6 +117,33 @@ export function ArtifactRail({
     }
   }, [spaceId])
 
+  const handleShowArtifactContextMenu = useCallback((menu: ArtifactContextMenuState) => {
+    setContextMenu(menu)
+  }, [])
+
+  const handleCloseArtifactContextMenu = useCallback(() => {
+    setContextMenu(null)
+  }, [])
+
+  const handleCopyRelativePath = useCallback(async (relativePath: string) => {
+    try {
+      await navigator.clipboard.writeText(relativePath)
+      setContextMenu(null)
+    } catch (error) {
+      console.error('[ArtifactRail] Failed to copy relative path:', error)
+    }
+  }, [])
+
+  const handleRevealInFolder = useCallback(async (path: string) => {
+    if (isWebMode) return
+    try {
+      await api.showArtifactInFolder(path)
+      setContextMenu(null)
+    } catch (error) {
+      console.error('[ArtifactRail] Failed to show in folder:', error)
+    }
+  }, [])
+
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   // Use external control if provided, otherwise internal state
   const isControlled = externalExpanded !== undefined
@@ -128,7 +165,9 @@ export function ArtifactRail({
   }, [initialWidth, isDragging])
   const [viewMode, setViewMode] = useState<ArtifactViewMode>(getInitialViewMode)
   const [mobileOverlayOpen, setMobileOverlayOpen] = useState(false)
+  const [contextMenu, setContextMenu] = useState<ArtifactContextMenuState | null>(null)
   const railRef = useRef<HTMLDivElement>(null)
+  const contextMenuRef = useRef<HTMLDivElement>(null)
   const onWidthChangeRef = useRef(onWidthChange)
   onWidthChangeRef.current = onWidthChange
   const isGenerating = useIsGenerating()
@@ -230,13 +269,37 @@ export function ArtifactRail({
     }
   }, [isMobile, mobileOverlayOpen])
 
+  useEffect(() => {
+    if (!contextMenu) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(event.target as Node)) {
+        setContextMenu(null)
+      }
+    }
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setContextMenu(null)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleEscape)
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [contextMenu])
+
   // Load artifacts from the main process
   const loadArtifacts = useCallback(async () => {
     if (!spaceId) return
 
     try {
       setIsLoading(true)
-      const response = await api.listArtifacts(spaceId)
+      const response = await api.listArtifacts(spaceId, 5)
       if (response.success && response.data) {
         setArtifacts(response.data as Artifact[])
       }
@@ -336,7 +399,10 @@ export function ArtifactRail({
   const renderContent = () => (
     <div className="flex-1 overflow-hidden">
       {viewMode === 'tree' ? (
-        <ArtifactTree spaceId={spaceId} />
+        <ArtifactTree
+          spaceId={spaceId}
+          onShowContextMenu={handleShowArtifactContextMenu}
+        />
       ) : (
         <div className="h-full overflow-auto p-2">
           {isLoading ? (
@@ -370,7 +436,10 @@ export function ArtifactRail({
                     data-onboarding={isOnboardingArtifact && isOnboardingViewStep ? 'artifact-card' : undefined}
                     onClick={isOnboardingArtifact && isOnboardingViewStep ? handleOnboardingArtifactClick : undefined}
                   >
-                    <ArtifactCard artifact={artifact} />
+                    <ArtifactCard
+                      artifact={artifact}
+                      onShowContextMenu={handleShowArtifactContextMenu}
+                    />
                   </div>
                 )
               })}
@@ -598,6 +667,36 @@ export function ArtifactRail({
             </>
           )}
         </div>
+      )}
+
+      {contextMenu && createPortal(
+        <div
+          ref={contextMenuRef}
+          className="fixed z-[9999] min-w-[180px] bg-popover border border-border rounded-lg shadow-lg py-1"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+        >
+          <button
+            onClick={() => handleCopyRelativePath(contextMenu.relativePath)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-secondary transition-colors text-left"
+          >
+            <span>{t('Copy relative path')}</span>
+          </button>
+          {!isWebMode && (
+            <button
+              onClick={() => handleRevealInFolder(contextMenu.path)}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-secondary transition-colors text-left"
+            >
+              <span>{contextMenu.isFolder ? t('Open folder location') : t('Show in folder')}</span>
+            </button>
+          )}
+          <button
+            onClick={handleCloseArtifactContextMenu}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:bg-secondary transition-colors text-left"
+          >
+            <span>{t('Close')}</span>
+          </button>
+        </div>,
+        document.body
       )}
     </div>
   )
