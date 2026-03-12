@@ -11,12 +11,13 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useSpaceStore } from '../../stores/space.store'
-import { useChatStore } from '../../stores/chat.store'
+import { useChatStore, useMessageQueue } from '../../stores/chat.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { useAIBrowserStore } from '../../stores/ai-browser.store'
 import { MessageList } from './MessageList'
 import type { MessageListHandle } from './MessageList'
 import { InputArea } from './InputArea'
+import { MessageQueuePanel } from './MessageQueuePanel'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { Sparkles } from '../icons/ToolIcons'
 import {
@@ -45,8 +46,14 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     sendMessage,
     stopGeneration,
     continueAfterInterrupt,
-    answerQuestion
+    answerQuestion,
+    removeFromQueue,
+    editQueueItem,
+    clearQueue
   } = useChatStore()
+
+  // Get message queue for current conversation
+  const messageQueue = useMessageQueue()
 
   // Onboarding state
   const {
@@ -274,6 +281,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const { enabled: aiBrowserEnabled } = useAIBrowserStore()
 
   // Handle send (with optional images for multi-modal messages, optional thinking mode)
+  // Note: When isGenerating is true, message will be added to queue by the store
   const handleSend = async (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => {
     // In onboarding mode, intercept and play mock response
     if (isOnboarding && currentStep === 'send-message') {
@@ -282,7 +290,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     }
 
     // Can send if has text OR has images
-    if ((!content.trim() && (!images || images.length === 0)) || isGenerating) return
+    if (!content.trim() && (!images || images.length === 0)) return
 
     // Pass both AI Browser and thinking state to sendMessage
     await sendMessage(content, images, aiBrowserEnabled, thinkingEnabled)
@@ -375,6 +383,14 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
           onClick={() => messageListRef.current?.scrollToBottom('auto')}
         />
       </div>
+
+      {/* Message Queue Panel - shows pending messages */}
+      <MessageQueuePanel
+        queue={messageQueue}
+        onRemove={removeFromQueue}
+        onEdit={editQueueItem}
+        onClear={clearQueue}
+      />
 
       {/* Input area */}
       <InputArea

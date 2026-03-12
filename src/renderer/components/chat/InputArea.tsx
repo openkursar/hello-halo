@@ -287,11 +287,12 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
   }
 
   // Handle send
+  // Note: When isGenerating is true, message will be added to queue by the store
   const handleSend = () => {
     const textToSend = isOnboardingSendStep ? onboardingPrompt : content.trim()
     const hasContent = textToSend || images.length > 0
 
-    if (hasContent && !isGenerating) {
+    if (hasContent) {
       onSend(textToSend, images.length > 0 ? images : undefined, thinkingEnabled)
 
       if (!isOnboardingSendStep) {
@@ -368,8 +369,9 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
   }
 
   // In onboarding mode, can always send (prefilled content)
-  // Can send if has text OR has images (and not processing/generating)
-  const canSend = isOnboardingSendStep || ((content.trim().length > 0 || images.length > 0) && !isGenerating && !isProcessingImages)
+  // Can send if has text OR has images (and not processing images)
+  // Note: When isGenerating, message will be queued automatically
+  const canSend = isOnboardingSendStep || ((content.trim().length > 0 || images.length > 0) && !isProcessingImages)
   const hasImages = images.length > 0
 
   return (
@@ -484,7 +486,7 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
               placeholder={placeholder || t('Type a message, let Halo help you...')}
-              disabled={isGenerating}
+              disabled={false}
               readOnly={isOnboardingSendStep}
               rows={1}
               className={`w-full bg-transparent resize-none
