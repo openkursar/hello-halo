@@ -26,6 +26,20 @@ import type { SessionInitInfo } from '../types/slash-command'
 import { PULSE_READ_GRACE_PERIOD_MS } from '../types'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
 
+// Pending message for queue
+export interface PendingMessage {
+  id: string
+  content: string
+  images?: ImageAttachment[]
+  thinkingEnabled: boolean
+  createdAt: string
+}
+
+// Helper to generate unique ID
+function generateQueueId(): string {
+  return `queue-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+}
+
 // LRU cache size limit
 const CONVERSATION_CACHE_SIZE = 10
 
@@ -54,6 +68,8 @@ interface SessionState {
   textBlockVersion: number
   // Pending question from AskUserQuestion tool
   pendingQuestion: PendingQuestion | null
+  // Message queue for sequential sending
+  pendingQueue: PendingMessage[]
 }
 
 // Create empty session state
@@ -69,7 +85,8 @@ function createEmptySessionState(): SessionState {
     errorType: null,
     compactInfo: null,
     textBlockVersion: 0,
-    pendingQuestion: null
+    pendingQuestion: null,
+    pendingQueue: []
   }
 }
 
@@ -143,6 +160,13 @@ interface ChatState {
   // Messaging
   sendMessage: (content: string, images?: ImageAttachment[], aiBrowserEnabled?: boolean, thinkingEnabled?: boolean) => Promise<void>
   stopGeneration: (conversationId?: string) => Promise<void>
+
+  // Message queue management
+  addToQueue: (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => string | null
+  removeFromQueue: (queueId: string) => void
+  editQueueItem: (queueId: string, content: string) => void
+  clearQueue: () => void
+  processNextInQueue: (conversationId: string, aiBrowserEnabled?: boolean) => Promise<void>
 
   // Tool approval
   approveTool: (conversationId: string) => Promise<void>
@@ -675,25 +699,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  // Send message (with optional images for multi-modal, optional AI Browser and thinking mode)
-  sendMessage: async (content, images, aiBrowserEnabled, thinkingEnabled) => {
-    const conversation = get().getCurrentConversation()
-    const conversationMeta = get().getCurrentConversationMeta()
-    const { currentSpaceId } = get()
-
-    if ((!conversation && !conversationMeta) || !currentSpaceId) {
-      console.error('[ChatStore] No conversation or space selected')
-      return
-    }
-
-    const conversationId = conversationMeta?.id || conversation?.id
-    if (!conversationId) return
-
+  // Internal: Actually send a message (called by sendMessage and processNextInQueue)
+  _sendMessageInternal: async (content: string, images: ImageAttachment[] | undefined, conversationId: string, currentSpaceId: string, aiBrowserEnabled: boolean | undefined, thinkingEnabled: boolean | undefined) => {
     try {
       // Initialize/reset session state for this conversation
       set((state) => {
         const newSessions = new Map(state.sessions)
+        const existingSession = newSessions.get(conversationId) || createEmptySessionState()
         newSessions.set(conversationId, {
+          ...existingSession,
           isGenerating: true,
           streamingContent: '',
           isStreaming: false,
@@ -801,6 +815,158 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return { sessions: newSessions }
       })
     }
+  },
+
+  // Send message (with optional images for multi-modal, optional AI Browser and thinking mode)
+  // If currently generating, message will be added to queue instead
+  sendMessage: async (content, images, aiBrowserEnabled, thinkingEnabled) => {
+    const conversation = get().getCurrentConversation()
+    const conversationMeta = get().getCurrentConversationMeta()
+    const { currentSpaceId } = get()
+
+    if ((!conversation && !conversationMeta) || !currentSpaceId) {
+      console.error('[ChatStore] No conversation or space selected')
+      return
+    }
+
+    const conversationId = conversationMeta?.id || conversation?.id
+    if (!conversationId) return
+
+    const session = get().sessions.get(conversationId)
+    const isCurrentlyGenerating = session?.isGenerating ?? false
+
+    // If currently generating, add to queue
+    if (isCurrentlyGenerating) {
+      const queueId = get().addToQueue(content, images, thinkingEnabled)
+      if (queueId) {
+        console.log(`[ChatStore] Message added to queue: ${queueId}`)
+      }
+      return
+    }
+
+    // Otherwise, send immediately
+    await get()._sendMessageInternal(content, images, conversationId, currentSpaceId, aiBrowserEnabled, thinkingEnabled)
+  },
+
+  // Add a message to the pending queue
+  addToQueue: (content, images, thinkingEnabled = true) => {
+    const conversationId = get().getCurrentConversationId()
+    if (!conversationId) return null
+
+    const queueId = generateQueueId()
+    const pendingMessage: PendingMessage = {
+      id: queueId,
+      content,
+      images,
+      thinkingEnabled,
+      createdAt: new Date().toISOString()
+    }
+
+    set((state) => {
+      const newSessions = new Map(state.sessions)
+      const session = newSessions.get(conversationId) || createEmptySessionState()
+      newSessions.set(conversationId, {
+        ...session,
+        pendingQueue: [...session.pendingQueue, pendingMessage]
+      })
+      return { sessions: newSessions }
+    })
+
+    return queueId
+  },
+
+  // Remove a message from the queue
+  removeFromQueue: (queueId) => {
+    const conversationId = get().getCurrentConversationId()
+    if (!conversationId) return
+
+    set((state) => {
+      const newSessions = new Map(state.sessions)
+      const session = newSessions.get(conversationId)
+      if (session) {
+        newSessions.set(conversationId, {
+          ...session,
+          pendingQueue: session.pendingQueue.filter(item => item.id !== queueId)
+        })
+      }
+      return { sessions: newSessions }
+    })
+  },
+
+  // Edit a queued message
+  editQueueItem: (queueId, content) => {
+    const conversationId = get().getCurrentConversationId()
+    if (!conversationId) return
+
+    set((state) => {
+      const newSessions = new Map(state.sessions)
+      const session = newSessions.get(conversationId)
+      if (session) {
+        newSessions.set(conversationId, {
+          ...session,
+          pendingQueue: session.pendingQueue.map(item =>
+            item.id === queueId ? { ...item, content } : item
+          )
+        })
+      }
+      return { sessions: newSessions }
+    })
+  },
+
+  // Clear all queued messages
+  clearQueue: () => {
+    const conversationId = get().getCurrentConversationId()
+    if (!conversationId) return
+
+    set((state) => {
+      const newSessions = new Map(state.sessions)
+      const session = newSessions.get(conversationId)
+      if (session) {
+        newSessions.set(conversationId, {
+          ...session,
+          pendingQueue: []
+        })
+      }
+      return { sessions: newSessions }
+    })
+  },
+
+  // Process next message in queue (called after current message completes)
+  processNextInQueue: async (conversationId, aiBrowserEnabled) => {
+    const { currentSpaceId } = get()
+    if (!currentSpaceId) return
+
+    const session = get().sessions.get(conversationId)
+    if (!session || session.pendingQueue.length === 0) return
+
+    // Get the first item from queue
+    const nextMessage = session.pendingQueue[0]
+    if (!nextMessage) return
+
+    // Remove it from queue
+    set((state) => {
+      const newSessions = new Map(state.sessions)
+      const currentSession = newSessions.get(conversationId)
+      if (currentSession) {
+        newSessions.set(conversationId, {
+          ...currentSession,
+          pendingQueue: currentSession.pendingQueue.slice(1)
+        })
+      }
+      return { sessions: newSessions }
+    })
+
+    console.log(`[ChatStore] Processing next message from queue: ${nextMessage.id}`)
+
+    // Send the message
+    await get()._sendMessageInternal(
+      nextMessage.content,
+      nextMessage.images,
+      conversationId,
+      currentSpaceId,
+      aiBrowserEnabled,
+      nextMessage.thinkingEnabled
+    )
   },
 
   // Stop generation for a specific conversation
@@ -990,6 +1156,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   // Handle complete - reload conversation from backend (Single Source of Truth)
   // Key: Only set isGenerating=false AFTER backend data is loaded to prevent flash
+  // After completion, automatically process next message in queue if any
   handleAgentComplete: async (data) => {
     const { spaceId, conversationId } = data
     console.log(`[ChatStore] handleAgentComplete [${conversationId}]`)
@@ -1034,6 +1201,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     // Reload conversation from backend (Single Source of Truth)
     // Backend has already saved the complete message with thoughts
+    let hasQueueItems = false
     try {
       const response = await api.getConversation(spaceId, conversationId)
       if (response.success && response.data) {
@@ -1052,6 +1220,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             : undefined,
           starred: updatedConversation.starred
         }
+
+        // Check if there are queue items before clearing state
+        const sessionBeforeUpdate = get().sessions.get(conversationId)
+        hasQueueItems = (sessionBeforeUpdate?.pendingQueue.length || 0) > 0
 
         // Now atomically: update cache, metadata, AND clear session state
         // This prevents flash by doing all in one render
@@ -1135,6 +1307,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
         return { sessions: newSessions }
       })
+    }
+
+    // Process next message in queue if any (continue regardless of errors)
+    const finalSession = get().sessions.get(conversationId)
+    if (finalSession && finalSession.pendingQueue.length > 0) {
+      console.log(`[ChatStore] Processing next queued message for [${conversationId}]`)
+      // Small delay to ensure UI has updated
+      setTimeout(() => {
+        get().processNextInQueue(conversationId)
+      }, 100)
     }
   },
 
@@ -1375,10 +1557,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   // Reset a specific session to empty state (e.g., clear app chat, before new send)
+  // Note: This also clears the pending queue
   resetSession: (conversationId: string) => {
     set((state) => {
       const newSessions = new Map(state.sessions)
-      newSessions.set(conversationId, createEmptySessionState())
+      const existingSession = newSessions.get(conversationId)
+      newSessions.set(conversationId, {
+        ...createEmptySessionState(),
+        // Preserve queue if explicitly needed, otherwise clear it
+        pendingQueue: existingSession?.pendingQueue || []
+      })
       return { sessions: newSessions }
     })
   },
@@ -1661,6 +1849,21 @@ export function useIsGenerating(): boolean {
     if (!spaceState?.currentConversationId) return false
     const session = state.sessions.get(spaceState.currentConversationId)
     return session?.isGenerating ?? false
+  })
+}
+
+/**
+ * Selector: Get current session's pending message queue
+ * Returns the queue array for the currently active conversation
+ */
+export function useMessageQueue(): PendingMessage[] {
+  return useChatStore((state) => {
+    const spaceState = state.currentSpaceId
+      ? state.spaceStates.get(state.currentSpaceId)
+      : null
+    if (!spaceState?.currentConversationId) return []
+    const session = state.sessions.get(spaceState.currentConversationId)
+    return session?.pendingQueue ?? []
   })
 }
 
