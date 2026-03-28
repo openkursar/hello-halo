@@ -27,7 +27,7 @@ import { useAIBrowserStore } from '../../stores/ai-browser.store'
 import { getOnboardingPrompt } from '../onboarding/onboardingData'
 import { ImageAttachmentPreview } from './ImageAttachmentPreview'
 import { processImage, isValidImageType, formatFileSize } from '../../utils/imageProcessor'
-import type { ImageAttachment } from '../../types'
+import type { ImageAttachment, Artifact } from '../../types'
 import { useTranslation } from '../../i18n'
 import { SlashCommandMenu, filterSlashCommands } from './SlashCommandMenu'
 import type { SlashCommandItem } from '../../types/slash-command'
@@ -40,6 +40,7 @@ interface InputAreaProps {
   isCompact?: boolean
   /** Available slash commands for the "/" quick-input autocomplete */
   slashCommands?: SlashCommandItem[]
+  mentionArtifacts?: Artifact[]
 }
 
 // Image constraints
@@ -52,7 +53,60 @@ interface ImageError {
   message: string
 }
 
-export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [] }: InputAreaProps) {
+interface MentionMatch {
+  query: string
+  start: number
+  end: number
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function getMentionMatch(value: string, cursorPosition: number): MentionMatch | null {
+  const beforeCursor = value.slice(0, cursorPosition)
+  const match = beforeCursor.match(/(^|\s)@([^\s@]*)$/)
+  if (!match || match.index === undefined) return null
+
+  const start = match.index + match[1].length
+  return {
+    query: match[2] || '',
+    start,
+    end: cursorPosition
+  }
+}
+
+function normalizePathLike(value: string): string {
+  return value.replace(/\\/g, '/').trim().toLowerCase()
+}
+
+function matchesFuzzyPathPrefix(relativePath: string, query: string): boolean {
+  const normalizedPath = normalizePathLike(relativePath)
+  const normalizedQuery = normalizePathLike(query)
+
+  if (!normalizedQuery) return true
+  if (normalizedPath.includes(normalizedQuery)) return true
+
+  const pathSegments = normalizedPath.split('/').filter(Boolean)
+  const querySegments = normalizedQuery.split('/').filter(Boolean)
+
+  if (querySegments.length === 0) return true
+  if (querySegments.length > pathSegments.length) return false
+
+  for (let i = 0; i < querySegments.length; i += 1) {
+    if (!pathSegments[i]?.startsWith(querySegments[i])) {
+      return false
+    }
+  }
+
+  return true
+}
+
+function formatArtifactReference(relativePath: string): string {
+  return `\`${relativePath}\``
+}
+
+export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [], mentionArtifacts = [] }: InputAreaProps) {
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
   const [content, setContent] = useState('')
@@ -66,6 +120,8 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
   // Slash-command autocomplete
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
+  const [mentionMenuOpen, setMentionMenuOpen] = useState(false)
+  const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const attachMenuRef = useRef<HTMLDivElement>(null)
@@ -205,6 +261,11 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
     e.preventDefault()
     setIsDragOver(false)
 
+    const referencePath = e.dataTransfer.getData('text/halo-artifact-relative-path') || e.dataTransfer.getData('text/plain')
+    if (referencePath && handleDropReference(referencePath)) {
+      return
+    }
+
     const files = Array.from(e.dataTransfer.files).filter(file => isValidImageType(file))
 
     if (files.length > 0) {
@@ -257,6 +318,10 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
 
   // `slashFilter` is the text typed after "/" — drives filtering and menu visibility.
   const slashFilter = slashMenuOpen && content.startsWith('/') ? content.slice(1) : ''
+  const mentionMatch = useMemo(() => {
+    const cursor = textareaRef.current?.selectionStart ?? content.length
+    return getMentionMatch(content, cursor)
+  }, [content])
 
   // Pre-filtered, pre-sorted list — single source of truth for rendering and keyboard nav.
   // Only computed when the menu is open; returns [] otherwise (zero cost when closed).
@@ -265,9 +330,70 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
     [slashCommands, slashFilter, slashMenuOpen]
   )
 
+  const filteredMentionArtifacts = useMemo(() => {
+    if (!mentionMenuOpen) return []
+
+    const query = mentionMatch?.query.trim() || ''
+    const normalizedQuery = normalizePathLike(query)
+    const artifacts = [...mentionArtifacts]
+
+    const score = (artifact: Artifact) => {
+      const name = normalizePathLike(artifact.name)
+      const relativePath = normalizePathLike(artifact.relativePath)
+      const pathSegments = relativePath.split('/').filter(Boolean)
+      const querySegments = normalizedQuery.split('/').filter(Boolean)
+
+      if (!normalizedQuery) return artifact.type === 'folder' ? 0 : 1
+      if (relativePath === normalizedQuery || name === normalizedQuery) return 0
+      if (pathSegments[0]?.startsWith(querySegments[0] || '')) return 1
+      if (pathSegments.every((segment, index) => !querySegments[index] || segment.startsWith(querySegments[index]))) return 2
+      if (relativePath.startsWith(normalizedQuery)) return 3
+      if (name.startsWith(normalizedQuery)) return 4
+      if (relativePath.includes(normalizedQuery)) return 5
+      return 10
+    }
+
+    return artifacts
+      .filter((artifact) => matchesFuzzyPathPrefix(artifact.relativePath, query))
+      .sort((a, b) => {
+        const diff = score(a) - score(b)
+        if (diff !== 0) return diff
+        if (a.type !== b.type) return a.type === 'folder' ? -1 : 1
+        return a.relativePath.localeCompare(b.relativePath)
+      })
+      .slice(0, 50)
+  }, [mentionArtifacts, mentionMatch, mentionMenuOpen])
+
   const handleSlashClose = () => {
     setSlashMenuOpen(false)
     setSlashSelectedIndex(0)
+  }
+
+  const handleMentionClose = () => {
+    setMentionMenuOpen(false)
+    setMentionSelectedIndex(0)
+  }
+
+  const insertMention = (relativePath: string) => {
+    const currentCursor = textareaRef.current?.selectionStart ?? content.length
+    const match = getMentionMatch(content, currentCursor)
+    if (!match) return
+
+    const mentionText = formatArtifactReference(relativePath)
+    const suffix = content.slice(match.end)
+    const needsTrailingSpace = suffix.length === 0 || !/^\s/.test(suffix)
+    const nextContent = `${content.slice(0, match.start)}${mentionText}${needsTrailingSpace ? ' ' : ''}${suffix}`
+    const nextCursor = content.slice(0, match.start).length + mentionText.length + (needsTrailingSpace ? 1 : 0)
+
+    setContent(nextContent)
+    handleMentionClose()
+
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus()
+        textareaRef.current.setSelectionRange(nextCursor, nextCursor)
+      }
+    })
   }
 
   const handleSlashSelect = (item: SlashCommandItem) => {
@@ -286,6 +412,29 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
         textareaRef.current.setSelectionRange(len, len)
       }
     })
+  }
+
+  const handleDropReference = (rawPath: string) => {
+    const normalizedPath = normalizePathLike(rawPath)
+    const escapedPath = escapeRegExp(normalizedPath)
+    const exactMatch = mentionArtifacts.find(artifact => normalizePathLike(artifact.relativePath) === normalizedPath)
+    const partialMatch = mentionArtifacts.find(artifact => new RegExp(`(^|/)${escapedPath}$`, 'i').test(normalizePathLike(artifact.relativePath)))
+    const target = exactMatch || partialMatch
+    if (!target) return false
+
+    const prefix = content && !content.endsWith(' ') && !content.endsWith('\n') ? ' ' : ''
+    const nextContent = `${content}${prefix}${formatArtifactReference(target.relativePath)} `
+    setContent(nextContent)
+    handleMentionClose()
+
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus()
+        const len = nextContent.length
+        textareaRef.current.setSelectionRange(len, len)
+      }
+    })
+    return true
   }
 
   // Handle send
@@ -321,6 +470,34 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
 
     // ── Slash-command menu navigation ─────────────────────────────────────────
     // filteredSlashCommands is already computed by useMemo — no extra filtering here.
+    if (mentionMenuOpen && filteredMentionArtifacts.length > 0) {
+      const filteredLen = filteredMentionArtifacts.length
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionSelectedIndex((i) => (i + 1) % filteredLen)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionSelectedIndex((i) => (i - 1 + filteredLen) % filteredLen)
+        return
+      }
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+        e.preventDefault()
+        const selected = filteredMentionArtifacts[mentionSelectedIndex]
+        if (selected) {
+          insertMention(selected.relativePath)
+        }
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        handleMentionClose()
+        return
+      }
+    }
+
     if (slashMenuOpen && filteredSlashCommands.length > 0) {
       const filteredLen = filteredSlashCommands.length
 
@@ -436,6 +613,35 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
               onClose={handleSlashClose}
             />
           )}
+          {mentionMenuOpen && filteredMentionArtifacts.length > 0 && (
+            <div className="absolute bottom-full left-0 mb-2 w-full max-w-md bg-popover border border-border rounded-xl shadow-lg z-30 overflow-hidden">
+              <div className="max-h-[336px] overflow-y-auto py-1">
+                {filteredMentionArtifacts.map((artifact, index) => {
+                  const isSelected = index === mentionSelectedIndex
+                  return (
+                    <button
+                      key={`${artifact.path}-${artifact.type}`}
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        insertMention(artifact.relativePath)
+                      }}
+                      className={`w-full flex items-center gap-2 text-left min-h-[38px] border-l-2 ${isSelected ? 'bg-primary/10 border-primary pl-2.5 pr-3' : 'border-transparent pl-2.5 pr-3 hover:bg-muted/50'}`}
+                    >
+                      <span className="text-xs font-medium text-primary/80 shrink-0">
+                        {artifact.type === 'folder' ? t('Folder') : t('File')}
+                      </span>
+                      <span className="text-sm truncate flex-1 min-w-0">{artifact.relativePath}</span>
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="border-t border-border/40 px-3 py-1.5 flex items-center gap-3 text-[10px] text-muted-foreground/40 select-none">
+                <span>↑↓ {t('navigate')}</span>
+                <span>↵ {t('select')}</span>
+                <span>Esc {t('close')}</span>
+              </div>
+            </div>
+          )}
           {/* Image preview area */}
           {hasImages && (
             <ImageAttachmentPreview
@@ -488,8 +694,18 @@ export function InputArea({ onSend, onStop, isGenerating, placeholder, isCompact
                 if (looksLikeCommand) {
                   setSlashMenuOpen(true)
                   setSlashSelectedIndex(0)
+                  setMentionMenuOpen(false)
                 } else {
                   setSlashMenuOpen(false)
+                }
+
+                const nextCursor = e.target.selectionStart ?? val.length
+                const nextMentionMatch = getMentionMatch(val, nextCursor)
+                if (nextMentionMatch && mentionArtifacts.length > 0) {
+                  setMentionMenuOpen(true)
+                  setMentionSelectedIndex(0)
+                } else {
+                  setMentionMenuOpen(false)
                 }
               }}
               onKeyDown={handleKeyDown}

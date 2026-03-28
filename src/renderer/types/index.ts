@@ -186,9 +186,10 @@ export interface NotificationConfig {
 
 // Global layout preferences (panel sizes and visibility)
 export interface LayoutConfig {
-  sidebarOpen?: boolean;          // Whether conversation list sidebar is open
-  sidebarWidth?: number;          // Conversation list sidebar width (px)
-  artifactRailWidth?: number;     // Artifact rail panel width (px)
+  sidebarOpen?: boolean;                 // Whether conversation list sidebar is open
+  sidebarWidth?: number;                 // Conversation list sidebar width (px)
+  sidebarTopSectionHeight?: number;      // Height of the top conversation sidebar section (px)
+  artifactRailWidth?: number;            // Artifact rail panel width (px)
 }
 
 export interface HaloConfig {
@@ -380,6 +381,7 @@ export interface Artifact {
   name: string;
   type: ArtifactType;
   path: string;
+  relativePath: string;
   extension: string;
   icon: string;
   createdAt: string;

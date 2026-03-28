@@ -31,6 +31,7 @@ export interface Artifact {
   name: string
   type: 'file' | 'folder'
   path: string
+  relativePath: string
   extension: string
   icon: string
   createdAt: string
@@ -57,7 +58,7 @@ function getWorkingDir(spaceId: string): string {
  * List all artifacts in a space
  * Uses caching and file watching for optimal performance
  */
-export async function listArtifacts(spaceId: string): Promise<Artifact[]> {
+export async function listArtifacts(spaceId: string, maxDepth: number = 2): Promise<Artifact[]> {
   console.log(`[Artifact] listArtifacts for space: ${spaceId}`)
 
   const workDir = getWorkingDir(spaceId)
@@ -67,7 +68,7 @@ export async function listArtifacts(spaceId: string): Promise<Artifact[]> {
     return []
   }
 
-  const cachedArtifacts = await listArtifactsCached(spaceId, workDir, 2)
+  const cachedArtifacts = await listArtifactsCached(spaceId, workDir, maxDepth)
 
   // Convert to Artifact format
   const artifacts: Artifact[] = cachedArtifacts.map(ca => ({
@@ -77,6 +78,7 @@ export async function listArtifacts(spaceId: string): Promise<Artifact[]> {
     name: ca.name,
     type: ca.type,
     path: ca.path,
+    relativePath: ca.relativePath,
     extension: ca.extension,
     icon: ca.icon,
     createdAt: ca.createdAt,

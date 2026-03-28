@@ -23,7 +23,13 @@ import type { ConversationMeta } from '../../types'
 const MIN_WIDTH = 140
 const MAX_WIDTH = 360
 const DEFAULT_WIDTH = 260
+const MIN_TOP_SECTION_HEIGHT = 80
+const DEFAULT_TOP_SECTION_HEIGHT = 180
 const clampWidth = (v: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, v))
+const clampTopSectionHeight = (value: number, containerHeight: number) => {
+  const maxAllowed = Math.max(MIN_TOP_SECTION_HEIGHT, containerHeight - 160)
+  return Math.min(maxAllowed, Math.max(MIN_TOP_SECTION_HEIGHT, value))
+}
 
 interface ConversationListProps {
   onClose?: () => void
@@ -53,9 +59,13 @@ export const ConversationList = memo(function ConversationList({
 
   // Width state - initialized from persisted config
   const initialWidth = layoutConfig?.sidebarWidth
+  const initialTopSectionHeight = layoutConfig?.sidebarTopSectionHeight
   const [width, setWidth] = useState(initialWidth != null ? clampWidth(initialWidth) : DEFAULT_WIDTH)
   const [isDragging, setIsDragging] = useState(false)
+  const [isDraggingTopSection, setIsDraggingTopSection] = useState(false)
   const widthRef = useRef(width)
+  const topSectionHeightRef = useRef(initialTopSectionHeight ?? DEFAULT_TOP_SECTION_HEIGHT)
+  const [topSectionHeight, setTopSectionHeight] = useState(topSectionHeightRef.current)
 
   // Sync width when config arrives asynchronously
   useEffect(() => {
@@ -65,6 +75,13 @@ export const ConversationList = memo(function ConversationList({
       widthRef.current = clamped
     }
   }, [initialWidth, isDragging])
+
+  useEffect(() => {
+    if (initialTopSectionHeight !== undefined && !isDraggingTopSection) {
+      topSectionHeightRef.current = initialTopSectionHeight
+      setTopSectionHeight(initialTopSectionHeight)
+    }
+  }, [initialTopSectionHeight, isDraggingTopSection])
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingTitle, setEditingTitle] = useState('')
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
@@ -77,6 +94,11 @@ export const ConversationList = memo(function ConversationList({
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     setIsDragging(true)
+  }, [])
+
+  const handleTopSectionMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsDraggingTopSection(true)
   }, [])
 
   useEffect(() => {
@@ -111,6 +133,38 @@ export const ConversationList = memo(function ConversationList({
       document.removeEventListener('mouseup', handleMouseUp)
     }
   }, [isDragging])
+
+  useEffect(() => {
+    if (!isDraggingTopSection) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!containerRef.current) return
+      const rect = containerRef.current.getBoundingClientRect()
+      const offsetY = e.clientY - rect.top - 48
+      const clamped = clampTopSectionHeight(offsetY, rect.height)
+      setTopSectionHeight(clamped)
+      topSectionHeightRef.current = clamped
+    }
+
+    const handleMouseUp = () => {
+      setIsDraggingTopSection(false)
+      const currentConfig = useAppStore.getState().config
+      if (currentConfig) {
+        useAppStore.getState().updateConfig({ layout: { ...currentConfig.layout, sidebarTopSectionHeight: topSectionHeightRef.current } })
+      }
+      api.setConfig({ layout: { sidebarTopSectionHeight: topSectionHeightRef.current } }).catch(err =>
+        console.error('[ConversationList] Failed to persist sidebar top section height:', err)
+      )
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isDraggingTopSection])
 
   // Close dropdown menu on outside click
   useEffect(() => {
@@ -296,14 +350,25 @@ export const ConversationList = memo(function ConversationList({
         )}
       </div>
 
-      {/* Automation apps status badge — quick jump to AppsPage */}
-      <AutomationBadge />
+      {/* Top resizable section */}
+      <div style={{ height: topSectionHeight }} className="flex flex-col overflow-hidden">
+        {/* Automation apps status badge — quick jump to AppsPage */}
+        <AutomationBadge />
 
-      {/* Pinned section - pinned conversations at top of sidebar (skip when hidden to avoid pulse selector cost) */}
-      {visible && <PulseSidebarSection />}
+        {/* Pinned section - pinned conversations at top of sidebar (skip when hidden to avoid pulse selector cost) */}
+        <div className="flex-1 overflow-auto">
+          {visible && <PulseSidebarSection />}
+        </div>
+      </div>
+
+      <div
+        className={`h-1.5 cursor-row-resize hover:bg-primary/50 transition-colors ${isDraggingTopSection ? 'bg-primary/50' : ''}`}
+        onMouseDown={handleTopSectionMouseDown}
+        title={t('Drag to resize sections')}
+      />
 
       {/* Conversation list - virtualized for performance with large lists */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden min-h-0">
         <Virtuoso
           data={conversations}
           overscan={200}

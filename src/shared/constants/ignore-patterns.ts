@@ -100,7 +100,7 @@ export const BASELINE_IGNORE_PATTERNS = [
   // ── C# / .NET ──
   // NOTE: 'bin' removed - too generic, could be user scripts directory
   'obj',
-  'packages',      // NuGet (older projects)
+  // NOTE: 'packages' removed - too generic for modern monorepos where it often stores source code
 
   // ── C / C++ ──
   'cmake-build-*',

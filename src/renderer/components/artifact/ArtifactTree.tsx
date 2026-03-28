@@ -51,6 +51,13 @@ function isDimmed(name: string): boolean {
 
 interface ArtifactTreeProps {
   spaceId: string
+  onShowContextMenu?: (menu: {
+    x: number
+    y: number
+    path: string
+    relativePath: string
+    isFolder: boolean
+  }) => void
 }
 
 // Fixed offsets for tree height calculation (in pixels)
@@ -80,6 +87,13 @@ interface LazyLoadContextType {
   loadingPaths: Set<string>
 }
 const LazyLoadContext = createContext<LazyLoadContextType | null>(null)
+const ArtifactContextMenuContext = createContext<((menu: {
+  x: number
+  y: number
+  path: string
+  relativePath: string
+  isFolder: boolean
+}) => void) | null>(null)
 
 // ============================================
 // Index helpers — maintain Map<path, node> for O(1) lookup
@@ -142,7 +156,7 @@ function mergeChildren(
 // ArtifactTree component
 // ============================================
 
-export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
+export function ArtifactTree({ spaceId, onShowContextMenu }: ArtifactTreeProps) {
   const { t } = useTranslation()
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set())
   const treeHeight = useTreeHeight()
@@ -299,34 +313,36 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
 
   return (
     <OpenFileContext.Provider value={openFile}>
-      <LazyLoadContext.Provider value={lazyLoadValue}>
-        <div className="flex flex-col h-full">
-          {/* Header */}
-          <div className="flex-shrink-0 bg-card px-2 py-1.5 border-b border-border/50 text-[10px] text-muted-foreground/80 [.light_&]:text-muted-foreground uppercase tracking-wider">
-            {t('Files')}
-          </div>
+      <ArtifactContextMenuContext.Provider value={onShowContextMenu ?? null}>
+        <LazyLoadContext.Provider value={lazyLoadValue}>
+          <div className="flex flex-col h-full">
+            {/* Header */}
+            <div className="flex-shrink-0 bg-card px-2 py-1.5 border-b border-border/50 text-[10px] text-muted-foreground/80 [.light_&]:text-muted-foreground uppercase tracking-wider">
+              {t('Files')}
+            </div>
 
-          {/* Tree — uses window height based calculation */}
-          <div className="flex-1 overflow-hidden">
-            <Tree<ArtifactTreeNode>
-              data={treeData}
-              openByDefault={false}
-              width="100%"
-              height={treeHeight}
-              indent={16}
-              rowHeight={26}
-              overscanCount={5}
-              paddingTop={4}
-              paddingBottom={4}
-              disableDrag
-              disableDrop
-              disableEdit
-            >
-              {TreeNodeComponent}
-            </Tree>
+            {/* Tree — uses window height based calculation */}
+            <div className="flex-1 overflow-hidden">
+              <Tree<ArtifactTreeNode>
+                data={treeData}
+                openByDefault={false}
+                width="100%"
+                height={treeHeight}
+                indent={16}
+                rowHeight={26}
+                overscanCount={5}
+                paddingTop={4}
+                paddingBottom={4}
+                disableDrag
+                disableDrop
+                disableEdit
+              >
+                {TreeNodeComponent}
+              </Tree>
+            </div>
           </div>
-        </div>
-      </LazyLoadContext.Provider>
+        </LazyLoadContext.Provider>
+      </ArtifactContextMenuContext.Provider>
     </OpenFileContext.Provider>
   )
 }
@@ -336,6 +352,7 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
 // ============================================
 
 function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<ArtifactTreeNode>) {
+  const contextMenuHandler = useContext(ArtifactContextMenuContext)
   const { t } = useTranslation()
   const openFile = useContext(OpenFileContext)
   const lazyLoad = useContext(LazyLoadContext)
@@ -401,22 +418,28 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
   }
 
   // Handle right-click — show in folder (desktop only)
-  const handleContextMenu = async (e: React.MouseEvent) => {
+  const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    if (!isWebMode) {
-      try {
-        await api.showArtifactInFolder(data.path)
-      } catch (error) {
-        console.error('Failed to show in folder:', error)
-      }
-    }
+    contextMenuHandler?.({
+      x: e.clientX,
+      y: e.clientY,
+      path: data.path,
+      relativePath: data.relativePath,
+      isFolder
+    })
   }
 
   return (
     <div
       ref={dragHandle}
       style={style}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/halo-artifact-relative-path', data.relativePath)
+        e.dataTransfer.setData('text/plain', data.relativePath)
+        e.dataTransfer.effectAllowed = 'copy'
+      }}
       onClick={handleClick}
       onDoubleClick={handleDoubleClickFile}
       onContextMenu={handleContextMenu}
