@@ -17,6 +17,72 @@ import type {
 } from '../types'
 
 // ============================================================================
+// Schema Dereferencing
+// ============================================================================
+
+type JsonSchemaNode = Record<string, unknown>
+
+/**
+ * Recursively resolve all $ref/#/$defs/... references within a JSON Schema node,
+ * inlining the referenced definitions so the resulting schema contains no $ref
+ * or $defs. This is required for strict OpenAI-compatible endpoints (e.g. Kimi /
+ * Moonshot) that reject schemas containing $ref.
+ *
+ * Only handles the local-reference form: "#/$defs/<Name>".
+ * External $refs (URLs, file paths) are left untouched.
+ */
+function dereferenceSchema(
+  node: unknown,
+  defs: Record<string, unknown>
+): unknown {
+  if (node === null || typeof node !== 'object') return node
+  if (Array.isArray(node)) return node.map(item => dereferenceSchema(item, defs))
+
+  const obj = node as JsonSchemaNode
+
+  // Resolve $ref before processing other keys
+  if (typeof obj['$ref'] === 'string') {
+    const ref = obj['$ref'] as string
+    if (ref.startsWith('#/$defs/')) {
+      const defName = ref.slice('#/$defs/'.length)
+      const target = defs[defName]
+      if (target != null) return dereferenceSchema(target, defs)
+    }
+    return obj
+  }
+
+  const result: JsonSchemaNode = {}
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === '$defs') continue  // strip $defs from output
+    result[key] = dereferenceSchema(value, defs)
+  }
+  return result
+}
+
+/**
+ * Return a parameters object safe for strict OpenAI-compatible endpoints.
+ * If the input_schema contains $defs / $ref, all references are inlined
+ * so that the resulting object is self-contained.
+ */
+function toOpenAIParameters(schema: AnthropicTool['input_schema']): JsonSchemaNode {
+  const raw = schema as unknown as JsonSchemaNode | undefined
+  if (!raw) return { type: 'object', properties: {} }
+
+  const hasDefs = typeof raw['$defs'] === 'object' && raw['$defs'] !== null
+  if (!hasDefs) {
+    // Fast-path: no $defs, keep existing shape
+    return {
+      type: 'object',
+      properties: (raw['properties'] as JsonSchemaNode) || {},
+      ...(raw['required'] !== undefined ? { required: raw['required'] } : {}),
+    }
+  }
+
+  const defs = raw['$defs'] as Record<string, unknown>
+  return dereferenceSchema(raw, defs) as JsonSchemaNode
+}
+
+// ============================================================================
 // Tool Definition Conversion
 // ============================================================================
 
@@ -29,11 +95,7 @@ export function anthropicToolToOpenAIChatTool(tool: AnthropicTool): OpenAIChatTo
     function: {
       name: tool.name,
       description: tool.description || '',
-      parameters: {
-        type: 'object',
-        properties: tool.input_schema?.properties || {},
-        required: tool.input_schema?.required
-      },
+      parameters: toOpenAIParameters(tool.input_schema),
       strict: tool.strict
     }
   }
@@ -48,11 +110,7 @@ export function anthropicToolToResponsesTool(tool: AnthropicTool): OpenAIRespons
     type: 'function',
     name: tool.name,
     description: tool.description || '',
-    parameters: {
-      type: 'object',
-      properties: tool.input_schema?.properties || {},
-      required: tool.input_schema?.required
-    },
+    parameters: toOpenAIParameters(tool.input_schema),
     strict: tool.strict
   }
 }

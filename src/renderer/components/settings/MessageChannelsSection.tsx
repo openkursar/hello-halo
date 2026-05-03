@@ -876,6 +876,17 @@ function PermissionSection({ instance, onChange, onDebouncedChange, permissionDe
             </div>
           )}
 
+          {/* Guest section divider — makes the owner/guest boundary visually explicit */}
+          {hasOwners && (
+            <div className="flex items-center gap-2 pt-1">
+              <div className="flex-1 border-t border-border/60" />
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground/50 px-1">
+                {t('Guest Permissions')}
+              </span>
+              <div className="flex-1 border-t border-border/60" />
+            </div>
+          )}
+
           {/* Guest access toggle (only when owners are set) */}
           {hasOwners && (
             <>
@@ -884,8 +895,8 @@ function PermissionSection({ instance, onChange, onDebouncedChange, permissionDe
                   <p className="text-sm text-muted-foreground">{t('Guest Access')}</p>
                   <p className="text-xs text-muted-foreground/70">
                     {guestAccessEnabled
-                      ? t('Guests have limited access')
-                      : t('Guests have no access')}
+                      ? t('Guests have limited access to selected tools below')
+                      : t('Guests have no tool access — chat only')}
                   </p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
