@@ -106,12 +106,17 @@ export async function dispatch(
   }
 
   // Server responses are not always JSON. http.Error sends text/plain.
+  // Shape matches server/internal/rules/runner.go Report/Verdict — field
+  // names here must track that struct (json tags) exactly.
   let body: {
     slug?: string
     version?: string
     verdict?: string
     comment?: string
-    report?: { overall?: string; rules?: Array<{ id: string; severity: string; message: string }> }
+    report?: {
+      overall?: string
+      verdicts?: Array<{ rule: string; severity: string; message: string; requires_human?: boolean }>
+    }
   } = {}
   let rawBody = ''
   const contentType = response.headers.get('content-type') ?? ''
@@ -127,9 +132,12 @@ export async function dispatch(
 
   if (!response.ok) {
     // Surface as much of the actual failure as possible.
-    const ruleSummary = body.report?.rules
-      ?.filter(r => r.severity === 'fail' || r.severity === 'error')
-      .map(r => `  - [${r.severity}] ${r.id}: ${r.message}`)
+    // Surface anything that isn't a clean pass, plus warn-level verdicts that
+    // tripped the human-review threshold — those are precisely the cases where
+    // the user needs to see why publish was blocked.
+    const ruleSummary = body.report?.verdicts
+      ?.filter(r => (r.severity !== 'pass' && r.severity !== 'warn') || r.requires_human)
+      .map(r => `  - [${r.severity}] ${r.rule}: ${r.message}`)
       .join('\n')
     const detailParts = [
       `Registry returned HTTP ${response.status}${response.statusText ? ' ' + response.statusText : ''}`,
