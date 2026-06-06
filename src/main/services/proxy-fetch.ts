@@ -30,8 +30,8 @@ import https from 'node:https'
 import http from 'node:http'
 import zlib from 'node:zlib'
 import { ProxyAgent } from 'proxy-agent'
-import { getConfig, onNetworkConfigChange } from './config.service'
-import { isHttpLoggingEnabled, logHttpRequest, logHttpResponse, logHttpResponseBody } from './logging'
+import { getConfig, onNetworkConfigChange } from '../foundation/config.service'
+import { isHttpLoggingEnabled, logHttpRequest, logHttpResponse, logHttpResponseBody } from '../foundation/logging'
 
 // ============================================================================
 // Preserve originals before any global patching

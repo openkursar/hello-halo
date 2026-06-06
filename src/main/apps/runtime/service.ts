@@ -44,7 +44,7 @@ import { readSessionMessages } from './session-store'
 import { getSpace } from '../../services/space.service'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { broadcastToAll } from '../../http/websocket'
-import { sendToRenderer } from '../../services/window.service'
+import { sendToRenderer } from '../../foundation/window.service'
 import { notifyAppEvent } from '../../services/notification.service'
 
 // ============================================

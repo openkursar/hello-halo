@@ -39,8 +39,8 @@
  *   before initialization.
  */
 
-import { getConfig } from '../config.service'
-import { installSdkLogger } from '../logging'
+import { getConfig } from '../../foundation/config.service'
+import { installSdkLogger } from '../../foundation/logging'
 import {
   ANTHROPIC_CAPABILITIES,
   HALO_CAPABILITIES,

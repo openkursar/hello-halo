@@ -17,7 +17,7 @@ import {
   getConfigPath,
   initializeApp,
   getCredentialsGeneration
-} from '../../../src/main/services/config.service'
+} from '../../../src/main/foundation/config.service'
 
 describe('Config Service', () => {
   describe('getHaloDir', () => {

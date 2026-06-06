@@ -20,33 +20,63 @@
 import { ipcMain } from 'electron'
 import * as storeController from '../controllers/store.controller'
 import { onSyncStatusChanged } from '../store'
-import { sendToRenderer } from '../services/window.service'
+import { sendToRenderer } from '../foundation/window.service'
 import type { StoreInstallProgress } from '../../shared/store/store-types'
+import { storeRpc } from '../../shared/rpc/contracts/store.contract'
+import { registerRawRpcHandlers } from './rpc'
 
 export function registerStoreHandlers(): void {
-  // ── store:query (new primary entry point) ─────────────────────────────
-  ipcMain.handle(
-    'store:query',
-    async (_event, params: { search?: string; type?: string; category?: string; page?: number; pageSize?: number; locale?: string }) => {
+  registerRawRpcHandlers(storeRpc, {
+    // ── store:query (new primary entry point) ─────────────────────────────
+    storeQuery: async (params: { search?: string; type?: string; category?: string; page?: number; pageSize?: number; locale?: string }) => {
       return storeController.queryStoreApps(params)
-    }
-  )
+    },
 
-  // ── store:list-apps (legacy compat) ─────────────────────────────────
-  ipcMain.handle(
-    'store:list-apps',
-    async (_event, query?: { search?: string; category?: string; type?: string; tags?: string[] }) => {
+    // ── store:list-apps (legacy compat) ─────────────────────────────────
+    storeListApps: async (query?: { search?: string; category?: string; type?: string; tags?: string[] }) => {
       return storeController.listStoreApps(query)
-    }
-  )
+    },
 
-  // ── store:get-app-detail ───────────────────────────────────────────────
-  ipcMain.handle(
-    'store:get-app-detail',
-    async (_event, slug: string) => {
+    // ── store:get-app-detail ───────────────────────────────────────────────
+    storeGetAppDetail: async (slug: string) => {
       return storeController.getStoreAppDetail(slug)
-    }
-  )
+    },
+
+    // ── store:refresh ──────────────────────────────────────────────────────
+    storeRefresh: async () => {
+      return storeController.refreshStoreIndex()
+    },
+
+    // ── store:check-updates ────────────────────────────────────────────────
+    storeCheckUpdates: async () => {
+      return storeController.checkStoreUpdates()
+    },
+
+    // ── store:get-registries ───────────────────────────────────────────────
+    storeGetRegistries: async () => {
+      return storeController.getStoreRegistries()
+    },
+
+    // ── store:add-registry ─────────────────────────────────────────────────
+    storeAddRegistry: async (input: { name: string; url: string; sourceType?: string; adapterConfig?: Record<string, unknown> }) => {
+      return storeController.addStoreRegistry(input)
+    },
+
+    // ── store:remove-registry ──────────────────────────────────────────────
+    storeRemoveRegistry: async (registryId: string) => {
+      return storeController.removeStoreRegistry(registryId)
+    },
+
+    // ── store:toggle-registry ──────────────────────────────────────────────
+    storeToggleRegistry: async (input: { registryId: string; enabled: boolean }) => {
+      return storeController.toggleStoreRegistry(input.registryId, input.enabled)
+    },
+
+    // ── store:update-registry-adapter-config ───────────────────────────────
+    storeUpdateRegistryAdapterConfig: async (input: { registryId: string; adapterConfig: Record<string, unknown> }) => {
+      return storeController.updateStoreRegistryAdapterConfig(input.registryId, input.adapterConfig)
+    },
+  })
 
   // ── store:install ──────────────────────────────────────────────────────
   ipcMain.handle(
@@ -86,62 +116,6 @@ export function registerStoreHandlers(): void {
         : undefined
 
       return storeController.installStoreApp(slug, spaceId, userConfig, onProgress)
-    }
-  )
-
-  // ── store:refresh ──────────────────────────────────────────────────────
-  ipcMain.handle(
-    'store:refresh',
-    async () => {
-      return storeController.refreshStoreIndex()
-    }
-  )
-
-  // ── store:check-updates ────────────────────────────────────────────────
-  ipcMain.handle(
-    'store:check-updates',
-    async () => {
-      return storeController.checkStoreUpdates()
-    }
-  )
-
-  // ── store:get-registries ───────────────────────────────────────────────
-  ipcMain.handle(
-    'store:get-registries',
-    async () => {
-      return storeController.getStoreRegistries()
-    }
-  )
-
-  // ── store:add-registry ─────────────────────────────────────────────────
-  ipcMain.handle(
-    'store:add-registry',
-    async (_event, input: { name: string; url: string; sourceType?: string; adapterConfig?: Record<string, unknown> }) => {
-      return storeController.addStoreRegistry(input)
-    }
-  )
-
-  // ── store:remove-registry ──────────────────────────────────────────────
-  ipcMain.handle(
-    'store:remove-registry',
-    async (_event, registryId: string) => {
-      return storeController.removeStoreRegistry(registryId)
-    }
-  )
-
-  // ── store:toggle-registry ──────────────────────────────────────────────
-  ipcMain.handle(
-    'store:toggle-registry',
-    async (_event, input: { registryId: string; enabled: boolean }) => {
-      return storeController.toggleStoreRegistry(input.registryId, input.enabled)
-    }
-  )
-
-  // ── store:update-registry-adapter-config ───────────────────────────────
-  ipcMain.handle(
-    'store:update-registry-adapter-config',
-    async (_event, input: { registryId: string; adapterConfig: Record<string, unknown> }) => {
-      return storeController.updateStoreRegistryAdapterConfig(input.registryId, input.adapterConfig)
     }
   )
 

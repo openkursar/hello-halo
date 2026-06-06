@@ -14,7 +14,7 @@ import { tool, createSdkMcpServer } from '../../services/agent/resolved-sdk'
 import type { ActivityStore } from './store'
 import type { ActivityEntry, ActivityEntryType, ActivityEntryContent } from './types'
 import { broadcastToAll } from '../../http/websocket'
-import { sendToRenderer } from '../../services/window.service'
+import { sendToRenderer } from '../../foundation/window.service'
 import { notifyAppEvent } from '../../services/notification.service'
 
 // ============================================

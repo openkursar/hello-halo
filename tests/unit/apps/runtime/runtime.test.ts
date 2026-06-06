@@ -63,7 +63,7 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
 }))
 
 // Mock config service (used by execute.ts)
-vi.mock('../../../../src/main/services/config.service', () => ({
+vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn().mockReturnValue({}),
   getTempSpacePath: vi.fn().mockReturnValue('/tmp/halo-test/temp'),
   onNetworkConfigChange: vi.fn(),
@@ -81,7 +81,7 @@ vi.mock('../../../../src/main/http/websocket', () => ({
 }))
 
 // Mock window service (used by service.ts for IPC to renderer)
-vi.mock('../../../../src/main/services/window.service', () => ({
+vi.mock('../../../../src/main/foundation/window.service', () => ({
   sendToRenderer: vi.fn(),
 }))
 

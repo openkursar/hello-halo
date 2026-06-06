@@ -26,7 +26,7 @@ import { join } from 'path'
 import { getAppManager } from '../manager'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import type { MemoryCallerScope } from '../../platform/memory'
-import { getConfig } from '../../services/config.service'
+import { getConfig } from '../../foundation/config.service'
 import {
   getApiCredentials,
   getApiCredentialsForSource,

@@ -17,12 +17,12 @@
 import { shell } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync, renameSync } from 'fs'
-import { getHaloDir, getTempSpacePath, getSpacesDir } from './config.service'
+import { getHaloDir, getTempSpacePath, getSpacesDir } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
-import { getAppManager } from '../apps/manager'
+import { getAppManager } from './app-bridge'
 
 // Re-export config helper for backward compatibility with existing imports
-export { getSpacesDir } from './config.service'
+export { getSpacesDir } from '../foundation/config.service'
 
 // ============================================================================
 // Types

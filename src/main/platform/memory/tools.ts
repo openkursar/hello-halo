@@ -10,7 +10,7 @@
  */
 
 import { z } from 'zod'
-import { tool, createSdkMcpServer } from '../../services/agent/resolved-sdk'
+import { tool, createSdkMcpServer } from './sdk'
 import type { MemoryCallerScope, MemoryService } from './types'
 import { getReadableScopes, getWritableScopes } from './permissions'
 

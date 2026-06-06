@@ -14,7 +14,7 @@
 
 import { join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, statSync } from 'fs'
-import { getHaloDir } from '../services/config.service'
+import { getHaloDir } from '../foundation/config.service'
 import type { RegistryIndex } from '../../shared/store/store-types'
 import type { AppSpec } from '../apps/spec/schema'
 import type { CachedIndex, CachedSpec } from './registry.types'

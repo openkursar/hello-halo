@@ -8,7 +8,7 @@
 import { app } from 'electron'
 import { freemem, totalmem } from 'os'
 import type { DiagnosticReport } from '../types'
-import { getConfig, getHaloDir } from '../../config.service'
+import { getConfig, getHaloDir } from '../../../foundation/config.service'
 import { getHealthState } from '../orchestrator'
 import { getRegistryStats } from '../process-guardian'
 import { getRecentEvents } from '../health-checker'

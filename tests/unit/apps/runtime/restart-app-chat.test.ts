@@ -112,7 +112,7 @@ vi.mock('../../../../src/main/services/email-mcp', () => ({
 
 // Config + space services. onAgentConfigChange is consumed by the logging
 // controller at module load — must be a no-op subscriber stub.
-vi.mock('../../../../src/main/services/config.service', () => ({
+vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn().mockReturnValue({}),
   getTempSpacePath: vi.fn().mockReturnValue('/tmp/halo-test/temp'),
   onApiConfigChange: vi.fn(),

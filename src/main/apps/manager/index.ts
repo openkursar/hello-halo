@@ -28,7 +28,7 @@
 import { join } from 'path'
 import type { DatabaseManager } from '../../platform/store'
 import { getSpace } from '../../services/space.service'
-import { getHaloDir } from '../../services/config.service'
+import { getHaloDir } from '../../foundation/config.service'
 import { AppManagerStore } from './store'
 import { createAppManagerService } from './service'
 import { MIGRATION_NAMESPACE, migrations } from './migrations'

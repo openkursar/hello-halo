@@ -17,7 +17,7 @@ import { app } from 'electron'
 import smCrypto from 'sm-crypto'
 const { sm3, sm4 } = smCrypto
 
-import { isCredentialAtRestSafe } from '../../services/security-policy'
+import { isCredentialAtRestSafe } from './credential-safety'
 
 const MARKER = 'gmcred:v1:'
 const SALT_LEN = 16

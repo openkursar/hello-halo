@@ -6,7 +6,7 @@
  */
 
 import { query as claudeQuery } from './resolved-sdk'
-import { getConfig, getTempSpacePath } from '../config.service'
+import { getConfig, getTempSpacePath } from '../../foundation/config.service'
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../openai-compat-router'
 import type { McpServerStatusInfo } from './types'
 import {

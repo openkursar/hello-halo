@@ -21,7 +21,12 @@
 import type { Response } from 'express'
 import { parse as parseYaml } from 'yaml'
 
-import { loadProductConfig } from './ai-sources/auth-loader'
+import { loadProductConfig } from '../foundation/product-config'
+
+// `credentialAtRestSafe` is consumed by the foundation-tier at-rest crypto
+// primitive (`crypto-envelope.ts`), so its predicate lives in foundation.
+// Re-exported here to keep this module's documented policy surface complete.
+export { isCredentialAtRestSafe } from '../foundation/credential-safety'
 
 // ============================================================================
 // Policy shape
@@ -134,21 +139,6 @@ export function getSecurityPolicy(): SecurityPolicy {
 
 export function isRemoteMcpSafe(): boolean {
   return getSecurityPolicy().remoteMcpSafe === true
-}
-
-/**
- * True only when `credentialAtRestSafe` is explicitly set to boolean true.
- *
- * Consumers MUST treat this as a one-way gate: when false, the credential
- * persistence layer takes the standard path (plain string stored in
- * config). When true, the GM/T path is taken: HKDF-SHA-256 over a
- * machine-bound seed derives an SM4-CBC encryption key and an HMAC-SM3
- * MAC key (encrypt-then-MAC); see `src/main/http/auth/envelope.ts`. Any
- * non-boolean truthy value is treated as false to prevent accidental
- * enablement via config typos.
- */
-export function isCredentialAtRestSafe(): boolean {
-  return getSecurityPolicy().credentialAtRestSafe === true
 }
 
 /**

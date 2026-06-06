@@ -17,8 +17,8 @@
  */
 
 import { Notification } from 'electron'
-import { getConfig } from './config.service'
-import { getMainWindow, sendToRenderer } from './window.service'
+import { getConfig } from '../foundation/config.service'
+import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { broadcastToAll } from '../http/websocket'
 
 // ── Helpers ────────────────────────────────────────────

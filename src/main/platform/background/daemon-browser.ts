@@ -11,10 +11,22 @@
 
 import * as path from 'path'
 import * as fs from 'fs'
-import { BrowserWindow, session, app } from 'electron'
-import { injectStealthScripts } from '../../services/stealth'
+import { BrowserWindow, session, app, type WebContents } from 'electron'
 import { extractPartition } from './partition'
-import { sanitizeFilename, resolveUniquePath } from '../../services/ai-browser/download-utils'
+import { sanitizeFilename, resolveUniquePath } from '../../foundation/file-naming'
+
+/**
+ * Anti-detection stealth injection is browser-domain behavior (lives in
+ * `services/stealth`), which sits ABOVE this platform module. Rather than
+ * import upward, the daemon browser exposes an injector seam that bootstrap
+ * wires from services at startup (`setDaemonStealthInjector`). Injection is
+ * best-effort: if the seam is unset, the daemon window simply runs without it.
+ */
+type StealthInjector = (webContents: WebContents) => Promise<void>
+let stealthInjector: StealthInjector | null = null
+export function setDaemonStealthInjector(injector: StealthInjector): void {
+  stealthInjector = injector
+}
 
 /**
  * Default user agent matching a real Chrome browser.
@@ -257,10 +269,10 @@ export class DaemonBrowserManager {
       this.stealthInjected = false
     })
 
-    // Inject stealth scripts via CDP
-    if (!this.stealthInjected) {
+    // Inject stealth scripts via CDP (best-effort; injector wired by bootstrap)
+    if (!this.stealthInjected && stealthInjector) {
       try {
-        await injectStealthScripts(this.daemonWindow.webContents)
+        await stealthInjector(this.daemonWindow.webContents)
         this.stealthInjected = true
         console.log(`[DaemonBrowser] Stealth scripts injected (partition: ${partition})`)
       } catch (error) {

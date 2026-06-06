@@ -16,7 +16,7 @@
  */
 
 import { BrowserView, BrowserWindow } from 'electron'
-import { loadProductConfig } from './ai-sources/auth-loader'
+import { loadProductConfig } from '../foundation/product-config'
 
 // ============================================
 // Types

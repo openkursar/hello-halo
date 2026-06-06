@@ -11,7 +11,7 @@
 
 import { join } from 'path'
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
-import { getTempSpacePath, getHaloDir } from './config.service'
+import { getTempSpacePath, getHaloDir } from '../foundation/config.service'
 import { getSpace } from './space.service'
 
 /**

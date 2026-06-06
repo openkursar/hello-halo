@@ -23,7 +23,7 @@
 import { z } from 'zod'
 import { tool, createSdkMcpServer } from '../../services/agent/resolved-sdk'
 import { sendToChannel, getEnabledChannels } from '../../services/notify-channels'
-import { getConfig } from '../../services/config.service'
+import { getConfig } from '../../foundation/config.service'
 import { getActiveImChannelManager } from './im-channels'
 import { FileExportGate, FileExportDeniedError } from './file-export-gate'
 import type { NotificationChannelType } from '../../../shared/types/notification-channels'

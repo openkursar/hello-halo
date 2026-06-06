@@ -13,10 +13,11 @@
  */
 
 import { app, BrowserWindow, dialog } from 'electron'
-import { getMainWindow } from '../../services/window.service'
+import { getMainWindow } from '../../foundation/window.service'
 import { KeepAliveManager } from './keep-alive'
 import { TrayManager } from './tray'
 import { DaemonBrowserManager } from './daemon-browser'
+export { setDaemonStealthInjector } from './daemon-browser'
 import type {
   BackgroundService,
   BackgroundStatus,

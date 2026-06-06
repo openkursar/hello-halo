@@ -9,7 +9,7 @@
  * the transport layers (IPC / HTTP) from duplicating config-mutation code.
  */
 
-import { getConfig, saveConfig } from '../services/config.service'
+import { getConfig, saveConfig } from '../foundation/config.service'
 import { getImChannelManager, dispatchInboundMessage } from '../apps/runtime'
 
 // ============================================

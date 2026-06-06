@@ -16,7 +16,7 @@
 import { join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync } from 'fs'
 import { getSpace, touchSpaceActivity } from './space.service'
-import { getConfig } from './config.service'
+import { getConfig } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
 import type { FileChangesSummary } from '../../shared/file-changes'
 

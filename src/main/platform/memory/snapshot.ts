@@ -15,7 +15,7 @@
 
 import { stat } from 'fs/promises'
 import { z } from 'zod'
-import { tool, createSdkMcpServer } from '../../services/agent/resolved-sdk'
+import { tool, createSdkMcpServer } from './sdk'
 import type { MemoryCallerScope } from './types'
 import { getMemoryFilePath, getMemoryArchiveDir } from './paths'
 import { readMemoryFile, listMemoryFiles, getFileSize } from './file-ops'

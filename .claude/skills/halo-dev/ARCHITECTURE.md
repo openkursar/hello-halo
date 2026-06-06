@@ -5,10 +5,15 @@
 
 ## 1) Layer Model
 
+Tiers are ordered bottom-up; each tier may depend only on the tiers **below** it.
+
 ```
-User Interaction Layer
-  - Renderer pages/components/stores
-  - Desktop UI and remote web UI
+Renderer (src/renderer)
+  - pages/components/stores; desktop UI and remote web UI
+
+Transport (src/main/ipc, src/main/http, src/preload)
+  - thin request/response + event plumbing; NO business logic
+  - http/routes is split per domain (config/space/agent/artifact/apps/store/im/...)
 
 Apps Layer (src/main/apps)
   - spec            : App YAML parse + validate
@@ -17,26 +22,51 @@ Apps Layer (src/main/apps)
                       + im-channels/ (IM provider plugins)
                       + sources/ (file-watcher, schedule-bridge, webhook event sources)
                       + dispatch-inbound (IM → app-chat/prompt-chat)
+                      + registers services/app-bridge at init (see §2)
   - conversation-mcp: in-process MCP server for app management tools
-  - store-index     : planned
+
+Services Layer (src/main/services)
+  - domain services: agent, ai-browser, ai-sources, space, conversation,
+    artifact, analytics, remote, etc.
+  - app-bridge.ts   : DI seam so services reach Apps data without importing up
 
 Platform Layer (src/main/platform)
   - store       : SQLite manager + migrations foundation
   - scheduler   : persistent job engine
   - event       : event routing/filter/dedup
-  - memory      : scoped memory tools + files
+  - memory      : scoped memory tools + files (SDK primitives injected via memory/sdk)
   - background  : keep-alive + tray + daemon browser
 
-Services Layer (src/main/services)
-  - existing domain services (agent, ai-browser, space, conversation, remote, etc.)
+Foundation Layer (src/main/foundation)  ← bedrock, zero upward deps
+  - config.service, config-encryption, crypto-envelope, credential-safety
+  - secure-storage, window, protocol, logging/, product-config
 ```
 
 ## 2) Dependency Direction (Must Hold)
 
-- Dependencies flow downward only: `UI -> apps -> platform -> services/utilities`.
-- `apps/runtime` is the orchestration boundary; do not push runtime orchestration into transport layers.
-- `platform/*` modules stay generic infrastructure (not renderer-specific, not UI-coupled).
-- Shared renderer-safe types belong in `src/shared/apps/*`.
+- Dependencies flow **downward only**:
+  `renderer -> transport -> apps -> services -> platform -> foundation`.
+- **foundation** is the bedrock: it imports only Electron/Node/`shared` — never
+  `platform/services/apps/http`. Anything config/log/window/crypto/product-config
+  belongs here. A foundation file importing an upper tier is always a bug.
+- `apps/runtime` is the orchestration boundary; do not push runtime orchestration
+  into transport layers.
+- `platform/*` stay generic infrastructure (not renderer-specific, not UI-coupled),
+  and must not import `services/apps`. (Two legacy exceptions remain and are
+  tracked as debt: `platform/background/daemon-browser` reuses `services/stealth`
+  + `services/ai-browser/download-utils` — daemon-browser is browser-domain code
+  co-located in background for lifecycle reasons.)
+- **Dependency inversion seams** keep the direction clean where a lower tier needs
+  a higher tier's behavior at runtime:
+  - `services/app-bridge.ts` — the agent engine and space service reach the App
+    manager / `halo-apps` MCP server / MCP-change events through this seam;
+    `apps/runtime` registers the concrete impls at startup (`registerAppBridge`).
+  - `platform/memory/sdk.ts` — the agent-SDK `tool()`/`createSdkMcpServer()`
+    primitives are injected by bootstrap (`setMemorySdk`) so memory never imports
+    `services/agent`.
+  - Pattern mirrors `apps/runtime/im-channels`'s `setActiveImChannelManager`.
+  - Type-only imports across a boundary are erased at runtime and are allowed.
+- Shared renderer-safe types belong in `src/shared/*`.
 
 ## 3) Engineering Baseline (Non-Negotiable)
 
@@ -52,9 +82,17 @@ src/
 ├── main/                              # Electron Main Process
 │   ├── index.ts                       # Main entry, app lifecycle
 │   ├── bootstrap/                     # essential.ts (sync) + extended.ts (async)
+│   ├── foundation/                    # Bedrock tier (zero upward deps): config.service,
+│   │                                  #   config-encryption, crypto-envelope,
+│   │                                  #   credential-safety, secure-storage, window,
+│   │                                  #   protocol, logging/, product-config
 │   ├── controllers/                   # Business logic shared by IPC & HTTP
-│   ├── http/                          # Remote Access: Express + WebSocket + routes/
-│   ├── ipc/                           # IPC handlers (20 modules, one per domain)
+│   ├── http/                          # Remote Access: Express + WebSocket
+│   │   └── routes/                    #   Per-domain route modules (*.routes.ts) +
+│   │                                  #   _shared.ts (imports/helpers barrel) +
+│   │                                  #   index.ts (thin aggregator). NO business logic.
+│   ├── ipc/                           # IPC handlers (one module per domain)
+│   │   └── rpc.ts                     #   registerRpcHandlers() — typed-RPC registrar
 │   ├── apps/                          # Apps Layer (spec, manager, runtime, conversation-mcp)
 │   ├── platform/                      # Platform Layer (store, scheduler, event, memory, background)
 │   ├── openai-compat-router/          # Anthropic <-> OpenAI bridge
@@ -626,3 +664,43 @@ To avoid circular imports between `dispatch-inbound` and `runtime/index`, the ma
 - `getActiveImChannelManager()` — called by dispatch-inbound / any provider that needs cross-instance lookup
 
 Providers needing manager reference MUST use this accessor, not direct import of runtime/index.
+
+## 23) Typed RPC (request/response contracts)
+
+A request/response IPC operation is historically hand-written in up to five
+places (ipcMain.handle + preload bridge + renderer transport map + renderer api
+adapter + HTTP route), kept in sync by a manual checklist. The typed-RPC layer
+collapses the boilerplate: declare each operation **once** as a contract, then
+derive the main-side handler registration and the preload invokers from it, so
+the surfaces cannot drift.
+
+### 23.1 Pieces
+
+- `src/shared/rpc/define.ts` — `rpcMethod<Args, Result>(channel)` + `RpcContract`,
+  `RpcHandlers<C>`, `RpcClient<C>` inference types. Dependency-free, renderer-safe.
+- `src/shared/rpc/contracts/*.contract.ts` — one contract per domain; exposed
+  method names match the existing `window.halo.*` surface.
+- `src/main/ipc/rpc.ts` — `registerRpcHandlers(contract, handlers, logTag)`:
+  wraps each impl in the `{ success, data } | { success, error }` envelope.
+- `src/preload/index.ts` — `bindRpc(contract)` spreads typed invokers into the
+  `halo` object.
+
+### 23.2 Reference migration
+
+`model-capabilities` is the pilot (see `ipc/model-capabilities.ts`,
+`shared/rpc/contracts/model-capabilities.contract.ts`). The IPC handler dropped
+from ~70 to ~35 lines and the preload entries are now contract-derived.
+
+### 23.3 Migrating another domain
+
+1. Add `src/shared/rpc/contracts/<domain>.contract.ts` with `rpcMethod` entries
+   whose keys are the exposed `window.halo.*` names and whose channel strings
+   match the existing channels (keep them identical to preserve behavior).
+2. Replace the domain's `ipc/<domain>.ts` body with `registerRpcHandlers(...)`.
+3. In `preload/index.ts`, spread `...bindRpc(<domain>Rpc)` and delete the manual
+   invoke wrappers (keep the `HaloAPI` interface entries — they document the
+   surface and are type-checked against the contract).
+4. Leave `renderer/api/index.ts` (the IPC/HTTP adapter) and `http/routes/*` as
+   they are unless the domain is also being moved onto a generated HTTP binding —
+   the renderer↔main round-trip must be validated with the app running, since
+   build/tsc verify compilation but not live channel behavior.

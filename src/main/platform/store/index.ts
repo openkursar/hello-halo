@@ -35,7 +35,7 @@
  */
 
 import { join } from 'path'
-import { getHaloDir } from '../../services/config.service'
+import { getHaloDir } from '../../foundation/config.service'
 import { createDatabaseManager } from './database-manager'
 import type { DatabaseManager, Migration } from './types'
 

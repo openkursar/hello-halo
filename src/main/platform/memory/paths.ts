@@ -15,7 +15,7 @@
  */
 
 import { join, sep } from 'path'
-import { getHaloDir } from '../../services/config.service'
+import { getHaloDir } from '../../foundation/config.service'
 import type { MemoryCallerScope, MemoryScopeType } from './types'
 
 /** Memory file name (main file for each scope) */

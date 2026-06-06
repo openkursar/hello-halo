@@ -22,7 +22,7 @@ import {
   _resetSpaceRegistry,
   _resetActivityState
 } from '../../../src/main/services/space.service'
-import { initializeApp, getHaloDir, getSpacesDir, getTempSpacePath } from '../../../src/main/services/config.service'
+import { initializeApp, getHaloDir, getSpacesDir, getTempSpacePath } from '../../../src/main/foundation/config.service'
 
 describe('Space Service', () => {
   beforeEach(async () => {

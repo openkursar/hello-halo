@@ -27,7 +27,7 @@ import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
 import { registerSecurityHandlers } from '../ipc/security'
 import { enableRemoteAccess } from '../services/remote.service'
-import { getConfig } from '../services/config.service'
+import { getConfig } from '../foundation/config.service'
 import { registerBrowserHandlers } from '../ipc/browser'
 import { cleanupAIBrowser } from '../services/ai-browser'
 import { registerOverlayHandlers, cleanupOverlayHandlers } from '../ipc/overlay'
@@ -38,15 +38,18 @@ import { cleanupAllCaches } from '../services/artifact-cache.service'
 import { flushSpaceActivity } from '../services/space.service'
 import { disposeSearchContext } from '../services/web-search'
 import { markExtendedServicesReady } from './state'
-import { getMainWindow, sendToRenderer } from '../services/window.service'
+import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
 import { closeAllV2Sessions } from '../services/agent/session-manager'
 import { registerHealthHandlers } from '../ipc/health'
-import { initBackground, shutdownBackground, getBackgroundService } from '../platform/background'
+import { initBackground, shutdownBackground, getBackgroundService, setDaemonStealthInjector } from '../platform/background'
+import { injectStealthScripts } from '../services/stealth'
 import { initStore, shutdownStore } from '../platform/store'
 import type { DatabaseManager } from '../platform/store'
 import { initScheduler, shutdownScheduler } from '../platform/scheduler'
 import { initMemory } from '../platform/memory'
+import { setMemorySdk } from '../platform/memory/sdk'
+import { tool as sdkTool, createSdkMcpServer as sdkCreateMcpServer } from '../services/agent/resolved-sdk'
 import { initAppManager, shutdownAppManager } from '../apps/manager'
 import { initAppRuntime, shutdownAppRuntime } from '../apps/runtime'
 import { installAppsSubscribers } from '../services/analytics/subscribers/apps.subscriber'
@@ -104,6 +107,12 @@ async function initPlatformAndApps(): Promise<void> {
     initScheduler({ db }),
     initMemory(),
   ])
+
+  // Inject the resolved agent-SDK MCP primitives into the memory tier, so
+  // platform/memory builds its MCP server without importing the services
+  // tier. The SDK is already initialized (see index.ts) and these refs are
+  // only invoked later, when a session's memory MCP server is built.
+  setMemorySdk({ tool: sdkTool, createSdkMcpServer: sdkCreateMcpServer })
 
   // Get the background service singleton (already initialized by initBackground())
   const background = getBackgroundService()
@@ -245,6 +254,11 @@ export function initializeExtendedServices(): void {
   // and access a shared hidden BrowserWindow with stealth injection
   const backgroundService = initBackground()
   backgroundService.initTray()
+
+  // Wire browser-domain stealth injection into the platform daemon browser
+  // without the platform tier importing services (keeps platform → services
+  // direction clean). Best-effort: the daemon window runs without it if unset.
+  setDaemonStealthInjector(injectStealthScripts)
 
   // Analytics: fire-and-forget IPC channel for renderer telemetry
   registerAnalyticsHandlers()

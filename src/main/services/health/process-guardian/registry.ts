@@ -11,7 +11,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { randomUUID } from 'crypto'
 import type { HealthRegistry, ProcessEntry, ProcessType } from '../types'
-import { getHaloDir } from '../../config.service'
+import { getHaloDir } from '../../../foundation/config.service'
 
 // ============================================
 // Registry State

@@ -16,7 +16,7 @@
 
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
-import { getConfig, saveConfig as saveHaloConfig } from '../services/config.service'
+import { getConfig, saveConfig as saveHaloConfig } from '../foundation/config.service'
 import { getAppManager } from '../apps/manager'
 import { AppAlreadyInstalledError } from '../apps/manager/errors'
 import { getAppRuntime } from '../apps/runtime'
@@ -36,7 +36,7 @@ import { SyncService } from './sync.service'
 import { QueryService } from './query.service'
 import { STORE_CACHE_NAMESPACE, storeCacheMigrations } from './store-cache.schema'
 import { getAdapter } from './adapters'
-import { loadProductConfig } from '../services/ai-sources/auth-loader'
+import { loadProductConfig } from '../foundation/product-config'
 
 // ============================================
 // Constants

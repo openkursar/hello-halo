@@ -11,7 +11,7 @@ import { describe, it, expect, vi } from 'vitest'
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: vi.fn()
 }))
-vi.mock('../../../src/main/services/config.service', () => ({
+vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(() => ({})),
   getTempSpacePath: vi.fn(() => '/tmp')
 }))

@@ -35,9 +35,9 @@
  *   inbound message that triggered the claim continues uninterrupted.
  */
 
-import { getConfig, saveConfig } from '../../../services/config.service'
+import { getConfig, saveConfig } from '../../../foundation/config.service'
 import { invalidateImSessions } from '../../../services/agent/session-manager'
-import { sendToRenderer } from '../../../services/window.service'
+import { sendToRenderer } from '../../../foundation/window.service'
 import { broadcastToAll } from '../../../http/websocket'
 import { getActiveImChannelManager } from './index'
 import { dispatchInboundMessage } from '../dispatch-inbound'

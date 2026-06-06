@@ -7,10 +7,10 @@ import { dirname, join } from 'path'
 import { homedir } from 'os'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
-import { getDataFolderName } from './ai-sources/auth-loader'
+import { getDataFolderName } from './product-config'
 
 // Import analytics config type
-import type { AnalyticsConfig } from './analytics/types'
+import type { AnalyticsConfig } from '../services/analytics/types'
 import type {
   AISourcesConfig,
   AISource,

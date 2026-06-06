@@ -21,7 +21,7 @@ import {
 } from './auth'
 import { initWebSocket, shutdownWebSocket, getClientCount } from './websocket'
 import { registerApiRoutes } from './routes'
-import { getMainWindow as getMainWindowFromService } from '../services/window.service'
+import { getMainWindow as getMainWindowFromService } from '../foundation/window.service'
 
 // Vite dev server URL
 const VITE_DEV_SERVER = 'http://localhost:5173'

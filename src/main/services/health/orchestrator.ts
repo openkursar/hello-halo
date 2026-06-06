@@ -39,7 +39,7 @@ import {
   updateErrorCount,
   resetDialogSuppression
 } from './recovery-manager'
-import { sendToRenderer } from '../window.service'
+import { sendToRenderer } from '../../foundation/window.service'
 
 // ============================================
 // State

@@ -10,16 +10,18 @@ export { getAISourceManager, AISourceManager } from './manager'
 
 // Auth Loader (for dynamic provider loading)
 export {
-  loadProductConfig,
   loadAuthProviders,
   getEnabledAuthProviderConfigs,
   isProviderAvailable,
   getProviderByType,
   isOAuthProvider,
   type AuthProviderConfig,
-  type ProductConfig,
   type LoadedProvider
 } from './auth-loader'
+
+// Product config now lives in the foundation tier; re-exported here so
+// existing `services/ai-sources` consumers keep a stable import surface.
+export { loadProductConfig, type ProductConfig } from '../../foundation/product-config'
 
 // Built-in Providers
 export { getCustomProvider, CustomAISourceProvider } from './providers/custom.provider'

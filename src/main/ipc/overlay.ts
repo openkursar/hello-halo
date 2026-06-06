@@ -7,25 +7,29 @@
  * to avoid startup overhead. This reduces initial memory usage and speeds up app launch.
  */
 
-import { ipcMain, BrowserWindow } from 'electron'
+import { BrowserWindow } from 'electron'
 import { overlayManager } from '../services/overlay.service'
+import { overlayRpc } from '../../shared/rpc/contracts/overlay.contract'
+import { registerRawRpcHandlers } from './rpc'
 
 /**
  * Register overlay IPC handlers
  */
 export function registerOverlayHandlers(mainWindow: BrowserWindow | null): void {
-  // Show chat capsule overlay (async - triggers lazy initialization on first call)
-  ipcMain.handle('overlay:show-chat-capsule', async () => {
-    console.log('[IPC] overlay:show-chat-capsule')
-    await overlayManager.showChatCapsule()
-    return true
-  })
+  registerRawRpcHandlers(overlayRpc, {
+    // Show chat capsule overlay (async - triggers lazy initialization on first call)
+    showChatCapsuleOverlay: async () => {
+      console.log('[IPC] overlay:show-chat-capsule')
+      await overlayManager.showChatCapsule()
+      return true
+    },
 
-  // Hide chat capsule overlay
-  ipcMain.handle('overlay:hide-chat-capsule', async () => {
-    console.log('[IPC] overlay:hide-chat-capsule')
-    overlayManager.hideChatCapsule()
-    return true
+    // Hide chat capsule overlay
+    hideChatCapsuleOverlay: async () => {
+      console.log('[IPC] overlay:hide-chat-capsule')
+      overlayManager.hideChatCapsule()
+      return true
+    },
   })
 
   // Set main window reference (lazy initialization - does NOT create BrowserView yet)

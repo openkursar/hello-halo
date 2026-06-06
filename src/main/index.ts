@@ -77,7 +77,7 @@ Object.assign(console, log.functions)
 
 // Logging subsystem: subscribe to config changes and control log level + transports.
 // Must load after console replacement so its initial log calls go through electron-log.
-import './services/logging'
+import './foundation/logging'
 
 // Fix PATH for macOS GUI apps
 // GUI apps don't inherit shell environment variables (.zshrc, .bash_profile, etc.)
@@ -104,7 +104,7 @@ app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
 // Must be called before app.whenReady() and requestSingleInstanceLock() so that
 // each build variant (e.g. Halo vs Halo-Enterprise) uses its own userData directory.
 // This isolates cookies, sessions, localStorage, Claude SDK config, etc.
-import { getDataFolderName, DEFAULT_DATA_FOLDER_NAME, loadProductConfig } from './services/ai-sources/auth-loader'
+import { getDataFolderName, DEFAULT_DATA_FOLDER_NAME, loadProductConfig } from './foundation/product-config'
 import { join as joinPath } from 'path'
 const dataFolderName = getDataFolderName()
 if (dataFolderName !== DEFAULT_DATA_FOLDER_NAME) {
@@ -187,14 +187,14 @@ import {
   initializeExtendedServices,
   cleanupExtendedServices
 } from './bootstrap'
-import { initializeApp } from './services/config.service'
+import { initializeApp } from './foundation/config.service'
 import { flushAllPendingIndexWrites } from './services/conversation.service'
 import { shutdownRemoteAccess } from './services/remote.service'
 import { stopOpenAICompatRouter } from './openai-compat-router'
 import { manualCheckForUpdates } from './services/updater.service'
 import { initAnalytics } from './services/analytics'
-import { registerProtocols } from './services/protocol.service'
-import { setMainWindow } from './services/window.service'
+import { registerProtocols } from './foundation/protocol.service'
+import { setMainWindow } from './foundation/window.service'
 import { initInstanceId, shutdownHealthSystem, onRendererCrash, onRendererUnresponsive } from './services/health'
 import { reconcileAllSpaces } from './services/artifact-cache.service'
 import { initSdk } from './services/agent/resolved-sdk'

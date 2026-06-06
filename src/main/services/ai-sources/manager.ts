@@ -37,12 +37,13 @@ import {
   type ProviderId
 } from '../../../shared/types'
 import { getBuiltinProvider, isAnthropicProvider, isBuiltinProvider } from '../../../shared/constants'
-import { getConfig, saveConfig } from '../config.service'
+import { getConfig, saveConfig } from '../../foundation/config.service'
 import { getCustomProvider } from './providers/custom.provider'
 import { getGitHubCopilotProvider } from './providers/github-copilot.provider'
 import { getClaudeProvider } from './providers/claude.provider'
-import { loadAuthProvidersAsync, loadProductConfig } from './auth-loader'
-import { decryptString } from '../secure-storage.service'
+import { loadAuthProvidersAsync } from './auth-loader'
+import { loadProductConfig } from '../../foundation/product-config'
+import { decryptString } from '../../foundation/secure-storage.service'
 import { normalizeApiUrl } from '../../openai-compat-router'
 
 /**

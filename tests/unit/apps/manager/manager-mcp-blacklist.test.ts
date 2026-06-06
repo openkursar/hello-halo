@@ -19,11 +19,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
 
-vi.mock('../../../../src/main/services/ai-sources/auth-loader', () => ({
+vi.mock('../../../../src/main/foundation/product-config', () => ({
   loadProductConfig: vi.fn(() => ({ name: 'test', version: '0.0.0', authProviders: [] })),
 }))
 
-import { loadProductConfig } from '../../../../src/main/services/ai-sources/auth-loader'
+import { loadProductConfig } from '../../../../src/main/foundation/product-config'
 import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../src/main/platform/store/types'
 import { AppManagerStore } from '../../../../src/main/apps/manager/store'

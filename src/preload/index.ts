@@ -3,6 +3,31 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
+import type { RpcContract, RpcClient } from '../shared/rpc/define'
+import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
+import { onboardingRpc } from '../shared/rpc/contracts/onboarding.contract'
+import { securityRpc } from '../shared/rpc/contracts/security.contract'
+import { perfRpc } from '../shared/rpc/contracts/perf.contract'
+import { notificationChannelsRpc } from '../shared/rpc/contracts/notification-channels.contract'
+import { imSessionsRpc } from '../shared/rpc/contracts/im-sessions.contract'
+import { cliConfigRpc } from '../shared/rpc/contracts/cli-config.contract'
+import { imChannelsRpc } from '../shared/rpc/contracts/im-channels.contract'
+import { weixinIlinkRpc } from '../shared/rpc/contracts/weixin-ilink.contract'
+import { conversationRpc } from '../shared/rpc/contracts/conversation.contract'
+import { spaceRpc } from '../shared/rpc/contracts/space.contract'
+import { storeRpc } from '../shared/rpc/contracts/store.contract'
+import { remoteRpc } from '../shared/rpc/contracts/remote.contract'
+import { authRpc } from '../shared/rpc/contracts/auth.contract'
+import { systemRpc } from '../shared/rpc/contracts/system.contract'
+import { healthRpc } from '../shared/rpc/contracts/health.contract'
+import { configRpc } from '../shared/rpc/contracts/config.contract'
+import { agentRpc } from '../shared/rpc/contracts/agent.contract'
+import { artifactRpc } from '../shared/rpc/contracts/artifact.contract'
+import { searchRpc } from '../shared/rpc/contracts/search.contract'
+import { wecomBotRpc } from '../shared/rpc/contracts/wecom-bot.contract'
+import { gitBashRpc } from '../shared/rpc/contracts/git-bash.contract'
+import { overlayRpc } from '../shared/rpc/contracts/overlay.contract'
+import { appRpc } from '../shared/rpc/contracts/app.contract'
 import type {
   HealthStatusResponse,
   HealthStateResponse,
@@ -369,7 +394,7 @@ export interface HaloAPI {
   imChannelsProviders: () => Promise<IpcResponse>
   imChannelsPermissionDefaults: () => Promise<IpcResponse>
 
-  // IM Sessions (会话管理)
+  // IM Sessions
   imSessionsList: (appId?: string) => Promise<IpcResponse>
   imSessionsSetProactive: (input: { appId: string; channel: string; chatId: string; proactive: boolean }) => Promise<IpcResponse>
   imSessionsRemove: (input: { appId: string; channel: string; chatId: string }) => Promise<IpcResponse>
@@ -495,86 +520,62 @@ function createEventListener<T = unknown>(
   }
 }
 
+/**
+ * Derive preload invokers from a typed RPC contract: each exposed method
+ * becomes `(...args) => ipcRenderer.invoke(channel, ...args)`. The return is
+ * typed as the matching subset of {@link HaloAPI} (the contract's keys are
+ * `window.halo.*` method names), so spreading it into the `api` object stays
+ * fully typed against the existing surface — the channel name and arg order
+ * can never drift from the contract, and no per-channel casting is needed.
+ *
+ * Behaviour is identical to the hand-written `ipcRenderer.invoke(...)` wrapper
+ * it replaces; the `HaloAPI[K]` result types continue to come from the
+ * interface declaration.
+ *
+ * ⚠️ ONLY valid for IDENTITY-ARG channels — i.e. ones whose hand-written
+ * wrapper was `(...args) => invoke('ch', ...args)` (positional args passed
+ * through unchanged). bindRpc spreads positional args, so any channel whose
+ * wrapper TRANSFORMED args — packing into an object `(viewId, url) =>
+ * invoke('ch', { viewId, url })`, reordering, or setting up a per-call
+ * progress listener — MUST stay hand-written (see `browser:*`, `store:install`,
+ * `git-bash:install`). The `as HaloAPI[K]` cast cannot detect this mismatch,
+ * and esbuild does not type-check — so a wrong migration compiles green but
+ * breaks at runtime. Verify the original wrapper is identity-form before
+ * converting a channel to a contract.
+ */
+function bindRpc<C extends RpcContract>(contract: C): { [K in keyof C & keyof HaloAPI]: HaloAPI[K] } {
+  const out: Record<string, (...args: unknown[]) => Promise<unknown>> = {}
+  for (const name of Object.keys(contract)) {
+    const { channel } = contract[name]
+    out[name] = (...args: unknown[]) => ipcRenderer.invoke(channel, ...args)
+  }
+  return out as { [K in keyof C & keyof HaloAPI]: HaloAPI[K] }
+}
+
 // Expose API to renderer
 const api: HaloAPI = {
+  // Typed-RPC-derived bindings (see shared/rpc/contracts). Channel names and
+  // argument shapes come from the contract — no manual sync needed.
+  ...bindRpc(modelCapabilitiesRpc),
+
   // Generic Auth (provider-agnostic)
-  authGetProviders: () => ipcRenderer.invoke('auth:get-providers'),
-  authGetBuiltinProviders: () => ipcRenderer.invoke('auth:get-builtin-providers'),
-  authStartLogin: (providerType) => ipcRenderer.invoke('auth:start-login', providerType),
-  authOpenLoginWindow: (providerType, loginUrl, redirectUri) => ipcRenderer.invoke('auth:open-login-window', providerType, loginUrl, redirectUri),
-  authCompleteLogin: (providerType, state) => ipcRenderer.invoke('auth:complete-login', providerType, state),
-  authRefreshToken: (sourceId) => ipcRenderer.invoke('auth:refresh-token', sourceId),
-  authCheckToken: (sourceId) => ipcRenderer.invoke('auth:check-token', sourceId),
-  authLogout: (sourceId) => ipcRenderer.invoke('auth:logout', sourceId),
+  ...bindRpc(authRpc),
   onAuthLoginProgress: (callback) => createEventListener('auth:login-progress', callback),
 
-  // Config
-  getConfig: () => ipcRenderer.invoke('config:get'),
-  setConfig: (updates) => ipcRenderer.invoke('config:set', updates),
-  validateApi: (apiKey, apiUrl, provider, model?) =>
-    ipcRenderer.invoke('config:validate-api', apiKey, apiUrl, provider, model),
-  fetchModels: (apiKey, apiUrl) =>
-    ipcRenderer.invoke('config:fetch-models', apiKey, apiUrl),
-  refreshAISourcesConfig: () => ipcRenderer.invoke('config:refresh-ai-sources'),
+  // Config + AI Sources CRUD (derived from configRpc contract)
+  ...bindRpc(configRpc),
 
   // CLI Config
-  cliConfigGetPaths: () => ipcRenderer.invoke('cli-config:get-paths'),
-  cliConfigScanSkills: () => ipcRenderer.invoke('cli-config:scan-skills'),
-  cliConfigMigrateSkills: (actions) => ipcRenderer.invoke('cli-config:migrate-skills', actions),
-  cliConfigScanMcp: () => ipcRenderer.invoke('cli-config:scan-mcp'),
-  cliConfigMigrateMcp: (actions) => ipcRenderer.invoke('cli-config:migrate-mcp', actions),
-  cliConfigSetConfigDir: (mode, customDir?) => ipcRenderer.invoke('cli-config:set-config-dir', mode, customDir),
-
-  // AI Sources CRUD (atomic - backend reads from disk, never overwrites rotating tokens)
-  aiSourcesSwitchSource: (sourceId) => ipcRenderer.invoke('ai-sources:switch-source', sourceId),
-  aiSourcesSetModel: (modelId) => ipcRenderer.invoke('ai-sources:set-model', modelId),
-  aiSourcesAddSource: (source) => ipcRenderer.invoke('ai-sources:add-source', source),
-  aiSourcesUpdateSource: (sourceId, updates) => ipcRenderer.invoke('ai-sources:update-source', sourceId, updates),
-  aiSourcesDeleteSource: (sourceId) => ipcRenderer.invoke('ai-sources:delete-source', sourceId),
+  ...bindRpc(cliConfigRpc),
 
   // Space
-  getHaloSpace: () => ipcRenderer.invoke('space:get-halo'),
-  listSpaces: () => ipcRenderer.invoke('space:list'),
-  createSpace: (input) => ipcRenderer.invoke('space:create', input),
-  deleteSpace: (spaceId) => ipcRenderer.invoke('space:delete', spaceId),
-  getSpace: (spaceId) => ipcRenderer.invoke('space:get', spaceId),
-  openSpaceFolder: (spaceId) => ipcRenderer.invoke('space:open-folder', spaceId),
-  updateSpace: (spaceId, updates) => ipcRenderer.invoke('space:update', spaceId, updates),
-  getDefaultSpacePath: () => ipcRenderer.invoke('space:get-default-path'),
-  selectFolder: () => ipcRenderer.invoke('dialog:select-folder'),
-  updateSpacePreferences: (spaceId, preferences) =>
-    ipcRenderer.invoke('space:update-preferences', spaceId, preferences),
-  getSpacePreferences: (spaceId) => ipcRenderer.invoke('space:get-preferences', spaceId),
+  ...bindRpc(spaceRpc),
 
   // Conversation
-  listConversations: (spaceId) => ipcRenderer.invoke('conversation:list', spaceId),
-  createConversation: (spaceId, title) => ipcRenderer.invoke('conversation:create', spaceId, title),
-  getConversation: (spaceId, conversationId) =>
-    ipcRenderer.invoke('conversation:get', spaceId, conversationId),
-  updateConversation: (spaceId, conversationId, updates) =>
-    ipcRenderer.invoke('conversation:update', spaceId, conversationId, updates),
-  deleteConversation: (spaceId, conversationId) =>
-    ipcRenderer.invoke('conversation:delete', spaceId, conversationId),
-  addMessage: (spaceId, conversationId, message) =>
-    ipcRenderer.invoke('conversation:add-message', spaceId, conversationId, message),
-  updateLastMessage: (spaceId, conversationId, updates) =>
-    ipcRenderer.invoke('conversation:update-last-message', spaceId, conversationId, updates),
-  getMessageThoughts: (spaceId, conversationId, messageId) =>
-    ipcRenderer.invoke('conversation:get-thoughts', spaceId, conversationId, messageId),
-  toggleStarConversation: (spaceId, conversationId, starred) =>
-    ipcRenderer.invoke('conversation:toggle-star', spaceId, conversationId, starred),
+  ...bindRpc(conversationRpc),
 
-  // Agent
-  sendMessage: (request) => ipcRenderer.invoke('agent:send-message', request),
-  stopGeneration: (conversationId) => ipcRenderer.invoke('agent:stop', conversationId),
-  approveTool: (conversationId) => ipcRenderer.invoke('agent:approve-tool', conversationId),
-  rejectTool: (conversationId) => ipcRenderer.invoke('agent:reject-tool', conversationId),
-  getSessionState: (conversationId) => ipcRenderer.invoke('agent:get-session-state', conversationId),
-  ensureSessionWarm: (spaceId, conversationId) => ipcRenderer.invoke('agent:ensure-session-warm', spaceId, conversationId),
-  testMcpConnections: () => ipcRenderer.invoke('agent:test-mcp'),
-  answerQuestion: (data) => ipcRenderer.invoke('agent:answer-question', data),
-  injectMessage: (data) => ipcRenderer.invoke('agent:inject-message', data),
-  getEngineCapabilities: () => ipcRenderer.invoke('agent:get-engine-capabilities'),
+  // Agent (derived from agentRpc contract)
+  ...bindRpc(agentRpc),
 
   // Event listeners
   onAgentMessage: (callback) => createEventListener('agent:message', callback),
@@ -591,65 +592,27 @@ const api: HaloAPI = {
   onAgentSessionInfo: (callback) => createEventListener('agent:session-info', callback),
   onAgentTurnStart: (callback) => createEventListener('agent:turn-start', callback),
 
-  // Artifact
-  listArtifacts: (spaceId, maxDepth = 2) => ipcRenderer.invoke('artifact:list', spaceId, maxDepth),
-  listArtifactsTree: (spaceId) => ipcRenderer.invoke('artifact:list-tree', spaceId),
-  loadArtifactChildren: (spaceId, dirPath) => ipcRenderer.invoke('artifact:load-children', spaceId, dirPath),
-  initArtifactWatcher: (spaceId) => ipcRenderer.invoke('artifact:init-watcher', spaceId),
+  // Artifact (methods derived from artifactRpc contract; event listeners kept)
+  ...bindRpc(artifactRpc),
   onArtifactChanged: (callback) => createEventListener('artifact:changed', callback),
   onArtifactTreeUpdate: (callback) => createEventListener('artifact:tree-update', callback),
-  reconcileArtifacts: (spaceId) => ipcRenderer.invoke('artifact:reconcile', spaceId),
-  openArtifact: (filePath) => ipcRenderer.invoke('artifact:open', filePath),
-  showArtifactInFolder: (filePath) => ipcRenderer.invoke('artifact:show-in-folder', filePath),
-  readArtifactContent: (filePath) => ipcRenderer.invoke('artifact:read-content', filePath),
-  saveArtifactContent: (filePath, content) => ipcRenderer.invoke('artifact:save-content', filePath, content),
-  detectFileType: (filePath) => ipcRenderer.invoke('artifact:detect-file-type', filePath),
-  
-  // File operations — create/move send (parentPath, name), backend constructs full path
-  createArtifactFile: (spaceId, parentPath, name, content) => ipcRenderer.invoke('artifact:create-file', spaceId, parentPath, name, content),
-  createArtifactFolder: (spaceId, parentPath, name) => ipcRenderer.invoke('artifact:create-folder', spaceId, parentPath, name),
-  deleteArtifact: (spaceId, targetPath) => ipcRenderer.invoke('artifact:delete', spaceId, targetPath),
-  renameArtifact: (spaceId, oldPath, newName) => ipcRenderer.invoke('artifact:rename', spaceId, oldPath, newName),
-  moveArtifact: (spaceId, oldPath, newParentPath) => ipcRenderer.invoke('artifact:move', spaceId, oldPath, newParentPath),
 
-  // Onboarding
-  writeOnboardingArtifact: (spaceId, filename, content) =>
-    ipcRenderer.invoke('onboarding:write-artifact', spaceId, filename, content),
-  saveOnboardingConversation: (spaceId, userPrompt, aiResponse) =>
-    ipcRenderer.invoke('onboarding:save-conversation', spaceId, userPrompt, aiResponse),
+  // Onboarding (derived from onboardingRpc contract)
+  ...bindRpc(onboardingRpc),
 
   // Remote Access
-  enableRemoteAccess: (port) => ipcRenderer.invoke('remote:enable', port),
-  disableRemoteAccess: () => ipcRenderer.invoke('remote:disable'),
-  enableTunnel: () => ipcRenderer.invoke('remote:tunnel:enable'),
-  disableTunnel: () => ipcRenderer.invoke('remote:tunnel:disable'),
-  getRemoteStatus: () => ipcRenderer.invoke('remote:status'),
-  getRemoteQRCode: (includeToken) => ipcRenderer.invoke('remote:qrcode', includeToken),
-  setRemotePassword: (password) => ipcRenderer.invoke('remote:set-password', password),
-  regenerateRemotePassword: () => ipcRenderer.invoke('remote:regenerate-password'),
+  ...bindRpc(remoteRpc),
   onRemoteStatusChange: (callback) => createEventListener('remote:status-change', callback),
 
   // Security policy
-  getSecurityPolicy: () => ipcRenderer.invoke('security:get-public-policy'),
+  ...bindRpc(securityRpc),
 
-  // System Settings
-  getAutoLaunch: () => ipcRenderer.invoke('system:get-auto-launch'),
-  setAutoLaunch: (enabled) => ipcRenderer.invoke('system:set-auto-launch', enabled),
-  openLogFolder: () => ipcRenderer.invoke('system:open-log-folder'),
-  relaunch: () => ipcRenderer.invoke('system:relaunch'),
-
-  // Window
-  setTitleBarOverlay: (options) => ipcRenderer.invoke('window:set-title-bar-overlay', options),
-  maximizeWindow: () => ipcRenderer.invoke('window:maximize'),
-  unmaximizeWindow: () => ipcRenderer.invoke('window:unmaximize'),
-  isWindowMaximized: () => ipcRenderer.invoke('window:is-maximized'),
-  toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),
+  // System Settings + Window controls (derived from systemRpc contract)
+  ...bindRpc(systemRpc),
   onWindowMaximizeChange: (callback) => createEventListener('window:maximize-change', callback),
 
-  // Search
-  search: (query, scope, conversationId, spaceId) =>
-    ipcRenderer.invoke('search:execute', query, scope, conversationId, spaceId),
-  cancelSearch: () => ipcRenderer.invoke('search:cancel'),
+  // Search (methods derived from searchRpc contract; event listeners kept)
+  ...bindRpc(searchRpc),
   onSearchProgress: (callback) => createEventListener('search:progress', callback),
   onSearchCancelled: (callback) => createEventListener('search:cancelled', callback),
 
@@ -659,7 +622,10 @@ const api: HaloAPI = {
   getVersion: () => ipcRenderer.invoke('updater:get-version'),
   onUpdaterStatus: (callback) => createEventListener('updater:status', callback),
 
-  // Browser (embedded browser for Content Canvas)
+  // Browser (embedded browser for Content Canvas).
+  // NOTE: these preload methods PACK positional args into the object shape the
+  // main handlers destructure (e.g. (viewId, url) -> { viewId, url }), so they
+  // are kept hand-written — bindRpc's positional passthrough would break them.
   getBrowserHomepage: () => ipcRenderer.invoke('browser:get-homepage'),
   createBrowserView: (viewId, url) => ipcRenderer.invoke('browser:create', { viewId, url }),
   destroyBrowserView: (viewId) => ipcRenderer.invoke('browser:destroy', { viewId }),
@@ -678,6 +644,7 @@ const api: HaloAPI = {
   toggleBrowserDevTools: (viewId) => ipcRenderer.invoke('browser:dev-tools', { viewId }),
   setBrowserDeviceMode: (viewId, mode) => ipcRenderer.invoke('browser:set-device-mode', { viewId, mode }),
   showBrowserContextMenu: (options) => ipcRenderer.invoke('browser:show-context-menu', options),
+  openLoginWindow: (url, title) => ipcRenderer.invoke('browser:open-login-window', { url, title }),
   onBrowserStateChange: (callback) => createEventListener('browser:state-change', callback),
   onBrowserZoomChanged: (callback) => createEventListener('browser:zoom-changed', callback),
 
@@ -689,24 +656,18 @@ const api: HaloAPI = {
   onAIBrowserActiveViewChanged: (callback) => createEventListener('ai-browser:active-view-changed', callback),
 
   // Overlay (for floating UI above BrowserView)
-  showChatCapsuleOverlay: () => ipcRenderer.invoke('overlay:show-chat-capsule'),
-  hideChatCapsuleOverlay: () => ipcRenderer.invoke('overlay:hide-chat-capsule'),
+  ...bindRpc(overlayRpc),
   onCanvasExitMaximized: (callback) => createEventListener('canvas:exit-maximized', callback),
 
   // Performance Monitoring (Developer Tools)
-  perfStart: (config) => ipcRenderer.invoke('perf:start', config),
-  perfStop: () => ipcRenderer.invoke('perf:stop'),
-  perfGetState: () => ipcRenderer.invoke('perf:get-state'),
-  perfGetHistory: () => ipcRenderer.invoke('perf:get-history'),
-  perfClearHistory: () => ipcRenderer.invoke('perf:clear-history'),
-  perfSetConfig: (config) => ipcRenderer.invoke('perf:set-config', config),
-  perfExport: () => ipcRenderer.invoke('perf:export'),
+  ...bindRpc(perfRpc),
   perfReportRendererMetrics: (metrics) => ipcRenderer.send('perf:renderer-metrics', metrics),
   onPerfSnapshot: (callback) => createEventListener('perf:snapshot', callback),
   onPerfWarning: (callback) => createEventListener('perf:warning', callback),
 
-  // Git Bash (Windows only)
-  getGitBashStatus: () => ipcRenderer.invoke('git-bash:status'),
+  // Git Bash (Windows only) — getGitBashStatus + openExternal derived from
+  // gitBashRpc; installGitBash keeps its custom per-call progress wrapper.
+  ...bindRpc(gitBashRpc),
   installGitBash: async (onProgress) => {
     // Create a unique channel for this installation
     const progressChannel = `git-bash:install-progress-${Date.now()}`
@@ -724,97 +685,31 @@ const api: HaloAPI = {
       ipcRenderer.removeListener(progressChannel, progressHandler)
     }
   },
-  openLoginWindow: (url, title) => ipcRenderer.invoke('browser:open-login-window', { url, title }),
-  openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
 
   // Bootstrap lifecycle
   getBootstrapStatus: () => ipcRenderer.invoke('bootstrap:get-status'),
   onBootstrapExtendedReady: (callback) => createEventListener('bootstrap:extended-ready', callback),
 
   // Health System
-  getHealthStatus: () => ipcRenderer.invoke('health:get-status'),
-  getHealthState: () => ipcRenderer.invoke('health:get-state'),
-  triggerHealthRecovery: (strategyId, userConsented) => ipcRenderer.invoke('health:trigger-recovery', strategyId, userConsented),
-  generateHealthReport: () => ipcRenderer.invoke('health:generate-report'),
-  generateHealthReportText: () => ipcRenderer.invoke('health:generate-report-text'),
-  exportHealthReport: (filePath) => ipcRenderer.invoke('health:export-report', filePath),
-  runHealthCheck: () => ipcRenderer.invoke('health:run-check'),
+  ...bindRpc(healthRpc),
 
   // Notification Channels
-  testNotificationChannel: (channelType: string) => ipcRenderer.invoke('notify-channels:test', channelType),
-  clearNotificationChannelCache: () => ipcRenderer.invoke('notify-channels:clear-cache'),
+  ...bindRpc(notificationChannelsRpc),
 
-  // WeCom Bot (企业微信智能机器人) — legacy compat
-  getWecomBotStatus: () => ipcRenderer.invoke('wecom-bot:status'),
-  reconnectWecomBot: () => ipcRenderer.invoke('wecom-bot:reconnect'),
-
-  // WeCom Bot — Scan-Auth (QR-code device flow)
-  wecomBotScanAuthStart: () => ipcRenderer.invoke('wecom-bot:scan-auth:start'),
-  wecomBotScanAuthPoll: (scode) => ipcRenderer.invoke('wecom-bot:scan-auth:poll', scode),
-  wecomBotScanAuthCancel: (scode) => ipcRenderer.invoke('wecom-bot:scan-auth:cancel', scode),
-  wecomBotScanAuthCreateAssistant: (input) => ipcRenderer.invoke('wecom-bot:scan-auth:create-assistant', input),
+  // WeCom Bot (企业微信智能机器人) status + scan-auth (derived from wecomBotRpc)
+  ...bindRpc(wecomBotRpc),
 
   // IM Channels (multi-instance)
-  imChannelsStatus: () => ipcRenderer.invoke('im-channels:status'),
-  imChannelsInstanceStatus: (instanceId: string) => ipcRenderer.invoke('im-channels:instance-status', instanceId),
-  imChannelsReconnect: (instanceId: string) => ipcRenderer.invoke('im-channels:reconnect', instanceId),
-  imChannelsReload: () => ipcRenderer.invoke('im-channels:reload'),
-  imChannelsProviders: () => ipcRenderer.invoke('im-channels:providers'),
-  imChannelsPermissionDefaults: () => ipcRenderer.invoke('im-channels:permission-defaults'),
+  ...bindRpc(imChannelsRpc),
 
-  // IM Sessions (会话管理)
-  imSessionsList: (appId) => ipcRenderer.invoke('im-sessions:list', appId),
-  imSessionsSetProactive: (input) => ipcRenderer.invoke('im-sessions:set-proactive', input),
-  imSessionsRemove: (input) => ipcRenderer.invoke('im-sessions:remove', input),
-  imSessionsSetCustomName: (input) => ipcRenderer.invoke('im-sessions:set-custom-name', input),
+  // IM Sessions
+  ...bindRpc(imSessionsRpc),
 
   // WeChat Personal Bot via iLink API
-  weixinIlinkRequestQrcode: () => ipcRenderer.invoke('weixin-ilink:request-qrcode'),
-  weixinIlinkPollAuthStatus: (qrcode) => ipcRenderer.invoke('weixin-ilink:poll-auth-status', qrcode),
-  weixinIlinkSaveToken: (instanceId, botToken, baseUrl?, accountId?) => ipcRenderer.invoke('weixin-ilink:save-token', instanceId, botToken, baseUrl, accountId),
-  weixinIlinkDisconnect: (instanceId) => ipcRenderer.invoke('weixin-ilink:disconnect', instanceId),
+  ...bindRpc(weixinIlinkRpc),
 
-  // Apps Management
-  appList: (filter) => ipcRenderer.invoke('app:list', filter),
-  appGet: (appId) => ipcRenderer.invoke('app:get', appId),
-  appInstall: (input) => ipcRenderer.invoke('app:install', input),
-  appUninstall: (input) => ipcRenderer.invoke('app:uninstall', input),
-  appReinstall: (input) => ipcRenderer.invoke('app:reinstall', input),
-  appDelete: (input) => ipcRenderer.invoke('app:delete', input),
-  appPause: (appId) => ipcRenderer.invoke('app:pause', appId),
-  appResume: (appId) => ipcRenderer.invoke('app:resume', appId),
-  appTrigger: (appId) => ipcRenderer.invoke('app:trigger', appId),
-  appGetState: (appId) => ipcRenderer.invoke('app:get-state', appId),
-  appGetActivity: (input) => ipcRenderer.invoke('app:get-activity', input),
-  appGetSession: (input) => ipcRenderer.invoke('app:get-session', input),
-  appRespondEscalation: (input) => ipcRenderer.invoke('app:respond-escalation', input),
-  appContinueRun: (input) => ipcRenderer.invoke('app:continue-run', input),
-  appUpdateConfig: (input) => ipcRenderer.invoke('app:update-config', input),
-  appUpdateFrequency: (input) => ipcRenderer.invoke('app:update-frequency', input),
-  appUpdateOverrides: (input) => ipcRenderer.invoke('app:update-overrides', input),
-  appUpdateSpec: (input) => ipcRenderer.invoke('app:update-spec', input),
-  appGrantPermission: (input) => ipcRenderer.invoke('app:grant-permission', input),
-  appRevokePermission: (input) => ipcRenderer.invoke('app:revoke-permission', input),
-
-  // App Import / Export
-  appExportSpec: (appId) => ipcRenderer.invoke('app:export-spec', appId),
-  appImportSpec: (input) => ipcRenderer.invoke('app:import-spec', input),
-  appOpenSkillFolder: (appId) => ipcRenderer.invoke('app:open-skill-folder', appId),
-  appGetDataPath: (appId) => ipcRenderer.invoke('app:get-data-path', appId),
-  appOpenDataFolder: (appId) => ipcRenderer.invoke('app:open-data-folder', appId),
-  appClearMemory: (appId) => ipcRenderer.invoke('app:clear-memory', appId),
-  appMoveSpace: (input) => ipcRenderer.invoke('app:move-space', input),
-
-  // App Chat
-  appChatSend: (request) => ipcRenderer.invoke('app:chat-send', request),
-  appChatStop: (appId) => ipcRenderer.invoke('app:chat-stop', appId),
-  appChatStatus: (appId) => ipcRenderer.invoke('app:chat-status', appId),
-  appChatMessages: (input) => ipcRenderer.invoke('app:chat-messages', input),
-  appChatSessionState: (appId) => ipcRenderer.invoke('app:chat-session-state', appId),
-  appChatClear: (input) => ipcRenderer.invoke('app:chat-clear', input),
-  appChatRestart: (appId) => ipcRenderer.invoke('app:chat-restart', appId),
-  appImChatMessages: (input) => ipcRenderer.invoke('app:im-chat-messages', input),
-  appImChatClear: (input) => ipcRenderer.invoke('app:im-chat-clear', input),
+  // Apps Management + Import/Export + Chat (all derived from appRpc contract)
+  ...bindRpc(appRpc),
 
   // App Event Listeners
   onAppStatusChanged: (callback) => createEventListener('app:status_changed', callback),
@@ -824,10 +719,9 @@ const api: HaloAPI = {
   onImSessionUpdated: (callback) => createEventListener('app:im-session-updated', callback),
   onImChannelInstanceUpdated: (callback) => createEventListener('im-channels:instance-updated', callback),
 
-  // Store (App Registry)
-  storeQuery: (params) => ipcRenderer.invoke('store:query', params),
-  storeListApps: (query) => ipcRenderer.invoke('store:list-apps', query),
-  storeGetAppDetail: (slug) => ipcRenderer.invoke('store:get-app-detail', slug),
+  // Store (App Registry) — most methods derived from storeRpc contract;
+  // storeInstall keeps its custom progress-listener wrapper below.
+  ...bindRpc(storeRpc),
   storeInstall: async (input, onProgress) => {
     if (!onProgress) {
       return ipcRenderer.invoke('store:install', input)
@@ -844,25 +738,13 @@ const api: HaloAPI = {
       ipcRenderer.removeListener(progressChannel, progressHandler)
     }
   },
-  storeRefresh: () => ipcRenderer.invoke('store:refresh'),
-  storeCheckUpdates: () => ipcRenderer.invoke('store:check-updates'),
-  storeGetRegistries: () => ipcRenderer.invoke('store:get-registries'),
-  storeAddRegistry: (input) => ipcRenderer.invoke('store:add-registry', input),
-  storeRemoveRegistry: (registryId) => ipcRenderer.invoke('store:remove-registry', registryId),
-  storeToggleRegistry: (input) => ipcRenderer.invoke('store:toggle-registry', input),
-  storeUpdateRegistryAdapterConfig: (input) => ipcRenderer.invoke('store:update-registry-adapter-config', input),
   onStoreSyncStatusChanged: (callback) => createEventListener('store:sync-status-changed', callback),
 
   // Notification (in-app toast)
   onNotificationToast: (callback) => createEventListener('notification:toast', callback),
 
   // Model Capabilities
-  modelCapabilitiesResolve: (modelId, overrides) =>
-    ipcRenderer.invoke('model-capabilities:resolve', modelId, overrides),
-  modelCapabilitiesGetPreset: (modelId) =>
-    ipcRenderer.invoke('model-capabilities:preset', modelId),
-  modelCapabilitiesAll: () =>
-    ipcRenderer.invoke('model-capabilities:all'),
+  // modelCapabilities* are provided by `...bindRpc(modelCapabilitiesRpc)` above.
 
   // Telemetry (fire-and-forget)
   trackEvent: (event: string, properties?: Record<string, unknown>) => {

@@ -16,7 +16,7 @@
 
 import { is } from '@electron-toolkit/utils'
 import { jsonrepair } from 'jsonrepair'
-import { isDeveloperMode } from '../logging'
+import { isDeveloperMode } from '../../foundation/logging'
 import type {
   Thought,
   ToolCall,
@@ -613,7 +613,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
         // Add to session state
         sessionState.thoughts.push(thought)
 
-        // Send to renderer for immediate display (shows tool name, "准备中...")
+        // Send to renderer for immediate display (shows tool name + preparing state)
         emitAgentEvent('agent:thought', spaceId, conversationId, { thought })
 
         // Agent Team: detect Agent tool_use with name + team_name (team mode spawn)

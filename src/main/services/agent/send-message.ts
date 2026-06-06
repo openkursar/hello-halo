@@ -16,11 +16,11 @@
  *     5. Return immediately (no await on stream processing)
  */
 
-import { getConfig } from '../config.service'
+import { getConfig } from '../../foundation/config.service'
 import { addMessage } from '../conversation.service'
 import { createAIBrowserMcpServer } from '../ai-browser'
 import { createWebSearchMcpServer } from '../web-search'
-import { createHaloAppsMcpServer } from '../../apps/conversation-mcp'
+import { createHaloAppsMcpServer } from '../app-bridge'
 import type {
   AgentRequest,
   SessionConfig,
@@ -115,7 +115,8 @@ export async function sendMessage(
       mcpServers['ai-browser'] = createAIBrowserMcpServer(undefined, workDir)
     }
     if (digitalHumansEnabled) {
-      mcpServers['halo-apps'] = createHaloAppsMcpServer(spaceId)
+      const haloApps = createHaloAppsMcpServer(spaceId)
+      if (haloApps) mcpServers['halo-apps'] = haloApps
     }
     mcpServers['web-search'] = createWebSearchMcpServer()
 

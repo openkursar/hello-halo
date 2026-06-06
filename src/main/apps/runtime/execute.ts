@@ -42,7 +42,7 @@ import { getOrCreateV2Session } from '../../services/agent/session-manager'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import { createWebSearchMcpServer } from '../../services/web-search'
 import { createEmailMcpServer } from '../../services/email-mcp'
-import { getConfig, resolveClaudeConfigDir } from '../../services/config.service'
+import { getConfig, resolveClaudeConfigDir } from '../../foundation/config.service'
 import { getSpace, getSpaceDir } from '../../services/space.service'
 import { openSessionWriter, type SessionWriter } from './session-store'
 

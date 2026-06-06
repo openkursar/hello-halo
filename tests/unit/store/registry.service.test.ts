@@ -17,7 +17,7 @@ vi.mock("../../../src/main/apps/runtime", () => ({
   getAppRuntime: getAppRuntimeMock,
 }))
 
-vi.mock("../../../src/main/services/ai-sources/auth-loader", () => ({
+vi.mock("../../../src/main/foundation/product-config", () => ({
   loadProductConfig: loadProductConfigMock,
   // config.service indirectly imports getDataFolderName via the same
   // module; provide a deterministic fallback so the test mock surface

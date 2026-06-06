@@ -25,7 +25,7 @@ const saveConfigMock = vi.fn((patch: any) => {
 })
 const getConfigMock = vi.fn(() => configState.current)
 
-vi.mock('../../../../../src/main/services/config.service', () => ({
+vi.mock('../../../../../src/main/foundation/config.service', () => ({
   getConfig: () => getConfigMock(),
   saveConfig: (patch: any) => saveConfigMock(patch),
 }))
@@ -46,7 +46,7 @@ vi.mock('../../../../../src/main/services/agent/session-manager', () => ({
 }))
 
 const sendToRendererMock = vi.fn()
-vi.mock('../../../../../src/main/services/window.service', () => ({
+vi.mock('../../../../../src/main/foundation/window.service', () => ({
   sendToRenderer: (channel: string, data: unknown) => sendToRendererMock(channel, data),
 }))
 

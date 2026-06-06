@@ -6,7 +6,6 @@
  * this module subscribes and forwards them to the BrowserWindow.
  */
 
-import { ipcMain } from 'electron'
 import {
   sendMessage,
   injectMessage,
@@ -21,10 +20,12 @@ import {
 import { getEngineCapabilities, getActiveEngine } from '../services/agent/resolved-sdk'
 import { defaultCapabilitiesFor } from '../services/agent/capabilities'
 import { resolveCodexPendingQuestion } from '../services/agent/codex'
-import { getMainWindow } from '../services/window.service'
+import { getMainWindow } from '../foundation/window.service'
 import { broadcastToWebSocket, broadcastToAll } from '../http/websocket'
 import { analytics } from '../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../services/analytics/types'
+import { agentRpc } from '../../shared/rpc/contracts/agent.contract'
+import { registerRawRpcHandlers } from './rpc'
 
 // Module-level subscription disposables (lifetime = process lifetime)
 // Stored to establish correct Disposable pattern; these are never disposed
@@ -75,11 +76,9 @@ export function registerAgentHandlers(): void {
   // IPC Handlers
   // ============================================
 
-  // Send message to agent (with optional images for multi-modal, optional thinking mode)
-  ipcMain.handle(
-    'agent:send-message',
-    async (
-      _event,
+  registerRawRpcHandlers(agentRpc, {
+    // Send message to agent (with optional images for multi-modal, optional thinking mode)
+    sendMessage: async (
       request: {
         spaceId: string
         conversationId: string
@@ -110,59 +109,55 @@ export function registerAgentHandlers(): void {
         analytics.trackErrorSurface('agent-send', err)
         return { success: false, error: err.message }
       }
-    }
-  )
+    },
 
-  // Stop generation for a specific conversation (or all if not specified)
-  ipcMain.handle('agent:stop', async (_event, conversationId?: string) => {
-    try {
-      stopGeneration(conversationId)
-      return { success: true }
-    } catch (error: unknown) {
-      const err = error as Error
-      return { success: false, error: err.message }
-    }
-  })
+    // Stop generation for a specific conversation (or all if not specified)
+    stopGeneration: async (conversationId?: string) => {
+      try {
+        stopGeneration(conversationId)
+        return { success: true }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
 
-  // Approve/reject tool execution - no-op (all permissions auto-allowed)
-  ipcMain.handle('agent:approve-tool', async () => ({ success: true }))
-  ipcMain.handle('agent:reject-tool', async () => ({ success: true }))
+    // Approve/reject tool execution - no-op (all permissions auto-allowed)
+    approveTool: async () => ({ success: true }),
+    rejectTool: async () => ({ success: true }),
 
-  // Get current session state for recovery after refresh
-  ipcMain.handle('agent:get-session-state', async (_event, conversationId: string) => {
-    try {
-      const state = getSessionState(conversationId)
-      return { success: true, data: state }
-    } catch (error: unknown) {
-      const err = error as Error
-      return { success: false, error: err.message }
-    }
-  })
+    // Get current session state for recovery after refresh
+    getSessionState: async (conversationId: string) => {
+      try {
+        const state = getSessionState(conversationId)
+        return { success: true, data: state }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
 
-  // Warm up V2 session - call when switching conversations to prepare for faster message sending
-  ipcMain.handle('agent:ensure-session-warm', async (_event, spaceId: string, conversationId: string) => {
-    try {
-      // Async initialization, non-blocking IPC call
-      ensureSessionWarm(spaceId, conversationId).catch((error: unknown) => {
-        console.error('[IPC] ensureSessionWarm error:', error)
-      })
-      return { success: true }
-    } catch (error: unknown) {
-      const err = error as Error
-      return { success: false, error: err.message }
-    }
-  })
+    // Warm up V2 session - call when switching conversations to prepare for faster message sending
+    ensureSessionWarm: async (spaceId: string, conversationId: string) => {
+      try {
+        // Async initialization, non-blocking IPC call
+        ensureSessionWarm(spaceId, conversationId).catch((error: unknown) => {
+          console.error('[IPC] ensureSessionWarm error:', error)
+        })
+        return { success: true }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
 
-  // Answer a pending AskUserQuestion.
-  //
-  // We try the Codex elicitation bridge first (its pending map lives in the
-  // codex adapter), then fall back to the CC `permission-handler` map. Order
-  // matters: ids are namespaced (`codex-ask-*` vs `ask-*`) and the maps are
-  // disjoint, so this is a fast lookup with no risk of cross-resolution.
-  ipcMain.handle(
-    'agent:answer-question',
-    async (
-      _event,
+    // Answer a pending AskUserQuestion.
+    //
+    // We try the Codex elicitation bridge first (its pending map lives in the
+    // codex adapter), then fall back to the CC `permission-handler` map. Order
+    // matters: ids are namespaced (`codex-ask-*` vs `ask-*`) and the maps are
+    // disjoint, so this is a fast lookup with no risk of cross-resolution.
+    answerQuestion: async (
       data: {
         conversationId: string
         id: string
@@ -182,33 +177,29 @@ export function registerAgentHandlers(): void {
         const err = error as Error
         return { success: false, error: err.message }
       }
-    }
-  )
+    },
 
-  // Returns the capability descriptor for the active engine. The renderer
-  // calls this once per session and uses the returned flags to drive
-  // engine-aware UI affordances (todo state machine, thinking placeholder,
-  // diff fallback). Falls back to the declarative default if the engine
-  // module did not export its own descriptor — guarantees the renderer
-  // always gets a usable shape.
-  ipcMain.handle('agent:get-engine-capabilities', async () => {
-    try {
-      const caps = getEngineCapabilities()
-      if (caps) return { success: true, data: caps }
-      const engine = getActiveEngine() ?? 'anthropic'
-      return { success: true, data: defaultCapabilitiesFor(engine) }
-    } catch (error: unknown) {
-      const err = error as Error
-      return { success: false, error: err.message }
-    }
-  })
+    // Returns the capability descriptor for the active engine. The renderer
+    // calls this once per session and uses the returned flags to drive
+    // engine-aware UI affordances (todo state machine, thinking placeholder,
+    // diff fallback). Falls back to the declarative default if the engine
+    // module did not export its own descriptor — guarantees the renderer
+    // always gets a usable shape.
+    getEngineCapabilities: async () => {
+      try {
+        const caps = getEngineCapabilities()
+        if (caps) return { success: true, data: caps }
+        const engine = getActiveEngine() ?? 'anthropic'
+        return { success: true, data: defaultCapabilitiesFor(engine) }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
 
-  // Inject a mid-turn message into an active session.
-  // Called when user sends a message while generation is in progress (Agent Team mode).
-  ipcMain.handle(
-    'agent:inject-message',
-    async (
-      _event,
+    // Inject a mid-turn message into an active session.
+    // Called when user sends a message while generation is in progress (Agent Team mode).
+    injectMessage: async (
       data: { conversationId: string; message: string }
     ) => {
       try {
@@ -219,18 +210,18 @@ export function registerAgentHandlers(): void {
         console.error(`[IPC] agent:inject-message error:`, err)
         return { success: false, error: err.message }
       }
-    }
-  )
+    },
 
-  // Test MCP server connections
-  ipcMain.handle('agent:test-mcp', async () => {
-    try {
-      const result = await testMcpConnections()
-      return result
-    } catch (error: unknown) {
-      const err = error as Error
-      analytics.trackErrorSurface('mcp-connect', err)
-      return { success: false, servers: [], error: err.message }
-    }
+    // Test MCP server connections
+    testMcpConnections: async () => {
+      try {
+        const result = await testMcpConnections()
+        return result
+      } catch (error: unknown) {
+        const err = error as Error
+        analytics.trackErrorSurface('mcp-connect', err)
+        return { success: false, servers: [], error: err.message }
+      }
+    },
   })
 }

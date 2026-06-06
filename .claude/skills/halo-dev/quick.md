@@ -103,6 +103,8 @@
 
 | If you need to... | Start here | Usually also touch |
 |---|---|---|
+| Change config / logging / window / secure-storage / product.json | `src/main/foundation/*` | Foundation is the bedrock tier (zero upward deps). NEVER import `platform/services/apps/http` from here. |
+| Let a service use App data (manager, halo-apps MCP) | `src/main/services/app-bridge.ts` | Register impls in `apps/runtime/index.ts`. Do NOT import `apps/*` values from `services/*` (type-only is OK). |
 | Add/change App spec fields | `src/main/apps/spec/schema.ts` | `spec/parse.ts`, `spec/validate.ts`, `src/shared/apps/spec-types.ts`, `tests/unit/apps/spec/*` |
 | Change install/config/status lifecycle | `src/main/apps/manager/service.ts` | `manager/store.ts`, `manager/migrations.ts`, `tests/unit/apps/manager/*` |
 | Change execution/trigger/escalation/activity | `src/main/apps/runtime/service.ts` | `runtime/execute.ts`, `runtime/report-tool.ts`, `runtime/store.ts`, `tests/unit/apps/runtime/*` |

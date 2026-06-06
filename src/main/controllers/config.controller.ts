@@ -6,8 +6,8 @@
 import {
   getConfig as serviceGetConfig,
   saveConfig as serviceSaveConfig
-} from '../services/config.service'
-import { maskConfigFields, unmaskSentinels } from '../services/config-encryption'
+} from '../foundation/config.service'
+import { maskConfigFields, unmaskSentinels } from '../foundation/config-encryption'
 import { validateApiConnection, fetchModelsFromApi } from '../services/api-validator.service'
 
 export interface ControllerResponse<T = unknown> {

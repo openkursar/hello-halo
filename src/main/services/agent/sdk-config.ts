@@ -9,7 +9,7 @@
 import path from 'path'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs'
 import { app } from 'electron'
-import { resolveClaudeConfigDir, getConfig } from '../config.service'
+import { resolveClaudeConfigDir, getConfig } from '../../foundation/config.service'
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../openai-compat-router'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
 import { inferOpenAIWireApi, credentialsToBackendConfig } from './helpers'

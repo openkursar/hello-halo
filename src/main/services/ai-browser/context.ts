@@ -27,7 +27,7 @@ import {
   registerWebContentsForDownload,
   unregisterWebContentsForDownload
 } from './download-handler'
-import { sanitizeFilename, resolveUniquePath } from './download-utils'
+import { sanitizeFilename, resolveUniquePath } from '../../foundation/file-naming'
 import type {
   BrowserContextInterface,
   AccessibilitySnapshot,

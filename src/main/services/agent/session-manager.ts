@@ -13,8 +13,7 @@ import os from 'os'
 import { existsSync, copyFileSync, mkdirSync } from 'fs'
 import { app } from 'electron'
 import { createSession } from './resolved-sdk'
-import { getConfig, onApiConfigChange, getCredentialsGeneration } from '../config.service'
-import { onMcpAppsChange } from '../../apps/manager/service'
+import { getConfig, onApiConfigChange, getCredentialsGeneration } from '../../foundation/config.service'
 import { getConversation } from '../conversation.service'
 import type {
   V2SDKSession,
@@ -32,7 +31,7 @@ import { isImSessionKey } from '../../../shared/apps/im-keys'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
-import { createHaloAppsMcpServer } from '../../apps/conversation-mcp'
+import { createHaloAppsMcpServer } from '../app-bridge'
 import { createWebSearchMcpServer } from '../web-search'
 import { startConsumer, type ConsumerHandle } from './session-consumer'
 import { hasActiveTeamTasks } from './subagent-handler'
@@ -655,7 +654,8 @@ export async function ensureSessionWarm(
   // Build MCP servers config (must match sendMessage to avoid session rebuild)
   const mcpServers: Record<string, any> = dbMcpServers ? { ...dbMcpServers } : {}
   if (digitalHumansEnabled) {
-    mcpServers['halo-apps'] = createHaloAppsMcpServer(spaceId)
+    const haloApps = createHaloAppsMcpServer(spaceId)
+    if (haloApps) mcpServers['halo-apps'] = haloApps
   }
   mcpServers['web-search'] = createWebSearchMcpServer()
 
@@ -963,13 +963,19 @@ onApiConfigChange(() => {
   invalidateAllSessions()
 })
 
-// Register for MCP apps change notifications.
-// Global MCP changes (spaceId=null) invalidate all sessions.
-// Space-scoped MCP changes invalidate only that space's sessions.
-onMcpAppsChange((spaceId) => {
+/**
+ * Invalidate sessions in response to an MCP-apps change.
+ * Global changes (`spaceId === null`) invalidate all sessions; space-scoped
+ * changes invalidate only that space's sessions.
+ *
+ * The Apps layer owns the `onMcpAppsChange` event and wires this handler to
+ * it at startup (see `apps/runtime`), keeping the services→apps dependency
+ * direction inverted.
+ */
+export function handleMcpAppsChange(spaceId: string | null): void {
   if (spaceId === null) {
     invalidateAllSessions()
   } else {
     invalidateSessionsForSpace(spaceId)
   }
-})
+}

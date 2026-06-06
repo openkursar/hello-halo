@@ -9,7 +9,7 @@ import { stringify as stringifyYaml } from 'yaml'
 import { getAppManager } from '../apps/manager'
 import { AppAlreadyInstalledError, McpCommandBlockedError } from '../apps/manager/errors'
 import { getAppRuntime } from '../apps/runtime'
-import { parseAndValidateAppSpec, AppSpecValidationError } from '../apps/spec'
+import { parseAndValidateAppSpec, AppSpecValidationError, type AppSpec } from '../apps/spec'
 import { MCP_COMMAND_BLOCKED_MESSAGE } from '../services/security-policy'
 
 // ============================================================================
@@ -84,6 +84,77 @@ export function exportSpec(appId: string): AppControllerResponse<ExportSpecResul
     return { success: true, data: { yaml, filename } }
   } catch (error: unknown) {
     const err = error as Error
+    return { success: false, error: err.message }
+  }
+}
+
+// ============================================================================
+// Install (from a parsed/validated spec object)
+// ============================================================================
+
+export interface InstallAppResult {
+  appId: string
+  /** Non-fatal runtime activation error message, if activation failed. */
+  activationWarning?: string
+}
+
+/**
+ * Install an app from an already-parsed spec object: install + auto-activate,
+ * returning structured error codes. Shared by `ipc/app.ts` (app:install) and
+ * `http/routes/apps.routes.ts` (POST /api/apps/install) so the install +
+ * activation orchestration and error-code mapping live in one place.
+ *
+ * Note: MCP-policy gating (`security.mcpCommandBlacklist`) is enforced inside
+ * `manager.install()`; transport-layer pre-checks (e.g. remote-MCP rejection)
+ * stay at the boundary where the response shape differs per transport.
+ */
+export async function installApp(
+  spaceId: string | null,
+  spec: AppSpec,
+  userConfig?: Record<string, unknown>,
+  opts?: {
+    /**
+     * Whether to auto-activate non-automation apps (MCP/Skill) after install.
+     * Defaults to true (IPC + importSpec behavior). The HTTP install route
+     * passes false to keep its original "activate automation apps only"
+     * semantics — preserved here rather than silently unified.
+     */
+    activateNonAutomation?: boolean
+  },
+): Promise<AppControllerResponse<InstallAppResult>> {
+  try {
+    const manager = getAppManager()
+    if (!manager) {
+      return { success: false, error: 'App Manager is not yet initialized. Please try again shortly.', code: 'NOT_INITIALIZED' }
+    }
+
+    const appId = await manager.install(spaceId, spec, userConfig)
+
+    // Auto-activate in runtime if available (non-fatal on failure)
+    const runtime = getAppRuntime()
+    const activateNonAutomation = opts?.activateNonAutomation ?? true
+    const shouldActivate = !!runtime && (activateNonAutomation || (spec as { type?: string }).type === 'automation')
+    let activationWarning: string | undefined
+    if (runtime && shouldActivate) {
+      try {
+        await runtime.activate(appId)
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        console.warn(`[AppController] installApp: runtime activate failed (non-fatal): ${errMsg}`)
+        activationWarning = errMsg
+      }
+    }
+
+    return { success: true, data: { appId, activationWarning } }
+  } catch (error: unknown) {
+    const err = error as Error
+    if (error instanceof McpCommandBlockedError) {
+      console.warn(`[AppController] installApp: blocked MCP command '${error.command}'`)
+      return { success: false, error: MCP_COMMAND_BLOCKED_MESSAGE, code: 'MCP_COMMAND_BLOCKED' }
+    }
+    if (error instanceof AppAlreadyInstalledError) {
+      return { success: false, error: err.message, code: 'ALREADY_INSTALLED' }
+    }
     return { success: false, error: err.message }
   }
 }

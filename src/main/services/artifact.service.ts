@@ -12,7 +12,7 @@ import { statSync, existsSync, realpathSync, readFileSync, writeFileSync, openSy
 import { promises as fsAsync } from 'fs'
 import { join, extname, basename, dirname, sep } from 'path'
 import { shell } from 'electron'
-import { getTempSpacePath } from './config.service'
+import { getTempSpacePath } from '../foundation/config.service'
 import { getSpace } from './space.service'
 import {
   listArtifacts as listArtifactsCached,

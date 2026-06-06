@@ -18,7 +18,7 @@ import {
   onTunnelStatusChange,
   TunnelDisabledByPolicyError,
 } from './tunnel.service'
-import { getConfig, saveConfig } from './config.service'
+import { getConfig, saveConfig } from '../foundation/config.service'
 import {
   setCustomAccessToken,
   generateAccessToken,

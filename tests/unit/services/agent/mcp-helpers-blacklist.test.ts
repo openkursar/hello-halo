@@ -17,20 +17,20 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 // Partial-mock auth-loader: only override loadProductConfig — every other
 // export (getDataFolderName, etc.) is consulted by config.service during
 // module init and must keep its real implementation.
-vi.mock('../../../../src/main/services/ai-sources/auth-loader', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../../src/main/services/ai-sources/auth-loader')>()
+vi.mock('../../../../src/main/foundation/product-config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/main/foundation/product-config')>()
   return {
     ...actual,
     loadProductConfig: vi.fn(() => ({ name: 'test', version: '0.0.0', authProviders: [] })),
   }
 })
 
-vi.mock('../../../../src/main/apps/manager', () => ({
+vi.mock('../../../../src/main/services/app-bridge', () => ({
   getAppManager: vi.fn(),
 }))
 
-import { loadProductConfig } from '../../../../src/main/services/ai-sources/auth-loader'
-import { getAppManager } from '../../../../src/main/apps/manager'
+import { loadProductConfig } from '../../../../src/main/foundation/product-config'
+import { getAppManager } from '../../../../src/main/services/app-bridge'
 import { getDbMcpServers, getMcpServersForRequires } from '../../../../src/main/services/agent/helpers'
 
 type MockedFn = ReturnType<typeof vi.fn>

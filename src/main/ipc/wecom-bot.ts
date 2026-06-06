@@ -24,7 +24,6 @@
  * as a session key. Each scode owns one AbortController; cancel() aborts it.
  */
 
-import { ipcMain } from 'electron'
 import { getImChannelManager } from '../apps/runtime'
 import { getAppManager } from '../apps/manager'
 import { buildDefaultAssistantSpec } from '../apps/runtime/im-channels/wecom-bot-default-spec'
@@ -34,6 +33,8 @@ import {
   ScanAuthError,
   type ScanAuthErrorKind,
 } from '../apps/runtime/im-channels/wecom-bot-scan-auth'
+import { wecomBotRpc } from '../../shared/rpc/contracts/wecom-bot.contract'
+import { registerRawRpcHandlers } from './rpc'
 
 // ============================================
 // Scan-Auth Session State
@@ -66,93 +67,92 @@ function errorPayload(err: unknown): { success: false; error: string; kind?: Sca
 // ============================================
 
 export function registerWecomBotHandlers(): void {
-  // ── Legacy: aggregate status across all wecom-bot instances ──────────
-  ipcMain.handle('wecom-bot:status', async () => {
-    try {
-      const manager = getImChannelManager()
-      if (!manager) {
-        return { success: true, data: { configured: false, enabled: false, connected: false } }
+  registerRawRpcHandlers(wecomBotRpc, {
+    // ── Legacy: aggregate status across all wecom-bot instances ──────────
+    getWecomBotStatus: async () => {
+      try {
+        const manager = getImChannelManager()
+        if (!manager) {
+          return { success: true, data: { configured: false, enabled: false, connected: false } }
+        }
+        const statuses = manager.getAllStatuses().filter(s => s.type === 'wecom-bot')
+        const anyConnected = statuses.some(s => s.connected)
+        const anyEnabled = statuses.some(s => s.enabled)
+        const anyConfigured = statuses.length > 0
+        return {
+          success: true,
+          data: { configured: anyConfigured, enabled: anyEnabled, connected: anyConnected },
+        }
+      } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
       }
-      const statuses = manager.getAllStatuses().filter(s => s.type === 'wecom-bot')
-      const anyConnected = statuses.some(s => s.connected)
-      const anyEnabled = statuses.some(s => s.enabled)
-      const anyConfigured = statuses.length > 0
-      return {
-        success: true,
-        data: { configured: anyConfigured, enabled: anyEnabled, connected: anyConnected },
-      }
-    } catch (error: unknown) {
-      return { success: false, error: (error as Error).message }
-    }
-  })
+    },
 
-  // ── Legacy: reconnect all wecom-bot instances ────────────────────────
-  ipcMain.handle('wecom-bot:reconnect', async () => {
-    try {
-      const manager = getImChannelManager()
-      if (!manager) {
-        return { success: false, error: 'ImChannelManager not initialized' }
+    // ── Legacy: reconnect all wecom-bot instances ────────────────────────
+    reconnectWecomBot: async () => {
+      try {
+        const manager = getImChannelManager()
+        if (!manager) {
+          return { success: false, error: 'ImChannelManager not initialized' }
+        }
+        const statuses = manager.getAllStatuses().filter(s => s.type === 'wecom-bot')
+        for (const s of statuses) {
+          manager.reconnectInstance(s.id)
+        }
+        return { success: true }
+      } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
       }
-      const statuses = manager.getAllStatuses().filter(s => s.type === 'wecom-bot')
-      for (const s of statuses) {
-        manager.reconnectInstance(s.id)
+    },
+
+    // ── Scan-Auth: start (allocate scode) ────────────────────────────────
+    wecomBotScanAuthStart: async () => {
+      try {
+        const { scode, authUrl } = await generateScode()
+        // Replace any session for the same scode (extremely unlikely, but safe).
+        const existing = activeSessions.get(scode)
+        if (existing) existing.abort.abort()
+        activeSessions.set(scode, { abort: new AbortController(), startedAt: Date.now() })
+        return { success: true, data: { scode, authUrl } }
+      } catch (err) {
+        return errorPayload(err)
+      }
+    },
+
+    // ── Scan-Auth: poll (long-poll until user approves) ──────────────────
+    wecomBotScanAuthPoll: async (scode: string) => {
+      if (typeof scode !== 'string' || !scode) {
+        return errorPayload(new ScanAuthError('invalid-response', 'Missing scode'))
+      }
+      const session = activeSessions.get(scode)
+      if (!session) {
+        return errorPayload(new ScanAuthError('expired', 'No active scan session for this scode'))
+      }
+      try {
+        const creds = await pollResult(scode, { signal: session.abort.signal })
+        return { success: true, data: creds }
+      } catch (err) {
+        return errorPayload(err)
+      } finally {
+        activeSessions.delete(scode)
+      }
+    },
+
+    // ── Scan-Auth: cancel (abort an active poll) ─────────────────────────
+    wecomBotScanAuthCancel: async (scode: string) => {
+      if (typeof scode !== 'string' || !scode) {
+        return { success: true } // No-op: nothing to cancel
+      }
+      const session = activeSessions.get(scode)
+      if (session) {
+        session.abort.abort()
+        activeSessions.delete(scode)
       }
       return { success: true }
-    } catch (error: unknown) {
-      return { success: false, error: (error as Error).message }
-    }
-  })
+    },
 
-  // ── Scan-Auth: start (allocate scode) ────────────────────────────────
-  ipcMain.handle('wecom-bot:scan-auth:start', async () => {
-    try {
-      const { scode, authUrl } = await generateScode()
-      // Replace any session for the same scode (extremely unlikely, but safe).
-      const existing = activeSessions.get(scode)
-      if (existing) existing.abort.abort()
-      activeSessions.set(scode, { abort: new AbortController(), startedAt: Date.now() })
-      return { success: true, data: { scode, authUrl } }
-    } catch (err) {
-      return errorPayload(err)
-    }
-  })
-
-  // ── Scan-Auth: poll (long-poll until user approves) ──────────────────
-  ipcMain.handle('wecom-bot:scan-auth:poll', async (_event, scode: string) => {
-    if (typeof scode !== 'string' || !scode) {
-      return errorPayload(new ScanAuthError('invalid-response', 'Missing scode'))
-    }
-    const session = activeSessions.get(scode)
-    if (!session) {
-      return errorPayload(new ScanAuthError('expired', 'No active scan session for this scode'))
-    }
-    try {
-      const creds = await pollResult(scode, { signal: session.abort.signal })
-      return { success: true, data: creds }
-    } catch (err) {
-      return errorPayload(err)
-    } finally {
-      activeSessions.delete(scode)
-    }
-  })
-
-  // ── Scan-Auth: cancel (abort an active poll) ─────────────────────────
-  ipcMain.handle('wecom-bot:scan-auth:cancel', async (_event, scode: string) => {
-    if (typeof scode !== 'string' || !scode) {
-      return { success: true } // No-op: nothing to cancel
-    }
-    const session = activeSessions.get(scode)
-    if (session) {
-      session.abort.abort()
-      activeSessions.delete(scode)
-    }
-    return { success: true }
-  })
-
-  // ── Scan-Auth: create the auto-bound default assistant ───────────────
-  ipcMain.handle(
-    'wecom-bot:scan-auth:create-assistant',
-    async (_event, input: { botIdPrefix: string }) => {
+    // ── Scan-Auth: create the auto-bound default assistant ───────────────
+    wecomBotScanAuthCreateAssistant: async (input: { botIdPrefix: string }) => {
       try {
         const manager = getAppManager()
         if (!manager) {
@@ -168,8 +168,8 @@ export function registerWecomBotHandlers(): void {
         console.error('[WecomBot] scan-auth create-assistant error:', err.message)
         return { success: false, error: err.message }
       }
-    }
-  )
+    },
+  })
 
   console.log('[WecomBot] IPC handlers registered (legacy compat + scan-auth)')
 }

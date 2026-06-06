@@ -10,7 +10,7 @@
 
 import { existsSync, readFileSync } from 'fs'
 import type { ConfigProbeResult } from '../../types'
-import { getConfigPath } from '../../../config.service'
+import { getConfigPath } from '../../../../foundation/config.service'
 
 /**
  * Check configuration file health

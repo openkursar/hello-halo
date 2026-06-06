@@ -18,7 +18,7 @@ import { proxyFetch } from '../../proxy-fetch'
 import { randomBytes } from 'crypto'
 import { v4 as uuidv4 } from 'uuid'
 import open from 'open'
-import { getConfig, saveConfig } from '../../config.service'
+import { getConfig, saveConfig } from '../../../foundation/config.service'
 import type {
   OAuthAISourceProvider,
   ProviderResult

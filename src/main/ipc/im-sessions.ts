@@ -5,32 +5,34 @@
  * The registry is populated automatically by dispatch-inbound when
  * users message the bot; these handlers expose read, rename, toggle
  * auto-sync (proactive flag), and remove.
+ *
+ * Registered from the typed RPC contract (passthrough — handler bodies and
+ * return shapes preserved verbatim). Generic, provider-agnostic (ARCHITECTURE §22).
  */
 
-import { ipcMain } from 'electron'
 import { getImSessionRegistry } from '../apps/runtime/im-session-registry'
+import { imSessionsRpc } from '../../shared/rpc/contracts/im-sessions.contract'
+import { registerRawRpcHandlers } from './rpc'
 
 export function registerImSessionHandlers(): void {
-  // List IM sessions — if appId is provided, filter by app; otherwise return all
-  ipcMain.handle('im-sessions:list', async (_event, appId?: string) => {
-    try {
-      const registry = getImSessionRegistry()
-      if (!registry) {
-        return { success: true, data: [] }
+  registerRawRpcHandlers(imSessionsRpc, {
+    // List IM sessions — if appId is provided, filter by app; otherwise return all
+    imSessionsList: async (appId?: string) => {
+      try {
+        const registry = getImSessionRegistry()
+        if (!registry) {
+          return { success: true, data: [] }
+        }
+        const sessions = appId ? registry.getAllSessions(appId) : registry.listAll()
+        return { success: true, data: sessions }
+      } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
       }
-      const sessions = appId ? registry.getAllSessions(appId) : registry.listAll()
-      return { success: true, data: sessions }
-    } catch (error: unknown) {
-      return { success: false, error: (error as Error).message }
-    }
-  })
-
-  // Toggle a session's auto-sync flag. When proactive=true, the run's
-  // final assistant text is pushed to this contact at run completion by
-  // apps/runtime/im-auto-sync.ts.
-  ipcMain.handle(
-    'im-sessions:set-proactive',
-    async (_event, input: { appId: string; channel: string; chatId: string; proactive: boolean }) => {
+    },
+    // Toggle a session's auto-sync flag. When proactive=true, the run's
+    // final assistant text is pushed to this contact at run completion by
+    // apps/runtime/im-auto-sync.ts.
+    imSessionsSetProactive: async (input: { appId: string; channel: string; chatId: string; proactive: boolean }) => {
       try {
         const registry = getImSessionRegistry()
         if (!registry) {
@@ -44,13 +46,9 @@ export function registerImSessionHandlers(): void {
       } catch (error: unknown) {
         return { success: false, error: (error as Error).message }
       }
-    }
-  )
-
-  // Remove a session from the registry
-  ipcMain.handle(
-    'im-sessions:remove',
-    async (_event, input: { appId: string; channel: string; chatId: string }) => {
+    },
+    // Remove a session from the registry
+    imSessionsRemove: async (input: { appId: string; channel: string; chatId: string }) => {
       try {
         const registry = getImSessionRegistry()
         if (!registry) {
@@ -61,13 +59,9 @@ export function registerImSessionHandlers(): void {
       } catch (error: unknown) {
         return { success: false, error: (error as Error).message }
       }
-    }
-  )
-
-  // Set a custom display name for a session
-  ipcMain.handle(
-    'im-sessions:set-custom-name',
-    async (_event, input: { appId: string; channel: string; chatId: string; name: string }) => {
+    },
+    // Set a custom display name for a session
+    imSessionsSetCustomName: async (input: { appId: string; channel: string; chatId: string; name: string }) => {
       try {
         const registry = getImSessionRegistry()
         if (!registry) {
@@ -81,8 +75,8 @@ export function registerImSessionHandlers(): void {
       } catch (error: unknown) {
         return { success: false, error: (error as Error).message }
       }
-    }
-  )
+    },
+  })
 
   console.log('[ImSessions] IPC handlers registered')
 }

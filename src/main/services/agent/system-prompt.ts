@@ -12,7 +12,7 @@
  */
 
 import os from 'os'
-import { getDataFolderName } from '../ai-sources/auth-loader'
+import { getDataFolderName } from '../../foundation/product-config'
 
 // ============================================
 // Constants

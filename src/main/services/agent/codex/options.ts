@@ -22,7 +22,7 @@
 import path from 'path'
 import { mkdirSync } from 'fs'
 import { getApiCredentials, credentialsToBackendConfig } from '../helpers'
-import { getConfig, getHaloDir } from '../../config.service'
+import { getConfig, getHaloDir } from '../../../foundation/config.service'
 import { getCleanUserEnv } from '../sdk-config'
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../../openai-compat-router'
 import type { ApiCredentials } from '../types'

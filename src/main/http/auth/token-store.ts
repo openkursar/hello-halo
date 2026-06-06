@@ -10,7 +10,7 @@
 import { randomInt, timingSafeEqual } from 'crypto'
 
 import { validatePassword } from './password-policy'
-import { decodeFromStorage } from './envelope'
+import { decodeFromStorage } from '../../foundation/crypto-envelope'
 
 let accessToken: string | null = null
 

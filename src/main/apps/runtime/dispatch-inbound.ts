@@ -24,7 +24,7 @@ import { sendAppChatMessage, buildImSessionKey, clearImSession } from './app-cha
 import type { ImSessionContext } from './im-channels/im-prompt'
 import { getImSessionRegistry } from './im-session-registry'
 import { getActiveImChannelManager } from './im-channels'
-import { sendToRenderer } from '../../services/window.service'
+import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import { stopGeneration } from '../../services/agent/control'
 import { activeSessions } from '../../services/agent/session-manager'

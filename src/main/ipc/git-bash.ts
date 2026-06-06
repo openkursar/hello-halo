@@ -7,50 +7,60 @@ import open from 'open'
 import { resolveGitBashAvailability, setGitBashPathEnv } from '../services/git-bash.service'
 import { downloadAndInstallGitBash } from '../services/git-bash-installer.service'
 import { createMockBash, cleanupMockBash } from '../services/mock-bash.service'
-import { getConfig, saveConfig } from '../services/config.service'
-import { getMainWindow } from '../services/window.service'
+import { getConfig, saveConfig } from '../foundation/config.service'
+import { getMainWindow } from '../foundation/window.service'
+import { gitBashRpc } from '../../shared/rpc/contracts/git-bash.contract'
+import { registerRawRpcHandlers } from './rpc'
 
 /**
  * Register Git Bash IPC handlers
  */
 export function registerGitBashHandlers(): void {
-
-  // Get Git Bash detection status
-  // This should be called by renderer to check if Git Bash is available
-  // It considers both saved config and system detection
-  // Returns mockMode: true when user skipped and using mock bash
-  ipcMain.handle('git-bash:status', async () => {
-    try {
-      // Non-Windows platforms always have bash available
-      if (process.platform !== 'win32') {
-        return { success: true, data: { found: true, path: '/bin/bash', source: 'system', mockMode: false } }
-      }
-
-      const status = resolveGitBashAvailability(getConfig() as any, (gitBash) => {
-        saveConfig({ gitBash } as any)
-      })
-
-      if (status.path && !status.mockMode) {
-        setGitBashPathEnv(status.path)
-        cleanupMockBash()
-      }
-
-      return {
-        success: true,
-        data: {
-          found: status.available,
-          path: status.path,
-          source: status.source,
-          mockMode: status.mockMode
+  registerRawRpcHandlers(gitBashRpc, {
+    // Get Git Bash detection status
+    // This should be called by renderer to check if Git Bash is available
+    // It considers both saved config and system detection
+    // Returns mockMode: true when user skipped and using mock bash
+    getGitBashStatus: async () => {
+      try {
+        // Non-Windows platforms always have bash available
+        if (process.platform !== 'win32') {
+          return { success: true, data: { found: true, path: '/bin/bash', source: 'system', mockMode: false } }
         }
+
+        const status = resolveGitBashAvailability(getConfig() as any, (gitBash) => {
+          saveConfig({ gitBash } as any)
+        })
+
+        if (status.path && !status.mockMode) {
+          setGitBashPathEnv(status.path)
+          cleanupMockBash()
+        }
+
+        return {
+          success: true,
+          data: {
+            found: status.available,
+            path: status.path,
+            source: status.source,
+            mockMode: status.mockMode
+          }
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        return { success: false, error: msg }
       }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error)
-      return { success: false, error: msg }
-    }
+    },
+
+    // Open external URL (for manual download link)
+    openExternal: async (url: string) => {
+      await open(url)
+    },
   })
 
   // Install Git Bash (download Portable Git)
+  // Preload bridge wraps a per-call progress listener, so this stays a raw
+  // ipcMain.handle (not a clean 1:1 invoke for the typed-RPC passthrough).
   ipcMain.handle('git-bash:install', async (_event, { progressChannel }) => {
     try {
       const result = await downloadAndInstallGitBash((progress) => {
@@ -85,11 +95,6 @@ export function registerGitBashHandlers(): void {
       const msg = error instanceof Error ? error.message : String(error)
       return { success: false, error: msg }
     }
-  })
-
-  // Open external URL (for manual download link)
-  ipcMain.handle('shell:open-external', async (_event, url: string) => {
-    await open(url)
   })
 }
 

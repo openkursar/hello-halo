@@ -21,8 +21,8 @@ import electronUpdater from 'electron-updater'
 import { is } from '@electron-toolkit/utils'
 
 // Local imports
-import { getMainWindow } from './window.service'
-import { loadProductConfig, UpdateConfig } from './ai-sources/auth-loader'
+import { getMainWindow } from '../foundation/window.service'
+import { loadProductConfig, UpdateConfig } from '../foundation/product-config'
 
 // Type imports
 const { autoUpdater } = electronUpdater

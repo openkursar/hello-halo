@@ -8,7 +8,7 @@
 
 import { statfsSync } from 'fs'
 import type { DiskProbeResult } from '../../types'
-import { getHaloDir } from '../../../config.service'
+import { getHaloDir } from '../../../../foundation/config.service'
 
 // Minimum free space threshold (100 MB)
 const MIN_FREE_SPACE_MB = 100

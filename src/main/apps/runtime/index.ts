@@ -51,8 +51,13 @@ import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, setActiveIm
 import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
 import { dispatchInboundMessage, clearSupplementBuffersForInstance } from './dispatch-inbound'
 import { clearAllImPermissionContexts } from './im-permission-registry'
-import { getConfig } from '../../services/config.service'
-import { getDataFolderName } from '../../services/ai-sources/auth-loader'
+import { getConfig } from '../../foundation/config.service'
+import { getDataFolderName } from '../../foundation/product-config'
+import { getAppManager } from '../manager'
+import { onMcpAppsChange } from '../manager/service'
+import { createHaloAppsMcpServer } from '../conversation-mcp'
+import { registerAppBridge } from '../../services/app-bridge'
+import { handleMcpAppsChange } from '../../services/agent/session-manager'
 import type { AppRuntimeService } from './types'
 
 // Re-export types for consumers
@@ -188,6 +193,14 @@ export async function initAppRuntime(
 ): Promise<AppRuntimeService> {
   const start = performance.now()
   console.log('[Runtime] Initializing App Runtime...')
+
+  // Invert the services→apps dependency: the agent engine and space service
+  // reach app data through `services/app-bridge` (their own tier); the Apps
+  // layer registers the concrete implementations here, before any session is
+  // created. The agent's session-invalidation handler is likewise wired to
+  // the MCP-apps-change event from this side.
+  registerAppBridge({ getAppManager, createHaloAppsMcpServer, onMcpAppsChange })
+  onMcpAppsChange(handleMcpAppsChange)
 
   // Get the app-level database
   const appDb = deps.db.getAppDatabase()

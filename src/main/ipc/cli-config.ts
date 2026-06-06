@@ -6,16 +6,20 @@
  * - Scan and migrate Skills from ~/.claude/skills/ to Halo
  * - Scan and migrate MCP servers from ~/.claude.json to Halo
  * - Update CLAUDE_CONFIG_DIR mode (halo default / cc default / custom)
+ *
+ * Request/response channels are registered from the typed RPC contract
+ * (passthrough — handler bodies and return shapes preserved verbatim).
  */
 
-import { ipcMain } from 'electron'
 import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { stat, readdir, mkdir, cp, readFile, access } from 'fs/promises'
-import { getConfig, saveConfig, resolveClaudeConfigDir } from '../services/config.service'
-import type { McpServerConfig } from '../services/config.service'
+import { getConfig, saveConfig, resolveClaudeConfigDir } from '../foundation/config.service'
+import type { McpServerConfig } from '../foundation/config.service'
 import { getAppManager, AppAlreadyInstalledError } from '../apps/manager'
 import type { McpSpec } from '../apps/spec/schema'
+import { cliConfigRpc } from '../../shared/rpc/contracts/cli-config.contract'
+import { registerRawRpcHandlers } from './rpc'
 
 // ============================================
 // Path helpers
@@ -39,71 +43,68 @@ async function pathExists(p: string): Promise<boolean> {
 // ============================================
 
 export function registerCliConfigHandlers(): void {
-
-  // ── Get current path info ────────────────────────────────────────────────
-  ipcMain.handle('cli-config:get-paths', async () => {
-    console.log('[CliConfig] cli-config:get-paths')
-    try {
-      const config = getConfig()
-      const mode = config.agent?.configDirMode ?? 'halo'
-      return {
-        success: true,
-        data: {
-          haloDefault: resolveClaudeConfigDir('halo'),
-          ccDefault: getCCDefaultDir(),
-          current: resolveClaudeConfigDir(mode, config.agent?.customConfigDir),
-          configDirMode: mode,
-          customConfigDir: config.agent?.customConfigDir,
+  registerRawRpcHandlers(cliConfigRpc, {
+    // ── Get current path info ────────────────────────────────────────────────
+    cliConfigGetPaths: async () => {
+      console.log('[CliConfig] cli-config:get-paths')
+      try {
+        const config = getConfig()
+        const mode = config.agent?.configDirMode ?? 'halo'
+        return {
+          success: true,
+          data: {
+            haloDefault: resolveClaudeConfigDir('halo'),
+            ccDefault: getCCDefaultDir(),
+            current: resolveClaudeConfigDir(mode, config.agent?.customConfigDir),
+            configDirMode: mode,
+            customConfigDir: config.agent?.customConfigDir,
+          }
         }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[CliConfig] cli-config:get-paths failed:', err.message)
+        return { success: false, error: err.message }
       }
-    } catch (error: unknown) {
-      const err = error as Error
-      console.error('[CliConfig] cli-config:get-paths failed:', err.message)
-      return { success: false, error: err.message }
-    }
-  })
+    },
 
-  // ── Scan skills for conflicts ────────────────────────────────────────────
-  ipcMain.handle('cli-config:scan-skills', async () => {
-    console.log('[CliConfig] cli-config:scan-skills')
-    try {
-      const ccSkillsDir = join(getCCDefaultDir(), 'skills')
-      const haloSkillsDir = join(resolveClaudeConfigDir('halo'), 'skills')
+    // ── Scan skills for conflicts ────────────────────────────────────────────
+    cliConfigScanSkills: async () => {
+      console.log('[CliConfig] cli-config:scan-skills')
+      try {
+        const ccSkillsDir = join(getCCDefaultDir(), 'skills')
+        const haloSkillsDir = join(resolveClaudeConfigDir('halo'), 'skills')
 
-      if (!(await pathExists(ccSkillsDir))) {
-        return { success: true, data: { skills: [], ccSkillsDir, haloSkillsDir } }
-      }
-
-      const entries = await readdir(ccSkillsDir)
-      const skills: Array<{ name: string; ccPath: string; haloPath: string; exists: boolean }> = []
-
-      for (const name of entries) {
-        const entryPath = join(ccSkillsDir, name)
-        const entryStat = await stat(entryPath)
-        if (entryStat.isDirectory()) {
-          skills.push({
-            name,
-            ccPath: entryPath,
-            haloPath: join(haloSkillsDir, name),
-            exists: await pathExists(join(haloSkillsDir, name)),
-          })
+        if (!(await pathExists(ccSkillsDir))) {
+          return { success: true, data: { skills: [], ccSkillsDir, haloSkillsDir } }
         }
+
+        const entries = await readdir(ccSkillsDir)
+        const skills: Array<{ name: string; ccPath: string; haloPath: string; exists: boolean }> = []
+
+        for (const name of entries) {
+          const entryPath = join(ccSkillsDir, name)
+          const entryStat = await stat(entryPath)
+          if (entryStat.isDirectory()) {
+            skills.push({
+              name,
+              ccPath: entryPath,
+              haloPath: join(haloSkillsDir, name),
+              exists: await pathExists(join(haloSkillsDir, name)),
+            })
+          }
+        }
+
+        console.log(`[CliConfig] scan-skills: found ${skills.length} CC skills`)
+        return { success: true, data: { skills, ccSkillsDir, haloSkillsDir } }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[CliConfig] scan-skills failed:', err.message)
+        return { success: false, error: err.message }
       }
+    },
 
-      console.log(`[CliConfig] scan-skills: found ${skills.length} CC skills`)
-      return { success: true, data: { skills, ccSkillsDir, haloSkillsDir } }
-    } catch (error: unknown) {
-      const err = error as Error
-      console.error('[CliConfig] scan-skills failed:', err.message)
-      return { success: false, error: err.message }
-    }
-  })
-
-  // ── Migrate skills ───────────────────────────────────────────────────────
-  ipcMain.handle(
-    'cli-config:migrate-skills',
-    async (
-      _event,
+    // ── Migrate skills ───────────────────────────────────────────────────────
+    cliConfigMigrateSkills: async (
       actions: Array<{ name: string; action: 'skip' | 'overwrite' | 'rename' }>
     ) => {
       console.log('[CliConfig] cli-config:migrate-skills, items:', actions.length)
@@ -156,60 +157,56 @@ export function registerCliConfigHandlers(): void {
         console.error('[CliConfig] migrate-skills failed:', err.message)
         return { success: false, error: err.message }
       }
-    }
-  )
+    },
 
-  // ── Scan MCP servers for conflicts ──────────────────────────────────────
-  ipcMain.handle('cli-config:scan-mcp', async () => {
-    console.log('[CliConfig] cli-config:scan-mcp')
-    try {
-      const ccJsonPath = join(homedir(), '.claude.json')
-
-      if (!(await pathExists(ccJsonPath))) {
-        return { success: true, data: { servers: [], ccJsonPath } }
-      }
-
-      let ccData: Record<string, unknown>
+    // ── Scan MCP servers for conflicts ──────────────────────────────────────
+    cliConfigScanMcp: async () => {
+      console.log('[CliConfig] cli-config:scan-mcp')
       try {
-        ccData = JSON.parse(await readFile(ccJsonPath, 'utf-8'))
-      } catch {
-        return { success: false, error: 'Failed to parse ~/.claude.json' }
-      }
+        const ccJsonPath = join(homedir(), '.claude.json')
 
-      // Check against App Manager DB (the active data source) instead of config.json
-      const manager = getAppManager()
-      const installedMcpNames = new Set<string>()
-      if (manager) {
-        const globalMcps = manager.listApps({ type: 'mcp', spaceId: null })
-        for (const app of globalMcps) {
-          if (app.status !== 'uninstalled') {
-            installedMcpNames.add(app.specId)
+        if (!(await pathExists(ccJsonPath))) {
+          return { success: true, data: { servers: [], ccJsonPath } }
+        }
+
+        let ccData: Record<string, unknown>
+        try {
+          ccData = JSON.parse(await readFile(ccJsonPath, 'utf-8'))
+        } catch {
+          return { success: false, error: 'Failed to parse ~/.claude.json' }
+        }
+
+        // Check against App Manager DB (the active data source) instead of config.json
+        const manager = getAppManager()
+        const installedMcpNames = new Set<string>()
+        if (manager) {
+          const globalMcps = manager.listApps({ type: 'mcp', spaceId: null })
+          for (const app of globalMcps) {
+            if (app.status !== 'uninstalled') {
+              installedMcpNames.add(app.specId)
+            }
           }
         }
+
+        const ccServers = (ccData.mcpServers ?? {}) as Record<string, unknown>
+        const servers = Object.entries(ccServers).map(([name, ccConfig]) => ({
+          name,
+          ccConfig,
+          haloConfig: installedMcpNames.has(name) ? ccConfig : undefined,
+          exists: installedMcpNames.has(name),
+        }))
+
+        console.log(`[CliConfig] scan-mcp: found ${servers.length} CC MCP servers`)
+        return { success: true, data: { servers, ccJsonPath } }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[CliConfig] scan-mcp failed:', err.message)
+        return { success: false, error: err.message }
       }
+    },
 
-      const ccServers = (ccData.mcpServers ?? {}) as Record<string, unknown>
-      const servers = Object.entries(ccServers).map(([name, ccConfig]) => ({
-        name,
-        ccConfig,
-        haloConfig: installedMcpNames.has(name) ? ccConfig : undefined,
-        exists: installedMcpNames.has(name),
-      }))
-
-      console.log(`[CliConfig] scan-mcp: found ${servers.length} CC MCP servers`)
-      return { success: true, data: { servers, ccJsonPath } }
-    } catch (error: unknown) {
-      const err = error as Error
-      console.error('[CliConfig] scan-mcp failed:', err.message)
-      return { success: false, error: err.message }
-    }
-  })
-
-  // ── Migrate MCP servers ──────────────────────────────────────────────────
-  ipcMain.handle(
-    'cli-config:migrate-mcp',
-    async (
-      _event,
+    // ── Migrate MCP servers ──────────────────────────────────────────────────
+    cliConfigMigrateMcp: async (
       actions: Array<{ name: string; action: 'skip' | 'overwrite' }>
     ) => {
       console.log('[CliConfig] cli-config:migrate-mcp, items:', actions.length)
@@ -266,14 +263,10 @@ export function registerCliConfigHandlers(): void {
         console.error('[CliConfig] migrate-mcp failed:', err.message)
         return { success: false, error: err.message }
       }
-    }
-  )
+    },
 
-  // ── Update config dir mode ───────────────────────────────────────────────
-  ipcMain.handle(
-    'cli-config:set-config-dir',
-    async (
-      _event,
+    // ── Update config dir mode ───────────────────────────────────────────────
+    cliConfigSetConfigDir: async (
       mode: 'halo' | 'cc' | 'custom',
       customDir?: string
     ) => {
@@ -316,8 +309,8 @@ export function registerCliConfigHandlers(): void {
         console.error('[CliConfig] set-config-dir failed:', err.message)
         return { success: false, error: err.message }
       }
-    }
-  )
+    },
+  })
 
   console.log('[CliConfig] CLI config handlers registered')
 }

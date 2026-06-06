@@ -20,7 +20,7 @@
 
 import { createSdkMcpServer } from '../agent/resolved-sdk'
 import type { EmailChannelConfig } from '../../../shared/types/notification-channels'
-import { getServiceDefaults } from '../ai-sources/auth-loader'
+import { getServiceDefaults } from '../../foundation/product-config'
 import { ImapClient } from './imap-client'
 import { SmtpClient } from './smtp-client'
 import { CalDavClient } from './caldav-client'

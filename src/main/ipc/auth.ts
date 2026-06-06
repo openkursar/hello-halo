@@ -15,11 +15,13 @@
  * - auth:get-builtin-providers - Get list of built-in providers
  */
 
-import { ipcMain, BrowserWindow, nativeTheme, session } from 'electron'
+import { BrowserWindow, nativeTheme, session } from 'electron'
 import { getAISourceManager, getEnabledAuthProviderConfigs } from '../services/ai-sources'
 import { BUILTIN_PROVIDERS } from '../../shared/constants'
 import { buildLoginLoadingPage, buildLoginErrorPage, loginPageBg } from '../services/browser-login-pages'
 import type { ProviderId } from '../../shared/types'
+import { authRpc } from '../../shared/rpc/contracts/auth.contract'
+import { registerRawRpcHandlers } from './rpc'
 
 /** Timeout for OAuth redirect window (10 minutes) */
 const LOGIN_WINDOW_TIMEOUT_MS = 10 * 60 * 1000
@@ -30,63 +32,62 @@ const LOGIN_WINDOW_TIMEOUT_MS = 10 * 60 * 1000
 export function registerAuthHandlers(): void {
   const manager = getAISourceManager()
 
-  /**
-   * Get list of available authentication providers (OAuth)
-   */
-  ipcMain.handle('auth:get-providers', async () => {
-    try {
-      const providers = getEnabledAuthProviderConfigs()
-      return { success: true, data: providers }
-    } catch (error: unknown) {
-      const err = error as Error
-      console.error('[Auth IPC] Get providers error:', err)
-      return { success: false, error: err.message }
-    }
-  })
+  registerRawRpcHandlers(authRpc, {
+    /**
+     * Get list of available authentication providers (OAuth)
+     */
+    authGetProviders: async () => {
+      try {
+        const providers = getEnabledAuthProviderConfigs()
+        return { success: true, data: providers }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[Auth IPC] Get providers error:', err)
+        return { success: false, error: err.message }
+      }
+    },
 
-  /**
-   * Get list of built-in providers (for UI display)
-   */
-  ipcMain.handle('auth:get-builtin-providers', async () => {
-    try {
-      return { success: true, data: BUILTIN_PROVIDERS }
-    } catch (error: unknown) {
-      const err = error as Error
-      console.error('[Auth IPC] Get builtin providers error:', err)
-      return { success: false, error: err.message }
-    }
-  })
+    /**
+     * Get list of built-in providers (for UI display)
+     */
+    authGetBuiltinProviders: async () => {
+      try {
+        return { success: true, data: BUILTIN_PROVIDERS }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[Auth IPC] Get builtin providers error:', err)
+        return { success: false, error: err.message }
+      }
+    },
 
-  /**
-   * Start OAuth login flow for a provider
-   */
-  ipcMain.handle('auth:start-login', async (_event, providerType: ProviderId) => {
-    try {
-      console.log(`[Auth IPC] Starting login for provider: ${providerType}`)
-      const result = await manager.startOAuthLogin(providerType)
-      return result
-    } catch (error: unknown) {
-      const err = error as Error
-      console.error(`[Auth IPC] Start login error for ${providerType}:`, err)
-      return { success: false, error: err.message }
-    }
-  })
+    /**
+     * Start OAuth login flow for a provider
+     */
+    authStartLogin: async (providerType: ProviderId) => {
+      try {
+        console.log(`[Auth IPC] Starting login for provider: ${providerType}`)
+        const result = await manager.startOAuthLogin(providerType)
+        return result
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error(`[Auth IPC] Start login error for ${providerType}:`, err)
+        return { success: false, error: err.message }
+      }
+    },
 
-  /**
-   * Open a BrowserWindow for standard redirect OAuth (PKCE flow).
-   * Used by Claude OAuth — intercepts the callback redirect to extract the code
-   * and automatically completes the login flow.
-   *
-   * Flow:
-   * 1. Open BrowserWindow pointing to loginUrl
-   * 2. Monitor will-redirect / will-navigate events for the redirectUri
-   * 3. Extract code from redirect URL query params
-   * 4. Call manager.completeOAuthLogin(providerType, code)
-   * 5. Close window and return result
-   */
-  ipcMain.handle(
-    'auth:open-login-window',
-    async (_event, providerType: ProviderId, loginUrl: string, redirectUri: string) => {
+    /**
+     * Open a BrowserWindow for standard redirect OAuth (PKCE flow).
+     * Used by Claude OAuth — intercepts the callback redirect to extract the code
+     * and automatically completes the login flow.
+     *
+     * Flow:
+     * 1. Open BrowserWindow pointing to loginUrl
+     * 2. Monitor will-redirect / will-navigate events for the redirectUri
+     * 3. Extract code from redirect URL query params
+     * 4. Call manager.completeOAuthLogin(providerType, code)
+     * 5. Close window and return result
+     */
+    authOpenLoginWindow: async (providerType: ProviderId, loginUrl: string, redirectUri: string) => {
       return new Promise<{ success: boolean; error?: string }>((resolve) => {
         const mainWindow = BrowserWindow.getAllWindows()[0]
         const isDark = nativeTheme.shouldUseDarkColors
@@ -211,81 +212,81 @@ export function registerAuthHandlers(): void {
           resolve({ success: false, error: 'Login window closed' })
         })
       })
-    }
-  )
+    },
 
-  /**
-   * Complete OAuth login flow for a provider
-   */
-  ipcMain.handle('auth:complete-login', async (_event, providerType: ProviderId, state: string) => {
-    try {
-      console.log(`[Auth IPC] Completing login for provider: ${providerType}`)
-      const mainWindow = BrowserWindow.getAllWindows()[0]
+    /**
+     * Complete OAuth login flow for a provider
+     */
+    authCompleteLogin: async (providerType: ProviderId, state: string) => {
+      try {
+        console.log(`[Auth IPC] Completing login for provider: ${providerType}`)
+        const mainWindow = BrowserWindow.getAllWindows()[0]
 
-      // The manager's completeOAuthLogin handles everything including config save
-      const result = await manager.completeOAuthLogin(providerType, state)
+        // The manager's completeOAuthLogin handles everything including config save
+        const result = await manager.completeOAuthLogin(providerType, state)
 
-      // Send progress update on completion
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        if (result.success) {
-          mainWindow.webContents.send('auth:login-progress', {
-            provider: providerType,
-            status: 'completed'
-          })
+        // Send progress update on completion
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (result.success) {
+            mainWindow.webContents.send('auth:login-progress', {
+              provider: providerType,
+              status: 'completed'
+            })
+          }
         }
+
+        return result
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error(`[Auth IPC] Complete login error for ${providerType}:`, err)
+        return { success: false, error: err.message }
       }
+    },
 
-      return result
-    } catch (error: unknown) {
-      const err = error as Error
-      console.error(`[Auth IPC] Complete login error for ${providerType}:`, err)
-      return { success: false, error: err.message }
-    }
-  })
-
-  /**
-   * Refresh token for a source (by source ID)
-   */
-  ipcMain.handle('auth:refresh-token', async (_event, sourceId: string) => {
-    try {
-      const result = await manager.ensureValidToken(sourceId)
-      return result
-    } catch (error: unknown) {
-      const err = error as Error
-      console.error(`[Auth IPC] Refresh token error for ${sourceId}:`, err)
-      return { success: false, error: err.message }
-    }
-  })
-
-  /**
-   * Check token status for a source (by source ID)
-   */
-  ipcMain.handle('auth:check-token', async (_event, sourceId: string) => {
-    try {
-      const result = await manager.ensureValidToken(sourceId)
-      if (result.success) {
-        return { success: true, data: { valid: true, needsRefresh: false } }
-      } else {
-        return { success: true, data: { valid: false, reason: result.error } }
+    /**
+     * Refresh token for a source (by source ID)
+     */
+    authRefreshToken: async (sourceId: string) => {
+      try {
+        const result = await manager.ensureValidToken(sourceId)
+        return result
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error(`[Auth IPC] Refresh token error for ${sourceId}:`, err)
+        return { success: false, error: err.message }
       }
-    } catch (error: unknown) {
-      const err = error as Error
-      return { success: false, error: err.message }
-    }
-  })
+    },
 
-  /**
-   * Logout from a source (by source ID)
-   */
-  ipcMain.handle('auth:logout', async (_event, sourceId: string) => {
-    try {
-      const result = await manager.logout(sourceId)
-      return result
-    } catch (error: unknown) {
-      const err = error as Error
-      console.error(`[Auth IPC] Logout error for ${sourceId}:`, err)
-      return { success: false, error: err.message }
-    }
+    /**
+     * Check token status for a source (by source ID)
+     */
+    authCheckToken: async (sourceId: string) => {
+      try {
+        const result = await manager.ensureValidToken(sourceId)
+        if (result.success) {
+          return { success: true, data: { valid: true, needsRefresh: false } }
+        } else {
+          return { success: true, data: { valid: false, reason: result.error } }
+        }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
+
+    /**
+     * Logout from a source (by source ID)
+     */
+    authLogout: async (sourceId: string) => {
+      try {
+        const result = await manager.logout(sourceId)
+        return result
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error(`[Auth IPC] Logout error for ${sourceId}:`, err)
+        return { success: false, error: err.message }
+      }
+    },
   })
 
   console.log('[Auth IPC] Registered auth handlers')

@@ -6,15 +6,15 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-vi.mock('../../../../src/main/services/security-policy', () => ({
+vi.mock('../../../../src/main/foundation/credential-safety', () => ({
   isCredentialAtRestSafe: vi.fn(() => false),
 }))
 
-import { isCredentialAtRestSafe } from '../../../../src/main/services/security-policy'
+import { isCredentialAtRestSafe } from '../../../../src/main/foundation/credential-safety'
 import {
   encodeForStorage,
   decodeFromStorage,
-} from '../../../../src/main/http/auth/envelope'
+} from '../../../../src/main/foundation/crypto-envelope'
 
 type MockFn = ReturnType<typeof vi.fn>
 
