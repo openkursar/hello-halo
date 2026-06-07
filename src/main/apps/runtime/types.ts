@@ -6,6 +6,7 @@
  */
 
 import type { RunOutcome, AppStatus } from '../manager'
+import type { TeamContext } from '../../../shared/apps/team-types'
 
 // ============================================
 // Trigger Types
@@ -115,6 +116,8 @@ export interface ActivityEntryContent {
   choices?: string[]
   /** File URL for output type */
   outputUrl?: string
+  /** Persisted in content_json; avoids a separate column for team aggregation. */
+  teamContext?: TeamContext
 }
 
 /** User response to an escalation */

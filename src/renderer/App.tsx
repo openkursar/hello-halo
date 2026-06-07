@@ -11,6 +11,8 @@ import { initPerfStoreListeners } from './stores/perf.store'
 import { useSpaceStore } from './stores/space.store'
 import { useSearchStore } from './stores/search.store'
 import { useAppsStore } from './stores/apps.store'
+import { useTeamStore } from './stores/team.store'
+import type { TeamUpdatedEvent, TeamBlackboardEvent, TeamMessageEvent } from '../shared/apps/team-types'
 import { useAppsPageStore } from './stores/apps-page.store'
 import { SplashPage } from './pages/SplashPage'
 import { SetupPage } from './pages/SetupPage'
@@ -649,6 +651,30 @@ export default function App() {
       unsubNavigate()
     }
   }, [setInitialAppId, setView])
+
+  // Register Digital Team real-time event listeners (global, like app:* above)
+  // so team list/detail/flow signals stay live even when the team tab is unmounted.
+  useEffect(() => {
+    // Prime the team list so the sidebar AutomationBadge reflects running /
+    // waiting teams even before the team tab is opened.
+    void useTeamStore.getState().loadTeams()
+
+    const unsubTeamUpdated = api.onTeamUpdated((data) => {
+      useTeamStore.getState().applyTeamUpdated(data as TeamUpdatedEvent)
+    })
+    const unsubTeamBlackboard = api.onTeamBlackboard((data) => {
+      useTeamStore.getState().applyTeamBlackboard(data as TeamBlackboardEvent)
+    })
+    const unsubTeamMessage = api.onTeamMessage((data) => {
+      useTeamStore.getState().applyTeamMessage(data as TeamMessageEvent)
+    })
+
+    return () => {
+      unsubTeamUpdated()
+      unsubTeamBlackboard()
+      unsubTeamMessage()
+    }
+  }, [])
 
   // Register in-app toast listener (notification:toast from main process)
   const showToast = useNotificationStore((s) => s.show)

@@ -28,6 +28,16 @@ import { wecomBotRpc } from '../shared/rpc/contracts/wecom-bot.contract'
 import { gitBashRpc } from '../shared/rpc/contracts/git-bash.contract'
 import { overlayRpc } from '../shared/rpc/contracts/overlay.contract'
 import { appRpc } from '../shared/rpc/contracts/app.contract'
+import { TEAM_IPC, TEAM_EVENTS } from '../shared/apps/team-types'
+import type {
+  CreateTeamInput,
+  UpdateTeamInput,
+  TeamMemberInput,
+  TeamEdge,
+  ProposedMember,
+  TeamRunTrigger,
+  TeamTriggerInput,
+} from '../shared/apps/team-types'
 import type {
   HealthStatusResponse,
   HealthStateResponse,
@@ -438,7 +448,7 @@ export interface HaloAPI {
   appMoveSpace: (input: { appId: string; newSpaceId: string | null }) => Promise<IpcResponse>
 
   // App Chat
-  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean }) => Promise<IpcResponse>
+  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean; conversationId?: string; teamContext?: unknown }) => Promise<IpcResponse>
   appChatStop: (appId: string) => Promise<IpcResponse>
   appChatStatus: (appId: string) => Promise<IpcResponse>
   appChatMessages: (input: { appId: string; spaceId: string }) => Promise<IpcResponse>
@@ -455,6 +465,38 @@ export interface HaloAPI {
   onAppNavigate: (callback: (data: unknown) => void) => () => void
   onImSessionUpdated: (callback: (data: unknown) => void) => () => void
   onImChannelInstanceUpdated: (callback: (data: unknown) => void) => () => void
+
+  // Digital Team
+  teamList: (spaceId?: string) => Promise<IpcResponse>
+  teamGet: (teamId: string) => Promise<IpcResponse>
+  teamCreate: (input: { input: CreateTeamInput; confirmedProposal?: ProposedMember[] }) => Promise<IpcResponse>
+  teamUpdate: (input: { teamId: string; input: UpdateTeamInput }) => Promise<IpcResponse>
+  teamDissolve: (teamId: string) => Promise<IpcResponse>
+  teamAddMember: (input: { teamId: string; member: TeamMemberInput }) => Promise<IpcResponse>
+  teamRemoveMember: (input: { teamId: string; appId: string }) => Promise<IpcResponse>
+  teamSetEdges: (input: { teamId: string; edges: TeamEdge[] }) => Promise<IpcResponse>
+  teamProposeMembers: (input: { goal: string; owningSpaceId: string }) => Promise<IpcResponse>
+  teamRun: (teamId: string, trigger?: TeamRunTrigger) => Promise<IpcResponse>
+  teamPause: (teamId: string) => Promise<IpcResponse>
+  teamGetDetail: (teamId: string) => Promise<IpcResponse>
+  /** Triggers (team as a first-class triggerable entity). */
+  teamListTriggers: (teamId: string) => Promise<IpcResponse>
+  teamSetTrigger: (input: { teamId: string; trigger: TeamTriggerInput; triggerId?: string }) => Promise<IpcResponse>
+  teamRemoveTrigger: (input: { teamId: string; triggerId: string }) => Promise<IpcResponse>
+  teamListArtifacts: (teamId: string) => Promise<IpcResponse>
+  /** Load a member's team-channel chat history for one run (JSONL). */
+  teamChatMessages: (input: { appId: string; spaceId: string; teamId: string; epochId: string }) => Promise<IpcResponse>
+  /** Run history (epochs), newest first. */
+  teamListEpochs: (teamId: string) => Promise<IpcResponse>
+  /** Tasks/findings/members snapshot for one past run. */
+  teamEpochBoard: (input: { teamId: string; epochId: string }) => Promise<IpcResponse>
+  /** Products produced during one specific run. */
+  teamEpochArtifacts: (input: { teamId: string; epochId: string }) => Promise<IpcResponse>
+
+  // Digital Team Event Listeners
+  onTeamUpdated: (callback: (data: unknown) => void) => () => void
+  onTeamBlackboard: (callback: (data: unknown) => void) => () => void
+  onTeamMessage: (callback: (data: unknown) => void) => () => void
 
   // Notification (in-app toast)
   onNotificationToast: (callback: (data: unknown) => void) => () => void
@@ -718,6 +760,33 @@ const api: HaloAPI = {
   onAppNavigate: (callback) => createEventListener('app:navigate', callback),
   onImSessionUpdated: (callback) => createEventListener('app:im-session-updated', callback),
   onImChannelInstanceUpdated: (callback) => createEventListener('im-channels:instance-updated', callback),
+
+  // Digital Team — request methods (thin invoke wrappers over TEAM_IPC channels)
+  teamList: (spaceId) => ipcRenderer.invoke(TEAM_IPC.list, spaceId),
+  teamGet: (teamId) => ipcRenderer.invoke(TEAM_IPC.get, teamId),
+  teamCreate: (input) => ipcRenderer.invoke(TEAM_IPC.create, input),
+  teamUpdate: (input) => ipcRenderer.invoke(TEAM_IPC.update, input),
+  teamDissolve: (teamId) => ipcRenderer.invoke(TEAM_IPC.dissolve, teamId),
+  teamAddMember: (input) => ipcRenderer.invoke(TEAM_IPC.addMember, input),
+  teamRemoveMember: (input) => ipcRenderer.invoke(TEAM_IPC.removeMember, input),
+  teamSetEdges: (input) => ipcRenderer.invoke(TEAM_IPC.setEdges, input),
+  teamProposeMembers: (input) => ipcRenderer.invoke(TEAM_IPC.proposeMembers, input),
+  teamRun: (teamId, trigger) => ipcRenderer.invoke(TEAM_IPC.run, teamId, trigger),
+  teamPause: (teamId) => ipcRenderer.invoke(TEAM_IPC.pause, teamId),
+  teamGetDetail: (teamId) => ipcRenderer.invoke(TEAM_IPC.getDetail, teamId),
+  teamListArtifacts: (teamId) => ipcRenderer.invoke(TEAM_IPC.listArtifacts, teamId),
+  teamListTriggers: (teamId) => ipcRenderer.invoke(TEAM_IPC.listTriggers, teamId),
+  teamSetTrigger: (input) => ipcRenderer.invoke(TEAM_IPC.setTrigger, input),
+  teamRemoveTrigger: (input) => ipcRenderer.invoke(TEAM_IPC.removeTrigger, input),
+  teamChatMessages: (input) => ipcRenderer.invoke('team:chat-messages', input),
+  teamListEpochs: (teamId) => ipcRenderer.invoke('team:list-epochs', teamId),
+  teamEpochBoard: (input) => ipcRenderer.invoke('team:epoch-board', input),
+  teamEpochArtifacts: (input) => ipcRenderer.invoke('team:epoch-artifacts', input),
+
+  // Digital Team Event Listeners
+  onTeamUpdated: (callback) => createEventListener(TEAM_EVENTS.updated, callback),
+  onTeamBlackboard: (callback) => createEventListener(TEAM_EVENTS.blackboard, callback),
+  onTeamMessage: (callback) => createEventListener(TEAM_EVENTS.message, callback),
 
   // Store (App Registry) — most methods derived from storeRpc contract;
   // storeInstall keeps its custom progress-listener wrapper below.

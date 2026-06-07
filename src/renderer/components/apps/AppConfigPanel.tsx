@@ -30,6 +30,7 @@ import { AppNotifyChannelsSection } from './AppNotifyChannelsSection'
 import { appTypeLabel } from './appTypeUtils'
 import { SystemPromptEditor } from './SystemPromptEditor'
 import { Switch } from '../ui/Switch'
+import { HttpTriggerCard } from '../common/HttpTriggerCard'
 import { SchedulePicker } from './SchedulePicker'
 import {
   extractScheduleValue,
@@ -1172,6 +1173,13 @@ export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
           onRequireRestart={() => setRestartHinted(true)}
         />
       )}
+
+      {/* HTTP Trigger: collapsed-by-default integration block. Lets external
+          systems trigger this digital human; reuses the global Remote Access
+          token for auth. */}
+      <div className="pt-2 border-t border-border">
+        <HttpTriggerCard kind="app" id={appId} />
+      </div>
 
       {/* Runtime Control: always-visible escape hatch for restarting the
           agent. Sits outside Danger Zone because restart is non-destructive

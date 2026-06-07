@@ -446,6 +446,9 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
       'app:navigate': 'onAppNavigate',
       'app:im-session-updated': 'onImSessionUpdated',
       'im-channels:instance-updated': 'onImChannelInstanceUpdated',
+      'team:updated': 'onTeamUpdated',
+      'team:blackboard': 'onTeamBlackboard',
+      'team:message': 'onTeamMessage',
       'notification:toast': 'onNotificationToast'
     }
 

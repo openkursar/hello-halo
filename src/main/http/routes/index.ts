@@ -16,6 +16,7 @@ import { registerNotifyRoutes } from './notify.routes'
 import { registerImRoutes } from './im.routes'
 import { registerSystemRoutes } from './system.routes'
 import { registerAppsRoutes } from './apps.routes'
+import { registerTeamRoutes } from './team.routes'
 import { registerStoreRoutes } from './store.routes'
 
 /**
@@ -31,6 +32,7 @@ export function registerApiRoutes(app: Express): void {
   registerImRoutes(app)
   registerSystemRoutes(app)
   registerAppsRoutes(app)
+  registerTeamRoutes(app)
   registerStoreRoutes(app)
 
   console.log('[HTTP] API routes registered')

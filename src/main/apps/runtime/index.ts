@@ -358,6 +358,16 @@ export function getImChannelManager(): ImChannelManager | null {
 }
 
 /**
+ * Get the EventRouter instance created during init.
+ * Used by the team trigger scheduler to route 'webhook' | 'file' | 'wecom'
+ * team triggers through the same multi-subscriber path the app runtime uses.
+ * Returns null if the App Runtime is not yet initialized.
+ */
+export function getEventRouter(): EventRouter | null {
+  return eventRouterInstance
+}
+
+/**
  * Shutdown the App Runtime module.
  *
  * 1. Deactivates all Apps (removes scheduler jobs + event subscriptions)

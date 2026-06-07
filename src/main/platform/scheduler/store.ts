@@ -69,6 +69,13 @@ const migrations: Migration[] = [
         ON scheduler_run_log(job_id, started_at DESC)
       `)
     }
+  },
+  {
+    version: 2,
+    description: 'Add kind discriminator for multi-consumer dispatch (default app)',
+    up(db: Database.Database) {
+      db.exec(`ALTER TABLE scheduler_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'app'`)
+    }
   }
 ]
 
@@ -88,6 +95,7 @@ interface JobRow {
   consecutive_errors: number
   status: string
   metadata_json: string | null
+  kind: string
   created_at: number
   updated_at: number
 }
@@ -130,6 +138,7 @@ function rowToJob(row: JobRow): SchedulerJob {
     consecutiveErrors: row.consecutive_errors,
     status: row.status as JobStatus,
     metadata: row.metadata_json ? (JSON.parse(row.metadata_json) as Record<string, unknown>) : undefined,
+    kind: row.kind,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
@@ -180,11 +189,11 @@ export class SchedulerStore {
       INSERT INTO scheduler_jobs (
         id, name, schedule_json, enabled, anchor_ms, next_run_at_ms,
         last_run_at_ms, running_at_ms, consecutive_errors, status,
-        metadata_json, created_at, updated_at
+        metadata_json, kind, created_at, updated_at
       ) VALUES (
         @id, @name, @schedule_json, @enabled, @anchor_ms, @next_run_at_ms,
         @last_run_at_ms, @running_at_ms, @consecutive_errors, @status,
-        @metadata_json, @created_at, @updated_at
+        @metadata_json, @kind, @created_at, @updated_at
       )
     `).run({
       id: job.id,
@@ -198,6 +207,7 @@ export class SchedulerStore {
       consecutive_errors: job.consecutiveErrors,
       status: job.status,
       metadata_json: job.metadata ? JSON.stringify(job.metadata) : null,
+      kind: job.kind ?? 'app',
       created_at: job.createdAt,
       updated_at: job.updatedAt
     })
@@ -219,6 +229,7 @@ export class SchedulerStore {
         consecutive_errors = @consecutive_errors,
         status = @status,
         metadata_json = @metadata_json,
+        kind = @kind,
         updated_at = @updated_at
       WHERE id = @id
     `).run({
@@ -233,6 +244,7 @@ export class SchedulerStore {
       consecutive_errors: job.consecutiveErrors,
       status: job.status,
       metadata_json: job.metadata ? JSON.stringify(job.metadata) : null,
+      kind: job.kind ?? 'app',
       updated_at: job.updatedAt
     })
   }

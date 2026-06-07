@@ -2025,7 +2025,9 @@ describe('AppRuntimeService', () => {
     it('should register a job due handler on the scheduler', () => {
       createService()
       expect(mockScheduler.onJobDue).toHaveBeenCalledTimes(1)
-      expect(typeof mockScheduler.onJobDue.mock.calls[0][0]).toBe('function')
+      // Registers under the 'app' kind (kind-based dispatch); handler is 2nd arg.
+      expect(mockScheduler.onJobDue.mock.calls[0][0]).toBe('app')
+      expect(typeof mockScheduler.onJobDue.mock.calls[0][1]).toBe('function')
     })
   })
 

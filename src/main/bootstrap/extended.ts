@@ -51,11 +51,17 @@ import { initMemory } from '../platform/memory'
 import { setMemorySdk } from '../platform/memory/sdk'
 import { tool as sdkTool, createSdkMcpServer as sdkCreateMcpServer } from '../services/agent/resolved-sdk'
 import { initAppManager, shutdownAppManager } from '../apps/manager'
-import { initAppRuntime, shutdownAppRuntime } from '../apps/runtime'
+import { initAppRuntime, shutdownAppRuntime, getEventRouter } from '../apps/runtime'
+import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService } from '../apps/team'
+import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler } from '../apps/runtime/team'
+import type { TeamTriggerScheduler } from '../apps/runtime/team'
+import { createSpace, deleteSpace, getSpace } from '../services/space.service'
+import { listArtifacts } from '../services/artifact.service'
 import { installAppsSubscribers } from '../services/analytics/subscribers/apps.subscriber'
 import { runStartupSnapshot } from '../services/analytics/snapshot'
 import { analytics } from '../services/analytics/analytics.service'
 import { registerAppHandlers } from '../ipc/app'
+import { registerTeamIpc } from '../ipc/team'
 import { registerAnalyticsHandlers } from '../ipc/analytics'
 import { registerNotificationChannelHandlers } from '../ipc/notification-channels'
 import { registerWecomBotHandlers } from '../ipc/wecom-bot'
@@ -79,7 +85,7 @@ let platformDb: DatabaseManager | null = null
  * (manager, runtime) modules. Runs asynchronously after extended services
  * are registered, so it does not block startup or the UI.
  *
- * Initialization order (per architecture §8B):
+ * Initialization order:
  *   Phase 0: initStore()
  *   Phase 1 (parallel): initScheduler, initMemory
  *   Phase 2: initAppManager
@@ -123,6 +129,11 @@ async function initPlatformAndApps(): Promise<void> {
   // ── Phase 2: App Manager ─────────────────────────────────────────────────
   const appManager = await initAppManager({ db })
 
+  // ── Phase 2.1: Team data layer ───────────────────────────────────────────
+  // Peer of the App Manager: owns the six Digital Team tables under the
+  // 'app_team' migration namespace on the shared app database.
+  initTeamStore({ db })
+
   // ── Phase 2.5: Migrate legacy config.mcpServers → DB ────────────────────
   // One-time migration: config.json mcpServers (dead storage from Issue #74)
   // are imported into the App Manager DB where getDbMcpServers() can read them.
@@ -142,6 +153,67 @@ async function initPlatformAndApps(): Promise<void> {
   // Wire lifecycle events (install/uninstall/run) into the analytics pipeline.
   // Must come after both appManager and runtime are ready.
   installAppsSubscribers(appManager, runtime)
+
+  // ── Phase 3.6: Team runtime + service ────────────────────────────────────
+  // The team coordination kernel reuses the app-chat session layer (resume,
+  // MCP injection), so it is constructed only after the App Runtime is ready.
+  // setActiveTeamRuntime publishes it through the accessor app-chat/report-tool
+  // read; initTeamService wires lifecycle deps (App Manager, the runtime
+  // accessor, space + artifact helpers).
+  const teamStore = getTeamStore()
+  // Late-bound so the team service can resolve the trigger scheduler (created
+  // after the service, since the scheduler needs the service's runTeam).
+  let teamTriggerScheduler: TeamTriggerScheduler | null = null
+  if (teamStore) {
+    setActiveTeamRuntime(createTeamRuntime({ store: teamStore }))
+    initTeamService({
+      store: teamStore,
+      appManager,
+      getRuntime: () => getActiveTeamRuntime(),
+      getTriggerSync: () => teamTriggerScheduler,
+      spaces: {
+        spaceExists: (spaceId) => getSpace(spaceId) != null,
+        // AI-provisioned members get their own independent space under the
+        // owning team. createSpace centralizes data; the name carries
+        // the team + member handle for human-readable grouping.
+        createMemberSpace: ({ teamName, memberName }) =>
+          createSpace({ name: `${teamName} · ${memberName}`, icon: 'users' }).id,
+        // Fire-and-forget on dissolve orphan cleanup: deleteSpace is async but
+        // the service contract is sync (best-effort); errors are logged inside.
+        deleteMemberSpace: (spaceId) => {
+          void deleteSpace(spaceId).catch((err) =>
+            console.warn('[Bootstrap] Team member space delete failed:', err)
+          )
+        },
+        // Resolve a space to its absolute path so relative artifact refs
+        // (e.g. "brief.md") can be opened.
+        resolveSpacePath: (spaceId) => getSpace(spaceId)?.path ?? null,
+      },
+      listArtifacts: (spaceId) => listArtifacts(spaceId),
+    })
+
+    // Team triggers: register the kind='team' scheduler handler and rehydrate
+    // persisted triggers — schedule triggers become scheduler jobs, event
+    // triggers (webhook/file/wecom) become EventRouter subscriptions. Must run
+    // before scheduler.start(). The EventRouter is created inside initAppRuntime
+    // above, so it is available here.
+    const teamService = getTeamService()
+    const eventRouter = getEventRouter()
+    if (teamService && eventRouter) {
+      teamTriggerScheduler = createTeamTriggerScheduler({
+        scheduler,
+        store: teamStore,
+        eventRouter,
+        runTeam: (teamId, trigger) => teamService.runTeam(teamId, trigger),
+      })
+      teamTriggerScheduler.registerHandler()
+      teamTriggerScheduler.rehydrate()
+    } else if (teamService && !eventRouter) {
+      console.warn('[Bootstrap] EventRouter unavailable; team trigger scheduler not initialized')
+    }
+  } else {
+    console.warn('[Bootstrap] Team store unavailable; team service not initialized')
+  }
 
   // ── Phase 4: Registry Service (App Store) ─────────────────────────────
   initRegistryService({ db })
@@ -266,6 +338,9 @@ export function initializeExtendedServices(): void {
   // App management IPC handlers (app:install, app:list, etc.)
   registerAppHandlers()
 
+  // Digital Team IPC handlers (team:list, team:create, team:run, etc.)
+  registerTeamIpc()
+
   // Notification channel IPC handlers (notify-channels:test, etc.)
   registerNotificationChannelHandlers()
 
@@ -345,6 +420,12 @@ export async function cleanupExtendedServices(): Promise<void> {
 
   // Store: Shutdown registry service (before app manager)
   shutdownRegistryService()
+
+  // Team: Tear down the service + runtime accessor and the data layer before
+  // the App Manager goes away (the service holds an App Manager reference).
+  shutdownTeamService()
+  setActiveTeamRuntime(null)
+  shutdownTeamStore()
 
   // Apps: Shutdown runtime first (deactivates all apps, stops event router, cancels runs).
   // This is intentionally ahead of `analytics.destroy()` so that any final

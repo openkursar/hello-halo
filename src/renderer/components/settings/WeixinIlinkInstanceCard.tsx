@@ -43,6 +43,8 @@ export interface WeixinIlinkInstanceCardProps {
   instance: ImChannelInstanceConfig
   status: ImChannelInstanceStatus | undefined
   automationApps: AutomationApp[]
+  /** Teams selectable as a backend (a team = its lead digital human + members). */
+  teams: { id: string; name: string; leadAppId: string | null }[]
   isExpanded: boolean
   onToggle: () => void
   onChange: (instance: ImChannelInstanceConfig) => void
@@ -82,6 +84,7 @@ export function WeixinIlinkInstanceCard({
   instance,
   status,
   automationApps,
+  teams,
   isExpanded,
   onToggle,
   onChange,
@@ -201,13 +204,26 @@ export function WeixinIlinkInstanceCard({
     })
   }, [stopPolling, instance])
 
-  const handleAppChange = useCallback((appId: string) => {
-    onChange({ ...instance, appId })
-  }, [instance, onChange])
+  // Combined backend selector value: "app:<id>" or "team:<id>".
+  const targetValue = instance.teamId ? `team:${instance.teamId}` : instance.appId ? `app:${instance.appId}` : ''
 
-  // Resolve bound app name
+  const handleTargetChange = useCallback((value: string) => {
+    if (value.startsWith('team:')) {
+      const teamId = value.slice('team:'.length)
+      const team = teams.find(tm => tm.id === teamId)
+      onChange({ ...instance, teamId, appId: team?.leadAppId ?? '' })
+    } else {
+      const appId = value.startsWith('app:') ? value.slice('app:'.length) : value
+      onChange({ ...instance, teamId: undefined, appId })
+    }
+  }, [instance, onChange, teams])
+
+  // Resolve bound target name (a team, or a single digital human).
+  const boundTeam = instance.teamId ? teams.find(tm => tm.id === instance.teamId) : undefined
   const boundApp = automationApps.find(a => a.id === instance.appId)
-  const displayName = boundApp?.spec.name || t('Not bound')
+  const displayName = boundTeam
+    ? t('Team: {{name}}', { name: boundTeam.name })
+    : boundApp?.spec.name || t('Not bound')
 
   const statusDot = !isEnabled
     ? 'bg-muted-foreground/30'
@@ -362,28 +378,44 @@ export function WeixinIlinkInstanceCard({
             )}
           </div>
 
-          {/* Digital Human selector */}
+          {/* Backend selector — a single digital human OR a team (team = its
+              lead + members, same binding surface). */}
           <div className="space-y-1">
             <label className="text-sm text-muted-foreground">
-              {t('Digital Human')} <span className="text-red-400">*</span>
+              {t('Backend')} <span className="text-red-400">*</span>
             </label>
             <div className="relative">
               <Bot className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
               <select
-                value={instance.appId || ''}
-                onChange={(e) => handleAppChange(e.target.value)}
+                value={targetValue}
+                onChange={(e) => handleTargetChange(e.target.value)}
                 className="w-full bg-muted border border-border rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary appearance-none cursor-pointer"
               >
-                <option value="">{t('Select digital human')}</option>
-                {automationApps.map(app => (
-                  <option key={app.id} value={app.id}>
-                    {app.spec.name}
-                  </option>
-                ))}
+                <option value="">{t('Select a digital human or team')}</option>
+                {automationApps.length > 0 && (
+                  <optgroup label={t('Digital Humans')}>
+                    {automationApps.map(app => (
+                      <option key={app.id} value={`app:${app.id}`}>
+                        {app.spec.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {teams.length > 0 && (
+                  <optgroup label={t('Teams')}>
+                    {teams.map(tm => (
+                      <option key={tm.id} value={`team:${tm.id}`} disabled={!tm.leadAppId}>
+                        {tm.leadAppId ? tm.name : t('{{name}} (no lead yet)', { name: tm.name })}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </div>
             <p className="text-xs text-muted-foreground">
-              {t('All messages from this Bot will be handled by this digital human')}
+              {instance.teamId
+                ? t('All messages from this Bot are handled by this team (its lead replies and can delegate to members)')
+                : t('All messages from this Bot will be handled by this digital human')}
             </p>
           </div>
         </div>

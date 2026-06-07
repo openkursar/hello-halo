@@ -38,7 +38,7 @@ export type AppsDetailView =
   | { type: 'uninstalled-detail'; appId: string }
   | null
 
-export type AppsPageTab = 'my-digital-humans' | 'my-skills' | 'my-mcp' | 'store'
+export type AppsPageTab = 'my-digital-humans' | 'team' | 'my-skills' | 'my-mcp' | 'store'
 
 /**
  * Map an app type to its owning AppsPage tab.

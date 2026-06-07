@@ -83,9 +83,12 @@ function getBackoffDelay(consecutiveErrors: number): number {
  *   // later
  *   timer.stop()
  */
+/** Default job kind for jobs created before kind-based dispatch existed. */
+const DEFAULT_JOB_KIND = 'app'
+
 export class SchedulerTimer {
   private store: SchedulerStore
-  private handler: JobDueHandler | null = null
+  private handlers = new Map<string, JobDueHandler>()
   private timerId: ReturnType<typeof setTimeout> | null = null
   private running = false  // Guard against concurrent tick execution
   private nowFn: () => number
@@ -100,11 +103,11 @@ export class SchedulerTimer {
   }
 
   /**
-   * Register the handler that is called when a job is due.
-   * Only one handler is supported; subsequent calls replace the previous one.
+   * Register the handler called when a job of the given `kind` is due.
+   * Each kind has its own handler; re-registering a kind replaces it.
    */
-  setHandler(handler: JobDueHandler): void {
-    this.handler = handler
+  setHandler(kind: string, handler: JobDueHandler): void {
+    this.handlers.set(kind, handler)
   }
 
   /**
@@ -290,13 +293,11 @@ export class SchedulerTimer {
    * Execute a single job: set running state, call handler, update state.
    */
   private async executeJob(job: SchedulerJob, nowMs: number): Promise<void> {
-    if (!this.handler) {
-      console.warn(`[Scheduler] No handler registered, skipping job "${job.name}" (${job.id})`)
-      return
-    }
+    const kind = job.kind ?? DEFAULT_JOB_KIND
+    const handler = this.handlers.get(kind)
 
     const startedAt = this.nowFn()
-    console.debug(`[Scheduler] Executing job "${job.name}" (${job.id}), schedule=${JSON.stringify(job.schedule)}, consecutiveErrors=${job.consecutiveErrors}`)
+    console.debug(`[Scheduler] Executing job "${job.name}" (${job.id}), kind=${kind}, schedule=${JSON.stringify(job.schedule)}, consecutiveErrors=${job.consecutiveErrors}`)
 
     // Mark as running
     job.runningAtMs = startedAt
@@ -307,15 +308,22 @@ export class SchedulerTimer {
     let outcome: RunOutcome = 'error'
     let errorMessage: string | undefined
 
-    try {
-      outcome = await this.handler(job)
-    } catch (err) {
-      outcome = 'error'
-      errorMessage = err instanceof Error ? err.message : String(err)
-      console.error(
-        `[Scheduler] Job "${job.name}" (${job.id}) handler threw:`,
-        errorMessage
-      )
+    if (!handler) {
+      // No registered consumer for this kind: record an error (never silent) so
+      // backoff/auto-disable applies instead of tight-looping on every tick.
+      errorMessage = `No handler registered for job kind "${kind}"`
+      console.error(`[Scheduler] Job "${job.name}" (${job.id}): ${errorMessage}`)
+    } else {
+      try {
+        outcome = await handler(job)
+      } catch (err) {
+        outcome = 'error'
+        errorMessage = err instanceof Error ? err.message : String(err)
+        console.error(
+          `[Scheduler] Job "${job.name}" (${job.id}) handler threw:`,
+          errorMessage
+        )
+      }
     }
 
     const finishedAt = this.nowFn()

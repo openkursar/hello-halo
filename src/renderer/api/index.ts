@@ -22,6 +22,7 @@ import { updaterApi } from './updater.api'
 import { perfApi } from './perf.api'
 import { healthApi } from './health.api'
 import { appsApi } from './apps.api'
+import { teamApi } from './team.api'
 import { storeApi } from './store.api'
 import { eventsApi } from './events.api'
 
@@ -45,6 +46,7 @@ export const api = {
   ...perfApi,
   ...healthApi,
   ...appsApi,
+  ...teamApi,
   ...storeApi,
   ...eventsApi,
 }

@@ -16,6 +16,8 @@ import type { ActivityEntry, ActivityEntryType, ActivityEntryContent } from './t
 import { broadcastToAll } from '../../http/websocket'
 import { sendToRenderer } from '../../foundation/window.service'
 import { notifyAppEvent } from '../../services/notification.service'
+import { getActiveTeamRuntime } from './team'
+import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 
 // ============================================
 // Types
@@ -33,6 +35,8 @@ export interface ReportToolContext {
   notificationLevel?: 'all' | 'important' | 'none'
   /** Absolute path to the plans directory for file-based data_path guidance */
   plansDir?: string
+  /** Drives team-specific report routing when present. */
+  teamContext?: TeamTriggerContext
 }
 
 /** Callback invoked when an escalation entry is created */
@@ -168,6 +172,41 @@ export function createReportToolServer(
       if (input.question) content.question = input.question
       if (input.choices) content.choices = input.choices
 
+      // ── Team-channel routing ────────────────────────────────────────────────
+      // In a team turn, report_to_user keeps its ORIGINAL purpose: escalation
+      // (human decision) + optional audit entries. It does NOT carry the result —
+      // the result is the turn's FINAL MESSAGE, captured by the runtime (onReply).
+      // Lead-routed escalations reach the user via the lead's mailbox, so the
+      // user-facing emission is suppressed below to avoid a double-send (the
+      // audit entry is still persisted in both cases).
+      let suppressUserEscalation = false
+      const team = runContext.teamContext
+      if (team && safeType === 'escalation') {
+        const runtime = getActiveTeamRuntime()
+        const reportText = input.data ? `${safeSummary}\n\n${input.data}` : safeSummary
+        // Tag the escalation entry so the team view aggregates it, and
+        // capture it so orchestration routes per escalationRouting.
+        content.teamContext = {
+          teamId: team.teamId,
+          epochId: team.epochId,
+          ...(team.taskId ? { taskId: team.taskId } : {}),
+        }
+        runtime?.captureReport(team.correlationId, {
+          kind: 'escalation',
+          content: reportText,
+        })
+        // Suppress the user-facing escalation ONLY for a MEMBER under 'lead'
+        // routing — that escalation is forwarded to the lead to resolve first.
+        // The LEAD's own upward escalation must always reach the user, otherwise
+        // it would be silently lost (the lead is the last resort before the user).
+        const teamPrompt = runtime?.buildPromptContext(team, runContext.appId)
+        suppressUserEscalation =
+          teamPrompt?.escalationRouting === 'lead' && teamPrompt?.selfIsLead === false
+      }
+      // Non-escalation reports in a team turn fall through to the normal path:
+      // they write an ordinary (audit) activity entry and do NOT affect the team
+      // result (which is the turn's final message).
+
       // Persist + broadcast the entry
       const entry: ActivityEntry = {
         id: entryId,
@@ -187,11 +226,14 @@ export function createReportToolServer(
 
       console.log(`[Runtime][${runTag}] Activity entry created: type=${safeType}, app=${runContext.appId}, entry=${entryId}`)
 
-      // Send system desktop notification based on notification level
+      // Send system desktop notification based on notification level. A
+      // lead-routed team escalation never reaches the user, so it must not raise
+      // a desktop notification either.
       const level = runContext.notificationLevel ?? 'important'
       const shouldNotify =
-        level === 'all' ||
-        (level === 'important' && (safeType === 'escalation' || safeType === 'milestone' || safeType === 'output'))
+        !suppressUserEscalation &&
+        (level === 'all' ||
+          (level === 'important' && (safeType === 'escalation' || safeType === 'milestone' || safeType === 'output')))
       if (shouldNotify) {
         notifyAppEvent(runContext.appName, safeSummary, {
           appId: runContext.appId,
@@ -201,23 +243,33 @@ export function createReportToolServer(
 
       // Handle escalation
       if (safeType === 'escalation') {
+        // Lead-routed team escalation: the runtime already delivered it to the
+        // lead. Do not prompt the user as well.
+        if (suppressUserEscalation) {
+          return textResult(
+            `Escalation routed to the team lead (entry: ${entryId}). ` +
+            'End your turn now — the lead will respond via the team.'
+          )
+        }
+
         if (onEscalation) {
           onEscalation(entryId)
         }
 
-        // Broadcast escalation event for real-time UI update
-        broadcastToAll('app:escalation:new', {
+        // Broadcast escalation event for real-time UI update. Carry team context
+        // when this is a team escalation so team-aware consumers can attribute it
+        // (the team view also reacts via the team:updated status change).
+        const escalationEvent = {
           appId: runContext.appId,
           entryId,
           question: input.question ?? content.summary,
           choices: input.choices ?? [],
-        })
-        sendToRenderer('app:escalation:new', {
-          appId: runContext.appId,
-          entryId,
-          question: input.question ?? content.summary,
-          choices: input.choices ?? [],
-        })
+          ...(content.teamContext
+            ? { teamId: content.teamContext.teamId, epochId: content.teamContext.epochId }
+            : {}),
+        }
+        broadcastToAll('app:escalation:new', escalationEvent)
+        sendToRenderer('app:escalation:new', escalationEvent)
 
         return textResult(
           `Escalation sent to user (entry: ${entryId}). ` +

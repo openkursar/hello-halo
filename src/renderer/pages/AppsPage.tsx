@@ -15,6 +15,7 @@ import { useAppStore } from '../stores/app.store'
 import { useSpaceStore } from '../stores/space.store'
 import { useAppsStore } from '../stores/apps.store'
 import { useAppsPageStore, tabForAppType } from '../stores/apps-page.store'
+import { useTeamStore } from '../stores/team.store'
 import type { AppType } from '../../shared/apps/spec-types'
 import { Header } from '../components/layout/Header'
 import { AppList } from '../components/apps/AppList'
@@ -33,6 +34,7 @@ import { ManualAddDialog } from '../components/apps/ManualAddDialog'
 import { SkillInstallDialog } from '../components/apps/SkillInstallDialog'
 import { UninstalledDetailView } from '../components/apps/UninstalledDetailView'
 import { StoreView } from '../components/store/StoreView'
+import { TeamTabContent } from '../components/team'
 import { useTranslation, getCurrentLanguage } from '../i18n'
 import { resolveSpecI18n } from '../utils/spec-i18n'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -75,11 +77,23 @@ export function AppsPage() {
     return null
   }, [currentTab])
 
+  // Team lead apps are an internal coordination role, not standalone digital
+  // humans — hide them from the digital-humans list (they are managed inside
+  // the team view). Derived from the loaded team list (kept fresh via events).
+  const teamLeadAppIds = useTeamStore(s => s.teams)
+  const leadAppIdSet = useMemo(
+    () => new Set(teamLeadAppIds.map(t => t.leadAppId).filter((id): id is string => !!id)),
+    [teamLeadAppIds]
+  )
+
   /** Filter apps visible in the current tab (excludes store tab) */
   const appsForCurrentTab = useMemo(() => {
     if (!appTypeForCurrentTab) return []
-    return apps.filter(a => a.spec.type === appTypeForCurrentTab)
-  }, [apps, appTypeForCurrentTab])
+    return apps.filter(a =>
+      a.spec.type === appTypeForCurrentTab &&
+      !(appTypeForCurrentTab === 'automation' && leadAppIdSet.has(a.id))
+    )
+  }, [apps, appTypeForCurrentTab, leadAppIdSet])
 
   /**
    * Open the marketplace pre-filtered by the target type. Delegates to the
@@ -254,6 +268,11 @@ export function AppsPage() {
           onClick={() => setCurrentTab('my-digital-humans')}
         />
         <TabButton
+          active={currentTab === 'team'}
+          label={t('Teams')}
+          onClick={() => setCurrentTab('team')}
+        />
+        <TabButton
           active={currentTab === 'my-skills'}
           label={t('My Skills')}
           onClick={() => setCurrentTab('my-skills')}
@@ -273,6 +292,8 @@ export function AppsPage() {
       {/* Content area */}
       {currentTab === 'store' ? (
         <StoreView />
+      ) : currentTab === 'team' ? (
+        <TeamTabContent />
       ) : !isMobile ? (
         /* ── Desktop: split layout — left sidebar + right detail (unchanged) ── */
         <div className="flex-1 flex overflow-hidden">

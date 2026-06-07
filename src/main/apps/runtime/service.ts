@@ -16,7 +16,8 @@ import { AppNotFoundError } from '../manager'
 import type { AutomationSpec, SubscriptionDef } from '../spec'
 import type { SchedulerService, SchedulerJob, SchedulerJobCreate } from '../../platform/scheduler'
 import type { EventRouter } from './event-router'
-import type { EventFilter, FilterRule } from './event-types'
+import type { EventFilter } from './event-types'
+import { sourceConfigToEventFilter } from './event-filter-mapping'
 import type { MemoryService } from '../../platform/memory'
 import type { BackgroundService } from '../../platform/background'
 import type { ActivityStore } from './store'
@@ -41,6 +42,7 @@ import { AppNotRunnableError, EscalationNotFoundError, ConcurrencyLimitError } f
 import { Semaphore } from './concurrency'
 import { executeRun } from './execute'
 import { readSessionMessages } from './session-store'
+import { getActiveTeamRuntime } from './team'
 import { getSpace } from '../../services/space.service'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { broadcastToAll } from '../../http/websocket'
@@ -714,73 +716,15 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   }
 
   // ── Helper: Map subscription to event filter ────────
+  // Delegates to the shared source→filter mapping so the app runtime and the
+  // team trigger scheduler derive identical filters from the same semantics.
   function subscriptionToEventFilter(
     sub: SubscriptionDef
   ): EventFilter | null {
-    switch (sub.source.type) {
-      case 'file': {
-        const filter: EventFilter = { types: ['file.*'] }
-        const rules: FilterRule[] = []
-
-        // Apply pattern-based filtering if the subscription specifies a glob pattern
-        const filePattern = sub.source.config.pattern
-        if (filePattern) {
-          rules.push({
-            field: 'payload.relativePath',
-            op: 'matches',
-            value: filePattern,
-          })
-        }
-
-        // Apply path-based filtering if the subscription specifies a directory
-        const filePath = sub.source.config.path
-        if (filePath) {
-          const normalizedPath = filePath.replace(/\/+$/, '') // strip trailing slashes
-          rules.push({
-            field: 'payload.filePath',
-            op: 'contains',
-            value: normalizedPath,
-          })
-        }
-
-        if (rules.length > 0) {
-          filter.rules = rules
-        }
-
-        return filter
-      }
-      case 'webhook': {
-        const filter: EventFilter = { types: ['webhook.received'] }
-        // Add path-based filtering if the subscription specifies a webhook path
-        const webhookPath = sub.source.config.path
-        if (webhookPath) {
-          filter.rules = [{
-            field: 'payload.path',
-            op: 'eq',
-            value: webhookPath.replace(/^\/+|\/+$/g, ''), // normalize: strip leading/trailing slashes
-          }]
-        }
-        return filter
-      }
-      case 'webpage':
-        return { types: ['webpage.changed'] }
-      case 'rss':
-        return { types: ['rss.updated'] }
-      case 'wecom': {
-        const filter: EventFilter = { types: ['wecom.message'] }
-        const wecomChatId = sub.source.config.chatId
-        if (wecomChatId) {
-          filter.rules = [{
-            field: 'payload.chatId',
-            op: 'eq',
-            value: wecomChatId,
-          }]
-        }
-        return filter
-      }
-      default:
-        return null
-    }
+    return sourceConfigToEventFilter(
+      sub.source.type,
+      sub.source.config as Record<string, unknown>
+    )
   }
 
   // ── Service Implementation ──────────────────────────
@@ -1171,6 +1115,34 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         appManager.updateStatus(appId, 'active')
       }
 
+      // ── Team escalation: resume the TEAM turn, not a solo run ──────────────
+      // A team member's escalation was raised inside a team-channel turn. The
+      // user's answer must be delivered back into that team turn so coordination
+      // continues; a member must NEVER fall through to a solo automation run
+      // (that would run it outside the team and create a stray run record).
+      const teamContext = entry.content.teamContext
+      if (teamContext) {
+        const parts: string[] = []
+        if (response.choice) parts.push(response.choice)
+        if (response.text) parts.push(response.text)
+        const decision = parts.join(' — ') || 'Proceed.'
+        const teamRuntime = getActiveTeamRuntime()
+        const resumed = teamRuntime?.resumeFromEscalation({
+          teamId: teamContext.teamId,
+          epochId: teamContext.epochId,
+          appId,
+          taskId: teamContext.taskId,
+          response: decision,
+        })
+        if (!resumed) {
+          console.warn(
+            `[Runtime] Team escalation answered but team/epoch is gone; not resuming: ` +
+            `app=${appId}, team=${teamContext.teamId}, epoch=${teamContext.epochId}`
+          )
+        }
+        return
+      }
+
       // Resume the original run with the escalation context.
       // Unlike creating a new run, we reopen the existing run so the entire
       // escalation lifecycle (original trigger → AI work → question → response → continuation)
@@ -1351,7 +1323,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   // This connects the scheduler's onJobDue to our execution logic.
   // IM conversation history from proactive sessions is injected into the
   // trigger context, and the run result is forwarded to IM after completion.
-  scheduler.onJobDue(async (job: SchedulerJob): Promise<RunOutcome> => {
+  scheduler.onJobDue('app', async (job: SchedulerJob): Promise<RunOutcome> => {
     const appId = (job.metadata as any)?.appId
     if (!appId) {
       console.warn(`[Runtime] Scheduler job ${job.id} has no appId in metadata`)

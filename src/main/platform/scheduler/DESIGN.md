@@ -11,8 +11,12 @@
 A general-purpose, persistent job scheduler for the Halo Electron main process.
 It knows nothing about AI, LLM, or Apps -- it manages timed jobs with callbacks.
 
-The consuming layer (`apps/runtime`) registers jobs via `addJob()` and listens
-for due-time callbacks via `onJobDue(handler)`.
+Consuming layers register jobs via `addJob()` (tagging each with a `kind`,
+default `'app'`) and register a per-kind callback via `onJobDue(kind, handler)`.
+The timer routes each due job to the handler matching its `kind`, so multiple
+domains (e.g. `apps/runtime` for `'app'`, the team runtime for `'team'`) consume
+the same scheduler without depending on one another. A due job whose kind has no
+registered handler is recorded as an error (never silently dropped).
 
 ---
 
@@ -188,7 +192,7 @@ interface SchedulerService {
   resumeJob(jobId): void
   getJob(jobId): SchedulerJob | null
   listJobs(filter?): SchedulerJob[]
-  onJobDue(handler): void
+  onJobDue(kind, handler): void   // kind-routed; jobs default to kind 'app'
   start(): void
   stop(): void
   getRunLog(jobId, limit?): RunLogEntry[]

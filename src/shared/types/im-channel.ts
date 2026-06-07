@@ -92,8 +92,22 @@ export interface ImChannelInstanceConfig {
   type: ImChannelType
   /** Whether this instance is enabled */
   enabled: boolean
-  /** Bound digital human (App) ID — required for routing */
+  /**
+   * Bound digital human (App) ID — required for routing.
+   * For a team-backed instance (`teamId` set), this holds the team's lead app id
+   * so all existing routing/session/permission/reply code works unchanged; the
+   * lead is resolved fresh from the team at dispatch time.
+   */
   appId: string
+  /**
+   * Optional team binding. When set, this instance is backed by a digital team:
+   * inbound messages route to the team's lead with team coordination tools and a
+   * long-lived 'conversation' epoch (the lead may delegate to members and the
+   * reply flows back to this chat). When absent, the instance is backed by the
+   * single digital human `appId` (default). Mirrors "a team = a digital human":
+   * same binding surface, the team just has members behind its lead.
+   */
+  teamId?: string
   /** Provider-specific configuration (e.g., botId, secret, wsUrl for WeCom) */
   config: Record<string, unknown>
   /**

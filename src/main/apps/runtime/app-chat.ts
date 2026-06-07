@@ -57,6 +57,11 @@ import { assembleAppChatPrompt } from './prompt/assembler'
 import { buildIdentityFragments } from './prompt/identity'
 import { NATIVE_CHAT_ENTRY } from './prompt/entry-native'
 import { buildImEntry, buildImConstraints, type ImSessionContext } from './im-channels/im-prompt'
+import { buildTeamEntry, buildTeamConstraints, buildTeamImBridge } from './team/team-prompt'
+import { getActiveTeamRuntime } from './team'
+import { createTeamMcpServer } from './team/team-tools'
+import { TEAM_MCP_SERVER_NAME } from '../../../shared/apps/team-types'
+import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import { createFileSendMcpServer } from './im-channels/file-send-mcp'
 import { mergeConfigWithDefaults } from './config-defaults'
 import { createReportToolServer, type ReportToolContext } from './report-tool'
@@ -73,7 +78,7 @@ import { getAppMemoryService, getActivityStore } from './index'
 import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
 // Key builders live in shared/ so the renderer can import them without
 // depending on main-process modules.
-import { getAppChatConversationId, buildImSessionKey } from '../../../shared/apps/im-keys'
+import { getAppChatConversationId, buildImSessionKey, buildTeamSessionKey } from '../../../shared/apps/im-keys'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../services/agent/types'
 import { ProgressEventParser } from './progress-formatter'
@@ -246,6 +251,8 @@ export interface AppChatRequest {
    * Absent for native Halo chat UI.
    */
   imSession?: ImSessionContext
+  /** Callers MUST set conversationId = buildTeamSessionKey(appId, teamId). */
+  teamContext?: TeamTriggerContext
 }
 
 // ============================================
@@ -262,7 +269,7 @@ const CHAT_RUN_ID = 'chat'
  * - Halo native ("app-chat:{appId}") → "chat"
  * - IM channel ("app-chat:{appId}:wecom-bot:group:xxx") → "chat-wecom-bot-group-xxx"
  */
-function deriveRunId(conversationId: string, appId: string): string {
+export function deriveRunId(conversationId: string, appId: string): string {
   const defaultPrefix = `app-chat:${appId}`
   if (conversationId === defaultPrefix) {
     return CHAT_RUN_ID
@@ -298,7 +305,7 @@ const scopedContexts = new Map<string, BrowserContext>()
 export async function sendAppChatMessage(
   request: AppChatRequest
 ): Promise<void> {
-  const { appId, spaceId, message, images, thinkingEnabled, onReply, onProgress, imFileSend, senderIdentity, imSession } = request
+  const { appId, spaceId, message, images, thinkingEnabled, onReply, onProgress, imFileSend, senderIdentity, imSession, teamContext } = request
   const conversationId = request.conversationId ?? getAppChatConversationId(appId)
 
   console.log(`[AppChat][${appId}] sendMessage: "${message.substring(0, 100)}"`)
@@ -355,12 +362,34 @@ export async function sendAppChatMessage(
     workDir,
     modelInfo: resolvedCreds.displayModel,
   })
-  const entry = imSession
-    ? buildImEntry(imSession, permCtx?.ownerIds)
-    : NATIVE_CHAT_ENTRY
-  const constraints = imSession
-    ? buildImConstraints(imSession, permCtx?.ownerIds)
-    : []
+  // Team turns take precedence over IM (trusted member, no guest restrictions).
+  // When a team turn ALSO arrives over an IM channel (a team-backed IM instance),
+  // the lead keeps its team identity + tools and gains a front-desk bridge so it
+  // replies to the person in-chat. The lead runs as a trusted team peer, so IM
+  // guest hardening (buildImConstraints) is intentionally NOT applied.
+  // Reversible seal: any team turn (user/IM/teammate) re-engaging a hibernated
+  // epoch wakes it first, so coordination resumes and member replies route back
+  // to the lead. No-op when the epoch is already open.
+  if (teamContext) {
+    getActiveTeamRuntime()?.reactivateEpoch(teamContext.teamId, teamContext.epochId)
+  }
+  const teamPromptCtx = teamContext
+    ? getActiveTeamRuntime()?.buildPromptContext(teamContext, appId) ?? null
+    : null
+  let entry: string
+  let constraints: string[]
+  if (teamPromptCtx) {
+    entry = imSession
+      ? `${buildTeamEntry(teamPromptCtx)}\n\n${buildTeamImBridge(imSession)}`
+      : buildTeamEntry(teamPromptCtx)
+    constraints = buildTeamConstraints(teamPromptCtx)
+  } else if (imSession) {
+    entry = buildImEntry(imSession, permCtx?.ownerIds)
+    constraints = buildImConstraints(imSession, permCtx?.ownerIds)
+  } else {
+    entry = NATIVE_CHAT_ENTRY
+    constraints = []
+  }
   const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
 
   // ── 4. Build MCP servers ─────────────────────────────
@@ -405,6 +434,8 @@ export async function sendAppChatMessage(
     runId: CHAT_RUN_ID,
     sessionKey: conversationId,
     notificationLevel: app.userOverrides?.notificationLevel,
+    // Team turns route report() to the team runtime instead of the inbox.
+    ...(teamContext ? { teamContext } : {}),
   }
 
   const mcpServers: Record<string, any> = {
@@ -420,6 +451,23 @@ export async function sendAppChatMessage(
       : {}),
     // Inject file-send tool when the originating IM channel supports file delivery
     ...(imFileSend ? { 'im-file-send': createFileSendMcpServer(imFileSend) } : {}),
+    // Team coordination tools (team-channel turns only).
+    ...(teamContext && teamPromptCtx && getActiveTeamRuntime()
+      ? {
+          [TEAM_MCP_SERVER_NAME]: createTeamMcpServer({
+            teamId: teamContext.teamId,
+            epochId: teamContext.epochId,
+            callerAppId: app.id,
+            collabMode: teamPromptCtx.collabMode,
+            selfIsLead: teamPromptCtx.selfIsLead,
+            bus: getActiveTeamRuntime()!.bus,
+            blackboard: getActiveTeamRuntime()!.blackboard,
+            // Lead-only team_complete → deferred seal after the lead's turn ends.
+            requestComplete: (summary) =>
+              getActiveTeamRuntime()!.requestSeal(teamContext.teamId, teamContext.epochId, summary),
+          }),
+        }
+      : {}),
   }
   console.log(
     `[AppChat][${appId}] MCP servers: [${Object.keys(mcpServers).join(', ')}], ` +
@@ -971,4 +1019,31 @@ export async function clearImSession(
   const conversationId = buildImSessionKey(appId, channel, chatType, chatId)
   await clearSessionByConversationId(conversationId, appId, spaceId)
   console.log(`[AppChat][${appId}] IM session cleared: ${conversationId}`)
+}
+
+/**
+ * Tear down a member's team-channel session (process, V2 session, browser ctx)
+ * but PRESERVE the JSONL transcript + saved sessionId so the run stays a
+ * retrievable history record. Contrast clearAppChat/clearImSession, which wipe.
+ */
+export async function closeTeamSession(
+  appId: string,
+  teamId: string,
+  epochId: string
+): Promise<void> {
+  const conversationId = buildTeamSessionKey(appId, teamId, epochId)
+
+  // Abort any in-flight generation before tearing down the underlying session.
+  if (activeSessions.has(conversationId)) {
+    try { await stopGeneration(conversationId) } catch { /* best-effort */ }
+  }
+  // Close the V2 process; the saved sessionId on disk allows SDK resume later.
+  closeV2Session(conversationId)
+  // Drop the per-session browser context (rebuilt on demand if the run resumes).
+  const ctx = scopedContexts.get(conversationId)
+  if (ctx) {
+    ctx.destroy()
+    scopedContexts.delete(conversationId)
+  }
+  console.log(`[AppChat][${appId}] Team session closed (history preserved): ${conversationId}`)
 }

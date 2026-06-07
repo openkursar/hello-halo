@@ -1,0 +1,237 @@
+/**
+ * TeamFlowCanvas — the team topology canvas (React Flow + dagre).
+ *
+ * One engine, two modes:
+ *  - read mode (status board): live status nodes, animated edges while a message
+ *    flows, click a node to open that member; not draggable / not editable.
+ *  - edit mode (collaboration structure): nodes are draggable to rearrange; three
+ *    visible ways to wire links, all funnelling to the same domain operations —
+ *    (1) drag from a member's side dot to another, (2) click a member → its
+ *    "Connect to…" toolbar, (3) the floating Relationships panel (add/remove/
+ *    sync). No hidden gestures.
+ *
+ * dagre seeds a clean, crossing-minimized layout; React Flow renders + handles
+ * interaction. Theme follows Halo's light/dark class via colorMode.
+ */
+
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  MarkerType,
+  ReactFlowProvider,
+  type Connection,
+  type Edge,
+  type ColorMode,
+  type NodeMouseHandler,
+  type NodeChange,
+  type EdgeChange,
+} from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
+import type { RosterMember, TeamEdge } from '../../../../shared/apps/team-types'
+import type { ActiveFlow } from '../../../stores/team.store'
+import { MemberNode, type MemberFlowNode } from './MemberNode'
+import { RelationEdge } from './RelationEdge'
+import { RelationshipsPanel } from './RelationshipsPanel'
+import { FlowEditContext, type FlowEdit } from './flow-context'
+import { layoutNodes } from './layout'
+
+const nodeTypes = { member: MemberNode }
+const edgeTypes = { relation: RelationEdge }
+
+interface TeamFlowCanvasProps {
+  roster: RosterMember[]
+  edges: TeamEdge[]
+  teamId: string
+  /** read: status board; edit: collaboration structure editor. */
+  editable?: boolean
+  /** Live message flows (read mode) → animate the matching edge. */
+  activeFlows?: ActiveFlow[]
+  /** Open a member (read mode node click). */
+  onSelectMember?: (member: RosterMember) => void
+  /** Domain edit operations (edit mode). The owner persists them. */
+  onAddRelation?: (fromAppId: string, toAppId: string, sync: boolean) => void
+  onRemoveRelation?: (fromAppId: string, toAppId: string) => void
+  onSetSync?: (fromAppId: string, toAppId: string, sync: boolean) => void
+}
+
+/** Detect Halo's current color scheme from the documentElement class. */
+function useColorMode(): ColorMode {
+  const get = (): ColorMode => {
+    if (typeof document === 'undefined') return 'light'
+    const cl = document.documentElement.classList
+    if (cl.contains('dark')) return 'dark'
+    if (cl.contains('light')) return 'light'
+    return typeof matchMedia !== 'undefined' && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  }
+  const [mode, setMode] = useState<ColorMode>(get)
+  useEffect(() => {
+    const obs = new MutationObserver(() => setMode(get()))
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+    return () => obs.disconnect()
+  }, [])
+  return mode
+}
+
+// ── Edge styling ────────────────────────────────────────────────────────────
+
+function styleEdge(id: string, source: string, target: string, sync: boolean, active: boolean): Edge {
+  const color = active ? 'hsl(var(--primary))' : sync ? 'hsl(var(--primary) / 0.65)' : 'hsl(var(--muted-foreground) / 0.6)'
+  return {
+    id, source, target,
+    type: 'relation',
+    animated: active,
+    data: { sync, active },
+    markerEnd: { type: MarkerType.ArrowClosed, color, width: 18, height: 18 },
+  }
+}
+
+function buildEdges(roster: RosterMember[], teamEdges: TeamEdge[], activeFlows: ActiveFlow[]): Edge[] {
+  const isActive = (from: string, to: string) =>
+    activeFlows.some(f => (f.fromAppId === from && f.toAppId === to) || (f.fromAppId === to && f.toAppId === from))
+  return teamEdges
+    .filter(e => roster.some(m => m.appId === e.fromAppId) && roster.some(m => m.appId === e.toAppId))
+    .map(e => styleEdge(`${e.fromAppId}__${e.toAppId}`, e.fromAppId, e.toAppId, e.sync, isActive(e.fromAppId, e.toAppId)))
+}
+
+function InnerCanvas({
+  roster, edges: teamEdges, teamId, editable = false, activeFlows = [],
+  onSelectMember, onAddRelation, onRemoveRelation, onSetSync,
+}: TeamFlowCanvasProps) {
+  const colorMode = useColorMode()
+
+  // Layout positions are STABLE during editing: dagre seeds them when the member
+  // set changes (read mode also re-seeds when the structure changes); after that
+  // the user can drag freely and adding/removing a link never reshuffles nodes.
+  const memberSig = useMemo(() => roster.map(m => m.appId).sort().join(','), [roster])
+  const edgeSig = useMemo(() => teamEdges.map(e => `${e.fromAppId}>${e.toAppId}`).sort().join(','), [teamEdges])
+  const layoutKey = editable ? memberSig : `${memberSig}|${edgeSig}`
+
+  const positions = useMemo(() => {
+    const base: MemberFlowNode[] = roster.map(m => ({
+      id: m.appId, type: 'member', position: { x: 0, y: 0 },
+      data: { member: m, editable, active: false },
+    }))
+    const laid = layoutNodes(base, buildEdges(roster, teamEdges, []))
+    return new Map(laid.map(n => [n.id, n.position]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutKey])
+
+  // ── Controlled mode: nodes/edges are always derived from props + local drag
+  //    state. No useNodesState/useEdgesState — those had timing conflicts with
+  //    React Flow's internal node measurement (visibility:hidden never resolved).
+  //    This approach: derive → pass → render. React Flow measures what it gets.
+
+  // Drag positions overlay (edit mode only; ephemeral within a session).
+  const [dragPos, setDragPos] = useState(new Map<string, { x: number; y: number }>())
+  // Selection (needed for NodeToolbar visibility on selected node).
+  const [selNodeIds, setSelNodeIds] = useState(new Set<string>())
+  const [selEdgeIds, setSelEdgeIds] = useState(new Set<string>())
+  // Reset drag positions when layout changes (new members / mode switch).
+  useEffect(() => { setDragPos(new Map()) }, [positions])
+
+  const nodes = useMemo<MemberFlowNode[]>(() => roster.map(m => ({
+    id: m.appId,
+    type: 'member',
+    position: dragPos.get(m.appId) ?? positions.get(m.appId) ?? { x: 0, y: 0 },
+    data: { member: m, editable, active: activeFlows.some(f => f.fromAppId === m.appId || f.toAppId === m.appId) },
+    draggable: editable,
+    selectable: true,
+    selected: selNodeIds.has(m.appId),
+  })), [roster, positions, dragPos, editable, activeFlows, selNodeIds])
+
+  const edges = useMemo(() => {
+    const base = buildEdges(roster, teamEdges, activeFlows)
+    return base.map(e => selEdgeIds.has(e.id) ? { ...e, selected: true } : e)
+  }, [roster, teamEdges, activeFlows, selEdgeIds])
+
+  const handleNodesChange = useCallback((changes: NodeChange<MemberFlowNode>[]) => {
+    for (const c of changes) {
+      if (c.type === 'position' && 'position' in c && c.position) {
+        setDragPos(prev => new Map(prev).set(c.id, c.position!))
+      }
+      if (c.type === 'select') {
+        setSelNodeIds(prev => {
+          const next = new Set(prev)
+          if (c.selected) next.add(c.id); else next.delete(c.id)
+          return next
+        })
+      }
+      // 'dimensions' changes are handled internally by React Flow (measurement).
+    }
+  }, [])
+
+  const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
+    for (const c of changes) {
+      if (c.type === 'select') {
+        setSelEdgeIds(prev => {
+          const next = new Set(prev)
+          if (c.selected) next.add(c.id); else next.delete(c.id)
+          return next
+        })
+      }
+    }
+  }, [])
+
+  const onConnect = useCallback((conn: Connection) => {
+    if (!editable || !conn.source || !conn.target || conn.source === conn.target) return
+    if (teamEdges.some(e => e.fromAppId === conn.source && e.toAppId === conn.target)) return
+    onAddRelation?.(conn.source, conn.target, false)
+  }, [editable, teamEdges, onAddRelation])
+
+  const onNodeClick = useCallback<NodeMouseHandler>((_evt, node) => {
+    if (editable) return
+    const m = roster.find(r => r.appId === node.id)
+    if (m) onSelectMember?.(m)
+  }, [editable, roster, onSelectMember])
+
+  const edit = useMemo<FlowEdit>(() => ({
+    editable,
+    roster,
+    edges: teamEdges,
+    addRelation: (f, t, s) => onAddRelation?.(f, t, s),
+    removeRelation: (f, t) => onRemoveRelation?.(f, t),
+    setSync: (f, t, s) => onSetSync?.(f, t, s),
+  }), [editable, roster, teamEdges, onAddRelation, onRemoveRelation, onSetSync])
+
+  return (
+    <FlowEditContext.Provider value={edit}>
+      <div className="relative h-full w-full">
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={handleNodesChange}
+          onEdgesChange={handleEdgesChange}
+          onConnect={onConnect}
+          onNodeClick={onNodeClick}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          colorMode={colorMode}
+          fitView
+          fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
+          nodesDraggable={editable}
+          nodesConnectable={editable}
+          elementsSelectable
+          edgesFocusable={editable}
+          connectionLineType={'smoothstep' as never}
+          connectionLineStyle={{ stroke: 'hsl(var(--primary))', strokeWidth: 2 }}
+          proOptions={{ hideAttribution: true }}
+          className="bg-transparent"
+        >
+          <Background gap={16} size={1} className="opacity-50" />
+          {editable && <Controls showInteractive={false} position="bottom-left" className="!shadow-md" />}
+        </ReactFlow>
+        {editable && <RelationshipsPanel />}
+      </div>
+    </FlowEditContext.Provider>
+  )
+}
+
+export function TeamFlowCanvas(props: TeamFlowCanvasProps) {
+  return (
+    <ReactFlowProvider>
+      <InnerCanvas {...props} />
+    </ReactFlowProvider>
+  )
+}

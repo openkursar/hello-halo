@@ -230,13 +230,13 @@ export const appsApi = {
   },
 
   // App Chat
-  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean }): Promise<ApiResponse> => {
+  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean; conversationId?: string; teamContext?: unknown }): Promise<ApiResponse> => {
     // Subscribe to agent events so remote/Capacitor clients receive streaming updates.
     // The view also subscribes on mount (via useRemoteSubscription), but the API-level
     // subscription mirrors sendMessage's pattern and ensures coverage if the API is
     // called before the view mounts (e.g. programmatic triggers).
     if (!isElectron()) {
-      subscribeToConversation(getAppChatConversationId(request.appId))
+      subscribeToConversation(request.conversationId ?? getAppChatConversationId(request.appId))
     }
 
     if (isElectron()) {
