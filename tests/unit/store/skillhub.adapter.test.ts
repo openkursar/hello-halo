@@ -147,13 +147,13 @@ describe('SkillHubAdapter', () => {
       expect(entry.meta?.installs).toBe(100)
     })
 
-    it('appends search param when search is provided', async () => {
+    it('appends keyword param when search is provided', async () => {
       fetchMock.mockResolvedValueOnce(jsonResponse({ ...MOCK_LIST_RESPONSE, data: { skills: [], total: 0 } }))
 
       await adapter.query(MOCK_SOURCE, { page: 1, pageSize: 10, search: 'code review' })
 
       const url = String(fetchMock.mock.calls[0][0])
-      expect(url).toContain('search=code%20review')
+      expect(url).toContain('keyword=code%20review')
     })
 
     it('appends category param when category is provided', async () => {

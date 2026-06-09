@@ -5,7 +5,7 @@
  * with 33,000+ community skills.
  *
  * API overview:
- *   List:    GET /api/skills?page=N&pageSize=24&search=...
+ *   List:    GET /api/skills?page=N&pageSize=24&keyword=...
  *   Detail:  GET /api/v1/skills/{slug}/files  → file list + version
  *   Content: GET https://skillhub-1388575217.cos.accelerate.myqcloud.com/skills/{slug}/{version}/files/SKILL.md
  *
@@ -125,7 +125,7 @@ export class SkillHubAdapter implements RegistryAdapter {
     const pageSize = Math.min(params.pageSize || 24, 100)
     const t0 = performance.now()
 
-    const searchParam = params.search ? `&search=${encodeURIComponent(params.search)}` : ''
+    const searchParam = params.search ? `&keyword=${encodeURIComponent(params.search)}` : ''
     const categoryParam = params.category ? `&category=${encodeURIComponent(params.category)}` : ''
     const url = `${API_BASE}/api/skills?page=${params.page}&pageSize=${pageSize}${searchParam}${categoryParam}`
 
