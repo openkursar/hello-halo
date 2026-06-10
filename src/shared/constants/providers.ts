@@ -433,6 +433,20 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     notes: 'Grok-4.1 Fast has 2M context window for agentic tasks'
   },
 
+  {
+    id: 'litellm',
+    name: 'LiteLLM',
+    authType: 'api-key',
+    apiUrl: 'http://localhost:4000',
+    modelsUrl: 'http://localhost:4000/v1/models',
+    models: [],
+    description: 'AI gateway proxy for 100+ LLM providers',
+    website: 'https://github.com/BerriAI/litellm',
+    region: 'global',
+    icon: 'network',
+    notes: 'Models are auto-discovered from the proxy. Set your proxy URL and optional API key'
+  },
+
   // ============================================================================
   // OAuth Providers
   // ============================================================================

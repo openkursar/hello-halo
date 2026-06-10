@@ -79,6 +79,7 @@ export type BuiltinProviderId =
   | 'together'
   | 'fireworks'
   | 'xai'
+  | 'litellm'
   | 'github-copilot'
   | 'claude'
 
