@@ -133,6 +133,8 @@ export interface ChatState {
   deleteConversation: (spaceId: string, conversationId: string) => Promise<boolean>
   renameConversation: (spaceId: string, conversationId: string, newTitle: string) => Promise<boolean>
   toggleStarConversation: (spaceId: string, conversationId: string, starred: boolean) => Promise<boolean>
+  attachKnowledgeBase: (spaceId: string, conversationId: string, kbId: string) => Promise<void>
+  detachKnowledgeBase: (spaceId: string, conversationId: string, kbId: string) => Promise<void>
 
   // Messaging
   sendMessage: (content: string, images?: ImageAttachment[], aiBrowserEnabled?: boolean, thinkingEnabled?: boolean) => Promise<void>

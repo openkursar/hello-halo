@@ -21,6 +21,7 @@ import { addMessage } from '../conversation.service'
 import { createAIBrowserMcpServer } from '../ai-browser'
 import { createWebSearchMcpServer } from '../web-search'
 import { createHaloAppsMcpServer } from '../app-bridge'
+import { getKBReferencesForSpace, getKBReferenceById, getKBChatContext } from '../tlon'
 import type {
   AgentRequest,
   SessionConfig,
@@ -75,7 +76,17 @@ export async function sendMessage(
   console.log(`[Agent] sendMessage: conv=${conversationId}${images && images.length > 0 ? `, images=${images.length}` : ''}${aiBrowserEnabled ? ', AI Browser enabled' : ''}${thinkingEnabled ? ', thinking=ON' : ''}${canvasContext?.isOpen ? `, canvas tabs=${canvasContext.tabCount}` : ''}`)
 
   const config = getConfig()
-  const workDir = getWorkingDir(spaceId)
+  // "Chat with this KB" turns (tlonKbId set) target one KB directly: the
+  // working dir becomes that KB's wiki dir so Read/Glob/Grep navigate its pages.
+  // Resolved up front so the working dir is correct for MCP setup below too.
+  const kbChatCtx = request.tlonKbId ? getKBChatContext(request.tlonKbId) : null
+  if (request.tlonKbId && !kbChatCtx) {
+    console.warn(`[Agent] tlonKbId ${request.tlonKbId} has no chat context; falling back to space context`)
+  }
+  let workDir = kbChatCtx ? kbChatCtx.workDir : getWorkingDir(spaceId)
+  if (request.tlonKbId) {
+    console.log(`[Agent] KB chat turn: tlonKbId=${request.tlonKbId} ctx=${kbChatCtx ? 'resolved' : 'NULL'} workDir=${workDir}`)
+  }
   const digitalHumansEnabled = config.agent?.enableDigitalHumans !== false
 
   // Accumulate stderr for detailed error messages
@@ -120,6 +131,21 @@ export async function sendMessage(
     }
     mcpServers['web-search'] = createWebSearchMcpServer()
 
+    // Knowledge bases injected into the system prompt so the agent can Read the
+    // listed wiki pages. For a KB-chat turn it's just the targeted KB; otherwise
+    // it's the union of KBs bound to this space and KBs loaded into THIS
+    // conversation (deduped by id).
+    let knowledgeBases = kbChatCtx ? [kbChatCtx.reference] : getKBReferencesForSpace(spaceId)
+    if (!kbChatCtx && conversation?.knowledgeBaseIds?.length) {
+      const byId = new Map(knowledgeBases.map(ref => [ref.id, ref]))
+      for (const kbId of conversation.knowledgeBaseIds) {
+        if (byId.has(kbId)) continue
+        const ref = getKBReferenceById(kbId)
+        if (ref) byId.set(kbId, ref)
+      }
+      knowledgeBases = Array.from(byId.values())
+    }
+
     // Build base SDK options
     const sdkOptions = buildBaseSdkOptions({
       credentials: resolvedCredentials,
@@ -127,6 +153,7 @@ export async function sendMessage(
       electronPath,
       spaceId,
       conversationId,
+      knowledgeBases,
       stderrHandler: (data: string) => {
         console.error(`[Agent][${conversationId}] CLI stderr:`, data)
         stderrBuffer += data

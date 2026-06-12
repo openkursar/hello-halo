@@ -31,6 +31,7 @@ import {
   type AISourcesConfig,
   type AISource,
   type BackendRequestConfig,
+  type DirectCallEndpoint,
   type OAuthStartResult,
   type OAuthCompleteResult,
   type ModelOption,
@@ -248,6 +249,60 @@ class AISourceManager {
     })
 
     return config
+  }
+
+  /**
+   * Resolve the current source into a ready-to-POST descriptor for a direct,
+   * non-streaming HTTP call that bypasses the SDK and the compat router (e.g.
+   * Tlon ingest). Built on getBackendConfig() so URL normalization, wire
+   * format and auth headers are defined in one place rather than re-derived by
+   * each direct caller.
+   *
+   * `apiType` is passed through so callers can reject `responses` / `kiro`,
+   * which need the router's request/response translation and cannot be spoken
+   * directly. Returns null when no source is configured.
+   */
+  getDirectCallEndpoint(): DirectCallEndpoint | null {
+    const source = getCurrentSource(this.getDecryptedAiSources())
+    if (!source) return null
+    const backend = this.getBackendConfig()
+    if (!backend) return null
+
+    const wireFormat: 'anthropic' | 'openai' =
+      isAnthropicProvider(source.provider) || backend.apiType === 'anthropic_passthrough'
+        ? 'anthropic'
+        : 'openai'
+
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    let url = backend.url
+
+    if (wireFormat === 'anthropic') {
+      // getBackendConfig leaves a native-Anthropic url as the base (the SDK
+      // appends /v1/messages); a direct call must append it itself.
+      if (!/\/v1\/messages$/.test(url)) {
+        url = `${url.replace(/\/+$/, '')}/v1/messages`
+      }
+      headers['anthropic-version'] = '2023-06-01'
+    }
+
+    const hasAuth =
+      !!backend.headers &&
+      Object.keys(backend.headers).some(k => k.toLowerCase() === 'authorization')
+    if (hasAuth) {
+      // OAuth providers (claude/copilot) inject their own Authorization + betas.
+      Object.assign(headers, backend.headers)
+    } else if (wireFormat === 'anthropic') {
+      headers['x-api-key'] = backend.key
+    } else {
+      headers['authorization'] = `Bearer ${backend.key}`
+    }
+
+    // The [1m] suffix is an SDK-only context-window hint stripped at the router
+    // wire boundary; the real Anthropic API rejects non-canonical model ids.
+    const rawModel = backend.model || source.model
+    const model = wireFormat === 'anthropic' ? rawModel.replace(/\[1m\]$/i, '') : rawModel
+
+    return { url, headers, wireFormat, model, apiType: backend.apiType }
   }
 
   /**

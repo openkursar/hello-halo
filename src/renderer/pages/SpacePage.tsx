@@ -28,6 +28,7 @@ import { Header } from '../components/layout/Header'
 import { SidebarToggle } from '../components/layout/SidebarToggle'
 import { SpaceSelector } from '../components/layout/SpaceSelector'
 import { ModelSelector } from '../components/layout/ModelSelector'
+import { KBIndicator } from '../components/tlon/KBIndicator'
 import { ContentCanvas } from '../components/canvas'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
 import { api } from '../api'
@@ -362,6 +363,9 @@ export function SpacePage() {
             <div className="hidden sm:block">
               <SearchIcon onClick={openSearch} isInSpace={true} />
             </div>
+
+            {/* Connected knowledge bases indicator */}
+            {currentSpace && <KBIndicator spaceId={currentSpace.id} />}
 
             {/* Model Selector */}
             <ModelSelector />

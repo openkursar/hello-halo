@@ -316,6 +316,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     }
   }
 
+
   // Combine real messages with mock onboarding messages
   const realMessages = currentConversation?.messages || []
   const displayMessages = mockUserMessage

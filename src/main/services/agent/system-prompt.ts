@@ -13,6 +13,7 @@
 
 import os from 'os'
 import { getDataFolderName } from '../../foundation/product-config'
+import type { KBReference } from '../../../shared/types/tlon'
 
 // ============================================
 // Constants
@@ -67,6 +68,8 @@ export interface SystemPromptContext {
   aiBrowserEnabled?: boolean
   /** Whether Digital Humans MCP tools are enabled */
   digitalHumansEnabled?: boolean
+  /** Knowledge bases bound to this session's space/app (Tlon) */
+  knowledgeBases?: KBReference[]
 }
 
 // ============================================
@@ -504,6 +507,26 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
       + 'You do NOT have browser automation tools in this session. '
       + 'If the user asks you to browse the web, fill forms, scrape pages, or perform any browser interaction, '
       + 'tell them to enable AI Browser via the toggle in the bottom-left of the input area, then retry.'
+  }
+
+  if (ctx.knowledgeBases?.length) {
+    prompt += '\n\n# Knowledge\n\n'
+      + 'You have studied the material below and know it as your own. Act as a colleague who '
+      + 'has read all of it AND a research assistant thinking one step ahead:\n'
+      + '- Speak from it fluently and in your own words — never announce that you are "looking '
+      + 'something up", and never refer to internal wiki paths.\n'
+      + '- Be proactive: connect what the user is asking to what you know, surface relevant '
+      + 'context they did not explicitly ask for, draw cross-topic links, and flag tensions or '
+      + 'non-obvious implications they should be aware of.\n'
+      + '- Each entry below is a topic you know, with a one-line synopsis — usually enough to '
+      + 'answer directly. Read a topic\'s file only when you need exact figures, quotes, or '
+      + 'detail beyond the synopsis.\n'
+      + '- Attribute what you use to the original source document by name (e.g. "your PCB '
+      + 'survey"), never to a wiki file path. If the knowledge does not actually cover the '
+      + 'question, say so plainly rather than forcing a connection.\n\n'
+    for (const kb of ctx.knowledgeBases) {
+      prompt += `## ${kb.name}\n\n${kb.indexContent}\n\n`
+    }
   }
 
   return prompt

@@ -1,11 +1,54 @@
 /**
  * createConversationsSlice — conversations slice of the chat store.
  */
-import type { ChatSlice } from './internal'
+import type { ChatSlice, ChatState } from './internal'
 import { CONVERSATION_CACHE_SIZE, api, createEmptySessionState, createEmptySpaceState } from './internal'
 import type { Conversation, ConversationMeta, Thought } from './internal'
+import { useTlonStore } from '../tlon.store'
 
-export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConversations' | 'preloadAllSpaceConversations' | 'createConversation' | 'selectConversation' | 'deleteConversation' | 'renameConversation' | 'toggleStarConversation'> = (set, get) => ({
+/**
+ * Optimistically write a conversation's knowledgeBaseIds into the cache, then
+ * persist via updateConversation. On failure the previous value is restored;
+ * the response seeds the cache when the conversation wasn't cached yet (a new
+ * chat exists only as meta until selected) so chips render.
+ */
+async function persistKnowledgeBaseIds(
+  spaceId: string,
+  conversationId: string,
+  ids: string[],
+  set: (fn: (state: ChatState) => Partial<ChatState>) => void,
+  get: () => ChatState
+): Promise<void> {
+  const prev = get().conversationCache.get(conversationId)?.knowledgeBaseIds
+  const writeCache = (value: string[] | undefined) => {
+    set((state) => {
+      const newCache = new Map(state.conversationCache)
+      const conversation = newCache.get(conversationId)
+      if (conversation) newCache.set(conversationId, { ...conversation, knowledgeBaseIds: value })
+      return { conversationCache: newCache }
+    })
+  }
+  writeCache(ids)
+  try {
+    const res = await api.updateConversation(spaceId, conversationId, { knowledgeBaseIds: ids })
+    if (!res.success) {
+      writeCache(prev)
+      return
+    }
+    if (res.data && !get().conversationCache.has(conversationId)) {
+      set((state) => {
+        const newCache = new Map(state.conversationCache)
+        newCache.set(conversationId, res.data as Conversation)
+        return { conversationCache: newCache }
+      })
+    }
+  } catch (err) {
+    console.error('[ChatStore] persistKnowledgeBaseIds error:', err)
+    writeCache(prev)
+  }
+}
+
+export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConversations' | 'preloadAllSpaceConversations' | 'createConversation' | 'selectConversation' | 'deleteConversation' | 'renameConversation' | 'toggleStarConversation' | 'attachKnowledgeBase' | 'detachKnowledgeBase'> = (set, get) => ({
   setCurrentSpace: (spaceId: string) => {
     set({ currentSpaceId: spaceId })
   },
@@ -121,6 +164,20 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
             .catch((error) => console.error('[ChatStore] Session warm up failed:', error))
         } catch (error) {
           console.error('[ChatStore] Failed to trigger session warm up:', error)
+        }
+
+        // Auto-load the default knowledge base (one-time, at creation). Persisted
+        // on the conversation, so removing it later sticks. Resolved lazily to
+        // avoid coupling the import graph.
+        try {
+          const tlon = useTlonStore.getState()
+          if (tlon.kbs.length === 0) await tlon.loadKBs()
+          const defaultKb = useTlonStore.getState().kbs.find(k => k.isDefault)
+          if (defaultKb) {
+            await get().attachKnowledgeBase(spaceId, newConversation.id, defaultKb.id)
+          }
+        } catch (error) {
+          console.error('[ChatStore] Failed to auto-load default knowledge base:', error)
         }
 
         return newConversation
@@ -437,5 +494,18 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
       console.error('Failed to toggle star:', error)
       return false
     }
+  },
+
+  // Knowledge bases (Tlon) loaded into a conversation. Persisted via
+  // updateConversation; the cache is updated optimistically so chips re-render.
+  attachKnowledgeBase: async (spaceId, conversationId, kbId) => {
+    const current = get().conversationCache.get(conversationId)?.knowledgeBaseIds ?? []
+    if (current.includes(kbId)) return
+    await persistKnowledgeBaseIds(spaceId, conversationId, [...current, kbId], set, get)
+  },
+  detachKnowledgeBase: async (spaceId, conversationId, kbId) => {
+    const current = get().conversationCache.get(conversationId)?.knowledgeBaseIds ?? []
+    if (!current.includes(kbId)) return
+    await persistKnowledgeBaseIds(spaceId, conversationId, current.filter(id => id !== kbId), set, get)
   },
 })

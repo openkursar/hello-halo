@@ -28,6 +28,7 @@ export const agentApi = {
     }>
     aiBrowserEnabled?: boolean  // Enable AI Browser tools
     thinkingEnabled?: boolean  // Enable extended thinking mode
+    tlonKbId?: string  // Chat-with-knowledge-base turn
     canvasContext?: {  // Canvas context for AI awareness
       isOpen: boolean
       tabCount: number

@@ -26,6 +26,7 @@ import { useOnboardingStore } from '../../stores/onboarding.store'
 import { useAIBrowserStore } from '../../stores/ai-browser.store'
 import { getOnboardingPrompt } from '../onboarding/onboardingData'
 import { ImageAttachmentPreview } from './ImageAttachmentPreview'
+import { KnowledgeBaseButton } from './KnowledgeBaseButton'
 import { processImage, isValidImageType, formatFileSize } from '../../utils/imageProcessor'
 import type { ImageAttachment, Artifact } from '../../types'
 import { getCurrentSource, supportsVision } from '../../types'
@@ -932,6 +933,9 @@ function InputToolbar({
             <span className="text-xs">{t('Deep Thinking')}</span>
           </button>
         )}
+
+        {/* Knowledge base loader */}
+        {!isGenerating && !isOnboarding && <KnowledgeBaseButton />}
       </div>
 
       {/* Right section: Stop (when generating) + Send */}

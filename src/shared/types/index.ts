@@ -20,6 +20,7 @@ export type {
   CustomSourceConfig,
   LegacyAISourcesConfig,
   BackendRequestConfig,
+  DirectCallEndpoint,
   OAuthLoginState,
   OAuthStartResult,
   OAuthCompleteResult,
@@ -64,6 +65,9 @@ export * from './inbound-message'
 
 // IM channel types (proactive push adapter + session records)
 export * from './im-channel'
+
+// Tlon knowledge base types (cross-process)
+export * from './tlon'
 
 // File changes types (shared between main process agent and renderer diff)
 export type { FileChangesSummary, ThoughtLike } from '../file-changes'

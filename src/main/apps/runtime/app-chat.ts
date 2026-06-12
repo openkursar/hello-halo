@@ -348,6 +348,7 @@ export async function sendAppChatMessage(
   // IM (group/direct) or native UI. See src/main/apps/runtime/prompt/
   // and src/main/apps/runtime/im-channels/im-prompt.ts.
   const identity = buildIdentityFragments({
+    appId: app.id,
     appSpec: app.spec,
     memoryInstructions,
     userConfig: mergedConfig,

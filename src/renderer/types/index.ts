@@ -361,6 +361,8 @@ export interface Conversation extends ConversationMeta {
   messages: Message[];
   sessionId?: string;
   version?: number;  // Format version: 2 = thoughts separated into .thoughts.json
+  /** Knowledge bases (Tlon) loaded into this conversation; injected per turn. */
+  knowledgeBaseIds?: string[];
 }
 
 // ============================================
@@ -725,7 +727,7 @@ export type AgentEvent =
 // App State Types
 // ============================================
 
-export type AppView = 'splash' | 'gitBashSetup' | 'setup' | 'home' | 'space' | 'settings' | 'apps' | 'serverConnect' | 'serverList';
+export type AppView = 'splash' | 'gitBashSetup' | 'setup' | 'home' | 'space' | 'settings' | 'apps' | 'tlon' | 'serverConnect' | 'serverList';
 
 export interface AppState {
   view: AppView;

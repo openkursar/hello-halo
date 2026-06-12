@@ -122,6 +122,13 @@ interface Conversation extends ConversationMeta {
   sessionId?: string
   version?: number  // 2 = thoughts stored separately
   /**
+   * Knowledge bases (Tlon) loaded into THIS conversation. Their index.md is
+   * injected into the system prompt for every turn (in addition to any KBs
+   * bound at the space level). Optional + read with a `?? []` fallback, so
+   * legacy conversations work without migration (same pattern as engineId).
+   */
+  knowledgeBaseIds?: string[]
+  /**
    * Agent engine that owns this conversation.
    *
    * Recorded on `createConversation` from the active `config.agent.sdkEngine`.

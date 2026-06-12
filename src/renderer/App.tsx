@@ -12,6 +12,7 @@ import { useSpaceStore } from './stores/space.store'
 import { useSearchStore } from './stores/search.store'
 import { useAppsStore } from './stores/apps.store'
 import { useAppsPageStore } from './stores/apps-page.store'
+import { useTlonStore } from './stores/tlon.store'
 import { SplashPage } from './pages/SplashPage'
 import { SetupPage } from './pages/SetupPage'
 import { GitBashSetupPage } from './pages/GitBashSetupPage'
@@ -29,12 +30,13 @@ import { NotificationToast } from './components/notification/NotificationToast'
 import { useNotificationStore } from './stores/notification.store'
 import { api } from './api'
 import { syncStatusBarStyle } from './api/safe-area'
-import { isCapacitor, isElectron } from './api/transport'
+import { isCapacitor, isElectron, onEvent } from './api/transport'
 import { useTelemetry } from './hooks/useTelemetry'
 import type { WsConnectionState } from './api/transport'
 import { useTranslation } from './i18n'
 import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, Question, McpServerStatus } from './types'
 import type { SessionInitInfo } from './types/slash-command'
+import type { IngestProgressEvent } from '../shared/types/tlon'
 import { hasAnyAISource } from './types'
 
 // Lazy load heavy page components for better initial load performance
@@ -43,6 +45,7 @@ const HomePage = lazy(() => import('./pages/HomePage').then(m => ({ default: m.H
 const SpacePage = lazy(() => import('./pages/SpacePage').then(m => ({ default: m.SpacePage })))
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
 const AppsPage = lazy(() => import('./pages/AppsPage').then(m => ({ default: m.AppsPage })))
+const TlonPage = lazy(() => import('./pages/TlonPage').then(m => ({ default: m.TlonPage })))
 
 // Page loading fallback - minimal spinner that matches app style
 function PageLoader() {
@@ -650,6 +653,24 @@ export default function App() {
     }
   }, [setInitialAppId, setView])
 
+  // Register Tlon (knowledge base) real-time event listeners.
+  // Uses the imported onEvent() transport directly (not api.onEvent) so the
+  // channel mapping in transport.ts methodMap is honored. Progress events
+  // drive animation only; the store re-pulls authoritative status from disk.
+  useEffect(() => {
+    const unsubProgress = onEvent('tlon:ingest-progress', (data) => {
+      useTlonStore.getState().handleIngestProgress(data as IngestProgressEvent)
+    })
+    const unsubStats = onEvent('tlon:stats-updated', (data) => {
+      const { kbId } = data as { kbId: string }
+      if (kbId) useTlonStore.getState().handleStatsUpdated(kbId)
+    })
+    return () => {
+      unsubProgress()
+      unsubStats()
+    }
+  }, [])
+
   // Register in-app toast listener (notification:toast from main process)
   const showToast = useNotificationStore((s) => s.show)
   useEffect(() => {
@@ -905,6 +926,12 @@ export default function App() {
         return (
           <Suspense fallback={<PageLoader />}>
             <AppsPage />
+          </Suspense>
+        )
+      case 'tlon':
+        return (
+          <Suspense fallback={<PageLoader />}>
+            <TlonPage />
           </Suspense>
         )
       default:

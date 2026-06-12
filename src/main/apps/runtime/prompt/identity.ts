@@ -14,8 +14,10 @@
 import type { AppSpec } from '../../spec'
 import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../../services/agent/system-prompt'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../../../services/ai-browser'
+import { getKBReferencesForApp } from '../../../services/tlon'
 
 export interface IdentityFragmentsInput {
+  appId: string
   appSpec: AppSpec
   memoryInstructions: string
   userConfig?: Record<string, unknown>
@@ -31,6 +33,7 @@ export function buildIdentityFragments(input: IdentityFragmentsInput): string[] 
     workDir: input.workDir,
     modelInfo: input.modelInfo,
     aiBrowserEnabled: input.usesAIBrowser,
+    knowledgeBases: getKBReferencesForApp(input.appId),
   }
   fragments.push(
     input.usesAIBrowser

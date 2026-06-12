@@ -24,6 +24,7 @@ import {
   CONTEXT_WINDOW_HARD_MIN,
   CONTEXT_WINDOW_HARD_CAP,
 } from '../../../shared/constants/model-runtime-limits'
+import type { KBReference } from '../../../shared/types/tlon'
 
 // ============================================
 // Configuration
@@ -205,6 +206,8 @@ export interface BaseSdkOptionsParams {
   aiBrowserEnabled?: boolean
   /** Whether Digital Humans MCP tools are enabled */
   digitalHumansEnabled?: boolean
+  /** Knowledge bases bound to this session's space (Tlon) */
+  knowledgeBases?: KBReference[]
 }
 
 // ============================================
@@ -645,10 +648,10 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
     // When AI Browser is enabled, appends full browser tool workflow guide
     systemPrompt: params.aiBrowserEnabled
       ? buildSystemPromptWithAIBrowser(
-          { workDir, modelInfo: credentials.displayModel, promptProfile: params.promptProfile, aiBrowserEnabled: true, digitalHumansEnabled: params.digitalHumansEnabled },
+          { workDir, modelInfo: credentials.displayModel, promptProfile: params.promptProfile, aiBrowserEnabled: true, digitalHumansEnabled: params.digitalHumansEnabled, knowledgeBases: params.knowledgeBases },
           AI_BROWSER_SYSTEM_PROMPT
         )
-      : buildSystemPrompt({ workDir, modelInfo: credentials.displayModel, promptProfile: params.promptProfile, digitalHumansEnabled: params.digitalHumansEnabled }),
+      : buildSystemPrompt({ workDir, modelInfo: credentials.displayModel, promptProfile: params.promptProfile, digitalHumansEnabled: params.digitalHumansEnabled, knowledgeBases: params.knowledgeBases }),
     maxTurns: params.maxTurns ?? 50,
     allowedTools: [...DEFAULT_ALLOWED_TOOLS],
     // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/
