@@ -13,12 +13,9 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Loader2, AlertCircle, Radio, Eraser } from 'lucide-react'
 import { api } from '../../api'
 import { useChatStore } from '../../stores/chat.store'
-import { useSmartScroll } from '../../hooks/useSmartScroll'
-import { MessageRow } from '../chat/MessageRow'
-import { StreamingSection } from '../chat/StreamingSection'
-import { useBrowserToolCalls } from '../chat/useBrowserToolCalls'
-import { InterruptedBubble } from '../chat/InterruptedBubble'
-import { CompactNotice } from '../chat/CompactNotice'
+import { MessageList } from '../chat/MessageList'
+import type { MessageListHandle } from '../chat/MessageList'
+import { ScrollToBottomButton } from '../chat/ScrollToBottomButton'
 import { useRemoteSubscription } from '../../hooks/useRemoteSubscription'
 import { useWsRecovery } from '../../hooks/useWsRecovery'
 import { useTranslation } from '../../i18n'
@@ -48,7 +45,6 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
   // Persisted messages
   const [messages, setMessages] = useState<Message[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
-  const scrollRef = useRef<HTMLDivElement>(null)
 
   // Streaming state from chat store
   const chatSession = useChatStore(s => s.getSession(conversationId))
@@ -64,15 +60,12 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
     textBlockVersion,
   } = chatSession
 
-  // ── Smart scroll: auto-follow during streaming, snap after message load ──
-  const { scrollToBottom, handleScroll } = useSmartScroll({
-    containerRef: scrollRef,
-    deps: [streamingContent, thoughts.length, isStreaming, isThinking, messages],
-    behavior: 'auto',
-  })
-
-  // Browser tool calls from streaming thoughts
-  const streamingBrowserToolCalls = useBrowserToolCalls(thoughts)
+  // Scroll control via the shared MessageList shell (Virtuoso-based)
+  const messageListRef = useRef<MessageListHandle>(null)
+  const [showScrollButton, setShowScrollButton] = useState(false)
+  const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
+    setShowScrollButton(!atBottom)
+  }, [])
 
   // Load persisted messages
   useEffect(() => {
@@ -222,67 +215,37 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
         t={t}
       />
 
-      {/* Message area */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto" onScroll={handleScroll}>
-        <div className="max-w-3xl mx-auto py-6 px-4">
-          {/* Empty state */}
-          {loadState === 'empty' && !hasStreamingContent && (
-            <div className="flex items-center justify-center py-12">
-              <p className="text-sm text-muted-foreground">{t('No messages yet')}</p>
-            </div>
-          )}
-
-          {/* Persisted messages */}
-          {messages.map((message) => (
-            <MessageRow
-              key={message.id}
-              message={message}
-              hideBrowserViewButton
-            />
-          ))}
-
-          {/* Live streaming content */}
-          {hasStreamingContent && (
-            <StreamingSection
+      {/* Read-only: IM interactions happen in the external channel, so no input here. */}
+      <div className="flex-1 relative overflow-hidden">
+        {loadState === 'empty' && !hasStreamingContent ? (
+          <div className="h-full flex items-center justify-center px-4">
+            <p className="text-sm text-muted-foreground">{t('No messages yet')}</p>
+          </div>
+        ) : (
+          <div className="h-full px-4">
+            <MessageList
+              ref={messageListRef}
+              conversationId={conversationId}
+              messages={messages}
               streamingContent={streamingContent}
+              isGenerating={isGenerating}
               isStreaming={isStreaming}
               thoughts={thoughts}
               isThinking={isThinking}
+              compactInfo={compactInfo}
+              error={error}
+              errorType={errorType}
               textBlockVersion={textBlockVersion}
-              browserToolCalls={streamingBrowserToolCalls}
-              showBrowserViewButton={false}
+              onAtBottomStateChange={handleAtBottomStateChange}
+              hideBrowserViewButton
             />
-          )}
+          </div>
+        )}
 
-          {/* Interrupted error */}
-          {!isGenerating && error && errorType === 'interrupted' && (
-            <div className="pb-4">
-              <InterruptedBubble error={error} />
-            </div>
-          )}
-
-          {/* Generic error */}
-          {!isGenerating && error && errorType !== 'interrupted' && (
-            <div className="flex justify-start animate-fade-in pb-4">
-              <div className="w-[85%]">
-                <div className="rounded-2xl px-4 py-3 bg-destructive/10 border border-destructive/30">
-                  <div className="flex items-center gap-2 text-destructive">
-                    <AlertCircle className="w-4 h-4" />
-                    <span className="text-sm font-medium">{t('Something went wrong')}</span>
-                  </div>
-                  <p className="mt-2 text-sm text-destructive/80">{error}</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Compact notice */}
-          {compactInfo && (
-            <div className="pb-4">
-              <CompactNotice trigger={compactInfo.trigger} preTokens={compactInfo.preTokens} />
-            </div>
-          )}
-        </div>
+        <ScrollToBottomButton
+          visible={showScrollButton && !(loadState === 'empty' && !hasStreamingContent)}
+          onClick={() => messageListRef.current?.scrollToBottom('auto')}
+        />
       </div>
     </div>
   )

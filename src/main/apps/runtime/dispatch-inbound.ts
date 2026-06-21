@@ -39,6 +39,8 @@ import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
 import { FileExportGate } from './file-export-gate'
 import { getSpaceDir } from '../../services/space.service'
+import { maybeClaimOwner } from './im-channels/owner-claim'
+import { getImChannelsPermissionDefaults } from '../../foundation/product-config'
 
 // ============================================
 // Constants
@@ -48,6 +50,13 @@ const LOG_TAG = '[Dispatch]'
 
 /** Maximum reply length (platform-safe limit for most IM channels) */
 const MAX_REPLY_LENGTH = 4000
+
+/**
+ * Shown when the model produced no usable answer (only the whitespace
+ * empty-response repair placeholder). A streaming IM session must still be
+ * terminated, so we finish it with this notice instead of an empty bubble.
+ */
+const EMPTY_RESPONSE_NOTICE = 'The model returned an empty response. Please send your message again.'
 
 /**
  * Commands that abort the current generation.
@@ -86,6 +95,67 @@ const DM_REJECTED_MESSAGE =
 const GROUP_REJECTED_MESSAGE =
   '⚠️ This bot only responds to direct messages.\n' +
   '⚠️ 该机器人仅在私聊中响应。'
+
+/** Bilingual confirmation pushed once after a successful owner auto-claim. */
+const OWNER_CLAIMED_MESSAGE =
+  '✅ You are now bound as the owner of this bot, with full access.\n' +
+  '✅ 已自动绑定你为本机器人的主人，拥有完整权限。'
+
+/**
+ * Claim confirmation for group-only instances. The claiming DM itself is
+ * about to be rejected by replyScope, so direct the user back to the group
+ * instead of following the claim with a bare rejection.
+ */
+const OWNER_CLAIMED_GROUP_ONLY_MESSAGE =
+  '✅ You are now bound as the owner of this bot, with full access.\n' +
+  'This bot is configured to respond only in group chats — please continue there.\n' +
+  '✅ 已自动绑定你为本机器人的主人，拥有完整权限。\n' +
+  '本机器人配置为仅在群聊中响应，请回到群聊中使用。'
+
+/**
+ * Bilingual guide sent when permission control is on but no owner is bound
+ * yet and auto-claim cannot apply (group chat, or sender ID unavailable).
+ * The optional setup-guide link comes from the product config
+ * (`imChannels.permissionControl.ownerSetupGuideUrl`) — enterprise builds
+ * point it at their internal documentation.
+ */
+function buildNoOwnerGuideMessage(): string {
+  const guideUrl = getImChannelsPermissionDefaults()?.ownerSetupGuideUrl
+  const link = guideUrl ? `\n📖 Guide / 设置指引: ${guideUrl}` : ''
+  return (
+    '⚠️ This bot has no owner yet, so it cannot execute tasks.\n' +
+    'Send it a direct message — the sender is bound as owner automatically. ' +
+    'Or set the owner ID in Halo Settings → Message Channels.\n' +
+    '⚠️ 该机器人尚未绑定主人，暂时无法执行任务。\n' +
+    '请先与机器人私聊发送一条消息，发送者将自动绑定为主人；' +
+    '也可在 Halo 设置 → 消息通道中手动填写主人 ID。' +
+    link
+  )
+}
+
+/** Min interval between no-owner guide pushes per chat — an ownerless bot in an active group would otherwise reply to every message. */
+const NO_OWNER_GUIDE_INTERVAL_MS = 10 * 60 * 1000
+
+/** Last guide push per `${instanceId}:${chatId}`. Entries go stale once an owner is bound; pruned lazily on size growth. */
+const noOwnerGuideSentAt = new Map<string, number>()
+
+function shouldSendNoOwnerGuide(instanceId: string, chatId: string): boolean {
+  const key = `${instanceId}:${chatId}`
+  const now = Date.now()
+  const last = noOwnerGuideSentAt.get(key)
+  if (last !== undefined && now - last < NO_OWNER_GUIDE_INTERVAL_MS) {
+    return false
+  }
+  if (noOwnerGuideSentAt.size >= 1000) {
+    for (const [k, t] of noOwnerGuideSentAt) {
+      if (now - t >= NO_OWNER_GUIDE_INTERVAL_MS) {
+        noOwnerGuideSentAt.delete(k)
+      }
+    }
+  }
+  noOwnerGuideSentAt.set(key, now)
+  return true
+}
 
 // ============================================
 // Helpers
@@ -471,7 +541,7 @@ export async function dispatchInboundMessage(
   // Resolve the IM instance config up front — it decides whether this chat is
   // backed by a single digital human (appId) or a digital team (teamId).
   const channelManager = getActiveImChannelManager()
-  const instanceCfg = channelManager?.getInstanceConfig(instanceId)
+  let instanceCfg = channelManager?.getInstanceConfig(instanceId)
 
   // Team-backed instance: route to the team's lead with a long-lived conversation
   // epoch + team tools. The lead is a real digital human, so everything below
@@ -509,11 +579,60 @@ export async function dispatchInboundMessage(
     return
   }
 
-  // ── Reply scope check (security gate) ─────────────────────────
-  // Default: 'all' for backward compatibility (existing instances without the
-  // field should not break). New instances default to 'group' in the UI.
+  // Default 'all': instances created before the field existed must not break.
   const replyScope = instanceCfg?.replyScope ?? 'all'
 
+  // ── Owner auto-claim / no-owner gate ──────────────────────────
+  // permissionEnabled=true with empty owners means everyone is a deny-all
+  // guest — including the instance creator. Since Halo is a personal client,
+  // the first direct-message sender is the creator, so we bind them as owner
+  // automatically. Group chats never auto-claim (first-sender-wins would be
+  // unsafe); they get a throttled guide message instead.
+  //
+  // This gate runs BEFORE the replyScope gate: claiming is instance lifecycle
+  // initialisation, replyScope is a reply policy. A 'group'-scoped instance
+  // still needs its owner bound via DM — gating DMs first would make claiming
+  // impossible while the group guide keeps pointing users at DMs.
+  // Team-backed turns run the lead as a trusted team peer (owner posture), so
+  // owner-claim / no-owner gating does not apply — mirrors the permission-context
+  // skip below. Without this guard, enterprise builds (permissionEnabled=true by
+  // default) would block team-backed group chats until someone DMs to claim owner.
+  const ownersUnset =
+    instanceCfg?.permissionEnabled === true &&
+    (!Array.isArray(instanceCfg.owners) || instanceCfg.owners.length === 0)
+  if (!teamBacking && ownersUnset) {
+    if (msg.chatType === 'direct' && msg.from) {
+      const claimed = await maybeClaimOwner(instanceId, msg.from)
+      if (claimed) {
+        const confirmation = replyScope === 'group' ? OWNER_CLAIMED_GROUP_ONLY_MESSAGE : OWNER_CLAIMED_MESSAGE
+        try {
+          channelManager?.getInstance(instanceId)?.pushToChat(msg.chatId, confirmation, msg.chatType)
+        } catch (err) {
+          console.error(`${LOG_TAG} Owner-claim welcome push failed: instanceId=${instanceId}`, err)
+        }
+        if (replyScope === 'group') {
+          // The claiming DM itself is outside the reply scope; the
+          // confirmation already directs the user back to the group.
+          return
+        }
+        // Re-read so this dispatch's permission resolution sees the new owner.
+        instanceCfg = channelManager?.getInstanceConfig(instanceId)
+      }
+      // Claim failure (e.g. persistence error) falls through as deny-all
+      // guest; the next message retries the claim.
+    } else {
+      console.log(
+        `${LOG_TAG} Blocked: no owner bound: chatType=${msg.chatType}, ` +
+        `channel=${msg.channel}, chatId=${msg.chatId}, instanceId=${instanceId}`
+      )
+      if (shouldSendNoOwnerGuide(instanceId, msg.chatId)) {
+        reply.send(buildNoOwnerGuideMessage()).catch(() => {})
+      }
+      return
+    }
+  }
+
+  // ── Reply scope check ──────────────────────────────────────────
   if (replyScope !== 'all' && replyScope !== msg.chatType) {
     const rejectionMsg = msg.chatType === 'direct' ? DM_REJECTED_MESSAGE : GROUP_REJECTED_MESSAGE
     console.log(
@@ -782,7 +901,13 @@ export async function dispatchInboundMessage(
           specId: app.specId,
         })
 
-        const replyText = finalContent.slice(0, MAX_REPLY_LENGTH)
+        // Decouple "must terminate the stream" from "has a real answer".
+        // A whitespace-only payload is the empty-response repair placeholder:
+        // we must still finish the streaming session (the only normal-path
+        // terminator), but surface a notice rather than a blank message.
+        const replyText = finalContent.trim()
+          ? finalContent.slice(0, MAX_REPLY_LENGTH)
+          : EMPTY_RESPONSE_NOTICE
         const sendFn = reply.streaming
           ? () => reply.streaming!.finish(replyText)
           : () => reply.send(replyText)

@@ -9,7 +9,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { Play, Pause, RotateCcw, Globe, ExternalLink, MessageSquare, Activity, Cog, ChevronRight } from 'lucide-react'
+import { Play, Pause, RotateCcw, RefreshCw, Globe, ExternalLink, MessageSquare, Activity, Cog, ChevronRight, Share2 } from 'lucide-react'
 import Avatar from 'boring-avatars'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
@@ -20,6 +20,7 @@ import { resolvePermission } from '../../../shared/apps/app-types'
 import { api } from '../../api'
 import { useSpaceStore } from '../../stores/space.store'
 import { useAppStore } from '../../stores/app.store'
+import { ShareCurrentAppDialog } from '../store/ShareCurrentAppDialog'
 import type { BrowserLoginEntry } from '../../../shared/apps/spec-types'
 
 // Brand-aligned palette for boring-avatars
@@ -56,6 +57,9 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
   // Browser popover state
   const [showBrowserPopover, setShowBrowserPopover] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
+
+  // Share dialog state
+  const [showShareDialog, setShowShareDialog] = useState(false)
 
   // Close popover on outside click
   useEffect(() => {
@@ -232,7 +236,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
                 title={t('Resume')}
                 className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
               >
-                <Play className="w-3.5 h-3.5" />
+                <RefreshCw className="w-3.5 h-3.5" />
               </button>
             ) : (
               <button
@@ -264,9 +268,25 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
                 )}
               </div>
             )}
+
+            {/* Share */}
+            <button
+              onClick={() => setShowShareDialog(true)}
+              title={t('Share')}
+              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+            </button>
           </div>
         )}
       </div>
+
+      {showShareDialog && (
+        <ShareCurrentAppDialog
+          appId={appId}
+          onClose={() => setShowShareDialog(false)}
+        />
+      )}
 
       {/* ── Tab Bar ── */}
       {isAutomation && (

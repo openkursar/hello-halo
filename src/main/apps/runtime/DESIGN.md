@@ -140,16 +140,66 @@ IPC handlers and HTTP routes are a separate concern (Phase 3 task ⑫).
 - IPC/HTTP layer is thin routing that delegates to the service.
 - Can be added independently without modifying runtime internals.
 
-### 2.10 Stream Processing: Collect Final Result Only
+### 2.10 Stream Processing: Headless Run + JSONL Transcript (Observed by Read)
 
-**Decision**: Runtime's stream processing collects the final text result and
-token usage but does NOT stream individual events to the renderer.
+> A run is a **headless execution that produces a transcript**, not an
+> interactive session. "Watching" a run is therefore a *read* over that
+> transcript, not a live event subscription. This is the deliberate boundary:
+> rendering and data model are unified with chat (same `MessageList` shell, same
+> `Message[]`), but the live-update transport follows each surface's nature —
+> chat pushes events (a user is present), a run is observed by reading its JSONL.
+>
+> History: an interim phase routed runs through the shared stream processor so
+> they emitted `agent:*` events like chat. That coupled a headless batch process
+> to the interactive real-time pipeline and made every unwatched run (up to
+> `maxConcurrent` at once) push events to a renderer nobody was looking at — then
+> needed viewer-gating to undo that cost. Reverted in favour of the model below.
+
+**Decision**: `execute.ts` consumes each turn with its own **headless loop**
+(`processStream`). The loop:
+- appends each aggregate `assistant` / `user` message to the run JSONL
+  (`session-store`) — the run-detail view reads it back via `app:get-session`;
+- detects `report_to_user` (the completion signal) from `tool_use` blocks;
+- collects final text, token usage, and the CC `session_id` (for resume);
+- emits **no** `agent:*` renderer events.
+
+`includePartialMessages` is **false**: with no live event consumer there is no
+reason to stream token frames; only aggregate block-level messages arrive, one
+JSONL append per completed block.
+
+**Run-detail view** (`SessionDetailView`): renders through the shared
+`MessageList` shell, fed by the run JSONL. While the run is live (authoritative
+from the app runtime status — `running` + `runningRunId === runId`, broadcast via
+`app:status_changed`) it **polls** `app:get-session` every 2s so new blocks/steps
+appear incrementally; on live→idle it does one final reload. The poll exists only
+while the view is open AND the run is live, so unwatched and finished runs incur
+zero cost.
+
+**Mid-run injection**: while a run is live it registers an `ActiveRunHandle` in
+`active-runs.ts` (keyed by `runId`, holding the session + JSONL writer). The
+run-detail input box sends a supplement through `app:inject-run` →
+`service.injectIntoRun` → `injectIntoActiveRun`, which persists it to the run
+JSONL and pushes it into the live SDK session (absorbed at the next tool
+boundary, same mechanism as `agent/inject-message.ts`). The handle is
+unregistered in `executeRun`'s `finally`, so only genuinely live runs are
+injectable. Injection is independent of the (absent) event path: the injected
+turn shows up on the next JSONL poll.
 
 **Rationale**:
-- Activity Thread shows summaries, not real-time AI thinking.
-- The AI communicates results via `report_to_user` tool calls.
-- Full execution details are available via "View Process" (session logs).
-- This dramatically simplifies stream processing vs. conversation mode.
+- Respects the headless-vs-interactive boundary; no batch process is forced
+  through the real-time event pipeline, so there is nothing to viewer-gate.
+- Unifies what is genuinely shared (the `MessageList` shell, `Message[]`, the
+  JSONL storage adapter) without unifying the live transport, which differs by
+  nature. This is the same "shell shared, source pluggable" boundary the chat
+  surfaces use (space = conversation.service, digital-human = JSONL).
+- Decouples runs from the chat agent pipeline → changes to chat streaming cannot
+  regress the automation mainline, and vice-versa (smaller blast radius).
+- Cost: an unwatched run touches the renderer **not at all**; a watched run costs
+  one 2s file read. Per-run renderer/IPC/WS event cost is zero.
+- Trade-off accepted: the watcher sees block/step-level updates at ~2s latency,
+  not token-level typewriter. Sufficient for observing a run's progress. If
+  sub-second smoothness for the rare watcher is ever wanted, push JSONL diffs via
+  a file-watch while the view is open — still no events for unwatched runs.
 
 ### 2.11 Auto-Continue on Missing report_to_user
 

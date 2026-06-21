@@ -13,6 +13,34 @@ export function extractBaseUrl(endpointUrl: string): string {
 }
 
 /**
+ * Hosts that serve genuine first-party Anthropic responses (well-formed native
+ * SSE). This is the Claude API endpoint used by both API-key and OAuth
+ * ("Claude auth") sources.
+ */
+const NATIVE_ANTHROPIC_HOSTS = new Set<string>([
+  'api.anthropic.com'
+])
+
+/**
+ * Whether an upstream URL points at a genuine first-party Anthropic endpoint.
+ *
+ * Drives the streaming choice in handleAnthropicPassthrough: native hosts are
+ * piped verbatim, while third-party Anthropic-compatible providers (GLM, etc.)
+ * go through the re-serialization repair pipeline. The repair pipeline's
+ * one-shot reasoning state machine drops interleaved `thinking` text, so it
+ * must be bypassed for native streams.
+ *
+ * Unparseable URLs are treated as non-native (safe default: keep repair).
+ */
+export function isNativeAnthropicHost(url: string): boolean {
+  try {
+    return NATIVE_ANTHROPIC_HOSTS.has(new URL(url).host)
+  } catch {
+    return false
+  }
+}
+
+/**
  * Normalize API URL based on wire format
  *
  * Ensures URLs are in the correct format expected by the router:

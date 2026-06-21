@@ -14,6 +14,8 @@ import { StoreInstallDialog } from './StoreInstallDialog'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveEntryI18n, resolveSpecI18n } from '../../utils/spec-i18n'
 import { AppTypeBadge } from './AppTypeBadge'
+import { StoreDocumentation } from './StoreDocumentation'
+import { api } from '../../api'
 
 export function StoreDetail() {
   const { t } = useTranslation()
@@ -25,7 +27,6 @@ export function StoreDetail() {
   const clearStoreSelection = useAppsPageStore(state => state.clearStoreSelection)
   const selectStoreApp = useAppsPageStore(state => state.selectStoreApp)
   const checkUpdates = useAppsPageStore(state => state.checkUpdates)
-  const installFromStore = useAppsPageStore(state => state.installFromStore)
   const apps = useAppsStore(state => state.apps)
 
   const [showSystemPrompt, setShowSystemPrompt] = useState(false)
@@ -95,25 +96,25 @@ export function StoreDetail() {
     console.log('[StoreDetail] App installed:', appId)
   }, [checkUpdates])
 
-  // Update in-place for MCP/Skill — reinstalls to the same scope as the existing install
+  // Upgrade in place via updateSpec — reinstalling would throw AppAlreadyInstalledError.
   const handleUpdateInPlace = useCallback(async () => {
     if (!entry || !installedApp) return
     setUpdateInstallError(null)
     setUpdateInstalling(true)
     try {
-      const appId = await installFromStore(entry.slug, installedApp.spaceId)
-      if (appId) {
+      const res = await api.storeApplyUpgrade(installedApp.id, 'force')
+      if (res.success) {
         useAppsStore.getState().loadApps()
         void checkUpdates()
       } else {
-        setUpdateInstallError(t('Installation failed. Please try again.'))
+        setUpdateInstallError(res.error ?? t('Update failed. Please try again.'))
       }
     } catch (err) {
-      setUpdateInstallError(err instanceof Error ? err.message : t('Installation failed'))
+      setUpdateInstallError(err instanceof Error ? err.message : t('Update failed'))
     } finally {
       setUpdateInstalling(false)
     }
-  }, [entry, installedApp, installFromStore, checkUpdates, t])
+  }, [entry, installedApp, checkUpdates, t])
 
   // Loading state
   if (storeDetailLoading) {
@@ -208,7 +209,7 @@ export function StoreDetail() {
                 <span className="text-3xl flex-shrink-0">{entry.icon}</span>
               )}
               <div className="min-w-0">
-                <h1 className="text-lg font-semibold text-foreground">{resolvedEntry?.name ?? entry.name}</h1>
+                <h1 className="text-lg font-semibold text-foreground break-words">{resolvedEntry?.name ?? entry.name}</h1>
                 <div className="flex items-center gap-2 mt-1 flex-wrap">
                   <span className="text-xs text-muted-foreground">v{entry.version}</span>
                   <span className="text-xs text-muted-foreground">
@@ -343,6 +344,15 @@ export function StoreDetail() {
               {resolvedSpec?.description ?? spec.description ?? entry.description}
             </p>
           </div>
+
+          {/* Documentation (SKILL.md) — skills only, lazily fetched */}
+          {entry.type === 'skill' && (
+            <StoreDocumentation
+              slug={entry.slug}
+              version={entry.version}
+              inlineContent={spec.type === 'skill' ? spec.skill_files?.['SKILL.md'] : undefined}
+            />
+          )}
 
           {/* Config Schema Preview */}
           {(resolvedSpec?.config_schema ?? spec.config_schema) && (resolvedSpec?.config_schema ?? spec.config_schema)!.length > 0 && (

@@ -5,6 +5,7 @@
  * Clicking navigates to the detail view.
  */
 
+import { Star } from 'lucide-react'
 import type { RegistryEntry } from '../../../shared/store/store-types'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveEntryI18n } from '../../utils/spec-i18n'
@@ -22,6 +23,7 @@ export function StoreCard({ entry, onClick }: StoreCardProps) {
   const { t } = useTranslation()
   const { name, description } = resolveEntryI18n(entry, getCurrentLanguage())
   const visibleTags = entry.tags.slice(0, MAX_VISIBLE_TAGS)
+  const featured = Boolean(entry.meta?.featured)
 
   return (
     <button
@@ -34,10 +36,19 @@ export function StoreCard({ entry, onClick }: StoreCardProps) {
           {entry.icon && (
             <span className="text-base flex-shrink-0">{entry.icon}</span>
           )}
-          <span className="text-sm font-medium text-foreground truncate">
+          <span className="text-sm font-medium text-foreground truncate min-w-0">
             {name}
           </span>
           <AppTypeBadge type={entry.type} />
+          {featured && (
+            <span
+              className="flex items-center gap-0.5 flex-shrink-0 px-1.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-500 text-xs"
+              title={t('Featured')}
+            >
+              <Star className="w-3 h-3 fill-current" />
+              {t('Featured')}
+            </span>
+          )}
         </div>
         <span className="text-xs text-muted-foreground flex-shrink-0">
           v{entry.version}

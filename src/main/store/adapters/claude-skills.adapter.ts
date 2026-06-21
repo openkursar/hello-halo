@@ -161,10 +161,8 @@ async function collectSkillFilesViaTree(
 
     const res = await fetchWithTimeout(rawUrl, { headers: { 'User-Agent': 'Halo-Store/1.0' } })
     if (!res.ok) {
-      console.warn(
-        `[ClaudeSkillsAdapter] Failed to download "${relativePath}" for "${skillSlug}": HTTP ${res.status}`
-      )
-      return
+      // A partial skill is broken at runtime — fail the install instead.
+      throw new Error(`Failed to download "${relativePath}" of "${skillSlug}": HTTP ${res.status}`)
     }
     result[relativePath] = await res.text()
     completed++
@@ -207,13 +205,12 @@ async function collectSkillFilesLegacy(
 
     if (entry.type === 'file') {
       if (!entry.download_url) {
-        console.warn(`[ClaudeSkillsAdapter] No download_url for "${relativePath}" in "${skillSlug}", skipping`)
-        return
+        throw new Error(`No download_url for "${relativePath}" of "${skillSlug}"`)
       }
       const res = await fetchWithTimeout(entry.download_url, { headers: { 'User-Agent': 'Halo-Store/1.0' } })
       if (!res.ok) {
-        console.warn(`[ClaudeSkillsAdapter] Failed to download "${relativePath}" for "${skillSlug}": HTTP ${res.status}`)
-        return
+        // A partial skill is broken at runtime — fail the install instead.
+        throw new Error(`Failed to download "${relativePath}" of "${skillSlug}": HTTP ${res.status}`)
       }
       result[relativePath] = await res.text()
 
@@ -346,5 +343,29 @@ export class ClaudeSkillsAdapter implements RegistryAdapter {
       },
     }
     return spec
+  }
+
+  /**
+   * Fetch SKILL.md directly from raw.githubusercontent.com — zero GitHub API
+   * quota, unlike fetchSpec which lists the whole tree.
+   */
+  async fetchDocument(_source: RegistrySource, entry: RegistryEntry): Promise<string | null> {
+    const installPath = entry.path
+    if (!installPath) return null
+
+    const parts = installPath.match(/^([^/]+)\/([^/]+)\/(.+)$/)
+    if (!parts) return null
+    const [, owner, repo, pathInRepo] = parts
+
+    const filePath = /\/SKILL\.md$/i.test(pathInRepo) ? pathInRepo : `${pathInRepo}/SKILL.md`
+    const branch = (entry.meta?.branch as string | undefined) ?? 'main'
+    const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/${filePath}`
+
+    const res = await fetchWithTimeout(rawUrl, { headers: { 'User-Agent': 'Halo-Store/1.0' } })
+    if (!res.ok) {
+      console.log(`[ClaudeSkillsAdapter] No document for "${entry.slug}" (HTTP ${res.status})`)
+      return null
+    }
+    return await res.text()
   }
 }

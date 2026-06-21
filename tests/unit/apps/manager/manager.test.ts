@@ -1247,5 +1247,55 @@ describe('AppManager', () => {
 
       newManager.closeAll()
     })
+
+    it('migration v4 backfills upgrade_strategy=auto for existing rows', () => {
+      const newManager = createDatabaseManager(':memory:')
+      const db = newManager.getAppDatabase()
+
+      // Only run migrations 1..3 to simulate pre-v4 state
+      newManager.runMigrations(db, MIGRATION_NAMESPACE, migrations.slice(0, 3))
+      const now = Date.now()
+      db.prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run('legacy-app', 'legacy-spec', null, '{}', 'active', now)
+
+      // Now run all migrations (incl. v4) — should backfill
+      newManager.runMigrations(db, MIGRATION_NAMESPACE, migrations)
+
+      const row = db.prepare(`SELECT upgrade_strategy FROM installed_apps WHERE id = ?`).get('legacy-app') as { upgrade_strategy: string }
+      expect(row.upgrade_strategy).toBe('auto')
+
+      newManager.closeAll()
+    })
+  })
+
+  // ===========================================================================
+  // Upgrade Strategy
+  // ===========================================================================
+
+  describe('setUpgradeStrategy', () => {
+    it('defaults to auto on install', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'upg-default' }))
+      const app = service.getApp(appId)!
+      expect(app.upgradeStrategy).toBe('auto')
+    })
+
+    it('persists every valid strategy value', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'upg-roundtrip' }))
+      for (const strategy of ['notify', 'manual', 'auto'] as const) {
+        service.setUpgradeStrategy(appId, strategy)
+        expect(service.getApp(appId)!.upgradeStrategy).toBe(strategy)
+      }
+    })
+
+    it('rejects unknown strategy values', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'upg-bad' }))
+      expect(() => service.setUpgradeStrategy(appId, 'turbo' as never)).toThrow()
+    })
+
+    it('throws AppNotFoundError when target app does not exist', () => {
+      expect(() => service.setUpgradeStrategy('missing', 'auto')).toThrow(AppNotFoundError)
+    })
   })
 })

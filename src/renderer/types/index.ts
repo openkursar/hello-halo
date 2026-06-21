@@ -255,6 +255,11 @@ export interface NetworkConfig {
   browserUseProxy?: boolean;  // When true, AI Browser also uses the Settings proxy. Default false = system proxy.
 }
 
+// Browser configuration
+export interface BrowserConfig {
+  customAllowlist?: string[];  // User-added allowlist patterns; only honored when the build sets browserPolicy.userExtensible
+}
+
 export interface HaloConfig {
   api: ApiConfig;  // Legacy, kept for backward compatibility
   aiSources: AISourcesConfig;  // v2 format: { version: 2, currentId, sources: [] }
@@ -272,6 +277,7 @@ export interface HaloConfig {
   layout?: LayoutConfig;  // Global layout preferences (panel sizes and visibility)
   chat?: ChatConfig;  // Chat behavior preferences
   network?: NetworkConfig;  // Network settings (proxy, etc.)
+  browser?: BrowserConfig;  // Browser settings (user custom allowlist)
   isFirstLaunch: boolean;
 }
 

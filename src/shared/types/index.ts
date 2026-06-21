@@ -65,6 +65,9 @@ export * from './inbound-message'
 // IM channel types (proactive push adapter + session records)
 export * from './im-channel'
 
+// Agent definition types (for custom subagent configurations)
+export type { AgentDefinition, AgentMcpServerSpec, PermissionMode, McpServerConfigForProcessTransport } from './agent-definition'
+
 // File changes types (shared between main process agent and renderer diff)
 export type { FileChangesSummary, ThoughtLike } from '../file-changes'
 export { countChangedLines, calculateDiffStats, extractFileChangesSummaryFromThoughts } from '../file-changes'

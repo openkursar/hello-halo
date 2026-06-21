@@ -36,12 +36,15 @@ import {
   Search,
   Smartphone,
   Monitor,
+  Loader2,
+  ShieldCheck,
 } from 'lucide-react'
 import { api } from '../../../api'
 import { canvasLifecycle, type TabState, type BrowserState } from '../../../services/canvas-lifecycle'
 import { useBrowserState } from '../../../hooks/useCanvasLifecycle'
 import { useAIBrowserStore } from '../../../stores/ai-browser.store'
 import { useTranslation } from '../../../i18n'
+import { useSecurityPolicy } from '../../../hooks/useSecurityPolicy'
 import { getBrowserHomepage } from '../../../utils/browser-homepage'
 
 interface BrowserViewerProps {
@@ -108,6 +111,66 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
 
   // Get browser state from lifecycle manager via hook
   const browserState = useBrowserState(tab.id)
+
+  // Blocked-page "allow and retry" — only offered when the build lets users
+  // extend the browser allowlist (browserPolicy.userExtensible).
+  const securityPolicy = useSecurityPolicy()
+  const allowlistEditable = securityPolicy?.browserAllowlistEditable === true
+  const [isAllowingBlockedHost, setIsAllowingBlockedHost] = useState(false)
+  const [allowBlockedHostError, setAllowBlockedHostError] = useState<string | null>(null)
+  const isMountedRef = useRef(true)
+
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
+
+  const blockedUrl = tab.browserState?.blockedUrl
+  const blockedHost = (() => {
+    if (!blockedUrl) return null
+    try {
+      return new URL(blockedUrl).hostname
+    } catch {
+      return null
+    }
+  })()
+
+  // A new block target invalidates any error from a previous attempt
+  useEffect(() => {
+    setAllowBlockedHostError(null)
+  }, [blockedUrl])
+
+  const handleAllowBlockedHost = useCallback(async () => {
+    if (!blockedUrl || !blockedHost) return
+    setIsAllowingBlockedHost(true)
+    setAllowBlockedHostError(null)
+    try {
+      const result = await api.addBrowserAllowlistEntry(blockedHost)
+      if (!result.success) {
+        if (isMountedRef.current) {
+          setAllowBlockedHostError(result.error || t('Failed to update allowlist'))
+        }
+        return
+      }
+      if (tab.browserViewId) {
+        await api.navigateBrowserView(tab.browserViewId, blockedUrl)
+      } else {
+        // Initial URL was blocked at creation — no view exists, re-create it
+        await canvasLifecycle.retryBlockedBrowserView(tab.id)
+      }
+    } catch (error) {
+      console.error('[BrowserViewer] Allow blocked host failed:', error)
+      if (isMountedRef.current) {
+        setAllowBlockedHostError((error as Error).message)
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsAllowingBlockedHost(false)
+      }
+    }
+  }, [blockedUrl, blockedHost, tab.browserViewId, tab.id, t])
 
   // AI Browser state - detect if AI is operating this browser
   const isAIOperating = useAIBrowserStore(state => state.isOperating)
@@ -482,6 +545,28 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
               </div>
               <h3 className="text-base font-semibold">{t('Access Restricted')}</h3>
               <p className="text-sm text-muted-foreground">{tab.error}</p>
+              {allowlistEditable && blockedHost && (
+                <button
+                  onClick={handleAllowBlockedHost}
+                  disabled={isAllowingBlockedHost}
+                  className="inline-flex items-center gap-2 px-4 py-2 mt-1 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {isAllowingBlockedHost ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <ShieldCheck className="w-4 h-4" />
+                  )}
+                  {t('Allow {{host}} and retry', { host: blockedHost })}
+                </button>
+              )}
+              {allowlistEditable && blockedHost && (
+                <p className="text-xs text-muted-foreground">
+                  {t('Manage allowed sites in Settings → System')}
+                </p>
+              )}
+              {allowBlockedHostError && (
+                <p className="text-xs text-destructive">{allowBlockedHostError}</p>
+              )}
             </div>
           </div>
         ) : !tab.browserViewId ? (
@@ -506,6 +591,7 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
  * Shows a message when browser features are not available
  */
 export function BrowserViewerFallback({ tab }: BrowserViewerProps) {
+  const { t } = useTranslation()
   const openExternal = () => {
     if (tab.url) {
       window.open(tab.url, '_blank')

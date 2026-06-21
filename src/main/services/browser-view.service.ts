@@ -16,7 +16,7 @@
  */
 
 import { BrowserView, BrowserWindow } from 'electron'
-import { loadProductConfig } from '../foundation/product-config'
+import { isUrlAllowedByPolicy } from './browser-policy.service'
 
 // ============================================
 // Types
@@ -41,6 +41,10 @@ export interface BrowserViewState {
    *  to show the policy-block overlay and by applyBounds() to keep the
    *  native BrowserView offscreen so the overlay is visible. */
   blockedByPolicy?: boolean
+  /** Exact URL that was blocked. `state.url` can be stale here (e.g. a
+   *  redirect block keeps the pre-redirect URL), so the overlay's
+   *  "allow and retry" action needs the real target. */
+  blockedUrl?: string
 }
 
 export interface BrowserViewBounds {
@@ -101,115 +105,16 @@ export const PC_DEVICE_METRICS = {
 // ============================================
 // Browser Policy Enforcement
 // ============================================
+// Policy evaluation (isUrlAllowedByPolicy and friends) lives in
+// browser-policy.service.ts — this file only consumes the verdict.
 
 /**
- * Parse a dotted-quad IPv4 string into a 32-bit unsigned integer.
- * Returns null for anything that is not a strictly-formatted IPv4 address,
- * so callers can cleanly distinguish IPs from hostnames.
+ * Stable error code attached to the create() rejection when the initial URL
+ * is blocked by browser policy. The IPC layer forwards it so the renderer
+ * can show the policy-block overlay (with "allow and retry") instead of a
+ * generic creation error.
  */
-function parseIPv4(ip: string): number | null {
-  const parts = ip.split('.')
-  if (parts.length !== 4) return null
-
-  let value = 0
-  for (const part of parts) {
-    if (!/^\d{1,3}$/.test(part)) return null
-    const octet = Number(part)
-    if (octet > 255) return null
-    value = value * 256 + octet
-  }
-  return value >>> 0 // force unsigned 32-bit
-}
-
-/**
- * Match an IPv4 hostname against a CIDR pattern (e.g. "10.0.0.0/8").
- * Returns false for any malformed pattern or non-IPv4 hostname, never throws.
- *
- * - `/0` matches every IPv4 address.
- * - `/32` requires an exact address match.
- */
-function matchCidr(hostname: string, pattern: string): boolean {
-  const slashIndex = pattern.indexOf('/')
-  if (slashIndex === -1) return false
-
-  const prefixText = pattern.slice(slashIndex + 1)
-  if (!/^\d{1,2}$/.test(prefixText)) return false
-  const prefix = Number(prefixText)
-  if (prefix > 32) return false
-
-  const hostInt = parseIPv4(hostname)
-  const baseInt = parseIPv4(pattern.slice(0, slashIndex))
-  if (hostInt === null || baseInt === null) return false
-
-  if (prefix === 0) return true
-  const mask = (0xffffffff << (32 - prefix)) >>> 0
-  return ((hostInt & mask) >>> 0) === ((baseInt & mask) >>> 0)
-}
-
-/**
- * Match a hostname against a domain or IP pattern.
- *
- * Supported patterns:
- * - "*.example.com"  → matches "example.com" and any subdomain (e.g. "app.example.com")
- * - "example.com"    → exact hostname match
- * - "10.0.0.0/8"     → IPv4 CIDR range (only matches IPv4 hostnames)
- * - "192.168.1.1"    → exact IPv4 match (handled by the exact-match branch)
- */
-function matchDomainPattern(hostname: string, pattern: string): boolean {
-  const lowerHost = hostname.toLowerCase()
-  const lowerPattern = pattern.toLowerCase()
-
-  // CIDR ranges only make sense for IPv4 hostnames; matchCidr safely rejects
-  // hostname-vs-CIDR and IP-vs-domain mismatches.
-  if (lowerPattern.includes('/')) {
-    return matchCidr(lowerHost, lowerPattern)
-  }
-
-  if (lowerPattern.startsWith('*.')) {
-    const baseDomain = lowerPattern.slice(2) // "example.com"
-    return lowerHost === baseDomain || lowerHost.endsWith('.' + baseDomain)
-  }
-
-  return lowerHost === lowerPattern
-}
-
-/**
- * Check whether a URL is permitted by the browser policy from product.json.
- *
- * - No policy configured → always allowed (open-source default).
- * - Non-HTTP(S) URLs (about:blank, file://, etc.) → always allowed.
- * - Allowlist mode → URL must match at least one pattern.
- * - Blocklist mode → URL must NOT match any pattern.
- */
-export function isUrlAllowedByPolicy(url: string): boolean {
-  const policy = loadProductConfig().browserPolicy
-  if (!policy || policy.mode === 'unrestricted') return true
-
-  // Always permit non-HTTP(S) URLs (about:blank, devtools, file, etc.)
-  let hostname: string
-  try {
-    const parsed = new URL(url)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return true
-    hostname = parsed.hostname
-  } catch {
-    // Malformed URL — let Chromium handle the error naturally
-    return true
-  }
-
-  if (policy.mode === 'allowlist') {
-    const patterns = policy.allowlist
-    if (!patterns || patterns.length === 0) return false // allowlist with no entries blocks everything
-    return patterns.some(p => matchDomainPattern(hostname, p))
-  }
-
-  if (policy.mode === 'blocklist') {
-    const patterns = policy.blocklist
-    if (!patterns || patterns.length === 0) return true // blocklist with no entries blocks nothing
-    return !patterns.some(p => matchDomainPattern(hostname, p))
-  }
-
-  return true
-}
+export const BROWSER_POLICY_BLOCKED = 'BROWSER_POLICY_BLOCKED'
 
 /** Build a short error string for state.error. */
 function buildBlockedMessage(url: string): string {
@@ -219,19 +124,6 @@ function buildBlockedMessage(url: string): string {
   } catch {
     return 'Navigation blocked by browser policy'
   }
-}
-
-/**
- * Get the default homepage URL for new browser tabs.
- *
- * - No browser policy → 'https://www.bing.com' (standard default)
- * - Policy with explicit homepage → that URL
- * - Policy without homepage → 'about:blank' (let user type an allowed URL)
- */
-export function getDefaultBrowserHomepage(): string {
-  const policy = loadProductConfig().browserPolicy
-  if (!policy || policy.mode === 'unrestricted') return 'https://www.bing.com'
-  return policy.homepage || 'about:blank'
 }
 
 // ============================================
@@ -316,12 +208,14 @@ class BrowserViewManager {
     console.log(`[BrowserView] >>> create() called - viewId: ${viewId}, url: ${url}, offscreen: ${isOffscreen}, deviceMode: ${deviceMode}`)
 
     // Browser policy check — reject BEFORE creating any BrowserView.
-    // The IPC handler returns { success: false, error } which the renderer
-    // handles by showing a React error component (no BrowserView involved).
+    // The IPC handler returns { success: false, error, code } which the
+    // renderer maps to the policy-block overlay (no BrowserView involved).
     if (url && !isUrlAllowedByPolicy(url)) {
       const msg = buildBlockedMessage(url)
       console.log(`[BrowserView] ${msg}`)
-      throw new Error(msg)
+      const error = new Error(msg) as Error & { code?: string }
+      error.code = BROWSER_POLICY_BLOCKED
+      throw error
     }
 
     // Don't create duplicate views
@@ -560,6 +454,7 @@ class BrowserViewManager {
       this.updateState(viewId, {
         error: buildBlockedMessage(url),
         blockedByPolicy: true,
+        blockedUrl: url,
         isLoading: false,
       })
       this.emitStateChangeImmediate(viewId)
@@ -785,6 +680,7 @@ class BrowserViewManager {
         isLoading: true,
         error: undefined,
         blockedByPolicy: false,
+        blockedUrl: undefined,
       })
       // Use immediate emit for navigation start - user needs to see loading indicator
       this.emitStateChangeImmediate(viewId)
@@ -798,6 +694,7 @@ class BrowserViewManager {
         canGoForward: wc.canGoForward(),
         error: undefined,
         blockedByPolicy: false,
+        blockedUrl: undefined,
       })
       // Use immediate emit for load finish - user needs to see content immediately
       this.emitStateChangeImmediate(viewId)
@@ -860,7 +757,7 @@ class BrowserViewManager {
         wc.loadURL(url)
       } else {
         console.log(`[BrowserView] window.open blocked by browser policy: ${url}`)
-        this.updateState(viewId, { error: buildBlockedMessage(url), blockedByPolicy: true })
+        this.updateState(viewId, { error: buildBlockedMessage(url), blockedByPolicy: true, blockedUrl: url })
         this.emitStateChangeImmediate(viewId)
       }
       return { action: 'deny' }
@@ -877,7 +774,7 @@ class BrowserViewManager {
       if (!isUrlAllowedByPolicy(url)) {
         event.preventDefault()
         console.log(`[BrowserView] will-navigate blocked by browser policy: ${url}`)
-        this.updateState(viewId, { error: buildBlockedMessage(url), blockedByPolicy: true })
+        this.updateState(viewId, { error: buildBlockedMessage(url), blockedByPolicy: true, blockedUrl: url })
         this.emitStateChangeImmediate(viewId)
       }
     })
@@ -887,7 +784,7 @@ class BrowserViewManager {
       if (!isUrlAllowedByPolicy(url)) {
         event.preventDefault()
         console.log(`[BrowserView] will-redirect blocked by browser policy: ${url}`)
-        this.updateState(viewId, { error: buildBlockedMessage(url), blockedByPolicy: true, isLoading: false })
+        this.updateState(viewId, { error: buildBlockedMessage(url), blockedByPolicy: true, blockedUrl: url, isLoading: false })
         this.emitStateChangeImmediate(viewId)
       }
     })

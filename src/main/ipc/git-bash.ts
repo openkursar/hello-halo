@@ -136,7 +136,19 @@ export async function initializeGitBashOnStartup(): Promise<{
   }
 
   if (status.needsSetup) {
-    console.log('[GitBash] Not found, setup required')
+    // The CLI exits at startup without a valid bash path, so headless runs that
+    // bypass the setup UI still need the mock fallback. Leave config untouched
+    // (skipped stays false) so the renderer keeps prompting interactive users.
+    const mockPath = createMockBash()
+    setGitBashPathEnv(mockPath)
+    console.log('[GitBash] Not found, setup required — mock fallback active')
+    return {
+      available: true,
+      needsSetup: true,
+      mockMode: true,
+      path: mockPath,
+      configCleared: status.configUpdated
+    }
   }
 
   return {

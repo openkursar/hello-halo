@@ -10,6 +10,7 @@
  * before reaching the Claude Code SDK.
  */
 
+import { Readable } from 'node:stream'
 import type { Response as ExpressResponse } from 'express'
 import { BaseStreamHandler, type StreamHandlerOptions } from './base-stream-handler'
 import { safeJsonParse } from '../utils'
@@ -59,7 +60,7 @@ export class AnthropicStreamHandler extends BaseStreamHandler {
         console.error('[AnthropicStream] Error:', error)
       }
     } finally {
-      this.finishMessage()
+      await this.finishMessage()
     }
   }
 
@@ -183,8 +184,45 @@ export async function streamAnthropicPassthrough(
   stream: unknown,
   res: ExpressResponse,
   model?: string,
-  debug = false
+  debug = false,
+  estimateInputTokens?: () => Promise<number>
 ): Promise<void> {
-  const handler = new AnthropicStreamHandler(res, { model, debug })
+  const handler = new AnthropicStreamHandler(res, { model, debug, estimateInputTokens })
   await handler.processStream(stream)
+}
+
+/**
+ * Forward an upstream Anthropic SSE stream to the client byte-for-byte.
+ *
+ * Unlike streamAnthropicPassthrough (which re-parses and re-serializes through
+ * BaseStreamHandler to repair non-standard third-party responses), this does
+ * zero parsing. It is used for genuine first-party Anthropic upstreams whose
+ * SSE is already well-formed: re-serializing those through the OpenAI-oriented
+ * state machine drops interleaved `thinking` text (it keeps only the
+ * signature), so they must be piped raw. The caller selects this path via
+ * isNativeAnthropicHost (see utils/url.ts).
+ *
+ * The caller forwards response headers/status before invoking this.
+ */
+export async function pipeAnthropicPassthrough(
+  stream: unknown,
+  res: ExpressResponse
+): Promise<void> {
+  if (!stream) {
+    res.write('event: error\ndata: {"type":"error","error":{"type":"api_error","message":"Empty stream from provider"}}\n\n')
+    res.end()
+    return
+  }
+
+  try {
+    const nodeStream = Readable.fromWeb(stream as Parameters<typeof Readable.fromWeb>[0])
+    for await (const chunk of nodeStream) {
+      res.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    }
+    if (!res.writableEnded) res.end()
+  } catch {
+    // Upstream aborted mid-stream (network drop, client disconnect). Partial
+    // SSE has already been written; just close the connection cleanly.
+    if (!res.writableEnded) res.end()
+  }
 }

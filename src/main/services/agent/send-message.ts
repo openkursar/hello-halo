@@ -158,7 +158,8 @@ export async function sendMessage(
     // Get or create persistent V2 session (also starts persistent consumer if new)
     const v2Session = await getOrCreateV2Session(
       spaceId, conversationId, sdkOptions, sessionId, sessionConfig, workDir,
-      resolvedCredentials.displayModel  // Passed to consumer for thought parsing
+      resolvedCredentials.displayModel,  // Passed to consumer for thought parsing
+      resolvedCredentials.capabilities?.contextWindow
     )
 
     sessionObtained = true
@@ -166,7 +167,9 @@ export async function sendMessage(
     // Ensure consumer's displayModel is up-to-date.
     // When the session is reused (no rebuild), the consumer retains the old displayModel.
     // This keeps thought parsing ("Connected | Model: X") in sync after model switches.
-    updateConsumerDisplayModel(conversationId, resolvedCredentials.displayModel)
+    updateConsumerDisplayModel(
+      conversationId, resolvedCredentials.displayModel, resolvedCredentials.capabilities?.contextWindow
+    )
 
     // Dynamic runtime parameter adjustment
     try {

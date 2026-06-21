@@ -18,6 +18,7 @@ import { streamOpenAIChatToAnthropic } from '../stream'
 import { proxyFetch } from '../../services/proxy-fetch'
 import { getEndpointUrlError, isValidEndpointUrl } from './api-type'
 import { applyProviderAdapter, type AdapterContext } from './provider-adapters'
+import { deferInputTokensEstimate, fillResponseUsageFallback } from '../utils/usage-estimator'
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -791,6 +792,7 @@ export async function handleResponsesRequest(
           createCodexAnthropicStreamBridge(res, anthropicRequest.model, toolNamespaceMap),
           anthropicRequest.model,
           debug,
+          deferInputTokensEstimate(anthropicRequest),
         )
       }
       return
@@ -800,6 +802,7 @@ export async function handleResponsesRequest(
     const anthropicResponse = apiType === 'responses'
       ? convertOpenAIResponsesToAnthropic(openaiResponse)
       : convertOpenAIChatToAnthropic(openaiResponse, anthropicRequest.model)
+    fillResponseUsageFallback(anthropicResponse, anthropicRequest)
     res.json(anthropicToCodexResponse(anthropicResponse, anthropicRequest.model, toolNamespaceMap))
   } catch (error: any) {
     return sendResponsesError(res, 500, 'api_error', error?.message || String(error))

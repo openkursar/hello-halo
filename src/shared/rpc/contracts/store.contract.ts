@@ -17,4 +17,10 @@ export const storeRpc = {
   storeRemoveRegistry: rawRpcMethod('store:remove-registry'),
   storeToggleRegistry: rawRpcMethod('store:toggle-registry'),
   storeUpdateRegistryAdapterConfig: rawRpcMethod('store:update-registry-adapter-config'),
+  storeCheckUpdatesNow: rawRpcMethod('store:check-updates-now'),
+  storeApplyUpgrade: rawRpcMethod('store:apply-upgrade'),
+  storePublish: rawRpcMethod('store:publish'),
+  storePublishPreview: rawRpcMethod('store:publish-preview'),
+  storeExportDhpkg: rawRpcMethod('store:export-dhpkg'),
+  storeImportDhpkg: rawRpcMethod('store:import-dhpkg'),
 }

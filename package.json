@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.10-rc.9",
+  "version": "2.1.10-rc.29",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.mjs",
@@ -32,8 +32,8 @@
     "test:check:mac-x64": "node tests/check/binaries.mjs --platform mac-x64",
     "test:check:win": "node tests/check/binaries.mjs --platform win",
     "test:check:linux": "node tests/check/binaries.mjs --platform linux",
-    "test:unit": "vitest run --config tests/vitest.config.ts",
-    "test:unit:watch": "vitest --config tests/vitest.config.ts",
+    "test:unit": "cross-env ELECTRON_RUN_AS_NODE=1 electron node_modules/vitest/vitest.mjs run --config tests/vitest.config.ts",
+    "test:unit:watch": "cross-env ELECTRON_RUN_AS_NODE=1 electron node_modules/vitest/vitest.mjs --config tests/vitest.config.ts",
     "test:e2e": "playwright test --config tests/playwright.config.ts",
     "test:e2e:smoke": "playwright test --config tests/playwright.config.ts --project=smoke",
     "test:e2e:codex-mcp": "playwright test --config tests/playwright.config.ts --project=codex-mcp",
@@ -124,6 +124,7 @@
     "node-pty": "^1.1.0",
     "nodemailer": "^8.0.1",
     "open": "^10.2.0",
+    "pinyin-pro": "^3.28.1",
     "proxy-agent": "^7.0.0",
     "qrcode": "^1.5.4",
     "react": "^18.2.0",
@@ -194,6 +195,7 @@
       "out/**/*",
       "resources/**/*",
       "product.json",
+      "halo-webank/build/dist/**/*",
       "!node_modules/better-sqlite3/prebuilds"
     ],
     "asarUnpack": [

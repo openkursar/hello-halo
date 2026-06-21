@@ -16,6 +16,7 @@ import {
   listApps,
   queryStore,
   getAppDetail,
+  getAppDocument,
   installFromStore,
   refreshIndex,
   checkUpdates,
@@ -116,6 +117,26 @@ export async function getStoreAppDetail(
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] getStoreAppDetail error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Get the SKILL.md / README document for a store app, for the detail page.
+ * Returns { content: null } when the source has no document for this entry.
+ */
+export async function getStoreAppDocument(
+  slug: string
+): Promise<StoreControllerResponse<{ content: string | null }>> {
+  try {
+    if (!slug) {
+      return { success: false, error: 'App slug is required' }
+    }
+    const doc = await getAppDocument(slug)
+    return { success: true, data: doc }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreAppDocument error:', err.message)
     return { success: false, error: err.message }
   }
 }

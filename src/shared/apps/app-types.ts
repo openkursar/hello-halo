@@ -105,7 +105,19 @@ export interface InstalledApp {
 
   /** Unix timestamp (ms) when the App was soft-deleted (uninstalled). Undefined if active. */
   uninstalledAt?: number
+
+  /**
+   * User-controlled upgrade strategy.
+   *
+   * - 'auto'    (default): patch/minor versions install silently; majors notify
+   * - 'notify':  surface every available update as a notification
+   * - 'manual':  no automatic checks; user-triggered only
+   */
+  upgradeStrategy: UpgradeStrategy
 }
+
+/** User-controlled per-app upgrade strategy. */
+export type UpgradeStrategy = 'auto' | 'notify' | 'manual'
 
 /** Filter criteria for listing Apps */
 export interface AppListFilter {

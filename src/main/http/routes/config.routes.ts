@@ -10,6 +10,7 @@ import {
   getPublicSecurityPolicy,
   getServiceConfig,
   rejectIfRemoteMcpForbidden,
+  rejectIfRemoteBrowserAllowlistForbidden,
 } from './_shared'
 
 export function registerConfigRoutes(app: Express): void {
@@ -30,6 +31,7 @@ export function registerConfigRoutes(app: Express): void {
 
   app.post('/api/config', async (req: Request, res: Response) => {
     if (rejectIfRemoteMcpForbidden(res, () => configTouchesMcp(req.body), 'POST /api/config')) return
+    if (rejectIfRemoteBrowserAllowlistForbidden(res, req.body)) return
     const result = configController.setConfig(req.body)
     res.json(result)
   })

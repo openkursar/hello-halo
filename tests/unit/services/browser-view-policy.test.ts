@@ -14,7 +14,7 @@ vi.mock('../../../src/main/foundation/product-config', () => ({
 }))
 
 import { loadProductConfig } from '../../../src/main/foundation/product-config'
-import { isUrlAllowedByPolicy } from '../../../src/main/services/browser-view.service'
+import { isUrlAllowedByPolicy } from '../../../src/main/services/browser-policy.service'
 
 const mockLoadProductConfig = vi.mocked(loadProductConfig)
 

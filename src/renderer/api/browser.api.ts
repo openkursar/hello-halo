@@ -181,4 +181,26 @@ export const browserApi = {
   onAIBrowserActiveViewChanged: (callback: (data: { viewId: string; url: string | null; title: string | null }) => void) =>
     onEvent('ai-browser:active-view-changed', callback as (data: unknown) => void),
 
+  // ===== Browser Policy (user-extensible allowlist — desktop only) =====
+  getBrowserPolicy: async (): Promise<ApiResponse> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.getBrowserPolicy()
+  },
+
+  addBrowserAllowlistEntry: async (pattern: string): Promise<ApiResponse> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.addBrowserAllowlistEntry(pattern)
+  },
+
+  removeBrowserAllowlistEntry: async (pattern: string): Promise<ApiResponse> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.removeBrowserAllowlistEntry(pattern)
+  },
+
 }

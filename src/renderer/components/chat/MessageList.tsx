@@ -16,6 +16,7 @@
  */
 
 import { useEffect, useRef, useMemo, useCallback, forwardRef, useImperativeHandle } from 'react'
+import type { ReactNode } from 'react'
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso'
 import { MessageRow } from './MessageRow'
 import { StreamingSection } from './StreamingSection'
@@ -27,6 +28,14 @@ import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 
 export interface MessageListProps {
+  /**
+   * Conversation this list belongs to. Drives the streaming session subscription
+   * in the footer (queued messages + per-token re-render). This is the only link
+   * to chat.store — the store is the shared real-time bus, keyed by conversationId,
+   * not a "main chat" singleton. Surfaces using virtual ids (e.g. "app-chat:{appId}"
+   * or IM session keys) pass that id here.
+   */
+  conversationId?: string
   messages: Message[]
   streamingContent: string
   isGenerating: boolean
@@ -42,6 +51,33 @@ export interface MessageListProps {
   pendingQuestion?: PendingQuestion | null  // Active question from AskUserQuestion tool
   onAnswerQuestion?: (answers: Record<string, string>) => void  // Callback when user answers
   onAtBottomStateChange?: (atBottom: boolean) => void  // Callback when at-bottom state changes
+  /**
+   * Lazily load a message's separated thoughts (v2 format). Source-agnostic: the
+   * space surface loads from .thoughts.json; other surfaces can pass inline/no-op.
+   * Omit to disable lazy loading (LazyCollapsedThoughtProcess degrades gracefully).
+   */
+  thoughtsLoader?: (messageId: string) => Promise<Thought[]>
+  /**
+   * Hide the "View live feed" button on BrowserTaskCard (both persisted rows and the
+   * live streaming section). Set true where Canvas/BrowserView is unavailable
+   * (automation app / IM contexts).
+   */
+  hideBrowserViewButton?: boolean
+  /**
+   * Start every message's thought panel expanded. For trace/debug viewers
+   * (automation run detail) where the full execution timeline is the point.
+   */
+  defaultThoughtsExpanded?: boolean
+  /**
+   * Start every message's thought panel in full-height mode. Pairs with
+   * defaultThoughtsExpanded for trace viewers.
+   */
+  defaultThoughtsMaximized?: boolean
+  /**
+   * Slot rendered at the end of the footer. The shell stays domain-agnostic — callers
+   * inject surface-specific affordances (Continue, live indicator, clear, ...) here.
+   */
+  footerExtra?: ReactNode
 }
 
 /** Handle exposed to parent for scroll control */
@@ -66,14 +102,22 @@ interface StreamingRevision {
   onAnswerQuestion?: (answers: Record<string, string>) => void
 }
 
-function StreamingFooterContent({ revisionRef }: { revisionRef: React.RefObject<StreamingRevision> }) {
-  // Subscribe to full session changes so this component re-renders when thoughts/streaming update.
-  // Data is read from the ref (always fresh); this selector just triggers the re-render.
+function StreamingFooterContent({
+  conversationId,
+  showBrowserViewButton,
+  revisionRef,
+}: {
+  conversationId: string
+  showBrowserViewButton: boolean
+  revisionRef: React.RefObject<StreamingRevision>
+}) {
+  // Subscribe to this conversation's session so the footer re-renders when
+  // thoughts/streaming/queued update. Data is read from the ref (always fresh);
+  // this selector only triggers the re-render. Keyed by conversationId — the store
+  // is the shared real-time bus, not the "current conversation" singleton.
   // IMPORTANT: Must watch the entire session object — watching only queuedMessages breaks
   // streaming re-renders because queuedMessages never changes during normal streaming.
-  const session = useChatStore(s =>
-    s.sessions.get(s.getCurrentSpaceState().currentConversationId ?? '')
-  )
+  const session = useChatStore(s => s.sessions.get(conversationId))
   const queuedMessages = session?.queuedMessages ?? []
 
   const rev = revisionRef.current!
@@ -85,6 +129,7 @@ function StreamingFooterContent({ revisionRef }: { revisionRef: React.RefObject<
       isThinking={rev.isThinking}
       textBlockVersion={rev.textBlockVersion}
       browserToolCalls={rev.streamingBrowserToolCalls}
+      showBrowserViewButton={showBrowserViewButton}
       pendingQuestion={rev.pendingQuestion}
       onAnswerQuestion={rev.onAnswerQuestion}
       queuedMessages={queuedMessages}
@@ -93,6 +138,7 @@ function StreamingFooterContent({ revisionRef }: { revisionRef: React.RefObject<
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList({
+  conversationId = '',
   messages,
   streamingContent,
   isGenerating,
@@ -108,6 +154,11 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   pendingQuestion = null,
   onAnswerQuestion,
   onAtBottomStateChange,
+  thoughtsLoader,
+  hideBrowserViewButton = false,
+  defaultThoughtsExpanded = false,
+  defaultThoughtsMaximized = false,
+  footerExtra,
 }, ref) {
   const { t } = useTranslation()
   const virtuosoRef = useRef<VirtuosoHandle>(null)
@@ -120,11 +171,6 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   // LazyCollapsedThoughtProcess to CollapsedThoughtProcess — this ref ensures the
   // new CollapsedThoughtProcess mounts with defaultExpanded=true so the panel stays open.
   const expandedThoughtIds = useRef(new Set<string>())
-  const { loadMessageThoughts, currentSpaceId, currentConversationId } = useChatStore(s => ({
-    loadMessageThoughts: s.loadMessageThoughts,
-    currentSpaceId: s.currentSpaceId,
-    currentConversationId: s.getCurrentSpaceState().currentConversationId,
-  }))
 
   // Expose scroll control to parent (ChatView)
   useImperativeHandle(ref, () => ({
@@ -242,18 +288,20 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       <MessageRow
         message={message}
         previousCost={previousCost}
-        defaultThoughtsExpanded={expandedThoughtIds.current.has(message.id)}
-        onLoadThoughts={(messageId) => {
-          expandedThoughtIds.current.add(messageId)
-          return currentSpaceId && currentConversationId
-            ? loadMessageThoughts(currentSpaceId, currentConversationId, messageId)
-            : Promise.resolve([])
-        }}
+        defaultThoughtsExpanded={defaultThoughtsExpanded || expandedThoughtIds.current.has(message.id)}
+        defaultThoughtsMaximized={defaultThoughtsMaximized}
+        onLoadThoughts={thoughtsLoader
+          ? (messageId) => {
+              expandedThoughtIds.current.add(messageId)
+              return thoughtsLoader(messageId)
+            }
+          : undefined}
+        hideBrowserViewButton={hideBrowserViewButton}
         injectionMessages={injectionMap.get(message.id)}
         className={contentWidthClass}
       />
     )
-  }, [previousCostMap, currentSpaceId, currentConversationId, loadMessageThoughts, injectionMap, contentWidthClass])
+  }, [previousCostMap, thoughtsLoader, hideBrowserViewButton, defaultThoughtsExpanded, defaultThoughtsMaximized, injectionMap, contentWidthClass])
 
   // Ref for onContinue — keeps Footer callback stable when parent re-renders
   const onContinueRef = useRef(onContinue)
@@ -273,13 +321,19 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   // Footer: stable callback — only depends on low-frequency values
   // High-frequency streaming updates are handled by StreamingFooterContent internally
   const Footer = useCallback(() => {
-    const hasFooterContent = isGenerating || (!isGenerating && error) || compactInfo
+    const hasFooterContent = isGenerating || (!isGenerating && error) || compactInfo || footerExtra
     if (!hasFooterContent) return <div className="pb-6" />
 
     return (
       <div className={contentWidthClass}>
         {/* Streaming area — isolated component reads from refs, re-renders independently */}
-        {isGenerating && <StreamingFooterContent revisionRef={streamingRevisionRef} />}
+        {isGenerating && (
+          <StreamingFooterContent
+            conversationId={conversationId}
+            showBrowserViewButton={!hideBrowserViewButton}
+            revisionRef={streamingRevisionRef}
+          />
+        )}
 
         {/* Error message - shown when generation fails (not during generation) */}
         {/* Interrupted errors get special friendly UI, other errors show standard error bubble */}
@@ -313,6 +367,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
           </div>
         )}
 
+        {/* Surface-specific footer slot (Continue / live indicator / clear / ...) */}
+        {footerExtra}
+
         {/* Bottom padding to match original py-6 spacing */}
         <div className="pb-6" />
       </div>
@@ -321,6 +378,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     isGenerating,
     error, errorType,
     compactInfo, t, contentWidthClass,
+    conversationId, hideBrowserViewButton, footerExtra,
   ])
 
   // Top padding spacer — matches original py-6

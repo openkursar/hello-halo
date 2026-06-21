@@ -15,21 +15,19 @@
  *   for consistent message and streaming display across all chat views.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Loader2, AlertCircle, Eraser } from 'lucide-react'
 import { api } from '../../api'
 import { useChatStore } from '../../stores/chat.store'
-import { useSmartScroll } from '../../hooks/useSmartScroll'
-import { MessageRow } from '../chat/MessageRow'
-import { StreamingSection } from '../chat/StreamingSection'
-import { useBrowserToolCalls } from '../chat/useBrowserToolCalls'
-import { InterruptedBubble } from '../chat/InterruptedBubble'
-import { CompactNotice } from '../chat/CompactNotice'
+import { MessageList } from '../chat/MessageList'
+import type { MessageListHandle } from '../chat/MessageList'
+import { ScrollToBottomButton } from '../chat/ScrollToBottomButton'
 import { InputArea } from '../chat/InputArea'
 import { useRemoteSubscription } from '../../hooks/useRemoteSubscription'
 import { useWsRecovery } from '../../hooks/useWsRecovery'
 import { useTranslation } from '../../i18n'
-import type { Message, ImageAttachment } from '../../types'
+import type { Message, ImageAttachment, Artifact } from '../../types'
+import type { SlashCommandItem } from '../../types/slash-command'
 import { getAppChatConversationId } from '../../../shared/apps/im-keys'
 
 interface AppChatViewProps {
@@ -52,10 +50,10 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
   const [messages, setMessages] = useState<Message[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
 
   // ── Streaming state from chat store (uses virtual conversationId) ──
   const session = useChatStore(s => s.getSession(conversationId))
+  const sessionInitInfo = useChatStore(s => s.sessionInitInfo)
   const resetSession = useChatStore(s => s.resetSession)
   const answerQuestion = useChatStore(s => s.answerQuestion)
   const {
@@ -71,15 +69,46 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
     textBlockVersion,
   } = session
 
-  // ── Smart scroll: auto-follow during streaming, snap after message load ──
-  const { scrollToBottom, handleScroll } = useSmartScroll({
-    containerRef: scrollRef,
-    deps: [streamingContent, thoughts.length, isStreaming, isThinking, pendingQuestion, messages],
-    behavior: 'auto',
-  })
+  // ── Scroll control via the shared MessageList shell (Virtuoso-based) ──
+  const messageListRef = useRef<MessageListHandle>(null)
+  const [showScrollButton, setShowScrollButton] = useState(false)
+  const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
+    setShowScrollButton(!atBottom)
+  }, [])
 
-  // ── Extract browser tool calls from streaming thoughts ──
-  const streamingBrowserToolCalls = useBrowserToolCalls(thoughts)
+  // ── Slash-command list for this app-chat session (SDK system:init, keyed by conversationId) ──
+  const slashCommands = useMemo<SlashCommandItem[]>(() => {
+    const initInfo = sessionInitInfo.get(conversationId)
+    if (!initInfo?.slashCommands) return []
+    const skillsSet = new Set(initInfo.skills || [])
+    const items: SlashCommandItem[] = []
+    const seen = new Set<string>()
+    for (const cmd of initInfo.slashCommands) {
+      if (seen.has(cmd)) continue
+      seen.add(cmd)
+      const category = skillsSet.has(cmd) ? 'skill' : 'builtin'
+      items.push({ id: `${category}-${cmd}`, command: `/${cmd}`, label: cmd, category })
+    }
+    return items
+  }, [sessionInitInfo, conversationId])
+
+  // ── Artifacts for @ mention suggestions (depth=5, mirrors space chat) ──
+  const [mentionArtifacts, setMentionArtifacts] = useState<Artifact[]>([])
+  useEffect(() => {
+    if (!spaceId) {
+      setMentionArtifacts([])
+      return
+    }
+    let cancelled = false
+    api.listArtifacts(spaceId, 5).then(response => {
+      if (!cancelled && response.success && response.data) {
+        setMentionArtifacts(response.data as Artifact[])
+      }
+    }).catch(err => {
+      if (!cancelled) console.error('[AppChatView] Failed to load mention artifacts:', err)
+    })
+    return () => { cancelled = true }
+  }, [spaceId])
 
   // ── Load persisted chat messages on mount ──
   useEffect(() => {
@@ -216,7 +245,7 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
       }
 
       // Scroll to bottom after sending
-      requestAnimationFrame(() => scrollToBottom('auto'))
+      requestAnimationFrame(() => messageListRef.current?.scrollToBottom('auto'))
     } catch (err) {
       console.error('[AppChatView] Send error:', err)
       useChatStore.getState().setSessionError(conversationId, String((err as Error).message || t('Failed to send message')))
@@ -272,7 +301,6 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
             onStop={handleStop}
             isGenerating={false}
             placeholder={t('Chat with this App...')}
-            isCompact
           />
         </div>
       </div>
@@ -296,7 +324,6 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
             onStop={handleStop}
             isGenerating={false}
             placeholder={t('Chat with this App...')}
-            isCompact
           />
         </div>
       </div>
@@ -305,72 +332,42 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
 
   // ── Active state: messages + streaming + input ──
   const hasStreamingContent = isGenerating && (streamingContent || thoughts.length > 0 || isThinking)
+  const showEmptyHint = loadState === 'empty' && !hasStreamingContent
 
   return (
     <div className="flex flex-col h-full">
-      {/* Message area */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto" onScroll={handleScroll}>
-        <div className="max-w-3xl mx-auto py-6 px-4">
-          {/* Empty state hint */}
-          {loadState === 'empty' && !hasStreamingContent && (
-            <div className="flex items-center justify-center py-12">
-              <p className="text-sm text-muted-foreground">{t('Send a message to start chatting with this App')}</p>
-            </div>
-          )}
-
-          {/* Persisted messages */}
-          {messages.map((message) => (
-            <MessageRow
-              key={message.id}
-              message={message}
-              hideBrowserViewButton
-            />
-          ))}
-
-          {/* Live streaming content */}
-          {hasStreamingContent && (
-            <StreamingSection
+      <div className="flex-1 relative overflow-hidden">
+        {showEmptyHint ? (
+          <div className="h-full flex items-center justify-center px-4">
+            <p className="text-sm text-muted-foreground">{t('Send a message to start chatting with this App')}</p>
+          </div>
+        ) : (
+          <div className="h-full px-4">
+            <MessageList
+              ref={messageListRef}
+              conversationId={conversationId}
+              messages={messages}
               streamingContent={streamingContent}
+              isGenerating={isGenerating}
               isStreaming={isStreaming}
               thoughts={thoughts}
               isThinking={isThinking}
+              compactInfo={compactInfo}
+              error={error}
+              errorType={errorType}
               textBlockVersion={textBlockVersion}
-              browserToolCalls={streamingBrowserToolCalls}
-              showBrowserViewButton={false}
               pendingQuestion={pendingQuestion}
               onAnswerQuestion={handleAnswerQuestion}
+              onAtBottomStateChange={handleAtBottomStateChange}
+              hideBrowserViewButton
             />
-          )}
+          </div>
+        )}
 
-          {/* Interrupted error (special friendly UI) */}
-          {!isGenerating && error && errorType === 'interrupted' && (
-            <div className="pb-4">
-              <InterruptedBubble error={error} />
-            </div>
-          )}
-
-          {/* Generic error */}
-          {!isGenerating && error && errorType !== 'interrupted' && (
-            <div className="flex justify-start animate-fade-in pb-4">
-              <div className="w-[85%]">
-                <div className="rounded-2xl px-4 py-3 bg-destructive/10 border border-destructive/30">
-                  <div className="flex items-center gap-2 text-destructive">
-                    <AlertCircle className="w-4 h-4" />
-                    <span className="text-sm font-medium">{t('Something went wrong')}</span>
-                  </div>
-                  <p className="mt-2 text-sm text-destructive/80">{error}</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Compact notice */}
-          {compactInfo && (
-            <div className="pb-4">
-              <CompactNotice trigger={compactInfo.trigger} preTokens={compactInfo.preTokens} />
-            </div>
-          )}
-        </div>
+        <ScrollToBottomButton
+          visible={showScrollButton && !showEmptyHint}
+          onClick={() => messageListRef.current?.scrollToBottom('auto')}
+        />
       </div>
 
       {/* Clear chat + Input area */}
@@ -412,7 +409,8 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
           onStop={handleStop}
           isGenerating={isGenerating}
           placeholder={t('Chat with this App...')}
-          isCompact
+          slashCommands={slashCommands}
+          mentionArtifacts={mentionArtifacts}
         />
       </div>
     </div>

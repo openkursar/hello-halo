@@ -11,6 +11,10 @@
  *   2. Longest-prefix match from the `patterns` section
  *   3. Built-in defaults
  *
+ * Additionally, a `[1m]` suffix on the model id (CC's explicit 1M context
+ * opt-in) raises the resolved contextWindow to 1M unless the user override
+ * explicitly sets contextWindow — see `resolve()`.
+ *
  * This service is purely in-memory — preset data is bundled with the app and
  * loaded at module initialisation time. It adds zero async I/O overhead.
  */
@@ -21,6 +25,9 @@ import type {
   ModelCapabilityOverride,
   ModelCapabilitiesPreset
 } from '../../shared/types/model-capabilities'
+
+/** Context window granted by the explicit `[1m]` model-id suffix */
+const EXPLICIT_1M_CONTEXT_WINDOW = 1_000_000
 
 /** Fallback values used when a model has no preset or pattern entry */
 const DEFAULT_CAPABILITY: Omit<ModelCapability, 'displayName' | 'provider'> = {
@@ -80,7 +87,8 @@ class ModelCapabilitiesService {
    * Resolve the final capability for a model.
    *
    * Priority (highest → lowest):
-   *   user override > exact match > pattern match > built-in defaults
+   *   user override > `[1m]` model-id suffix (contextWindow only)
+   *   > exact match > pattern match > built-in defaults
    *
    * @param modelId   The model identifier (e.g. "deepseek-chat", "Pro/zai-org/GLM-4.7")
    * @param overrides Optional map of per-model overrides from the AISource config
@@ -96,11 +104,25 @@ class ModelCapabilitiesService {
     }
 
     const userOverride = overrides?.[modelId]
-    if (!userOverride || Object.keys(userOverride).length === 0) {
-      return base
+    const merged =
+      userOverride && Object.keys(userOverride).length > 0
+        ? { ...base, ...userOverride }
+        : base
+
+    // A `[1m]` suffix in the model id is the user's explicit 1M context
+    // opt-in (CC's documented convention). Preset/pattern/default windows
+    // are guesses and must not silently shrink it; only an explicit
+    // per-model contextWindow override — a more specific user action —
+    // may still lower it.
+    if (
+      /\[1m\]$/i.test(modelId) &&
+      !Number.isFinite(userOverride?.contextWindow) &&
+      merged.contextWindow < EXPLICIT_1M_CONTEXT_WINDOW
+    ) {
+      return { ...merged, contextWindow: EXPLICIT_1M_CONTEXT_WINDOW }
     }
 
-    return { ...base, ...userOverride }
+    return merged
   }
 
   /**

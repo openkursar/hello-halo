@@ -4,6 +4,17 @@
 import type { ChatSlice } from './internal'
 import { api, createEmptySessionState } from './internal'
 import type { AgentEventBase, Conversation, ConversationMeta, Thought, ToolCall } from './internal'
+import { isAppChatKey } from '../../../shared/apps/im-keys'
+
+/**
+ * Virtual conversation ids never represent a real user conversation and must
+ * never appear in the sidebar or the Pulse panel: "app-chat:{appId}" and IM
+ * session keys (digital-human + IM sessions). Real conversations are UUIDs that
+ * match a ConversationMeta in spaceStates.
+ */
+function isVirtualConversationId(conversationId: string): boolean {
+  return isAppChatKey(conversationId)
+}
 
 export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAgentToolCall' | 'handleAgentToolResult' | 'handleAgentError' | 'handleAgentComplete' | 'handleAgentThought' | 'handleAgentThoughtDelta' | 'handleAgentCompact' | 'handleAgentSessionInfo' | 'handleAgentTurnStart' | 'handleAskQuestion'> = (set, get) => ({
   handleAgentMessage: (data) => {
@@ -114,8 +125,10 @@ export const createAgentEventsSlice: ChatSlice<'handleAgentMessage' | 'handleAge
       state.currentSpaceId === spaceId &&
       currentSpaceState?.currentConversationId === conversationId
 
-    // Track unseen completion if user is not viewing this conversation
-    if (!isUserViewingThisConversation) {
+    // Track unseen completion if user is not viewing this conversation.
+    // Skip virtual sessions (digital-human chat, IM, automation runs): they are
+    // not real conversations and must never surface in Pulse or the sidebar.
+    if (!isUserViewingThisConversation && !isVirtualConversationId(conversationId)) {
       // Find the conversation title from any space state
       let title = 'Conversation'
       let metaFound = false

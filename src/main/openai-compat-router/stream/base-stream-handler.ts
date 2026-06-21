@@ -13,6 +13,7 @@ import { jsonrepair } from 'jsonrepair'
 import { SSEWriter } from './sse-writer'
 import type { AnthropicStopReason, StreamToolCallState } from '../types'
 import { safeJsonParse } from '../utils'
+import { estimateUsageTokens } from '../utils/usage-estimator'
 
 // ============================================================================
 // Stream State
@@ -68,12 +69,19 @@ export function createInitialState(model: string): StreamState {
 export interface StreamHandlerOptions {
   model?: string
   debug?: boolean
+  /**
+   * Deferred input-token estimate started at request dispatch (see
+   * usage-estimator.ts). Awaited only when the upstream omitted usage —
+   * settled long before stream finish, so the await never blocks.
+   */
+  estimateInputTokens?: () => Promise<number>
 }
 
 export abstract class BaseStreamHandler {
   protected writer: SSEWriter
   protected state: StreamState
   protected debug: boolean
+  private estimateInputTokens?: () => Promise<number>
 
   // Tool call tracking
   protected toolCallMap = new Map<number, StreamToolCallState>()
@@ -83,6 +91,7 @@ export abstract class BaseStreamHandler {
     this.writer = new SSEWriter(res, { debug: options.debug })
     this.state = createInitialState(options.model || 'unknown')
     this.debug = options.debug ?? false
+    this.estimateInputTokens = options.estimateInputTokens
   }
 
   /**
@@ -135,7 +144,7 @@ export abstract class BaseStreamHandler {
     return true
   }
 
-  protected finishMessage(): void {
+  protected async finishMessage(): Promise<void> {
     // Only check if writer is closed, not if state is finished
     // (state.finished is set when finish_reason is received, but we still need to send final events)
     if (this.writer.isClosed) return
@@ -165,7 +174,7 @@ export abstract class BaseStreamHandler {
       } else if (textPreview) {
         console.log(`[LLM] model=${this.state.model} stop=${this.state.stopReason} → text="${textPreview}"`)
       } else {
-        console.log(`[LLM] model=${this.state.model} stop=${this.state.stopReason} → (empty)`)
+        console.log(`[LLM] model=${this.state.model} stop=${this.state.stopReason} → (empty, thinking_len=${this.state.accumulatedThinking.length})`)
       }
     }
 
@@ -179,40 +188,37 @@ export abstract class BaseStreamHandler {
     // Close any open block
     this.closeCurrentBlock()
 
-    // Ensure the response contains a valid terminal content block.
-    // The downstream SDK (isResultSuccessful) requires the last content block to
-    // be 'text', 'thinking', or 'redacted_thinking' — otherwise the response is
-    // treated as an execution error.
+    // Repair turns that produced no actual text and no tool calls, regardless
+    // of which blocks the provider happened to open (truly empty, thinking-only,
+    // empty text block — all observed in the wild from GLM-4.7/5.1 et al.):
     //
-    // Two failure modes observed from third-party LLMs:
-    //   1. No content blocks at all (no text, no thinking) — inject empty text block.
-    //   2. Thinking block present but text block empty (e.g. GLM-4.7 puts the full
-    //      answer inside the thinking block and emits an empty text block) — the SDK
-    //      receives text="" which triggers an execution error. Inject a placeholder
-    //      so the response is not treated as failed.
-    if (this.state.stopReason === 'end_turn' && this.state.started) {
+    //   1. SDK contract: isResultSuccessful requires a terminal 'text' /
+    //      'thinking' / 'redacted_thinking' block, else the turn is treated as
+    //      an execution error and the agent loop aborts.
+    //   2. History round-trip: the placeholder must be NON-empty. An empty
+    //      assistant text persists into the session transcript and converts to
+    //      `{role:'assistant', content: null}` without tool_calls on the next
+    //      request (messages.ts `text || null`) — an invalid history message
+    //      that makes providers like GLM return empty responses for every
+    //      subsequent turn in the session.
+    //
+    // Gate matches the effective stop reason emitted below (null defaults to
+    // end_turn), so interrupted streams that finalize as end_turn get the same
+    // repair.
+    if ((this.state.stopReason ?? 'end_turn') === 'end_turn' && this.state.started) {
       const hasActualText = this.state.accumulatedText.length > 0
       const hasToolCalls = this.toolCallMap.size > 0
 
       if (!hasActualText && !hasToolCalls) {
-        if (!this.state.hasTextBlock && !this.state.hasThinkingBlock) {
-          // Case 1: completely empty response — inject an empty text block
-          const idx = this.state.contentBlockIndex
-          this.writer.writeTextBlockStart(idx)
-          this.writer.writeBlockStop(idx)
-          if (this.debug) console.log(`[StreamHandler] Injected empty text block at index ${idx} (model=${this.state.model}, end_turn with no content)`)
-        } else if (this.state.hasThinkingBlock && this.state.hasTextBlock) {
-          // Case 2: thinking present, text block opened but empty — the block is
-          // already closed, so we can't append to it. Re-open a new text block
-          // with a placeholder to satisfy the SDK contract.
-          const idx = this.state.contentBlockIndex
-          this.writer.writeTextBlockStart(idx)
-          this.writer.writeTextDelta(idx, ' ')
-          this.writer.writeBlockStop(idx)
-          if (this.debug) console.log(`[StreamHandler] Injected placeholder text block at index ${idx} (model=${this.state.model}, thinking-only response with empty text)`)
-        }
+        const idx = this.state.contentBlockIndex
+        this.writer.writeTextBlockStart(idx)
+        this.writer.writeTextDelta(idx, ' ')
+        this.writer.writeBlockStop(idx)
+        console.log(`[StreamHandler] Injected placeholder text block at index ${idx} (model=${this.state.model}, stop=${this.state.stopReason ?? 'null'}, thinking_len=${this.state.accumulatedThinking.length})`)
       }
     }
+
+    await this.applyUsageFallback()
 
     // Write message_delta
     this.writer.writeMessageDelta(this.state.stopReason || 'end_turn', {
@@ -228,6 +234,55 @@ export abstract class BaseStreamHandler {
     this.writer.end()
 
     this.state.finished = true
+  }
+
+  /**
+   * Bias-high usage fallback for upstreams that omit usage entirely.
+   *
+   * The final message_delta is the single source of token accounting for
+   * every downstream consumer (SDK context display, llm.invocation telemetry,
+   * automation run records); leaving it at 0 silently zeroes all of them.
+   * Estimation contract: may over-count, must never under-count (see
+   * usage-estimator.ts).
+   *
+   * Input side awaits the deferred estimate started at dispatch time — by
+   * stream finish it has settled, so the await is a resolved-promise
+   * microtask. Output side runs a single char pass over text already
+   * accumulated in state (KB-scale).
+   *
+   * Gated on `state.started`: a stream that never produced a message (e.g.
+   * upstream error before any chunk) was likely never charged, so no tokens
+   * are attributed to it.
+   */
+  private async applyUsageFallback(): Promise<void> {
+    if (!this.state.started) return
+    const usage = this.state.usage
+    if (usage.inputTokens > 0 && usage.outputTokens > 0) return
+
+    try {
+      const needInput = usage.inputTokens === 0 && !!this.estimateInputTokens
+      const needOutput = usage.outputTokens === 0
+
+      if (needInput) {
+        usage.inputTokens = await this.estimateInputTokens!()
+      }
+      if (needOutput) {
+        let raw = estimateUsageTokens(this.state.accumulatedText)
+        raw += estimateUsageTokens(this.state.accumulatedThinking)
+        for (const tc of this.toolCallMap.values()) {
+          raw += estimateUsageTokens(tc.arguments)
+        }
+        if (raw > 0) usage.outputTokens = raw
+      }
+      if (needInput || needOutput) {
+        console.log(
+          `[StreamHandler] usage fallback applied: input=${usage.inputTokens} output=${usage.outputTokens} (bias-high estimate, model=${this.state.model})`
+        )
+      }
+    } catch (err) {
+      // Fallback must never break stream finalization.
+      console.warn('[StreamHandler] usage fallback failed:', err)
+    }
   }
 
   // ============================================================================

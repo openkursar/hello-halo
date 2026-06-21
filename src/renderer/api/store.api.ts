@@ -43,6 +43,13 @@ export const storeApi = {
     return httpRequest('GET', `/api/store/apps/${slug}`)
   },
 
+  storeGetAppDocument: async (slug: string): Promise<ApiResponse<{ content: string | null }>> => {
+    if (isElectron()) {
+      return window.halo.storeGetAppDocument(slug)
+    }
+    return httpRequest('GET', `/api/store/app-document?slug=${encodeURIComponent(slug)}`)
+  },
+
   storeInstall: async (
     slug: string,
     spaceId: string | null,
@@ -104,11 +111,66 @@ export const storeApi = {
     return httpRequest('PATCH', `/api/store/registries/${registryId}/adapter-config`, adapterConfig)
   },
 
+  storeCheckUpdatesNow: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeCheckUpdatesNow()
+    }
+    return httpRequest('POST', '/api/store/updates/check-now')
+  },
+
+  storeApplyUpgrade: async (
+    appId: string,
+    mode: 'patch_minor' | 'major' | 'force' = 'force',
+  ): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeApplyUpgrade({ appId, mode })
+    }
+    return httpRequest('POST', `/api/store/updates/${appId}/apply`, { mode })
+  },
+
+  storePublish: async (appId: string, author?: string, version?: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storePublish({ appId, author, version })
+    }
+    return httpRequest('POST', `/api/store/publish`, { appId, author, version })
+  },
+
+  storePublishPreview: async (appId: string, author?: string): Promise<ApiResponse<{ slug: string; localVersion: string; storeVersion: string | null }>> => {
+    if (isElectron()) {
+      return window.halo.storePublishPreview({ appId, author })
+    }
+    return httpRequest('POST', `/api/store/publish/preview`, { appId, author })
+  },
+
+  storeExportDhpkg: async (appId: string): Promise<ApiResponse<{ path: string }>> => {
+    if (isElectron()) {
+      return window.halo.storeExportDhpkg({ appId })
+    }
+    return { success: false, error: 'Not supported outside Electron' }
+  },
+
+  storeImportDhpkg: async (input?: { filePath?: string; spaceId?: string | null }): Promise<ApiResponse<{ appId: string }>> => {
+    if (isElectron()) {
+      return window.halo.storeImportDhpkg(input)
+    }
+    if (!input?.filePath) {
+      return { success: false, error: 'A server-local filePath is required outside Electron' }
+    }
+    return httpRequest('POST', '/api/store/import-dhpkg', input)
+  },
+
   onStoreSyncStatusChanged: (callback: (data: { registryId: string; status: string; appCount: number; error?: string }) => void) => {
     if (isElectron()) {
       return window.halo.onStoreSyncStatusChanged(callback)
     }
     return onEvent('store:sync-status-changed', callback)
+  },
+
+  onStoreUpgradeAvailable: (callback: (data: { appId: string; currentVersion: string; latestVersion: string; strategy: 'auto' | 'notify' | 'manual'; severity: 'patch' | 'minor' | 'major' }) => void) => {
+    if (isElectron()) {
+      return window.halo.onStoreUpgradeAvailable(callback)
+    }
+    return onEvent('store:upgrade-available', callback)
   },
 
 }

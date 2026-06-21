@@ -6,7 +6,8 @@
  */
 
 import { ipcMain, BrowserWindow, Menu, clipboard, nativeImage, shell, nativeTheme, MenuItemConstructorOptions } from 'electron'
-import { browserViewManager, CHROME_USER_AGENT, getDefaultBrowserHomepage, type BrowserViewBounds, type DeviceMode } from '../services/browser-view.service'
+import { browserViewManager, CHROME_USER_AGENT, type BrowserViewBounds, type DeviceMode } from '../services/browser-view.service'
+import { getDefaultBrowserHomepage } from '../services/browser-policy.service'
 import { buildLoginLoadingPage, buildLoginErrorPage, loginPageBg } from '../services/browser-login-pages'
 
 /**
@@ -53,7 +54,8 @@ export function registerBrowserHandlers(mainWindow: BrowserWindow | null) {
         return { success: true, data: state }
       } catch (error) {
         console.error('[Browser IPC] Create failed:', error)
-        return { success: false, error: (error as Error).message }
+        const err = error as Error & { code?: string }
+        return { success: false, error: err.message, code: err.code }
       }
     }
   )

@@ -175,12 +175,6 @@ export async function enableRemoteAccess(
   } catch (err) {
     if (err instanceof CredentialRestoreError) {
       logAuthEvent('credential_restore_failed', {})
-      // The plaintext is already lost — keeping the unreadable blob would
-      // only force the user through this error path again on the next
-      // enable attempt. Wipe it (and disable the feature) so a subsequent
-      // user-initiated enable starts cleanly with a freshly generated PIN.
-      // The UI receives the code below and is expected to tell the user
-      // their paired devices must be re-paired.
       saveConfig({
         ...config,
         remoteAccess: {
@@ -196,13 +190,6 @@ export async function enableRemoteAccess(
     throw err
   }
 
-  // Always re-encode the live token. This unifies three paths:
-  //   - first launch (no saved value)
-  //   - profile change (plain → gm, or gm → plain)
-  //   - corrupted ciphertext recovery (saved value failed to decrypt,
-  //     a fresh PIN was generated, and we must overwrite the bad blob)
-  // For AEAD profiles the salt/IV refresh on every save is fine — the
-  // ciphertext is bound to the same plaintext.
   saveConfig({
     ...config,
     remoteAccess: {

@@ -1,27 +1,26 @@
-/**
- * Store Module
- *
- * Registry service for discovering, browsing, and installing apps
- * from remote registries (GitHub-based or custom).
- *
- * Initialization: Called from bootstrap/extended.ts after platform+apps init.
- * Shutdown: Called during app cleanup.
- */
+/** Registry service for discovering, browsing, installing, and publishing apps. */
 
 export {
   initRegistryService,
   shutdownRegistryService,
   onSyncStatusChanged,
-  // Re-export key functions for controller use
+  onUpgradeAvailable,
   refreshIndex,
   queryStore,
   listApps,
   getAppDetail,
+  getAppDocument,
   installFromStore,
   checkUpdates,
+  applyUpgrade,
   getRegistries,
   addRegistry,
   removeRegistry,
   toggleRegistry,
   updateRegistryAdapterConfig,
 } from './registry.service'
+
+export { checkNow as checkUpgradesNow, startUpgradeScheduler, stopUpgradeScheduler } from './upgrade.service'
+
+export { publish, collectFiles, getPublishPreview } from './publish'
+export { pack as packDhpkg, unpack as unpackDhpkg } from './dhpkg'

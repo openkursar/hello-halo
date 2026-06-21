@@ -22,12 +22,14 @@ export const appRpc = {
   appGetSession: rawRpcMethod('app:get-session'),
   appRespondEscalation: rawRpcMethod('app:respond-escalation'),
   appContinueRun: rawRpcMethod('app:continue-run'),
+  appInjectRun: rawRpcMethod('app:inject-run'),
   appUpdateConfig: rawRpcMethod('app:update-config'),
   appUpdateFrequency: rawRpcMethod('app:update-frequency'),
   appUpdateOverrides: rawRpcMethod('app:update-overrides'),
   appUpdateSpec: rawRpcMethod('app:update-spec'),
   appGrantPermission: rawRpcMethod('app:grant-permission'),
   appRevokePermission: rawRpcMethod('app:revoke-permission'),
+  appSetUpgradeStrategy: rawRpcMethod('app:set-upgrade-strategy'),
 
   // App Import / Export
   appExportSpec: rawRpcMethod('app:export-spec'),

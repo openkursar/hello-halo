@@ -20,7 +20,7 @@ vi.mock('electron', () => ({
 }))
 
 import { Readable } from 'node:stream'
-import { streamAnthropicPassthrough } from '../stream/anthropic-stream'
+import { streamAnthropicPassthrough, pipeAnthropicPassthrough } from '../stream/anthropic-stream'
 
 /** Build a mock Express response that captures written chunks */
 function createMockRes() {
@@ -139,11 +139,19 @@ describe('AnthropicStreamHandler', () => {
 
     const events = parseSSEEvents(chunks)
 
-    // Should have injected an empty text block (start + stop, no delta)
+    // Should have injected a placeholder text block. The placeholder must be
+    // non-empty: empty assistant text converts to `content: null` (invalid)
+    // when the history is replayed to OpenAI-compat providers.
     const textBlockStarts = events.filter(e =>
       e.event === 'content_block_start' && e.data.content_block?.type === 'text'
     )
     expect(textBlockStarts).toHaveLength(1)
+
+    const textDeltas = events.filter(e =>
+      e.event === 'content_block_delta' && e.data.delta?.type === 'text_delta'
+    )
+    expect(textDeltas).toHaveLength(1)
+    expect(textDeltas[0].data.delta.text).toBe(' ')
 
     const msgDelta = events.find(e => e.event === 'message_delta')
     expect(msgDelta?.data.delta.stop_reason).toBe('end_turn')
@@ -193,8 +201,9 @@ describe('AnthropicStreamHandler', () => {
     expect(textBlockStarts).toHaveLength(0)
   })
 
-  it('handles thinking-only response without text block (no text block opened)', async () => {
-    // Edge case: model sends thinking but never opens a text block at all
+  it('repairs thinking-only response that never opens a text block (GLM-5.1 form)', async () => {
+    // GLM-5.1 form: only reasoning is streamed, no text block is ever opened.
+    // The repair must not depend on which blocks the provider happened to open.
     const { res, chunks } = createMockRes()
     const upstream = [
       'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"test","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
@@ -209,11 +218,72 @@ describe('AnthropicStreamHandler', () => {
 
     const events = parseSSEEvents(chunks)
 
-    // thinking block is a valid terminal type per SDK, but since hasThinkingBlock
-    // is true and hasTextBlock is false, the case 2 branch won't trigger.
-    // Case 1 won't trigger either (hasThinkingBlock is true).
-    // This is correct — the SDK accepts thinking as a valid terminal block.
+    const textDeltas = events.filter(e =>
+      e.event === 'content_block_delta' && e.data.delta?.type === 'text_delta'
+    )
+    expect(textDeltas).toHaveLength(1)
+    expect(textDeltas[0].data.delta.text).toBe(' ')
+
     const msgDelta = events.find(e => e.event === 'message_delta')
     expect(msgDelta?.data.delta.stop_reason).toBe('end_turn')
+  })
+})
+
+describe('Anthropic passthrough: re-serialize vs raw pipe', () => {
+  // Interleaved thinking: a thinking block that appears AFTER a text block in
+  // the same response (the norm with Anthropic's interleaved-thinking beta).
+  // The re-serializer's one-shot reasoning state machine drops such thinking
+  // text while letting the signature through — this is the Claude-OAuth bug.
+  const interleavedUpstream = [
+    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-opus-4-8","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Let me check."}}\n\n',
+    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+    'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":""}}\n\n',
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":"interleaved reasoning"}}\n\n',
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"signature_delta","signature":"sig-abc"}}\n\n',
+    'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":20}}\n\n',
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+  ].join('')
+
+  it('re-serialize path drops interleaved thinking text but keeps the signature (documents the bug)', async () => {
+    const { res, chunks } = createMockRes()
+
+    await streamAnthropicPassthrough(sseToStream(interleavedUpstream), res, 'claude-opus-4-8')
+
+    const events = parseSSEEvents(chunks)
+    const thinkingDeltas = events.filter(e =>
+      e.event === 'content_block_delta' && e.data.delta?.type === 'thinking_delta'
+    )
+    const signatureDeltas = events.filter(e =>
+      e.event === 'content_block_delta' && e.data.delta?.type === 'signature_delta'
+    )
+
+    // The bug: thinking text is dropped, signature survives.
+    expect(thinkingDeltas).toHaveLength(0)
+    expect(signatureDeltas).toHaveLength(1)
+  })
+
+  it('raw pipe path forwards interleaved thinking text verbatim (the fix)', async () => {
+    const { res, chunks } = createMockRes()
+
+    await pipeAnthropicPassthrough(sseToStream(interleavedUpstream), res)
+
+    // Byte-for-byte forwarding: output equals input exactly.
+    expect(chunks.join('')).toBe(interleavedUpstream)
+
+    const events = parseSSEEvents(chunks)
+    const thinkingDeltas = events.filter(e =>
+      e.event === 'content_block_delta' && e.data.delta?.type === 'thinking_delta'
+    )
+    expect(thinkingDeltas).toHaveLength(1)
+    expect(thinkingDeltas[0].data.delta.thinking).toBe('interleaved reasoning')
+  })
+
+  it('raw pipe ends the response on an empty/missing upstream body', async () => {
+    const { res } = createMockRes()
+    await pipeAnthropicPassthrough(null, res)
+    expect(res.end).toHaveBeenCalled()
   })
 })

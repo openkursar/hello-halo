@@ -252,6 +252,11 @@ export interface HaloAPI {
   // Security policy (renderer-safe slice — see ipc/security.ts)
   getSecurityPolicy: () => Promise<IpcResponse>
 
+  // Browser policy (user-extensible allowlist — see ipc/browser-policy.ts)
+  getBrowserPolicy: () => Promise<IpcResponse>
+  addBrowserAllowlistEntry: (pattern: string) => Promise<IpcResponse>
+  removeBrowserAllowlistEntry: (pattern: string) => Promise<IpcResponse>
+
   // System Settings
   getAutoLaunch: () => Promise<IpcResponse>
   setAutoLaunch: (enabled: boolean) => Promise<IpcResponse>
@@ -431,12 +436,14 @@ export interface HaloAPI {
   appGetSession: (input: { appId: string; runId: string }) => Promise<IpcResponse>
   appRespondEscalation: (input: { appId: string; escalationId: string; response: { ts: number; choice?: string; text?: string } }) => Promise<IpcResponse>
   appContinueRun: (input: { appId: string; runId: string }) => Promise<IpcResponse>
+  appInjectRun: (input: { appId: string; runId: string; text: string }) => Promise<IpcResponse>
   appUpdateConfig: (input: { appId: string; config: Record<string, unknown> }) => Promise<IpcResponse>
   appUpdateFrequency: (input: { appId: string; subscriptionId: string; frequency: string }) => Promise<IpcResponse>
   appUpdateOverrides: (input: { appId: string; overrides: Record<string, unknown> }) => Promise<IpcResponse>
   appUpdateSpec: (input: { appId: string; specPatch: Record<string, unknown> }) => Promise<IpcResponse>
   appGrantPermission: (input: { appId: string; permission: string }) => Promise<IpcResponse>
   appRevokePermission: (input: { appId: string; permission: string }) => Promise<IpcResponse>
+  appSetUpgradeStrategy: (input: { appId: string; strategy: 'auto' | 'notify' | 'manual' }) => Promise<IpcResponse>
 
   // App Import / Export
   appExportSpec: (appId: string) => Promise<IpcResponse<{ yaml: string; filename: string }>>
@@ -505,6 +512,7 @@ export interface HaloAPI {
   storeQuery: (params: { search?: string; type?: string; category?: string; page?: number; pageSize?: number; locale?: string }) => Promise<IpcResponse>
   storeListApps: (query: { search?: string; locale?: string; category?: string; type?: string; tags?: string[] }) => Promise<IpcResponse>
   storeGetAppDetail: (slug: string) => Promise<IpcResponse>
+  storeGetAppDocument: (slug: string) => Promise<IpcResponse>
   storeInstall: (
     input: { slug: string; spaceId: string | null; userConfig?: Record<string, unknown> },
     onProgress?: (progress: StoreInstallProgress) => void,
@@ -516,7 +524,14 @@ export interface HaloAPI {
   storeRemoveRegistry: (registryId: string) => Promise<IpcResponse>
   storeToggleRegistry: (input: { registryId: string; enabled: boolean }) => Promise<IpcResponse>
   storeUpdateRegistryAdapterConfig: (input: { registryId: string; adapterConfig: Record<string, unknown> }) => Promise<IpcResponse>
+  storeCheckUpdatesNow: () => Promise<IpcResponse>
+  storeApplyUpgrade: (input: { appId: string; mode?: 'patch_minor' | 'major' | 'force' }) => Promise<IpcResponse>
+  storePublish: (input: { appId: string; author?: string; version?: string }) => Promise<IpcResponse>
+  storePublishPreview: (input: { appId: string; author?: string }) => Promise<IpcResponse<{ slug: string; localVersion: string; storeVersion: string | null }>>
+  storeExportDhpkg: (input: { appId: string }) => Promise<IpcResponse<{ path: string }>>
+  storeImportDhpkg: (input?: { filePath?: string; spaceId?: string | null }) => Promise<IpcResponse<{ appId: string }>>
   onStoreSyncStatusChanged: (callback: (data: { registryId: string; status: string; appCount: number; error?: string }) => void) => () => void
+  onStoreUpgradeAvailable: (callback: (data: { appId: string; currentVersion: string; latestVersion: string; strategy: 'auto' | 'notify' | 'manual'; severity: 'patch' | 'minor' | 'major' }) => void) => () => void
 
   // Model Capabilities
   /** Resolve the final capability for a model (preset merged with user overrides) */
@@ -648,6 +663,11 @@ const api: HaloAPI = {
 
   // Security policy
   ...bindRpc(securityRpc),
+
+  // Browser policy
+  getBrowserPolicy: () => ipcRenderer.invoke('browser-policy:get'),
+  addBrowserAllowlistEntry: (pattern) => ipcRenderer.invoke('browser-policy:add', { pattern }),
+  removeBrowserAllowlistEntry: (pattern) => ipcRenderer.invoke('browser-policy:remove', { pattern }),
 
   // System Settings + Window controls (derived from systemRpc contract)
   ...bindRpc(systemRpc),
@@ -791,6 +811,7 @@ const api: HaloAPI = {
   // Store (App Registry) — most methods derived from storeRpc contract;
   // storeInstall keeps its custom progress-listener wrapper below.
   ...bindRpc(storeRpc),
+  storeGetAppDocument: (slug) => ipcRenderer.invoke('store:get-app-document', slug),
   storeInstall: async (input, onProgress) => {
     if (!onProgress) {
       return ipcRenderer.invoke('store:install', input)
@@ -808,6 +829,7 @@ const api: HaloAPI = {
     }
   },
   onStoreSyncStatusChanged: (callback) => createEventListener('store:sync-status-changed', callback),
+  onStoreUpgradeAvailable: (callback) => createEventListener('store:upgrade-available', callback),
 
   // Notification (in-app toast)
   onNotificationToast: (callback) => createEventListener('notification:toast', callback),

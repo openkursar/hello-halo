@@ -49,6 +49,7 @@ import * as storeController from '../../controllers/store.controller'
 import {
   rejectIfRemoteMcpForbidden,
   rejectIfRemoteMcpForbiddenAsync,
+  rejectIfRemoteBrowserAllowlistForbidden,
   isMcpAppSpec,
   patchTouchesMcp,
   configTouchesMcp,
@@ -251,6 +252,7 @@ export {
   reconcileArtifacts,
   rejectIfRemoteMcpForbidden,
   rejectIfRemoteMcpForbiddenAsync,
+  rejectIfRemoteBrowserAllowlistForbidden,
   relative,
   renameArtifact,
   resolve,

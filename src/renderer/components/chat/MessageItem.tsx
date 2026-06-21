@@ -289,8 +289,10 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
   // Check if there are running browser tools (based on isWorking state)
   const hasBrowserActivity = isWorking && browserToolCalls.length > 0
 
-  // Error-only message (no content): render standalone error block without bubble wrapper
-  const isErrorOnly = !isUser && !message.content && !!message.error && !isWorking
+  // Error-only message (no content): render standalone error block without bubble wrapper.
+  // Treat whitespace-only content as empty — the empty-response repair placeholder
+  // (a single space) must not mask the error block behind a blank bubble.
+  const isErrorOnly = !isUser && !message.content?.trim() && !!message.error && !isWorking
 
   // Message bubble content
   const bubble = isErrorOnly ? (

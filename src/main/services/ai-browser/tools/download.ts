@@ -9,7 +9,7 @@
 import { z } from 'zod'
 import { tool } from '../../agent/resolved-sdk'
 import type { BrowserContext } from '../context'
-import { isUrlAllowedByPolicy } from '../../browser-view.service'
+import { isUrlAllowedByPolicy } from '../../browser-policy.service'
 import { textResult, withTimeout } from './helpers'
 
 /** Default timeout for download operations (ms) */

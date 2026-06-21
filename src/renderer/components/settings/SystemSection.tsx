@@ -15,6 +15,7 @@ import type { HealthCheckResult, HealthReport } from './types'
 import { Switch } from '../ui/Switch'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { useSecurityPolicy } from '../../hooks/useSecurityPolicy'
+import { BrowserAllowlistCard } from './BrowserAllowlistCard'
 
 interface SystemSectionProps {
   config: HaloConfig | null
@@ -286,6 +287,10 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
           </label>
         </div>
       </section>
+
+      {/* Browser Allowlist — renders only when the build enables
+          browserPolicy.userExtensible (enterprise allowlist deployments). */}
+      <BrowserAllowlistCard />
 
       {/* System Section */}
       <section id="system" className="bg-card rounded-xl border border-border p-6">

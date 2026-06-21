@@ -19,6 +19,6 @@ Always design with high maintainability and modularity, aligned with long-term a
 - Code must stand alone — no planning labels (`E1`, `F2`, `Phase X`, etc.), no chat-session IDs, no ceremonial prefixes (`Full-chain X:`, `Helper:`, `Section:`) in code or comments. If a comment only makes sense to someone who saw the design conversation, it's wrong.
 - **IMPORTANT** — Comments convey context that readers cannot obtain from the code itself. Default is not needed; only add when the code itself cannot convey information. Each comment should be as brief as possible, avoid being too long, and must not carry sensitive information such as internal documents, corporate information, personal information, etc.
 - Variable naming follows existing-code observation. Underscore prefix (`_name`) is reserved for intentionally-unused identifiers (e.g. `_event` in IPC handlers). Scan 2–3 sibling files for established style before naming a new local.
-
+- do not use ask tool
 **tips.**
 This project is 100% AI-generated, so humans may not necessarily know more than you do. You need to proactively review documentation, manage documents, and examine code to confirm details and direction (for matters involving architecture and direction, actively discuss with users).

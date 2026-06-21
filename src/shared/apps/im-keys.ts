@@ -124,3 +124,12 @@ export function parseTeamChatKey(
   if (!instanceId || !chatId) return null
   return { instanceId, chatType, chatId }
 }
+
+/**
+ * Check whether a conversationId belongs to the app-chat namespace — native
+ * digital-human chat ("app-chat:{appId}") or any IM session under it. Keeps the
+ * "app-chat:" prefix knowledge here rather than inlined at call sites.
+ */
+export function isAppChatKey(conversationId: string): boolean {
+  return conversationId.startsWith('app-chat:')
+}

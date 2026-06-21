@@ -55,6 +55,14 @@ export interface BrowserPolicy {
   blocklist?: string[]
   /** Default homepage URL for new browser tabs (defaults to about:blank when policy is active) */
   homepage?: string
+  /**
+   * Allowlist mode only: when true, users may add their own allowlist
+   * entries (persisted in config.json `browser.customAllowlist`) via the
+   * Settings UI and the blocked-page "allow and retry" action. User entries
+   * can only widen the allowlist — mode and built-in patterns stay fixed.
+   * Omitted/false → the allowlist is fully locked (default).
+   */
+  userExtensible?: boolean
 }
 
 /**
@@ -82,6 +90,21 @@ export interface RegistryOverride {
   name?: string
   enabled?: boolean
   hidden?: boolean
+  /**
+   * Publish target for the App detail page's "Publish" button.
+   * The user never picks the target — it is determined by product.json.
+   *
+   *   - 'github-pr':     open a draft PR against an OSS DHP repo (requires `github.owner/repo`)
+   *   - 'http-registry': POST a multipart .dhpkg to a private registry with a Bearer token
+   *   - 'local-dhpkg':   write a .dhpkg via the system save dialog (no network)
+   */
+  publish?: {
+    target: 'github-pr' | 'http-registry' | 'local-dhpkg'
+    /** Required when target === 'github-pr' */
+    github?: { owner: string; repo: string; clientId?: string }
+    /** Required when target === 'http-registry'; must be replaced at deploy time. */
+    token?: string
+  }
 }
 
 /**
@@ -120,6 +143,11 @@ export interface ImChannelsPermissionDefaults {
   }
   /** Placeholder hint for the Owner User IDs input (enterprise-customizable) */
   ownerIdHint?: string
+  /**
+   * Documentation URL appended to the no-owner guide message sent in IM
+   * when permission control is on but no owner is bound yet.
+   */
+  ownerSetupGuideUrl?: string
 }
 
 /**

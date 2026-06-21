@@ -46,6 +46,7 @@ import { getConfig, resolveClaudeConfigDir } from '../../foundation/config.servi
 import { getSpace, getSpaceDir } from '../../services/space.service'
 import { openSessionWriter, type SessionWriter } from './session-store'
 import { prepareMemoryForTurn, finalizeMemoryAfterTurn, type CompactionCredentialsProvider } from './turn/memory-lifecycle'
+import { registerActiveRun, unregisterActiveRun } from './active-runs'
 
 // ============================================
 // Types
@@ -303,7 +304,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // so the model can resume naturally from its restored session context.
     // A full trigger message would interfere with the in-progress task state.
     const initialMessage = trigger.type === 'continue_followup'
-      ? USER_CONTINUE_MESSAGE
+      ? (trigger.continue?.userMessage ?? USER_CONTINUE_MESSAGE)
       : (trigger.type === 'escalation_followup' && existingRunId && trigger.escalation)
         ? buildEscalationResumeMessage(trigger.escalation)
         : buildInitialMessage({
@@ -419,7 +420,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // Override SDK options for automation context
     sdkOptions.systemPrompt = systemPrompt
     sdkOptions.maxTurns = config.agent?.maxTurns ?? DEFAULT_MAX_TURNS
-    // Automation runs don't need token-level streaming
+    // Token-level partials OFF: a run is headless and emits no renderer events,
+    // so there is no live consumer for token frames. processStream persists one
+    // aggregate block-level message (thinking / tool-call / tool-result / text) per
+    // completed block to the run JSONL; the run-detail view reads that transcript
+    // back by polling (see DESIGN.md §2.10), which is enough to watch a run's steps.
     sdkOptions.includePartialMessages = false
     // Enable extended thinking for automation runs (same as interactive chat)
     sdkOptions.maxThinkingTokens = 10240
@@ -475,19 +480,34 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       sessionWriter.writeTrigger(initialMessage)
     }
 
-    // ── 6. Process stream ──────────────────────────────────
-    let streamResult = await processStream(
+    // ── 5c. Make the run injectable ────────────────────────
+    //    Registering in the active-run registry lets the run-detail input box
+    //    inject a mid-run supplement (active-runs.ts): it writes the supplement to
+    //    the run JSONL and pushes it into the live SDK session. The run itself is
+    //    headless — it emits no renderer events; the run-detail view reads the JSONL.
+    registerActiveRun({
+      runId,
+      appId: app.id,
+      spaceId: app.spaceId!,
       session,
-      initialMessage,
-      abortController,
-      runTag,
-      sessionWriter
-    )
+      writer: sessionWriter,
+    })
+
+    // ── 6. Process stream (headless: persist JSONL + detect report_to_user) ──
+    let streamResult = await processStream(session, initialMessage, abortController, runTag, sessionWriter)
+
+    // A free-text follow-up to an already-completed run (continue.interactive) is
+    // a conversational turn: reply once and stop. The report_to_user auto-continue
+    // enforcement below applies only to autonomous execution and the premature-error
+    // "Continue" recovery — never to a chat follow-up, which must not be nagged.
+    const isInteractiveFollowup =
+      trigger.type === 'continue_followup' && trigger.continue?.interactive === true
 
     // report_to_user is the only completion signal; any other end (silent stop,
     // SDK is_error, transport failure) is transient and must be retried.
     let autoContinueCount = 0
     while (
+      !isInteractiveFollowup &&
       !streamResult.reportToolCalled &&
       !abortController.signal.aborted &&
       autoContinueCount < MAX_AUTO_CONTINUES
@@ -504,13 +524,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         sessionWriter.writeTrigger(`[Auto-continue #${autoContinueCount}] ${AUTO_CONTINUE_FULL}`)
       }
 
-      const nextResult = await processStream(
-        session,
-        AUTO_CONTINUE_FULL,
-        abortController,
-        runTag,
-        sessionWriter
-      )
+      const nextResult = await processStream(session, AUTO_CONTINUE_FULL, abortController, runTag, sessionWriter)
 
       // Merge results: accumulate text and tokens, take latest flags
       streamResult = {
@@ -545,10 +559,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     } else if (streamResult.aiReportedError) {
       finalStatus = 'error'
       outcome = 'error'
-    } else if (!streamResult.reportToolCalled) {
+    } else if (!streamResult.reportToolCalled && !isInteractiveFollowup) {
       // AI never called report_to_user despite auto-continue prompts —
       // treat as error so it shows in Activity Thread and counts toward
-      // consecutive error tracking.
+      // consecutive error tracking. Interactive chat follow-ups are exempt:
+      // a conversational reply has nothing to report, so it completes normally.
       finalStatus = 'error'
       outcome = 'error'
       console.warn(
@@ -567,19 +582,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       tokensUsed: streamResult.totalTokens || undefined,
     })
 
-    // Save session ID for context recovery on both escalation and premature-stop errors.
-    //
-    // escalation (waiting_user): user responds → follow-up run restores context.
-    // premature termination (error + !reportToolCalled): user clicks Continue →
-    //   continueFailedRun() reopens this run and restores the same session.
-    if (streamResult.sessionId && (
-      finalStatus === 'waiting_user' ||
-      (finalStatus === 'error' && !streamResult.reportToolCalled)
-    )) {
+    // Persist the CC session id for every outcome. The subprocess is closed in
+    // `finally` to free resources, but the on-disk session stays resumable — this
+    // is what lets a user reopen a finished run and keep talking to it with full
+    // context (escalation reply, "Continue", or a free-text follow-up correction).
+    if (streamResult.sessionId) {
       store.updateRunSessionId(runId, streamResult.sessionId)
       console.log(
-        `[Runtime][${runTag}] Session ID saved for context recovery ` +
-        `(${finalStatus}): ${streamResult.sessionId}`
+        `[Runtime][${runTag}] Session ID saved for resume (${finalStatus}): ${streamResult.sessionId}`
       )
     }
 
@@ -715,7 +725,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       errorMessage,
     }
   } finally {
-    // ── 8. Close session ────────────────────────────────────
+    // ── 8. Stop accepting injections ───────────────────────
+    //    Unregister BEFORE closing the session so a late injection can't push into
+    //    a closing session. No renderer event is emitted here: runs are headless.
+    //    The run-detail view detects completion from the app runtime status
+    //    (broadcast separately by the service) and reloads the JSONL transcript.
+    unregisterActiveRun(runId)
+
+    // ── 9. Close session ────────────────────────────────────
     // Always close the session. Escalation follow-up recovers context
     // via CC's disk-based resume (sessionId), not process reuse.
     if (session) {
@@ -727,7 +744,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       }
     }
 
-    // ── 9. Destroy scoped browser context (cleans up owned views) ──
+    // ── 10. Destroy scoped browser context (cleans up owned views) ──
     if (scopedBrowserCtx) {
       scopedBrowserCtx.destroy()
       console.log(`[Runtime][${runTag}] Scoped browser context destroyed`)
@@ -740,27 +757,27 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 // ============================================
 
 /**
- * Process the V2 session stream.
+ * Process the V2 session stream for a headless automation run.
  *
- * Unlike conversation mode (send-message.ts), automation runs:
- * - Do NOT stream to the renderer (no IPC events)
- * - Do NOT accumulate thoughts for display
- * - Collect only the final text result and token usage
- * - Detect escalation via report_to_user tool calls
+ * Runs are headless: this loop consumes the SDK stream to (a) persist each
+ * assistant/user message to the run JSONL (the run-detail view reads it back via
+ * app:get-session), (b) detect the `report_to_user` completion signal, and
+ * (c) collect the final text, token usage, and CC session id. It deliberately
+ * emits NO `agent:*` renderer events — watching a run is a read over its JSONL
+ * transcript (SessionDetailView polls), not a live event subscription. This keeps
+ * the unwatched majority of runs (up to maxConcurrent at once) off the renderer
+ * event path entirely. `includePartialMessages` is false, so only aggregate
+ * block-level messages arrive — one JSONL append per completed block.
  *
- * @param session - V2 SDK session
- * @param message - Initial message to send
- * @param abortController - For cancellation
- * @returns Stream processing result
+ * Returns the StreamResult shape the completion logic in executeRun expects.
  */
 async function processStream(
   session: any,
   message: string,
   abortController: AbortController,
-  runTag?: string,
+  runTag: string,
   writer?: SessionWriter
 ): Promise<StreamResult> {
-  const tag = runTag || '????'
   const result: StreamResult = {
     finalText: '',
     totalTokens: 0,
@@ -768,146 +785,72 @@ async function processStream(
     reportToolCalled: false,
   }
 
-  // Send the initial message
   session.send(message)
 
   let messageCount = 0
   let toolUseCount = 0
 
-  // Consume the stream
   try {
     for await (const sdkMessage of session.stream()) {
-      // Check for abort
       if (abortController.signal.aborted) {
-        console.log(`[Runtime][${tag}] Run aborted during stream processing`)
+        console.log(`[Runtime][${runTag}] Run aborted during stream processing`)
         break
       }
-
       if (!sdkMessage || typeof sdkMessage !== 'object') continue
 
-      const msgType = sdkMessage.type
+      const msgType = (sdkMessage as { type?: string }).type
       messageCount++
 
-      // Persist stream event for "View process" drill-down
+      // Persist assistant/user messages to the run JSONL for "View process" reload.
+      // (No stream_event frames arrive — partials are off.)
       if (writer && (msgType === 'assistant' || msgType === 'user')) {
-        writer.writeEvent(sdkMessage)
+        writer.writeEvent(sdkMessage as Record<string, unknown>)
       }
 
-      // Handle assistant messages (final responses)
       if (msgType === 'assistant') {
-        const content = sdkMessage.message?.content
+        const content = (sdkMessage as any).message?.content
         if (Array.isArray(content)) {
           for (const block of content) {
-            if (block.type === 'thinking' && typeof block.thinking === 'string') {
-              console.log(
-                `[Runtime][${tag}] ── THINKING ───────────────────────────────\n` +
-                block.thinking +
-                `\n[Runtime][${tag}] ── END THINKING ───────────────────────────`
-              )
-            }
             if (block.type === 'text' && typeof block.text === 'string') {
               result.finalText += block.text
-              if (block.text.trim()) {
-                console.log(
-                  `[Runtime][${tag}] ── AI TEXT ────────────────────────────────\n` +
-                  block.text +
-                  `\n[Runtime][${tag}] ── END AI TEXT ────────────────────────────`
-                )
-              }
             }
             if (block.type === 'tool_use') {
               toolUseCount++
-              // Detect report_to_user calls (MCP name: mcp__halo-report__report_to_user)
+              // report_to_user (MCP name: mcp__halo-report__report_to_user) is the
+              // definitive completion signal for automation runs.
               if (typeof block.name === 'string' && block.name.includes('report_to_user')) {
                 result.reportToolCalled = true
               }
-              console.log(
-                `[Runtime][${tag}] ── TOOL CALL ──────────────────────────────\n` +
-                `  name:  ${block.name}\n` +
-                `  id:    ${block.id || '(none)'}\n` +
-                `  input: ${JSON.stringify(block.input, null, 2)}\n` +
-                `[Runtime][${tag}] ── END TOOL CALL ──────────────────────────`
-              )
             }
           }
         }
       }
 
-      // Handle user messages — these carry tool results back to the AI
-      if (msgType === 'user') {
-        const content = sdkMessage.message?.content
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block.type === 'tool_result') {
-              const resultText = typeof block.content === 'string'
-                ? block.content
-                : Array.isArray(block.content)
-                  ? block.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('')
-                  : JSON.stringify(block.content ?? '')
-              console.log(
-                `[Runtime][${tag}] ── TOOL RESULT ────────────────────────────\n` +
-                `  id:      ${block.tool_use_id || '(none)'}\n` +
-                `  error:   ${block.is_error ? 'YES' : 'no'}\n` +
-                `  content: ${resultText}\n` +
-                `[Runtime][${tag}] ── END TOOL RESULT ──────────────────────────`
-              )
-            }
-          }
-        }
-      }
-
-      // Handle result messages (includes token usage)
       if (msgType === 'result') {
-        // Extract token usage from result
-        if (sdkMessage.usage) {
-          result.totalTokens =
-            (sdkMessage.usage.input_tokens || 0) +
-            (sdkMessage.usage.output_tokens || 0)
+        const m = sdkMessage as any
+        if (m.usage) {
+          result.totalTokens = (m.usage.input_tokens || 0) + (m.usage.output_tokens || 0)
         }
-
-        // Check if the result indicates an error
-        if (sdkMessage.is_error || sdkMessage.error_during_execution) {
+        if (m.cumulative_usage) {
+          result.totalTokens =
+            (m.cumulative_usage.input_tokens || 0) + (m.cumulative_usage.output_tokens || 0)
+        }
+        if (m.is_error || m.error_during_execution) {
           result.aiReportedError = true
-          console.warn(`[Runtime][${tag}] AI reported error in result message`)
+          console.warn(`[Runtime][${runTag}] AI reported error in result message`)
         }
-
-        // Extract cumulative usage if available
-        if (sdkMessage.cumulative_usage) {
-          result.totalTokens =
-            (sdkMessage.cumulative_usage.input_tokens || 0) +
-            (sdkMessage.cumulative_usage.output_tokens || 0)
-        }
-
-        console.log(
-          `[Runtime][${tag}] Stream result: tokens=${result.totalTokens}, ` +
-          `isError=${result.aiReportedError}, stopReason=${sdkMessage.stop_reason || 'unknown'}`
-        )
       }
 
-      // Handle system messages (may contain session info)
-      if (msgType === 'system') {
-        if (sdkMessage.subtype === 'init') {
-          const tools = sdkMessage.tools || []
-          const mcpInfo = sdkMessage.mcp_servers || []
-          // Capture session ID for escalation context recovery
-          if (sdkMessage.session_id) {
-            result.sessionId = sdkMessage.session_id
-          }
-          console.log(
-            `[Runtime][${tag}] Session initialized: ${sdkMessage.session_id || 'unknown'}\n` +
-            `  tools: [${tools.join(', ')}]\n` +
-            `  mcp_servers: ${JSON.stringify(mcpInfo)}\n` +
-            `  model: ${sdkMessage.model || 'unknown'}`
-          )
-        }
+      // Capture the CC session id so a user can later resume / continue this run.
+      if (msgType === 'system' && (sdkMessage as any).subtype === 'init' && (sdkMessage as any).session_id) {
+        result.sessionId = (sdkMessage as any).session_id
       }
     }
   } catch (streamErr) {
-    // Stream errors may include abort, network issues, etc.
     if (abortController.signal.aborted) {
-      console.log(`[Runtime][${tag}] Stream aborted (expected)`)
+      console.log(`[Runtime][${runTag}] Stream aborted (expected)`)
     } else {
-      console.error(`[Runtime][${tag}] Stream processing error:`, streamErr)
+      console.error(`[Runtime][${runTag}] Stream processing error:`, streamErr)
       throw new RunExecutionError(
         'unknown',
         'unknown',
@@ -917,8 +860,9 @@ async function processStream(
   }
 
   console.log(
-    `[Runtime][${tag}] Stream finished: messages=${messageCount}, toolCalls=${toolUseCount}, ` +
-    `textLen=${result.finalText.length}`
+    `[Runtime][${runTag}] Stream cycle finished: messages=${messageCount}, ` +
+    `toolCalls=${toolUseCount}, textLen=${result.finalText.length}, ` +
+    `reportToolCalled=${result.reportToolCalled}`
   )
 
   return result

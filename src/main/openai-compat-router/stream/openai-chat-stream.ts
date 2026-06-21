@@ -66,7 +66,7 @@ export class OpenAIChatStreamHandler extends BaseStreamHandler {
         console.error('[OpenAIChatStream] Error:', error)
       }
     } finally {
-      this.finishMessage()
+      await this.finishMessage()
     }
   }
 
@@ -265,8 +265,9 @@ export async function streamOpenAIChatToAnthropic(
   stream: unknown,
   res: ExpressResponse,
   model?: string,
-  debug = false
+  debug = false,
+  estimateInputTokens?: () => Promise<number>
 ): Promise<void> {
-  const handler = new OpenAIChatStreamHandler(res, { model, debug })
+  const handler = new OpenAIChatStreamHandler(res, { model, debug, estimateInputTokens })
   await handler.processStream(stream)
 }

@@ -349,6 +349,220 @@ describe('WecomStreamSession 10-minute cutoff fallback', () => {
   })
 })
 
+describe('WecomStreamSession.maybePushProgress', () => {
+  it('does not push when progressLines is empty', async () => {
+    const transport = makeTransport()
+    const { logger } = makeLogger()
+    const session = makeSession(transport, logger)
+    session.markStreamBroken('test setup')
+    
+    // No progress events added, so progressLines is empty
+    await session.finish('done')
+    
+    const pushes = transport.calls.filter((c) => c.method === 'queuePush')
+    // Should only have the final answer push, not a progress push
+    expect(pushes).toHaveLength(1)
+    expect(pushes[0].args[1]).toBe('done')
+  })
+
+  it('throttles progress pushes at 2-minute intervals', async () => {
+    vi.useFakeTimers()
+    try {
+      const t0 = new Date('2026-01-01T00:00:00Z').getTime()
+      vi.setSystemTime(t0)
+      
+      const transport = makeTransport()
+      const { logger, events } = makeLogger()
+      const session = makeSession(transport, logger)
+      
+      // Mark stream as broken to trigger push mode
+      session.markStreamBroken('test')
+      
+      // Add progress events
+      await session.update({ type: 'tool_call', tool: 'Read', summary: 'reading file' })
+      
+      // First push should happen immediately (lastProgressPushAt starts at 0)
+      const pushes1 = transport.calls.filter((c) => c.method === 'queuePush')
+      expect(pushes1.length).toBeGreaterThanOrEqual(1)
+      
+      // Advance less than 2 minutes
+      vi.setSystemTime(t0 + 60_000) // 1 minute
+      await session.update({ type: 'tool_call', tool: 'Bash', summary: 'running command' })
+      
+      // Should NOT push again (throttled)
+      const pushes2 = transport.calls.filter((c) => c.method === 'queuePush')
+      const progressPushes = pushes2.filter(p => 
+        (p.args[1] as string).includes('任务进行中')
+      )
+      expect(progressPushes).toHaveLength(1) // Still just the first one
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('pushes progress after throttle interval elapses', async () => {
+    vi.useFakeTimers()
+    try {
+      const t0 = new Date('2026-01-01T00:00:00Z').getTime()
+      vi.setSystemTime(t0)
+      
+      const transport = makeTransport()
+      const { logger } = makeLogger()
+      const session = makeSession(transport, logger)
+      
+      session.markStreamBroken('test')
+      
+      // Add progress event
+      await session.update({ type: 'tool_call', tool: 'Read', summary: 'first' })
+      
+      // Advance past the 2-minute throttle interval
+      vi.setSystemTime(t0 + 2 * 60_000 + 1000) // 2 minutes + 1 second
+      
+      // Add another progress event - should trigger a new push
+      await session.update({ type: 'tool_call', tool: 'Write', summary: 'second' })
+      
+      const progressPushes = transport.calls.filter(p => 
+        p.method === 'queuePush' && (p.args[1] as string).includes('任务进行中')
+      )
+      expect(progressPushes.length).toBeGreaterThanOrEqual(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('formats push text with last 3 progress lines', async () => {
+    const transport = makeTransport()
+    const { logger } = makeLogger()
+    const session = makeSession(transport, logger)
+    
+    session.markStreamBroken('test')
+    
+    // Add more than 3 progress events
+    await session.update({ type: 'tool_call', tool: 'Read', summary: 'first' })
+    await session.update({ type: 'tool_call', tool: 'Edit', summary: 'second' })
+    await session.update({ type: 'tool_call', tool: 'Write', summary: 'third' })
+    await session.update({ type: 'tool_call', tool: 'Bash', summary: 'fourth' })
+    
+    const progressPushes = transport.calls.filter(p => 
+      p.method === 'queuePush' && (p.args[1] as string).includes('任务进行中')
+    )
+    
+    expect(progressPushes.length).toBeGreaterThanOrEqual(1)
+    
+    const pushText = progressPushes[0].args[1] as string
+    
+    // Should include the prefix
+    expect(pushText).toContain('_(任务进行中)_')
+    
+    // Should only include last 3 lines
+    expect(pushText).not.toContain('first')
+    expect(pushText).toContain('second')
+    expect(pushText).toContain('third')
+    expect(pushText).toContain('fourth')
+  })
+
+  it('increments progressPushesSent counter on each push', async () => {
+    vi.useFakeTimers()
+    try {
+      const t0 = new Date('2026-01-01T00:00:00Z').getTime()
+      vi.setSystemTime(t0)
+      
+      const transport = makeTransport()
+      const { logger, events } = makeLogger()
+      const session = makeSession(transport, logger)
+      
+      session.markStreamBroken('test')
+      
+      // First push
+      await session.update({ type: 'tool_call', tool: 'Read', summary: 'first' })
+      
+      // Check for stream_progress_push log with seq=1
+      expect(events.some(e => e.includes('stream_progress_push'))).toBe(true)
+      
+      // Advance past throttle
+      vi.setSystemTime(t0 + 3 * 60_000)
+      
+      // Second push
+      await session.update({ type: 'tool_call', tool: 'Write', summary: 'second' })
+      
+      // Verify we have multiple stream_progress_push logs
+      const progressLogs = events.filter(e => e.includes('stream_progress_push'))
+      expect(progressLogs.length).toBeGreaterThanOrEqual(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('logs push with correct metadata (seq, bytes, elapsedMs)', async () => {
+    vi.useFakeTimers()
+    try {
+      const t0 = new Date('2026-01-01T00:00:00Z').getTime()
+      vi.setSystemTime(t0)
+      
+      const transport = makeTransport()
+      const { logger } = makeLogger()
+      const loggedEvents: Array<{level: string, event: string, fields: Record<string, unknown>}> = []
+      const trackingLogger = (level: string, event: string, fields: Record<string, unknown>) => {
+        loggedEvents.push({ level, event, fields })
+      }
+      const session = makeSession(transport, trackingLogger)
+      
+      session.markStreamBroken('test')
+      await session.update({ type: 'tool_call', tool: 'Read', summary: 'reading' })
+      
+      const progressLog = loggedEvents.find(e => e.event === 'stream_progress_push')
+      expect(progressLog).toBeDefined()
+      expect(progressLog!.fields.seq).toBe(1)
+      expect(progressLog!.fields.bytes).toBeGreaterThan(0)
+      expect(progressLog!.fields.elapsedMs).toBeGreaterThanOrEqual(0)
+      expect(progressLog!.fields.trace).toBe('trace-1')
+      expect(progressLog!.fields.streamId).toBe('stream-test-1')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('includes correct source tag in queuePush call', async () => {
+    const transport = makeTransport()
+    const { logger } = makeLogger()
+    const session = makeSession(transport, logger)
+    
+    session.markStreamBroken('test')
+    await session.update({ type: 'tool_call', tool: 'Read', summary: 'reading' })
+    
+    const progressPushes = transport.calls.filter(p => 
+      p.method === 'queuePush' && (p.args[1] as string).includes('任务进行中')
+    )
+    
+    expect(progressPushes.length).toBeGreaterThanOrEqual(1)
+    
+    // Verify sourceTag parameter
+    const sourceTag = progressPushes[0].args[3] as string
+    expect(sourceTag).toBe('stream:stream-test-1')
+  })
+
+  it('handles tool_result events in progress lines', async () => {
+    const transport = makeTransport()
+    const { logger } = makeLogger()
+    const session = makeSession(transport, logger)
+    
+    session.markStreamBroken('test')
+    
+    await session.update({ type: 'tool_call', tool: 'Read', summary: 'reading' })
+    await session.update({ type: 'tool_result', tool: 'Read', summary: 'done', success: true })
+    
+    const progressPushes = transport.calls.filter(p => 
+      p.method === 'queuePush' && (p.args[1] as string).includes('任务进行中')
+    )
+    
+    expect(progressPushes.length).toBeGreaterThanOrEqual(1)
+    
+    const pushText = progressPushes[0].args[1] as string
+    expect(pushText).toContain('📖') // Read icon
+    expect(pushText).toContain('✅') // Success icon
+  })
+})
+
 describe('WecomStreamSession instrumentation', () => {
   it('exposes the trace id for log correlation', () => {
     const transport = makeTransport()

@@ -79,6 +79,7 @@ export type BuiltinProviderId =
   | 'together'
   | 'fireworks'
   | 'xai'
+  | 'litellm'
   | 'github-copilot'
   | 'claude'
 
@@ -120,6 +121,11 @@ export const AVAILABLE_MODELS: ModelOption[] = [
     id: 'claude-mythos-preview',
     name: 'Claude Mythos (Preview)',
     description: 'Next-generation frontier model, preview access'
+  },
+  {
+    id: 'claude-fable-5',
+    name: 'Claude Fable 5',
+    description: 'Frontier model with native 1M context, strongest coding and agentic performance'
   },
   {
     id: 'claude-opus-4-7',

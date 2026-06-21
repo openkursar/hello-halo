@@ -55,6 +55,17 @@ export interface RegistryAdapter {
   ): Promise<AppSpec>
 
   /**
+   * Fetch the human-readable document (SKILL.md / README) for a single entry,
+   * for display on the store detail page. Must be cheap: a single static
+   * fetch, no API-quota-consuming calls.
+   *
+   * Returns the markdown text, or null when the source has no document for
+   * this entry (callers hide the docs section). Adapters without a document
+   * concept leave this unimplemented.
+   */
+  fetchDocument?(source: RegistrySource, entry: RegistryEntry): Promise<string | null>
+
+  /**
    * Fetch bundled skill files for skills declared with `bundled: true` in `requires.skills`.
    *
    * Only implemented by adapters whose package format supports co-located skill directories

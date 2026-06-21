@@ -12,7 +12,7 @@
  * every masked/encrypted field is auditable at code-review time.
  */
 
-import { encodeForStorage, decodeFromStorage } from './crypto-envelope'
+import { encodeForStorage, decodeFromStorage, needsKeyMigration } from './crypto-envelope'
 
 // ============================================================================
 // Mask sentinel — the value returned to clients in place of real secrets.
@@ -141,6 +141,20 @@ export function decryptConfigFields(config: Record<string, unknown>): void {
     if (typeof val !== 'string' || !val) return
     parent[key] = decodeFromStorage(val)
   })
+}
+
+/**
+ * True when any sensitive field is not yet stored under the master key
+ * (plaintext or legacy-seed ciphertext). Operates on the raw, still-encoded
+ * config — must run before decryptConfigFields.
+ */
+export function configHasUnmigratedCredentials(config: Record<string, unknown>): boolean {
+  let found = false
+  visitSensitiveFields(config, (parent, key) => {
+    const val = parent[key]
+    if (typeof val === 'string' && needsKeyMigration(val)) found = true
+  })
+  return found
 }
 
 // ============================================================================

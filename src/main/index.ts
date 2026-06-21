@@ -104,7 +104,8 @@ app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
 // Must be called before app.whenReady() and requestSingleInstanceLock() so that
 // each build variant (e.g. Halo vs Halo-Enterprise) uses its own userData directory.
 // This isolates cookies, sessions, localStorage, Claude SDK config, etc.
-import { getDataFolderName, DEFAULT_DATA_FOLDER_NAME, loadProductConfig } from './foundation/product-config'
+import { getDataFolderName, DEFAULT_DATA_FOLDER_NAME } from './foundation/product-config'
+import { isHostnameTrustedForCertificates } from './services/browser-policy.service'
 import { join as joinPath } from 'path'
 const dataFolderName = getDataFolderName()
 if (dataFolderName !== DEFAULT_DATA_FOLDER_NAME) {
@@ -152,30 +153,16 @@ app.on('second-instance', () => {
   }
 })
 
-// Trust certificates for domains explicitly listed in browserPolicy.allowlist.
-// Only fires when Chromium has already rejected a certificate (self-signed, private CA, etc.).
-// Normal HTTPS requests with valid certificates are unaffected (zero overhead).
+// Trust certificates for hosts covered by built-in browser allowlist domain
+// patterns (never user custom entries or CIDR ranges — see
+// isHostnameTrustedForCertificates). Only fires when Chromium has already
+// rejected a certificate (self-signed, private CA, etc.). Normal HTTPS
+// requests with valid certificates are unaffected (zero overhead).
 app.on('certificate-error', (event, _webContents, url, _error, _certificate, callback) => {
-  const policy = loadProductConfig().browserPolicy
-  if (policy?.mode === 'allowlist' && policy.allowlist) {
-    try {
-      const h = new URL(url).hostname.toLowerCase()
-      const trusted = policy.allowlist.some(p => {
-        const lp = p.toLowerCase()
-        if (lp.startsWith('*.')) {
-          const base = lp.slice(2)
-          return h === base || h.endsWith('.' + base)
-        }
-        return h === lp
-      })
-      if (trusted) {
-        event.preventDefault()
-        callback(true)
-        return
-      }
-    } catch {
-      // Malformed URL — reject
-    }
+  if (isHostnameTrustedForCertificates(url)) {
+    event.preventDefault()
+    callback(true)
+    return
   }
   callback(false)
 })

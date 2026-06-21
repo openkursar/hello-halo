@@ -17,15 +17,25 @@ import {
   useState,
   useMemo,
   useCallback,
-  useRef,
   lazy,
   Suspense,
 } from 'react'
-import { X, Loader2, Upload, FolderOpen, FileText, Archive, AlertCircle } from 'lucide-react'
+import { X, Loader2, FolderOpen, FileText, Archive, AlertCircle } from 'lucide-react'
 import { useAppsStore } from '../../stores/apps.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
 import type { SkillSpec } from '../../../shared/apps/spec-types'
+import {
+  toSlug,
+  buildMdFromForm,
+  parseMd,
+  processMdFile,
+  processDirectoryEntry,
+  processFileListAsFolder,
+  processZipFile,
+  type ParsedSkill,
+} from './skill-import-utils'
+import { FileImportZone } from './FileImportZone'
 
 // Lazy-load CodeMirrorEditor to keep initial bundle small
 const CodeMirrorEditor = lazy(() =>
@@ -51,247 +61,8 @@ const INITIAL_FORM: VisualForm = {
   bodyContent: '',
 }
 
-/** A successfully parsed / assembled skill ready to install */
-interface ParsedSkill {
-  /** Slug-friendly name derived from frontmatter or file/folder name */
-  name: string
-  /** Description from frontmatter */
-  description: string
-  /** All files keyed by relative path.  Single-file skills have only 'SKILL.md'. */
-  skillFiles: Record<string, string>
-}
-
-// ============================================
-// Frontmatter helpers
-// ============================================
-
-/**
- * Derive a slug-friendly name from an arbitrary string.
- * "My Cool Skill" → "my-cool-skill"
- */
-function toSlug(raw: string): string {
-  return raw
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
-
-/**
- * Build a SKILL.md string from the Visual form.
- */
-function buildMdFromForm(form: VisualForm): string {
-  const slug = toSlug(form.name) || 'my-skill'
-  const desc = form.description.trim() || 'My skill description'
-  const headline = form.name.trim() || 'My Skill'
-  const body = form.bodyContent.trim()
-    || `# ${headline}\n\nWrite your skill instructions here...`
-
-  return `---\nname: ${slug}\ndescription: ${desc}\n---\n\n${body}`
-}
-
-/**
- * Parse a SKILL.md string into its frontmatter fields and body.
- * Returns empty strings if frontmatter is absent.
- */
-function parseMd(content: string): { name: string; description: string; bodyContent: string } {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
-  if (!match) return { name: '', description: '', bodyContent: content.trim() }
-  const fm = match[1]
-  const body = match[2].trim()
-  const name = fm.match(/^name:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, '') ?? ''
-  const description = fm.match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, '') ?? ''
-  return { name, description, bodyContent: body }
-}
-
-// ============================================
-// File-reading utilities
-// ============================================
-
-function readFileText(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = e => resolve(e.target!.result as string)
-    reader.onerror = () => reject(new Error(`Failed to read file: ${file.name}`))
-    reader.readAsText(file)
-  })
-}
-
-/** Read all entries from a FileSystemDirectoryReader, handling the 100-entry limit. */
-async function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
-  const all: FileSystemEntry[] = []
-  while (true) {
-    const batch = await new Promise<FileSystemEntry[]>((resolve, reject) =>
-      reader.readEntries(resolve, reject)
-    )
-    if (batch.length === 0) break
-    all.push(...batch)
-  }
-  return all
-}
-
-/**
- * Recursively walk a FileSystemDirectoryEntry and return all file contents
- * keyed by their paths relative to the entry itself.
- */
-async function readDirectoryEntry(
-  entry: FileSystemDirectoryEntry,
-  prefix = ''
-): Promise<Record<string, string>> {
-  const result: Record<string, string> = {}
-  const entries = await readAllEntries(entry.createReader())
-
-  for (const child of entries) {
-    if (child.isFile) {
-      const fileEntry = child as FileSystemFileEntry
-      const file = await new Promise<File>((resolve, reject) =>
-        fileEntry.file(resolve, reject)
-      )
-      const content = await readFileText(file)
-      result[prefix + child.name] = content
-    } else if (child.isDirectory) {
-      const subDir = child as FileSystemDirectoryEntry
-      const sub = await readDirectoryEntry(subDir, prefix + child.name + '/')
-      Object.assign(result, sub)
-    }
-  }
-  return result
-}
-
-/**
- * Build a ParsedSkill from a single .md file.
- * The file is always stored as 'SKILL.md' regardless of its original name.
- */
-async function processMdFile(file: File): Promise<ParsedSkill> {
-  const content = await readFileText(file)
-  const { name, description } = parseMd(content)
-  return {
-    name: name || toSlug(file.name.replace(/\.md$/i, '')),
-    description: description || '',
-    skillFiles: { 'SKILL.md': content },
-  }
-}
-
-/**
- * Build a ParsedSkill from a FileSystemDirectoryEntry (drag-drop folder).
- * The entry is the folder itself; we strip its name from all paths.
- */
-async function processDirectoryEntry(entry: FileSystemDirectoryEntry): Promise<ParsedSkill> {
-  const files = await readDirectoryEntry(entry)
-
-  if (!files['SKILL.md']) {
-    throw new Error('SKILL.md not found. A skill folder must contain SKILL.md at its root.')
-  }
-
-  const { name, description } = parseMd(files['SKILL.md'])
-  return {
-    name: name || toSlug(entry.name),
-    description: description || '',
-    skillFiles: files,
-  }
-}
-
-/**
- * Build a ParsedSkill from a FileList produced by <input webkitdirectory>.
- * Each file's webkitRelativePath is "folderName/path/to/file".
- */
-async function processFileListAsFolder(fileList: FileList): Promise<ParsedSkill> {
-  const skillFiles: Record<string, string> = {}
-  let folderName = ''
-
-  for (const file of Array.from(fileList)) {
-    const relPath = file.webkitRelativePath // e.g. "halo-dev/SKILL.md"
-    const parts = relPath.split('/')
-    if (parts.length < 2) continue
-    if (!folderName) folderName = parts[0]
-    const filePath = parts.slice(1).join('/') // strip top-level folder segment
-    if (!filePath) continue
-    skillFiles[filePath] = await readFileText(file)
-  }
-
-  if (!skillFiles['SKILL.md']) {
-    throw new Error('SKILL.md not found. A skill folder must contain SKILL.md at its root.')
-  }
-
-  const { name, description } = parseMd(skillFiles['SKILL.md'])
-  return {
-    name: name || toSlug(folderName),
-    description: description || '',
-    skillFiles,
-  }
-}
-
-/**
- * Build a ParsedSkill from a .zip file.
- * Uses fflate (pure-JS, no Node.js required).
- * Supports both flat ZIPs (SKILL.md at root) and wrapped ZIPs
- * (all files inside a single top-level folder).
- * macOS metadata injected by Finder (__MACOSX/, ._*, .DS_Store) is ignored.
- */
-async function processZipFile(file: File): Promise<ParsedSkill> {
-  const { unzipSync } = await import('fflate')
-  const buffer = await file.arrayBuffer()
-  let entries: Record<string, Uint8Array>
-  try {
-    entries = unzipSync(new Uint8Array(buffer))
-  } catch {
-    throw new Error('Could not extract ZIP. Make sure the file is a valid ZIP archive.')
-  }
-
-  // Build a raw map (skip directory-only entries and macOS metadata)
-  const rawFiles: Record<string, string> = {}
-  for (const [path, bytes] of Object.entries(entries)) {
-    if (path.endsWith('/')) continue // directory entry
-    // Skip macOS-injected metadata (Finder adds these automatically when compressing)
-    if (path.startsWith('__MACOSX/')) continue
-    if (path.split('/').some(seg => seg === '.DS_Store' || seg.startsWith('._'))) continue
-    rawFiles[path] = new TextDecoder('utf-8').decode(bytes)
-  }
-
-  if (Object.keys(rawFiles).length === 0) {
-    throw new Error('ZIP archive is empty.')
-  }
-
-  // Detect a single common top-level folder (e.g. "halo-dev/")
-  const topDirs = new Set(
-    Object.keys(rawFiles)
-      .map(p => p.split('/')[0])
-      .filter(Boolean)
-  )
-
-  // If every file lives inside the same top-level folder AND that folder
-  // is not a file itself, treat it as a wrapper and strip it.
-  let skillFiles: Record<string, string> = {}
-  if (topDirs.size === 1) {
-    const prefix = [...topDirs][0] + '/'
-    const allInPrefix = Object.keys(rawFiles).every(p => p.startsWith(prefix))
-    if (allInPrefix) {
-      for (const [path, content] of Object.entries(rawFiles)) {
-        const stripped = path.slice(prefix.length)
-        if (stripped) skillFiles[stripped] = content
-      }
-    } else {
-      skillFiles = rawFiles
-    }
-  } else {
-    skillFiles = rawFiles
-  }
-
-  if (!skillFiles['SKILL.md']) {
-    throw new Error(
-      'SKILL.md not found in ZIP. The archive must contain SKILL.md at the root level, ' +
-      'or inside a single top-level folder.'
-    )
-  }
-
-  const { name, description } = parseMd(skillFiles['SKILL.md'])
-  const folderName = file.name.replace(/\.zip$/i, '')
-  return {
-    name: name || toSlug(folderName),
-    description: description || '',
-    skillFiles,
-  }
-}
+// Pure parse utilities live in ./skill-import-utils so the Add Skill,
+// Share to Store, and Install from File entry points share identical logic.
 
 // ============================================
 // ImportDropZone sub-component
@@ -315,10 +86,7 @@ interface ImportDropZoneProps {
 
 function ImportDropZone({ imported, onImported, onClear, onError }: ImportDropZoneProps) {
   const { t } = useTranslation()
-  const [isDragOver, setIsDragOver] = useState(false)
   const [processing, setProcessing] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const folderInputRef = useRef<HTMLInputElement>(null)
 
   const handleProcess = useCallback(async (task: () => Promise<ImportedSkill>) => {
     setProcessing(true)
@@ -332,43 +100,8 @@ function ImportDropZone({ imported, onImported, onClear, onError }: ImportDropZo
     }
   }, [onImported, onError, t])
 
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragOver(false)
-    onError('') // clear previous error
-
-    // Prefer the FileSystem Entry API for correct folder support
-    const items = e.dataTransfer.items
-    if (items && items.length > 0) {
-      const item = items[0]
-      const entry = item.webkitGetAsEntry?.()
-
-      if (entry?.isDirectory) {
-        const dirEntry = entry as FileSystemDirectoryEntry
-        await handleProcess(async () => ({
-          parsed: await processDirectoryEntry(dirEntry),
-          label: dirEntry.name,
-          sourceType: 'folder' as const,
-        }))
-        return
-      }
-
-      if (entry?.isFile) {
-        const fileEntry = entry as FileSystemFileEntry
-        const file = await new Promise<File>((resolve, reject) =>
-          fileEntry.file(resolve, reject)
-        )
-        await handleDroppedFile(file)
-        return
-      }
-    }
-
-    // Fallback: plain File
-    const file = e.dataTransfer.files[0]
-    if (file) await handleDroppedFile(file)
-  }, [handleProcess]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  async function handleDroppedFile(file: File) {
+  const handleFile = useCallback(async (file: File) => {
+    onError('')
     const name = file.name.toLowerCase()
     if (name.endsWith('.md')) {
       await handleProcess(async () => ({
@@ -385,25 +118,25 @@ function ImportDropZone({ imported, onImported, onClear, onError }: ImportDropZo
     } else {
       onError(t('Unsupported file type. Drop a .md file, a .zip archive, or a skill folder.'))
     }
-  }
+  }, [handleProcess, onError, t])
 
-  const handleFileInput = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    e.target.value = '' // allow re-selecting same file
-    await handleDroppedFile(file)
-  }, [handleProcess]) // eslint-disable-line react-hooks/exhaustive-deps
+  const handleDirEntry = useCallback(async (entry: FileSystemDirectoryEntry) => {
+    onError('')
+    await handleProcess(async () => ({
+      parsed: await processDirectoryEntry(entry),
+      label: entry.name,
+      sourceType: 'folder' as const,
+    }))
+  }, [handleProcess, onError])
 
-  const handleFolderInput = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (!files || files.length === 0) return
-    e.target.value = ''
+  const handleFolderList = useCallback(async (files: FileList) => {
+    onError('')
     await handleProcess(async () => ({
       parsed: await processFileListAsFolder(files),
       label: files[0].webkitRelativePath.split('/')[0] || t('Folder'),
       sourceType: 'folder' as const,
     }))
-  }, [handleProcess, t])
+  }, [handleProcess, onError, t])
 
   if (imported) {
     const Icon = imported.sourceType === 'folder' ? FolderOpen
@@ -456,58 +189,16 @@ function ImportDropZone({ imported, onImported, onClear, onError }: ImportDropZo
   }
 
   return (
-    <div className="space-y-3">
-      {/* Drop zone */}
-      <div
-        onDragOver={e => { e.preventDefault(); setIsDragOver(true) }}
-        onDragLeave={() => setIsDragOver(false)}
-        onDrop={handleDrop}
-        onClick={() => fileInputRef.current?.click()}
-        className={`flex flex-col items-center justify-center gap-3 h-48 border-2 border-dashed rounded-lg cursor-pointer select-none transition-colors ${
-          isDragOver
-            ? 'border-primary bg-primary/5'
-            : 'border-border hover:border-muted-foreground/50'
-        }`}
-      >
-        {processing
-          ? <Loader2 className="w-7 h-7 text-muted-foreground animate-spin" />
-          : <Upload className={`w-7 h-7 ${isDragOver ? 'text-primary' : 'text-muted-foreground'}`} />
-        }
-        <div className="text-center px-4">
-          <p className="text-sm text-foreground">
-            {t('Drop a skill file or folder here')}
-          </p>
-          <p className="text-xs text-muted-foreground mt-1">
-            {t('.md file · skill folder · .zip archive')}
-          </p>
-        </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".md,.zip"
-          onChange={handleFileInput}
-          className="hidden"
-        />
-      </div>
-
-      {/* Browse folder button */}
-      <button
-        type="button"
-        onClick={() => folderInputRef.current?.click()}
-        className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground border border-border hover:border-muted-foreground/50 rounded-lg transition-colors"
-      >
-        <FolderOpen className="w-4 h-4" />
-        {t('Browse skill folder...')}
-        <input
-          ref={folderInputRef}
-          type="file"
-          // @ts-expect-error -- non-standard but supported in Electron/Chrome
-          webkitdirectory=""
-          onChange={handleFolderInput}
-          className="hidden"
-        />
-      </button>
-
+    <FileImportZone
+      onFile={handleFile}
+      onDirectoryEntry={handleDirEntry}
+      onFolderFileList={handleFolderList}
+      fileAccept=".md,.zip"
+      dropLabel={t('Drop a skill file or folder here')}
+      dropHint={t('.md file · skill folder · .zip archive')}
+      folderLabel={t('Browse skill folder...')}
+      processing={processing}
+    >
       {/* Format hints */}
       <div className="space-y-1.5">
         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -529,7 +220,7 @@ function ImportDropZone({ imported, onImported, onClear, onError }: ImportDropZo
           ))}
         </div>
       </div>
-    </div>
+    </FileImportZone>
   )
 }
 

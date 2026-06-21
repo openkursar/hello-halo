@@ -31,7 +31,7 @@ export class SyncService {
   private db: Database.Database
   private dbManager: DatabaseManager
   private listener: SyncStatusListener | null = null
-  private syncing = new Set<string>()
+  private syncing = new Map<string, Promise<void>>()
 
   constructor(dbManager: DatabaseManager) {
     this.dbManager = dbManager
@@ -102,9 +102,10 @@ export class SyncService {
    * Sync a single Mirror source. Skips if within TTL and not forced.
    */
   async syncOne(registry: RegistrySource, ttlMs = DEFAULT_MIRROR_TTL_MS, force = false): Promise<void> {
-    if (this.syncing.has(registry.id)) {
-      console.log('[SyncService] syncOne:skip-already-syncing', { registryId: registry.id, ttlMs, force })
-      return
+    // Wait for any in-flight sync of the same registry instead of skipping:
+    // callers like refreshIndex(ttl=0) must not return before data is fresh.
+    while (this.syncing.has(registry.id)) {
+      await this.syncing.get(registry.id)
     }
 
     // Check TTL
@@ -123,7 +124,8 @@ export class SyncService {
       }
     }
 
-    this.syncing.add(registry.id)
+    let release!: () => void
+    this.syncing.set(registry.id, new Promise<void>(resolve => { release = resolve }))
     this.emit(registry.id, 'syncing', 0)
 
     console.log('[SyncService] syncOne:start', {
@@ -183,6 +185,7 @@ export class SyncService {
       this.emit(registry.id, 'error', existing?.app_count ?? 0, msg)
     } finally {
       this.syncing.delete(registry.id)
+      release()
       console.log('[SyncService] syncOne:finalize', { registryId: registry.id, inProgressCount: this.syncing.size })
     }
   }
@@ -216,6 +219,22 @@ export class SyncService {
    */
   clearProxyCache(registryId: string): void {
     this.db.prepare(`DELETE FROM registry_query_cache WHERE registry_id = ?`).run(registryId)
+  }
+
+  /**
+   * Clear all cached data for a specific registry.
+   *
+   * Removes: FTS entries, registry_items, sync state, spec cache, and query cache.
+   * Used when a registry source is removed, hidden, or has its URL changed —
+   * any scenario where the old cached data is no longer valid.
+   */
+  clearRegistryData(registryId: string): void {
+    this.removeFtsForRegistry(registryId)
+    this.clearRegistryItems(registryId)
+    this.db.prepare(`DELETE FROM registry_sync_state WHERE registry_id = ?`).run(registryId)
+    this.db.prepare(`DELETE FROM registry_spec_cache WHERE registry_id = ?`).run(registryId)
+    this.db.prepare(`DELETE FROM registry_query_cache WHERE registry_id = ?`).run(registryId)
+    console.log(`[SyncService] Cleared all cached data for registry "${registryId}"`)
   }
 
   /**

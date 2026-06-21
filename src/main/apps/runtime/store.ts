@@ -222,14 +222,14 @@ export class ActivityStore {
       UPDATE automation_runs SET session_id = ? WHERE run_id = ?
     `)
 
-    // Reset a failed or waiting run back to running state.
-    // Used by both user-initiated continue and escalation follow-up.
-    // Clears finished_at, duration_ms, and error_message so the run appears live again.
-    // Only transitions from 'error' or 'waiting_user' to prevent accidental resets.
+    // Reopen any terminal run (error/waiting_user/ok) back to 'running', clearing
+    // finished_at, duration_ms, and error_message so it appears live again. 'ok' is
+    // included so a user can resume a normally-completed run with a follow-up
+    // ("this part is wrong, fix it"). A run already 'running' is never reopened.
     this.stmtReopenRun = db.prepare(`
       UPDATE automation_runs
       SET status = 'running', finished_at = NULL, duration_ms = NULL, error_message = NULL
-      WHERE run_id = ? AND status IN ('error', 'waiting_user')
+      WHERE run_id = ? AND status IN ('error', 'waiting_user', 'ok')
     `)
   }
 

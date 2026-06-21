@@ -161,6 +161,10 @@
         "homepage": {
           "type": "string",
           "description": "Default homepage URL for new browser tabs. Falls back to about:blank when policy is active but homepage is not set."
+        },
+        "userExtensible": {
+          "type": "boolean",
+          "description": "Allowlist mode only. When true, users may add their own allowlist entries from the desktop Settings UI and the blocked-page prompt (stored in config.json browser.customAllowlist). User entries can only widen the allowlist; mode and built-in patterns stay fixed. Omit/false to fully lock the allowlist (default)."
         }
       },
       "required": ["mode"]
@@ -186,7 +190,7 @@
         },
         "credentialAtRestSafe": {
           "type": "boolean",
-          "description": "When true, the stored remote-access credential is encrypted at rest with SM4-CBC plus HMAC-SM3 (encrypt-then-MAC; GM/T 0002 + GM/T 0091) under a machine-bound KEK. When omitted/false (open-source default), the credential is stored as plain text. The plaintext value is held in memory in both modes so the UI can keep displaying the current PIN; login validation uses crypto.timingSafeEqual against the in-memory value."
+          "description": "When true, the stored remote-access credential is encrypted at rest with SM4-CBC plus HMAC-SM3 (encrypt-then-MAC) under a KEK derived via HKDF-SHA-256 from a persisted random master key (userData/cred.key, generated on first run). The master key is stable across restarts, network changes, and hardware reconfiguration; a legacy hostname+MAC-derived seed is retained only to decrypt ciphertext from older builds and is migrated to the master key on next save. When omitted/false (open-source default), the credential is stored as plain text. The plaintext value is held in memory in both modes so the UI can keep displaying the current PIN; login validation uses crypto.timingSafeEqual against the in-memory value."
         },
         "tunnelSafe": {
           "type": "boolean",
@@ -222,6 +226,27 @@
           "hidden": {
             "type": "boolean",
             "description": "When true, the registry is removed entirely from the Store UI and any persisted copy from a previous run is dropped on the next startup. Takes precedence over `enabled`. Use this — not `enabled: false` — when policy forbids the registry outright."
+          },
+          "publish": {
+            "type": "object",
+            "description": "Publish target. Determines where the App detail 'Publish' button routes the spec.",
+            "required": ["target"],
+            "properties": {
+              "target": {
+                "type": "string",
+                "enum": ["github-pr", "http-registry", "local-dhpkg"]
+              },
+              "github": {
+                "type": "object",
+                "properties": {
+                  "owner": { "type": "string" },
+                  "repo": { "type": "string" },
+                  "clientId": { "type": "string" }
+                },
+                "required": ["owner", "repo"]
+              },
+              "token": { "type": "string" }
+            }
           }
         },
         "additionalProperties": false

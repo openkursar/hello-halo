@@ -352,8 +352,8 @@ export const EscalationConfigSchema = z.object({
 export const StoreMetadataSchema = z.object({
   /** URL-safe unique identifier (single-file: filename, bundle: directory name) */
   slug: z.string().regex(
-    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/,
-    'Slug must be lowercase alphanumeric with optional internal hyphens'
+    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)?$/,
+    'Slug must be lowercase alphanumeric with optional internal hyphens, optionally scoped as author/id'
   ).optional(),
   /** Primary category for store navigation */
   category: z.string().optional(),

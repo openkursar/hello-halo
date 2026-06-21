@@ -449,7 +449,9 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
       'team:updated': 'onTeamUpdated',
       'team:blackboard': 'onTeamBlackboard',
       'team:message': 'onTeamMessage',
-      'notification:toast': 'onNotificationToast'
+      'notification:toast': 'onNotificationToast',
+      'store:sync-status-changed': 'onStoreSyncStatusChanged',
+      'store:upgrade-available': 'onStoreUpgradeAvailable',
     }
 
     const method = methodMap[channel]

@@ -13,7 +13,8 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }))
 vi.mock('../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn(() => ({})),
-  getTempSpacePath: vi.fn(() => '/tmp')
+  getTempSpacePath: vi.fn(() => '/tmp'),
+  onAgentConfigChange: vi.fn(() => () => {})
 }))
 vi.mock('../../../src/main/openai-compat-router', () => ({
   ensureOpenAICompatRouter: vi.fn(),

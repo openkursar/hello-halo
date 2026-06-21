@@ -15,7 +15,7 @@
  * This module is the single source of truth for all predefined agents.
  */
 
-import type { AgentDefinition } from '../../../halo-local/claude-code-core/src/types/sdk-types'
+import type { AgentDefinition } from '../../../shared/types/agent-definition'
 
 // ============================================
 // Web Searcher Agent

@@ -72,7 +72,6 @@ import {
   type StreamLogLevel,
 } from './wecom-stream-session'
 import { ensureUtf8 } from './wecom-content-utf8'
-import { maybeClaimOwner } from './wecom-bot-owner-claim'
 
 // ============================================
 // Constants
@@ -643,48 +642,6 @@ class WecomBotInstance implements ImChannelInstance {
       chatId,
       hasStream: this.authenticated,
     })
-
-    // One-shot owner auto-claim for scan-auth bots. No-op for instances that
-    // were not provisioned via the QR-code flow (pendingOwnerClaim is unset).
-    // Awaited so the subsequent dispatch reads the updated owners list. See
-    // wecom-bot-owner-claim.ts for the protocol rationale.
-    //
-    // When a claim is performed, we proactively push a one-time welcome
-    // notice to the chat. The WeCom Intelligent Bot protocol does not let
-    // us greet the user before they speak first — we have no chatId until
-    // their first inbound arrives — so this is the earliest possible moment
-    // to confirm the binding to the user.
-    let claimed = false
-    try {
-      claimed = await maybeClaimOwner(this.instanceId, senderId)
-    } catch (err) {
-      // Claim failure is non-fatal — log and proceed; the user can retry by
-      // sending another message, which will hit the same code path.
-      logEvent(this.instanceId, 'warn', 'owner_claim_error', {
-        trace,
-        err: err instanceof Error ? err.message : String(err),
-      })
-    }
-    if (claimed) {
-      // Fire-and-forget — pushToChat is async-internal but exposed as boolean.
-      // We do not block AI dispatch on the welcome reaching WeCom.
-      try {
-        this.pushToChat(
-          chatId,
-          '✅ 已绑定你为本机器人的主人，权限控制已自动开启。',
-          chatType,
-        )
-        logEvent(this.instanceId, 'info', 'owner_claim_welcome_pushed', {
-          trace,
-          chatId,
-        })
-      } catch (err) {
-        logEvent(this.instanceId, 'warn', 'owner_claim_welcome_push_failed', {
-          trace,
-          err: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
 
     try {
       this.inboundHandler(inbound, reply)

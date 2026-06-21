@@ -160,8 +160,17 @@ function buildTools(spaceId: string) {
 
         const appId = await manager.install(spaceId, validatedSpec, {})
 
-        // Auto-install required skills (non-fatal)
-        await installRequiredSkills(validatedSpec, spaceId)
+        // Dependency failure rolls back the app — never leave a partial install.
+        try {
+          await installRequiredSkills(validatedSpec, spaceId)
+        } catch (depErr) {
+          try {
+            // deleteApp() only accepts 'uninstalled' apps — soft-delete first
+            await manager.uninstall(appId)
+            await manager.deleteApp(appId)
+          } catch { /* rollback is best-effort; the original error matters more */ }
+          return textResult(`App creation failed: ${(depErr as Error).message}`, true)
+        }
 
         let activationWarning = ''
         const runtime = getAppRuntime()

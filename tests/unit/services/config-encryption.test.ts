@@ -19,6 +19,7 @@ import {
   decryptConfigFields,
   maskConfigFields,
   unmaskSentinels,
+  configHasUnmigratedCredentials,
   MASK_SENTINEL,
 } from '../../../src/main/foundation/config-encryption'
 
@@ -129,6 +130,24 @@ describe('config-encryption', () => {
       const firstPass = (config.api as any).apiKey
       encryptConfigFields(config)
       expect((config.api as any).apiKey).toBe(firstPass)
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Migration detection
+  // --------------------------------------------------------------------------
+
+  describe('configHasUnmigratedCredentials', () => {
+    it('is true when sensitive fields are still plaintext under at-rest mode', () => {
+      setProfile(true)
+      expect(configHasUnmigratedCredentials(makeConfig())).toBe(true)
+    })
+
+    it('is false once all sensitive fields are encrypted under the master key', () => {
+      setProfile(true)
+      const config = makeConfig()
+      encryptConfigFields(config)
+      expect(configHasUnmigratedCredentials(config)).toBe(false)
     })
   })
 

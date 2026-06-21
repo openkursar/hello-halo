@@ -626,7 +626,11 @@ export async function sendAppChatMessage(
             `tokens=${streamResult.tokenUsage ? 'yes' : 'no'}`
           )
 
-          // Invoke onReply callback for external bridges (WeCom Bot auto-reply)
+          // Invoke onReply callback for external bridges (WeCom Bot auto-reply).
+          // Always fire when content exists — including the whitespace-only
+          // empty-response placeholder — because the bridge's onReply is what
+          // terminates a streaming IM session. Whether the placeholder is shown
+          // or replaced with a notice is the bridge's decision, not ours.
           if (onReply && replyContent) {
             try {
               onReply(replyContent)

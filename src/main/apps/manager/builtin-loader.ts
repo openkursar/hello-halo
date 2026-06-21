@@ -187,7 +187,7 @@ function readSkillFiles(skillDir: string): Record<string, string> {
  * subdirectory becomes one skill; SKILL.md frontmatter provides name and
  * description so the spec validates without needing a sidecar yaml.
  */
-function buildBundledSkillSpecs(appDir: string): SkillSpec[] {
+function buildBundledSkillSpecs(appDir: string, parentAuthor?: string): SkillSpec[] {
   const skillsRoot = join(appDir, 'skills')
   if (!existsSync(skillsRoot) || !statSync(skillsRoot).isDirectory()) return []
 
@@ -203,20 +203,15 @@ function buildBundledSkillSpecs(appDir: string): SkillSpec[] {
     }
     const fmName = extractFrontmatterField(md, 'name') ?? entry.name
     const fmDesc = extractFrontmatterField(md, 'description') ?? `Bundled skill ${entry.name}`
+    const fmAuthor = extractFrontmatterField(md, 'author')
     specs.push({
       spec_version: '1',
-      // Use the directory name (declared in spec.yaml's requires.skills) as
-      // the canonical specId — matches how the registry adapter does it.
       name: entry.name,
       type: 'skill',
       version: '1.0',
       description: fmDesc,
-      // Pass a brief author so optional schema fields don't surprise downstream
-      // serializers. The actual author is encoded inside SKILL.md frontmatter.
-      author: 'builtin',
+      author: fmAuthor || parentAuthor || 'unknown',
       skill_files: skillFiles,
-      // Surface the human-readable name from frontmatter into store metadata
-      // so the UI has something nicer than the slug to show.
       store: {
         slug: entry.name,
         tags: [fmName],
@@ -306,14 +301,13 @@ async function processEntry(
   const stampedSpec = stampBuiltin(spec)
   processed.parents.add(stampedSpec.name)
 
-  const bundledSkills = buildBundledSkillSpecs(appDir).map(stampBuiltin)
+  const bundledSkills = buildBundledSkillSpecs(appDir, spec.author).map(stampBuiltin)
   for (const s of bundledSkills) processed.skills.add(s.name)
 
-  // ── Look up existing record by (specId, spaceId) ──────────────────────
   // Pass entry.spaceId verbatim: null filters to global-only, a string filters
   // to that space. Coercing null → undefined here would broaden the lookup to
   // ALL spaces and mistakenly match a same-named app in another space, causing
-  // the loader to silently skip the install. (See review item #6.)
+  // the loader to silently skip the install.
   const existing = appManager.listApps({ spaceId: entry.spaceId })
     .find(a => a.specId === stampedSpec.name)
 

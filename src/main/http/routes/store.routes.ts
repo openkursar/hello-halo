@@ -2,6 +2,7 @@
  * Store REST API routes (remote access).
  * Split from the monolithic routes/index.ts; mirrors the IPC API for this domain.
  */
+import { readFile } from 'fs/promises'
 import type { Express, Request, Response } from 'express'
 import {
   MCP_COMMAND_BLOCKED,
@@ -9,6 +10,15 @@ import {
   storeController,
   storeSlugIsMcp,
 } from './_shared'
+import {
+  applyUpgrade,
+  checkUpgradesNow,
+  publish,
+  getPublishPreview,
+  unpackDhpkg,
+} from '../../store'
+import { getAppManager } from '../../apps/manager'
+import { getAppRuntime } from '../../apps/runtime'
 
 export function registerStoreRoutes(app: Express): void {
   // ===== Store (App Registry) Routes =====
@@ -58,6 +68,18 @@ export function registerStoreRoutes(app: Express): void {
   app.get('/api/store/apps/:slug', async (req: Request, res: Response) => {
     try {
       const result = await storeController.getStoreAppDetail(req.params.slug)
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/store/app-document?slug=... — SKILL.md/README for the detail page.
+  // Query param because scoped slugs ("owner/repo") contain "/".
+  app.get('/api/store/app-document', async (req: Request, res: Response) => {
+    try {
+      const slug = typeof req.query.slug === 'string' ? req.query.slug : ''
+      const result = await storeController.getStoreAppDocument(slug)
       res.json(result)
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -203,6 +225,101 @@ export function registerStoreRoutes(app: Express): void {
       }
       const result = storeController.updateStoreRegistryAdapterConfig(req.params.registryId, adapterConfig)
       res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/updates/check-now — manually check app updates
+  app.post('/api/store/updates/check-now', async (_req: Request, res: Response) => {
+    try {
+      const result = await checkUpgradesNow()
+      res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/updates/:appId/apply — apply an available app update
+  app.post('/api/store/updates/:appId/apply', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      const { mode } = req.body as { mode?: 'patch_minor' | 'major' | 'force' }
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const result = await applyUpgrade(appId, mode ?? 'force')
+      res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/publish/preview — preview publish metadata
+  app.post('/api/store/publish/preview', async (req: Request, res: Response) => {
+    try {
+      const { appId, author } = req.body as { appId?: string; author?: string }
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      res.json({ success: true, data: getPublishPreview(appId, author) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/publish — publish an installed app to the configured registry
+  app.post('/api/store/publish', async (req: Request, res: Response) => {
+    try {
+      const { appId, author, version } = req.body as { appId?: string; author?: string; version?: string }
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const result = await publish(appId, author, version)
+      res.json({
+        success: result.status !== 'error',
+        data: result,
+        error: result.status === 'error' ? result.details : undefined,
+      })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/import-dhpkg — import a package from a server-local path
+  app.post('/api/store/import-dhpkg', async (req: Request, res: Response) => {
+    try {
+      const { filePath, spaceId } = req.body as { filePath?: string; spaceId?: string | null }
+      if (!filePath) {
+        res.status(400).json({ success: false, error: 'Missing filePath' })
+        return
+      }
+
+      const buf = await readFile(filePath)
+      const { spec } = await unpackDhpkg(buf)
+
+      const manager = getAppManager()
+      if (!manager) {
+        res.json({ success: false, error: 'App Manager not ready' })
+        return
+      }
+
+      const appId = await manager.install(spaceId ?? null, spec, {})
+      const runtime = getAppRuntime()
+      if (runtime) {
+        try {
+          await runtime.activate(appId)
+        } catch (err) {
+          console.warn(
+            `[HTTP] POST /api/store/import-dhpkg activate failed (non-fatal): ${(err as Error).message}`
+          )
+        }
+      }
+
+      res.json({ success: true, data: { appId } })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
