@@ -134,7 +134,6 @@ export { ImChannelManager } from './im-channels'
 
 let runtimeService: AppRuntimeService | null = null
 let memoryServiceRef: MemoryService | null = null
-let activityStoreRef: ActivityStore | null = null
 let eventRouterInstance: EventRouter | null = null
 let imChannelManagerInstance: ImChannelManager | null = null
 let imSessionRegistryInstance: ImSessionRegistry | null = null
@@ -317,7 +316,6 @@ export async function initAppRuntime(
 
   runtimeService = service
   memoryServiceRef = deps.memory
-  activityStoreRef = store
 
   const duration = performance.now() - start
   console.log(`[Runtime] App Runtime initialized in ${duration.toFixed(1)}ms`)
@@ -339,14 +337,6 @@ export function getAppRuntime(): AppRuntimeService | null {
  */
 export function getAppMemoryService(): MemoryService | null {
   return memoryServiceRef
-}
-
-/**
- * Get the activity store instance captured during init.
- * Used by app-chat.ts to provide report_to_user in chat mode.
- */
-export function getActivityStore(): ActivityStore | null {
-  return activityStoreRef
 }
 
 /**
@@ -372,7 +362,6 @@ export async function shutdownAppRuntime(): Promise<void> {
     await runtimeService.deactivateAll()
     runtimeService = null
     memoryServiceRef = null
-    activityStoreRef = null
   }
 
   if (eventRouterInstance) {

@@ -514,11 +514,11 @@ escalation:
 
 | Field | Type | Description |
 |---|---|---|
-| `enabled` | `boolean` | Defaults to `true`. The AI can call `report_to_user(type="escalation")` to pause execution and ask the user a question. Set to `false` to disable escalation (the AI must make decisions autonomously). |
+| `enabled` | `boolean` | Defaults to `true`. When enabled, the AI may pause execution to ask the user a question and resume once they respond. Set to `false` to disable escalation (the AI must make decisions autonomously). |
 | `timeout_hours` | `number` (positive) | If the user does not respond within this many hours, the escalation is automatically closed and the App status switches to `error`. Defaults to 24 hours. |
 
 > **App status flow**:
-> - AI calls `report_to_user(type="escalation")` → App status: `waiting_user`
+> - AI raises an escalation → App status: `waiting_user`
 > - User responds → follow-up run continues
 > - Timeout with no response → App status: `error`, desktop notification pushed
 
@@ -758,8 +758,7 @@ system_prompt: |
   You are a professional price-comparison agent.
   Check all price variants (official, third-party, coupons, membership) and compare against
   the 30-day price trend to determine whether the current price is at a low point.
-  When a price drop meets the user's threshold, report via report_to_user(type="milestone").
-  Always call report_to_user(type="run_complete") at the end of each run.
+  Flag when a price drop meets the user's threshold.
 
 requires:
   mcps:
@@ -845,7 +844,6 @@ system_prompt: |
   1. Open https://news.ycombinator.com and retrieve today's Top 10 stories
   2. Write a concise summary for each (2–3 sentences)
   3. Send an email notification
-  4. Call report_to_user to report completion
 
 subscriptions:
   - source:

@@ -59,7 +59,6 @@ import { NATIVE_CHAT_ENTRY } from './prompt/entry-native'
 import { buildImEntry, buildImConstraints, type ImSessionContext } from './im-channels/im-prompt'
 import { createFileSendMcpServer } from './im-channels/file-send-mcp'
 import { mergeConfigWithDefaults } from './config-defaults'
-import { createReportToolServer, type ReportToolContext } from './report-tool'
 import { tmpdir as osTmpdir } from 'os'
 import { createNotifyToolServer } from './notify-tool'
 import { FileExportGate } from './file-export-gate'
@@ -69,7 +68,7 @@ import { createWebSearchMcpServer } from '../../services/web-search'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { getSpace, getSpaceDir } from '../../services/space.service'
 import { openSessionWriter, readSessionMessages, saveChatSessionId, loadChatSessionId, deleteChatSessionId } from './session-store'
-import { getAppMemoryService, getActivityStore } from './index'
+import { getAppMemoryService } from './index'
 import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
 // Key builders live in shared/ so the renderer can import them without
 // depending on main-process modules.
@@ -123,7 +122,7 @@ const ALL_BUILTIN_TOOLS = [
  * Halo MCP servers that are always safe for guests (read-only, no side effects).
  * These are injected into guest sessions regardless of GuestPolicy.
  */
-const GUEST_SAFE_MCP = new Set(['web-search', 'halo-report', 'halo-memory'])
+const GUEST_SAFE_MCP = new Set(['web-search', 'halo-memory'])
 
 /**
  * Halo MCP servers controlled by GuestPolicy toggle switches.
@@ -143,7 +142,7 @@ const GUEST_TOGGLEABLE_MCP: Record<string, keyof GuestPolicy> = {
  *
  * Three-tier filtering:
  *   1. User-installed MCPs (from db) → only if listed in allowedUserMcp whitelist
- *   2. Halo safe MCPs → always injected (web-search, halo-report, halo-memory)
+ *   2. Halo safe MCPs → always injected (web-search, halo-memory)
  *   3. Halo toggleable MCPs → injected only if corresponding GuestPolicy flag is true
  *   4. Unknown MCPs (future additions) → NOT injected (conservative strategy)
  *
@@ -396,21 +395,14 @@ export async function sendAppChatMessage(
     usesImPush,
     exportGate,
   })
-
-  // Report tool: allows AI to write activity entries in chat mode
-  const activityStore = getActivityStore()
-  const reportContext: ReportToolContext = {
-    appId: app.id,
-    appName: app.spec.name,
-    runId: CHAT_RUN_ID,
-    sessionKey: conversationId,
-    notificationLevel: app.userOverrides?.notificationLevel,
-  }
-
+  // NOTE: report_to_user (halo-report) is intentionally NOT injected in chat/IM
+  // mode. It writes to activity_entries, whose run_id has a FK to automation_runs.
+  // Chat sessions have no automation_runs row, so any call fails with a FOREIGN
+  // KEY constraint and the model retries in a loop (see issue #200). Chat replies
+  // reach the user directly as text, so the Activity Thread is not needed here.
   const mcpServers: Record<string, any> = {
     ...(dbMcpServers ?? {}),
     'halo-memory': memoryMcpServer,
-    ...(activityStore ? { 'halo-report': createReportToolServer(activityStore, reportContext) } : {}),
     'halo-notify': notifyMcpServer,
     ...(digitalHumansEnabled ? { 'halo-apps': createHaloAppsMcpServer(spaceId) } : {}),
     'web-search': createWebSearchMcpServer(),
