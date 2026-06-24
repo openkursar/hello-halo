@@ -28,6 +28,7 @@ import { registerRemoteHandlers } from '../ipc/remote'
 import { registerSecurityHandlers } from '../ipc/security'
 import { enableRemoteAccess } from '../services/remote.service'
 import { getConfig, migrateCredentialEncryption } from '../foundation/config.service'
+import { isServerMode } from '../foundation/runtime-mode'
 import { registerBrowserHandlers } from '../ipc/browser'
 import { registerBrowserPolicyHandlers } from '../ipc/browser-policy'
 import { cleanupAIBrowser } from '../services/ai-browser'
@@ -276,7 +277,11 @@ export function initializeExtendedServices(): void {
   // Provides infrastructure for automation Apps to keep the process alive
   // and access a shared hidden BrowserWindow with stealth injection
   const backgroundService = initBackground()
-  backgroundService.initTray()
+  // Tray requires a desktop session; skip it in headless server mode where
+  // creating a Tray would throw (no display / no status-icon host).
+  if (!isServerMode()) {
+    backgroundService.initTray()
+  }
 
   // Wire browser-domain stealth injection into the platform daemon browser
   // without the platform tier importing services (keeps platform → services

@@ -172,8 +172,12 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import {
   initializeEssentialServices,
   initializeExtendedServices,
-  cleanupExtendedServices
+  cleanupExtendedServices,
+  applyServerModeSwitches,
+  installServerSignalHandlers,
+  bootServerMode
 } from './bootstrap'
+import { isServerMode } from './foundation/runtime-mode'
 import { initializeApp } from './foundation/config.service'
 import { flushAllPendingIndexWrites } from './services/conversation.service'
 import { shutdownRemoteAccess } from './services/remote.service'
@@ -185,6 +189,14 @@ import { setMainWindow } from './foundation/window.service'
 import { initInstanceId, shutdownHealthSystem, onRendererCrash, onRendererUnresponsive } from './services/health'
 import { reconcileAllSpaces } from './services/artifact-cache.service'
 import { initSdk } from './services/agent/resolved-sdk'
+
+// Headless server mode: apply no-display / no-sandbox switches before the app
+// becomes ready (required for Electron to start without a display in a container),
+// and route container stop signals (SIGTERM/SIGINT) into a graceful quit.
+if (isServerMode()) {
+  applyServerModeSwitches(app)
+  installServerSignalHandlers(app)
+}
 
 let mainWindow: BrowserWindow | null = null
 let isAppQuitting = false
@@ -464,6 +476,20 @@ app.whenReady().then(async () => {
   // Must be called before any subprocess is spawned
   initInstanceId()
 
+  // Headless server mode: no window/menu/tray. bootServerMode runs the essential
+  // + extended services directly (the GUI path chains Extended init to the
+  // window's ready-to-show, which never fires here) and force-starts remote
+  // access.
+  if (isServerMode()) {
+    await bootServerMode().catch((err) => {
+      // Fail fast with a non-zero exit so the orchestrator restarts the
+      // container instead of leaving a process up with no HTTP server.
+      console.error('[ServerMode] fatal boot error, exiting:', (err as Error)?.stack || err)
+      app.exit(1)
+    })
+    return
+  }
+
   // Create application menu
   createAppMenu()
 
@@ -546,6 +572,12 @@ app.on('before-quit', () => {
 })
 
 app.on('window-all-closed', () => {
+  // Headless server mode: the only BrowserWindows are incidental hidden
+  // automation surfaces (daemon / offscreen browser). Their unexpected close
+  // (e.g. a renderer OOM in the container) must NOT quit the service — process
+  // lifetime is owned by the signal handlers instead.
+  if (isServerMode()) return
+
   // With close-to-tray, this event only fires during actual quit
   // (isAppQuitting=true, so the close handler did not preventDefault).
   // On non-macOS, ensure clean shutdown before exiting.

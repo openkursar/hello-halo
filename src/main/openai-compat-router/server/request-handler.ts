@@ -25,7 +25,7 @@ import {
   streamAnthropicPassthrough,
   pipeAnthropicPassthrough
 } from '../stream'
-import { isNativeAnthropicHost } from '../utils'
+import { isNativeAnthropicHost, normalizeSystemPrompt } from '../utils'
 import { proxyFetch } from '../../services/proxy-fetch'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { withRequestQueue, generateQueueKey } from './request-queue'
@@ -634,14 +634,15 @@ export async function handleMessagesRequest(
     return
   }
 
-  // Use potentially modified request from interceptors
-  const request = interceptResult.request
+  // Normalize the system prompt's opening identity line (see utils/normalize-system-prompt.ts).
+  const { request, modified: systemNormalized } = normalizeSystemPrompt(interceptResult.request)
+  const requestModified = interceptResult.intercepted || systemNormalized
 
   // Route based on apiType
   if (configApiType === 'anthropic_passthrough') {
     return handleAnthropicPassthrough(request, config, res, {
       ...options,
-      requestModified: interceptResult.intercepted
+      requestModified
     })
   }
 
