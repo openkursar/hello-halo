@@ -17,6 +17,7 @@ import {
   getAppRuntime,
   getSpace,
   isAppChatGenerating,
+  isAppChatConversationGenerating,
   isMcpAppSpec,
   loadAppChatMessages,
   loadImChatMessages,
@@ -38,6 +39,7 @@ import type {
   InstalledApp,
   UninstallOptions,
 } from './_shared'
+import { resolveHttpConversationId } from '../../../shared/apps/im-keys'
 
 export function registerAppsRoutes(app: Express): void {
   // ===== Apps Routes =====
@@ -769,15 +771,25 @@ export function registerAppsRoutes(app: Express): void {
       }
       const runtime = getRuntimeOrFail(res)
       if (!runtime) return
-      const request: AppChatRequest = { ...req.body, appId }
+      // Trust boundary for the caller-supplied conversationId: rejects malformed
+      // ids, forbids addressing IM sessions over HTTP, and constrains chatId to a
+      // filename-safe charset (it flows into the JSONL filename).
+      const resolved = resolveHttpConversationId(appId, req.body?.conversationId)
+      if (!resolved.ok) {
+        res.status(400).json({ success: false, error: resolved.error })
+        return
+      }
+      const conversationId = resolved.conversationId
+      const request: AppChatRequest = { ...req.body, appId, conversationId }
       sendAppChatMessage(request).catch((error: unknown) => {
         const err = error as Error
         console.error(`[HTTP] POST /api/apps/:appId/chat/send background error:`, err.message)
       })
-      console.log('[HTTP] POST /api/apps/%s/chat/send', appId)
+      // Return the resolved conversationId so the caller can read back / poll it.
+      console.log('[HTTP] POST /api/apps/%s/chat/send (conversationId=%s)', appId, conversationId)
       res.json({
         success: true,
-        data: { conversationId: getAppChatConversationId(appId) }
+        data: { conversationId }
       })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -808,11 +820,19 @@ export function registerAppsRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing appId' })
         return
       }
+      // Optional conversationId narrows the check to one session; without it,
+      // report whether ANY of the app's sessions is generating.
+      const conversationId = typeof req.query.conversationId === 'string' && req.query.conversationId
+        ? req.query.conversationId
+        : getAppChatConversationId(appId)
+      const isGenerating = typeof req.query.conversationId === 'string' && req.query.conversationId
+        ? isAppChatConversationGenerating(conversationId)
+        : isAppChatGenerating(appId)
       res.json({
         success: true,
         data: {
-          isGenerating: isAppChatGenerating(appId),
-          conversationId: getAppChatConversationId(appId),
+          isGenerating,
+          conversationId,
         }
       })
     } catch (error) {

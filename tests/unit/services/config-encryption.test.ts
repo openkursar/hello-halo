@@ -17,6 +17,7 @@ import { isCredentialAtRestSafe } from '../../../src/main/foundation/credential-
 import {
   encryptConfigFields,
   decryptConfigFields,
+  applyFailedDecodeGuard,
   maskConfigFields,
   unmaskSentinels,
   configHasUnmigratedCredentials,
@@ -95,25 +96,25 @@ describe('config-encryption', () => {
 
       encryptConfigFields(config)
 
-      // Verify fields are encrypted (start with gmcred:v1:)
-      expect((config.api as any).apiKey).toMatch(/^gmcred:v1:/)
+      // Verify fields are encrypted (start with gmcred:v2:)
+      expect((config.api as any).apiKey).toMatch(/^gmcred:v2:/)
       const src = (config.aiSources as any).sources[0]
-      expect(src.apiKey).toMatch(/^gmcred:v1:/)
-      expect(src.accessToken).toMatch(/^gmcred:v1:/)
-      expect(src.refreshToken).toMatch(/^gmcred:v1:/)
-      expect(src.oauth.accessToken).toMatch(/^gmcred:v1:/)
-      expect(src.oauth.refreshToken).toMatch(/^gmcred:v1:/)
+      expect(src.apiKey).toMatch(/^gmcred:v2:/)
+      expect(src.accessToken).toMatch(/^gmcred:v2:/)
+      expect(src.refreshToken).toMatch(/^gmcred:v2:/)
+      expect(src.oauth.accessToken).toMatch(/^gmcred:v2:/)
+      expect(src.oauth.refreshToken).toMatch(/^gmcred:v2:/)
 
       // MCP env: only the sensitive key, not PYTHONPATH
       const mcp = (config.mcpServers as any).myServer
-      expect(mcp.env.API_KEY).toMatch(/^gmcred:v1:/)
+      expect(mcp.env.API_KEY).toMatch(/^gmcred:v2:/)
       expect(mcp.env.PYTHONPATH).toBe('/usr/lib')
-      expect(mcp.headers.Authorization).toMatch(/^gmcred:v1:/)
+      expect(mcp.headers.Authorization).toMatch(/^gmcred:v2:/)
 
       // Notification channels
-      expect((config.notificationChannels as any).email.password).toMatch(/^gmcred:v1:/)
-      expect((config.notificationChannels as any).wecom.secret).toMatch(/^gmcred:v1:/)
-      expect((config.notificationChannels as any).dingtalk.appKey).toMatch(/^gmcred:v1:/)
+      expect((config.notificationChannels as any).email.password).toMatch(/^gmcred:v2:/)
+      expect((config.notificationChannels as any).wecom.secret).toMatch(/^gmcred:v2:/)
+      expect((config.notificationChannels as any).dingtalk.appKey).toMatch(/^gmcred:v2:/)
 
       // Roundtrip
       decryptConfigFields(config)
@@ -266,6 +267,110 @@ describe('config-encryption', () => {
       unmaskSentinels(incoming, existing)
 
       expect((incoming.remoteAccess as any).password).toBe('123456')
+    })
+
+    it('matches sources by id, not index, when the client reorders them', () => {
+      const existing = makeConfig()
+      ;(existing.aiSources as any).sources.push({
+        id: 'src-2',
+        name: 'Other',
+        provider: 'anthropic',
+        apiKey: 'sk-other-key',
+      })
+
+      // Client sends the same sources in reversed order, both masked.
+      const incoming = JSON.parse(JSON.stringify(existing))
+      ;(incoming.aiSources as any).sources.reverse()
+      ;(incoming.aiSources as any).sources[0].apiKey = MASK_SENTINEL // src-2
+      ;(incoming.aiSources as any).sources[1].apiKey = MASK_SENTINEL // src-1
+
+      unmaskSentinels(incoming, existing)
+
+      // Index-based matching would swap these; id-based keeps each correct.
+      expect((incoming.aiSources as any).sources[0].apiKey).toBe('sk-other-key')
+      expect((incoming.aiSources as any).sources[1].apiKey).toBe('sk-source-key')
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Non-destructive decode failure contract (invariant ②)
+  // --------------------------------------------------------------------------
+
+  describe('decryptConfigFields failure reporting', () => {
+    it('reports undecodable fields, empties the in-memory value, and keeps the ciphertext', () => {
+      const config = {
+        api: { provider: 'openai', apiKey: 'enc:undecodable-legacy', apiUrl: '' },
+      }
+      const failures = decryptConfigFields(config)
+
+      // Consumer sees empty (never the raw ciphertext)...
+      expect((config.api as any).apiKey).toBe('')
+      // ...and the original ciphertext is reported for the write guard.
+      expect(failures).toContainEqual({
+        path: 'api.apiKey',
+        label: 'API key',
+        ciphertext: 'enc:undecodable-legacy',
+      })
+    })
+
+    it('reports no failures for plaintext / empty values', () => {
+      const config = { api: { provider: 'openai', apiKey: 'sk-plain', apiUrl: '' } }
+      expect(decryptConfigFields(config)).toEqual([])
+    })
+  })
+
+  describe('applyFailedDecodeGuard', () => {
+    it('restores the original ciphertext for a still-empty failed field', () => {
+      const failed = new Map([['api.apiKey', 'enc:original-cipher']])
+      const config = { api: { provider: 'openai', apiKey: '', apiUrl: '' } }
+
+      applyFailedDecodeGuard(config, failed)
+
+      expect((config.api as any).apiKey).toBe('enc:original-cipher')
+    })
+
+    it('keeps a value the user explicitly re-entered (non-empty wins)', () => {
+      const failed = new Map([['api.apiKey', 'enc:original-cipher']])
+      const config = { api: { provider: 'openai', apiKey: 'sk-re-entered', apiUrl: '' } }
+
+      applyFailedDecodeGuard(config, failed)
+
+      expect((config.api as any).apiKey).toBe('sk-re-entered')
+    })
+
+    it('is a no-op with an empty failure map', () => {
+      const config = { api: { provider: 'openai', apiKey: '', apiUrl: '' } }
+      applyFailedDecodeGuard(config, new Map())
+      expect((config.api as any).apiKey).toBe('')
+    })
+
+    it('keys array sections by id so deletion/reorder cannot cross-wire ciphertext', () => {
+      // Disk order: two orphaned sources A and B (both undecodable).
+      const disk = {
+        aiSources: {
+          version: 2,
+          currentId: 'a',
+          sources: [
+            { id: 'a', name: 'A', provider: 'openai', apiKey: 'enc:fail-A' },
+            { id: 'b', name: 'B', provider: 'openai', apiKey: 'enc:fail-B' },
+          ],
+        },
+      }
+      const failures = decryptConfigFields(disk)
+      const failedMap = new Map(failures.map((f) => [f.path, f.ciphertext]))
+
+      // Client deletes A and submits only B (still orphaned → empty). With an
+      // index-based key, B (now at index 0) would receive A's ciphertext.
+      const toWrite = {
+        aiSources: {
+          version: 2,
+          currentId: 'b',
+          sources: [{ id: 'b', name: 'B', provider: 'openai', apiKey: '' }],
+        },
+      }
+      applyFailedDecodeGuard(toWrite, failedMap)
+
+      expect((toWrite.aiSources.sources[0] as any).apiKey).toBe('enc:fail-B')
     })
   })
 })

@@ -72,7 +72,10 @@ import { getAppMemoryService } from './index'
 import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
 // Key builders live in shared/ so the renderer can import them without
 // depending on main-process modules.
-import { getAppChatConversationId, buildImSessionKey } from '../../../shared/apps/im-keys'
+import { getAppChatConversationId, buildImSessionKey, parseAppChatKey } from '../../../shared/apps/im-keys'
+import { classifySessionSource } from '../../../shared/types/im-channel'
+import { sendToRenderer } from '../../foundation/window.service'
+import { broadcastToAll } from '../../http/websocket'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../services/agent/types'
 import { ProgressEventParser } from './progress-formatter'
@@ -279,6 +282,46 @@ function deriveRunId(conversationId: string, appId: string): string {
  */
 const scopedContexts = new Map<string, BrowserContext>()
 
+/**
+ * Register an external (HTTP) app-chat session so it shows in the conversation
+ * list and is readable via the same HTTP path as IM sessions.
+ *
+ * IM sessions are skipped: dispatch-inbound already registers them with a live
+ * instanceId, and re-registering here with an empty instanceId would clobber
+ * that binding and break IM push. Native chat keys parse to null and are ignored.
+ */
+function registerExternalChatSession(
+  conversationId: string,
+  appId: string,
+  opts?: { displayName?: string; lastSender?: string; lastMessage?: string }
+): void {
+  const parsed = parseAppChatKey(conversationId)
+  if (!parsed || parsed.appId !== appId) return
+  if (classifySessionSource(parsed.channel) === 'im') return
+
+  const registry = getImSessionRegistry()
+  if (!registry) return
+
+  registry.register(appId, parsed.channel, parsed.chatId, parsed.chatType, '', {
+    displayName: opts?.displayName,
+    lastSender: opts?.lastSender,
+    lastMessage: opts?.lastMessage,
+  })
+
+  // Notify desktop + remote clients so the session panel refreshes in real time.
+  const sessionEvent = {
+    appId,
+    channel: parsed.channel,
+    chatId: parsed.chatId,
+    chatType: parsed.chatType,
+    instanceId: '',
+    lastMessage: opts?.lastMessage?.slice(0, 50),
+    lastSender: opts?.lastSender,
+  }
+  sendToRenderer('app:im-session-updated', sessionEvent)
+  broadcastToAll('app:im-session-updated', sessionEvent)
+}
+
 // ============================================
 // Core
 // ============================================
@@ -308,6 +351,14 @@ export async function sendAppChatMessage(
 
   const app = manager.getApp(appId)
   if (!app) throw new Error(`App not found: ${appId}`)
+
+  // Register external (HTTP/API) sessions for UI visibility + HTTP read parity.
+  // No-op for native chat and for IM sessions (owned by dispatch-inbound).
+  registerExternalChatSession(conversationId, app.id, {
+    displayName: senderIdentity?.name,
+    lastSender: senderIdentity?.name,
+    lastMessage: message,
+  })
 
   const memory = getAppMemoryService()
   if (!memory) throw new Error('Memory service not initialized')
@@ -385,7 +436,7 @@ export async function sendAppChatMessage(
   // space.path (internal storage) — see getSpaceDir().
   const exportGate = new FileExportGate([getSpaceDir(app.spaceId!), osTmpdir()])
   const imSessions = usesImPush
-    ? (getImSessionRegistry()?.getAllSessions(app.id) ?? [])
+    ? (getImSessionRegistry()?.getPushableSessions(app.id) ?? [])
     : []
   const notifyMcpServer = createNotifyToolServer({
     appId: app.id,
@@ -727,6 +778,14 @@ export function isAppChatGenerating(appId: string): boolean {
     if (key === prefix || key.startsWith(prefix + ':')) return true
   }
   return false
+}
+
+/**
+ * Whether a single conversation is generating, for the HTTP status endpoint's
+ * per-conversation polling. (isAppChatGenerating reports across all sessions.)
+ */
+export function isAppChatConversationGenerating(conversationId: string): boolean {
+  return activeSessions.has(conversationId)
 }
 
 /**

@@ -9,4 +9,5 @@ export const CHANNEL_LABELS: Record<string, string> = {
   'wecom-bot': 'WeCom',
   'feishu-bot': 'Feishu',
   'dingtalk-bot': 'DingTalk',
+  'http': 'HTTP',
 }

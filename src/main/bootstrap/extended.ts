@@ -27,7 +27,8 @@ import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
 import { registerSecurityHandlers } from '../ipc/security'
 import { enableRemoteAccess } from '../services/remote.service'
-import { getConfig, migrateCredentialEncryption } from '../foundation/config.service'
+import { getConfig, migrateCredentialEncryption, setCredentialFailureNotifier } from '../foundation/config.service'
+import { broadcastToAll } from '../http/websocket'
 import { isServerMode } from '../foundation/runtime-mode'
 import { registerBrowserHandlers } from '../ipc/browser'
 import { registerBrowserPolicyHandlers } from '../ipc/browser-policy'
@@ -208,8 +209,20 @@ export function initializeExtendedServices(): void {
   // gate features (e.g. Tunnel section visibility under tunnelSafe).
   registerSecurityHandlers()
 
-  // Move credentials still under the legacy machine key (or plaintext) onto the
-  // persisted master key. No-op on open-source and already-migrated installs.
+  // Push credential decode failures to renderer (IPC) and remote clients (WS).
+  // Registered before the migration task so failures surfaced during it reach a
+  // connected UI; later clients pull via config:get-credential-failures.
+  setCredentialFailureNotifier((failures) => {
+    sendToRenderer('credential:decrypt-failed', { failures })
+    try {
+      broadcastToAll('credential:decrypt-failed', { failures })
+    } catch (err) {
+      console.warn('[Bootstrap] credential failure WS broadcast failed:', (err as Error).message)
+    }
+  })
+
+  // Move credentials still under a legacy format (plaintext / v1) onto the v2
+  // static product key. No-op on open-source and already-migrated installs.
   registerIdleTask('migrate-credential-encryption', async () => {
     try {
       migrateCredentialEncryption()

@@ -54,6 +54,8 @@ export interface HaloAPI {
   // Config
   getConfig: () => Promise<IpcResponse>
   setConfig: (updates: Record<string, unknown>) => Promise<IpcResponse>
+  getCredentialFailures: () => Promise<IpcResponse>
+  onCredentialDecryptFailed: (callback: (data: { failures: Array<{ path: string; label: string }> }) => void) => () => void
   validateApi: (apiKey: string, apiUrl: string, provider: string, model?: string) => Promise<IpcResponse>
   fetchModels: (apiKey: string, apiUrl: string) => Promise<IpcResponse>
   refreshAISourcesConfig: () => Promise<IpcResponse>
@@ -579,6 +581,7 @@ const api: HaloAPI = {
 
   // Config + AI Sources CRUD (derived from configRpc contract)
   ...bindRpc(configRpc),
+  onCredentialDecryptFailed: (callback) => createEventListener('credential:decrypt-failed', callback),
 
   // CLI Config
   ...bindRpc(cliConfigRpc),

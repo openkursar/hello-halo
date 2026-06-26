@@ -47,6 +47,8 @@ export const eventsApi = {
     onEvent('agent:turn-start', callback),
   onRemoteStatusChange: (callback: (data: unknown) => void) =>
     onEvent('remote:status-change', callback),
+  onCredentialDecryptFailed: (callback: (data: unknown) => void) =>
+    onEvent('credential:decrypt-failed', callback),
 
   // ===== Server URL Management (Capacitor) =====
   setServerUrl,

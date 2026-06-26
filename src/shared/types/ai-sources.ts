@@ -66,6 +66,7 @@ export type BuiltinProviderId =
   | 'moonshot'
   | 'moonshot-global'
   | 'zhipu'
+  | 'zhipu-coding'
   | 'minimax'
   | 'minimax-global'
   | 'minimax-token-plan'
@@ -562,7 +563,7 @@ export interface ProviderDocsLink {
  *
  * Used as the single source of truth across the main process loader
  * (`src/main/services/ai-sources/auth-loader.ts`) and the renderer setup UI
- * (`LoginSelector.tsx`, `SetupPage.tsx`, `ApiSetup.tsx`). Keeping the type here
+ * (`LoginSelector.tsx`, `SetupPage.tsx`, `SetupProviderConfig.tsx`). Keeping the type here
  * prevents the two layers from drifting as fields are added (e.g. `preset`).
  *
  * Three mutually-exclusive shapes are supported by the loader:

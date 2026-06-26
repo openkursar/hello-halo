@@ -94,6 +94,7 @@ export {
   sendAppChatMessage,
   stopAppChat,
   isAppChatGenerating,
+  isAppChatConversationGenerating,
   loadAppChatMessages,
   loadImChatMessages,
   getAppChatSessionState,

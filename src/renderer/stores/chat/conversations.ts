@@ -3,7 +3,7 @@
  */
 import type { ChatSlice } from './internal'
 import { CONVERSATION_CACHE_SIZE, api, createEmptySessionState, createEmptySpaceState } from './internal'
-import type { Conversation, ConversationMeta, Thought } from './internal'
+import type { Conversation, ConversationMeta, Thought, Question } from './internal'
 
 export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConversations' | 'preloadAllSpaceConversations' | 'createConversation' | 'selectConversation' | 'deleteConversation' | 'renameConversation' | 'toggleStarConversation'> = (set, get) => ({
   setCurrentSpace: (spaceId: string) => {
@@ -266,8 +266,14 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
     try {
       const response = await api.getSessionState(conversationId)
       if (response.success && response.data) {
-        const sessionState = response.data as { isActive: boolean; thoughts: Thought[]; spaceId?: string }
+        const sessionState = response.data as {
+          isActive: boolean
+          thoughts: Thought[]
+          spaceId?: string
+          pendingQuestion?: { id: string; questions: Question[] }
+        }
 
+        // Recover in-flight thoughts so the streaming view rebuilds after a refresh.
         if (sessionState.isActive && sessionState.thoughts.length > 0) {
           console.log(`[ChatStore] Recovering ${sessionState.thoughts.length} thoughts for conversation ${conversationId}`)
 
@@ -283,6 +289,19 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
             })
 
             return { sessions: newSessions }
+          })
+        }
+
+        // Recover an unanswered AskUserQuestion missed by clients that were
+        // disconnected when its one-shot event fired, else the agent stays blocked
+        // with no visible prompt. Reuse handleAskQuestion for an identical result.
+        if (sessionState.isActive && sessionState.pendingQuestion) {
+          console.log(`[ChatStore] Recovering pending question for conversation ${conversationId}`)
+          get().handleAskQuestion({
+            spaceId: sessionState.spaceId ?? '',
+            conversationId,
+            id: sessionState.pendingQuestion.id,
+            questions: sessionState.pendingQuestion.questions,
           })
         }
       }

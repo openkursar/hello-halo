@@ -26,6 +26,7 @@ import { SearchHighlightBar } from './components/search/SearchHighlightBar'
 import { OnboardingOverlay } from './components/onboarding'
 import { UpdateNotification } from './components/updater/UpdateNotification'
 import { NotificationToast } from './components/notification/NotificationToast'
+import { CredentialAlertBanner } from './components/settings/CredentialAlertBanner'
 import { useNotificationStore } from './stores/notification.store'
 import { api } from './api'
 import { syncStatusBarStyle } from './api/safe-area'
@@ -372,7 +373,10 @@ export default function App() {
         // Ask the backend if this session is actually still active
         api.getSessionState(conversationId).then(res => {
           if (res.success && res.data) {
-            const backendState = res.data as { isActive: boolean }
+            const backendState = res.data as {
+              isActive: boolean
+              pendingQuestion?: { id: string; questions: Question[] }
+            }
             if (!backendState.isActive) {
               console.log(`[App] Session ${conversationId} completed while backgrounded — recovering`)
 
@@ -384,6 +388,16 @@ export default function App() {
                 // to reload. Clear session state directly to unblock the UI; the owning component
                 // (AppChatView / ImChatView) will reload messages via its own isGenerating effect.
                 chatState.resetSession(conversationId)
+              }
+            } else if (backendState.pendingQuestion) {
+              // Still active and waiting on an answer: the `agent:ask-question` event
+              // was almost certainly pushed while the WebSocket was suspended. Re-hydrate
+              // the question so the card reappears instead of silently deadlocking.
+              const pq = backendState.pendingQuestion
+              const current = chatState.getSession(conversationId).pendingQuestion
+              if (current?.status !== 'active' || current.id !== pq.id) {
+                console.log(`[App] Re-hydrating pending question for ${conversationId} after resume`)
+                chatState.handleAskQuestion({ spaceId: spaceId ?? '', conversationId, id: pq.id, questions: pq.questions })
               }
             }
           }
@@ -934,6 +948,9 @@ export default function App() {
       <UpdateNotification />
       {/* Unified in-app toast notifications */}
       <NotificationToast />
+      {/* At-rest credential decode failure alert (enterprise builds only).
+          Offset below the reconnection bar when it is showing so they stack. */}
+      <CredentialAlertBanner topOffset={showReconnectBanner ? 32 : 0} />
     </div>
   )
 }

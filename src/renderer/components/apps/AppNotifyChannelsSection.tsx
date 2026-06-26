@@ -173,7 +173,8 @@ function ContactsSection({ appId }: { appId: string }) {
     try {
       const result = await api.imSessionsList(appId) as { success: boolean; data?: ImSessionRecord[] }
       if (result.success && result.data) {
-        setSessions(result.data)
+        // Only IM sessions are pushable; HTTP sessions have no channel adapter.
+        setSessions(result.data.filter(s => s.source === 'im'))
       }
     } catch {
       // Ignore

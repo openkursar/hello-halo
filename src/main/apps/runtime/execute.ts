@@ -370,7 +370,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // files live under workingDir||path — see getSpaceDir().
     const exportGate = new FileExportGate([getSpaceDir(app.spaceId!), tmpdir()])
     const imSessions = usesImPush
-      ? (getImSessionRegistry()?.getAllSessions(app.id) ?? [])
+      ? (getImSessionRegistry()?.getPushableSessions(app.id) ?? [])
       : []
     const notifyMcpServer = createNotifyToolServer({
       appId: app.id,
