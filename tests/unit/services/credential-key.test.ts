@@ -90,4 +90,30 @@ describe('credential-key', () => {
       expect(a).not.toBe(b)
     })
   })
+
+  // Cross-version stability guard. Enterprise builds ship
+  // credentialAtRestSafe=true with an EMPTY credentialStaticKey, so every
+  // install derives the same fallback key from the in-source pepper and the
+  // data folder name. These pinned values fix that derivation: any change to
+  // FALLBACK_PEPPER, the HKDF info labels, or the SM4-CBC/HMAC-SM3 envelope
+  // parameters would shift the key and silently orphan every gmcred:v2:
+  // credential written by a prior release. Such a change must fail here.
+  describe('golden vector (empty enterprise key, dataFolderName="halo")', () => {
+    const GOLDEN_KEY_HEX = '529b8da54fc86f58be87c9a4da8c420f633993fffce043980c738df6cbe88bce'
+    // A gmcred:v2: ciphertext of 'golden-vector-secret' captured under the key
+    // above. Random salt/iv make every encrypt unique, so this is a fixed
+    // decrypt vector — not an encrypt-output comparison.
+    const GOLDEN_V2_CIPHERTEXT =
+      'gmcred:v2:NNi3iuNHmB955IomVgnVYcSxOSO6MDm6sFn8aiv/7ikgywaoIYl7GL5HeXRLu/Fq9ypFp6VbOP/NrAWeVrhwMZf8geE8/7vubolkmnXQw2MOTMNcUUNU8+70Zu+f7vOR'
+
+    it('derives the pinned fallback key for an empty static key', () => {
+      productConfig.security = { credentialStaticKey: '' }
+      expect(getStaticProductKey().toString('hex')).toBe(GOLDEN_KEY_HEX)
+    })
+
+    it('decodes a v2 credential written by a prior version under the same key', () => {
+      productConfig.security = { credentialStaticKey: '' }
+      expect(decodeFromStorage(GOLDEN_V2_CIPHERTEXT)).toBe('golden-vector-secret')
+    })
+  })
 })
