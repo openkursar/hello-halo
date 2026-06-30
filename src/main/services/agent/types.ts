@@ -46,6 +46,13 @@ export interface ApiCredentials {
   /** Provider adapter ID for request/response transformations */
   adapterId?: string
   /**
+   * Explicit per-model vision override (Settings > Provider > Model Config).
+   * Forwarded to the OpenAI-compat converter so a user-enabled "Vision" flag
+   * keeps image content for models the name heuristic would otherwise treat as
+   * text-only (e.g. `minimax-*`). `undefined` = no override.
+   */
+  visionOverride?: boolean
+  /**
    * Resolved capabilities for the chosen model (preset + user override merged).
    * Optional because legacy callers and api-validator construct credentials
    * before capabilities are known; the SDK config layer falls back to safe

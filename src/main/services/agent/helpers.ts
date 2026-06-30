@@ -278,6 +278,7 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
     forceStream: backendConfig.forceStream,
     filterContent: backendConfig.filterContent,
     adapterId: backendConfig.adapterId,
+    visionOverride: backendConfig.visionOverride,
     capabilities,
   }
 }
@@ -351,6 +352,7 @@ export async function getApiCredentialsForSource(
     forceStream: backendConfig.forceStream,
     filterContent: backendConfig.filterContent,
     adapterId: backendConfig.adapterId,
+    visionOverride: backendConfig.visionOverride,
     capabilities,
   }
 }
@@ -399,6 +401,7 @@ export function credentialsToBackendConfig(
     forceStream: credentials.forceStream,
     filterContent: credentials.filterContent,
     adapterId: credentials.adapterId,
+    visionOverride: credentials.visionOverride,
     ...overrides
   }
 }

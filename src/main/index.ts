@@ -85,7 +85,7 @@ import './foundation/logging'
 // Executed after page load to avoid blocking startup
 // Note: fix-path is ESM-only, loaded dynamically to support both CJS and ESM builds
 
-import { app, BrowserWindow, Menu } from 'electron'
+import { app, BrowserWindow, Menu, crashReporter } from 'electron'
 import open from 'open'
 
 // GPU compatibility: Disable hardware acceleration on Windows to prevent blank window issues
@@ -186,6 +186,8 @@ import { manualCheckForUpdates } from './services/updater.service'
 import { initAnalytics } from './services/analytics'
 import { registerProtocols } from './foundation/protocol.service'
 import { setMainWindow } from './foundation/window.service'
+import { checkAndArmSessionIntegrity, markSessionCleanExit } from './foundation/session-integrity'
+import { relaunchApp } from './services/lifecycle'
 import { initInstanceId, shutdownHealthSystem, onRendererCrash, onRendererUnresponsive } from './services/health'
 import { reconcileAllSpaces } from './services/artifact-cache.service'
 import { initSdk } from './services/agent/resolved-sdk'
@@ -219,8 +221,7 @@ function recoverRenderer(reason: string): void {
 
   if (recoveryAttempts > 3) {
     console.error('[Main] Renderer failed repeatedly. Relaunching app for a clean state.')
-    app.relaunch()
-    app.exit(0)
+    relaunchApp('renderer-recovery')
     return
   }
 
@@ -425,7 +426,7 @@ function createWindow(): void {
 
   // Reconcile artifact caches on window focus (recover missed watcher events)
   mainWindow.on('focus', () => {
-    reconcileAllSpaces().catch((err) => {
+    reconcileAllSpaces('window-focus').catch((err) => {
       console.error('[Main] Artifact reconciliation error on focus:', err)
     })
   })
@@ -453,6 +454,19 @@ function createWindow(): void {
 
 // Initialize application
 app.whenReady().then(async () => {
+  // Capture native crashes (V8 heap OOM, segfault, renderer GPU crashes) that bypass
+  // the JS uncaughtException handler. Minidumps are kept locally (uploadToServer:false)
+  // under app.getPath('crashDumps') — the only on-disk evidence when the process dies
+  // without running any shutdown code.
+  crashReporter.start({ uploadToServer: false })
+  console.log(`[CrashReporter] Native crash capture enabled, dumps at: ${app.getPath('crashDumps')}`)
+
+  // Detect whether the previous session ended without a graceful shutdown, then arm
+  // the marker for this session. Runs as the first whenReady step so a crash during
+  // the heavy init that follows is still attributed on the next launch (a crash
+  // before whenReady cannot be marked, but is rare).
+  checkAndArmSessionIntegrity()
+
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.halo.app')
 
@@ -541,6 +555,11 @@ async function shutdownServices(): Promise<void> {
     return
   }
   hasShutdown = true
+
+  // Record that a graceful shutdown was initiated. Done first so a normal quit is
+  // marked clean even if a later cleanup step is slow; an ungraceful death never
+  // reaches this path and so remains flagged on the next launch.
+  markSessionCleanExit()
 
   // Flush pending conversation index writes before shutdown
   flushAllPendingIndexWrites()

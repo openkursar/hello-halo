@@ -238,6 +238,11 @@ class AISourceManager {
       config.apiType = source.apiType
     }
 
+    const visionOverride = this.resolveVisionOverride(source, config.model)
+    if (visionOverride !== undefined) {
+      config.visionOverride = visionOverride
+    }
+
     console.log('[AISourceManager] getBackendConfig result:', {
       url: config.url,
       model: config.model,
@@ -338,7 +343,26 @@ class AISourceManager {
       config.apiType = source.apiType
     }
 
+    const visionOverride = this.resolveVisionOverride(source, config.model)
+    if (visionOverride !== undefined) {
+      config.visionOverride = visionOverride
+    }
+
     return config
+  }
+
+  /**
+   * Read the user's explicit per-model vision override for `model`.
+   *
+   * Returns the stored boolean only when the user has set it in Model Config;
+   * `undefined` otherwise so downstream image-stripping keeps its name-based
+   * heuristic fallback. Keyed by the wire model id — the same key Model Config
+   * writes — so proxy-prefixed/friendly names never accidentally match.
+   */
+  private resolveVisionOverride(source: AISource, model: string | undefined): boolean | undefined {
+    if (!model) return undefined
+    const v = source.modelOverrides?.[model]?.vision
+    return typeof v === 'boolean' ? v : undefined
   }
 
   // ========== Source CRUD Operations ==========
