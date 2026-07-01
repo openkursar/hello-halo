@@ -35,6 +35,7 @@ import type {
 } from '../../../shared/types/im-channel'
 import { WeixinIlinkInstanceCard } from './WeixinIlinkInstanceCard'
 import { WecomScanAuthDialog } from './WecomScanAuthDialog'
+import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 
 /** Product-level permission defaults (from IPC). Mirrors auth-loader.ImChannelsPermissionDefaults. */
 interface PermissionDefaults {
@@ -365,20 +366,6 @@ function InstanceCard({
 
   const [showMenu, setShowMenu] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
-
-  // Close menu on outside click
-  useEffect(() => {
-    if (!showMenu) return
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setShowMenu(false)
-        setShowDeleteConfirm(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showMenu])
 
   // Debounced save for config fields.
   // pendingSaveRef always holds the most-recent unsaved value so we can
@@ -470,20 +457,24 @@ function InstanceCard({
           </div>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          {/* Context menu */}
-          <div className="relative" ref={menuRef}>
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu) }}
-              className="p-1 rounded hover:bg-muted transition-colors"
+          {/* Context menu. Popover renders the panel through a portal so it
+              escapes this card's `overflow-hidden`, which previously clipped
+              the dropdown. The wrapper stops clicks from toggling the header. */}
+          <div onClick={(e) => e.stopPropagation()}>
+            <Popover
+              open={showMenu}
+              onOpenChange={(open) => {
+                setShowMenu(open)
+                if (!open) setShowDeleteConfirm(false)
+              }}
             >
-              <MoreVertical className="w-3.5 h-3.5 text-muted-foreground" />
-            </button>
-            {showMenu && (
-              <div className="absolute right-0 top-full mt-1 bg-popover border border-border rounded-lg shadow-lg z-10 min-w-[140px] py-1">
+              <PopoverTrigger className="p-1 rounded hover:bg-muted transition-colors">
+                <MoreVertical className="w-3.5 h-3.5 text-muted-foreground" />
+              </PopoverTrigger>
+              <PopoverContent align="end" className="min-w-[140px] py-1">
                 <button
                   type="button"
-                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); onReconnect() }}
+                  onClick={() => { setShowMenu(false); onReconnect() }}
                   className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted transition-colors flex items-center gap-2"
                   disabled={!isEnabled}
                 >
@@ -497,14 +488,14 @@ function InstanceCard({
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); setShowMenu(false); setShowDeleteConfirm(false); onDelete() }}
+                        onClick={() => { setShowMenu(false); setShowDeleteConfirm(false); onDelete() }}
                         className="flex-1 px-2 py-1 text-xs rounded bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors"
                       >
                         {t('Confirm')}
                       </button>
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(false) }}
+                        onClick={() => setShowDeleteConfirm(false)}
                         className="flex-1 px-2 py-1 text-xs rounded hover:bg-muted text-muted-foreground transition-colors"
                       >
                         {t('Cancel')}
@@ -514,15 +505,15 @@ function InstanceCard({
                 ) : (
                   <button
                     type="button"
-                    onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(true) }}
+                    onClick={() => setShowDeleteConfirm(true)}
                     className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted text-destructive transition-colors flex items-center gap-2"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     {t('Delete')}
                   </button>
                 )}
-              </div>
-            )}
+              </PopoverContent>
+            </Popover>
           </div>
           <ChevronDown
             className={`w-3.5 h-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`}
