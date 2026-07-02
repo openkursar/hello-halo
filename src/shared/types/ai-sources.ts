@@ -73,6 +73,7 @@ export type BuiltinProviderId =
   | 'yi'
   | 'stepfun'
   | 'openrouter'
+  | 'requesty'
   | 'groq'
   | 'mistral'
   | 'deepinfra'
