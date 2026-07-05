@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.10-rc.29",
+  "version": "2.1.10-rc.35",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.mjs",
@@ -193,7 +193,7 @@
       "out/**/*",
       "resources/**/*",
       "product.json",
-      "halo-webank/build/dist/**/*",
+      "halo-local/dist/**/*",
       "!node_modules/better-sqlite3/prebuilds"
     ],
     "asarUnpack": [

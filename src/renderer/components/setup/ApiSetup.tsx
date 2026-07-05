@@ -573,7 +573,7 @@ export function ApiSetup({ onBack, showBack = false, preset }: ApiSetupProps) {
                     type="text"
                     value={model}
                     onChange={(e) => setModel(e.target.value)}
-                    placeholder="claude-sonnet-4-5-20250929"
+                    placeholder={DEFAULT_MODEL}
                     className="w-full px-4 py-2 bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors"
                   />
                 ) : (

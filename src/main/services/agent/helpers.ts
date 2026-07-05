@@ -13,7 +13,7 @@ import { getSpace } from '../space.service'
 import { getAISourceManager } from '../ai-sources'
 import { getAppManager } from '../app-bridge'
 import type { McpSpec } from '../../apps/spec/schema'
-import type { BackendRequestConfig, AISource } from '../../../shared/types/ai-sources'
+import { resolveModelId, type BackendRequestConfig, type AISource } from '../../../shared/types/ai-sources'
 import { modelCapabilitiesService } from '../model-capabilities.service'
 import { isMcpCommandBlocked } from '../security-policy'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
@@ -255,7 +255,7 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
     console.log(`[Agent] Using OpenAI-compatible API (${currentSource?.provider || 'unknown'}) via AISourceManager`)
   }
 
-  const modelId = backendConfig.model || 'claude-opus-4-5-20251101'
+  const modelId = resolveModelId(backendConfig.model)
   const modelOption = currentSource?.availableModels?.find(m => m.id === modelId)
   const displayModel = modelOption?.name || modelId
   // Capabilities MUST resolve against the wire model id. Both the preset

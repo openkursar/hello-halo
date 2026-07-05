@@ -37,6 +37,7 @@ import type {
   OAuthCompleteResult,
   AISourceUserInfo
 } from '../../../../shared/types'
+import { DEFAULT_MODEL, resolveModelId } from '../../../../shared/types'
 
 // ============================================================================
 // Constants
@@ -84,7 +85,8 @@ const TOKEN_REFRESH_THRESHOLD_MS = 5 * 60 * 1000
  * [1m] suffix indicates 1M context window variant (stripped before API call).
  */
 const CLAUDE_MODELS: Record<string, string> = {
-  'claude-mythos-preview': 'Claude Mythos (Preview)',
+  'claude-sonnet-5': 'Claude Sonnet 5',
+  'claude-sonnet-5[1m]': 'Claude Sonnet 5 (1M context)',
   'claude-fable-5': 'Claude Fable 5',
   'claude-fable-5[1m]': 'Claude Fable 5 (1M context)',
   'claude-opus-4-8': 'Claude Opus 4.8',
@@ -93,10 +95,8 @@ const CLAUDE_MODELS: Record<string, string> = {
   'claude-opus-4-7[1m]': 'Claude Opus 4.7 (1M context)',
   'claude-opus-4-6': 'Claude Opus 4.6',
   'claude-opus-4-6[1m]': 'Claude Opus 4.6 (1M context)',
-  'claude-opus-4-5-20251101': 'Claude Opus 4.5',
   'claude-sonnet-4-6': 'Claude Sonnet 4.6',
   'claude-sonnet-4-6[1m]': 'Claude Sonnet 4.6 (1M context)',
-  'claude-sonnet-4-5-20250929': 'Claude Sonnet 4.5',
   'claude-haiku-4-5-20251001': 'Claude Haiku 4.5'
 }
 
@@ -110,7 +110,7 @@ const CLAUDE_MODELS: Record<string, string> = {
  * Runtime profile assumed:
  *   - first-party Anthropic API
  *   - OAuth subscriber (Pro/Max)
- *   - claude-4+ / claude-mythos models
+ *   - claude-4+ / claude-5 models
  *   - agentic workload (multi-turn tool use)
  *
  * Under that profile the betas below apply unconditionally; 1M context is
@@ -217,7 +217,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
       return null
     }
 
-    const rawModel = c.model || 'claude-sonnet-4-6'
+    const rawModel = resolveModelId(c.model)
     const is1mContext = /\[1m\]$/i.test(rawModel)
     // Preserve the [1m] suffix on the propagated model id. The embedded
     // Claude SDK relies on this suffix for its internal has1mContext() /
@@ -397,7 +397,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
       // Get available models
       const models = await this.getAvailableModels({} as AISourcesConfig)
       const modelNames = CLAUDE_MODELS
-      const defaultModel = 'claude-sonnet-4-6'
+      const defaultModel = DEFAULT_MODEL
 
       const result: OAuthCompleteResult & {
         _tokenData: { accessToken: string; refreshToken: string; expiresAt: number; uid: string }

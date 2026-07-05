@@ -19,7 +19,7 @@ import path from 'path'
 import { ensureOpenAICompatRouter, encodeBackendConfig, normalizeApiUrl } from '../openai-compat-router'
 import type { BackendConfig } from '../openai-compat-router'
 import { buildSdkEnv } from './agent/sdk-config'
-import { AVAILABLE_MODELS } from '../../shared/types/ai-sources'
+import { DEFAULT_MODEL } from '../../shared/types/ai-sources'
 import { getHeadlessElectronPath } from './agent/helpers'
 
 // Re-export normalizeApiUrl for external use (moved to router module)
@@ -164,7 +164,7 @@ export async function validateApiConnection(params: ValidateApiParams): Promise<
       message: 'Please select a model before testing the connection'
     }
   }
-  const testModel = model || AVAILABLE_MODELS[2].id
+  const testModel = model || DEFAULT_MODEL
 
   // Step 4: Get headless Electron path (same as agent module, used for executable fallback)
   const electronPath = getHeadlessElectronPath()

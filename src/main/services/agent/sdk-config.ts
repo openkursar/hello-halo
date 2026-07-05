@@ -13,6 +13,7 @@ import { resolveClaudeConfigDir, getConfig } from '../../foundation/config.servi
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../openai-compat-router'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
 import { inferOpenAIWireApi, credentialsToBackendConfig } from './helpers'
+import { resolveModelId } from '../../../shared/types/ai-sources'
 import { buildSystemPrompt, buildSystemPromptWithAIBrowser, DEFAULT_ALLOWED_TOOLS } from './system-prompt'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../ai-browser'
 import { createCanUseTool } from './permission-handler'
@@ -265,7 +266,7 @@ export async function resolveCredentialsForSdk(
   // Start with direct values
   let anthropicBaseUrl = credentials.baseUrl
   let anthropicApiKey = credentials.apiKey
-  let sdkModel = credentials.model || 'claude-opus-4-5-20251101'
+  let sdkModel = resolveModelId(credentials.model)
   const displayModel = credentials.displayModel || credentials.model
 
   // For non-Anthropic providers (openai or OAuth), use the OpenAI compat router
@@ -313,7 +314,7 @@ async function resolveAnthropicPassthrough(
     credentialsToBackendConfig(credentials, { url: configUrl, apiType: 'anthropic_passthrough' })
   )
 
-  let sdkModel = credentials.model || 'claude-opus-4-5-20251101'
+  let sdkModel = resolveModelId(credentials.model)
   const decoratedSdkModel = applyCC1mContextUnlock(sdkModel, credentials.capabilities)
   if (decoratedSdkModel !== sdkModel) {
     console.log(`[SDK Config] CC 1M context unlock (anthropic passthrough): sdkModel "${sdkModel}" → "${decoratedSdkModel}" (contextWindow=${credentials.capabilities?.contextWindow})`)

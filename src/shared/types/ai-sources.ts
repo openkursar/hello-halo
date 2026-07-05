@@ -118,9 +118,9 @@ export interface ModelOption {
  */
 export const AVAILABLE_MODELS: ModelOption[] = [
   {
-    id: 'claude-mythos-preview',
-    name: 'Claude Mythos (Preview)',
-    description: 'Next-generation frontier model, preview access'
+    id: 'claude-sonnet-5',
+    name: 'Claude Sonnet 5',
+    description: 'Best combination of speed and intelligence, suitable for most tasks'
   },
   {
     id: 'claude-fable-5',
@@ -128,28 +128,23 @@ export const AVAILABLE_MODELS: ModelOption[] = [
     description: 'Frontier model with native 1M context, strongest coding and agentic performance'
   },
   {
+    id: 'claude-opus-4-8',
+    name: 'Claude Opus 4.8',
+    description: 'Most capable model for complex agentic coding and enterprise work'
+  },
+  {
     id: 'claude-opus-4-7',
     name: 'Claude Opus 4.7',
-    description: 'Latest and most powerful model, great for complex reasoning and architecture decisions'
+    description: 'Powerful model, great for complex reasoning and architecture decisions'
   },
   {
     id: 'claude-opus-4-6',
     name: 'Claude Opus 4.6',
-    description: 'Most powerful model, great for complex reasoning and architecture decisions'
-  },
-  {
-    id: 'claude-opus-4-5-20251101',
-    name: 'Claude Opus 4.5',
-    description: 'great for complex reasoning and architecture decisions'
+    description: 'Powerful model, great for complex reasoning and architecture decisions'
   },
   {
     id: 'claude-sonnet-4-6',
     name: 'Claude Sonnet 4.6',
-    description: 'Balanced performance and cost, suitable for most tasks'
-  },
-  {
-    id: 'claude-sonnet-4-5-20250929',
-    name: 'Claude Sonnet 4.5',
     description: 'Balanced performance and cost, suitable for most tasks'
   },
   {
@@ -159,7 +154,20 @@ export const AVAILABLE_MODELS: ModelOption[] = [
   }
 ]
 
-export const DEFAULT_MODEL = 'claude-sonnet-4-6'
+export const DEFAULT_MODEL = 'claude-sonnet-5'
+
+/** Model ids retired upstream — requests with them are rejected by the API. */
+const RETIRED_MODEL_IDS = new Set(['claude-mythos-preview'])
+
+/**
+ * Resolve a stored model id to a usable one: fills empty values and remaps
+ * retired ids to DEFAULT_MODEL so persisted configs keep working after a
+ * model is delisted.
+ */
+export function resolveModelId(model?: string | null): string {
+  if (!model || RETIRED_MODEL_IDS.has(model)) return DEFAULT_MODEL
+  return model
+}
 
 // ============================================================================
 // AI Source Configuration Types (v2)

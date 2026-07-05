@@ -14,6 +14,7 @@ import { StoreInstallDialog } from './StoreInstallDialog'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveEntryI18n, resolveSpecI18n } from '../../utils/spec-i18n'
 import { AppTypeBadge } from './AppTypeBadge'
+import { EntryIcon } from './EntryIcon'
 import { StoreDocumentation } from './StoreDocumentation'
 import { api } from '../../api'
 
@@ -205,9 +206,7 @@ export function StoreDetail() {
           {/* Header: Icon + Name + Version + Author */}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
             <div className="flex items-start gap-3 min-w-0">
-              {entry.icon && (
-                <span className="text-3xl flex-shrink-0">{entry.icon}</span>
-              )}
+              {entry.icon && <EntryIcon icon={entry.icon} textClassName="text-3xl" imageSize={36} />}
               <div className="min-w-0">
                 <h1 className="text-lg font-semibold text-foreground break-words">{resolvedEntry?.name ?? entry.name}</h1>
                 <div className="flex items-center gap-2 mt-1 flex-wrap">

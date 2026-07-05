@@ -19,6 +19,7 @@ import type {
   CustomSourceConfig,
   ModelOption
 } from '../../shared/types'
+import { DEFAULT_MODEL } from '../../shared/types'
 import { BUILTIN_PROVIDERS, getBuiltinProvider } from '../../shared/constants'
 import { decryptString } from './secure-storage.service'
 import { encryptConfigFields, decryptConfigFields, configHasUnmigratedCredentials } from './config-encryption'
@@ -653,9 +654,6 @@ export function resolveClaudeConfigDir(
       return join(app.getPath('userData'), 'claude-config')
   }
 }
-
-// Default model (Opus 4.5)
-const DEFAULT_MODEL = 'claude-opus-4-5-20251101'
 
 // Default configuration
 const DEFAULT_CONFIG: HaloConfig = {

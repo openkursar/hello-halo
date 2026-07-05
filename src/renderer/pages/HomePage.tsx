@@ -232,7 +232,7 @@ export function HomePage() {
             <p className="text-sm">{t('No dedicated spaces yet')}</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {spaces.map((space, i) => (
               <div
                 key={`${space.id}-${i}`}
@@ -241,7 +241,7 @@ export function HomePage() {
                   space.isMissing ? 'opacity-70 cursor-not-allowed border-dashed' : ''
                 }`}
               >
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <SpaceIcon iconId={space.icon} size={20} />
                     <span className="font-medium truncate">{space.name}</span>
@@ -252,17 +252,17 @@ export function HomePage() {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                  <div className="flex items-center gap-2 sm:gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all flex-shrink-0">
                     <button
                       onClick={(e) => handleEditSpace(e, space)}
-                      className="p-1 hover:bg-secondary rounded transition-all"
+                      className="p-2 sm:p-1 hover:bg-secondary rounded transition-all"
                       title={t('Edit Space')}
                     >
                       <Pencil className="w-4 h-4 text-muted-foreground" />
                     </button>
                     <button
                       onClick={(e) => handleDeleteSpace(e, space.id)}
-                      className="p-1 hover:bg-destructive/20 rounded transition-all"
+                      className="p-2 sm:p-1 hover:bg-destructive/20 rounded transition-all"
                       title={t('Delete space')}
                     >
                       <Trash2 className="w-4 h-4 text-destructive" />

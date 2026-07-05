@@ -34,6 +34,7 @@ export type {
 export {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
+  resolveModelId,
   createEmptyAISourcesConfig,
   getCurrentSource,
   getSourceById,
