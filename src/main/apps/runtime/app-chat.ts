@@ -79,6 +79,7 @@ import { broadcastToAll } from '../../http/websocket'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../services/agent/types'
 import { ProgressEventParser } from './progress-formatter'
+import { ReplyTextAccumulator } from './reply-accumulator'
 import { flushSupplementBuffer } from './dispatch-inbound'
 export { getAppChatConversationId, buildImSessionKey }
 
@@ -579,14 +580,12 @@ export async function sendAppChatMessage(
     // ── 8. Process stream ──────────────────────────────
     const messageContent = buildMessageContent(message, images)
 
-    // Track the last assistant message's text content from raw SDK messages.
-    // This is the authoritative source for IM replies — same principle as the JSONL
-    // path used by AppChatView (readSessionMessages → extractTextContent).
-    // Unlike processStream's internal lastTextContent which can be corrupted by
-    // dual-path (stream_event + SDK message) state interference, this reads directly
-    // from the SDK's output which is always correct.
-    // See: stream-processor.ts TODO about lastTextContent pollution.
-    let lastAssistantText = ''
+    // Accumulate the final reply text from raw SDK assistant messages. Keeps the
+    // last contiguous run of text blocks so multi-segment answers survive intact
+    // (a tool_use resets the run — preceding text is intermediate narration).
+    // This is the authoritative source for IM replies; reading directly from SDK
+    // output sidesteps processStream's lastTextContent dual-path pollution.
+    const replyAccumulator = new ReplyTextAccumulator()
 
     // One stateful parser per message: accumulates tool input JSON and thinking
     // text across delta events, emits complete ProgressEvents on block_stop.
@@ -612,11 +611,12 @@ export async function sendAppChatMessage(
 
           // App chat doesn't use conversation.service for storage.
           // Messages are persisted to JSONL via onRawMessage for reload.
-          const replyContent = lastAssistantText || streamResult.finalContent
+          const assistantText = replyAccumulator.getReply()
+          const replyContent = assistantText || streamResult.finalContent
           console.log(
             `[AppChat][${appId}] Stream complete: ` +
             `content=${replyContent.length} chars` +
-            `${lastAssistantText ? ' (from SDK message)' : ' (from streamResult)'}, ` +
+            `${assistantText ? ' (from SDK message)' : ' (from streamResult)'}, ` +
             `thoughts=${streamResult.thoughts.length}, ` +
             `tokens=${streamResult.tokenUsage ? 'yes' : 'no'}`
           )
@@ -650,19 +650,10 @@ export async function sendAppChatMessage(
             sessionWriter.writeEvent(sdkMessage)
           }
 
-          // Extract text from assistant messages for IM reply.
-          // SDK assistant messages contain the complete, correct text blocks
-          // (unlike processStream's stateful lastTextContent which can be corrupted).
-          if (sdkMessage.type === 'assistant') {
-            const content = sdkMessage.message?.content
-            if (Array.isArray(content)) {
-              const text = content
-                .filter((b: any) => b.type === 'text' && b.text)
-                .map((b: any) => b.text)
-                .join('')
-              if (text) lastAssistantText = text
-            }
-          }
+          // Accumulate assistant text for the IM reply. SDK assistant messages
+          // carry complete text blocks in order, so the accumulator can track
+          // the last contiguous run across a multi-step (text/tool_use) flow.
+          replyAccumulator.feed(sdkMessage)
 
           // Emit progress events to IM channel if callback provided
           if (onProgress && progressParser) {
