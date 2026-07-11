@@ -43,8 +43,15 @@ function sql(statements) {
   return execFileSync('/usr/bin/sqlite3', [DB_PATH, statements], { encoding: 'utf-8' }).trim()
 }
 
+/** An activity row whose owning app no longer exists — the pre-FK-era dirt that
+ *  once aborted the v4 rebuild (FK=ON inside the migration transaction) and
+ *  blocked startup. v4 must drop it, not die on it. */
+const ORPHAN_APP_ID = 'ghost-app-uninstalled'
+
 /** Downgrade app_runtime to pre-v4: recreate activity_entries WITH the run_id FK,
- *  and roll the _migrations row back to version 3. Node must be stopped (file lock). */
+ *  and roll the _migrations row back to version 3. Also seeds an orphan row
+ *  (sqlite3 CLI runs with foreign_keys=OFF, matching how real orphans were
+ *  written). Node must be stopped (file lock). */
 function downgradeAppRuntimeToV3() {
   sql(`
     CREATE TABLE activity_entries_old (
@@ -67,6 +74,8 @@ function downgradeAppRuntimeToV3() {
     ALTER TABLE activity_entries_old RENAME TO activity_entries;
     CREATE INDEX IF NOT EXISTS idx_entries_app ON activity_entries(app_id, ts DESC);
     CREATE INDEX IF NOT EXISTS idx_entries_run ON activity_entries(run_id);
+    INSERT INTO activity_entries (id, app_id, run_id, type, ts, content_json)
+      VALUES ('orphan-entry-1', '${ORPHAN_APP_ID}', 'run-ghost', 'report', ${Date.now()}, '{}');
     UPDATE _migrations SET version = 3 WHERE namespace = 'app_runtime';
   `)
 }
@@ -154,8 +163,9 @@ try {
     const afterActivity = upgraded ? await apiOk(node, 'GET', `/api/apps/${appId}/activity?limit=20`) : []
     const dataIntact = afterActivity.length === beforeActivity.length &&
       JSON.stringify(afterActivity.map((e) => e.id).sort()) === JSON.stringify(beforeActivity.map((e) => e.id).sort())
-    mark(preVersion === 4 && downgradedVersion === 3 && postVersion === 4 && upgraded && dataIntact ? 'PASS' : 'FAIL',
-      `pre=${preVersion} downgraded=${downgradedVersion} post=${postVersion} bootedOk=${!!upgraded} dataIntact=${dataIntact} (before=${beforeActivity.length} after=${afterActivity.length})`)
+    const orphanDropped = countActivity(ORPHAN_APP_ID) === 0
+    mark(preVersion === 4 && downgradedVersion === 3 && postVersion === 4 && upgraded && dataIntact && orphanDropped ? 'PASS' : 'FAIL',
+      `pre=${preVersion} downgraded=${downgradedVersion} post=${postVersion} bootedOk=${!!upgraded} dataIntact=${dataIntact} orphanDropped=${orphanDropped} (before=${beforeActivity.length} after=${afterActivity.length})`)
   })
 
   await report.run('4.2', async (mark) => {

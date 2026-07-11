@@ -128,6 +128,13 @@ export const migrations: Migration[] = [
       // original single-column node_id key made those rows overwrite each other
       // across offices (corrupting election rosters and reachability checks).
       // SQLite cannot alter a primary key in place, so rebuild the table.
+      //
+      // Bare copy (no row filtering) is safe ONLY because of two preconditions —
+      // do not copy this pattern without them (see app_runtime v4 for the
+      // filtered variant): no FK references office_nodes in either direction,
+      // so no row can violate a constraint under the migration transaction's
+      // foreign_keys=ON; and the old single-column node_id PK guarantees the
+      // new composite key cannot collide.
       db.exec(`
         CREATE TABLE office_nodes_new (
           office_id TEXT NOT NULL,

@@ -71,6 +71,10 @@ export const migrations: Migration[] = [
     // parent, so the FK rejected every such insert. Entries are owned by app_id
     // (CASCADE kept); run cleanup is handled explicitly in pruneOldData.
     // activity_entries is a leaf table, so dropping the run_id FK is safe.
+    // The rebuild runs with foreign_keys=ON inside a transaction (PRAGMA can't be
+    // toggled there), so the copy filters rows whose app_id no longer exists —
+    // orphans left by a pre-FK insert would otherwise fail the retained app_id FK
+    // and abort the whole migration.
     up(db) {
       db.exec(`
         CREATE TABLE activity_entries_v4 (
@@ -87,7 +91,8 @@ export const migrations: Migration[] = [
         INSERT INTO activity_entries_v4
           (id, app_id, run_id, type, ts, session_key, content_json, user_response_json)
           SELECT id, app_id, run_id, type, ts, session_key, content_json, user_response_json
-          FROM activity_entries;
+          FROM activity_entries
+          WHERE app_id IN (SELECT id FROM installed_apps);
         DROP TABLE activity_entries;
         ALTER TABLE activity_entries_v4 RENAME TO activity_entries;
         CREATE INDEX IF NOT EXISTS idx_entries_app ON activity_entries(app_id, ts DESC);
