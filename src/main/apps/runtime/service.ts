@@ -590,8 +590,10 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   function checkEscalationTimeouts(): void {
     try {
       const pendingEscalations = store.getAllPendingEscalations()
-      if (pendingEscalations.length === 0) return
-
+      // No early return here: the data-pruning piggyback at the end of this
+      // function must run on every tick — "no pending escalations" is the
+      // common state, and returning early starved pruneOldDataIfNeeded()
+      // forever (old runs were never cleaned up).
       const now = Date.now()
 
       for (const entry of pendingEscalations) {

@@ -514,7 +514,9 @@ describe('parseAndValidateAppSpec - full skill example', () => {
     expect(spec.config_schema![0].type).toBe('select')
     expect(spec.config_schema![0].options).toHaveLength(3)
     expect(spec.permissions).toEqual(['filesystem.read'])
-    expect(spec.output!.format).toContain('{file}')
+    // `output` belongs to automation specs only — the skill schema strips it
+    // (skills follow the external SKILL.md format).
+    expect(spec.output).toBeUndefined()
   })
 })
 

@@ -1,5 +1,6 @@
 /** Renderer state for the Digital Team feature. */
 
+import { useMemo } from 'react'
 import { create } from 'zustand'
 import { api } from '../api'
 import { useNotificationStore } from './notification.store'
@@ -17,9 +18,12 @@ import type {
   TeamUpdatedEvent,
   TeamBlackboardEvent,
   TeamMessageEvent,
+  TeamPresenceEvent,
+  TeamOfficeStatusEvent,
   TeamEpochSummary,
   EpochBoard,
 } from '../../shared/apps/team-types'
+import { isRemoteMember } from '../../shared/apps/team-types'
 
 // ── Renderer-only aggregate types ────────────────────────────────────────────
 
@@ -34,6 +38,38 @@ export interface ActiveFlow {
 /** How long a flow line stays visible after a team:message arrives (~2s). */
 const FLOW_TTL_MS = 2200
 
+/** Neutral reachability of a member, derived from its owner node's presence. */
+export type MemberReachability = 'online' | 'away' | 'offline'
+
+/** A node's live presence within one office (owner name + reachability). */
+export interface NodePresence {
+  displayName: string | null
+  status: MemberReachability
+}
+
+/**
+ * Per-member presence projection consumed by the topology / cards. Owner name is
+ * an identity-only label (the person's real name) — never a node id or location.
+ */
+export interface MemberPresence {
+  reachability: MemberReachability
+  /** Owner's real name for a remote member; null for a local member. */
+  ownerName: string | null
+  isRemote: boolean
+}
+
+/** Map the federation FSM status onto a neutral, user-facing reachability. */
+function toReachability(status: 'online' | 'suspect' | 'offline'): MemberReachability {
+  return status === 'suspect' ? 'away' : status
+}
+
+/**
+ * Whether an office is currently resting. A transient overlay on top of the
+ * persisted run status — the office is reachable ('live') until something pauses
+ * it (the person who runs it stepped away), and returns to 'live' on reconnect.
+ */
+export type OfficeLiveness = 'live' | 'paused'
+
 // ── State ────────────────────────────────────────────────────────────────────
 
 interface TeamState {
@@ -43,6 +79,10 @@ interface TeamState {
   detail: TeamDetail | null
   /** Transient send signals for the flow-line animation (auto-expire). */
   activeFlows: ActiveFlow[]
+  /** Live presence per office: teamId → (nodeId → {displayName, reachability}). */
+  presence: Map<string, Map<string, NodePresence>>
+  /** Office liveness overlay: teamId → 'paused' while the office is resting. Absent = live. */
+  officeLiveness: Map<string, OfficeLiveness>
 
   // ── Loading flags ────────────────────────
   isLoadingList: boolean
@@ -69,6 +109,8 @@ interface TeamState {
   // ── Management ────────────────────────────
   updateTeam: (teamId: string, input: UpdateTeamInput) => Promise<boolean>
   dissolveTeam: (teamId: string) => Promise<boolean>
+  /** Leave a joined office (joiner): removes this node's local shadow of it. */
+  leaveOffice: (teamId: string) => Promise<boolean>
   addMember: (teamId: string, member: TeamMemberInput) => Promise<boolean>
   removeMember: (teamId: string, appId: string) => Promise<boolean>
   setEdges: (teamId: string, edges: TeamEdge[]) => Promise<boolean>
@@ -81,8 +123,20 @@ interface TeamState {
   applyTeamUpdated: (event: TeamUpdatedEvent) => void
   applyTeamBlackboard: (event: TeamBlackboardEvent) => void
   applyTeamMessage: (event: TeamMessageEvent) => void
+  applyTeamPresence: (event: TeamPresenceEvent) => void
+  applyTeamOfficeStatus: (event: TeamOfficeStatusEvent) => void
   /** Remove flows older than FLOW_TTL_MS (called on a timer after each message). */
   expireFlows: () => void
+
+  /**
+   * Project a member's owner identity + reachability for the office UI. Local
+   * members are always reachable (this node); a remote member maps to its owner
+   * node's presence, treated as online until a frame arrives (optimistic).
+   */
+  getMemberPresence: (
+    teamId: string,
+    member: { ownerNodeId?: string; origin?: 'local' | 'remote'; ownerDisplayName?: string | null }
+  ) => MemberPresence
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -117,6 +171,8 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   currentTeamId: null,
   detail: null,
   activeFlows: [],
+  presence: new Map(),
+  officeLiveness: new Map(),
   epochs: [],
   isLoadingEpochs: false,
 
@@ -135,11 +191,11 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       if (res.success && Array.isArray(res.data)) {
         set({ teams: sortTeams(res.data as TeamListItem[]) })
       } else {
-        set({ error: (res.error as string) || 'Failed to load teams' })
+        set({ error: (res.error as string) || i18n.t('Couldn\u2019t load your offices. Please try again.') })
       }
     } catch (err) {
       console.error('[TeamStore] loadTeams error:', err)
-      set({ error: 'Failed to load teams' })
+      set({ error: i18n.t('Couldn\u2019t load your offices. Please try again.') })
     } finally {
       set({ isLoadingList: false })
     }
@@ -163,11 +219,11 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       if (res.success && res.data) {
         set({ detail: res.data as TeamDetail })
       } else if (!res.success) {
-        set({ error: (res.error as string) || 'Failed to load team detail' })
+        set({ error: (res.error as string) || i18n.t('Couldn\u2019t open this office. Please try again.') })
       }
     } catch (err) {
       console.error('[TeamStore] loadDetail error:', err)
-      set({ error: 'Failed to load team detail' })
+      set({ error: i18n.t('Couldn\u2019t open this office. Please try again.') })
     } finally {
       if (get().currentTeamId === teamId) set({ isLoadingDetail: false })
     }
@@ -214,7 +270,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       return null
     } catch (err) {
       console.error('[TeamStore] proposeMembers error:', err)
-      set({ error: 'Failed to propose members' })
+      set({ error: i18n.t('Failed to propose members') })
       notifyError(i18n.t('Could not build the team'), i18n.t('The AI model is unavailable. Check your AI source settings and try again.'))
       return null
     } finally {
@@ -239,7 +295,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       return null
     } catch (err) {
       console.error('[TeamStore] createTeam error:', err)
-      set({ error: 'Failed to create team' })
+      set({ error: i18n.t('Failed to create team') })
       notifyError(i18n.t('Could not create the team'), String((err as Error)?.message ?? err))
       return null
     } finally {
@@ -282,6 +338,24 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       return false
     } catch (err) {
       console.error('[TeamStore] dissolveTeam error:', err)
+      return false
+    }
+  },
+
+  leaveOffice: async (teamId) => {
+    try {
+      const res = await api.teamLeaveOffice(teamId)
+      if (res.success) {
+        set(s => ({
+          teams: s.teams.filter(t => t.id !== teamId),
+          currentTeamId: s.currentTeamId === teamId ? null : s.currentTeamId,
+          detail: s.currentTeamId === teamId ? null : s.detail,
+        }))
+        return true
+      }
+      return false
+    } catch (err) {
+      console.error('[TeamStore] leaveOffice error:', err)
       return false
     }
   },
@@ -470,4 +544,106 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       return next.length === s.activeFlows.length ? {} : { activeFlows: next }
     })
   },
+
+  applyTeamPresence: (event) => {
+    const { teamId, nodes } = event
+    if (!teamId || !Array.isArray(nodes)) return
+
+    const nodeMap = new Map<string, NodePresence>()
+    for (const n of nodes) {
+      nodeMap.set(n.nodeId, { displayName: n.displayName, status: toReachability(n.status) })
+    }
+
+    set(s => {
+      const presence = new Map(s.presence)
+      presence.set(teamId, nodeMap)
+      return { presence }
+    })
+  },
+
+  applyTeamOfficeStatus: (event) => {
+    const { teamId, kind } = event
+    if (!teamId || !kind) return
+
+    const wasPaused = get().officeLiveness.get(teamId) === 'paused'
+
+    set(s => {
+      const officeLiveness = new Map(s.officeLiveness)
+      if (kind === 'paused') officeLiveness.set(teamId, 'paused')
+      else officeLiveness.set(teamId, 'live')
+      return { officeLiveness }
+    })
+
+    // Only notify when we were actually resting, so a routine authority handover
+    // on an already-live office stays silent.
+    if (kind !== 'paused' && wasPaused) {
+      const name = get().teams.find(tm => tm.id === teamId)?.name
+      useNotificationStore.getState().show({
+        title: name
+          ? i18n.t('{{office}} is back', { office: name })
+          : i18n.t('The office is back'),
+        body: i18n.t('Reconnected automatically — work picks up where it left off.'),
+        variant: 'success',
+        duration: 4000,
+      })
+    }
+  },
+
+  getMemberPresence: (teamId, member) => {
+    const isRemote = isRemoteMember(member)
+
+    if (!isRemote) {
+      return { reachability: 'online', ownerName: null, isRemote: false }
+    }
+
+    const node = member.ownerNodeId ? get().presence.get(teamId)?.get(member.ownerNodeId) : undefined
+    return {
+      reachability: node?.status ?? 'online',
+      // Live node ledger first; the name persisted on the member row covers
+      // nodes (joiners) whose presence view has no rows for their peers.
+      ownerName: node?.displayName ?? member.ownerDisplayName ?? null,
+      isRemote: true,
+    }
+  },
 }))
+
+/**
+ * Whether a member (by appId) runs on someone else's machine. Used outside React
+ * (e.g. the chat store) to decide whether a team-overlay session's transcript is
+ * locally reloadable or only exists as relayed live frames. Reads the current
+ * detail snapshot; returns false when the member isn't resolved yet.
+ */
+export function isRemoteMemberAppId(appId: string): boolean {
+  const member = useTeamStore.getState().detail?.members.find(m => m.appId === appId)
+  if (!member) return false
+  return isRemoteMember(member)
+}
+
+/**
+ * Resolve a roster member's owner + reachability by appId. Roster projections
+ * carry only the appId, so this joins back to the persisted member (which holds
+ * the owner node + origin) and reuses the store selector.
+ *
+ * Selects primitive slices (never a fresh object) so the default strict-equality
+ * comparator does not loop; the projection is assembled in a memo.
+ */
+export function useMemberPresence(teamId: string, appId: string): MemberPresence {
+  const ownerNodeId = useTeamStore(s => s.detail?.members.find(m => m.appId === appId)?.ownerNodeId)
+  const origin = useTeamStore(s => s.detail?.members.find(m => m.appId === appId)?.origin)
+  const ownerDisplayName = useTeamStore(s => s.detail?.members.find(m => m.appId === appId)?.ownerDisplayName)
+  const node = useTeamStore(s =>
+    ownerNodeId ? s.presence.get(teamId)?.get(ownerNodeId) : undefined,
+  )
+
+  return useMemo<MemberPresence>(() => {
+    const isRemote = isRemoteMember({ origin, ownerNodeId })
+    if (!isRemote) return { reachability: 'online', ownerName: null, isRemote: false }
+    return {
+      reachability: node?.status ?? 'online',
+      // Live node ledger first; the name persisted on the member row covers
+      // nodes (joiners) whose presence view has no rows for their peers.
+      ownerName: node?.displayName ?? ownerDisplayName ?? null,
+      isRemote: true,
+    }
+  }, [origin, ownerNodeId, ownerDisplayName, node])
+}

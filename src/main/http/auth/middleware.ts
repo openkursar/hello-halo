@@ -18,6 +18,18 @@ import { validateToken } from './token-store'
 import { checkLock, recordFailure, recordSuccess } from './rate-limit'
 import { logAuthEvent } from './audit'
 import { notifyLockout } from './alert'
+import { parseCredentialType, verifyOfficeCredential, type OfficeCredential } from './office-credential'
+import { matchOfficeScope } from './route-scope'
+
+// Augment Express's Request so the office credential attached by authMiddleware
+// is typed end-to-end instead of cast through `any`. express-serve-static-core is
+// the type package that actually declares Request (express re-exports it).
+declare module 'express-serve-static-core' {
+  interface Request {
+    /** Set by authMiddleware on an office-credential-authenticated request. */
+    officeCredential?: OfficeCredential
+  }
+}
 
 // Paths under /api/* that are reachable without a valid token. Anything
 // else under /api/* must present credentials — the static-suffix rule
@@ -91,6 +103,23 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
     return
   }
 
+  // An office-member token MUST NEVER fall through to validateToken — that
+  // would grant full /api/* access. The two systems are strictly independent.
+  if (parseCredentialType(token) === 'office-member') {
+    const cred = verifyOfficeCredential(token)
+    if (!cred) {
+      res.status(401).json({ success: false, error: 'Invalid token' })
+      return
+    }
+    if (!matchOfficeScope(req.method, req.path)) {
+      res.status(403).json({ success: false, error: 'Forbidden' })
+      return
+    }
+    req.officeCredential = cred
+    next()
+    return
+  }
+
   if (!validateToken(token)) {
     // No audit/lockout side effects here — /api/* surface is for already
     // authenticated clients hitting downstream endpoints. The login path
@@ -100,6 +129,15 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   }
 
   next()
+}
+
+/**
+ * Typed accessor for the office credential attached by {@link authMiddleware}.
+ * Downstream team read-only routes use this to scope responses to the office.
+ * Returns null on requests authenticated by the remote-control PIN.
+ */
+export function getOfficeCredential(req: Request): OfficeCredential | null {
+  return req.officeCredential ?? null
 }
 
 /**

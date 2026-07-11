@@ -11,12 +11,16 @@
 
 import { Star, AlertTriangle, Loader2 } from 'lucide-react'
 import type { RosterMember, TeamMemberRuntimeStatus } from '../../../shared/apps/team-types'
+import { useMemberPresence } from '../../stores/team.store'
+import { MemberPresenceChip, OwnerLabel } from './MemberPresenceChip'
 import { useTranslation } from '../../i18n'
 
 interface MemberCardProps {
   member: RosterMember
   active?: boolean
   variant?: 'member' | 'lead'
+  /** Office this card belongs to — enables the owner label + presence chip. */
+  teamId?: string
   onClick?: () => void
 }
 
@@ -35,8 +39,10 @@ function statusDotClass(status: TeamMemberRuntimeStatus): string {
   }
 }
 
-export function MemberCard({ member, active, variant = 'member', onClick }: MemberCardProps) {
+export function MemberCard({ member, active, variant = 'member', teamId, onClick }: MemberCardProps) {
   const { t } = useTranslation()
+  const presence = useMemberPresence(teamId ?? '', member.appId)
+  const showPresence = !!teamId && presence.isRemote
 
   const statusLabel: Record<TeamMemberRuntimeStatus, string> = {
     working: t('Working'),
@@ -57,6 +63,8 @@ export function MemberCard({ member, active, variant = 'member', onClick }: Memb
   const isAlert = member.status === 'error' || member.status === 'waiting_user'
   const isWorking = member.status === 'working'
   const isLead = variant === 'lead' || member.isLead
+  // Away/offline is not an error — fade the card instead of using the alert amber border.
+  const isResting = showPresence && presence.reachability !== 'online'
 
   return (
     <button
@@ -64,6 +72,7 @@ export function MemberCard({ member, active, variant = 'member', onClick }: Memb
       onClick={onClick}
       className={`group relative flex w-full flex-col gap-2 rounded-xl border p-3 text-left shadow-sm transition-all
         ${isLead ? 'sm:w-56' : 'sm:w-44'}
+        ${isResting && !active ? 'opacity-70' : ''}
         ${active
           ? 'border-primary ring-1 ring-primary/40 bg-secondary'
           : isAlert
@@ -92,6 +101,13 @@ export function MemberCard({ member, active, variant = 'member', onClick }: Memb
         {isAlert && <AlertTriangle className="ml-auto h-3.5 w-3.5 flex-shrink-0 text-amber-500" />}
         {isWorking && !isAlert && <Loader2 className="ml-auto h-3.5 w-3.5 flex-shrink-0 animate-spin text-emerald-500" />}
       </div>
+
+      {showPresence && (
+        <div className="flex min-w-0 items-center gap-1.5">
+          <OwnerLabel ownerName={presence.ownerName} />
+          <MemberPresenceChip reachability={presence.reachability} ownerName={presence.ownerName} />
+        </div>
+      )}
 
       {member.role && (
         <span className="truncate text-xs text-muted-foreground">{member.role}</span>

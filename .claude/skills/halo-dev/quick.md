@@ -189,6 +189,13 @@
 - Run focused unit tests for touched module(s), for example:
   - `npm run test:unit -- tests/unit/apps/manager/manager.test.ts`
   - `npm run test:unit -- tests/unit/apps/runtime/runtime.test.ts`
+- **Team / federation / remote-office changes** additionally require the cluster
+  regression tier (`tests/decentralized/` — read its README.md first):
+  - `npm run test:team` prints the suite catalog; then
+    `npm run test:team -- single` (single-machine team) and/or
+    `npm run test:team -- federation` (multi-node consistency, writes RESULTS.md)
+  - These boot REAL multi-process nodes — run `npm run build` first, never run
+    suites in parallel (CPU contention → timeout-shaped false negatives).
 - Run `npm run i18n` when renderer text changed.
 - Confirm desktop path (IPC) and remote path (HTTP/WS) expectations for changed APIs.
 - Visually verify responsive behavior at mobile width (< 640px) for any UI changes.

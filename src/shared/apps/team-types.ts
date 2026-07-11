@@ -39,6 +39,14 @@ export interface Team {
   currentEpochId: string | null
   createdAt: number
   updatedAt: number
+  /**
+   * Authority of this office. null = this node HOSTS the office (it is the
+   * authority). A remote node id = this is a JOINED shadow office hosted
+   * elsewhere; this node only mirrors the roster for display + relay ownership
+   * and must not edit/run it. Optional on input — the store defaults to null —
+   * and always populated on read.
+   */
+  hostNodeId?: string | null
 }
 
 export interface TeamMember {
@@ -50,6 +58,29 @@ export interface TeamMember {
   /** Drives orphan cleanup on dissolve — only AI-sourced apps are auto-deleted. */
   aiProvisioned: boolean
   addedAt: number
+  /**
+   * Owning node of this member. SELF_NODE_ID sentinel for a locally-owned
+   * member; a remote node id for a federated member. Optional on input — the
+   * store defaults to SELF — and always populated on read.
+   */
+  ownerNodeId?: string
+  origin?: 'local' | 'remote'
+  /** Portable owner identity (Identity.id); null for legacy/local-only members. */
+  memberIdentity?: string | null
+  /**
+   * Permission-overlay scope carried at join, stored as raw JSON so the shared
+   * type stays renderer-safe. null/undefined = default-open. The AUTHORITY
+   * parses + enforces it (contactable/visibility); the renderer treats it opaquely.
+   */
+  scopeJson?: string | null
+  /**
+   * Display name of the owning person for a remote member (the "brought by
+   * Alice" badge). Denormalized onto the member row at join/materialization so
+   * every node can label the owner from its own store — a joiner keeps no
+   * office_nodes rows for its peers, only presence projections. null for local
+   * members and for legacy rows written before the owner advertised a name.
+   */
+  ownerDisplayName?: string | null
 }
 
 /** Directed collaboration edge (structured mode only). */
@@ -134,6 +165,13 @@ export interface TeamTriggerContext {
    * in envelope.fromAppId, not trigger.fromAppId.
    */
   kind?: 'run_start' | 'message' | 'completion'
+  /**
+   * The send originates from a HUMAN (1:1 member chat), not a teammate. The
+   * turn is still attributed to the lead for bus accounting, but the woken
+   * member receives the person's words verbatim — no "[Team message from …]"
+   * header impersonating a teammate (parity with local app-chat).
+   */
+  humanOrigin?: boolean
 }
 
 export interface TeamContext {
@@ -228,6 +266,64 @@ export interface BlackboardSnapshot {
   tasks: BlackboardTask[]
   findings: BlackboardFinding[]
   roster: RosterMember[]
+}
+
+// ── Joined-office materialization (host → joiner roster projection) ──
+
+/**
+ * One member of a joined office as supplied to the store for materialization.
+ * `ownerNodeId` is ABSOLUTE (the true owning node id, never the SELF sentinel);
+ * the store remaps it to SELF-relative for the receiving node. Structurally a
+ * superset-compatible mirror of the federation RosterMemberSnap wire shape so
+ * the manager can pass a roster frame's member straight through.
+ */
+export interface JoinedOfficeMemberSnap {
+  appId: string
+  memberName: string
+  role: string
+  isLead: boolean
+  ownerNodeId: string
+  memberIdentity: string | null
+  /** Owner's display name, persisted for the badge on nodes without peer node rows. */
+  ownerDisplayName?: string | null
+  /**
+   * The member's live runtime status on the authority, so a joiner's topology
+   * animates the working pulse in step with the host. Authority-local
+   * (idle/working/waiting_user/error) and transient — never persisted as a
+   * column; the joiner overlays it onto the rendered roster. Absent → 'idle'.
+   */
+  status?: TeamMemberRuntimeStatus
+  /** Title of the task a working member is on, for the node summary. */
+  currentTaskTitle?: string
+}
+
+/**
+ * The roster projection a joiner materializes into its local store as a shadow
+ * office. Renderer-safe and federation-free so apps/team owns no upward import;
+ * the federation RosterSnapshot is structurally compatible and passed through.
+ */
+export interface JoinedOfficeSnapshot {
+  team: {
+    id: string
+    name: string
+    goal: string
+    leadAppId: string | null
+    collabMode: CollabMode
+    /**
+     * The office's currently-open run epoch, if any. Persisted as the shadow
+     * office's current_epoch_id so a joiner can bind the live run from its own
+     * store (e.g. after a refresh), not only from the in-memory join.
+     */
+    epochId?: string
+    /**
+     * The office's live run status on the authority (idle/running/...), so a
+     * joiner's run banner reflects "running" the moment the host starts a run.
+     * Persisted as the shadow office's status. Absent → 'idle'.
+     */
+    status?: TeamStatus
+  }
+  members: JoinedOfficeMemberSnap[]
+  edges: Array<{ fromAppId: string; toAppId: string }>
 }
 
 // ── Tool I/O shapes (MCP server "halo-team") ──
@@ -409,9 +505,81 @@ export interface TeamMessageEvent {
   ts: number
 }
 
+/** One node's reachability within an office, as projected by the federation FSM. */
+export interface TeamPresenceNode {
+  nodeId: string
+  /** Portable owner identity (Identity.id) of the node. */
+  identity: string
+  /** Human-readable owner name; null until the node advertises one. */
+  displayName: string | null
+  status: 'online' | 'suspect' | 'offline'
+  lastSeen: number
+}
+
+/** Office-scoped presence frame (teamId === officeId). */
+export interface TeamPresenceEvent {
+  teamId: string
+  nodes: TeamPresenceNode[]
+}
+
+/**
+ * Office-level liveness signal, distinct from the persisted run TeamStatus. It is
+ * a transient overlay describing whether the office is currently reachable:
+ *   'paused'   — the office is resting (e.g. the person who runs it stepped away);
+ *                work picks back up when someone is online again.
+ *   'resumed'  — the office reconnected and is live again.
+ *   'authority-changed' — coordination quietly moved between machines; surfaced
+ *                the same calm way as a reconnect (no user action needed).
+ * The renderer maps each kind to humanized, location-free copy; the wire kind
+ * itself is code-only and never shown to a user.
+ */
+export type TeamOfficeStatusKind = 'paused' | 'resumed' | 'authority-changed'
+
+export interface TeamOfficeStatusEvent {
+  teamId: string
+  kind: TeamOfficeStatusKind
+}
+
 // ── Name constants (frozen — do not rename) ──
 
 export const TEAM_MCP_SERVER_NAME = 'halo-team'
+
+/** Sentinel owner-node id for a locally-owned team member (not federated). */
+export const SELF_NODE_ID = 'SELF'
+
+/**
+ * Whether a member runs on someone else's machine (federated), as opposed to
+ * being locally owned. A remote member's run transcript is not locally reloadable
+ * — it exists only as relayed live frames until owner-served history arrives.
+ */
+export function isRemoteMember(member: {
+  origin?: 'local' | 'remote'
+  ownerNodeId?: string
+}): boolean {
+  return member.origin === 'remote' && member.ownerNodeId !== SELF_NODE_ID
+}
+
+/**
+ * Whether a remote member's relayed live activity should be shown as a transient
+ * transcript. True only while the member is remote, nothing is actively streaming,
+ * no locally-loaded messages exist yet (owner history not arrived), and some
+ * relayed content/thoughts were captured. Yields automatically once real history
+ * populates `messageCount`.
+ */
+export function shouldShowRelayedTranscript(args: {
+  isRemote: boolean
+  hasStreaming: boolean
+  messageCount: number
+  streamingContentLength: number
+  thoughtCount: number
+}): boolean {
+  return (
+    args.isRemote &&
+    !args.hasStreaming &&
+    args.messageCount === 0 &&
+    (args.streamingContentLength > 0 || args.thoughtCount > 0)
+  )
+}
 
 export const TEAM_TOOL_NAMES = {
   send: 'team_send',
@@ -428,6 +596,8 @@ export const TEAM_EVENTS = {
   updated: 'team:updated',
   blackboard: 'team:blackboard',
   message: 'team:message',
+  presence: 'team:presence',
+  officeStatus: 'team:office-status',
 } as const
 
 export const TEAM_IPC = {
@@ -447,6 +617,11 @@ export const TEAM_IPC = {
   listTriggers: 'team:list-triggers',
   setTrigger: 'team:set-trigger',
   removeTrigger: 'team:remove-trigger',
+  generateInvite: 'team:generate-invite',
+  revokeInvite: 'team:revoke-invite',
+  joinOffice: 'team:join-office',
+  leaveOffice: 'team:leave-office',
+  sendToMember: 'team:send-to-member',
 } as const
 
 export const TEAM_CIRCUIT_DEFAULTS = {

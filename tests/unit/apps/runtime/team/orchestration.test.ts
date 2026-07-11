@@ -1,7 +1,7 @@
 /**
  * Unit tests for runtime/team orchestration (epoch lifecycle + delivery hooks).
  *
- * Covers (技术 §5.6, §13.1):
+ * Covers:
  *   - completion detection: the four turn exits (clean stream end → result from
  *     the final message, captured escalation → escalation, session throw → error,
  *     timeout → timeout) mapped onto TurnCompletion and fed to the bus.
@@ -232,10 +232,29 @@ describe('TeamOrchestration', () => {
       expect(team.status).toBe('idle')
       expect(team.currentEpochId).toBeNull()
     })
+
+    it('fires onRunStateChanged after seal so joiners learn the run rested (BUG 4)', async () => {
+      // Auto-seal ends a run without going through pauseTeam; the observer must
+      // still fire so joiner members learn the run rested.
+      seedTeam(store)
+      const { deps } = makeSession()
+      const onRunStateChanged = vi.fn<[string], void>()
+      bus = createMessageBus({
+        store,
+        hooks: { wakeTarget: (p) => orch.wakeTarget(p), isBusy: (k) => orch.isBusy(k) },
+      })
+      const orch = createOrchestration({ store, bus, session: deps, onRunStateChanged })
+      const epoch = await orch.startEpoch(TEAM_ID)
+
+      await orch.sealEpoch(TEAM_ID, 'completed', 'done')
+
+      expect(store.getEpochById(epoch.id)?.endedAt).not.toBeNull()
+      expect(onRunStateChanged).toHaveBeenCalledWith(TEAM_ID)
+    })
   })
 
   // ===========================================================================
-  // team_complete deferred seal (RC2)
+  // team_complete deferred seal
   // ===========================================================================
 
   describe('requestSeal (team_complete)', () => {
@@ -468,8 +487,44 @@ describe('TeamOrchestration', () => {
   })
 
   // ===========================================================================
-  // Completion detection — the four turn exits (技术 §5.6)
+  // Completion detection — the four turn exits
   // ===========================================================================
+
+  describe('inbound message rendering', () => {
+    it('a teammate send arrives under a "[Team message from …]" header', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      build(deps)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'go', wait: false })
+      const req = (deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      expect(req.message).toBe('[Team message from lead]\n\ngo')
+      pendings[0].resolve('done')
+      await flush()
+    })
+
+    it('a HUMAN 1:1 send arrives verbatim — no impersonated teammate header', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      build(deps)
+
+      // The service attributes the send to the lead for bus accounting but marks
+      // it human-originated; the member must receive the person's words as-is.
+      const sent = bus.send({
+        teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher',
+        message: '最近什么时候团建？', wait: true, humanOrigin: true,
+      })
+      await flush()
+      const req = (deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls[0][0]
+      expect(req.message).toBe('最近什么时候团建？')
+      expect(req.message).not.toContain('[Team message from')
+      pendings[0].resolve('下周五')
+      await flush()
+      await expect(sent).resolves.toMatchObject({ status: 'ok', message: '下周五' })
+    })
+  })
 
   describe('completion detection', () => {
     it('clean stream end → result completion carrying the final message + taskId', async () => {
@@ -545,7 +600,7 @@ describe('TeamOrchestration', () => {
   })
 
   // ===========================================================================
-  // Escalation routing (技术 §11)
+  // Escalation routing
   // ===========================================================================
 
   describe('escalation routing', () => {
@@ -674,7 +729,7 @@ describe('TeamOrchestration', () => {
   })
 
   // ===========================================================================
-  // Prompt context projection (技术 §10.1)
+  // Prompt context projection
   // ===========================================================================
 
   describe('buildPromptContext', () => {

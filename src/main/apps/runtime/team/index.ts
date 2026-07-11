@@ -9,7 +9,7 @@ import { createBlackboard } from './blackboard'
 import { createOrchestration } from './orchestration'
 import type { Orchestration, OrchestrationSessionDeps } from './orchestration'
 import type { MessageBus, TurnCompletion, CircuitLimits } from './message-bus'
-import type { Blackboard } from './blackboard'
+import type { Blackboard, BlackboardWriteRecord } from './blackboard'
 import type { TeamPromptContext } from './team-prompt'
 import type { TeamStore } from '../../team'
 import type {
@@ -17,6 +17,7 @@ import type {
   EpochEndReason,
   TeamTriggerContext,
   TeamRunTrigger,
+  TeamMemberRuntimeStatus,
 } from '../../../../shared/apps/team-types'
 import { buildTeamSessionKey } from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey, parseTeamChatKey } from '../../../../shared/apps/im-keys'
@@ -85,6 +86,13 @@ async function resolveImRoute(
 export interface TeamRuntime {
   bus: MessageBus
   blackboard: Blackboard
+  /**
+   * A member's live runtime status (idle/working/waiting_user/error) on this node,
+   * derived from its active team sessions. Read-only projection consumed by the
+   * federation roster egress so a joiner animates the working pulse in step with
+   * the host; never mutates orchestration state.
+   */
+  getMemberStatus(appId: string): TeamMemberRuntimeStatus
   startEpoch(teamId: string, trigger?: TeamRunTrigger): Promise<TeamEpoch>
   /** Get/create a per-chat long-lived 'conversation' epoch (message-driven entries, e.g. IM). */
   ensureConversationEpoch(teamId: string, chatKey: string): TeamEpoch
@@ -115,6 +123,39 @@ export interface CreateTeamRuntimeDeps {
   circuitOverrides?: Partial<CircuitLimits>
   syncWaitTimeoutMs?: number
   turnTimeoutMs?: number
+  /**
+   * Replication capture: fired after each authoritative local blackboard write
+   * so the federation layer can sequence and replicate it to hot-standbys.
+   * Notification-only; absent → no replication.
+   */
+  onBlackboardWrite?: (record: BlackboardWriteRecord) => void
+  /**
+   * Location-aware blackboard decorator: wraps the kernel blackboard so writes
+   * for a JOINED (shadow) office are routed to the authority as `blackboard-write`
+   * frames instead of being authored locally (single-writer). Absent → the kernel
+   * blackboard is used directly (the authority's own writes).
+   */
+  wrapBlackboard?: (base: Blackboard) => Blackboard
+  /**
+   * Observer fired after a run epoch is sealed (manual / quiescence auto-seal /
+   * breach). Bootstrap wires it to the federation roster egress so a joiner's
+   * run-state rests promptly even when the seal does not go through the
+   * service-level pauseTeam. Additive only — does not change seal semantics.
+   */
+  onRunStateChanged?: (teamId: string) => void
+  /**
+   * Status overlay consulted when the local session ledger reports a member
+   * idle. Bootstrap wires it to the federation manager's remote-busy view, so a
+   * member whose turn is in flight on a REMOTE owner still pulses 'working' on
+   * boards and roster projections. Absent → local sessions are the only source.
+   */
+  getMemberStatusOverlay?: (appId: string) => TeamMemberRuntimeStatus | null
+  /**
+   * Observer fired when a member's live status flips (turn start/end, escalation
+   * raised/resolved). Bootstrap wires it to the federation roster refresh so
+   * viewers see pulses start AND stop in step. Absent → no propagation.
+   */
+  onMemberStatusChanged?: (teamId: string) => void
 }
 
 export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
@@ -142,18 +183,33 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     bus,
     session,
     turnTimeoutMs: deps.turnTimeoutMs,
+    onRunStateChanged: deps.onRunStateChanged,
+    onMemberStatusChanged: deps.onMemberStatusChanged,
   })
 
-  const blackboard = createBlackboard({
+  // Local sessions first; when they say idle, fold in the injected overlay so a
+  // member running its turn on a REMOTE owner still reads 'working' here.
+  function memberStatus(appId: string): TeamMemberRuntimeStatus {
+    const local = orchestration!.getMemberStatus(appId)
+    if (local !== 'idle') return local
+    return deps.getMemberStatusOverlay?.(appId) ?? 'idle'
+  }
+
+  const baseBlackboard = createBlackboard({
     store,
-    getMemberStatus: (appId) => orchestration!.getMemberStatus(appId),
+    getMemberStatus: memberStatus,
+    onWrite: deps.onBlackboardWrite,
   })
+  // The location-aware decorator (if injected) routes shadow-office writes to the
+  // authority; the authority's own runtime gets the kernel blackboard unwrapped.
+  const blackboard = deps.wrapBlackboard ? deps.wrapBlackboard(baseBlackboard) : baseBlackboard
 
   console.log(`${LOG_TAG} created`)
 
   return {
     bus,
     blackboard,
+    getMemberStatus: memberStatus,
     startEpoch: (teamId, trigger) => orchestration!.startEpoch(teamId, trigger),
     ensureConversationEpoch: (teamId, chatKey) => orchestration!.ensureConversationEpoch(teamId, chatKey),
     reactivateEpoch: (teamId, epochId) => orchestration!.reactivateEpoch(teamId, epochId),
@@ -168,7 +224,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
   }
 }
 
-function createDefaultSessionDeps(store: TeamStore): OrchestrationSessionDeps {
+export function createDefaultSessionDeps(store: TeamStore): OrchestrationSessionDeps {
   return {
     async sendAppChatMessage(request) {
       const { sendAppChatMessage } = await import('../app-chat')
@@ -231,5 +287,7 @@ export function getActiveTeamRuntime(): TeamRuntime | null {
 
 export { buildTeamSessionKey }
 export type { Orchestration, OrchestrationSessionDeps } from './orchestration'
+export type { Blackboard, BlackboardWriteRecord } from './blackboard'
+export type { MessageBus, TurnCompletion } from './message-bus'
 export { createTeamTriggerScheduler, TEAM_JOB_KIND } from './team-triggers'
 export type { TeamTriggerScheduler } from './team-triggers'

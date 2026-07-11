@@ -95,6 +95,7 @@ vi.mock('../../../../src/main/services/ai-browser', () => ({
   createAIBrowserMcpServer: vi.fn().mockReturnValue({ name: 'mock-ai-browser', _isMcpServer: true }),
   createScopedBrowserContext: vi.fn(),
   getAIBrowserSdkToolNames: vi.fn().mockReturnValue([]),
+  AI_BROWSER_SYSTEM_PROMPT: 'mock ai-browser system prompt',
 }))
 
 // Mock web-search (may import electron transitively)
@@ -140,9 +141,20 @@ vi.mock('../../../../src/main/services/agent/events', () => ({
   emitAgentEvent: vi.fn(),
 }))
 
-// Mock resolved-sdk
+// Mock resolved-sdk (report-tool.ts imports tool/createSdkMcpServer from here)
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSession: vi.fn(),
+  tool: vi.fn((name: string, description: string, schema: unknown, handler: unknown) => ({
+    name,
+    description,
+    inputSchema: schema,
+    handler,
+  })),
+  createSdkMcpServer: vi.fn((options: { name: string; tools: unknown[] }) => ({
+    name: options.name,
+    tools: options.tools,
+    _isMcpServer: true,
+  })),
 }))
 
 // Mock executeRun so service tests can assert the trigger it receives without
@@ -175,7 +187,6 @@ import { Semaphore } from '../../../../src/main/apps/runtime/concurrency'
 import { buildAppSystemPrompt, buildInitialMessage } from '../../../../src/main/apps/runtime/prompt'
 import {
   AppNotRunnableError,
-  NoSubscriptionsError,
   ConcurrencyLimitError,
   EscalationNotFoundError,
   RunExecutionError,
@@ -976,6 +987,8 @@ describe('ActivityStore', () => {
     it('should close all pending entries when no activeEntryId is given', () => {
       const entry1 = randomUUID()
       const entry2 = randomUUID()
+      // Entries no longer require a parent run row (migration v4).
+      const runId = createTestRunId()
 
       store.insertEntry({
         id: entry1,
@@ -1004,10 +1017,11 @@ describe('ActivityStore', () => {
     it('should not affect entries from other apps', () => {
       const otherAppId = randomUUID()
       const otherRunId = createTestRunId()
+      const runId = createTestRunId()
 
       // Insert run for other app
       // (Use raw db to insert a minimal installed_apps row for FK)
-      store['db'].exec(`INSERT INTO installed_apps (id, space_id, spec_json, status, created_at) VALUES ('${otherAppId}', 'test-space', '{}', 'active', ${Date.now()})`)
+      store['db'].exec(`INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, installed_at) VALUES ('${otherAppId}', 'spec-${otherAppId}', 'test-space', '{}', 'active', ${Date.now()})`)
       store.insertRun({
         runId: otherRunId,
         appId: otherAppId,
@@ -1053,6 +1067,7 @@ describe('ActivityStore', () => {
 
     it('should not close already-responded entries', () => {
       const respondedEntry = randomUUID()
+      const runId = createTestRunId()
 
       store.insertEntry({
         id: respondedEntry,
@@ -1239,7 +1254,10 @@ describe('Prompt Builder', () => {
       expect(prompt).toContain('escalation')
     })
 
-    it('should include sub-agent instructions when usesAIBrowser=true', () => {
+    it('should include the AI-browser prompt when usesAIBrowser=true', () => {
+      // Sub-agent delegation instructions are currently disabled in
+      // buildAppSystemPrompt; this asserts the aiBrowser branch via the
+      // mocked AI_BROWSER_SYSTEM_PROMPT fragment instead.
       const prompt = buildAppSystemPrompt({
         appSpec: createTestSpec(),
         memoryInstructions: '',
@@ -1248,11 +1266,10 @@ describe('Prompt Builder', () => {
         workDir: '/tmp/test',
       })
 
-      expect(prompt).toContain('Browser Task Delegation')
-      expect(prompt).toContain('Task tool')
+      expect(prompt).toContain('mock ai-browser system prompt')
     })
 
-    it('should NOT include sub-agent instructions when usesAIBrowser=false', () => {
+    it('should NOT include the AI-browser prompt when usesAIBrowser=false', () => {
       const prompt = buildAppSystemPrompt({
         appSpec: createTestSpec(),
         memoryInstructions: '',
@@ -1261,7 +1278,7 @@ describe('Prompt Builder', () => {
         workDir: '/tmp/test',
       })
 
-      expect(prompt).not.toContain('Browser Task Delegation')
+      expect(prompt).not.toContain('mock ai-browser system prompt')
     })
 
     it('should handle AppSpec without system_prompt', () => {
@@ -1280,8 +1297,20 @@ describe('Prompt Builder', () => {
   })
 
   describe('buildInitialMessage', () => {
+    /** Minimal no-memory snapshot — buildInitialMessage requires one. */
+    const memorySnapshot = {
+      exists: false,
+      totalLines: 0,
+      sizeBytes: 0,
+      firstSection: null,
+      headers: [],
+      fullContent: null,
+      memoryFilePath: '/tmp/test-memory.md',
+    }
+
     it('should include trigger context', () => {
       const msg = buildInitialMessage({
+        memorySnapshot,
         triggerContext: 'Scheduled run at 14:30',
         appName: 'Price Monitor',
       })
@@ -1292,6 +1321,7 @@ describe('Prompt Builder', () => {
 
     it('should include user config when provided', () => {
       const msg = buildInitialMessage({
+        memorySnapshot,
         triggerContext: 'Manual trigger',
         appName: 'Price Monitor',
         userConfig: { productUrl: 'https://example.com', threshold: 100 },
@@ -1304,6 +1334,7 @@ describe('Prompt Builder', () => {
 
     it('should omit user config section when empty', () => {
       const msg = buildInitialMessage({
+        memorySnapshot,
         triggerContext: 'Manual trigger',
         appName: 'Price Monitor',
         userConfig: {},
@@ -1314,6 +1345,7 @@ describe('Prompt Builder', () => {
 
     it('should omit user config section when undefined', () => {
       const msg = buildInitialMessage({
+        memorySnapshot,
         triggerContext: 'Manual trigger',
         appName: 'Price Monitor',
       })
@@ -1323,6 +1355,7 @@ describe('Prompt Builder', () => {
 
     it('should include app name in instructions', () => {
       const msg = buildInitialMessage({
+        memorySnapshot,
         triggerContext: 'Manual trigger',
         appName: 'My Automation',
       })
@@ -1345,13 +1378,6 @@ describe('Error Types', () => {
     expect(err.status).toBe('paused')
     expect(err.message).toContain('app-123')
     expect(err.message).toContain('paused')
-  })
-
-  it('NoSubscriptionsError should contain appId', () => {
-    const err = new NoSubscriptionsError('app-456')
-    expect(err.name).toBe('NoSubscriptionsError')
-    expect(err.appId).toBe('app-456')
-    expect(err.message).toContain('app-456')
   })
 
   it('ConcurrencyLimitError should contain maxConcurrent', () => {
@@ -1378,7 +1404,6 @@ describe('Error Types', () => {
 
   it('All error types should be instanceof Error', () => {
     expect(new AppNotRunnableError('a', 'active')).toBeInstanceOf(Error)
-    expect(new NoSubscriptionsError('a')).toBeInstanceOf(Error)
     expect(new ConcurrencyLimitError(1)).toBeInstanceOf(Error)
     expect(new EscalationNotFoundError('a', 'b')).toBeInstanceOf(Error)
     expect(new RunExecutionError('a', 'b', 'c')).toBeInstanceOf(Error)
@@ -1593,7 +1618,7 @@ describe('AppRuntimeService', () => {
       expect(mockEventRouter.on).not.toHaveBeenCalled()
     })
 
-    it('should throw for automation app with no subscriptions', async () => {
+    it('should activate an automation app with no subscriptions (team members have none)', async () => {
       const appId = randomUUID()
       const app = {
         id: appId,
@@ -1609,7 +1634,10 @@ describe('AppRuntimeService', () => {
       mockAppManager.getApp.mockReturnValue(app)
 
       const service = createService()
-      await expect(service.activate(appId)).rejects.toThrow(NoSubscriptionsError)
+      // Subscription-less automation apps are valid: team members are driven
+      // solely by team runs (see apps/team/service.ts buildMemberSpec).
+      await expect(service.activate(appId)).resolves.toBeUndefined()
+      expect(mockScheduler.addJob).not.toHaveBeenCalled()
     })
 
     it('should use user frequency override when available', async () => {
@@ -1648,8 +1676,13 @@ describe('AppRuntimeService', () => {
         installedAt: Date.now(),
       }
       mockAppManager.getApp.mockReturnValue(app)
-      // Simulate existing job
-      mockScheduler.getJob.mockReturnValue({ id: `${appId}:check-prices`, status: 'paused' })
+      // Simulate existing job with an UNCHANGED schedule — activate() only
+      // resumes when the schedule matches; a changed schedule is re-added.
+      mockScheduler.getJob.mockReturnValue({
+        id: `${appId}:check-prices`,
+        status: 'paused',
+        schedule: { kind: 'every', every: '30m' },
+      })
 
       const service = createService()
       await service.activate(appId)

@@ -20,6 +20,7 @@ import {
   Background,
   Controls,
   MarkerType,
+  ConnectionLineType,
   ReactFlowProvider,
   type Connection,
   type Edge,
@@ -109,11 +110,29 @@ function InnerCanvas({
   const layoutKey = editable ? memberSig : `${memberSig}|${edgeSig}`
 
   const positions = useMemo(() => {
-    const base: MemberFlowNode[] = roster.map(m => ({
+    // Sort before seeding dagre: roster insertion order differs per node, which
+    // made the same office lay out differently on different machines.
+    const ordered = [...roster].sort(
+      (a, b) =>
+        Number(b.isLead) - Number(a.isLead) ||
+        a.memberName.localeCompare(b.memberName) ||
+        a.appId.localeCompare(b.appId)
+    )
+    const base: MemberFlowNode[] = ordered.map(m => ({
       id: m.appId, type: 'member', position: { x: 0, y: 0 },
-      data: { member: m, editable, active: false },
+      data: { member: m, editable, teamId, active: false },
     }))
-    const laid = layoutNodes(base, buildEdges(roster, teamEdges, []))
+    // Free mode persists no edges, which would flatten everyone onto one rank —
+    // seed layout-only lead→member links so the lead still sits above members.
+    // Never rendered, never persisted.
+    let layoutEdges = buildEdges(roster, teamEdges, [])
+    const lead = ordered.find(m => m.isLead)
+    if (layoutEdges.length === 0 && lead) {
+      layoutEdges = ordered
+        .filter(m => m.appId !== lead.appId)
+        .map(m => styleEdge(`layout-${lead.appId}__${m.appId}`, lead.appId, m.appId, false, false))
+    }
+    const laid = layoutNodes(base, layoutEdges)
     return new Map(laid.map(n => [n.id, n.position]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutKey])
@@ -135,11 +154,11 @@ function InnerCanvas({
     id: m.appId,
     type: 'member',
     position: dragPos.get(m.appId) ?? positions.get(m.appId) ?? { x: 0, y: 0 },
-    data: { member: m, editable, active: activeFlows.some(f => f.fromAppId === m.appId || f.toAppId === m.appId) },
+    data: { member: m, editable, teamId, active: activeFlows.some(f => f.fromAppId === m.appId || f.toAppId === m.appId) },
     draggable: editable,
     selectable: true,
     selected: selNodeIds.has(m.appId),
-  })), [roster, positions, dragPos, editable, activeFlows, selNodeIds])
+  })), [roster, positions, dragPos, editable, teamId, activeFlows, selNodeIds])
 
   const edges = useMemo(() => {
     const base = buildEdges(roster, teamEdges, activeFlows)
@@ -214,7 +233,7 @@ function InnerCanvas({
           nodesConnectable={editable}
           elementsSelectable
           edgesFocusable={editable}
-          connectionLineType={'smoothstep' as never}
+          connectionLineType={ConnectionLineType.SmoothStep}
           connectionLineStyle={{ stroke: 'hsl(var(--primary))', strokeWidth: 2 }}
           proOptions={{ hideAttribution: true }}
           className="bg-transparent"

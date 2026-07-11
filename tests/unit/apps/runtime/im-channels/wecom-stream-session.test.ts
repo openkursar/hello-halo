@@ -431,34 +431,46 @@ describe('WecomStreamSession.maybePushProgress', () => {
   })
 
   it('formats push text with last 3 progress lines', async () => {
-    const transport = makeTransport()
-    const { logger } = makeLogger()
-    const session = makeSession(transport, logger)
-    
-    session.markStreamBroken('test')
-    
-    // Add more than 3 progress events
-    await session.update({ type: 'tool_call', tool: 'Read', summary: 'first' })
-    await session.update({ type: 'tool_call', tool: 'Edit', summary: 'second' })
-    await session.update({ type: 'tool_call', tool: 'Write', summary: 'third' })
-    await session.update({ type: 'tool_call', tool: 'Bash', summary: 'fourth' })
-    
-    const progressPushes = transport.calls.filter(p => 
-      p.method === 'queuePush' && (p.args[1] as string).includes('任务进行中')
-    )
-    
-    expect(progressPushes.length).toBeGreaterThanOrEqual(1)
-    
-    const pushText = progressPushes[0].args[1] as string
-    
-    // Should include the prefix
-    expect(pushText).toContain('_(任务进行中)_')
-    
-    // Should only include last 3 lines
-    expect(pushText).not.toContain('first')
-    expect(pushText).toContain('second')
-    expect(pushText).toContain('third')
-    expect(pushText).toContain('fourth')
+    // Pushes are throttled (STREAM_PROGRESS_PUSH_INTERVAL_MS): only the first
+    // update pushes immediately, so the last-3-lines window is asserted on the
+    // second push.
+    vi.useFakeTimers()
+    try {
+      const t0 = new Date('2026-01-01T00:00:00Z').getTime()
+      vi.setSystemTime(t0)
+
+      const transport = makeTransport()
+      const { logger } = makeLogger()
+      const session = makeSession(transport, logger)
+
+      session.markStreamBroken('test')
+
+      await session.update({ type: 'tool_call', tool: 'Read', summary: 'first' })
+      await session.update({ type: 'tool_call', tool: 'Edit', summary: 'second' })
+      await session.update({ type: 'tool_call', tool: 'Write', summary: 'third' })
+      await session.update({ type: 'tool_call', tool: 'Bash', summary: 'fourth' })
+
+      // Advance beyond the throttle window so the next update flushes.
+      vi.setSystemTime(t0 + 3 * 60 * 1000)
+      await session.update({ type: 'tool_call', tool: 'Bash', summary: 'fifth' })
+
+      const progressPushes = transport.calls.filter(p =>
+        p.method === 'queuePush' && (p.args[1] as string).includes('任务进行中')
+      )
+
+      expect(progressPushes.length).toBeGreaterThanOrEqual(2)
+
+      const pushText = progressPushes[progressPushes.length - 1].args[1] as string
+
+      expect(pushText).toContain('_(任务进行中)_')
+      expect(pushText).not.toContain('first')
+      expect(pushText).not.toContain('second')
+      expect(pushText).toContain('third')
+      expect(pushText).toContain('fourth')
+      expect(pushText).toContain('fifth')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('increments progressPushesSent counter on each push', async () => {
@@ -542,24 +554,34 @@ describe('WecomStreamSession.maybePushProgress', () => {
   })
 
   it('handles tool_result events in progress lines', async () => {
-    const transport = makeTransport()
-    const { logger } = makeLogger()
-    const session = makeSession(transport, logger)
-    
-    session.markStreamBroken('test')
-    
-    await session.update({ type: 'tool_call', tool: 'Read', summary: 'reading' })
-    await session.update({ type: 'tool_result', tool: 'Read', summary: 'done', success: true })
-    
-    const progressPushes = transport.calls.filter(p => 
-      p.method === 'queuePush' && (p.args[1] as string).includes('任务进行中')
-    )
-    
-    expect(progressPushes.length).toBeGreaterThanOrEqual(1)
-    
-    const pushText = progressPushes[0].args[1] as string
-    expect(pushText).toContain('📖') // Read icon
-    expect(pushText).toContain('✅') // Success icon
+    // Throttled: the tool_result line lands in the second push, not the first.
+    vi.useFakeTimers()
+    try {
+      const t0 = new Date('2026-01-01T00:00:00Z').getTime()
+      vi.setSystemTime(t0)
+
+      const transport = makeTransport()
+      const { logger } = makeLogger()
+      const session = makeSession(transport, logger)
+
+      session.markStreamBroken('test')
+
+      await session.update({ type: 'tool_call', tool: 'Read', summary: 'reading' })
+      vi.setSystemTime(t0 + 3 * 60 * 1000)
+      await session.update({ type: 'tool_result', tool: 'Read', summary: 'done', success: true })
+
+      const progressPushes = transport.calls.filter(p =>
+        p.method === 'queuePush' && (p.args[1] as string).includes('任务进行中')
+      )
+
+      expect(progressPushes.length).toBeGreaterThanOrEqual(2)
+
+      const pushText = progressPushes[progressPushes.length - 1].args[1] as string
+      expect(pushText).toContain('📖') // Read icon
+      expect(pushText).toContain('✅') // Success icon
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

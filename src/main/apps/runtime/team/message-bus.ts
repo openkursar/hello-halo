@@ -115,6 +115,8 @@ export interface SendInput {
   /** Guards against ping-pong: initial lead wake is 0, each completion-wake increments. */
   forwardDepth?: number
   taskRef?: string
+  /** Human-originated 1:1 send (see TeamTriggerContext.humanOrigin). */
+  humanOrigin?: boolean
 }
 
 export interface MessageBus {
@@ -126,6 +128,12 @@ export interface MessageBus {
   }): void
   assertCanContact(teamId: string, fromAppId: string, toAppId: string, collabMode: CollabMode): void
   resolveMemberAppId(teamId: string, memberName: string): string
+  /**
+   * Immediately resolve every wait=true pending entry targeting `appId` (e.g. a
+   * member confirmed offline) so a blocked sender unblocks instead of hanging to
+   * the sync-wait timeout. Returns how many waiters were resolved.
+   */
+  resolvePendingWaitsForMember(appId: string, outcome: TurnCompletion): number
   getEpochStats(epochId: string): EpochStats
   resetEpoch(epochId: string): void
   onBreach(listener: (event: CircuitBreachEvent) => void): () => void
@@ -148,6 +156,8 @@ interface PendingWait {
   forwardDepth: number
   /** The epoch this wait belongs to, so resetEpoch only clears its own waiters. */
   epochId: string
+  /** The target member, so a confirmed-offline member can unblock its waiters. */
+  toAppId: string
 }
 
 interface BufferedDelivery {
@@ -320,6 +330,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       wait,
       taskId: input.taskRef,
       kind: 'message',
+      ...(input.humanOrigin ? { humanOrigin: true } : {}),
     }
     ;(trigger as TeamTriggerContext & { forwardDepth?: number }).forwardDepth = forwardDepth + 1
 
@@ -348,6 +359,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
         timer,
         forwardDepth,
         epochId: input.epochId,
+        toAppId,
       })
 
       // Register the waiter before delivering so a synchronous completion races safely.
@@ -381,6 +393,41 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       pending.resolve({ from: pending.fromMemberName, message: outcome.content, status: 'ok' })
     }
     return true
+  }
+
+  function resolvePendingWaitsForMember(appId: string, outcome: TurnCompletion): number {
+    let resolved = 0
+    for (const [corr, pending] of pendingWaits) {
+      if (pending.toAppId !== appId) continue
+      clearTimeout(pending.timer)
+      pendingWaits.delete(corr)
+      // A confirmed-offline unblock keeps timeout semantics but tells the sender
+      // explicitly that the teammate is gone so it can reassign.
+      if (outcome.kind === 'timeout') {
+        pending.resolve({
+          from: pending.fromMemberName,
+          message: 'The teammate is unavailable right now; reassign or proceed without them.',
+          status: 'timeout',
+        })
+      } else if (outcome.kind === 'error') {
+        pending.resolve({
+          from: pending.fromMemberName,
+          message: `The teammate's turn failed: ${outcome.message}`,
+          status: 'ok',
+        })
+      } else {
+        pending.resolve({
+          from: pending.fromMemberName,
+          message: outcome.kind === 'escalation' ? outcome.content : outcome.content,
+          status: 'ok',
+        })
+      }
+      resolved += 1
+    }
+    if (resolved > 0) {
+      console.log(`${LOG_TAG} resolvePendingWaitsForMember: app=${appId} resolved=${resolved} outcome=${outcome.kind}`)
+    }
+    return resolved
   }
 
   function describeCompletion(outcome: TurnCompletion): string {
@@ -532,6 +579,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     completeTurn,
     assertCanContact,
     resolveMemberAppId,
+    resolvePendingWaitsForMember,
     getEpochStats,
     resetEpoch,
     onBreach,

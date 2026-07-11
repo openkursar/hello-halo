@@ -152,5 +152,48 @@ export const migrations: Migration[] = [
           ON team_epochs(team_id, chat_key)
       `)
     }
+  },
+  {
+    version: 5,
+    description: 'Add federation fields to team_members (owner_node_id/origin/member_identity)',
+    up(db) {
+      // Defaults keep existing local members behaving identically: owned by SELF,
+      // origin local. member_identity stays null until a member is federated.
+      db.exec(`ALTER TABLE team_members ADD COLUMN owner_node_id TEXT NOT NULL DEFAULT 'SELF'`)
+      db.exec(`ALTER TABLE team_members ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'`)
+      db.exec(`ALTER TABLE team_members ADD COLUMN member_identity TEXT`)
+    }
+  },
+  {
+    version: 6,
+    description: 'Add teams.host_node_id to mark a joined ("shadow") office hosted elsewhere',
+    up(db) {
+      // NULL keeps existing teams behaving identically: this node is the office
+      // authority. A non-null remote node id marks a joined shadow office — a
+      // host-driven projection this node mirrors but does not author.
+      db.exec(`ALTER TABLE teams ADD COLUMN host_node_id TEXT`)
+    }
+  },
+  {
+    version: 7,
+    description: 'Add team_members.scope_json (permission overlay carried at join)',
+    up(db) {
+      // NULL = default-open (full visibility, contact anyone, discoverable,
+      // may re-invite), so existing local members are unaffected. A remote member
+      // admitted under a scoped office credential stores that scope here, and the
+      // AUTHORITY enforces it (contactable/visibility) — not just the UI.
+      db.exec(`ALTER TABLE team_members ADD COLUMN scope_json TEXT`)
+    }
+  },
+  {
+    version: 8,
+    description: 'Add team_members.owner_display_name (owner badge for a remote member)',
+    up(db) {
+      // NULL for local members (no badge). For a remote member this denormalizes
+      // the owning node's display name onto the member row so every node — not
+      // just the host, whose office_nodes ledger holds the joiners — can label
+      // "brought by Alice" from its own store (joiners keep no peer node rows).
+      db.exec(`ALTER TABLE team_members ADD COLUMN owner_display_name TEXT`)
+    }
   }
 ]

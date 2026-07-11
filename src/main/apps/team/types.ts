@@ -24,6 +24,8 @@ import type {
   TeamTrigger,
   TeamTriggerInput,
   TeamRunTriggerType,
+  JoinedOfficeSnapshot,
+  TeamMemberRuntimeStatus,
 } from '../../../shared/apps/team-types'
 
 // Re-export the frozen domain contract for apps/team consumers.
@@ -47,6 +49,8 @@ export type {
   TeamScheduleConfig,
   TeamRunTrigger,
   TeamRunTriggerType,
+  JoinedOfficeSnapshot,
+  JoinedOfficeMemberSnap,
 } from '../../../shared/apps/team-types'
 
 // ── SQLite Row Types (flat DB representation) ──
@@ -65,6 +69,8 @@ export interface TeamRow {
   current_epoch_id: string | null
   created_at: number
   updated_at: number
+  /** Office authority; added in migration v6 (null = hosted here). */
+  host_node_id: string | null
 }
 
 /** Row shape from the `team_members` table. */
@@ -76,6 +82,16 @@ export interface TeamMemberRow {
   is_lead: number
   ai_provisioned: number
   added_at: number
+  /** Owning node; added in migration v5 (default 'SELF' for local members). */
+  owner_node_id: string
+  /** Member origin; added in migration v5 (default 'local'). */
+  origin: string
+  /** Portable owner identity; added in migration v5 (null for local-only). */
+  member_identity: string | null
+  /** Permission-overlay scope JSON; added in migration v7 (null = default-open). */
+  scope_json: string | null
+  /** Owner's display name for a remote member; added in migration v8 (null = local). */
+  owner_display_name: string | null
 }
 
 /** Row shape from the `team_edges` table. */
@@ -190,9 +206,33 @@ export interface TeamStore {
   addMember(member: TeamMember): void
   removeMember(teamId: string, appId: string): boolean
   setMemberLead(teamId: string, appId: string, isLead: boolean): void
+  setMemberScope(teamId: string, appId: string, scopeJson: string | null): void
   listMembersByTeam(teamId: string): TeamMember[]
   getMemberByName(teamId: string, memberName: string): TeamMember | null
   listMembersByAppId(appId: string): TeamMember[]
+
+  // ── joined-office projection ──────────────────
+  /**
+   * Idempotently mirror a host-driven roster into the local store as a joined
+   * ("shadow") office (teams.host_node_id = the host's node id). Owner node ids
+   * arrive ABSOLUTE and are remapped SELF-relative for this node. A re-apply
+   * upserts in place — no duplicate members, no constraint error.
+   */
+  materializeJoinedOffice(input: {
+    hostNodeId: string
+    selfNodeId: string
+    snapshot: JoinedOfficeSnapshot
+  }): void
+  /**
+   * The transient per-member runtime status (appId → working/idle/...) captured
+   * from the last materialized roster snapshot of a joined office. Run-state is a
+   * live projection, not a persisted column, so the joiner's status board overlays
+   * it onto the rendered roster. Empty for a locally-hosted office or before any
+   * snapshot has arrived.
+   */
+  getJoinedMemberStatuses(teamId: string): Map<string, TeamMemberRuntimeStatus>
+  /** The in-progress task title a working member is on, from the last snapshot. */
+  getJoinedMemberTaskTitle(teamId: string, appId: string): string | undefined
 
   // ── team_edges ────────────────────────────────
   replaceEdgesForTeam(teamId: string, edges: TeamEdge[]): void

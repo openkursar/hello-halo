@@ -16,11 +16,15 @@ import type { NodeProps, Node } from '@xyflow/react'
 import { Star, Loader2, AlertTriangle, Plus, ArrowRight } from 'lucide-react'
 import type { RosterMember, TeamMemberRuntimeStatus } from '../../../../shared/apps/team-types'
 import { FlowEditContext } from './flow-context'
+import { useMemberPresence } from '../../../stores/team.store'
+import { MemberPresenceChip, OwnerLabel } from '../MemberPresenceChip'
 import { useTranslation } from '../../../i18n'
 
 export interface MemberNodeData {
   member: RosterMember
   editable: boolean
+  /** Office this node belongs to — resolves the member's owner + presence. */
+  teamId: string
   /** Highlight while a message flow is active across this member. */
   active: boolean
   [key: string]: unknown
@@ -39,10 +43,12 @@ function statusDotClass(status: TeamMemberRuntimeStatus): string {
 
 function MemberNodeImpl({ id, data, selected }: NodeProps<MemberFlowNode>) {
   const { t } = useTranslation()
-  const { member, editable, active } = data
+  const { member, editable, active, teamId } = data
+  const presence = useMemberPresence(teamId, member.appId)
   const isLead = member.isLead
-  const isWorking = member.status === 'working'
-  const isAlert = member.status === 'error' || member.status === 'waiting_user'
+  const isUnreachable = presence.reachability !== 'online'
+  const isWorking = member.status === 'working' && !isUnreachable
+  const isAlert = (member.status === 'error' || member.status === 'waiting_user') && !isUnreachable
 
   const summary =
     member.status === 'working'
@@ -57,7 +63,8 @@ function MemberNodeImpl({ id, data, selected }: NodeProps<MemberFlowNode>) {
 
   return (
     <div
-      className={`group relative flex w-[200px] flex-col gap-1.5 rounded-xl border bg-background px-3 py-2.5 shadow-sm transition-colors
+      className={`group relative flex w-[200px] flex-col gap-1.5 rounded-xl border bg-background px-3 py-2.5 shadow-sm transition-all
+        ${isUnreachable ? 'border-dashed opacity-55 saturate-0' : ''}
         ${selected ? 'border-primary ring-2 ring-primary/30'
           : active ? 'border-primary ring-1 ring-primary/40'
           : isAlert ? 'border-amber-500/50'
@@ -79,6 +86,17 @@ function MemberNodeImpl({ id, data, selected }: NodeProps<MemberFlowNode>) {
         {isAlert && <AlertTriangle className="ml-auto h-3.5 w-3.5 flex-shrink-0 text-amber-500" />}
         {isWorking && !isAlert && <Loader2 className="ml-auto h-3.5 w-3.5 flex-shrink-0 animate-spin text-emerald-500" />}
       </div>
+
+      {presence.isRemote && (
+        <div className="flex min-w-0 items-center gap-1.5">
+          <OwnerLabel ownerName={presence.ownerName} />
+          <MemberPresenceChip
+            reachability={presence.reachability}
+            ownerName={presence.ownerName}
+            showLabel={isUnreachable}
+          />
+        </div>
+      )}
 
       <span className="truncate text-xs text-muted-foreground">
         {summary || (isLead ? t('Team Lead') : '\u00A0')}

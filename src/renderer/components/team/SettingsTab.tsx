@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   GitBranch, RefreshCw, Bot, UserCircle,
-  ExternalLink, Trash2, Plus, Info, Crown,
+  ExternalLink, Trash2, Plus, Info, Crown, LogOut,
 } from 'lucide-react'
 import type { TeamDetail, TeamTrigger, TeamScheduleConfig, TeamTriggerInput } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
@@ -35,17 +35,31 @@ function valueToConfig(value: ScheduleValue): TeamScheduleConfig {
 // ── Component ──
 
 export function SettingsTab({ detail }: SettingsTabProps) {
+  const { t } = useTranslation()
+  // A joined office is owned by someone else: settings are read-only here and
+  // schedule/triggers (authoritative run config) are hidden entirely.
+  const readOnly = detail.team.hostNodeId != null
+
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="mx-auto max-w-2xl space-y-6 p-3 sm:p-6">
-        <GoalSection team={detail.team} first />
-        <ScheduleSection teamId={detail.team.id} />
-        <CollaborationSection team={detail.team} />
-        <MembersSection detail={detail} />
-        <div className="border-t border-border pt-6">
-          <HttpTriggerCard kind="team" id={detail.team.id} />
-        </div>
-        <DangerSection teamId={detail.team.id} />
+        {readOnly && (
+          <p className="rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-xs text-muted-foreground">
+            {t('This office is managed by its owner. You are watching it — settings are read-only.')}
+          </p>
+        )}
+        <GoalSection team={detail.team} first readOnly={readOnly} />
+        {!readOnly && <ScheduleSection teamId={detail.team.id} />}
+        <CollaborationSection team={detail.team} readOnly={readOnly} />
+        <MembersSection detail={detail} readOnly={readOnly} />
+        {!readOnly && (
+          <div className="border-t border-border pt-6">
+            <HttpTriggerCard kind="team" id={detail.team.id} />
+          </div>
+        )}
+        {readOnly
+          ? <LeaveSection teamId={detail.team.id} />
+          : <DangerSection teamId={detail.team.id} />}
       </div>
     </div>
   )
@@ -53,7 +67,7 @@ export function SettingsTab({ detail }: SettingsTabProps) {
 
 // ── 1. Goal ──
 
-function GoalSection({ team, first }: { team: TeamDetail['team']; first?: boolean }) {
+function GoalSection({ team, first, readOnly }: { team: TeamDetail['team']; first?: boolean; readOnly?: boolean }) {
   const updateTeam = useTeamStore(s => s.updateTeam)
   const { t } = useTranslation()
   const [draft, setDraft] = useState(team.goal)
@@ -81,7 +95,9 @@ function GoalSection({ team, first }: { team: TeamDetail['team']; first?: boolea
           onChange={e => setNameDraft(e.target.value)}
           onBlur={saveName}
           onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-          className="w-full rounded-lg border border-border bg-secondary px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          readOnly={readOnly}
+          disabled={readOnly}
+          className="w-full rounded-lg border border-border bg-secondary px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
         />
       </label>
       <label className="mt-3 block space-y-1">
@@ -91,11 +107,15 @@ function GoalSection({ team, first }: { team: TeamDetail['team']; first?: boolea
           onChange={e => setDraft(e.target.value)}
           onBlur={saveGoal}
           rows={4}
-          className="w-full resize-y rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          readOnly={readOnly}
+          disabled={readOnly}
+          className="w-full resize-y rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
         />
-        <p className="text-xs text-muted-foreground/70">
-          {t('The lead will decompose this goal into tasks for the team.')}
-        </p>
+        {!readOnly && (
+          <p className="text-xs text-muted-foreground/70">
+            {t('The lead will decompose this goal into tasks for the team.')}
+          </p>
+        )}
       </label>
     </Section>
   )
@@ -170,7 +190,7 @@ function ScheduleSection({ teamId }: { teamId: string }) {
 
 // ── 3. Collaboration ──
 
-function CollaborationSection({ team }: { team: TeamDetail['team'] }) {
+function CollaborationSection({ team, readOnly }: { team: TeamDetail['team']; readOnly?: boolean }) {
   const updateTeam = useTeamStore(s => s.updateTeam)
   const { t } = useTranslation()
 
@@ -186,6 +206,7 @@ function CollaborationSection({ team }: { team: TeamDetail['team'] }) {
             description={t('The AI Lead assigns tasks and reviews results. Members communicate through the defined reporting hierarchy.')}
             selected={team.collabMode === 'structured'}
             onClick={() => void updateTeam(team.id, { collabMode: 'structured' })}
+            disabled={readOnly}
           />
           <OptionCard
             icon={<RefreshCw className="h-4 w-4" />}
@@ -193,6 +214,7 @@ function CollaborationSection({ team }: { team: TeamDetail['team'] }) {
             description={t('All members communicate freely without restrictions.')}
             selected={team.collabMode === 'free'}
             onClick={() => void updateTeam(team.id, { collabMode: 'free' })}
+            disabled={readOnly}
           />
         </div>
       </div>
@@ -211,6 +233,7 @@ function CollaborationSection({ team }: { team: TeamDetail['team'] }) {
             selected={team.escalationRouting === 'lead'}
             onClick={() => void updateTeam(team.id, { escalationRouting: 'lead' })}
             badge={t('Recommended')}
+            disabled={readOnly}
           />
           <OptionCard
             icon={<UserCircle className="h-4 w-4" />}
@@ -218,6 +241,7 @@ function CollaborationSection({ team }: { team: TeamDetail['team'] }) {
             description={t('You will be notified immediately when any member is stuck.')}
             selected={team.escalationRouting === 'user'}
             onClick={() => void updateTeam(team.id, { escalationRouting: 'user' })}
+            disabled={readOnly}
           />
         </div>
       </div>
@@ -227,7 +251,7 @@ function CollaborationSection({ team }: { team: TeamDetail['team'] }) {
 
 // ── 4. Members ──
 
-function MembersSection({ detail }: { detail: TeamDetail }) {
+function MembersSection({ detail, readOnly }: { detail: TeamDetail; readOnly?: boolean }) {
   const { t } = useTranslation()
   const addMember = useTeamStore(s => s.addMember)
   const removeMember = useTeamStore(s => s.removeMember)
@@ -265,8 +289,8 @@ function MembersSection({ detail }: { detail: TeamDetail }) {
               description={app?.spec.description ?? ''}
               isLead={member.isLead}
               onOpenApp={() => openApp(member.appId)}
-              onMakeLead={member.isLead ? undefined : () => setPromote({ appId: member.appId, name: member.memberName })}
-              onRemove={member.isLead ? undefined : () => void removeMember(detail.team.id, member.appId)}
+              onMakeLead={readOnly || member.isLead ? undefined : () => setPromote({ appId: member.appId, name: member.memberName })}
+              onRemove={readOnly || member.isLead ? undefined : () => void removeMember(detail.team.id, member.appId)}
             />
           )
         })}
@@ -283,7 +307,7 @@ function MembersSection({ detail }: { detail: TeamDetail }) {
         />
       )}
 
-      {showAdd ? (
+      {!readOnly && (showAdd ? (
         <div className="mt-3 rounded-lg border border-border bg-secondary/30 p-3">
           <p className="mb-2 text-xs font-medium text-muted-foreground">{t('Add a digital human to the team')}</p>
           {candidates.length === 0 ? (
@@ -316,11 +340,13 @@ function MembersSection({ detail }: { detail: TeamDetail }) {
           <Plus className="h-4 w-4" />
           {t('Add member')}
         </button>
-      )}
+      ))}
 
-      <p className="mt-3 text-xs text-muted-foreground/60">
-        {t('Role is specific to this team. Description changes apply to the digital human everywhere.')}
-      </p>
+      {!readOnly && (
+        <p className="mt-3 text-xs text-muted-foreground/60">
+          {t('Role is specific to this team. Description changes apply to the digital human everywhere.')}
+        </p>
+      )}
     </Section>
   )
 }
@@ -414,6 +440,41 @@ function DangerSection({ teamId }: { teamId: string }) {
   )
 }
 
+// ── 5b. Leave (joined office) ──
+
+function LeaveSection({ teamId }: { teamId: string }) {
+  const leaveOffice = useTeamStore(s => s.leaveOffice)
+  const { t } = useTranslation()
+  const [confirm, setConfirm] = useState(false)
+  return (
+    <>
+      <div className="rounded-lg border border-border p-3">
+        <button
+          onClick={() => setConfirm(true)}
+          className="flex items-center gap-1.5 text-sm text-foreground transition-opacity hover:opacity-80"
+        >
+          <LogOut className="h-4 w-4" />
+          {t('Leave office')}
+        </button>
+        <p className="mt-1 text-xs text-muted-foreground/60">
+          {t('Removes this office from your view. Your digital humans stay yours.')}
+        </p>
+      </div>
+
+      {confirm && (
+        <ConfirmDialog
+          title={t('Leave this office?')}
+          message={t('It will be removed from your view. You can join again later with a new invite.')}
+          confirmLabel={t('Leave office')}
+          cancelLabel={t('Cancel')}
+          onConfirm={() => { setConfirm(false); void leaveOffice(teamId) }}
+          onCancel={() => setConfirm(false)}
+        />
+      )}
+    </>
+  )
+}
+
 // ── Shared primitives ──
 
 function Section({ title, children, first }: { title: string; children: React.ReactNode; first?: boolean }) {
@@ -425,18 +486,20 @@ function Section({ title, children, first }: { title: string; children: React.Re
   )
 }
 
-function OptionCard({ icon, label, description, selected, onClick, badge }: {
+function OptionCard({ icon, label, description, selected, onClick, badge, disabled }: {
   icon: React.ReactNode
   label: string
   description: string
   selected: boolean
   onClick: () => void
   badge?: string
+  disabled?: boolean
 }) {
   return (
     <button
       onClick={onClick}
-      className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-colors ${
+      disabled={disabled}
+      className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-colors disabled:cursor-default disabled:opacity-70 disabled:hover:border-border disabled:hover:bg-transparent ${
         selected
           ? 'border-primary bg-primary/5'
           : 'border-border hover:border-primary/40 hover:bg-secondary/30'

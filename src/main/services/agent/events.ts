@@ -28,6 +28,15 @@ export interface AgentEvent {
   conversationId: string
   /** Event payload */
   data: Record<string, unknown>
+  /**
+   * True when this event was re-fired from a cross-node relay replay rather than
+   * produced by a local agent turn. The federation RelayCapture uses it to refuse
+   * re-capturing a relayed frame even for a session this node owns — this guard
+   * survives a host fan-out echoing a producer's own frames back to it. Local
+   * turns never set it (it stays undefined → falsy), so the renderer path is
+   * unaffected.
+   */
+  relayed?: boolean
 }
 
 /**
@@ -79,9 +88,11 @@ export function emitAgentEvent(
   channel: string,
   spaceId: string,
   conversationId: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  /** Set by the relay replay path so RelayCapture refuses to re-capture it. */
+  relayed?: boolean
 ): void {
-  _onAgentEvent.fire({ channel, spaceId, conversationId, data })
+  _onAgentEvent.fire({ channel, spaceId, conversationId, data, relayed })
 }
 
 /**

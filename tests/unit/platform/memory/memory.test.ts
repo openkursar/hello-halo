@@ -422,54 +422,20 @@ describe('File Operations', () => {
 // ============================================================================
 
 describe('generatePromptInstructions', () => {
-  it('should generate instructions for user caller', async () => {
-    const caller: MemoryCallerScope = {
-      type: 'user',
-      spaceId: 'space-1',
-      spacePath: '/tmp/nonexistent-space'
-    }
-
-    const instructions = await generatePromptInstructions(caller)
+  // V3 memory model: one constant instruction block for all callers — memory
+  // is edited with native file tools on memory.md, no MCP tools and no
+  // per-caller scope variants.
+  it('should describe the memory.md structure', () => {
+    const instructions = generatePromptInstructions()
     expect(instructions).toContain('## Memory')
-    expect(instructions).toContain('memory_read')
-    expect(instructions).toContain('memory_write')
-    expect(instructions).toContain('user')
-    expect(instructions).toContain('space')
-    expect(instructions).not.toContain('append-only') // User has full access
-    // V2: state-document rules
-    expect(instructions).toContain('STATE document')
-    expect(instructions).toContain('headers')
-    expect(instructions).toContain('replace')
+    expect(instructions).toContain('# now')
+    expect(instructions).toContain('# History')
+    expect(instructions).toContain('memory.md')
   })
 
-  it('should generate instructions for app caller', async () => {
-    const caller: MemoryCallerScope = {
-      type: 'app',
-      spaceId: 'space-1',
-      spacePath: '/tmp/nonexistent-space',
-      appId: 'test-app'
-    }
-
-    const instructions = await generatePromptInstructions(caller)
-    expect(instructions).toContain('## Memory')
-    expect(instructions).toContain('read-only') // user scope for apps
-    expect(instructions).toContain('append-only') // space scope for apps
-    // V2: state-document rules
-    expect(instructions).toContain('STATE document')
-    expect(instructions).toContain('## State')
-  })
-
-  it('should include read mode descriptions', async () => {
-    const caller: MemoryCallerScope = {
-      type: 'app',
-      spaceId: 'space-1',
-      spacePath: '/tmp/nonexistent-space',
-      appId: 'test-app'
-    }
-
-    const instructions = await generatePromptInstructions(caller)
-    expect(instructions).toContain('headers')
-    expect(instructions).toContain('section')
-    expect(instructions).toContain('tail')
+  it('should instruct updating memory before reporting', () => {
+    const instructions = generatePromptInstructions()
+    expect(instructions).toContain('When to Update')
+    expect(instructions).toContain('before reporting')
   })
 })

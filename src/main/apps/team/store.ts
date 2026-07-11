@@ -35,7 +35,13 @@ import type {
   TaskPatch,
   TeamStore as ITeamStore,
 } from './types'
-import type { TeamTrigger, TeamRunTriggerType } from '../../../shared/apps/team-types'
+import type {
+  TeamTrigger,
+  TeamRunTriggerType,
+  JoinedOfficeSnapshot,
+  TeamMemberRuntimeStatus,
+} from '../../../shared/apps/team-types'
+import { SELF_NODE_ID } from '../../../shared/apps/team-types'
 
 // ── Row <-> Domain Mapping ──
 
@@ -53,6 +59,7 @@ function rowToTeam(row: TeamRow): Team {
     currentEpochId: row.current_epoch_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    hostNodeId: row.host_node_id ?? null,
   }
 }
 
@@ -65,6 +72,11 @@ function rowToMember(row: TeamMemberRow): TeamMember {
     isLead: row.is_lead === 1,
     aiProvisioned: row.ai_provisioned === 1,
     addedAt: row.added_at,
+    ownerNodeId: row.owner_node_id,
+    origin: row.origin as 'local' | 'remote',
+    memberIdentity: row.member_identity,
+    scopeJson: row.scope_json ?? null,
+    ownerDisplayName: row.owner_display_name ?? null,
   }
 }
 
@@ -156,6 +168,7 @@ export class TeamStore implements ITeamStore {
   private readonly stmtDeleteTeam: Database.Statement
   // team_members
   private readonly stmtAddMember: Database.Statement
+  private readonly stmtSetMemberScope: Database.Statement
   private readonly stmtRemoveMember: Database.Statement
   private readonly stmtListMembersByTeam: Database.Statement
   private readonly stmtGetMemberByName: Database.Statement
@@ -190,17 +203,28 @@ export class TeamStore implements ITeamStore {
   private readonly stmtListTriggersByTeam: Database.Statement
   private readonly stmtListAllEnabledTriggers: Database.Statement
 
+  /**
+   * Transient per-office runtime status projection from the last materialized
+   * roster snapshot of a joined office: officeId → (appId → {status, taskTitle}).
+   * Run-state is a live projection, not a persisted column, so it lives in memory
+   * and the joiner's status board overlays it. Replaced wholesale per snapshot.
+   */
+  private readonly joinedMemberRuntime = new Map<
+    string,
+    Map<string, { status: TeamMemberRuntimeStatus; taskTitle?: string }>
+  >()
+
   constructor(private readonly db: Database.Database) {
     // ── teams ─────────────────────────────────────
     this.stmtInsertTeam = db.prepare(`
       INSERT INTO teams (
         id, name, owning_space_id, goal, lead_app_id,
         member_sourcing, collab_mode, escalation_routing,
-        status, current_epoch_id, created_at, updated_at
+        status, current_epoch_id, created_at, updated_at, host_node_id
       ) VALUES (
         @id, @name, @owning_space_id, @goal, @lead_app_id,
         @member_sourcing, @collab_mode, @escalation_routing,
-        @status, @current_epoch_id, @created_at, @updated_at
+        @status, @current_epoch_id, @created_at, @updated_at, @host_node_id
       )
     `)
     this.stmtGetTeamById = db.prepare(`SELECT * FROM teams WHERE id = ?`)
@@ -222,10 +246,15 @@ export class TeamStore implements ITeamStore {
     // ── team_members ──────────────────────────────
     this.stmtAddMember = db.prepare(`
       INSERT INTO team_members (
-        team_id, app_id, member_name, role, is_lead, ai_provisioned, added_at
+        team_id, app_id, member_name, role, is_lead, ai_provisioned, added_at, owner_display_name,
+        owner_node_id, origin, member_identity, scope_json
       ) VALUES (
-        @team_id, @app_id, @member_name, @role, @is_lead, @ai_provisioned, @added_at
+        @team_id, @app_id, @member_name, @role, @is_lead, @ai_provisioned, @added_at, @owner_display_name,
+        @owner_node_id, @origin, @member_identity, @scope_json
       )
+    `)
+    this.stmtSetMemberScope = db.prepare(`
+      UPDATE team_members SET scope_json = @scope_json WHERE team_id = @team_id AND app_id = @app_id
     `)
     this.stmtRemoveMember = db.prepare(`
       DELETE FROM team_members WHERE team_id = ? AND app_id = ?
@@ -359,6 +388,8 @@ export class TeamStore implements ITeamStore {
       current_epoch_id: team.currentEpochId,
       created_at: team.createdAt,
       updated_at: team.updatedAt,
+      // Default to a locally-hosted office so existing callers need not change.
+      host_node_id: team.hostNodeId ?? null,
     })
   }
 
@@ -426,6 +457,23 @@ export class TeamStore implements ITeamStore {
     return this.stmtDeleteTeam.run(teamId).changes > 0
   }
 
+  /**
+   * Remove a shadow office and all of its mirrored rows (members, edges,
+   * triggers) in one transaction. Used when leaving a joined office — the rows
+   * are projections of a remote authority, so no orphan-app cleanup applies.
+   */
+  purgeJoinedOffice(officeId: string): boolean {
+    const purge = this.db.transaction(() => {
+      this.db.prepare(`DELETE FROM team_members WHERE team_id = ?`).run(officeId)
+      this.stmtDeleteEdgesForTeam.run(officeId)
+      this.deleteTriggersByTeam(officeId)
+      return this.stmtDeleteTeam.run(officeId).changes > 0
+    })
+    const removed = purge()
+    this.joinedMemberRuntime.delete(officeId)
+    return removed
+  }
+
   // ── team_members ────────────────────────────────
 
   /**
@@ -441,11 +489,21 @@ export class TeamStore implements ITeamStore {
       is_lead: member.isLead ? 1 : 0,
       ai_provisioned: member.aiProvisioned ? 1 : 0,
       added_at: member.addedAt,
+      // Default to a locally-owned member so existing callers need not change.
+      owner_node_id: member.ownerNodeId ?? SELF_NODE_ID,
+      origin: member.origin ?? 'local',
+      member_identity: member.memberIdentity ?? null,
+      scope_json: member.scopeJson ?? null,
+      owner_display_name: member.ownerDisplayName ?? null,
     })
   }
 
   removeMember(teamId: string, appId: string): boolean {
     return this.stmtRemoveMember.run(teamId, appId).changes > 0
+  }
+
+  setMemberScope(teamId: string, appId: string, scopeJson: string | null): void {
+    this.stmtSetMemberScope.run({ team_id: teamId, app_id: appId, scope_json: scopeJson })
   }
 
   /** Flip a member's lead flag (used when an existing member is named lead). */
@@ -465,6 +523,154 @@ export class TeamStore implements ITeamStore {
   /** Cross-team lookup: every membership for an app (one app may join many teams). */
   listMembersByAppId(appId: string): TeamMember[] {
     return (this.stmtListMembersByAppId.all(appId) as TeamMemberRow[]).map(rowToMember)
+  }
+
+  /**
+   * Mirror a host-driven roster into the local store as a joined ("shadow")
+   * office. Idempotent: the team row is upserted in place and the member set is
+   * replaced wholesale (the office is a host projection, so a whole-roster
+   * replace matches the single-writer model and sidesteps every unique-index
+   * collision on re-apply).
+   *
+   * SELF-relativity: wire owner node ids are ABSOLUTE; here each member's owner
+   * is remapped to local-relative — a member owned by THIS node (ownerNodeId ===
+   * selfNodeId) is stored as SELF/origin=local so this node's RelayCapture sees
+   * it as its own; every other member is stored remote with the absolute owner.
+   */
+  materializeJoinedOffice(input: {
+    hostNodeId: string
+    selfNodeId: string
+    snapshot: JoinedOfficeSnapshot
+  }): void {
+    const { hostNodeId, selfNodeId, snapshot } = input
+    const officeId = snapshot.team.id
+    const now = Date.now()
+
+    // The transient runtime-status overlay for this office, rebuilt from the
+    // snapshot and published after the row apply succeeds (so a failed apply does
+    // not leave a stale-but-confident overlay).
+    const runtime = new Map<string, { status: TeamMemberRuntimeStatus; taskTitle?: string }>()
+
+    const apply = this.db.transaction(() => {
+      const existing = this.stmtGetTeamById.get(officeId) as TeamRow | undefined
+      if (existing) {
+        this.db
+          .prepare(
+            `UPDATE teams
+               SET name = @name, goal = @goal, lead_app_id = @lead_app_id,
+                   collab_mode = @collab_mode, host_node_id = @host_node_id,
+                   current_epoch_id = @current_epoch_id, status = @status,
+                   updated_at = @updated_at
+             WHERE id = @id`
+          )
+          .run({
+            id: officeId,
+            name: snapshot.team.name,
+            goal: snapshot.team.goal,
+            lead_app_id: snapshot.team.leadAppId,
+            collab_mode: snapshot.team.collabMode,
+            host_node_id: hostNodeId,
+            // The host's currently-open run epoch, so the joiner can bind the
+            // live run from its store; null when no run is open.
+            current_epoch_id: snapshot.team.epochId ?? null,
+            // The host's live run status so the joiner's run banner goes "running"
+            // at run-start; default idle when the host did not stamp one.
+            status: snapshot.team.status ?? 'idle',
+            updated_at: now,
+          })
+      } else {
+        // owning_space_id = officeId: a synthetic, non-colliding value that
+        // satisfies NOT NULL + unique(owning_space_id, name) without clashing
+        // with any real local team (whose space ids are real space uuids).
+        this.stmtInsertTeam.run({
+          id: officeId,
+          name: snapshot.team.name,
+          owning_space_id: officeId,
+          goal: snapshot.team.goal,
+          lead_app_id: snapshot.team.leadAppId,
+          member_sourcing: 'manual',
+          collab_mode: snapshot.team.collabMode,
+          escalation_routing: 'user',
+          status: snapshot.team.status ?? 'idle',
+          current_epoch_id: snapshot.team.epochId ?? null,
+          created_at: now,
+          updated_at: now,
+          host_node_id: hostNodeId,
+        })
+      }
+
+      // Shadow the host's open run epoch as a local team_epochs row so the
+      // joiner's message bus can route a 1:1 reply: completeTurn treats a missing
+      // epoch row as sealed and drops the reply, and reactivateEpoch needs a row
+      // to reopen. Without this, chatting a HOST-owned member would silently fail
+      // ("sent, no reply"). Idempotent — only inserted when absent; a host-
+      // generated epoch id never collides.
+      const hostEpochId = snapshot.team.epochId ?? null
+      if (hostEpochId) {
+        const epochRow = this.stmtGetEpochById.get(hostEpochId) as TeamEpochRow | undefined
+        if (!epochRow) {
+          this.stmtInsertEpoch.run({
+            id: hostEpochId,
+            team_id: officeId,
+            started_at: now,
+            ended_at: null,
+            end_reason: null,
+            summary: null,
+            trigger_type: 'manual',
+            lifecycle: 'run',
+            chat_key: null,
+          })
+        }
+      }
+
+      this.db.prepare(`DELETE FROM team_members WHERE team_id = ?`).run(officeId)
+      for (const m of snapshot.members) {
+        const ownedHere = m.ownerNodeId === selfNodeId
+        if (m.status && m.status !== 'idle') {
+          runtime.set(m.appId, {
+            status: m.status,
+            ...(m.currentTaskTitle ? { taskTitle: m.currentTaskTitle } : {}),
+          })
+        }
+        this.stmtAddMember.run({
+          team_id: officeId,
+          app_id: m.appId,
+          member_name: m.memberName,
+          role: m.role,
+          is_lead: m.isLead ? 1 : 0,
+          ai_provisioned: 0,
+          added_at: now,
+          owner_node_id: ownedHere ? SELF_NODE_ID : m.ownerNodeId,
+          origin: ownedHere ? 'local' : 'remote',
+          member_identity: ownedHere ? null : m.memberIdentity,
+          scope_json: null,
+          owner_display_name: ownedHere ? null : m.ownerDisplayName ?? null,
+        })
+      }
+
+      this.stmtDeleteEdgesForTeam.run(officeId)
+      for (const edge of snapshot.edges) {
+        this.stmtInsertEdge.run({
+          team_id: officeId,
+          from_app_id: edge.fromAppId,
+          to_app_id: edge.toAppId,
+          sync: 0,
+        })
+      }
+    })
+    apply()
+    this.joinedMemberRuntime.set(officeId, runtime)
+  }
+
+  getJoinedMemberStatuses(teamId: string): Map<string, TeamMemberRuntimeStatus> {
+    const runtime = this.joinedMemberRuntime.get(teamId)
+    const out = new Map<string, TeamMemberRuntimeStatus>()
+    if (runtime) for (const [appId, v] of runtime) out.set(appId, v.status)
+    return out
+  }
+
+  getJoinedMemberTaskTitle(teamId: string, appId: string): string | undefined {
+    return this.joinedMemberRuntime.get(teamId)?.get(appId)?.taskTitle
   }
 
   // ── team_edges ──────────────────────────────────
@@ -558,6 +764,26 @@ export class TeamStore implements ITeamStore {
 
   listTasksByTeam(teamId: string): BlackboardTask[] {
     return (this.stmtListTasksByTeam.all(teamId) as BlackboardTaskRow[]).map(rowToTask)
+  }
+
+  /**
+   * The epoch id of the most recently written task or finding for a team, or null
+   * when the board is empty. Used by a JOINED (shadow) office to bind its activity
+   * feed directly to replicated data when the run-epoch pointer (current_epoch_id)
+   * has not yet been materialized from a roster snapshot — so the feed populates
+   * the instant tasks/findings replicate, independent of roster-refresh timing.
+   */
+  getLatestBoardEpochId(teamId: string): string | null {
+    const row = this.db
+      .prepare(
+        `SELECT epoch_id, MAX(ts) AS ts FROM (
+           SELECT epoch_id, updated_at AS ts FROM blackboard_tasks WHERE team_id = @teamId
+           UNION ALL
+           SELECT epoch_id, created_at AS ts FROM blackboard_findings WHERE team_id = @teamId
+         )`
+      )
+      .get({ teamId }) as { epoch_id: string | null; ts: number | null } | undefined
+    return row?.epoch_id ?? null
   }
 
   // ── blackboard_findings ─────────────────────────

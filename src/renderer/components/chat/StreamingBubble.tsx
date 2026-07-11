@@ -68,7 +68,12 @@ export function StreamingBubble({
    */
   useEffect(() => {
     if (textBlockVersion !== prevTextBlockVersionRef.current) {
-      console.log(`[StreamingBubble] 🆕 New text block detected: version ${prevTextBlockVersionRef.current} → ${textBlockVersion}`)
+      // Advance first so the effect can't re-run for the same version.
+      prevTextBlockVersionRef.current = textBlockVersion
+      // Skip if already clean: state setters are in the dep array, so an
+      // unconditional reset here would loop.
+      if (activeSnapshotLen === 0 && segments.length === 0 && scrollOffset === 0) return
+      console.log(`[StreamingBubble] 🆕 New text block detected: version → ${textBlockVersion}`)
       // Reset all state for new text block
       setActiveSnapshotLen(0)
       setSegments([])
@@ -76,9 +81,8 @@ export function StreamingBubble({
       setIsSegmentAnimating(false)
       clearTimeout(segmentAnimTimerRef.current)
       pendingSnapshotRef.current = null
-      prevTextBlockVersionRef.current = textBlockVersion
     }
-  }, [textBlockVersion])
+  }, [textBlockVersion, activeSnapshotLen, segments.length, scrollOffset])
 
   /**
    * Step 1: Detect tool_use and mark content as pending

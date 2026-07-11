@@ -18,6 +18,7 @@ import { TeamList } from './TeamList'
 import { TeamView } from './TeamView'
 import { TeamEmptyState } from './TeamEmptyState'
 import { TeamCreateDialog } from './TeamCreateDialog'
+import { TeamJoinDialog } from './TeamJoinDialog'
 
 export function TeamTabContent() {
   const { t } = useTranslation()
@@ -37,6 +38,7 @@ export function TeamTabContent() {
   const loadApps = useAppsStore(s => s.loadApps)
 
   const [showCreate, setShowCreate] = useState(false)
+  const [showJoin, setShowJoin] = useState(false)
 
   useEffect(() => {
     void loadTeams()
@@ -45,17 +47,18 @@ export function TeamTabContent() {
   }, [loadTeams, loadApps])
 
   const openCreate = () => setShowCreate(true)
+  const openJoin = () => setShowJoin(true)
 
   const rightPane = detail
     ? <TeamView detail={detail} />
-    : <TeamEmptyState hasTeams={teams.length > 0} onNewTeam={openCreate} />
+    : <TeamEmptyState hasTeams={teams.length > 0} onNewTeam={openCreate} onJoinOffice={openJoin} />
 
   return (
     <>
       {!isMobile ? (
         <div className="flex flex-1 overflow-hidden">
           <div className="flex w-60 flex-shrink-0 flex-col overflow-hidden border-r border-border">
-            <TeamList onNewTeam={openCreate} />
+            <TeamList onNewTeam={openCreate} onJoinOffice={openJoin} />
           </div>
           <div className="flex flex-1 flex-col overflow-hidden">{rightPane}</div>
         </div>
@@ -75,7 +78,7 @@ export function TeamTabContent() {
               <div className="flex flex-1 flex-col overflow-hidden">{rightPane}</div>
             </>
           ) : (
-            <TeamList onNewTeam={openCreate} />
+            <TeamList onNewTeam={openCreate} onJoinOffice={openJoin} />
           )}
         </div>
       )}
@@ -85,6 +88,13 @@ export function TeamTabContent() {
           owningSpaceId={owningSpaceId}
           onClose={() => setShowCreate(false)}
           onCreateMemberInline={() => { setShowCreate(false); setShowInstallDialog(true) }}
+        />
+      )}
+
+      {showJoin && (
+        <TeamJoinDialog
+          onClose={() => setShowJoin(false)}
+          onCreateDigitalHuman={() => setShowInstallDialog(true)}
         />
       )}
     </>

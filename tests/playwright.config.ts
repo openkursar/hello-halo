@@ -142,6 +142,13 @@ export default defineConfig({
       }
     },
     {
+      name: 'team-render',
+      testMatch: '**/team-render.spec.ts',
+      use: {
+        actionTimeout: 15000
+      }
+    },
+    {
       name: 'codex-mcp',
       testMatch: '**/codex-mcp.spec.ts',
       // Upstream LLM providers occasionally return 429 / transient stream

@@ -313,7 +313,9 @@ export async function startHttpServer(
     httpServer!.listen(listenPort, '0.0.0.0', () => {
       serverPort = listenPort
       console.log(`[HTTP] Server started on port ${listenPort}`)
-      console.log(`[HTTP] Access token: ${token}`)
+      // Never log the access token itself — the remote-access PIN must not
+      // reach logs — record only that one is active.
+      console.log(`[HTTP] Access token ${existingToken ? 'restored' : 'generated'} (len=${token.length})`)
       resolve({ port: listenPort, token })
     })
 

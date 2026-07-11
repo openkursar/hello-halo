@@ -6,13 +6,14 @@
  * button at the bottom opens the create dialog.
  */
 
-import { Plus } from 'lucide-react'
+import { Plus, LogIn } from 'lucide-react'
 import type { TeamListItem, TeamStatus } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
 import { useTranslation } from '../../i18n'
 
 interface TeamListProps {
   onNewTeam: () => void
+  onJoinOffice: () => void
 }
 
 function statusDotClass(status: TeamStatus, hasWaitingUser: boolean): string {
@@ -25,7 +26,7 @@ function statusDotClass(status: TeamStatus, hasWaitingUser: boolean): string {
   }
 }
 
-export function TeamList({ onNewTeam }: TeamListProps) {
+export function TeamList({ onNewTeam, onJoinOffice }: TeamListProps) {
   const { t } = useTranslation()
   const teams = useTeamStore(s => s.teams)
   const currentTeamId = useTeamStore(s => s.currentTeamId)
@@ -80,6 +81,13 @@ export function TeamList({ onNewTeam }: TeamListProps) {
         >
           <Plus className="h-4 w-4" />
           {t('New office')}
+        </button>
+        <button
+          onClick={onJoinOffice}
+          className="flex w-full items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
+        >
+          <LogIn className="h-4 w-4" />
+          {t('Join an office')}
         </button>
       </div>
     </div>

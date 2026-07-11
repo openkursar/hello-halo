@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Play, Pause, Cog, LayoutGrid, History, Network } from 'lucide-react'
+import { Play, Pause, Cog, LayoutGrid, History, Network, UserPlus, Eye } from 'lucide-react'
 import type { TeamDetail, RosterMember } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
 import { useTranslation } from '../../i18n'
@@ -18,6 +18,7 @@ import { StatusBoard } from './StatusBoard'
 import { TeamMemberChatView } from './TeamMemberChatView'
 import { HistoryTab } from './HistoryTab'
 import { SettingsTab } from './SettingsTab'
+import { TeamInviteDialog } from './TeamInviteDialog'
 
 type BoardTab = 'status' | 'history' | 'settings'
 
@@ -39,6 +40,7 @@ export function TeamView({ detail }: TeamViewProps) {
   const [selectedMember, setSelectedMember] = useState<RosterMember | null>(null)
   const [chatEpochId, setChatEpochId] = useState<string | null>(null)
   const [editingStructure, setEditingStructure] = useState(false)
+  const [showInvite, setShowInvite] = useState(false)
 
   const liveEpochId = team.currentEpochId ?? epochs[0]?.id ?? null
 
@@ -62,6 +64,9 @@ export function TeamView({ detail }: TeamViewProps) {
   const isRunning = team.status === 'running'
   const overlayOpen = !!selectedMember
 
+  // Gates every authority-only control (run/edit/invite) — a joined office is watch-only.
+  const isJoined = team.hostNodeId != null
+
   return (
     <div className="relative flex h-full overflow-hidden">
       {/* Main column */}
@@ -69,7 +74,15 @@ export function TeamView({ detail }: TeamViewProps) {
         {/* ── Header ──────────────────────────────────── */}
         <div className="flex items-start gap-2 border-b border-border px-3 py-3 sm:px-4">
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-base font-medium text-foreground">{team.name}</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="truncate text-base font-medium text-foreground">{team.name}</h2>
+              {isJoined && (
+                <span className="flex flex-shrink-0 items-center gap-1 rounded-full border border-border bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">
+                  <Eye className="h-3 w-3" />
+                  {t('Joined office')}
+                </span>
+              )}
+            </div>
             <button
               onClick={() => setTab('settings')}
               className="mt-0.5 line-clamp-2 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
@@ -79,30 +92,42 @@ export function TeamView({ detail }: TeamViewProps) {
             </button>
           </div>
 
-          {/* Edit collaboration structure — contextual to the Status board it edits. */}
-          {tab === 'status' && (
-            <button
-              onClick={() => setEditingStructure(v => !v)}
-              className={`flex-shrink-0 rounded-lg border p-1.5 transition-colors ${
-                editingStructure
-                  ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'
-              }`}
-              title={t('Edit collaboration structure')}
-            >
-              <Network className="h-4 w-4" />
-            </button>
-          )}
+          {!isJoined && (
+            <>
+              {/* Edit collaboration structure — contextual to the Status board it edits. */}
+              {tab === 'status' && (
+                <button
+                  onClick={() => setEditingStructure(v => !v)}
+                  className={`flex-shrink-0 rounded-lg border p-1.5 transition-colors ${
+                    editingStructure
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'
+                  }`}
+                  title={t('Edit collaboration structure')}
+                >
+                  <Network className="h-4 w-4" />
+                </button>
+              )}
 
-          {/* Run / pause */}
-          <button
-            onClick={() => isRunning ? pauseTeam(team.id) : runTeam(team.id)}
-            className="flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary"
-            title={isRunning ? t('Pause') : t('Run')}
-          >
-            {isRunning ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-            <span className="hidden sm:inline">{isRunning ? t('Pause') : t('Run')}</span>
-          </button>
+              <button
+                onClick={() => setShowInvite(true)}
+                className="flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary"
+                title={t('Invite')}
+              >
+                <UserPlus className="h-4 w-4" />
+                <span className="hidden sm:inline">{t('Invite')}</span>
+              </button>
+
+              <button
+                onClick={() => isRunning ? pauseTeam(team.id) : runTeam(team.id)}
+                className="flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary"
+                title={isRunning ? t('Pause') : t('Run')}
+              >
+                {isRunning ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                <span className="hidden sm:inline">{isRunning ? t('Pause') : t('Run')}</span>
+              </button>
+            </>
+          )}
 
         </div>
 
@@ -120,7 +145,7 @@ export function TeamView({ detail }: TeamViewProps) {
               detail={detail}
               activeFlows={activeFlows}
               onSelectMember={openMemberLive}
-              editingStructure={editingStructure}
+              editingStructure={editingStructure && !isJoined}
               onExitEditing={() => setEditingStructure(false)}
             />
           )}
@@ -147,6 +172,8 @@ export function TeamView({ detail }: TeamViewProps) {
           </div>
         </div>
       )}
+
+      {showInvite && <TeamInviteDialog teamId={team.id} onClose={() => setShowInvite(false)} />}
     </div>
   )
 }

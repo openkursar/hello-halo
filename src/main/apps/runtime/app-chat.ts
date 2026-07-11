@@ -823,6 +823,27 @@ export function loadImChatMessages(
 }
 
 /**
+ * Load a member's team-channel chat history for ONE run (epoch).
+ *
+ * The member's space is resolved from the installed app itself — the renderer
+ * roster does not always carry a spaceId (the blackboard roster leaves it null),
+ * so the app's installed spaceId is the authoritative source. Returns an empty
+ * array when the space or its path cannot be resolved.
+ *
+ * Single source of truth for the team-channel read, shared by the
+ * `team:chat-messages` IPC handler and the team read-only HTTP route.
+ */
+export function readTeamMemberMessages(appId: string, teamId: string, epochId: string): any[] {
+  const spaceId = getAppManager()?.getApp(appId)?.spaceId ?? null
+  if (!spaceId) return []
+  const spacePath = getSpace(spaceId)?.path
+  if (!spacePath) return []
+  const conversationId = buildTeamSessionKey(appId, teamId, epochId)
+  const runId = deriveRunId(conversationId, appId)
+  return readSessionMessages(spacePath, appId, runId)
+}
+
+/**
  * Get session state for recovery after page refresh.
  *
  * @param appId - App ID

@@ -87,6 +87,12 @@ interface InitTeamServiceDeps {
   listArtifacts: TeamServiceDeps['listArtifacts']
   proposeMembersFromGoal?: TeamServiceDeps['proposeMembersFromGoal']
   getTriggerSync?: TeamServiceDeps['getTriggerSync']
+  // Federation egress hooks: roster/membership/lifecycle mutations are projected
+  // to office peers by the injected federation layer (the service itself imports
+  // no federation). Optional — absent in a non-federated build.
+  onRosterMutated?: TeamServiceDeps['onRosterMutated']
+  onMemberRemoved?: TeamServiceDeps['onMemberRemoved']
+  onOfficeDissolved?: TeamServiceDeps['onOfficeDissolved']
 }
 
 export function initTeamService(deps: InitTeamServiceDeps): TeamService {
@@ -101,6 +107,9 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
     listArtifacts: deps.listArtifacts,
     proposeMembersFromGoal: deps.proposeMembersFromGoal ?? proposeMembersViaSdk,
     getTriggerSync: deps.getTriggerSync,
+    onRosterMutated: deps.onRosterMutated,
+    onMemberRemoved: deps.onMemberRemoved,
+    onOfficeDissolved: deps.onOfficeDissolved,
   })
   serviceInstance = service
 

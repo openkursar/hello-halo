@@ -5,7 +5,7 @@
  * `result` frame. If stream() blocks waiting for "the next event" past the
  * result, the consumer's `for await` loop never exits, processStream never
  * resolves, the consumer's outer `while` never emits `agent:complete`, and
- * the renderer stays stuck in "思考中…" forever — the visible smoke
+ * the renderer stays stuck in the "Thinking…" state forever — the visible smoke
  * regression we hit in production.
  *
  * This test directly drives the per-turn contract by reaching into the
@@ -72,7 +72,7 @@ describe('CodexAppServerSession.stream() per-turn contract', () => {
 
   it('REGRESSION: returns done=true IMMEDIATELY after the result frame', async () => {
     // The smoke regression: stream() that loops past `result` blocks
-    // processStream forever, leaving the UI in 思考中.
+    // processStream forever, leaving the UI in the "Thinking…" state.
     const a = makeAdapter()
     const iter = a.stream()[Symbol.asyncIterator]()
 
@@ -127,7 +127,6 @@ describe('CodexAppServerSession.stream() per-turn contract', () => {
     expect(r3.done).toBe(false)
     expect(r3.value.type).toBe('assistant')
 
-    // Now terminate.
     push(a, { type: 'result', subtype: 'success' })
     const r4 = await iter.next()
     expect(r4.done).toBe(false)

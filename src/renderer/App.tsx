@@ -12,7 +12,7 @@ import { useSpaceStore } from './stores/space.store'
 import { useSearchStore } from './stores/search.store'
 import { useAppsStore } from './stores/apps.store'
 import { useTeamStore } from './stores/team.store'
-import type { TeamUpdatedEvent, TeamBlackboardEvent, TeamMessageEvent } from '../shared/apps/team-types'
+import type { TeamUpdatedEvent, TeamBlackboardEvent, TeamMessageEvent, TeamPresenceEvent, TeamOfficeStatusEvent } from '../shared/apps/team-types'
 import { useAppsPageStore } from './stores/apps-page.store'
 import { SplashPage } from './pages/SplashPage'
 import { SetupPage } from './pages/SetupPage'
@@ -668,11 +668,19 @@ export default function App() {
     const unsubTeamMessage = api.onTeamMessage((data) => {
       useTeamStore.getState().applyTeamMessage(data as TeamMessageEvent)
     })
+    const unsubTeamPresence = api.onTeamPresence((data) => {
+      useTeamStore.getState().applyTeamPresence(data as TeamPresenceEvent)
+    })
+    const unsubTeamOfficeStatus = api.onTeamOfficeStatus((data) => {
+      useTeamStore.getState().applyTeamOfficeStatus(data as TeamOfficeStatusEvent)
+    })
 
     return () => {
       unsubTeamUpdated()
       unsubTeamBlackboard()
       unsubTeamMessage()
+      unsubTeamPresence()
+      unsubTeamOfficeStatus()
     }
   }, [])
 

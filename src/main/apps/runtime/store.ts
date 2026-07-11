@@ -424,11 +424,23 @@ export class ActivityStore {
    */
   pruneOldData(retentionMs: number = DEFAULT_RETENTION_MS): number {
     const cutoff = Date.now() - retentionMs
-    const result = this.db.prepare(`
-      DELETE FROM automation_runs
-      WHERE started_at < ?
-        AND status NOT IN ('running', 'waiting_user')
-    `).run(cutoff)
-    return result.changes
+    // activity_entries no longer carries a run_id FK (chat/team entries use a
+    // sentinel run with no parent), so a run delete no longer cascades to its
+    // entries — remove them explicitly first to keep cleanup behaviour intact.
+    return this.db.transaction(() => {
+      this.db.prepare(`
+        DELETE FROM activity_entries
+        WHERE run_id IN (
+          SELECT run_id FROM automation_runs
+          WHERE started_at < ? AND status NOT IN ('running', 'waiting_user')
+        )
+      `).run(cutoff)
+      const result = this.db.prepare(`
+        DELETE FROM automation_runs
+        WHERE started_at < ?
+          AND status NOT IN ('running', 'waiting_user')
+      `).run(cutoff)
+      return result.changes
+    })()
   }
 }

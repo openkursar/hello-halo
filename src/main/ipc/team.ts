@@ -2,13 +2,13 @@
 
 import { ipcMain } from 'electron'
 import { getTeamService } from '../apps/team'
-import { getAppManager } from '../apps/manager'
 import { TEAM_IPC } from '../../shared/apps/team-types'
-import { buildTeamSessionKey } from '../../shared/apps/im-keys'
-import { deriveRunId } from '../apps/runtime/app-chat'
-import { readSessionMessages } from '../apps/runtime/session-store'
-import { getSpace } from '../services/space.service'
+import { readTeamMemberMessages } from '../apps/runtime/app-chat'
+import { getTeamStore } from '../apps/team'
+import { getFederationManager } from '../apps/runtime/federation/manager'
+import { generateTeamInvite, revokeTeamInvite, joinTeamOffice, leaveTeamOffice } from '../controllers/team-invite.controller'
 import type { TeamService } from '../apps/team'
+import type { OfficeScope } from '../apps/federation/index'
 import type {
   CreateTeamInput,
   UpdateTeamInput,
@@ -109,19 +109,31 @@ export function registerTeamIpc(): void {
   )
 
   // ── team:chat-messages — a member's team-channel chat history for ONE run ──
+  // The read logic lives in readTeamMemberMessages (apps/runtime/app-chat) so the
+  // IPC and HTTP surfaces share a single source of truth. spaceId is accepted for
+  // wire compatibility but ignored — the app's installed spaceId is authoritative.
   ipcMain.handle('team:chat-messages', async (_e, input: { appId: string; spaceId?: string; teamId: string; epochId: string }) => {
     try {
-      // Resolve the member's space from the app itself — the renderer roster does
-      // not always carry a spaceId (the blackboard roster leaves it null), and a
-      // missing/empty spaceId is exactly what made history appear "lost" after a
-      // turn ended. The app's installed spaceId is authoritative.
-      const appSpaceId = getAppManager()?.getApp(input.appId)?.spaceId ?? input.spaceId ?? null
-      if (!appSpaceId) return { success: true, data: [] }
-      const space = getSpace(appSpaceId)
-      if (!space?.path) return { success: true, data: [] }
-      const conversationId = buildTeamSessionKey(input.appId, input.teamId, input.epochId)
-      const runId = deriveRunId(conversationId, input.appId)
-      const messages = readSessionMessages(space.path, input.appId, runId)
+      // A remote-owned member's transcript lives on the node that OWNS it, not
+      // here. Mirror the HTTP route (team.routes.ts) and pull it over the office
+      // link from that owner; a locally-owned member reads from local chat
+      // storage as before. Without this branch a desktop joiner refreshing a
+      // remote member's history sees blank.
+      const target = getTeamStore()?.listMembersByTeam(input.teamId).find((m) => m.appId === input.appId)
+      if (target?.origin === 'remote' && target.ownerNodeId) {
+        const manager = getFederationManager()
+        if (!manager) {
+          return { success: false, error: 'Federation is not yet initialized. Please try again shortly.' }
+        }
+        const messages = await manager.fetchMemberHistory({
+          officeId: input.teamId,
+          ownerNodeId: target.ownerNodeId,
+          appId: input.appId,
+          epochId: input.epochId,
+        })
+        return { success: true, data: messages }
+      }
+      const messages = readTeamMemberMessages(input.appId, input.teamId, input.epochId)
       return { success: true, data: messages }
     } catch (err) {
       const e = err as Error
@@ -129,6 +141,26 @@ export function registerTeamIpc(): void {
       return { success: false, error: e.message }
     }
   })
+
+  // ── team:send-to-member — dispatch a message to one member for ONE run ────
+  // Host-operator surface (the local owner driving a member directly), so no
+  // per-invite scope gate here — that gate is the remote HTTP boundary's job.
+  // The service routes to a remote-owned target over the office link internally;
+  // epoch is resolved from the teamSessionKey when omitted.
+  ipcMain.handle(
+    TEAM_IPC.sendToMember,
+    async (
+      _e,
+      input: {
+        teamId: string
+        appId: string
+        epochId: string
+        message: string
+        images?: { type: string; media_type: string; data: string }[]
+        thinkingEnabled?: boolean
+      }
+    ) => handle('team:send-to-member', (s) => s.sendToMember(input))
+  )
 
   // ── team:list-epochs — run history (newest first) ─────────────────────────
   ipcMain.handle('team:list-epochs', async (_e, teamId: string) =>
@@ -162,5 +194,53 @@ export function registerTeamIpc(): void {
       handle('team:remove-trigger', (s) => s.removeTrigger(input.teamId, input.triggerId))
   )
 
-  console.log('[TeamIPC] Team handlers registered (20 channels)')
+  // ── Remote office: invite generation (host) ───────────────────────────────
+  // Thin delegation to the shared controller so the IPC and HTTP surfaces mint
+  // the same invite. Errors are internal codes the renderer maps to neutral text.
+  ipcMain.handle(TEAM_IPC.generateInvite, async (_e, input: { teamId: string; ttlMs?: number; scope?: OfficeScope }) => {
+    try {
+      return await generateTeamInvite(input.teamId, input.ttlMs, input.scope)
+    } catch (err) {
+      const e = err as Error
+      console.error('[TeamIPC] team:generate-invite error:', e.message)
+      return { success: false, error: e.message }
+    }
+  })
+
+  ipcMain.handle(TEAM_IPC.revokeInvite, async (_e, input: { jti: string }) => {
+    try {
+      return revokeTeamInvite(input.jti)
+    } catch (err) {
+      const e = err as Error
+      console.error('[TeamIPC] team:revoke-invite error:', e.message)
+      return { success: false, error: e.message }
+    }
+  })
+
+  // ── Remote office: join an office hosted elsewhere (joiner) ────────────────
+  ipcMain.handle(
+    TEAM_IPC.joinOffice,
+    async (_e, input: { officeId: string; serverUrl: string; inviteToken: string; bringAppIds: string[] }) => {
+      try {
+        return await joinTeamOffice(input)
+      } catch (err) {
+        const e = err as Error
+        console.error('[TeamIPC] team:join-office error:', e.message)
+        return { success: false, error: e.message }
+      }
+    }
+  )
+
+  // ── Remote office: leave a joined office (joiner) ─────────────────────────
+  ipcMain.handle(TEAM_IPC.leaveOffice, async (_e, input: { officeId: string }) => {
+    try {
+      return await leaveTeamOffice(input.officeId)
+    } catch (err) {
+      const e = err as Error
+      console.error('[TeamIPC] team:leave-office error:', e.message)
+      return { success: false, error: e.message }
+    }
+  })
+
+  console.log('[TeamIPC] Team handlers registered (25 channels)')
 }

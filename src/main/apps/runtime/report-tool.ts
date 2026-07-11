@@ -218,10 +218,22 @@ export function createReportToolServer(
         content,
       }
       try {
-        emitEntry ? emitEntry(entry) : store.insertEntry(entry)
+        if (emitEntry) {
+          // Automation path: the entry is also how the user receives the report,
+          // so a failure here is a real delivery failure — surface it.
+          emitEntry(entry)
+        } else {
+          // Chat/team path: this is an audit copy only, delivered via the turn's
+          // final message / team capture / desktop notification below. Never
+          // abort the turn on a persistence error here (previously left a stuck
+          // member believing escalation was broken).
+          store.insertEntry(entry)
+        }
       } catch (err) {
         console.error('[Runtime] Failed to insert activity entry:', err)
-        return textResult(`Failed to save report: ${err instanceof Error ? err.message : String(err)}`, true)
+        if (emitEntry) {
+          return textResult(`Failed to save report: ${err instanceof Error ? err.message : String(err)}`, true)
+        }
       }
 
       console.log(`[Runtime][${runTag}] Activity entry created: type=${safeType}, app=${runContext.appId}, entry=${entryId}`)

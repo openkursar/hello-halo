@@ -11,9 +11,10 @@
  */
 
 import { useMemo } from 'react'
-import { Play, CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File } from 'lucide-react'
+import { Play, CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File, Coffee } from 'lucide-react'
 import type { TeamDetail, RosterMember, BlackboardTask, BlackboardFinding, TaskStatus } from '../../../shared/apps/team-types'
 import type { Thought } from '../../types'
+import { useTeamStore } from '../../stores/team.store'
 import type { ActiveFlow } from '../../stores/team.store'
 import { TeamFlowCanvas } from './flow/TeamFlowCanvas'
 import { StructureEditor } from './StructureEditor'
@@ -36,6 +37,10 @@ export function StatusBoard({ detail, activeFlows, onSelectMember, editingStruct
   const { t } = useTranslation()
 
   const members = useMemo(() => detail.roster.filter(m => !m.isLead), [detail.roster])
+  const isPaused = useTeamStore(s => s.officeLiveness.get(detail.team.id) === 'paused')
+  // A joined office is run by someone else: this node only watches it, so the
+  // "Press Run" idle hint would point at a button it does not have.
+  const isJoined = detail.team.hostNodeId != null
 
   // Editing the collaboration structure takes over the whole board area with the
   // dedicated full-canvas editor (auto-layout + draggable nodes + floating list).
@@ -53,7 +58,7 @@ export function StatusBoard({ detail, activeFlows, onSelectMember, editingStruct
 
   return (
     <div className="flex flex-col gap-5 p-3 sm:gap-6 sm:p-6">
-      <RunBanner status={detail.team.status} members={members.length} />
+      <RunBanner status={detail.team.status} members={members.length} paused={isPaused} isJoined={isJoined} />
 
       {/* Escalations awaiting the user — prominent and actionable (click a member
           to open its chat, where the decision panel is shown inline). */}
@@ -228,8 +233,31 @@ function EscalationCallout({ roster, onSelectMember }: { roster: RosterMember[];
 // Run-state banner
 // ──────────────────────────────────────────────
 
-function RunBanner({ status, members }: { status: TeamDetail['team']['status']; members: number }) {
+function RunBanner({ status, members, paused, isJoined }: {
+  status: TeamDetail['team']['status']
+  members: number
+  paused: boolean
+  isJoined: boolean
+}) {
   const { t } = useTranslation()
+
+  // Paused takes precedence over run status: nothing is wrong, it just picks
+  // back up on reconnect, so this avoids the red/amber "needs you" styling.
+  if (paused) {
+    return (
+      <div className="flex items-center gap-3 rounded-xl border border-border bg-secondary/40 px-3 py-2.5 sm:px-4">
+        <Coffee className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <span className="text-sm font-medium text-foreground">{t('The office is resting')}</span>
+          <span className="ml-2 text-xs text-muted-foreground">{t('It\u2019ll pick back up when someone\u2019s online again.')}</span>
+        </div>
+      </div>
+    )
+  }
+
+  const idleHint = isJoined
+    ? t('Ready and waiting — the owner starts it. You can open any teammate to follow along.')
+    : t('Press Run to start a coordinated session.')
 
   const config: Record<string, { dot: string; label: string; hint: string }> = {
     running: {
@@ -249,8 +277,8 @@ function RunBanner({ status, members }: { status: TeamDetail['team']['status']; 
     },
     idle: {
       dot: 'bg-muted-foreground/40',
-      label: t('Idle'),
-      hint: t('Press Run to start a coordinated session.'),
+      label: isJoined ? t('Ready') : t('Idle'),
+      hint: idleHint,
     },
   }
   const c = config[status] ?? config.idle
@@ -267,7 +295,7 @@ function RunBanner({ status, members }: { status: TeamDetail['team']['status']; 
         <span className="text-sm font-medium text-foreground">{c.label}</span>
         <span className="ml-2 text-xs text-muted-foreground">{c.hint}</span>
       </div>
-      {status === 'idle' && (
+      {status === 'idle' && !isJoined && (
         <span className="hidden items-center gap-1 text-xs text-muted-foreground sm:flex">
           <Play className="h-3 w-3" />
           {t('{{count}} members ready', { count: members })}

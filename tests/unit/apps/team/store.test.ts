@@ -48,6 +48,7 @@ function makeTeam(overrides?: Partial<Team>): Team {
     currentEpochId: null,
     createdAt: now,
     updatedAt: now,
+    hostNodeId: null,
     ...overrides,
   }
 }
@@ -388,6 +389,21 @@ describe('TeamStore', () => {
 
       expect(store.listTasksByEpoch('team-1', 'e1').map(t => t.id).sort()).toEqual(['t1', 't2'])
       expect(store.listTasksByTeam('team-1')).toHaveLength(3)
+    })
+
+    it('getLatestBoardEpochId returns the epoch of the most recent task/finding (BUG 3)', () => {
+      // A JOINED shadow office binds its activity feed to this when the run-epoch
+      // pointer has not yet materialized from a roster snapshot, so the feed
+      // populates straight from replicated data.
+      expect(store.getLatestBoardEpochId('team-1')).toBeNull()
+
+      store.insertTask(makeTask({ id: 't-old', epochId: 'e-old', updatedAt: 1000 }))
+      store.insertTask(makeTask({ id: 't-new', epochId: 'e-new', updatedAt: 5000 }))
+      expect(store.getLatestBoardEpochId('team-1')).toBe('e-new')
+
+      // A newer finding in a different epoch wins over the latest task.
+      store.insertFinding(makeFinding({ id: 'f-newest', epochId: 'e-newest', createdAt: 9000 }))
+      expect(store.getLatestBoardEpochId('team-1')).toBe('e-newest')
     })
   })
 

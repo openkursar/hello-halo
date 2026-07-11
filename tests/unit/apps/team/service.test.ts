@@ -9,7 +9,7 @@
  *     installs member apps with aiProvisioned=true in independent spaces
  *   - dissolve orphan cleanup: AI members + provisioned lead removed, manual
  *     members kept (and apps referenced by another team kept)
- *   - collabMode switch clears / regenerates edges (§F9)
+ *   - collabMode switch clears / regenerates edges
  *   - run/pause delegate to runtime.startEpoch / sealEpoch
  *   - every mutation emits team:updated on both transports
  *
@@ -332,6 +332,22 @@ describe('TeamService', () => {
       expect(edges[0].fromAppId).toBe(team.leadAppId)
       expect(edges[0].sync).toBe(true)
     })
+
+    it('fires onRosterMutated on a lead change so joiners do not go stale (D-NEW-3)', async () => {
+      const onRosterMutated = vi.fn()
+      const local = buildService({ onRosterMutated })
+      const team = await local.service.createTeam(
+        manualInput({
+          collabMode: 'structured',
+          members: [{ appId: 'existing-1', role: 'Research' }, { appId: 'existing-2', role: 'Writer' }],
+        })
+      )
+      onRosterMutated.mockClear()
+
+      await local.service.updateTeam(team.id, { leadAppId: 'existing-2' })
+      expect(onRosterMutated).toHaveBeenCalledWith(team.id)
+      local.dbManager.closeAll()
+    })
   })
 
   describe('run / pause', () => {
@@ -346,6 +362,117 @@ describe('TeamService', () => {
       const team = await ctx.service.createTeam(manualInput())
       await ctx.service.pauseTeam(team.id)
       expect(ctx.runtime.sealEpoch).toHaveBeenCalledWith(team.id, 'stopped')
+    })
+
+    it('runTeam fires onRunStateChanged so a joiner status board goes live at run-start', async () => {
+      const onRunStateChanged = vi.fn()
+      const local = buildService({ onRunStateChanged })
+      const team = await local.service.createTeam(manualInput())
+      onRunStateChanged.mockClear()
+
+      await local.service.runTeam(team.id)
+      expect(onRunStateChanged).toHaveBeenCalledWith(team.id)
+      local.dbManager.closeAll()
+    })
+
+    it('pauseTeam fires onRunStateChanged so a joiner status board rests at run-stop', async () => {
+      const onRunStateChanged = vi.fn()
+      const local = buildService({ onRunStateChanged })
+      const team = await local.service.createTeam(manualInput())
+      onRunStateChanged.mockClear()
+
+      await local.service.pauseTeam(team.id)
+      expect(onRunStateChanged).toHaveBeenCalledWith(team.id)
+      local.dbManager.closeAll()
+    })
+  })
+
+  describe('getTeamDetail — joined (shadow) office', () => {
+    it('reads the replicated board for the active epoch and overlays member status', async () => {
+      const NODE_HOST = 'node-host'
+      const EPOCH = 'epoch-host-run'
+      const LEAD = 'shadow-lead'
+      const WORKER = 'shadow-worker'
+
+      // A joiner materializes a RUNNING shadow office with a working member.
+      ctx.store.materializeJoinedOffice({
+        hostNodeId: NODE_HOST,
+        selfNodeId: 'node-self',
+        snapshot: {
+          team: {
+            id: 'shadow-office', name: 'Shadow', goal: 'g', leadAppId: LEAD,
+            collabMode: 'structured', hostNodeId: NODE_HOST, epochId: EPOCH, status: 'running',
+          },
+          members: [
+            { appId: LEAD, memberName: 'lead', role: 'Lead', isLead: true, ownerNodeId: NODE_HOST, memberIdentity: 'id-host', status: 'idle' },
+            { appId: WORKER, memberName: 'worker', role: 'Analyst', isLead: false, ownerNodeId: NODE_HOST, memberIdentity: 'id-host', status: 'working', currentTaskTitle: 'Draft the brief' },
+          ],
+          edges: [],
+        },
+      })
+      // Replication wrote a task into THIS store under the host's epoch id.
+      ctx.store.insertTask({
+        id: 'task-1', teamId: 'shadow-office', epochId: EPOCH, title: 'Draft the brief',
+        assigneeAppId: WORKER, status: 'in_progress', resultRef: null, note: null,
+        parentId: null, createdByAppId: LEAD, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+
+      const detail = ctx.service.getTeamDetail('shadow-office')!
+      expect(detail).toBeTruthy()
+      expect(detail.team.status).toBe('running')
+      expect(detail.tasks).toHaveLength(1)
+      expect(detail.tasks[0].id).toBe('task-1')
+      const worker = detail.roster.find((m) => m.appId === WORKER)!
+      expect(worker.status).toBe('working')
+      expect(worker.currentTaskTitle).toBe('Draft the brief')
+      const lead = detail.roster.find((m) => m.appId === LEAD)!
+      expect(lead.status).toBe('idle')
+      // The runtime's readBoard is NOT consulted for a joined office (host-local
+      // member status would read 'idle' there).
+      expect(ctx.runtime.blackboard.readBoard).not.toHaveBeenCalledWith(
+        'shadow-office', EPOCH, expect.anything()
+      )
+      // Materialization shadowed the host's run epoch as a local row so the
+      // joiner's bus can route a 1:1 reply.
+      const shadowEpoch = ctx.store.getEpochById(EPOCH)!
+      expect(shadowEpoch).toBeTruthy()
+      expect(shadowEpoch.teamId).toBe('shadow-office')
+      expect(shadowEpoch.endedAt).toBeNull()
+    })
+
+    it('renders replicated activity even when the run-epoch pointer is not yet set (BUG 3)', () => {
+      const NODE_HOST = 'node-host'
+      const EPOCH = 'epoch-host-run'
+      const WORKER = 'shadow-worker'
+
+      // The roster arrived BEFORE the run epoch was stamped (epochId undefined), so
+      // current_epoch_id stays null — but replication already landed a task/finding.
+      ctx.store.materializeJoinedOffice({
+        hostNodeId: NODE_HOST,
+        selfNodeId: 'node-self',
+        snapshot: {
+          team: {
+            id: 'shadow-office', name: 'Shadow', goal: 'g', leadAppId: 'shadow-lead',
+            collabMode: 'structured', hostNodeId: NODE_HOST, status: 'running',
+          },
+          members: [
+            { appId: WORKER, memberName: 'worker', role: 'Analyst', isLead: false, ownerNodeId: NODE_HOST, memberIdentity: 'id-host', status: 'idle' },
+          ],
+          edges: [],
+        },
+      })
+      expect(ctx.store.getTeamById('shadow-office')?.currentEpochId).toBeNull()
+
+      ctx.store.insertTask({
+        id: 'task-1', teamId: 'shadow-office', epochId: EPOCH, title: 'Draft the brief',
+        assigneeAppId: WORKER, status: 'in_progress', resultRef: null, note: null,
+        parentId: null, createdByAppId: 'shadow-lead', createdAt: Date.now(), updatedAt: Date.now(),
+      })
+
+      // The feed binds to the replicated data's epoch, not the (unset) pointer.
+      const detail = ctx.service.getTeamDetail('shadow-office')!
+      expect(detail.tasks).toHaveLength(1)
+      expect(detail.tasks[0].id).toBe('task-1')
     })
   })
 

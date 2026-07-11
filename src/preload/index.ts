@@ -499,11 +499,37 @@ export interface HaloAPI {
   teamEpochBoard: (input: { teamId: string; epochId: string }) => Promise<IpcResponse>
   /** Products produced during one specific run. */
   teamEpochArtifacts: (input: { teamId: string; epochId: string }) => Promise<IpcResponse>
+  /**
+   * Remote office: mint an invite link (host). An optional scope narrows what the
+   * joiner may see/contact/be-assigned (omitted = default-open). The scope shape is
+   * inlined here because the canonical OfficeScope lives in main and preload must
+   * not import across that boundary.
+   */
+  teamGenerateInvite: (input: {
+    teamId: string
+    ttlMs?: number
+    scope?: {
+      visibility: 'full' | 'assigned' | 'readonly'
+      contactable: 'all' | 'lead-only'
+      discoverable: boolean
+      canReinvite: boolean
+    }
+  }) => Promise<IpcResponse>
+  /** Remote office: revoke a previously issued invite. */
+  teamRevokeInvite: (input: { jti: string }) => Promise<IpcResponse>
+  /** Remote office: join an office hosted elsewhere, bringing local members (joiner). */
+  teamJoinOffice: (input: { officeId: string; serverUrl: string; inviteToken: string; bringAppIds: string[] }) => Promise<IpcResponse>
+  /** Remote office: leave a joined office, removing the local shadow (joiner). */
+  teamLeaveOffice: (input: { officeId: string }) => Promise<IpcResponse>
+  /** Send a message to a remote member via the office owner (team wake). */
+  teamSendToMember: (input: { teamId: string; appId: string; epochId: string; message: string; images?: { type: string; media_type: string; data: string }[]; thinkingEnabled?: boolean }) => Promise<IpcResponse>
 
   // Digital Team Event Listeners
   onTeamUpdated: (callback: (data: unknown) => void) => () => void
   onTeamBlackboard: (callback: (data: unknown) => void) => () => void
   onTeamMessage: (callback: (data: unknown) => void) => () => void
+  onTeamPresence: (callback: (data: unknown) => void) => () => void
+  onTeamOfficeStatus: (callback: (data: unknown) => void) => () => void
 
   // Notification (in-app toast)
   onNotificationToast: (callback: (data: unknown) => void) => () => void
@@ -802,11 +828,18 @@ const api: HaloAPI = {
   teamListEpochs: (teamId) => ipcRenderer.invoke('team:list-epochs', teamId),
   teamEpochBoard: (input) => ipcRenderer.invoke('team:epoch-board', input),
   teamEpochArtifacts: (input) => ipcRenderer.invoke('team:epoch-artifacts', input),
+  teamGenerateInvite: (input) => ipcRenderer.invoke(TEAM_IPC.generateInvite, input),
+  teamRevokeInvite: (input) => ipcRenderer.invoke(TEAM_IPC.revokeInvite, input),
+  teamJoinOffice: (input) => ipcRenderer.invoke(TEAM_IPC.joinOffice, input),
+  teamLeaveOffice: (input) => ipcRenderer.invoke(TEAM_IPC.leaveOffice, input),
+  teamSendToMember: (input) => ipcRenderer.invoke(TEAM_IPC.sendToMember, input),
 
   // Digital Team Event Listeners
   onTeamUpdated: (callback) => createEventListener(TEAM_EVENTS.updated, callback),
   onTeamBlackboard: (callback) => createEventListener(TEAM_EVENTS.blackboard, callback),
   onTeamMessage: (callback) => createEventListener(TEAM_EVENTS.message, callback),
+  onTeamPresence: (callback) => createEventListener(TEAM_EVENTS.presence, callback),
+  onTeamOfficeStatus: (callback) => createEventListener(TEAM_EVENTS.officeStatus, callback),
 
   // Store (App Registry) — most methods derived from storeRpc contract;
   // storeInstall keeps its custom progress-listener wrapper below.

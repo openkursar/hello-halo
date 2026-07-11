@@ -449,6 +449,8 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
       'team:updated': 'onTeamUpdated',
       'team:blackboard': 'onTeamBlackboard',
       'team:message': 'onTeamMessage',
+      'team:presence': 'onTeamPresence',
+      'team:office-status': 'onTeamOfficeStatus',
       'notification:toast': 'onNotificationToast',
       'store:sync-status-changed': 'onStoreSyncStatusChanged',
       'store:upgrade-available': 'onStoreUpgradeAvailable',

@@ -1,9 +1,9 @@
 /**
- * Unit tests for the team report routing (技术 §5.3) in report-tool.ts.
+ * Unit tests for the team report routing in report-tool.ts.
  *
- * The report_to_user tool keeps its ORIGINAL purpose in a team turn (RC4):
+ * The report_to_user tool keeps its original purpose in a team turn:
  *   - escalation → a user-facing entry is written TAGGED with teamContext (for
- *     §11 aggregation) AND captured to the team runtime as an escalation; the
+ *     cross-epoch aggregation) AND captured to the team runtime as an escalation; the
  *     escalation event is still broadcast.
  *   - non-escalation (run_complete/output/...) → NOT captured as a result (the
  *     result is the turn's final message); falls through to a normal audit entry.
@@ -16,7 +16,6 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-// Capture the report tool handler from the mocked tool() factory.
 const { toolMock, createSdkMcpServerMock } = vi.hoisted(() => ({
   toolMock: vi.fn((name: string, description: string, schema: unknown, handler: unknown) => ({
     name,
@@ -106,7 +105,7 @@ describe('report routing (§5.3)', () => {
     const handler = getReportHandler(ctx, store)
     const res = await handler({ type: 'run_complete', summary: 'T1 done', data: 'see out.md' })
 
-    // The result is the turn's final message — report does NOT carry it (RC4).
+    // The result is the turn's final message — report does NOT carry it.
     expect(capture).not.toHaveBeenCalled()
     // Falls through to the normal path: an ordinary (audit) entry is written.
     expect(entries).toHaveLength(1)
@@ -137,7 +136,7 @@ describe('report routing (§5.3)', () => {
       kind: 'escalation',
       content: 'Data source 403',
     })
-    // Entry written, tagged with teamContext for §11 aggregation.
+    // Entry written, tagged with teamContext for aggregation.
     expect(entries).toHaveLength(1)
     expect(entries[0].type).toBe('escalation')
     expect(entries[0].content.teamContext).toEqual({
@@ -176,7 +175,7 @@ describe('report routing (§5.3)', () => {
 
     // Still captured for the runtime to route to the lead.
     expect(capture).toHaveBeenCalledWith('corr-1', { kind: 'escalation', content: 'Data source 403' })
-    // Audit entry still written (tagged) for §11 aggregation.
+    // Audit entry still written (tagged) for aggregation.
     expect(entries).toHaveLength(1)
     expect(entries[0].type).toBe('escalation')
     // The user is NOT prompted: no callback, no broadcast, no desktop notification.

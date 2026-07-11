@@ -41,7 +41,9 @@ import { disposeSearchContext } from '../services/web-search'
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
-import { closeAllV2Sessions } from '../services/agent/session-manager'
+import { closeAllV2Sessions, activeSessions } from '../services/agent/session-manager'
+import { join as pathJoin, resolve as pathResolve, relative as pathRelative, isAbsolute as pathIsAbsolute, sep as pathSep } from 'path'
+import { readFile as fsReadFile } from 'fs/promises'
 import { registerHealthHandlers } from '../ipc/health'
 import { initBackground, shutdownBackground, getBackgroundService, setDaemonStealthInjector } from '../platform/background'
 import { injectStealthScripts } from '../services/stealth'
@@ -54,7 +56,19 @@ import { tool as sdkTool, createSdkMcpServer as sdkCreateMcpServer } from '../se
 import { initAppManager, shutdownAppManager } from '../apps/manager'
 import { initAppRuntime, shutdownAppRuntime, getEventRouter } from '../apps/runtime'
 import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService } from '../apps/team'
-import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler } from '../apps/runtime/team'
+import type { TeamStore } from '../apps/team'
+import { initFederationStore, shutdownFederationStore, getFederationStore, getAuthorityStore } from '../apps/federation'
+import { recoverPersistedOffices } from './office-recovery'
+import { initIdentity, getLocalIdentity } from '../http/identity'
+import { verifyOfficeCredential } from '../http/auth'
+import { setFederationInbound, sendFederationFrameToClient, listOfficeClientIds, broadcastToAll, getSessionIdentity } from '../http/websocket'
+import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, withOwnerResolvedSpace, createRelayCapture, createLocationAwareBlackboard } from '../apps/runtime/federation'
+import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtime/federation'
+import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
+import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamUpdatedEvent } from '../../shared/apps/team-types'
+import { parseTeamSessionKey } from '../../shared/apps/im-keys'
+import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps } from '../apps/runtime/team'
+import { readTeamMemberMessages } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
 import { createSpace, deleteSpace, getSpace } from '../services/space.service'
 import { listArtifacts } from '../services/artifact.service'
@@ -81,6 +95,10 @@ import { loadBuiltinApps } from '../apps/manager/builtin-loader'
 
 // Module-level reference to db for cleanup
 let platformDb: DatabaseManager | null = null
+// relayCapture.start() returns an IDisposable (agent-event subscription), not
+// a bare function — dispose() it on shutdown.
+let disposeRelayCapture: { dispose(): void } | null = null
+let flushRelayCapture: (() => void) | null = null
 
 /**
  * Initialize platform (store, scheduler, memory) and apps
@@ -136,6 +154,17 @@ async function initPlatformAndApps(): Promise<void> {
   // 'app_team' migration namespace on the shared app database.
   initTeamStore({ db })
 
+  // ── Federation data layer ────────────────────────────────────────────────
+  // Peer of the Team data layer: owns the office_nodes / office_credentials
+  // tables under the isolated 'app_federation' namespace — the node roster and
+  // the credential revocation ledger the auth gate consults. No coordination
+  // semantics; that lives in the federation manager.
+  initFederationStore({ db })
+
+  // Node's stable Ed25519 identity, established once at boot since
+  // office-credential signing/verification (http/auth) anchor to it.
+  initIdentity()
+
   // ── Phase 2.5: Migrate legacy config.mcpServers → DB ────────────────────
   // One-time migration: config.json mcpServers (dead storage from Issue #74)
   // are imported into the App Manager DB where getDbMcpServers() can read them.
@@ -167,7 +196,331 @@ async function initPlatformAndApps(): Promise<void> {
   // after the service, since the scheduler needs the service's runTeam).
   let teamTriggerScheduler: TeamTriggerScheduler | null = null
   if (teamStore) {
-    setActiveTeamRuntime(createTeamRuntime({ store: teamStore }))
+    // Local session layer: runs members OWNED by this node (origin=local).
+    const localSessionDeps = createDefaultSessionDeps(teamStore)
+
+    // Federation manager: per-office host/joiner coordinators. Bootstrap is the
+    // only tier bridging http and apps, so the http send/listing + credential
+    // verifier are injected here. Owner role runs a brought member's turn via
+    // the local session layer (runLocalTurn); inbound federation frames on the
+    // WS server route back via setFederationInbound.
+    const fedStore = getFederationStore()
+    const authStore = getAuthorityStore()
+    if (fedStore) {
+      // ── Authority/replication wiring helpers (the authority modules stay decoupled) ──
+
+      // Owner reachability: a member's owner node presence (offline / suspect)
+      // takes precedence; otherwise busy/idle from the live session set.
+      const computeOwnerStatus = (officeId: string, appId: string): OwnerStatus => {
+        const member = teamStore.listMembersByTeam(officeId).find((m) => m.appId === appId)
+        const ownerNode = member?.ownerNodeId
+        if (ownerNode && ownerNode !== SELF_NODE_ID) {
+          const node = fedStore.getNode(ownerNode)
+          if (node?.status === 'offline') return 'confirmed-offline'
+          if (node?.status === 'suspect') return 'suspect'
+        }
+        const ep = teamStore.getCurrentEpochForTeam(officeId)
+        if (ep && activeSessions.has(buildTeamSessionKey(appId, officeId, ep.id))) return 'busy'
+        return 'idle'
+      }
+
+      const emitBlackboard = (payload: Record<string, unknown>) => {
+        broadcastToAll(TEAM_EVENTS.blackboard, payload)
+        sendToRenderer(TEAM_EVENTS.blackboard, payload)
+      }
+      // Apply a remote member's admitted write to the authority's blackboard,
+      // PRESERVING the owner-generated id (so the owner's optimistic copy and the
+      // authority converge), then replicate it to hot-standbys.
+      const applyAuthorityMemberWrite = (record: MemberWriteRecord) => {
+        try {
+          if (record.op === 'post_task') {
+            const task = record.payload as unknown as BlackboardTask
+            try { teamStore.insertTask(task) } catch { /* duplicate id (retry) → idempotent */ }
+            emitBlackboard({ teamId: record.teamId, epochId: task.epochId, kind: 'task', task })
+          } else if (record.op === 'update_task') {
+            const p = record.payload as { taskId?: string; status?: TaskStatus; resultRef?: string | null; note?: string | null; updatedAt?: number }
+            const taskId = record.taskId ?? p.taskId
+            if (taskId && p.status) {
+              teamStore.updateTask(
+                taskId,
+                { status: p.status, ...(p.resultRef !== undefined ? { resultRef: p.resultRef } : {}), ...(p.note !== undefined ? { note: p.note } : {}) },
+                p.updatedAt ?? Date.now()
+              )
+              const task = teamStore.getTaskById(taskId)
+              if (task) emitBlackboard({ teamId: record.teamId, epochId: task.epochId, kind: 'task', task })
+            }
+          } else if (record.op === 'post_finding') {
+            const finding = record.payload as unknown as BlackboardFinding
+            try { teamStore.insertFinding(finding) } catch { /* duplicate id → idempotent */ }
+            emitBlackboard({ teamId: record.teamId, epochId: finding.epochId, kind: 'finding', finding })
+          }
+        } catch (err) {
+          console.error('[Bootstrap] applyAuthorityMemberWrite failed:', err)
+          return
+        }
+        // Replicate the admitted member write to hot-standbys (single-writer log).
+        getFederationManager()?.routeAuthorityWrite({
+          teamId: record.teamId,
+          epochId: record.epochId,
+          op: record.op,
+          payload: record.payload,
+          ...(record.taskId ? { taskId: record.taskId } : {}),
+        })
+      }
+
+      // Owner-side artifact resolution: a published finding's `ref` identifies the
+      // authoring member → its space → the file. Path-traversal guarded; never an
+      // arbitrary path, never a shell.
+      const resolveOfficeArtifactBytes = async (ref: ArtifactRef): Promise<Uint8Array | null> => {
+        const findings = teamStore.listFindingsByEpoch(ref.teamId, ref.epochId)
+        const finding = findings.find((f) => f.ref === ref.ref)
+        if (!finding) return null
+        const app = appManager.getApp(finding.authorAppId)
+        const spaceId = app?.spaceId
+        const spacePath = spaceId ? getSpace(spaceId)?.path : null
+        if (!spacePath) return null
+        const base = pathResolve(spacePath)
+        const abs = pathResolve(pathJoin(base, ref.ref))
+        // Traversal guard via path.relative: `abs` is inside `base` only when the
+        // relative path neither escapes upward ('..') nor is absolute. A bare
+        // startsWith() check is unsafe — a sibling like `${base}-evil` shares the
+        // prefix and would slip through.
+        const rel = pathRelative(base, abs)
+        if (rel === '..' || rel.startsWith('..' + pathSep) || pathIsAbsolute(rel)) {
+          return null
+        }
+        try {
+          return await fsReadFile(abs)
+        } catch {
+          return null
+        }
+      }
+
+      const federationManager = createFederationManager({
+        hostSend: sendFederationFrameToClient,
+        hostListOfficeClients: listOfficeClientIds,
+        federationStore: fedStore,
+        teamStore,
+        verifyCredential: (token) => verifyOfficeCredential(token),
+        // Anti-spoof: the host asserts an inbound frame's self-reported fromNode
+        // against the node identity the sending session proved at the credential
+        // handshake. Null (unknown/unauthenticated client) skips the assertion.
+        getSessionIdentity: (clientId) => getSessionIdentity(clientId),
+        getLocalNodeId: () => getLocalIdentity().id,
+        // Advertised on join so the host renders the owner badge ("brought by
+        // Alice") instead of a generic label on the members this node brings.
+        getLocalDisplayName: () => getLocalIdentity().displayName,
+        // Stamp each member's live status into the roster snapshot so a joiner's
+        // topology animates the working pulse in step with the host. Reads the
+        // team runtime's host-local getMemberStatus; idle when the runtime is not
+        // yet wired.
+        getMemberRuntimeStatus: (appId) => getActiveTeamRuntime()?.getMemberStatus(appId) ?? 'idle',
+        // Owner-authoritative space resolution: a wake's request.spaceId is the
+        // SENDER's sentinel for a member it does not own (see withOwnerResolvedSpace).
+        // The owner runs the member locally, so it substitutes its own real space
+        // before running; otherwise the transcript persists under getSpace(appId)
+        // (which does not exist) and is silently never written — the cause of
+        // "history-not-found" on a viewer and a member's reply flashing then
+        // vanishing with no record on either side.
+        runLocalTurn: (request) =>
+          localSessionDeps.sendAppChatMessage(
+            withOwnerResolvedSpace(request, (appId) => localSessionDeps.getMemberSpaceId(appId))
+          ),
+        // A member confirmed offline immediately unblocks any lead waiting on it
+        // (wait=true) instead of hanging to the sync-wait timeout. The federation
+        // FSM decides confirmed-offline; the bus performs the unblock.
+        onMemberConfirmedOffline: (appId) => {
+          getActiveTeamRuntime()?.bus.resolvePendingWaitsForMember(appId, { kind: 'timeout' })
+        },
+        // Presence projection → office-scoped UI event (teamId === officeId, so
+        // broadcastToAll's per-credential filter delivers it only to that office).
+        onPresenceChange: (officeId, snapshot) => {
+          const payload = { teamId: officeId, nodes: snapshot.nodes }
+          broadcastToAll('team:presence', payload)
+          sendToRenderer('team:presence', payload)
+        },
+        // Roster changed (a member joined / the joiner materialized its shadow
+        // office) → refresh the relationship graph + member list on both ends by
+        // emitting team:updated, the event the renderer re-fetches the team on.
+        onRosterChanged: (officeId) => {
+          const team = teamStore.getTeamById(officeId)
+          const payload = team ? { teamId: officeId, team } : { teamId: officeId }
+          broadcastToAll(TEAM_EVENTS.updated, payload)
+          sendToRenderer(TEAM_EVENTS.updated, payload)
+        },
+        // ── Authority/replication/resilience (falls back to local-only behaviour when absent) ──
+        authorityStore: authStore ?? undefined,
+        applyMemberWrite: (record) => applyAuthorityMemberWrite(record),
+        getCurrentRunEpoch: (officeId) => {
+          const ep = teamStore.getCurrentEpochForTeam(officeId)
+          return ep ? { teamId: officeId, epochId: ep.id } : null
+        },
+        getOwnerStatus: (officeId, appId) => computeOwnerStatus(officeId, appId),
+        reassignTask: (officeId, task) => {
+          // An orphaned in_progress task (owner gone) resets to pending so the
+          // lead re-dispatches it, via the authority's kernel board.
+          getActiveTeamRuntime()?.blackboard.updateTask({
+            teamId: officeId,
+            epochId: task.epochId,
+            taskId: task.id,
+            status: 'pending',
+            note: 'Reassigned automatically: the previous owner became unavailable.',
+          })
+        },
+        resolveArtifactBytes: (ref) => resolveOfficeArtifactBytes(ref),
+        // Authority changed / office paused → code-only status signal; the renderer
+        // maps the kind to neutral copy (t('Reconnected automatically') etc.). No
+        // technical words ever travel in a user-facing string.
+        onAuthorityChange: (officeId) => {
+          broadcastToAll('team:office-status', { teamId: officeId, kind: 'authority-changed' })
+          sendToRenderer('team:office-status', { teamId: officeId, kind: 'authority-changed' })
+          const team = teamStore.getTeamById(officeId)
+          if (team) {
+            broadcastToAll(TEAM_EVENTS.updated, { teamId: officeId, team })
+            sendToRenderer(TEAM_EVENTS.updated, { teamId: officeId, team })
+          }
+        },
+        onOfficePaused: (officeId, paused) => {
+          broadcastToAll('team:office-status', { teamId: officeId, kind: paused ? 'paused' : 'resumed' })
+          sendToRenderer('team:office-status', { teamId: officeId, kind: paused ? 'paused' : 'resumed' })
+        },
+        // Owner-side transcript reader: serve a member's team-channel history to a
+        // viewer over the office link. Reuses the same read as the IPC/HTTP chat
+        // surfaces so all three agree; the federation layer never opens chat
+        // storage itself. An empty transcript is a VALID answer (the member just
+        // hasn't spoken in this epoch) — answering not-found here made viewers
+        // show "history temporarily unavailable" (502) for a perfectly healthy
+        // member, diverging from how the same member reads on its own node.
+        readMemberHistory: ({ teamId, appId, epochId }) => {
+          const messages = readTeamMemberMessages(appId, teamId, epochId)
+          return messages.map((m) => ({
+            role: m.role,
+            content: m.content,
+            ...(m.timestamp ? { ts: Date.parse(m.timestamp) || undefined } : {}),
+          }))
+        },
+        // A hot-standby applied a replicated task/finding to its replica store.
+        // The signal carries no concrete task/finding object (only op + taskId),
+        // so it's a refresh trigger, not a blackboard merge: emit team:updated so
+        // the open detail re-fetches and the replicated row appears live, instead
+        // of staying silent until a manual refresh.
+        onReplicaApplied: (info) => {
+          const team = teamStore.getTeamById(info.officeId)
+          const payload = team ? { teamId: info.officeId, team } : { teamId: info.officeId }
+          broadcastToAll(TEAM_EVENTS.updated, payload)
+          sendToRenderer(TEAM_EVENTS.updated, payload)
+        },
+        // Joiner-side: the host kicked a member → drop the row by re-fetching the
+        // office. The roster also re-converges via the accompanying re-broadcast.
+        onMemberRemovedRemote: (officeId) => {
+          const team = teamStore.getTeamById(officeId)
+          const payload = team ? { teamId: officeId, team } : { teamId: officeId }
+          broadcastToAll(TEAM_EVENTS.updated, payload)
+          sendToRenderer(TEAM_EVENTS.updated, payload)
+        },
+        // Joiner-side: the host dissolved the office → remove the local shadow
+        // from every view (team:updated with removed). The manager already calls
+        // leaveOffice locally after invoking this, so this is the UI projection of
+        // that teardown — mirroring how leaveTeamOffice signals a removed office.
+        onOfficeDissolvedRemote: (officeId) => {
+          const event: TeamUpdatedEvent = { teamId: officeId, removed: true }
+          broadcastToAll(TEAM_EVENTS.updated, event as unknown as Record<string, unknown>)
+          sendToRenderer(TEAM_EVENTS.updated, event)
+        },
+        // Host-side: a joiner left → remove the members it brought via the same
+        // path as a kick (member-removed projection + roster re-broadcast + lead
+        // reassignment). The manager already verified ownership against the leaver.
+        onMemberLeft: (officeId, appIds) => {
+          const svc = getTeamService()
+          if (!svc) return
+          for (const appId of appIds) {
+            svc.removeMember(officeId, appId).catch((err) => {
+              console.warn(`[Bootstrap] onMemberLeft removeMember failed office=${officeId} app=${appId}:`, err)
+            })
+          }
+        },
+      })
+      setFederationManager(federationManager)
+      setFederationInbound((ctx) => federationManager.handleHostInbound(ctx))
+
+      // Activity-stream relay: capture this node's own team-session events
+      // (owner-only, to respect the privacy boundary and avoid re-relaying an
+      // event that arrived from elsewhere) and relay them so every office node
+      // sees the member work live; the renderer is unchanged because replay
+      // re-fires through emitAgentEvent.
+      const relayCapture = createRelayCapture({
+        isOwnTeamSession: (conversationId) => {
+          const parsed = parseTeamSessionKey(conversationId)
+          if (!parsed) return false
+          return teamStore.listMembersByAppId(parsed.appId)[0]?.ownerNodeId === SELF_NODE_ID
+        },
+        resolveOffice: (conversationId) => parseTeamSessionKey(conversationId)?.teamId ?? null,
+        sink: (officeId, batch) => federationManager.relaySink(officeId, batch),
+      })
+      disposeRelayCapture = relayCapture.start()
+      flushRelayCapture = () => relayCapture.flushAll()
+      console.log('[Bootstrap] Federation manager + activity relay initialized')
+    } else {
+      console.warn('[Bootstrap] Federation store unavailable; federation manager not initialized')
+    }
+
+    // Position-transparent session deps: local members run here; remote members
+    // are woken on their owner node and their result flows back via turn-complete.
+    // No "local/remote" parameter ever reaches the agent calling convention — the
+    // split lives entirely inside sendAppChatMessage. Falls back to plain local
+    // deps when the federation manager is unavailable.
+    const fedManager = getFederationManager()
+    const teamSessionDeps = fedManager
+      ? makeLocationAwareSessionDeps({
+          local: localSessionDeps,
+          selfNodeId: getLocalIdentity().id,
+          resolveOwnerNode: (appId) => teamStore.listMembersByAppId(appId)[0]?.ownerNodeId ?? SELF_NODE_ID,
+          resolveOfficeId: (appId) => teamStore.listMembersByAppId(appId)[0]?.teamId ?? null,
+          getRemoteSpaceId: (appId) => fedManager.getRemoteMemberSpaceId(appId),
+          sendWake: (p) => fedManager.sendWakeToMember(p),
+          registerTurnComplete: (corr, cb) => {
+            fedManager.registerTurnComplete(corr, cb)
+          },
+        })
+      : localSessionDeps
+
+    // Replication capture + location-aware blackboard. The decorator routes a
+    // shadow office's writes to its host (single-writer); the authority's own
+    // office delegates to the kernel board → onBlackboardWrite → replicate. Both
+    // are no-ops when the federation manager is unavailable.
+    const selfNodeId = getLocalIdentity().id
+    setActiveTeamRuntime(
+      createTeamRuntime({
+        store: teamStore,
+        session: teamSessionDeps,
+        onBlackboardWrite: (record) => getFederationManager()?.routeAuthorityWrite(record),
+        // Auto-seal (quiescence) / breach end a run without going through the
+        // service-level pauseTeam, so they must also push the rested run-state to
+        // joiners — otherwise a remote roster keeps a member "working" until the
+        // next throttled refresh. broadcastRosterFor re-projects the now-idle
+        // status + cleared epoch; no-op when the office is not hosted here.
+        onRunStateChanged: (teamId) => getFederationManager()?.broadcastRosterFor(teamId),
+        // A member executing on a REMOTE owner has no local session, so the
+        // runtime's own ledger reads idle. The manager knows the wake is in
+        // flight; overlay it so boards/rosters pulse the member everywhere.
+        getMemberStatusOverlay: (appId) =>
+          getFederationManager()?.isMemberRemoteBusy(appId) ? 'working' : null,
+        // Push each status flip (turn start/end, escalation) to joiners via the
+        // coalesced roster refresh — without it a viewer's board froze on the
+        // last projected status until an unrelated write refreshed the roster.
+        onMemberStatusChanged: (teamId) => getFederationManager()?.scheduleRosterRefresh(teamId),
+        wrapBlackboard: fedManager
+          ? (base) =>
+              createLocationAwareBlackboard({
+                base,
+                store: teamStore,
+                selfNodeId,
+                sendBlackboardWrite: (hostNodeId, write) =>
+                  getFederationManager()?.sendMemberWrite({ ...write, hostNodeId }),
+              })
+          : undefined,
+      })
+    )
     initTeamService({
       store: teamStore,
       appManager,
@@ -192,6 +545,26 @@ async function initPlatformAndApps(): Promise<void> {
         resolveSpacePath: (spaceId) => getSpace(spaceId)?.path ?? null,
       },
       listArtifacts: (spaceId) => listArtifacts(spaceId),
+      // Federation egress: project membership/lifecycle mutations to a hosted
+      // office's joiners so a remote roster converges on every change. The manager
+      // no-ops each when the office is not hosted here, so an unhosted office or a
+      // non-federated build is safe. A member removal projects the frame AND
+      // re-broadcasts the roster (the frame lets a joiner drop the row immediately;
+      // the roster re-broadcast is the convergent source of truth).
+      onRosterMutated: (teamId) => getFederationManager()?.broadcastRosterFor(teamId),
+      onMemberRemoved: (teamId, appId) => {
+        const mgr = getFederationManager()
+        mgr?.projectMemberRemoved(teamId, appId)
+        mgr?.broadcastRosterFor(teamId)
+      },
+      onOfficeDissolved: (teamId) => getFederationManager()?.projectOfficeDissolved(teamId),
+      // Run start/stop → push the live run-state (team running status + active
+      // epoch) to joiners immediately so a remote status board goes live the
+      // instant the host presses Run (and rests when it stops). Start/stop are
+      // infrequent discrete events, so they re-project at once (not throttled);
+      // the high-frequency member-status churn during the run rides the throttled
+      // scheduleRosterRefresh off each board write.
+      onRunStateChanged: (teamId) => getFederationManager()?.broadcastRosterFor(teamId),
     })
 
     // Team triggers: register the kind='team' scheduler handler and rehydrate
@@ -228,6 +601,16 @@ async function initPlatformAndApps(): Promise<void> {
   // ── Start timer loops AFTER all wiring is complete ──────────────────────
   // This ensures no events fire before subscriptions are registered.
   scheduler.start()
+
+  // ── Office lifecycle recovery ────────────────────────────────────────────
+  // Without this an office exists only while the invite dialog is open: nothing
+  // re-hosts a prior office or re-joins a prior connection after an app restart.
+  // Runs as an idle task: recovery is non-essential and must never block startup;
+  // a joiner's own client reconnects on backoff, so readiness arriving shortly
+  // after boot is in time.
+  registerIdleTask('recover-offices', () => {
+    recoverPersistedOffices(teamStore)
+  })
 
   // ── Tier 3: Idle tasks ─────────────────────────────────────────────────
   // Non-critical tasks that run after all essential infrastructure is ready.
@@ -451,7 +834,19 @@ export async function cleanupExtendedServices(): Promise<void> {
   // the App Manager goes away (the service holds an App Manager reference).
   shutdownTeamService()
   setActiveTeamRuntime(null)
+  try {
+    flushRelayCapture?.()
+    disposeRelayCapture?.dispose()
+  } catch (err) {
+    console.error('[Bootstrap] Relay capture teardown error:', err)
+  }
+  disposeRelayCapture = null
+  flushRelayCapture = null
+  getFederationManager()?.stopAll()
+  setFederationManager(null)
+  setFederationInbound(null)
   shutdownTeamStore()
+  shutdownFederationStore()
 
   // Apps: Shutdown runtime first (deactivates all apps, stops event router, cancels runs).
   // This is intentionally ahead of `analytics.destroy()` so that any final

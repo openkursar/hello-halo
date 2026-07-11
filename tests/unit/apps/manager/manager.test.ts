@@ -230,6 +230,7 @@ describe('AppManager', () => {
         spec_version: '1',
         name: 'shared-mcp',
         version: '1.0.0',
+        author: 'tester',
         description: 'an mcp',
         type: 'mcp',
         mcp_server: { type: 'stdio', command: 'echo', args: ['hi'] },

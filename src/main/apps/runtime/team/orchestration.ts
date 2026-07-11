@@ -105,6 +105,24 @@ export interface OrchestrationDeps {
   bus: MessageBus
   session: OrchestrationSessionDeps
   turnTimeoutMs?: number
+  /**
+   * Observer fired AFTER a run epoch is sealed (manual pause, quiescence
+   * auto-seal, circuit breach). Additive only — it does not alter seal semantics;
+   * it lets the federation egress propagate the rested run-state to joiners so a
+   * remote roster steps back to idle (and member pulses clear) promptly, even on
+   * an auto-seal that does not go through the service-level pauseTeam. Absent →
+   * no propagation. Never thrown into the seal path.
+   */
+  onRunStateChanged?: (teamId: string) => void
+  /**
+   * Observer fired when a member's live status flips (turn start/end, escalation
+   * raised/resolved). Bootstrap wires it to the federation roster refresh so
+   * VIEWERS see the pulse start AND stop in step — without it a joiner's board
+   * froze on the last projected status (e.g. a lead spinning forever after its
+   * final turn) until some unrelated write refreshed the roster. Coalescing is
+   * the subscriber's job. Never thrown into the turn path.
+   */
+  onMemberStatusChanged?: (teamId: string) => void
 }
 
 const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000
@@ -112,6 +130,15 @@ const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000
 export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   const { store, bus, session } = deps
   const turnTimeoutMs = deps.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS
+  const onRunStateChanged = deps.onRunStateChanged
+
+  function notifyMemberStatusChanged(teamId: string): void {
+    try {
+      deps.onMemberStatusChanged?.(teamId)
+    } catch (err) {
+      console.error(`${LOG_TAG} onMemberStatusChanged observer failed:`, err)
+    }
+  }
 
   // Only escalations are captured out-of-band; normal results come from onReply.
   const capturedEscalations = new Map<string, TurnCompletion>()
@@ -188,6 +215,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       }),
       turnTimeoutMs
     )
+    // The member just went working → push the pulse to viewers.
+    notifyMemberStatusChanged(teamId)
 
     // Detached: not awaited so the bus stays non-blocking.
     void turnPromise
@@ -212,6 +241,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       )
       .then((outcome) => {
         capturedEscalations.delete(trigger.correlationId)
+        // The turn ended → clear the viewer-side pulse (working → idle/alert).
+        notifyMemberStatusChanged(teamId)
         if (outcome.kind === 'escalation') {
           routeEscalation(teamId, epochId, appId, outcome.content)
         }
@@ -337,6 +368,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       const task = envelope.taskRef ? ` · task ${envelope.taskRef}` : ''
       return `[Result from ${who}${task}]\n\n${envelope.body}`
     }
+    // A human's 1:1 message arrives verbatim — no teammate header. The send is
+    // attributed to the lead only for bus accounting; impersonating "[Team
+    // message from Lead]" both confuses the member and misleads the person
+    // reading the transcript. Local app-chat sends the raw text; match it.
+    if (trigger.humanOrigin) return envelope.body
     const fromName = trigger.fromAppId ? memberName(envelope.teamId, trigger.fromAppId) : null
     const header = fromName
       ? `[Team message from ${fromName}${trigger.wait ? ' — awaiting your reply' : ''}]`
@@ -397,6 +433,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     }
     console.log(`${LOG_TAG} escalation awaiting user: team=${teamId} epoch=${epochId} app=${appId}`)
     emitTeamUpdated(teamId)
+    // waiting_user is a member-status flip too → push it to viewers.
+    notifyMemberStatusChanged(teamId)
   }
 
   // Wakes the escalating member via the team channel, which reactivates a sealed
@@ -420,6 +458,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       store.updateTeamStatus(teamId, 'running')
     }
     emitTeamUpdated(teamId)
+    notifyMemberStatusChanged(teamId)
 
     const isLeadSelf = team.leadAppId === appId
     // A member's completion should wake the lead to reconcile; the lead's own
@@ -644,6 +683,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       store.updateTeamStatus(teamId, 'idle')
       store.updateTeamCurrentEpoch(teamId, null)
       emitTeamUpdated(teamId)
+      notifyRunStateChanged(teamId)
       return
     }
 
@@ -654,6 +694,20 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     store.updateTeamStatus(teamId, 'idle')
     store.updateTeamCurrentEpoch(teamId, null)
     emitTeamUpdated(teamId)
+    // Propagate the rested run-state to joiners. The service-level pauseTeam fires
+    // this too, but quiescence/breach auto-seal funnels only through here — without
+    // this an auto-ended run leaves a joiner's members spinning until the next
+    // throttled roster refresh. Observer-only; never blocks or breaks the seal.
+    notifyRunStateChanged(teamId)
+  }
+
+  function notifyRunStateChanged(teamId: string): void {
+    if (!onRunStateChanged) return
+    try {
+      onRunStateChanged(teamId)
+    } catch (err) {
+      console.error(`${LOG_TAG} onRunStateChanged observer failed:`, err)
+    }
   }
 
   /**

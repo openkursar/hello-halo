@@ -25,10 +25,13 @@ import { InterruptedBubble } from '../chat/InterruptedBubble'
 import { CompactNotice } from '../chat/CompactNotice'
 import { InputArea } from '../chat/InputArea'
 import { EscalationPanel } from './EscalationPanel'
+import { MemberPresenceChip, OwnerLabel } from './MemberPresenceChip'
 import { useRemoteSubscription } from '../../hooks/useRemoteSubscription'
+import { useMemberPresence } from '../../stores/team.store'
 import { useTranslation } from '../../i18n'
 import type { Message, ImageAttachment } from '../../types'
 import type { RosterMember, TeamMemberRuntimeStatus } from '../../../shared/apps/team-types'
+import { shouldShowRelayedTranscript } from '../../../shared/apps/team-types'
 import { buildTeamSessionKey } from '../../../shared/apps/im-keys'
 
 interface TeamMemberChatViewProps {
@@ -100,7 +103,9 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
         setMessages(msgs)
         setLoadState(msgs.length > 0 ? 'loaded' : 'empty')
       } else {
-        setLoadState('empty')
+        // Only surface the error state on an explicit load — a silent
+        // post-turn reload should leave whatever is already on screen.
+        if (!silent) setLoadState('error')
       }
     } catch (err) {
       console.error('[TeamMemberChatView] load error:', err)
@@ -117,6 +122,9 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
     if (prevGen.current && !isGenerating) void loadMessages(true)
     prevGen.current = isGenerating
   }, [isGenerating, loadMessages])
+
+  const presence = useMemberPresence(teamId, appId)
+  const showOwner = presence.isRemote
 
   const handleSend = useCallback(async (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => {
     resetSession(conversationId)
@@ -139,15 +147,28 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
       const apiImages = images && images.length > 0
         ? images.map(img => ({ type: img.type, media_type: img.mediaType, data: img.data }))
         : undefined
-      const res = await api.appChatSend({ appId, spaceId, message: content, images: apiImages, thinkingEnabled, conversationId, teamContext })
+
+      // Local app-chat can't resolve a remote member's app ("App not found") —
+      // route through the owner's team-wake path instead, which relays the result back.
+      const res = presence.isRemote
+        ? await api.teamSendToMember({ teamId, appId, epochId: epochId ?? '', message: content, images: apiImages, thinkingEnabled })
+        : await api.appChatSend({ appId, spaceId, message: content, images: apiImages, thinkingEnabled, conversationId, teamContext })
+
       if (!res.success) {
-        useChatStore.getState().setSessionError(conversationId, String(res.error || t('Failed to send message')))
+        // Keep remote failures people-centric — never surface the raw transport/IPC code.
+        const reason = presence.isRemote
+          ? t('Couldn\u2019t reach {{owner}} just now. Your message will need another try when they\u2019re back.', { owner: presence.ownerName || t('this teammate') })
+          : String(res.error || t('Failed to send message'))
+        useChatStore.getState().setSessionError(conversationId, reason)
       }
       requestAnimationFrame(() => scrollToBottom('auto'))
     } catch (err) {
-      useChatStore.getState().setSessionError(conversationId, String((err as Error).message || t('Failed to send message')))
+      const reason = presence.isRemote
+        ? t('Couldn\u2019t reach {{owner}} just now. Your message will need another try when they\u2019re back.', { owner: presence.ownerName || t('this teammate') })
+        : String((err as Error).message || t('Failed to send message'))
+      useChatStore.getState().setSessionError(conversationId, reason)
     }
-  }, [appId, spaceId, teamId, conversationId, epochId, resetSession, scrollToBottom, t])
+  }, [appId, spaceId, teamId, conversationId, epochId, presence.isRemote, presence.ownerName, resetSession, scrollToBottom, t])
 
   const handleStop = useCallback(async () => {
     try {
@@ -164,6 +185,16 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
 
   const hasStreaming = isGenerating && (streamingContent || thoughts.length > 0 || isThinking)
 
+  // A remote member's finished transcript has no local persistence to reload — keep
+  // the relayed stream on screen until owner-served history backfills `messages`.
+  const showRelayedTranscript = shouldShowRelayedTranscript({
+    isRemote: presence.isRemote,
+    hasStreaming: !!hasStreaming,
+    messageCount: messages.length,
+    streamingContentLength: streamingContent.length,
+    thoughtCount: thoughts.length,
+  })
+
   return (
     <div className="flex h-full flex-col bg-background">
       {/* Header */}
@@ -173,6 +204,16 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
           {member.isLead && <Star className="h-3.5 w-3.5 flex-shrink-0 fill-current text-amber-500" />}
           <span className="truncate text-sm font-medium text-foreground">{member.memberName}</span>
           {member.role && <span className="truncate text-xs text-muted-foreground">· {member.role}</span>}
+          {showOwner && (
+            <span className="flex min-w-0 items-center gap-1.5">
+              <OwnerLabel ownerName={presence.ownerName} />
+              <MemberPresenceChip
+                reachability={presence.reachability}
+                ownerName={presence.ownerName}
+                showLabel={presence.reachability !== 'online'}
+              />
+            </span>
+          )}
           {!isCurrentEpoch && epochId && (
             <span className="flex-shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[10px] text-muted-foreground">{t('Past run')}</span>
           )}
@@ -195,10 +236,22 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
       ) : (
         <div ref={scrollRef} className="flex-1 overflow-y-auto" onScroll={handleScroll}>
           <div className="mx-auto max-w-3xl px-4 py-5">
-            {loadState === 'empty' && !hasStreaming && (
+            {loadState === 'empty' && !hasStreaming && !showRelayedTranscript && (
               <div className="flex flex-col items-center justify-center gap-1 py-16 text-center">
                 <p className="text-sm text-muted-foreground">{t('No work yet in this team.')}</p>
                 <p className="text-xs text-muted-foreground/60">{t('Run the team, or send a message to this member.')}</p>
+              </div>
+            )}
+
+            {loadState === 'error' && !hasStreaming && !showRelayedTranscript && (
+              <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+                <p className="text-sm text-muted-foreground">{t('Couldn\u2019t load the chat history right now.')}</p>
+                <button
+                  onClick={() => void loadMessages()}
+                  className="rounded-md px-3 py-1 text-xs text-muted-foreground/80 hover:bg-muted/50 hover:text-foreground transition-colors"
+                >
+                  {t('Try again')}
+                </button>
               </div>
             )}
 
@@ -206,7 +259,7 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
               <MessageRow key={message.id} message={message} hideBrowserViewButton />
             ))}
 
-            {hasStreaming && (
+            {(hasStreaming || showRelayedTranscript) && (
               <StreamingSection
                 streamingContent={streamingContent}
                 isStreaming={isStreaming}
@@ -220,10 +273,24 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
               />
             )}
 
+            {showRelayedTranscript && (
+              <p className="pb-4 pt-1 text-center text-xs text-muted-foreground/60">
+                {t('This is what they did just now.')}
+              </p>
+            )}
+
             {!isGenerating && error && errorType === 'interrupted' && (
               <div className="pb-4"><InterruptedBubble error={error} /></div>
             )}
-            {!isGenerating && error && errorType !== 'interrupted' && (
+            {/* Remote unreachability isn't an error — use calm amber, not alert red. */}
+            {!isGenerating && error && errorType !== 'interrupted' && presence.isRemote && (
+              <div className="flex justify-start pb-4">
+                <div className="w-[85%] rounded-2xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+                  <p className="text-sm text-foreground">{error}</p>
+                </div>
+              </div>
+            )}
+            {!isGenerating && error && errorType !== 'interrupted' && !presence.isRemote && (
               <div className="flex justify-start pb-4">
                 <div className="w-[85%] rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3">
                   <div className="flex items-center gap-2 text-destructive">
@@ -248,16 +315,36 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
         </div>
       )}
 
-      {/* Input */}
-      <div className="shrink-0 p-3">
-        <InputArea
-          onSend={handleSend}
-          onStop={handleStop}
-          isGenerating={isGenerating}
-          placeholder={t('Message {{name}}…', { name: member.memberName })}
-          isCompact
-        />
-      </div>
+      {/* While the owner is offline, a send could only fail after a long
+          timeout — show a plain notice instead of inviting one. An 'away'
+          owner keeps the input, with a hint. */}
+      {presence.reachability === 'offline' ? (
+        <div className="shrink-0 border-t border-border p-3">
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+            <p className="text-sm font-medium text-foreground">
+              {t('{{name}} is offline right now.', { name: member.memberName })}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('Messages can’t reach them while their machine is disconnected. Wait for {{owner}} to come back online, then continue here.', { owner: presence.ownerName || t('this teammate') })}
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="shrink-0 p-3">
+          {presence.reachability === 'away' && (
+            <p className="mb-2 px-1 text-xs text-amber-600 dark:text-amber-500">
+              {t('{{owner}} seems to have stepped away — replies may take a moment.', { owner: presence.ownerName || t('This teammate') })}
+            </p>
+          )}
+          <InputArea
+            onSend={handleSend}
+            onStop={handleStop}
+            isGenerating={isGenerating}
+            placeholder={t('Message {{name}}…', { name: member.memberName })}
+            isCompact
+          />
+        </div>
+      )}
     </div>
   )
 }

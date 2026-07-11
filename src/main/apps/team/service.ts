@@ -54,6 +54,28 @@ export interface TeamServiceDeps {
    * constructed with this service's runTeam.
    */
   getTriggerSync?: () => TeamTriggerSync | null
+
+  // ── Federation egress hooks (injected; the service never imports federation) ──
+  //
+  // Membership/lifecycle mutations are projected to a hosted office's joiners so a
+  // remote roster converges on EVERY change, not only on join. Bootstrap wires
+  // each to the FederationManager egress API. Absent (single-machine / not hosted)
+  // → a no-op. The dependency direction stays downward: the service emits a local
+  // event and fires these callbacks; it knows nothing of frames or transport.
+
+  /** A membership/edge change occurred → re-project the office roster. */
+  onRosterMutated?: (teamId: string) => void
+  /**
+   * A run started or stopped → push the live run-state (team status + the active
+   * epoch) to joiners so a remote status board goes live the instant the host
+   * presses Run (and rests when it stops). Bootstrap wires this to a throttled
+   * roster refresh.
+   */
+  onRunStateChanged?: (teamId: string) => void
+  /** A member was removed → project a `member-removed` frame + re-project roster. */
+  onMemberRemoved?: (teamId: string, appId: string) => void
+  /** The office was dissolved → project an `office-dissolved` frame. */
+  onOfficeDissolved?: (teamId: string) => void
 }
 
 export interface TeamTriggerSync {
@@ -108,6 +130,28 @@ export interface TeamService {
   listArtifacts(teamId: string, epochId?: string): Promise<TeamArtifactGroup[]>
   listEpochs(teamId: string): TeamEpochSummary[]
   getEpochBoard(teamId: string, epochId: string): EpochBoard | null
+  /**
+   * Drive ONE member turn and return its reply. Position-transparent: a
+   * remote-owned target is woken on its owner node over the office link and the
+   * reply refluxes back — the caller never learns position. epochId defaults to
+   * the team's current run when omitted/empty.
+   */
+  sendToMember(params: SendToMemberParams): Promise<SendToMemberResult>
+}
+
+export interface SendToMemberParams {
+  teamId: string
+  appId: string
+  epochId: string
+  message: string
+  images?: { type: string; media_type: string; data: string }[]
+  thinkingEnabled?: boolean
+}
+
+export interface SendToMemberResult {
+  ok: boolean
+  finalMessage: string | null
+  reason?: string
 }
 
 // ── Factory ──
@@ -371,6 +415,43 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const members = store.listMembersByTeam(teamId)
     const edges = store.listEdgesByTeam(teamId)
 
+    // A JOINED shadow office mirrors a remote authority and has no local
+    // team_epochs row, so getCurrentEpochForTeam never resolves the host's run
+    // epoch — read the board off current_epoch_id directly instead, and overlay
+    // the snapshot-projected member status (kernel getMemberStatus is host-local
+    // and would read 'idle' here). Replication can land a task/finding before the
+    // run-epoch pointer is materialized (or after a run rests), so fall back to
+    // the epoch of the most recent replicated board row — the joiner's activity
+    // feed must match the host regardless of roster-refresh timing.
+    const isJoined = team.hostNodeId != null
+    const joinedEpochId = isJoined
+      ? (team.currentEpochId ?? store.getLatestBoardEpochId(teamId))
+      : null
+    if (isJoined && joinedEpochId) {
+      const epochId = joinedEpochId
+      const statuses = store.getJoinedMemberStatuses(teamId)
+      return {
+        team,
+        members,
+        edges,
+        roster: members.map((m) => {
+          const status = statuses.get(m.appId) ?? 'idle'
+          const taskTitle = status === 'working' ? store.getJoinedMemberTaskTitle(teamId, m.appId) : undefined
+          return {
+            appId: m.appId,
+            memberName: m.memberName,
+            role: m.role,
+            isLead: m.isLead,
+            spaceId: appManager.getApp(m.appId)?.spaceId ?? null,
+            status,
+            ...(taskTitle ? { currentTaskTitle: taskTitle } : {}),
+          }
+        }),
+        tasks: store.listTasksByEpoch(teamId, epochId),
+        findings: store.listFindingsByEpoch(teamId, epochId),
+      }
+    }
+
     const epoch = store.getCurrentEpochForTeam(teamId) ?? store.listEpochsByTeam(teamId)[0] ?? null
     const runtime = getRuntime()
 
@@ -444,6 +525,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
     console.log(`${LOG_TAG} updateTeam: id=${teamId}`)
     emitUpdated(teamId, { team: after })
+    // Lead change / structured-edge regen mutates the roster; re-project it to
+    // joiners so they do not go stale (matches addMember/removeMember/setEdges).
+    deps.onRosterMutated?.(teamId)
     return after
   }
 
@@ -457,6 +541,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
     console.log(`${LOG_TAG} addMember: team=${teamId} app=${input.appId} name=${member.memberName}`)
     emitUpdated(teamId, { team: requireTeam(teamId) })
+    deps.onRosterMutated?.(teamId)
     return member
   }
 
@@ -472,11 +557,22 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       await cleanupOrphanApp(appId)
     }
 
+    // If the removed member was the lead, reassign so the next run does not
+    // resolve a phantom lead (which would wedge orchestration).
+    if (team.leadAppId === appId) {
+      const remaining = store.listMembersByTeam(teamId)
+      const nextLead = remaining.find((m) => m.origin !== 'remote') ?? remaining[0] ?? null
+      store.updateTeamLeadAppId(teamId, nextLead?.appId ?? null)
+      if (nextLead) store.setMemberLead(teamId, nextLead.appId, true)
+      console.log(`${LOG_TAG} removeMember: lead removed, reassigned team=${teamId} newLead=${nextLead?.appId ?? 'none'}`)
+    }
+
     if (team.collabMode === 'structured') {
       regenerateStructuredEdges(requireTeam(teamId))
     }
     console.log(`${LOG_TAG} removeMember: team=${teamId} app=${appId}`)
     emitUpdated(teamId, { team: requireTeam(teamId) })
+    deps.onMemberRemoved?.(teamId, appId)
   }
 
   function setEdges(teamId: string, edges: TeamEdge[]): void {
@@ -484,6 +580,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     store.replaceEdgesForTeam(teamId, edges.map((e) => ({ ...e, teamId })))
     console.log(`${LOG_TAG} setEdges: team=${teamId} count=${edges.length}`)
     emitUpdated(teamId, { team: requireTeam(teamId) })
+    deps.onRosterMutated?.(teamId)
   }
 
   // ── AI propose-members ──
@@ -506,6 +603,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const epoch = await rt.startEpoch(teamId, trigger)
     console.log(`${LOG_TAG} runTeam: team=${teamId} epoch=${epoch.id} trigger=${trigger.type}`)
     emitUpdated(teamId, { team: requireTeam(teamId) })
+    // Push the live run-state (now running + the active epoch) to joiners so a
+    // remote status board goes live at run-start, not only on a structural change.
+    deps.onRunStateChanged?.(teamId)
   }
 
   async function pauseTeam(teamId: string): Promise<void> {
@@ -514,6 +614,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     await rt.sealEpoch(teamId, 'stopped')
     console.log(`${LOG_TAG} pauseTeam: team=${teamId}`)
     emitUpdated(teamId, { team: requireTeam(teamId) })
+    // Push the rested run-state to joiners so a remote status board steps back
+    // to idle when the host stops the run.
+    deps.onRunStateChanged?.(teamId)
   }
 
   // ── Dissolve (orphan cleanup) ──
@@ -546,6 +649,13 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   ): Promise<void> {
     const team = store.getTeamById(teamId)
     if (!team) return
+
+    // Project office-dissolved to joiners BEFORE any teardown, while the hosted
+    // office's link is still live (bootstrap projects the frame, then tears
+    // down). Skipped on a silent internal dissolve (no user-facing teardown).
+    if (!opts.silent) {
+      deps.onOfficeDissolved?.(teamId)
+    }
 
     if (team.status === 'running' || team.currentEpochId) {
       const rt = getRuntime()
@@ -708,6 +818,47 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     emitUpdated(teamId, { team: requireTeam(teamId) })
   }
 
+  async function sendToMember(params: SendToMemberParams): Promise<SendToMemberResult> {
+    const team = requireTeam(params.teamId)
+    const target = store.listMembersByTeam(params.teamId).find((m) => m.appId === params.appId)
+    if (!target) return { ok: false, finalMessage: null, reason: 'MEMBER_NOT_FOUND' }
+
+    // Reuse the latest (possibly sealed) epoch when no run is currently open, so
+    // ad-hoc 1:1 chat works after a run ended; it is reactivated just below.
+    const epochId =
+      params.epochId || store.getCurrentEpochForTeam(params.teamId)?.id || store.listEpochsByTeam(params.teamId)[0]?.id
+    if (!epochId) return { ok: false, finalMessage: null, reason: 'NO_EPOCH' }
+
+    // Host-operator surface: the local owner drives the member directly, so the
+    // turn is attributed to the office lead (the operator's standing identity).
+    const fromAppId = team.leadAppId
+    if (!fromAppId) return { ok: false, finalMessage: null, reason: 'NO_LEAD' }
+
+    // A sealed epoch drops completions, so the operator would see "sent, no
+    // reply" after a run ended. Reactivate first (no-op when already open); a
+    // remote member's completion refluxes to this authority node, where the
+    // seal check is enforced.
+    const rt = requireRuntime()
+    rt.reactivateEpoch(params.teamId, epochId)
+
+    const result = await rt.bus.send({
+      teamId: params.teamId,
+      epochId,
+      fromAppId,
+      to: target.memberName,
+      message: params.message,
+      wait: true,
+      // A person typed this in the member's chat — deliver it verbatim, never
+      // under a "[Team message from Lead]" header (the lead is only the
+      // accounting identity for the bus).
+      humanOrigin: true,
+    })
+
+    if ('messageId' in result) return { ok: true, finalMessage: null }
+    if (result.status === 'timeout') return { ok: false, finalMessage: null, reason: 'TIMEOUT' }
+    return { ok: true, finalMessage: result.message }
+  }
+
   return {
     createTeam,
     getTeam,
@@ -728,6 +879,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     listArtifacts,
     listEpochs,
     getEpochBoard,
+    sendToMember,
   }
 }
 

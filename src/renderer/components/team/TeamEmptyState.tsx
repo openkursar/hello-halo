@@ -6,12 +6,13 @@
  * pick a team from the list.
  */
 
-import { Plus } from 'lucide-react'
+import { Plus, LogIn } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 
 interface TeamEmptyStateProps {
   hasTeams: boolean
   onNewTeam: () => void
+  onJoinOffice: () => void
 }
 
 /** A small stylized org-chart illustration (theme-aware, no raster asset). */
@@ -36,7 +37,7 @@ function OrgChartGlyph() {
   )
 }
 
-export function TeamEmptyState({ hasTeams, onNewTeam }: TeamEmptyStateProps) {
+export function TeamEmptyState({ hasTeams, onNewTeam, onJoinOffice }: TeamEmptyStateProps) {
   const { t } = useTranslation()
 
   return (
@@ -54,13 +55,22 @@ export function TeamEmptyState({ hasTeams, onNewTeam }: TeamEmptyStateProps) {
               {t('Group a set of digital humans into a team and describe a goal in plain words — a lead will break it down and coordinate them to get it done.')}
             </p>
           </div>
-          <button
-            onClick={onNewTeam}
-            className="mt-1 inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
-          >
-            <Plus className="h-4 w-4" />
-            {t('New office')}
-          </button>
+          <div className="mt-1 flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+            <button
+              onClick={onNewTeam}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+            >
+              <Plus className="h-4 w-4" />
+              {t('New office')}
+            </button>
+            <button
+              onClick={onJoinOffice}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm text-foreground transition-colors hover:bg-secondary"
+            >
+              <LogIn className="h-4 w-4" />
+              {t('Join an office')}
+            </button>
+          </div>
         </>
       )}
     </div>

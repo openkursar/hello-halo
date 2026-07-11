@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.10-rc.29",
+  "version": "2.1.10-rc.32",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.mjs",
@@ -37,6 +37,8 @@
     "test:e2e": "playwright test --config tests/playwright.config.ts",
     "test:e2e:smoke": "playwright test --config tests/playwright.config.ts --project=smoke",
     "test:e2e:codex-mcp": "playwright test --config tests/playwright.config.ts --project=codex-mcp",
+    "test:e2e:team-render": "playwright test --config tests/playwright.config.ts --project=team-render",
+    "test:team": "node tests/decentralized/run.mjs",
     "i18n:extract": "i18next",
     "i18n:translate": "node scripts/translate-i18n.mjs",
     "i18n": "npm run i18n:extract && npm run i18n:translate",

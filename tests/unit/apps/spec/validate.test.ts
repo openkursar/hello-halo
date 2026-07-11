@@ -35,7 +35,9 @@ const minimalSkillSpec = {
   author: 'tester',
   description: 'A test skill',
   type: 'skill',
-  system_prompt: 'You are a helpful assistant.'
+  // Skills follow the external SKILL.md format: content lives in
+  // skill_content / skill_files, not system_prompt.
+  skill_content: '# Test Skill\n\nYou are a helpful assistant.'
 }
 
 const minimalAutomationSpec = {
@@ -96,7 +98,7 @@ describe('validateAppSpec - minimal valid specs', () => {
   it('should accept minimal Skill spec', () => {
     const result = validateAppSpec(minimalSkillSpec)
     expect(result.type).toBe('skill')
-    expect(result.system_prompt).toBe('You are a helpful assistant.')
+    expect((result as { skill_content?: string }).skill_content).toContain('You are a helpful assistant.')
   })
 
   it('should accept minimal Automation spec', () => {
@@ -127,9 +129,12 @@ describe('validateAppSpec - required fields', () => {
     expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
   })
 
-  it('should reject missing author', () => {
-    const spec = { ...minimalSkillSpec, author: undefined }
+  it('should reject missing author (non-skill types)', () => {
+    // Author is optional for skills (SKILL.md has no author field) but stays
+    // required for the other types.
+    const spec = { ...minimalAutomationSpec, author: undefined }
     expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
+    expect(validateAppSpec({ ...minimalSkillSpec, author: undefined }).type).toBe('skill')
   })
 
   it('should reject missing description', () => {
@@ -167,18 +172,15 @@ describe('validateAppSpec - type-specific constraints', () => {
     } catch (err) {
       expect((err as AppSpecValidationError).issues).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({
-            path: 'system_prompt',
-            message: expect.stringContaining('system_prompt')
-          })
+          expect.objectContaining({ path: 'system_prompt' })
         ])
       )
     }
   })
 
-  it('should reject skill without system_prompt', () => {
-    const spec = { ...minimalSkillSpec, system_prompt: undefined }
-    expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
+  it('should accept a skill without system_prompt (SKILL.md model)', () => {
+    const result = validateAppSpec(minimalSkillSpec)
+    expect(result.system_prompt).toBeUndefined()
   })
 
   it('should reject MCP without mcp_server', () => {
@@ -186,30 +188,32 @@ describe('validateAppSpec - type-specific constraints', () => {
     expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
   })
 
-  it('should reject mcp_server on non-MCP type', () => {
-    const spec = {
+  it('should strip mcp_server on non-MCP type', () => {
+    // The discriminated-union schema strips fields that do not belong to the
+    // declared type instead of rejecting the spec.
+    const result = validateAppSpec({
       ...minimalSkillSpec,
       mcp_server: { command: 'npx' }
-    }
-    expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
+    })
+    expect(result.mcp_server).toBeUndefined()
   })
 
-  it('should reject subscriptions on non-automation type', () => {
-    const spec = {
+  it('should strip subscriptions on non-automation type', () => {
+    const result = validateAppSpec({
       ...minimalSkillSpec,
       subscriptions: [{
         source: { type: 'schedule' as const, config: { every: '30m' } }
       }]
-    }
-    expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
+    })
+    expect(result.subscriptions).toBeUndefined()
   })
 
-  it('should reject memory_schema on non-automation type', () => {
-    const spec = {
+  it('should strip memory_schema on non-automation type', () => {
+    const result = validateAppSpec({
       ...minimalSkillSpec,
       memory_schema: { price: { type: 'number' } }
-    }
-    expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
+    })
+    expect(result.memory_schema).toBeUndefined()
   })
 
   it('should allow extension without system_prompt', () => {

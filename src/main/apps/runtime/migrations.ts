@@ -64,4 +64,35 @@ export const migrations: Migration[] = [
       db.exec(`ALTER TABLE automation_runs ADD COLUMN session_id TEXT`)
     },
   },
+  {
+    version: 4,
+    description: 'Drop activity_entries.run_id FK so chat/team report entries persist',
+    // Chat/team reports use a sentinel run_id ('chat') with no automation_runs
+    // parent, so the FK rejected every such insert. Entries are owned by app_id
+    // (CASCADE kept); run cleanup is handled explicitly in pruneOldData.
+    // activity_entries is a leaf table, so dropping the run_id FK is safe.
+    up(db) {
+      db.exec(`
+        CREATE TABLE activity_entries_v4 (
+          id TEXT PRIMARY KEY,
+          app_id TEXT NOT NULL,
+          run_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          ts INTEGER NOT NULL,
+          session_key TEXT,
+          content_json TEXT NOT NULL,
+          user_response_json TEXT,
+          FOREIGN KEY (app_id) REFERENCES installed_apps(id) ON DELETE CASCADE
+        );
+        INSERT INTO activity_entries_v4
+          (id, app_id, run_id, type, ts, session_key, content_json, user_response_json)
+          SELECT id, app_id, run_id, type, ts, session_key, content_json, user_response_json
+          FROM activity_entries;
+        DROP TABLE activity_entries;
+        ALTER TABLE activity_entries_v4 RENAME TO activity_entries;
+        CREATE INDEX IF NOT EXISTS idx_entries_app ON activity_entries(app_id, ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_entries_run ON activity_entries(run_id);
+      `)
+    },
+  },
 ]

@@ -59,14 +59,46 @@ export interface Blackboard {
   ): BlackboardSnapshot
 }
 
+/**
+ * A structured blackboard write, surfaced AFTER a successful local store write so
+ * a replication layer can sequence and replicate it. Notification-only — the
+ * write has already been applied locally when it fires. `payload` is the full
+ * structured row/patch so a hot-standby can apply it verbatim.
+ */
+export interface BlackboardWriteRecord {
+  teamId: string
+  epochId: string
+  op: 'post_task' | 'update_task' | 'post_finding'
+  payload: Record<string, unknown>
+  taskId?: string
+}
+
 export interface BlackboardDeps {
   store: TeamStore
   getMemberStatus?: (appId: string) => TeamMemberRuntimeStatus
+  /**
+   * Fired AFTER each successful local blackboard write. Notification-only: the
+   * write is already applied; the replication layer assigns a seq and fans the
+   * entry out to hot-standbys. Absent → no replication. Must not throw into the
+   * write path, so callers wrap it.
+   */
+  onWrite?: (record: BlackboardWriteRecord) => void
 }
 
 export function createBlackboard(deps: BlackboardDeps): Blackboard {
   const { store } = deps
   const memberStatus = deps.getMemberStatus ?? (() => 'idle' as TeamMemberRuntimeStatus)
+
+  function notifyWrite(record: BlackboardWriteRecord): void {
+    if (!deps.onWrite) return
+    try {
+      deps.onWrite(record)
+    } catch (err) {
+      // Replication is best-effort relative to the local write; never let a
+      // replication-layer fault corrupt the authoritative local apply.
+      console.error(`${LOG_TAG} onWrite hook threw (write already applied):`, err)
+    }
+  }
 
   function emitTask(teamId: string, epochId: string, task: BlackboardTask): void {
     const payload = { teamId, epochId, kind: 'task' as const, task }
@@ -99,6 +131,13 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
     store.insertTask(task)
     console.log(`${LOG_TAG} postTask: team=${input.teamId} epoch=${input.epochId} task=${task.id}`)
     emitTask(input.teamId, input.epochId, task)
+    notifyWrite({
+      teamId: input.teamId,
+      epochId: input.epochId,
+      op: 'post_task',
+      payload: task as unknown as Record<string, unknown>,
+      taskId: task.id,
+    })
     return { taskId: task.id }
   }
 
@@ -118,6 +157,19 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
       `${LOG_TAG} updateTask: team=${input.teamId} task=${input.taskId} status=${input.status}`
     )
     if (task) emitTask(input.teamId, input.epochId, task)
+    notifyWrite({
+      teamId: input.teamId,
+      epochId: input.epochId,
+      op: 'update_task',
+      payload: {
+        taskId: input.taskId,
+        status: input.status,
+        ...(input.resultRef !== undefined ? { resultRef: input.resultRef } : {}),
+        ...(input.note !== undefined ? { note: input.note } : {}),
+        updatedAt: now,
+      },
+      taskId: input.taskId,
+    })
   }
 
   function postFinding(input: PostFindingInput): { findingId: string } {
@@ -133,6 +185,12 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
     store.insertFinding(finding)
     console.log(`${LOG_TAG} postFinding: team=${input.teamId} epoch=${input.epochId} finding=${finding.id}`)
     emitFinding(input.teamId, input.epochId, finding)
+    notifyWrite({
+      teamId: input.teamId,
+      epochId: input.epochId,
+      op: 'post_finding',
+      payload: finding as unknown as Record<string, unknown>,
+    })
     return { findingId: finding.id }
   }
 
