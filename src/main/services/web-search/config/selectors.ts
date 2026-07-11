@@ -142,6 +142,74 @@ export const BAIDU_FALLBACK_SELECTORS: EngineSelectors = {
 }
 
 // ============================================
+// Google Selectors
+// ============================================
+
+/**
+ * Google Search - Primary Selectors
+ *
+ * Last verified: 2026-06
+ * Test URL: https://www.google.com/search?q=test&hl=en
+ *
+ * DOM Structure (2026):
+ * #rso
+ *   └── div.MjjYud (each block; ~20/page, ~half are non-organic)
+ *         └── h3 (organic title; absent on image/video/PAA blocks)
+ *               └── (ancestor) a[href] (direct result URL)
+ *         └── [data-sncf] / .VwiC3b (snippet text)
+ *
+ * IMPORTANT: Google uses hash class names (MjjYud, VwiC3b, A6K0A, kb0PBd)
+ * that change between deployments. GoogleEngine deliberately does NOT rely on
+ * them for its primary extraction. Instead it anchors on three stable
+ * primitives that have held for years:
+ *   1. The `#rso` / `#search` container ids
+ *   2. The semantic `h3` title tag
+ *   3. The structural `h3.closest('a[href]')` relationship
+ * The class-based selectors below are documentation and a snippet fast-path
+ * only; see GoogleEngine.buildExtractionScript for the resilient logic.
+ */
+export const GOOGLE_SELECTORS: EngineSelectors = {
+  // Main organic results container
+  resultContainer: '#rso',
+
+  // Individual result block (fragile class — extraction anchors on h3 instead)
+  resultItem: 'div.MjjYud',
+
+  // Title is in an h3 (organic results only)
+  title: 'h3',
+
+  // Link is the anchor wrapping the h3 (resolved via closest() in the script)
+  link: 'h3',
+
+  // Snippet fast-path: stable data attribute first, hash class as fallback
+  snippet: '[data-sncf], .VwiC3b',
+
+  // Blocks/zones to exclude from organic results
+  excludeSelectors: [
+    '[data-text-ad]',          // Ads
+    '.related-question-pair',  // "People also ask"
+    '.kp-blk',                 // Knowledge panel
+    'g-section-with-header',   // Carousels (videos, "people also search for")
+  ],
+}
+
+/**
+ * Google Search - Fallback Selectors
+ *
+ * Widened scope used when primary extraction yields nothing. GoogleEngine's
+ * fallback script roots at the whole document and still anchors on h3 + anchor,
+ * so these mainly document the looser container/snippet hints.
+ */
+export const GOOGLE_FALLBACK_SELECTORS: EngineSelectors = {
+  resultContainer: '#search, #center_col',
+  resultItem: 'div.g, div.MjjYud',
+  title: 'h3',
+  link: 'h3',
+  snippet: '[data-sncf], .VwiC3b, div[style*="webkit-line-clamp"]',
+  excludeSelectors: ['[data-text-ad]', '.related-question-pair'],
+}
+
+// ============================================
 // Engine Configurations
 // ============================================
 
@@ -175,6 +243,26 @@ export const BAIDU_CONFIG = {
   waitForSelector: '#content_left .result, #content_left .c-container',
   // Baidu is slower, need more wait time
   extraWaitMs: 300,
+}
+
+/**
+ * Complete Google configuration
+ *
+ * Google is NOT auto-selectable (see GoogleEngine.autoSelectable). It is used
+ * only when explicitly requested, so it never sits on the default search path.
+ */
+export const GOOGLE_CONFIG = {
+  name: 'google' as const,
+  displayName: 'Google',
+  // Default to the English/international interface; GoogleEngine.buildSearchUrl
+  // adapts hl/gl per query language and adds the result-count hint.
+  searchUrlTemplate: 'https://www.google.com/search?q={{QUERY}}&hl=en&gl=us',
+  selectors: GOOGLE_SELECTORS,
+  fallbackSelectors: GOOGLE_FALLBACK_SELECTORS,
+  // Wait for the first organic title to render (h3 is the stable signal)
+  waitForSelector: '#rso h3, #search h3',
+  // Allow dynamic snippet content to settle
+  extraWaitMs: 350,
 }
 
 // ============================================

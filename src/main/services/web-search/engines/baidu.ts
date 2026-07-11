@@ -6,7 +6,9 @@
  * accessible from mainland China without VPN.
  *
  * Special considerations:
- * - Baidu uses redirect URLs (baidu.com/link?url=...)
+ * - Baidu wraps result links in redirect URLs (baidu.com/link?url=...), but
+ *   exposes the real destination in the result container's "mu" attribute,
+ *   which the extractor prefers (with the redirect as a fallback)
  * - More aggressive anti-bot measures
  * - Dynamic class names in some elements
  */
@@ -89,7 +91,12 @@ export class BaiduEngine extends SearchEngine {
           if (!titleEl) continue;
 
           var title = (titleEl.textContent || '').trim();
-          var url = titleEl.href || titleEl.getAttribute('href') || '';
+          // Prefer the real destination URL: Baidu stores it in the result
+          // container's "mu" attribute. Fall back to the baidu.com/link
+          // redirect href when "mu" is absent (some special result types).
+          var redirect = titleEl.href || titleEl.getAttribute('href') || '';
+          var real = item.getAttribute('mu') || '';
+          var url = real.indexOf('http') === 0 ? real : redirect;
           if (!title || !url) continue;
 
           // Extract snippet using exclusion approach:
@@ -135,7 +142,8 @@ export class BaiduEngine extends SearchEngine {
    * Post-process Baidu results
    *
    * Baidu-specific processing:
-   * - Handle redirect URLs (baidu.com/link?url=...)
+   * - URLs are already resolved to real destinations during extraction (via
+   *   the "mu" attribute), falling back to baidu.com/link redirects
    * - Clean up Baidu-specific artifacts
    * - Filter out Baidu internal pages
    */
@@ -147,12 +155,7 @@ export class BaiduEngine extends SearchEngine {
       // Skip invalid results
       if (!raw.title || !raw.url) continue
 
-      let url = raw.url
-
-      // Baidu uses redirect URLs - we keep them as-is since resolving
-      // would require additional HTTP requests. The redirect URL still
-      // works when clicked.
-      // Format: https://www.baidu.com/link?url=...
+      const url = raw.url
 
       // Skip non-http URLs
       if (!url.startsWith('http://') && !url.startsWith('https://')) continue

@@ -5,8 +5,10 @@
  * Works in all regions and with all models.
  *
  * Features:
- * - Bing and Baidu search engines
- * - Auto-selection based on query language
+ * - Bing and Baidu search engines (auto-selected by query language)
+ * - Google as an opt-in engine (explicit request only; off the default path)
+ * - Structured failure reporting (unreachable / captcha / layout change) with
+ *   AI-facing guidance
  * - Zero AI token consumption
  * - ~1-3 second response time
  *
@@ -43,6 +45,9 @@ export type {
   SearchResult,
   SearchResponse,
   SearchOptions,
+  SearchBlockReason,
+  SearchBlockInfo,
+  CookieSeed,
   EngineSelectors,
   EngineConfig,
 } from './types'

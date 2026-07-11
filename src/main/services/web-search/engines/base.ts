@@ -6,7 +6,14 @@
  * engine-specific configuration.
  */
 
-import type { EngineSelectors, SearchResult, SearchOptions, RawExtractionResult } from '../types'
+import type {
+  EngineSelectors,
+  SearchResult,
+  SearchOptions,
+  RawExtractionResult,
+  CookieSeed,
+  SearchBlockReason,
+} from '../types'
 import { buildExtractionScript, buildSearchUrl } from '../config/selectors'
 
 // ============================================
@@ -50,6 +57,17 @@ export abstract class SearchEngine {
 
   /** Additional wait time after selector appears (ms) */
   readonly extraWaitMs: number = 300
+
+  /**
+   * Whether this engine participates in automatic engine selection.
+   *
+   * Engines with `autoSelectable = false` are never chosen in `auto` mode and
+   * are only used when explicitly requested by name. This keeps fragile or
+   * region-restricted engines (e.g. Google, which is unreachable without a
+   * proxy for many users) off the default path while still allowing the AI or
+   * the user to opt into them deliberately.
+   */
+  readonly autoSelectable: boolean = true
 
   // ============================================
   // URL Building
@@ -195,5 +213,78 @@ export abstract class SearchEngine {
   getPriorityScore(query: string): number {
     // Default: neutral priority
     return 50
+  }
+
+  // ============================================
+  // Lifecycle Hooks (optional overrides)
+  // ============================================
+
+  /**
+   * Cookies to seed into the browser session before navigating.
+   *
+   * Default: none. Engines override this to satisfy region/consent
+   * preconditions deterministically (see Google). Seeding is best-effort and
+   * never aborts a search if it fails.
+   *
+   * @returns Cookies to set prior to navigation
+   */
+  cookieSeeds(): CookieSeed[] {
+    return []
+  }
+
+  /**
+   * Build a JavaScript expression that detects a blocked/unavailable page.
+   *
+   * The script must evaluate to one of the {@link SearchBlockReason} string
+   * values (`'captcha'`, `'layout_changed'`) or `null` when the page looks
+   * healthy. It runs in the loaded page after navigation. Network-level
+   * failures (`'unreachable'`) are detected by the caller, not here.
+   *
+   * Default: no detection (returns `null`).
+   *
+   * @returns JavaScript expression string, or `null` if not supported
+   */
+  buildBlockDetectionScript(): string | null {
+    return null
+  }
+
+  /**
+   * Build AI-facing guidance for a failed search outcome.
+   *
+   * The returned text is surfaced to the model so it can decide the next step
+   * (retry with another engine, ask the user, etc.) and explain the outcome
+   * honestly to the user. Subclasses override this for engine-specific advice.
+   *
+   * @param reason - Why the search failed
+   * @param query - The original query (for echoing back)
+   * @returns Human/AI-readable guidance text
+   */
+  buildBlockGuidance(reason: SearchBlockReason, query: string): string {
+    switch (reason) {
+      case 'unreachable':
+        return (
+          `Search engine "${this.displayName}" could not be reached for "${query}" ` +
+          `(network or navigation timeout). Try web_search again with a different ` +
+          `engine, and let the user know this engine was unavailable.`
+        )
+      case 'captcha':
+        return (
+          `Search engine "${this.displayName}" returned a verification/consent page ` +
+          `instead of results for "${query}". Try web_search again with a different ` +
+          `engine, and tell the user this engine was blocked.`
+        )
+      case 'layout_changed':
+        return (
+          `Search engine "${this.displayName}" loaded but no results could be parsed ` +
+          `for "${query}" (its page structure may have changed). Try web_search again ` +
+          `with a different engine.`
+        )
+      case 'no_results':
+      default:
+        return (
+          `No results found for "${query}" on ${this.displayName}. Try different ` +
+          `keywords, more general terms, or another engine.`
+        )
+    }
   }
 }
