@@ -148,7 +148,7 @@ describe('FederationManager (host role, faked WS hop)', () => {
     const onGrant = vi.fn()
     joinFromB(bLink, {}, { onGrant })
 
-    const node = federationStore.getNode(NODE_B)!
+    const node = federationStore.getNode(OFFICE, NODE_B)!
     expect(node).toBeTruthy()
     expect(node.status).toBe('online')
     expect(node.identity).toBe('identity-b')
@@ -198,7 +198,7 @@ describe('FederationManager (host role, faked WS hop)', () => {
 
     expect(onReject).toHaveBeenCalledWith('CREDENTIAL_INVALID')
     expect(onGrant).not.toHaveBeenCalled()
-    expect(federationStore.getNode(NODE_B)).toBeNull()
+    expect(federationStore.getNode(OFFICE, NODE_B)).toBeNull()
     expect(teamStore.listMembersByTeam(OFFICE)).toHaveLength(0)
   })
 

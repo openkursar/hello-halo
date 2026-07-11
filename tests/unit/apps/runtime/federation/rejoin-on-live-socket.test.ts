@@ -105,7 +105,7 @@ describe('confirmed-offline recovery on a live socket (Bug 1b)', () => {
   function confirmBobOffline(coordinator: ReturnType<typeof makeHost>) {
     clock += CONFIRMED_MS + 1
     coordinator.sweepPresence()
-    expect(federationStore.getNode(BOB)!.status).toBe('offline')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
   }
 
   it('a heartbeat from a confirmed-offline node triggers a host rejoin-request', () => {
@@ -120,7 +120,7 @@ describe('confirmed-offline recovery on a live socket (Bug 1b)', () => {
 
     const nudges = bob.received.filter((m) => m.kind === 'rejoin-request')
     expect(nudges).toHaveLength(1)
-    expect(federationStore.getNode(BOB)!.status).toBe('offline')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
   })
 
   it('rate-limits the rejoin-request: not one per heartbeat', () => {
@@ -173,7 +173,7 @@ describe('confirmed-offline recovery on a live socket (Bug 1b)', () => {
     // Initial join: requestJoin remembers the request AND routes it to the host,
     // which admits Bob online (re-arming the FSM from the seeded row).
     bobCoordinator.requestJoin(joinReq)
-    expect(federationStore.getNode(BOB)!.status).toBe('online')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
 
     confirmBobOffline(hostCoordinator)
 
@@ -182,7 +182,7 @@ describe('confirmed-offline recovery on a live socket (Bug 1b)', () => {
     // The deadlock is broken without any socket reconnect.
     clock += 10
     bobHeartbeat()
-    expect(federationStore.getNode(BOB)!.status).toBe('online')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
 
     bobCoordinator.stop()
   })

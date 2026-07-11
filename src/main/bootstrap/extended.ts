@@ -215,7 +215,7 @@ async function initPlatformAndApps(): Promise<void> {
         const member = teamStore.listMembersByTeam(officeId).find((m) => m.appId === appId)
         const ownerNode = member?.ownerNodeId
         if (ownerNode && ownerNode !== SELF_NODE_ID) {
-          const node = fedStore.getNode(ownerNode)
+          const node = fedStore.getNode(officeId, ownerNode)
           if (node?.status === 'offline') return 'confirmed-offline'
           if (node?.status === 'suspect') return 'suspect'
         }

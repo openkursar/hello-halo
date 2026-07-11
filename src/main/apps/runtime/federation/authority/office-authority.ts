@@ -239,7 +239,7 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     // Relay fast-fail: an owner whose presence row is suspect/offline is not
     // worth a relay round-trip — reply owner-unreachable immediately.
     isNodeReachable: (nodeId) => {
-      const status = federationStore.getNode(nodeId)?.status
+      const status = federationStore.getNode(officeId, nodeId)?.status
       return status !== 'offline' && status !== 'suspect'
     },
   })

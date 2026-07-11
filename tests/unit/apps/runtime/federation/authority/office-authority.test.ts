@@ -125,7 +125,7 @@ describe('office-authority (3-node resilience integration)', () => {
       dead.add(id)
       for (const peerId of ids) {
         if (peerId === id) continue
-        nodes[peerId].fed.setNodeStatus(id, 'offline', 0)
+        nodes[peerId].fed.setNodeStatus(OFFICE, id, 'offline', 0)
       }
     }
     return { nodes, kill }

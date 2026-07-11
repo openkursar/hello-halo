@@ -131,7 +131,7 @@ function build(ids: string[]): Rig {
       for (const other of ids) {
         if (other === observer) continue
         const status = canTalk(observer, other) ? 'online' : 'offline'
-        nodes[observer].fed.setNodeStatus(other, status, 0)
+        nodes[observer].fed.setNodeStatus(OFFICE, other, status, 0)
         nodes[observer].office.onNodePresence(other, status === 'online' ? 'online' : 'offline')
       }
     }

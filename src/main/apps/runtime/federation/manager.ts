@@ -485,10 +485,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   function ensureSelfNode(officeId: string): void {
     const self = deps.getLocalNodeId()
     const displayName = deps.getLocalDisplayName?.() ?? null
-    const existing = deps.federationStore.getNode(self)
+    const existing = deps.federationStore.getNode(officeId, self)
     // The row also feeds the roster's ownerDisplayName for host-owned members,
     // so refresh it when the advertised name changed (or was never stamped).
-    if (existing && existing.officeId === officeId && existing.displayName === displayName) return
+    if (existing && existing.displayName === displayName) return
     deps.federationStore.upsertNode({
       nodeId: self,
       officeId,
@@ -744,7 +744,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       // sent into the void — the caller then waits forever (the offline-confirm
       // that would unblock it is edge-triggered and already fired). Treat a
       // confirmed-offline owner as unreachable so the caller resolves fast.
-      if (!host.nodeToClient.has(params.ownerNodeId) || deps.federationStore.getNode(params.ownerNodeId)?.status === 'offline') {
+      if (!host.nodeToClient.has(params.ownerNodeId) || deps.federationStore.getNode(params.officeId, params.ownerNodeId)?.status === 'offline') {
         console.warn(`${LOG_TAG} sendWake: owner unreachable node=${params.ownerNodeId} office=${params.officeId}`)
         return false
       }
@@ -1019,7 +1019,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           // align the believed authority + tenure baseline.
           if (authority) {
             const host = snapshot.team.hostNodeId
-            const existing = deps.federationStore.getNode(host)
+            const existing = deps.federationStore.getNode(officeId, host)
             deps.federationStore.upsertNode({
               nodeId: host,
               officeId,
@@ -1253,7 +1253,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // would hang the whole deadline), or — for a hosted office — when there is no
     // live client mapping to send the request over. Reject with a stable technical
     // code; the renderer maps it to calm, location-free copy.
-    const ownerNode = deps.federationStore.getNode(params.ownerNodeId)
+    const ownerNode = deps.federationStore.getNode(params.officeId, params.ownerNodeId)
     const ownerUnreachable = ownerNode?.status === 'offline' || ownerNode?.status === 'suspect'
     const host = hosted.get(params.officeId)
     const noHostRoute = host !== undefined && !host.nodeToClient.has(params.ownerNodeId)

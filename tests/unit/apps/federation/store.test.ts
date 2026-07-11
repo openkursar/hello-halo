@@ -90,25 +90,58 @@ describe('FederationStore', () => {
       const db = dbManager.getAppDatabase()
       expect(() => dbManager.runMigrations(db, MIGRATION_NAMESPACE, migrations)).not.toThrow()
     })
+
+    it('v4 rebuild preserves existing office_nodes rows', () => {
+      const mgr = createDatabaseManager(':memory:')
+      const db = mgr.getAppDatabase()
+      mgr.runMigrations(db, MIGRATION_NAMESPACE, migrations.slice(0, 3))
+      db.prepare(`
+        INSERT INTO office_nodes (node_id, office_id, identity, display_name, joined_at, last_seen, status)
+          VALUES ('n1', 'office-a', 'id-1', 'Alice', 100, 200, 'online')
+      `).run()
+
+      mgr.runMigrations(db, MIGRATION_NAMESPACE, migrations)
+
+      const migrated = new FederationStore(db)
+      expect(migrated.getNode('office-a', 'n1')).toMatchObject({
+        nodeId: 'n1',
+        officeId: 'office-a',
+        displayName: 'Alice',
+        joinedAt: 100,
+        lastSeen: 200,
+        status: 'online',
+      })
+      mgr.closeAll()
+    })
   })
 
   describe('office_nodes', () => {
     it('round-trips a node through upsert/getNode', () => {
       const node = makeNode()
       store.upsertNode(node)
-      expect(store.getNode(node.nodeId)).toEqual(node)
+      expect(store.getNode(node.officeId, node.nodeId)).toEqual(node)
     })
 
     it('returns null for a missing node', () => {
-      expect(store.getNode('nope')).toBeNull()
+      expect(store.getNode(OFFICE_A, 'nope')).toBeNull()
     })
 
-    it('upsert overwrites an existing node by node_id', () => {
+    it('upsert overwrites an existing node by (office_id, node_id)', () => {
       store.upsertNode(makeNode({ displayName: 'Alice', status: 'online' }))
       store.upsertNode(makeNode({ displayName: 'Alice (renamed)', status: 'offline' }))
-      const back = store.getNode('node-1')!
+      const back = store.getNode(OFFICE_A, 'node-1')!
       expect(back.displayName).toBe('Alice (renamed)')
       expect(back.status).toBe('offline')
+    })
+
+    it('keeps per-office rows for the same node id (host + joiner roles coexist)', () => {
+      store.upsertNode(makeNode({ joinedAt: 1, status: 'online' }))
+      store.upsertNode(makeNode({ officeId: OFFICE_B, joinedAt: 2000, status: 'suspect' }))
+
+      expect(store.getNode(OFFICE_A, 'node-1')!.status).toBe('online')
+      expect(store.getNode(OFFICE_B, 'node-1')!.status).toBe('suspect')
+      expect(store.listNodesByOffice(OFFICE_A).map(n => n.nodeId)).toEqual(['node-1'])
+      expect(store.listNodesByOffice(OFFICE_B).map(n => n.nodeId)).toEqual(['node-1'])
     })
 
     it('lists nodes by office ordered by joined_at ascending', () => {
@@ -123,25 +156,34 @@ describe('FederationStore', () => {
 
     it('transitions node status and refreshes last_seen via setNodeStatus', () => {
       store.upsertNode(makeNode({ status: 'online', lastSeen: 1000 }))
-      store.setNodeStatus('node-1', 'offline', 5000)
-      const back = store.getNode('node-1')!
+      store.setNodeStatus(OFFICE_A, 'node-1', 'offline', 5000)
+      const back = store.getNode(OFFICE_A, 'node-1')!
       expect(back.status).toBe('offline')
       expect(back.lastSeen).toBe(5000)
     })
 
+    it('scopes status writes to the addressed office only', () => {
+      store.upsertNode(makeNode({ joinedAt: 1, status: 'online', lastSeen: 1000 }))
+      store.upsertNode(makeNode({ officeId: OFFICE_B, joinedAt: 2, status: 'online', lastSeen: 1000 }))
+      store.setNodeStatus(OFFICE_B, 'node-1', 'offline', 5000)
+
+      expect(store.getNode(OFFICE_A, 'node-1')!.status).toBe('online')
+      expect(store.getNode(OFFICE_B, 'node-1')!.status).toBe('offline')
+    })
+
     it('touchNode refreshes last_seen without changing status', () => {
       store.upsertNode(makeNode({ status: 'online', lastSeen: 1000 }))
-      store.touchNode('node-1', 7000)
-      const back = store.getNode('node-1')!
+      store.touchNode(OFFICE_A, 'node-1', 7000)
+      const back = store.getNode(OFFICE_A, 'node-1')!
       expect(back.status).toBe('online')
       expect(back.lastSeen).toBe(7000)
     })
 
     it('removes a node', () => {
       store.upsertNode(makeNode())
-      expect(store.removeNode('node-1')).toBe(true)
-      expect(store.getNode('node-1')).toBeNull()
-      expect(store.removeNode('node-1')).toBe(false)
+      expect(store.removeNode(OFFICE_A, 'node-1')).toBe(true)
+      expect(store.getNode(OFFICE_A, 'node-1')).toBeNull()
+      expect(store.removeNode(OFFICE_A, 'node-1')).toBe(false)
     })
   })
 

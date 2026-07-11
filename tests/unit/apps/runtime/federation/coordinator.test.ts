@@ -130,7 +130,7 @@ describe('FederationCoordinator', () => {
 
       bob.link.send(HOST, makeJoinRequest())
 
-      const node = federationStore.getNode(BOB)!
+      const node = federationStore.getNode(OFFICE, BOB)!
       expect(node).toBeTruthy()
       expect(node.status).toBe('online')
       expect(node.identity).toBe('identity-bob')
@@ -182,12 +182,12 @@ describe('FederationCoordinator', () => {
       const bob = recordingPeer(hub, BOB)
 
       bob.link.send(HOST, makeJoinRequest())
-      const firstJoinedAt = federationStore.getNode(BOB)!.joinedAt
+      const firstJoinedAt = federationStore.getNode(OFFICE, BOB)!.joinedAt
 
       clock += 50_000
       bob.link.send(HOST, makeJoinRequest({ displayName: 'Bob Renamed' }))
 
-      const node = federationStore.getNode(BOB)!
+      const node = federationStore.getNode(OFFICE, BOB)!
       expect(node.joinedAt).toBe(firstJoinedAt) // stable join order
       expect(node.lastSeen).toBe(clock) // refreshed
       expect(node.displayName).toBe('Bob Renamed') // refreshed
@@ -201,7 +201,7 @@ describe('FederationCoordinator', () => {
 
       const reject = bob.received.find((r) => r.msg.kind === 'join-reject')
       expect(reject?.msg).toMatchObject({ kind: 'join-reject', reason: 'CREDENTIAL_INVALID' })
-      expect(federationStore.getNode(BOB)).toBeNull()
+      expect(federationStore.getNode(OFFICE, BOB)).toBeNull()
       expect(teamStore.listMembersByTeam(OFFICE)).toHaveLength(0)
     })
 
@@ -213,7 +213,7 @@ describe('FederationCoordinator', () => {
 
       const reject = bob.received.find((r) => r.msg.kind === 'join-reject')
       expect(reject?.msg).toMatchObject({ kind: 'join-reject', reason: 'OFFICE_MISMATCH' })
-      expect(federationStore.getNode(BOB)).toBeNull()
+      expect(federationStore.getNode(OFFICE, BOB)).toBeNull()
     })
 
     it('rejects an office mismatch (request office differs from context)', () => {
@@ -224,7 +224,7 @@ describe('FederationCoordinator', () => {
 
       const reject = bob.received.find((r) => r.msg.kind === 'join-reject')
       expect(reject?.msg).toMatchObject({ kind: 'join-reject', reason: 'OFFICE_MISMATCH' })
-      expect(federationStore.getNode(BOB)).toBeNull()
+      expect(federationStore.getNode(OFFICE, BOB)).toBeNull()
     })
 
     it('does not crash the handshake on duplicate bringMembers; a name clash is admitted renamed', () => {
@@ -242,7 +242,7 @@ describe('FederationCoordinator', () => {
         })
       )
 
-      expect(federationStore.getNode(BOB)!.status).toBe('online')
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
       expect(bob.received.some((r) => r.msg.kind === 'join-grant')).toBe(true)
       // The repeated appId collapsed to one row; the name clash was admitted
       // under a disambiguated name (owner display name) instead of being dropped.
@@ -273,14 +273,14 @@ describe('FederationCoordinator', () => {
 
       clock += SUSPECT_MS + 1
       coordinator.sweepPresence()
-      expect(federationStore.getNode(BOB)!.status).toBe('suspect')
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('suspect')
       expect(carol.received.some((r) => r.msg.kind === 'presence-update' && r.msg.status === 'suspect')).toBe(true)
       expect(carol.received.some((r) => r.msg.kind === 'presence-update' && r.msg.status === 'offline')).toBe(false)
       carol.received.length = 0
 
       clock += CONFIRMED_MS - SUSPECT_MS
       coordinator.sweepPresence()
-      expect(federationStore.getNode(BOB)!.status).toBe('offline')
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
       const offline = carol.received.find(
         (r) => r.msg.kind === 'presence-update' && r.msg.status === 'offline'
       )
@@ -300,7 +300,7 @@ describe('FederationCoordinator', () => {
       clock += 2
       coordinator.sweepPresence()
 
-      expect(federationStore.getNode(BOB)!.status).toBe('online')
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
     })
 
     it('recovers suspect→online on a heartbeat (jitter absorbed, no offline)', () => {
@@ -310,12 +310,12 @@ describe('FederationCoordinator', () => {
 
       clock += SUSPECT_MS + 1
       coordinator.sweepPresence()
-      expect(federationStore.getNode(BOB)!.status).toBe('suspect')
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('suspect')
       carol.received.length = 0
 
       clock += 1
       hub.deliver(BOB, HOST, { kind: 'heartbeat', officeId: OFFICE, fromNode: BOB, ts: clock })
-      expect(federationStore.getNode(BOB)!.status).toBe('online')
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
       const back = carol.received.find(
         (r) => r.msg.kind === 'presence-update' && r.msg.status === 'online'
       )
@@ -323,7 +323,7 @@ describe('FederationCoordinator', () => {
 
       clock += SUSPECT_MS - 1
       coordinator.sweepPresence()
-      expect(federationStore.getNode(BOB)!.status).toBe('online')
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
     })
 
     it('does NOT revive a confirmed-offline node on a bare heartbeat (requires rejoin, T7)', () => {
@@ -332,23 +332,23 @@ describe('FederationCoordinator', () => {
 
       clock += CONFIRMED_MS + 1
       coordinator.sweepPresence()
-      expect(federationStore.getNode(BOB)!.status).toBe('offline')
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
 
       // A bare heartbeat after confirmed is dropped — no silent revival.
       clock += 1000
       hub.deliver(BOB, HOST, { kind: 'heartbeat', officeId: OFFICE, fromNode: BOB, ts: clock })
-      expect(federationStore.getNode(BOB)!.status).toBe('offline')
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
 
       // A fresh join handshake re-admits the node as online (T5).
       const bob = recordingPeer(hub, BOB)
       bob.link.send(HOST, makeJoinRequest())
-      expect(federationStore.getNode(BOB)!.status).toBe('online')
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
     })
 
     it('ignores heartbeats from an unknown node', () => {
       const { coordinator } = makeHost()
       hub.deliver('ghost', HOST, { kind: 'heartbeat', officeId: OFFICE, fromNode: 'ghost', ts: clock })
-      expect(federationStore.getNode('ghost')).toBeNull()
+      expect(federationStore.getNode(OFFICE, 'ghost')).toBeNull()
       coordinator.sweepPresence() // must not throw
     })
   })

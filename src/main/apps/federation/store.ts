@@ -98,33 +98,39 @@ export class FederationStore implements IFederationStore {
 
   constructor(private readonly db: Database.Database) {
     // ── office_nodes ──────────────────────────────
-    // Upsert keyed by node_id; caller must pass the original joined_at on
-    // rejoin to preserve join-order semantics (this upsert does not protect it).
+    // Upsert keyed by (office_id, node_id) — one row per office a node is in;
+    // caller must pass the original joined_at on rejoin to preserve join-order
+    // semantics (this upsert does not protect it).
     this.stmtUpsertNode = db.prepare(`
       INSERT INTO office_nodes (
-        node_id, office_id, identity, display_name, joined_at, last_seen, status
+        office_id, node_id, identity, display_name, joined_at, last_seen, status
       ) VALUES (
-        @node_id, @office_id, @identity, @display_name, @joined_at, @last_seen, @status
+        @office_id, @node_id, @identity, @display_name, @joined_at, @last_seen, @status
       )
-      ON CONFLICT(node_id) DO UPDATE SET
-        office_id = excluded.office_id,
+      ON CONFLICT(office_id, node_id) DO UPDATE SET
         identity = excluded.identity,
         display_name = excluded.display_name,
         joined_at = excluded.joined_at,
         last_seen = excluded.last_seen,
         status = excluded.status
     `)
-    this.stmtGetNode = db.prepare(`SELECT * FROM office_nodes WHERE node_id = ?`)
+    this.stmtGetNode = db.prepare(`
+      SELECT * FROM office_nodes WHERE office_id = ? AND node_id = ?
+    `)
     this.stmtListNodesByOffice = db.prepare(`
       SELECT * FROM office_nodes WHERE office_id = ? ORDER BY joined_at ASC
     `)
     this.stmtSetNodeStatus = db.prepare(`
-      UPDATE office_nodes SET status = @status, last_seen = @last_seen WHERE node_id = @node_id
+      UPDATE office_nodes SET status = @status, last_seen = @last_seen
+        WHERE office_id = @office_id AND node_id = @node_id
     `)
     this.stmtTouchNode = db.prepare(`
-      UPDATE office_nodes SET last_seen = @last_seen WHERE node_id = @node_id
+      UPDATE office_nodes SET last_seen = @last_seen
+        WHERE office_id = @office_id AND node_id = @node_id
     `)
-    this.stmtRemoveNode = db.prepare(`DELETE FROM office_nodes WHERE node_id = ?`)
+    this.stmtRemoveNode = db.prepare(`
+      DELETE FROM office_nodes WHERE office_id = ? AND node_id = ?
+    `)
 
     // ── office_credentials ────────────────────────
     this.stmtInsertCredential = db.prepare(`
@@ -168,8 +174,8 @@ export class FederationStore implements IFederationStore {
 
   upsertNode(node: OfficeNode): void {
     this.stmtUpsertNode.run({
-      node_id: node.nodeId,
       office_id: node.officeId,
+      node_id: node.nodeId,
       identity: node.identity,
       display_name: node.displayName,
       joined_at: node.joinedAt,
@@ -178,8 +184,8 @@ export class FederationStore implements IFederationStore {
     })
   }
 
-  getNode(nodeId: string): OfficeNode | null {
-    const row = this.stmtGetNode.get(nodeId) as OfficeNodeRow | undefined
+  getNode(officeId: string, nodeId: string): OfficeNode | null {
+    const row = this.stmtGetNode.get(officeId, nodeId) as OfficeNodeRow | undefined
     return row ? rowToNode(row) : null
   }
 
@@ -188,17 +194,17 @@ export class FederationStore implements IFederationStore {
     return (this.stmtListNodesByOffice.all(officeId) as OfficeNodeRow[]).map(rowToNode)
   }
 
-  setNodeStatus(nodeId: string, status: OfficeNode['status'], lastSeen: number): void {
-    this.stmtSetNodeStatus.run({ node_id: nodeId, status, last_seen: lastSeen })
+  setNodeStatus(officeId: string, nodeId: string, status: OfficeNode['status'], lastSeen: number): void {
+    this.stmtSetNodeStatus.run({ office_id: officeId, node_id: nodeId, status, last_seen: lastSeen })
   }
 
   /** Refresh presence without changing status (heartbeat). */
-  touchNode(nodeId: string, lastSeen: number): void {
-    this.stmtTouchNode.run({ node_id: nodeId, last_seen: lastSeen })
+  touchNode(officeId: string, nodeId: string, lastSeen: number): void {
+    this.stmtTouchNode.run({ office_id: officeId, node_id: nodeId, last_seen: lastSeen })
   }
 
-  removeNode(nodeId: string): boolean {
-    return this.stmtRemoveNode.run(nodeId).changes > 0
+  removeNode(officeId: string, nodeId: string): boolean {
+    return this.stmtRemoveNode.run(officeId, nodeId).changes > 0
   }
 
   // ── office_credentials ──────────────────────────

@@ -76,7 +76,7 @@ export function resolveEscalationTarget(params: ResolveEscalationParams): Escala
 
     return {
       ownerNodeId,
-      displayName: federationStore.getNode(ownerNodeId)?.displayName ?? null,
+      displayName: federationStore.getNode(teamId, ownerNodeId)?.displayName ?? null,
       routedTo: 'task-originator-owner',
     }
   }

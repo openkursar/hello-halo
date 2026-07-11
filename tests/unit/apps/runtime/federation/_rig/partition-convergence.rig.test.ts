@@ -77,8 +77,8 @@ describe('AC-5.4 — partition: minority withholds, majority continues, heal con
     rig.beat() // intra-cell heartbeats refresh same-side peers
     rig.tick() // cross-cut silence escalates to confirmed-offline
 
-    expect(rig.nodes.A.fed.getNode('D')!.status).toBe('offline')
-    expect(rig.nodes.A.fed.getNode('E')!.status).toBe('offline')
+    expect(rig.nodes.A.fed.getNode(RIG_OFFICE, 'D')!.status).toBe('offline')
+    expect(rig.nodes.A.fed.getNode(RIG_OFFICE, 'E')!.status).toBe('offline')
     expect(rig.nodes.A.office.isAuthoritySelf()).toBe(true)
     expect(rig.nodes.B.office.isAuthoritySelf()).toBe(false)
     expect(rig.nodes.C.office.isAuthoritySelf()).toBe(false)
@@ -86,8 +86,8 @@ describe('AC-5.4 — partition: minority withholds, majority continues, heal con
     // Minority side confirms the believed authority A offline → D (front of the
     // minority by joined_at) starts an election, but the last-known-roster quorum
     // is 3 of 5 and only D,E are reachable → it can never win.
-    expect(rig.nodes.D.fed.getNode('A')!.status).toBe('offline')
-    expect(rig.nodes.E.fed.getNode('A')!.status).toBe('offline')
+    expect(rig.nodes.D.fed.getNode(RIG_OFFICE, 'A')!.status).toBe('offline')
+    expect(rig.nodes.E.fed.getNode(RIG_OFFICE, 'A')!.status).toBe('offline')
     expect(rig.nodes.D.office.handover.election.isElecting()).toBe(true)
 
     // ── Majority keeps committing: A writes t2; B,C ack (majority of the 2 online

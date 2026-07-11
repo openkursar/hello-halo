@@ -119,5 +119,37 @@ export const migrations: Migration[] = [
         )
       `)
     }
+  },
+  {
+    version: 4,
+    description: 'office_nodes: composite primary key (office_id, node_id)',
+    up(db) {
+      // A node can host one office and be joined to others at the same time; the
+      // original single-column node_id key made those rows overwrite each other
+      // across offices (corrupting election rosters and reachability checks).
+      // SQLite cannot alter a primary key in place, so rebuild the table.
+      db.exec(`
+        CREATE TABLE office_nodes_new (
+          office_id TEXT NOT NULL,
+          node_id TEXT NOT NULL,
+          identity TEXT NOT NULL,
+          display_name TEXT,
+          joined_at INTEGER NOT NULL,
+          last_seen INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'online',
+          PRIMARY KEY (office_id, node_id)
+        )
+      `)
+      db.exec(`
+        INSERT INTO office_nodes_new (office_id, node_id, identity, display_name, joined_at, last_seen, status)
+          SELECT office_id, node_id, identity, display_name, joined_at, last_seen, status FROM office_nodes
+      `)
+      db.exec(`DROP TABLE office_nodes`)
+      db.exec(`ALTER TABLE office_nodes_new RENAME TO office_nodes`)
+      db.exec(`
+        CREATE INDEX idx_office_nodes_office
+          ON office_nodes(office_id, joined_at)
+      `)
+    }
   }
 ]

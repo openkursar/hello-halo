@@ -151,8 +151,8 @@ describe('authority/escalation-routing', () => {
     })
 
     it('no nodes known → unresolved owner (negative)', () => {
-      federationStore.removeNode(NODE_OWNER)
-      federationStore.removeNode(NODE_B)
+      federationStore.removeNode(TEAM_ID, NODE_OWNER)
+      federationStore.removeNode(TEAM_ID, NODE_B)
       const out = resolveEscalationTarget({ kind: 'office', teamId: TEAM_ID, store, federationStore })
       expect(out.ownerNodeId).toBeNull()
       expect(out.displayName).toBeNull()

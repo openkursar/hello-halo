@@ -173,7 +173,7 @@ describe('FederationCoordinator presence FSM (D3 two-threshold debounce)', () =>
     // The self row never degrades — a phantom self-offline poisons the
     // confirmedNodes guard (a later REAL offline of a peer is then ignored) and,
     // on a joiner, broadcasts a false projection up to the host.
-    expect(federationStore.getNode(HOST)!.status).toBe('online')
+    expect(federationStore.getNode(OFFICE, HOST)!.status).toBe('online')
     expect(onMemberConfirmedOffline).not.toHaveBeenCalled()
     expect(observer.statuses()).toEqual([])
   })
@@ -184,11 +184,11 @@ describe('FederationCoordinator presence FSM (D3 two-threshold debounce)', () =>
 
     clock += SUSPECT_MS + 1
     coordinator.sweepPresence()
-    expect(federationStore.getNode(BOB)!.status).toBe('suspect')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('suspect')
 
     clock += 1
     bobHeartbeat()
-    expect(federationStore.getNode(BOB)!.status).toBe('online')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
 
     expect(onMemberConfirmedOffline).not.toHaveBeenCalled()
     expect(observer.statuses()).toEqual(['suspect', 'online'])
@@ -204,7 +204,7 @@ describe('FederationCoordinator presence FSM (D3 two-threshold debounce)', () =>
     clock += 1
     coordinator.sweepPresence()
 
-    expect(federationStore.getNode(BOB)!.status).toBe('suspect')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('suspect')
     expect(onMemberConfirmedOffline).toHaveBeenCalledTimes(0)
   })
 
@@ -214,11 +214,11 @@ describe('FederationCoordinator presence FSM (D3 two-threshold debounce)', () =>
 
     clock += SUSPECT_MS + 1
     coordinator.sweepPresence()
-    expect(federationStore.getNode(BOB)!.status).toBe('suspect')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('suspect')
 
     clock += CONFIRMED_MS - SUSPECT_MS
     coordinator.sweepPresence()
-    expect(federationStore.getNode(BOB)!.status).toBe('offline')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
     expect(onMemberConfirmedOffline).toHaveBeenCalledTimes(2)
     expect(onMemberConfirmedOffline.mock.calls.map((c) => c[0]).sort()).toEqual(
       [...memberAppIds].sort()
@@ -243,7 +243,7 @@ describe('FederationCoordinator presence FSM (D3 two-threshold debounce)', () =>
     clock += CONFIRMED_MS + 50
     coordinator.sweepPresence()
 
-    expect(federationStore.getNode(BOB)!.status).toBe('offline')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
     const seq = observer.statuses()
     const suspectIdx = seq.indexOf('suspect')
     const offlineIdx = seq.indexOf('offline')
@@ -256,11 +256,11 @@ describe('FederationCoordinator presence FSM (D3 two-threshold debounce)', () =>
 
     clock += SUSPECT_MS + 1
     coordinator.sweepPresence()
-    expect(federationStore.getNode(BOB)!.status).toBe('suspect')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('suspect')
 
     clock += 1
     bobHeartbeat()
-    expect(federationStore.getNode(BOB)!.status).toBe('online')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
   })
 
   it('T7: a bare heartbeat after confirmed does NOT revive; a rejoin does', () => {
@@ -268,13 +268,13 @@ describe('FederationCoordinator presence FSM (D3 two-threshold debounce)', () =>
 
     clock += CONFIRMED_MS + 1
     coordinator.sweepPresence()
-    expect(federationStore.getNode(BOB)!.status).toBe('offline')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
     expect(onMemberConfirmedOffline).toHaveBeenCalledTimes(1)
 
     // Bare heartbeat: dropped, still offline.
     clock += 10
     bobHeartbeat()
-    expect(federationStore.getNode(BOB)!.status).toBe('offline')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
 
     // Rejoin handshake re-admits online and re-arms the FSM (a later confirmed
     // can fire again).
@@ -289,12 +289,12 @@ describe('FederationCoordinator presence FSM (D3 two-threshold debounce)', () =>
       bringMembers: [],
     }
     hub.deliver(BOB, HOST, join as FederationMessage)
-    expect(federationStore.getNode(BOB)!.status).toBe('online')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
 
     // Re-armed: a fresh silence confirms again (fan-out fires a second time).
     clock += CONFIRMED_MS + 1
     coordinator.sweepPresence()
-    expect(federationStore.getNode(BOB)!.status).toBe('offline')
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
     expect(onMemberConfirmedOffline).toHaveBeenCalledTimes(2)
   })
 })

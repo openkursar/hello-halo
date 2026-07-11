@@ -50,15 +50,15 @@ describe('AC-11.4 / B2 — flap & suspend through the real presence FSM (D8 rig)
     // heartbeat arrives. B and C only ever see A as suspect, never offline.
     rig.advance(SUSPECT_MS + 1)
     rig.tick() // sweep: A → suspect on B and C (no heartbeats flowed this gap)
-    expect(rig.nodes.B.fed.getNode('A')!.status).toBe('suspect')
-    expect(rig.nodes.C.fed.getNode('A')!.status).toBe('suspect')
+    expect(rig.nodes.B.fed.getNode(RIG_OFFICE, 'A')!.status).toBe('suspect')
+    expect(rig.nodes.C.fed.getNode(RIG_OFFICE, 'A')!.status).toBe('suspect')
 
     // A heartbeat from A inside the window rolls suspect back to online — the flap
     // is fully absorbed.
     rig.advance(1)
     rig.beat()
-    expect(rig.nodes.B.fed.getNode('A')!.status).toBe('online')
-    expect(rig.nodes.C.fed.getNode('A')!.status).toBe('online')
+    expect(rig.nodes.B.fed.getNode(RIG_OFFICE, 'A')!.status).toBe('online')
+    expect(rig.nodes.C.fed.getNode(RIG_OFFICE, 'A')!.status).toBe('online')
 
     expect(rig.nodes.B.becameAuthority).not.toHaveBeenCalled()
     expect(rig.nodes.C.becameAuthority).not.toHaveBeenCalled()
@@ -75,10 +75,10 @@ describe('AC-11.4 / B2 — flap & suspend through the real presence FSM (D8 rig)
     for (let cycle = 0; cycle < 5; cycle++) {
       rig.advance(SUSPECT_MS + 1)
       rig.tick()
-      expect(rig.nodes.B.fed.getNode('A')!.status).toBe('suspect')
+      expect(rig.nodes.B.fed.getNode(RIG_OFFICE, 'A')!.status).toBe('suspect')
       rig.advance(1)
       rig.beat()
-      expect(rig.nodes.B.fed.getNode('A')!.status).toBe('online')
+      expect(rig.nodes.B.fed.getNode(RIG_OFFICE, 'A')!.status).toBe('online')
     }
 
     expect(rig.offlineSeenBy('B')).toEqual([])
@@ -138,7 +138,7 @@ describe('AC-11.4 / B2 — flap & suspend through the real presence FSM (D8 rig)
     // B and C each independently confirm A offline through the genuine FSM
     // (suspect→confirmed in one sweep is allowed as long as it passes through
     // suspect first).
-    expect(rig.nodes.B.fed.getNode('A')!.status).toBe('offline')
-    expect(rig.nodes.C.fed.getNode('A')!.status).toBe('offline')
+    expect(rig.nodes.B.fed.getNode(RIG_OFFICE, 'A')!.status).toBe('offline')
+    expect(rig.nodes.C.fed.getNode(RIG_OFFICE, 'A')!.status).toBe('offline')
   })
 })

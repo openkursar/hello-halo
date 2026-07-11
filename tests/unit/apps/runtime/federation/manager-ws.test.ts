@@ -264,7 +264,7 @@ describe('FederationManager (real ws transport)', () => {
     })
 
     expect(teamStore.listMembersByTeam(OFFICE)).toHaveLength(0)
-    expect(federationStore.getNode('foreign-evil-node')).toBeNull()
+    expect(federationStore.getNode(OFFICE, 'foreign-evil-node')).toBeNull()
   })
 
   it('routes a JOINER → HOST-owned-member wake over the upstream link and refluxes the result', async () => {

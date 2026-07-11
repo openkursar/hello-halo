@@ -329,7 +329,7 @@ describe('M1b multi-node smoke rig (end-to-end distributed office)', () => {
     const onGrant = vi.fn()
     joinFromB(node, federationStore, teamStore, async () => ({ finalMessage: STUB_RESULT }), { onGrant })
 
-    const bNode = federationStore.getNode(NODE_B)!
+    const bNode = federationStore.getNode(OFFICE, NODE_B)!
     expect(bNode).toBeTruthy()
     expect(bNode.status).toBe('online')
     expect(bNode.officeId).toBe(OFFICE)
@@ -435,7 +435,7 @@ describe('M1b multi-node smoke rig (end-to-end distributed office)', () => {
     const CONFIRMED_MS = 200
     // Base the fake clock on B's persisted lastSeen (stamped at join with real
     // Date.now) so the silence math is anchored to the actual node row.
-    let clock = federationStore.getNode(NODE_B)!.lastSeen
+    let clock = federationStore.getNode(OFFICE, NODE_B)!.lastSeen
     const now = () => clock
 
     // Bus + orchestration on A. The bus's syncWait timeout is left at default
@@ -472,10 +472,10 @@ describe('M1b multi-node smoke rig (end-to-end distributed office)', () => {
 
     clock += SUSPECT_MS + 1
     coordinator.sweepPresence()
-    expect(federationStore.getNode(NODE_B)!.status).toBe('suspect')
+    expect(federationStore.getNode(OFFICE, NODE_B)!.status).toBe('suspect')
     clock += CONFIRMED_MS - SUSPECT_MS
     coordinator.sweepPresence()
-    expect(federationStore.getNode(NODE_B)!.status).toBe('offline')
+    expect(federationStore.getNode(OFFICE, NODE_B)!.status).toBe('offline')
 
     const result = await pending
     expect(result.status).toBe('timeout')
@@ -529,24 +529,24 @@ describe('M1b multi-node smoke rig (end-to-end distributed office)', () => {
     clock += SUSPECT_MS - 1
     heartbeat()
     coordinator.sweepPresence()
-    expect(federationStore.getNode(NODE_B)!.status).toBe('online')
+    expect(federationStore.getNode(OFFICE, NODE_B)!.status).toBe('online')
 
     dropBeats = true
     clock += SUSPECT_MS + 1
     coordinator.sweepPresence()
-    expect(federationStore.getNode(NODE_B)!.status).toBe('suspect')
+    expect(federationStore.getNode(OFFICE, NODE_B)!.status).toBe('suspect')
     expect(onMemberConfirmedOffline).not.toHaveBeenCalled()
 
     dropBeats = false
     clock += 1
     heartbeat()
-    expect(federationStore.getNode(NODE_B)!.status).toBe('online')
+    expect(federationStore.getNode(OFFICE, NODE_B)!.status).toBe('online')
     expect(onMemberConfirmedOffline).not.toHaveBeenCalled()
 
     dropBeats = true
     clock += CONFIRMED_MS + 1
     coordinator.sweepPresence()
-    expect(federationStore.getNode(NODE_B)!.status).toBe('offline')
+    expect(federationStore.getNode(OFFICE, NODE_B)!.status).toBe('offline')
     expect(onMemberConfirmedOffline).toHaveBeenCalledTimes(1)
     expect(onMemberConfirmedOffline).toHaveBeenCalledWith(REMOTE_MEMBER)
 

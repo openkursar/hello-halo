@@ -64,8 +64,8 @@ describe('AC-5.1 — survivor becomes authority and keeps accepting writes (D8 r
     rig.beat() // B,C still heartbeat each other (stay mutually online)
     rig.tick()
 
-    expect(rig.nodes.B.fed.getNode('A')!.status).toBe('offline')
-    expect(rig.nodes.C.fed.getNode('A')!.status).toBe('offline')
+    expect(rig.nodes.B.fed.getNode(RIG_OFFICE, 'A')!.status).toBe('offline')
+    expect(rig.nodes.C.fed.getNode(RIG_OFFICE, 'A')!.status).toBe('offline')
 
     // Drive the election to completion: B claims term 2, C confirms → quorum 2 of 3.
     rig.advance(1)

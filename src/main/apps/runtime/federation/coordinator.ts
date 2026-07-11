@@ -373,7 +373,7 @@ export function createFederationCoordinator(
         memberIdentity: m.memberIdentity ?? null,
         // Prefer the live node ledger, fall back to the name persisted on the
         // member row at join (covers rows written before the ledger had a name).
-        ownerDisplayName: federationStore.getNode(absoluteOwner)?.displayName ?? m.ownerDisplayName ?? null,
+        ownerDisplayName: federationStore.getNode(officeId, absoluteOwner)?.displayName ?? m.ownerDisplayName ?? null,
         status,
         ...(currentTaskTitle ? { currentTaskTitle } : {}),
       }
@@ -437,7 +437,7 @@ export function createFederationCoordinator(
     const ts = now()
 
     // Preserve original join order on rejoin: only the first join stamps joinedAt.
-    const existing = federationStore.getNode(req.fromNode)
+    const existing = federationStore.getNode(officeId, req.fromNode)
     federationStore.upsertNode({
       nodeId: req.fromNode,
       officeId,
@@ -535,7 +535,7 @@ export function createFederationCoordinator(
   // ── Presence: inbound heartbeat ──
 
   function handleHeartbeat(fromNode: NodeId, ts: number): void {
-    const node = federationStore.getNode(fromNode)
+    const node = federationStore.getNode(officeId, fromNode)
     if (!node) return
 
     // Once confirmed-offline, a bare heartbeat must NOT silently revive the
@@ -564,13 +564,13 @@ export function createFederationCoordinator(
       return
     }
 
-    federationStore.touchNode(fromNode, ts)
+    federationStore.touchNode(officeId, fromNode, ts)
     markSeen(fromNode)
 
     // Recovery: a single heartbeat while in suspect rolls back to online with
     // NO side effects (the jitter was absorbed; no member was ever reassigned).
     if (node.status === 'suspect') {
-      federationStore.setNodeStatus(fromNode, 'online', ts)
+      federationStore.setNodeStatus(officeId, fromNode, 'online', ts)
       console.log(`${LOG_TAG} node recovered suspect→online node=${fromNode} ts=${ts}`)
       link.broadcast({
         kind: 'presence-update',
@@ -700,7 +700,7 @@ export function createFederationCoordinator(
 
   /** online → suspect (HOLD). Persist + broadcast(suspect); NO side effects. */
   function enterSuspect(nodeId: NodeId, ts: number, lastSeen: number): void {
-    federationStore.setNodeStatus(nodeId, 'suspect', lastSeen)
+    federationStore.setNodeStatus(officeId, nodeId, 'suspect', lastSeen)
     console.log(`${LOG_TAG} node suspect node=${nodeId} lastSeen=${lastSeen} ts=${ts}`)
     link.broadcast({
       kind: 'presence-update',
@@ -722,7 +722,7 @@ export function createFederationCoordinator(
    */
   function confirmOffline(nodeId: NodeId, ts: number, lastSeen: number): void {
     confirmedNodes.add(nodeId)
-    federationStore.setNodeStatus(nodeId, 'offline', lastSeen)
+    federationStore.setNodeStatus(officeId, nodeId, 'offline', lastSeen)
 
     // Fan out via the persistent owner_node_id binding (not the last presence
     // frame) so the unblock never misses a member.

@@ -117,8 +117,8 @@ describe('AC-6 / F1 — host-edge fromNode anti-spoof (identity binding)', () =>
       frame: joinRequest(NODE_EVIL),
     })
 
-    expect(federationStore.getNode(NODE_EVIL)).toBeNull()
-    expect(federationStore.getNode(NODE_B)).toBeNull()
+    expect(federationStore.getNode(OFFICE, NODE_EVIL)).toBeNull()
+    expect(federationStore.getNode(OFFICE, NODE_B)).toBeNull()
     expect(teamStore.listMembersByTeam(OFFICE)).toHaveLength(0)
     expect(bReceived).toHaveLength(0)
   })
@@ -132,7 +132,7 @@ describe('AC-6 / F1 — host-edge fromNode anti-spoof (identity binding)', () =>
       frame: joinRequest(NODE_B),
     })
 
-    const node = federationStore.getNode(NODE_B)
+    const node = federationStore.getNode(OFFICE, NODE_B)
     expect(node).toBeTruthy()
     expect(node!.status).toBe('online')
     expect(teamStore.listMembersByTeam(OFFICE)).toHaveLength(1)
@@ -152,14 +152,14 @@ describe('AC-6 / F1 — host-edge fromNode anti-spoof (identity binding)', () =>
       frame: joinRequest(NODE_B),
     })
 
-    expect(federationStore.getNode(NODE_B)).toBeTruthy()
+    expect(federationStore.getNode(OFFICE, NODE_B)).toBeTruthy()
     expect(teamStore.listMembersByTeam(OFFICE)).toHaveLength(1)
   })
 
   it('drops a forged heartbeat (post-admission spoof of a peer node) without learning a binding', () => {
     const { hostManager } = wireHost(NODE_B)
     hostManager.handleHostInbound({ clientId: B_CLIENT_ID, officeId: OFFICE, frame: joinRequest(NODE_B) })
-    expect(federationStore.getNode(NODE_B)).toBeTruthy()
+    expect(federationStore.getNode(OFFICE, NODE_B)).toBeTruthy()
 
     // Must be dropped: a heartbeat from an unknown node would otherwise refresh
     // presence or be learned as a peer binding.
@@ -169,6 +169,6 @@ describe('AC-6 / F1 — host-edge fromNode anti-spoof (identity binding)', () =>
       frame: { kind: 'heartbeat', officeId: OFFICE, fromNode: NODE_EVIL, ts: 1 } as FederationMessage,
     })
 
-    expect(federationStore.getNode(NODE_EVIL)).toBeNull()
+    expect(federationStore.getNode(OFFICE, NODE_EVIL)).toBeNull()
   })
 })

@@ -213,12 +213,14 @@ export interface AuthorityStore {
  */
 export interface FederationStore {
   // ── office_nodes ──────────────────────────────
+  // Rows are keyed by (officeId, nodeId): a node keeps one row per office it is
+  // in (it can host one office while joined to others).
   upsertNode(node: OfficeNode): void
-  getNode(nodeId: string): OfficeNode | null
+  getNode(officeId: string, nodeId: string): OfficeNode | null
   listNodesByOffice(officeId: string): OfficeNode[]
-  setNodeStatus(nodeId: string, status: OfficeNode['status'], lastSeen: number): void
-  touchNode(nodeId: string, lastSeen: number): void
-  removeNode(nodeId: string): boolean
+  setNodeStatus(officeId: string, nodeId: string, status: OfficeNode['status'], lastSeen: number): void
+  touchNode(officeId: string, nodeId: string, lastSeen: number): void
+  removeNode(officeId: string, nodeId: string): boolean
 
   // ── office_credentials ────────────────────────
   insertCredential(rec: OfficeCredentialRecord): void
