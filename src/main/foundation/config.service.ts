@@ -7,7 +7,7 @@ import { dirname, join } from 'path'
 import { homedir } from 'os'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
-import { getDataFolderName } from './product-config'
+import { getDataFolderName, getProductFederationGatewayUrl } from './product-config'
 
 // Import analytics config type
 import type { AnalyticsConfig } from '../services/analytics/types'
@@ -564,6 +564,15 @@ interface HaloConfig {
      * browserPolicy.userExtensible — see browser-policy.service.ts.
      */
     customAllowlist?: string[]
+  }
+  // Office federation configuration
+  federation?: {
+    /**
+     * Federation gateway base URL used to relay office collaboration across
+     * networks. Empty/undefined falls back to the product.json default; no
+     * default anywhere = pure-LAN behaviour.
+     */
+    gatewayUrl?: string
   }
 }
 
@@ -1127,6 +1136,10 @@ export function saveConfig(config: Partial<HaloConfig>): HaloConfig {
       })
     }
   }
+  // federation: shallow merge (gatewayUrl, future fields)
+  if (config.federation !== undefined) {
+    newConfig.federation = { ...currentConfig.federation, ...config.federation }
+  }
 
   const configPath = getConfigPath()
   const configDir = dirname(configPath)
@@ -1258,4 +1271,15 @@ export function setAutoLaunch(enabled: boolean): void {
 export function getAutoLaunch(): boolean {
   const settings = app.getLoginItemSettings()
   return settings.openAtLogin
+}
+
+/**
+ * Effective federation gateway URL: user config first, then the product.json
+ * default. Null when neither is set (pure-LAN behaviour).
+ */
+export function getFederationGatewayUrl(): string | null {
+  const user = getConfig().federation?.gatewayUrl?.trim()
+  if (user) return user
+  const product = getProductFederationGatewayUrl()?.trim()
+  return product || null
 }

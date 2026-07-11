@@ -25,9 +25,11 @@ import { randomUUID } from 'crypto'
 import { createFederation, type Federation } from './index'
 import type { FederationLink } from './link'
 import { LanMeshLink, type WsSender } from './lan-mesh-provider'
-import { WsFederationClient } from './ws-federation-client'
+import { WsFederationClient, type FederationAuthProof } from './ws-federation-client'
 import { createStreamReplay, type StreamReplay } from './relay'
 import type { NodeBoundMember } from './coordinator'
+import { GatewayAttachClient } from './gateway-attach'
+import { createRemoteBusyOverlay } from './remote-busy-overlay'
 import type { FederationStore, OfficeCredentialLike } from './deps'
 import type { TeamStore, BlackboardTask } from '../../team'
 import { createOfficeAuthority, type OfficeAuthority } from './authority/office-authority'
@@ -36,9 +38,18 @@ import type { OwnerStatus } from './authority/reconcile'
 import type { MemberWriteRecord } from './authority/replication'
 import type { OutboundBlackboardWrite } from './authority/location-aware-blackboard'
 import type { BlackboardWriteRecord } from '../team/blackboard'
-import type { ArtifactRef, BlackboardWriteFrame, M2Frame, SerializedHistoryMessage } from './protocol-m2'
+import {
+  DEFAULT_P2P_CAPS,
+  PROTOCOL_VERSION_CURRENT,
+  PROTOCOL_VERSION_MIN_SUPPORTED,
+  type ArtifactRef,
+  type BlackboardWriteFrame,
+  type M2Frame,
+  type SerializedHistoryMessage,
+} from './protocol-m2'
 import type { AuthorityStore } from '../../federation'
 import { SELF_NODE_ID, type TeamMemberRuntimeStatus } from '../../../../shared/apps/team-types'
+import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 import type {
   FederationMessage,
   JoinMember,
@@ -74,15 +85,24 @@ const RELAY_WAKE_TIMEOUT_MS = 10 * 60_000
 const ROSTER_REFRESH_COALESCE_MS = 750
 
 /**
- * Resolves an outbound sender aimed at a freshly-elected authority. Given the
- * office and the new authority's node id, it returns a {@link WsSender} pointed
- * at that node (or null when it cannot be reached). This is the single seam the
- * transport uses to re-form after a host loss: production injects a real LAN
- * dialer; a test rig injects one backed by its in-memory hub. The default is a
- * no-op that returns null — production LAN discovery is deferred (tracked), so an
- * un-injected manager simply cannot redial (the office stays paused, honestly).
+ * A dialed peer connection: the outbound sender plus an optional disposer that
+ * tears the underlying socket down when the link is re-pointed again or the
+ * office exits. A rig may return a bare {@link WsSender} (nothing to dispose).
  */
-export type PeerDialer = (officeId: string, authorityNodeId: NodeId) => WsSender | null
+export interface DialedPeer {
+  sender: WsSender
+  dispose?: () => void
+}
+
+/**
+ * Resolves an outbound connection aimed at a freshly-elected authority. Given
+ * the office and the new authority's node id, it returns a sender pointed at
+ * that node (or null when it cannot be reached). This is the single seam the
+ * transport uses to re-form after a host loss: production injects a dialer that
+ * opens a WsFederationClient against the peer's ADVERTISED URL (learned via the
+ * roster address book); a test rig injects one backed by its in-memory hub.
+ */
+export type PeerDialer = (officeId: string, authorityNodeId: NodeId) => WsSender | DialedPeer | null
 
 /** Default dialer: cannot reach any peer (see {@link PeerDialer}). */
 const NO_PEER_DIALER: PeerDialer = () => null
@@ -98,6 +118,19 @@ export interface FederationManagerDeps {
   verifyCredential: (token: string) => OfficeCredentialLike | null
   /** Stable local node id; bootstrap passes () => getLocalIdentity().id. */
   getLocalNodeId: () => string
+  /**
+   * Build the signed device-key proof answering a host's auth challenge (the
+   * joiner leg of the node-identity handshake). Injected by bootstrap from
+   * http/identity so this module never imports the key store. Absent → this
+   * node cannot complete a federation-node handshake against an enforcing host.
+   */
+  makeAuthProof?: (nonce: string) => FederationAuthProof | null
+  /**
+   * Base URL of this node's own HTTP/WS server (remote-access lanUrl), advertised
+   * at join/host time so peers can dial this node after a transport loss. Null
+   * when no server is running — this node can then dial out but not be dialed.
+   */
+  getLocalAdvertisedUrl?: () => string | null
   /**
    * Human display name this node advertises when joining an office, shown as the
    * owner badge on the members it brings. Bootstrap passes
@@ -203,6 +236,20 @@ export interface FederationManagerDeps {
    * is preserved; injected → a mismatched frame is dropped at the host edge.
    */
   getSessionIdentity?: (clientId: string) => NodeId | null
+
+  // ── Gateway relay (optional; absent → pure-LAN behaviour unchanged) ──
+  /**
+   * Effective federation gateway base URL, or null when relaying is off. When
+   * set, hostOffice additionally attaches to the gateway so off-LAN members can
+   * reach this office through the relay.
+   */
+  getGatewayUrl?: () => string | null
+  /**
+   * Ed25519 device-key signature (base64) over a gw:announce payload string.
+   * Injected from http/identity by bootstrap. Absent → the gateway attachment
+   * still relays frames but publishes no discovery announce.
+   */
+  signGatewayAnnounce?: (payload: string) => string
 }
 
 export interface JoinOfficeParams {
@@ -339,6 +386,16 @@ export interface FederationManager {
    * is not hosted/joined here OR the dialer cannot reach that node.
    */
   redialToAuthority(officeId: string, authorityNodeId: NodeId): boolean
+  /**
+   * A peer node's dialable base URL from the office's address book (joined:
+   * in-memory host-projected; hosted: persisted office_nodes). Null when unknown.
+   */
+  getNodeAddress(officeId: string, nodeId: NodeId): string | null
+  /**
+   * Inbound entry for frames arriving over a DIALED peer connection (production
+   * PeerDialer). Delivers into the office's link; drops when the office is gone.
+   */
+  deliverInbound(officeId: string, frame: FederationMessage): void
   stopAll(): void
 }
 
@@ -358,6 +415,14 @@ interface HostedOffice {
   streamOriginClientId: string | null
   /** M2 per-office authority module (election/replication/reconcile/scope/artifact). */
   authority?: OfficeAuthority
+  /** Outbound gateway attachment when the office is relayed, else undefined. */
+  gateway?: GatewayAttachClient
+  /**
+   * Nodes reachable via the gateway, learned from relayed inbound frames. Kept
+   * exclusive with nodeToClient per node: whichever path a node's frames last
+   * arrived on is its return path.
+   */
+  nodeToGateway: Set<NodeId>
 }
 
 interface JoinedOffice {
@@ -380,8 +445,16 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   // (renderer zero-change). Shared across offices; dedup is keyed per-sessionKey.
   const streamReplay: StreamReplay = createStreamReplay()
   // Transport re-form seam: how a survivor reaches a newly-elected authority.
-  // Default cannot dial (production LAN discovery deferred, tracked).
   const peerDialer: PeerDialer = deps.peerDialer ?? NO_PEER_DIALER
+  // Live dialed-peer connections per office (from redialToAuthority). Disposed
+  // when the office re-points again or exits, so an abandoned dial never keeps
+  // reconnecting to a peer we no longer target.
+  const dialedPeers = new Map<string, () => void>()
+  // In-memory node address book per JOINED office, learned from the host's
+  // roster projection. Deliberately NOT persisted into office_nodes: the presence
+  // FSM assumes a direct transport to every row it sweeps, and a joiner has none
+  // to its peers. The host side reads addresses from its own office_nodes rows.
+  const officeAddressBooks = new Map<string, Map<NodeId, string>>()
 
   // Per-office coalescing timers for throttled roster refresh: a busy run flips
   // member status many times a second, so the run-state plane is rate-limited to
@@ -472,7 +545,16 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         ensureSelfNode(officeId)
         console.log(`${LOG_TAG} became office authority office=${officeId} term=${term}`)
       },
-      onAuthorityChange: (nodeId, term) => deps.onAuthorityChange?.(officeId, nodeId, term),
+      onAuthorityChange: (nodeId, term) => {
+        // Transport re-form: when the authority moved to a PEER, point this
+        // office's outbound leg at it (best-effort — an unreachable peer leaves
+        // the office paused, honestly). A move to SELF needs no dial; the
+        // initial believed-authority alignment never fires this callback.
+        if (nodeId !== deps.getLocalNodeId()) {
+          redialToAuthority(officeId, nodeId)
+        }
+        deps.onAuthorityChange?.(officeId, nodeId, term)
+      },
       onStepdown: () => console.log(`${LOG_TAG} stepped down as authority office=${officeId}`),
       onPausedChange: (paused) => deps.onOfficePaused?.(officeId, paused),
       resolveArtifactBytes: (ref) => deps.resolveArtifactBytes?.(ref) ?? Promise.resolve(null),
@@ -485,10 +567,11 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   function ensureSelfNode(officeId: string): void {
     const self = deps.getLocalNodeId()
     const displayName = deps.getLocalDisplayName?.() ?? null
+    const advertisedUrl = deps.getLocalAdvertisedUrl?.() ?? null
     const existing = deps.federationStore.getNode(officeId, self)
-    // The row also feeds the roster's ownerDisplayName for host-owned members,
-    // so refresh it when the advertised name changed (or was never stamped).
-    if (existing && existing.displayName === displayName) return
+    // The row also feeds the roster's ownerDisplayName + the address book, so
+    // refresh it when the advertised name/URL changed (or was never stamped).
+    if (existing && existing.displayName === displayName && existing.advertisedUrl === advertisedUrl) return
     deps.federationStore.upsertNode({
       nodeId: self,
       officeId,
@@ -499,55 +582,17 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       joinedAt: existing?.joinedAt ?? 1,
       lastSeen: Date.now(),
       status: 'online',
+      advertisedUrl,
     })
   }
 
-  // ── Remote-busy overlay (host role) ──
-  // Members whose turn is currently running on a REMOTE owner (a wake was sent,
-  // its turn-complete has not come back). The host's local runtime only knows
-  // turns it executes itself, so without this overlay the roster projected to
-  // viewers pulses ONLY host-owned members — a joiner-owned member looked idle
-  // everywhere while it was actually working. Keyed by wake correlationId;
-  // entries clear on turn-complete/waiter-cleanup, with a TTL backstop against
-  // a wake whose completion never arrives.
-  const remoteBusyByCorr = new Map<string, { officeId: string; appId: string; startedAt: number }>()
-  const REMOTE_BUSY_TTL_MS = 10 * 60_000
-
-  function markRemoteBusy(correlationId: string, officeId: string, appId: string): void {
-    remoteBusyByCorr.set(correlationId, { officeId, appId, startedAt: Date.now() })
-    scheduleRosterRefresh(officeId)
-  }
-
-  function clearRemoteBusy(correlationId: string): void {
-    const entry = remoteBusyByCorr.get(correlationId)
-    if (!entry) return
-    remoteBusyByCorr.delete(correlationId)
-    scheduleRosterRefresh(entry.officeId)
-  }
-
-  /** Drop every in-flight entry for one member (its owner was confirmed offline). */
-  function clearRemoteBusyForApp(appId: string): void {
-    for (const [corr, entry] of remoteBusyByCorr) {
-      if (entry.appId !== appId) continue
-      remoteBusyByCorr.delete(corr)
-      scheduleRosterRefresh(entry.officeId)
-    }
-  }
-
-  function isRemoteBusy(appId: string): boolean {
-    const now = Date.now()
-    for (const [corr, entry] of remoteBusyByCorr) {
-      if (now - entry.startedAt > REMOTE_BUSY_TTL_MS) {
-        remoteBusyByCorr.delete(corr)
-        continue
-      }
-      if (entry.appId === appId) return true
-    }
-    return false
-  }
+  // Host-role overlay of members currently working on a REMOTE owner. Every
+  // mutation schedules a throttled roster refresh so viewers animate the
+  // working/idle transition (see remote-busy-overlay.ts).
+  const remoteBusy = createRemoteBusyOverlay((officeId) => scheduleRosterRefresh(officeId))
 
   function dispatchTurnComplete(correlationId: string, outcome: TurnCompletion): void {
-    clearRemoteBusy(correlationId)
+    remoteBusy.clear(correlationId)
     const cb = turnCompleteWaiters.get(correlationId)
     if (!cb) {
       console.warn(`${LOG_TAG} turn-complete with no waiter corr=${correlationId}; dropping`)
@@ -566,7 +611,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       turnCompleteWaiters.delete(correlationId)
       // Caller gave up on this wake (timeout/teardown) → its member is no longer
       // "working" from this node's point of view.
-      clearRemoteBusy(correlationId)
+      remoteBusy.clear(correlationId)
     }
   }
 
@@ -579,6 +624,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       link: undefined as unknown as LanMeshLink,
       nodeToClient: new Map(),
       streamOriginClientId: null,
+      nodeToGateway: new Set(),
     }
 
     // Host link: send(nodeId) resolves a clientId then hostSend; broadcast fans
@@ -593,10 +639,18 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           if (exclude !== null && clientId === exclude) continue
           deps.hostSend(clientId, frame)
         }
+        // Relayed members: the gateway fans a null-addressed frame out to every
+        // admitted room member. A relayed producer cannot be excluded there;
+        // the viewer's seq dedup guards that overlap.
+        entry.gateway?.send(null, frame)
         return
       }
       const clientId = entry.nodeToClient.get(to)
       if (!clientId) {
+        if (entry.gateway?.isAttached() && entry.nodeToGateway.has(to)) {
+          entry.gateway.send(to, frame)
+          return
+        }
         console.warn(`${LOG_TAG} host send: no client for node=${to} office=${officeId}`)
         return
       }
@@ -605,6 +659,33 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       }
     })
     entry.link = link
+
+    // Gateway relay: when a gateway is configured, the host also opens an
+    // outbound attachment and claims the office's room so off-LAN members can
+    // be relayed. Requires the device-key proof factory — the gateway admits a
+    // host session on that proof alone.
+    const gatewayUrl = deps.getGatewayUrl?.() ?? null
+    if (gatewayUrl) {
+      if (deps.makeAuthProof) {
+        entry.gateway = new GatewayAttachClient({
+          gatewayUrl,
+          officeId,
+          makeAuthProof: deps.makeAuthProof,
+          onFrame: (frame) => handleGatewayInbound(officeId, frame),
+          signAnnounce: deps.signGatewayAnnounce,
+          getIdentityId: () => deps.getLocalNodeId(),
+          getEndpoints: () => {
+            const url = deps.getLocalAdvertisedUrl?.() ?? null
+            return url ? [url] : []
+          },
+          getDisplayName: () => deps.getLocalDisplayName?.() ?? undefined,
+        })
+      } else {
+        console.warn(
+          `${LOG_TAG} gateway configured but no auth proof factory; office=${officeId} stays LAN-only`
+        )
+      }
+    }
 
     // M2 authority module for this hosted office (undefined when M2 is off).
     const authority = buildAuthority(officeId, link)
@@ -623,7 +704,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       // entries FIRST — otherwise the roster keeps a dead member pulsing for
       // the full busy TTL. Then run the kernel unblock.
       onMemberConfirmedOffline: (appId) => {
-        clearRemoteBusyForApp(appId)
+        remoteBusy.clearForApp(appId)
         deps.onMemberConfirmedOffline?.(appId)
       },
       onPresenceChange: deps.onPresenceChange
@@ -681,16 +762,46 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   function handleHostInbound(ctx: { clientId: string; officeId: string; frame: unknown }): void {
     const entry = hosted.get(ctx.officeId)
     if (!entry) {
+      // Not hosted here — but a JOINED office can also receive inbound WS
+      // sessions: after a host loss, peers dial each other (election traffic,
+      // re-form) and their frames arrive on this node's WS server. Route them
+      // into the joined office's coordinator with the same edge assertions.
+      const joinedEntry = joined.get(ctx.officeId)
+      if (joinedEntry) {
+        handleJoinedInbound(joinedEntry, ctx)
+        return
+      }
       console.warn(`${LOG_TAG} inbound for unhosted office=${ctx.officeId}; dropping frame`)
       return
     }
     const frame = ctx.frame as FederationMessage
+    // The frame's inner officeId must match the office the session's credential
+    // authenticated for (ctx.officeId is credential-derived) — a cross-office
+    // frame smuggled over a valid session is dropped at the edge.
+    if ((frame as { officeId?: unknown }).officeId !== ctx.officeId) {
+      console.warn(`${LOG_TAG} inbound officeId mismatch office=${ctx.officeId}; dropping ${frame.kind}`)
+      return
+    }
+    // The node identity the sending session PROVED at its auth handshake. Null
+    // when the transport doesn't bind identities (e.g. an in-memory test rig);
+    // a proven identity activates every origin assertion below.
+    const sessionIdentity = deps.getSessionIdentity?.(ctx.clientId) ?? null
     const fromNode = resolveFromNode(frame)
     if (!fromNode) {
       // turn-complete and stream-frames carry no source node but must still
       // reach the host coordinator: turn-complete resolves the pending wait by
       // correlationId; stream-frames is replayed + re-broadcast by onStreamFrames.
+      // Their origin is asserted against the session identity instead.
       if (frame.kind === 'stream-frames') {
+        // Origin assertion: the producing session must OWN the member whose
+        // session key it streams for — otherwise any member of the office could
+        // inject fabricated activity for someone else's member.
+        if (sessionIdentity !== null && !ownsStreamSession(ctx.officeId, sessionIdentity, frame.sessionKey)) {
+          console.warn(
+            `${LOG_TAG} stream-frames origin mismatch office=${ctx.officeId} session=${sessionIdentity} key=${frame.sessionKey}; dropping`
+          )
+          return
+        }
         // Mark the producing client so the synchronous re-broadcast inside
         // onStreamFrames excludes it (no echo back to the producer → no loop).
         // Delivery is synchronous, so clear it immediately after.
@@ -703,6 +814,17 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         return
       }
       if (frame.kind === 'turn-complete') {
+        // Origin assertion: only the node the wake was sent TO may complete its
+        // correlation — a peer must not be able to forge another member's turn
+        // outcome. An unknown correlation passes through (the dispatcher warns
+        // and drops it as a no-waiter completion).
+        const expected = remoteBusy.ownerNodeId(frame.correlationId)
+        if (sessionIdentity !== null && expected !== undefined && expected !== sessionIdentity) {
+          console.warn(
+            `${LOG_TAG} turn-complete origin mismatch office=${ctx.officeId} corr=${frame.correlationId} session=${sessionIdentity} expected=${expected}; dropping`
+          )
+          return
+        }
         ;(entry.federation.link as LanMeshLink).deliver(ctx.clientId, frame)
         return
       }
@@ -712,7 +834,6 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // Assert the frame's self-reported fromNode matches the session's
     // authenticated identity (see FederationManagerDeps.getSessionIdentity); a
     // mismatch is a spoof attempt — drop it here.
-    const sessionIdentity = deps.getSessionIdentity?.(ctx.clientId) ?? null
     if (sessionIdentity !== null && fromNode !== sessionIdentity) {
       console.warn(
         `${LOG_TAG} inbound fromNode spoof office=${ctx.officeId} claimed=${fromNode} session=${sessionIdentity}; dropping`
@@ -723,9 +844,86 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // resolve. A join-request is the first frame that carries the binding, but
     // refreshing on every frame keeps the map correct across reconnects.
     entry.nodeToClient.set(fromNode, ctx.clientId)
+    // A direct client session supersedes any earlier gateway path for this node.
+    entry.nodeToGateway.delete(fromNode)
 
     // The host link's inbound entrypoint forwards to the coordinator's handler.
     ;(entry.federation.link as LanMeshLink).deliver(fromNode, frame)
+  }
+
+  /**
+   * Inbound frames relayed by the gateway for a hosted office. The gateway has
+   * already bound the sending session to a proven identity and asserted each
+   * frame's fromNode against it, so the LAN edge's spoof assertion is not
+   * repeated here. Learning fromNode into nodeToGateway (and out of
+   * nodeToClient) keeps the node's return path pointed at the relay.
+   */
+  function handleGatewayInbound(officeId: string, frame: FederationMessage): void {
+    const entry = hosted.get(officeId)
+    if (!entry) return
+    if ((frame as { officeId?: unknown }).officeId !== officeId) {
+      console.warn(`${LOG_TAG} gateway inbound officeId mismatch office=${officeId}; dropping ${frame.kind}`)
+      return
+    }
+    const fromNode = resolveFromNode(frame)
+    if (!fromNode) {
+      // stream-frames / turn-complete carry no source node. Their LAN origin
+      // assertions key off a local session identity, which a relayed frame does
+      // not have — the gateway's session binding is the origin gate here. The
+      // synthetic label only namespaces the delivery; the coordinator does not
+      // route on it for these kinds.
+      if (frame.kind === 'stream-frames' || frame.kind === 'turn-complete') {
+        ;(entry.federation.link as LanMeshLink).deliver('gateway', frame)
+        return
+      }
+      console.warn(`${LOG_TAG} gateway inbound frame without source node office=${officeId}; dropping`)
+      return
+    }
+    entry.nodeToGateway.add(fromNode)
+    entry.nodeToClient.delete(fromNode)
+    ;(entry.federation.link as LanMeshLink).deliver(fromNode, frame)
+  }
+
+  /**
+   * Inbound frames for a JOINED office arriving on this node's WS server (a
+   * peer dialed us — election / re-form traffic after a host loss). Applies the
+   * same officeId + proven-identity origin assertions as the hosted path, then
+   * delivers into the joined office's coordinator.
+   */
+  function handleJoinedInbound(
+    entry: JoinedOffice,
+    ctx: { clientId: string; officeId: string; frame: unknown }
+  ): void {
+    const frame = ctx.frame as FederationMessage
+    if ((frame as { officeId?: unknown }).officeId !== ctx.officeId) {
+      console.warn(`${LOG_TAG} joined inbound officeId mismatch office=${ctx.officeId}; dropping ${frame.kind}`)
+      return
+    }
+    const sessionIdentity = deps.getSessionIdentity?.(ctx.clientId) ?? null
+    const fromNode = resolveFromNode(frame)
+    if (fromNode && sessionIdentity !== null && fromNode !== sessionIdentity) {
+      console.warn(
+        `${LOG_TAG} joined inbound fromNode spoof office=${ctx.officeId} claimed=${fromNode} session=${sessionIdentity}; dropping`
+      )
+      return
+    }
+    ;(entry.federation.link as LanMeshLink).deliver(fromNode ?? deps.getLocalNodeId(), frame)
+  }
+
+  /**
+   * True when `nodeId` owns the member addressed by a stream batch's session
+   * key: the key must parse, belong to this office, and its member's persisted
+   * owner_node_id must equal the proven session identity. Host-owned members are
+   * stored SELF-relative and therefore never match a remote session — a joiner
+   * cannot stream as the host's members.
+   */
+  function ownsStreamSession(officeId: string, nodeId: NodeId, sessionKey: string): boolean {
+    const parsed = parseTeamSessionKey(sessionKey)
+    if (!parsed || parsed.teamId !== officeId) return false
+    const owner = deps.teamStore
+      .listMembersByTeam(officeId)
+      .find((m) => m.appId === parsed.appId)?.ownerNodeId
+    return owner === nodeId
   }
 
   function sendWakeToMember(params: {
@@ -757,7 +955,9 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       })
       // The member now runs on its owner: overlay 'working' into the roster
       // projection so every viewer animates it, not just host-owned members.
-      markRemoteBusy(params.correlationId, params.officeId, params.request.appId)
+      // The owner node id is also the ONLY session allowed to complete this
+      // correlation (asserted on the inbound turn-complete).
+      remoteBusy.mark(params.correlationId, params.officeId, params.request.appId, params.ownerNodeId)
       return true
     }
     // JOINER role: the office is joined here and the target member is owned by the
@@ -796,6 +996,9 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     }
     console.log(`${LOG_TAG} member-leave from=${from} office=${officeId} apps=${owned.length}`)
     deps.onMemberLeft?.(officeId, owned)
+    // Relay cleanup: the departed node's gateway session serves nothing now.
+    const host = hosted.get(officeId)
+    if (host?.nodeToGateway.delete(from)) host.gateway?.evict(from)
   }
 
   /**
@@ -933,6 +1136,9 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       const client = new WsFederationClient({
         serverUrl,
         credentialToken,
+        // Node-identity handshake: answer the host's auth challenge with a
+        // device-key signature so the session binds this node's portable id.
+        makeAuthProof: deps.makeAuthProof,
         onFrame: (frame) => link.deliver(selfContext.selfNodeId, frame),
         onStateChange: (state) => {
           if (state === 'open') authedOnce = true
@@ -979,6 +1185,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
               joinedAt: Date.now(),
               lastSeen: Date.now(),
               status: 'online',
+              advertisedUrl: deps.getLocalAdvertisedUrl?.() ?? null,
             })
           }
           // Persist the re-join record so a restart reconnects without re-prompting
@@ -1014,6 +1221,15 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
             selfNodeId: selfContext.selfNodeId,
             snapshot,
           })
+          // Learn the office's node address book (in memory only — see the map's
+          // declaration for why these never become office_nodes rows).
+          if (snapshot.nodes) {
+            const book = officeAddressBooks.get(officeId) ?? new Map<NodeId, string>()
+            for (const n of snapshot.nodes) {
+              if (n.advertisedUrl) book.set(n.nodeId, n.advertisedUrl)
+            }
+            officeAddressBooks.set(officeId, book)
+          }
           // M2: the host is the believed authority; record its node row (so the
           // joiner's presence FSM tracks it and can detect it going offline) and
           // align the believed authority + tenure baseline.
@@ -1028,6 +1244,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
               joinedAt: existing?.joinedAt ?? 0, // host/creator sorts earliest
               lastSeen: Date.now(),
               status: 'online',
+              advertisedUrl: snapshot.nodes?.find((n) => n.nodeId === host)?.advertisedUrl ?? null,
             })
             authority.termState.setAuthority(host, authority.termState.getTerm())
           }
@@ -1056,6 +1273,13 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         displayName: deps.getLocalDisplayName?.() ?? undefined,
         credentialToken,
         bringMembers,
+        // Version/capability negotiation: the host computes the common version
+        // (rejecting an incompatible node) and answers with the negotiated pv +
+        // effective caps on the join-grant.
+        pv: PROTOCOL_VERSION_CURRENT,
+        minSupported: PROTOCOL_VERSION_MIN_SUPPORTED,
+        caps: DEFAULT_P2P_CAPS,
+        advertisedUrl: deps.getLocalAdvertisedUrl?.() ?? undefined,
       }
       federation.coordinator.requestJoin(request)
     })
@@ -1070,11 +1294,17 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       clearTimeout(pendingRefresh)
       rosterRefreshTimers.delete(officeId)
     }
+    // Drop any dialed peer connection + the learned address book with the office.
+    dialedPeers.get(officeId)?.()
+    dialedPeers.delete(officeId)
+    officeAddressBooks.delete(officeId)
     const host = hosted.get(officeId)
     if (host) {
       host.authority?.stop()
       host.federation.coordinator.stop()
+      host.gateway?.close()
       host.nodeToClient.clear()
+      host.nodeToGateway.clear()
       hosted.delete(officeId)
       console.log(`${LOG_TAG} stopped hosting office=${officeId}`)
     }
@@ -1143,12 +1373,53 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   }
 
   function redialToAuthority(officeId: string, authorityNodeId: NodeId): boolean {
-    const sender = peerDialer(officeId, authorityNodeId)
-    if (!sender) {
+    const dialed = peerDialer(officeId, authorityNodeId)
+    if (!dialed) {
       console.warn(`${LOG_TAG} redial: no route to authority node=${authorityNodeId} office=${officeId}`)
       return false
     }
-    return repointLink(officeId, sender)
+    const sender = typeof dialed === 'function' ? dialed : dialed.sender
+    const dispose = typeof dialed === 'function' ? undefined : dialed.dispose
+    if (!repointLink(officeId, sender)) {
+      dispose?.()
+      return false
+    }
+    // Dispose the previous dialed connection (if any) AFTER the repoint so the
+    // office never sits without an outbound leg; a dial we no longer target must
+    // not keep reconnecting in the background.
+    dialedPeers.get(officeId)?.()
+    if (dispose) dialedPeers.set(officeId, dispose)
+    else dialedPeers.delete(officeId)
+    console.log(`${LOG_TAG} redialed to authority node=${authorityNodeId} office=${officeId}`)
+    return true
+  }
+
+  /**
+   * A peer node's dialable base URL: the joined office's in-memory address book
+   * first (host-projected), then the persisted office_nodes row (host side / own
+   * ledger). Null when unknown — the peer cannot be dialed.
+   */
+  function getNodeAddress(officeId: string, nodeId: NodeId): string | null {
+    return (
+      officeAddressBooks.get(officeId)?.get(nodeId) ??
+      deps.federationStore.getNode(officeId, nodeId)?.advertisedUrl ??
+      null
+    )
+  }
+
+  /**
+   * Inbound entry for frames arriving over a DIALED peer connection (the
+   * production PeerDialer's WsFederationClient). Mirrors the joiner client's
+   * onFrame wiring: deliver into the office's link with the self label; the
+   * handlers resolve the true origin from the frame itself.
+   */
+  function deliverInbound(officeId: string, frame: FederationMessage): void {
+    const office = hosted.get(officeId) ?? joined.get(officeId)
+    if (!office) {
+      console.warn(`${LOG_TAG} deliverInbound: office not present office=${officeId}; dropping ${frame.kind}`)
+      return
+    }
+    ;(office.federation.link as LanMeshLink).deliver(deps.getLocalNodeId(), frame)
   }
 
   /** M2: route to the replication layer (assign seq, append log, fan-out to standbys). */
@@ -1222,6 +1493,18 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       appId,
       fid: randomUUID(),
     })
+    // Relay cleanup after a kick: the removed row is already gone, so evict any
+    // gateway-path node that now owns nothing here (it can rejoin with a fresh
+    // invite). Best-effort — an unevicted idle session is harmless.
+    if (host.gateway && host.nodeToGateway.size > 0) {
+      const owners = new Set(deps.teamStore.listMembersByTeam(officeId).map((m) => m.ownerNodeId))
+      for (const nodeId of [...host.nodeToGateway]) {
+        if (!owners.has(nodeId)) {
+          host.nodeToGateway.delete(nodeId)
+          host.gateway.evict(nodeId)
+        }
+      }
+    }
   }
 
   function projectOfficeDissolved(officeId: string): void {
@@ -1256,7 +1539,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     const ownerNode = deps.federationStore.getNode(params.officeId, params.ownerNodeId)
     const ownerUnreachable = ownerNode?.status === 'offline' || ownerNode?.status === 'suspect'
     const host = hosted.get(params.officeId)
-    const noHostRoute = host !== undefined && !host.nodeToClient.has(params.ownerNodeId)
+    const noHostRoute =
+      host !== undefined &&
+      !host.nodeToClient.has(params.ownerNodeId) &&
+      !host.nodeToGateway.has(params.ownerNodeId)
     if (ownerUnreachable || noHostRoute) {
       return Promise.reject(new Error('history-owner-unreachable'))
     }
@@ -1306,7 +1592,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     sendWakeToMember,
     signalLeave,
     registerTurnComplete,
-    isMemberRemoteBusy: isRemoteBusy,
+    isMemberRemoteBusy: (appId) => remoteBusy.isBusy(appId),
     relaySink,
     routeAuthorityWrite,
     sendMemberWrite,
@@ -1319,6 +1605,8 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     fetchMemberHistory,
     repointLink,
     redialToAuthority,
+    getNodeAddress,
+    deliverInbound,
     stopAll,
   }
 }

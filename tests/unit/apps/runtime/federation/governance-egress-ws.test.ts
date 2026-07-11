@@ -69,6 +69,7 @@ import {
   listOfficeClientIds,
 } from '../../../../../src/main/http/websocket'
 import { createFederationManager } from '../../../../../src/main/apps/runtime/federation/manager'
+import { localAuthProof } from './_ws-auth'
 import type { FederationManager } from '../../../../../src/main/apps/runtime/federation/manager'
 
 const OFFICE = 'office-gov-ws'
@@ -142,6 +143,10 @@ describe('governance egress + run-epoch + restart recovery (real ws)', () => {
       teamStore: joinerTeamStore,
       verifyCredential: () => null,
       getLocalNodeId: () => 'joiner-node-b',
+      // D10: the WS node handshake requires a device-key proof; the host here
+      // does not wire getSessionIdentity, so the anti-spoof gate stays inert and
+      // the joiner's selfNodeId label is admitted as-is.
+      makeAuthProof: (nonce) => localAuthProof(nonce),
       onMemberRemovedRemote: (officeId, appId) => memberRemoved.push({ officeId, appId }),
       onOfficeDissolvedRemote: (officeId) => officeDissolved.push(officeId),
     })

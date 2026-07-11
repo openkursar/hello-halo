@@ -65,18 +65,15 @@ describe('office-credential', () => {
     _resetLocalIdentityCache()
   })
 
-  it('rejects issuing a non-default scope (gated, pending device-key identity binding)', () => {
-    // Narrow scope is well-formed but not yet issuable: until the join handshake
-    // proves the joiner's identity (device-key bound, not self-reported), a narrow
-    // invite would resolve to an empty board (fail-closed) — a dead invite. Gate it
-    // at the source so no unusable narrow-scope token is minted.
-    expect(() =>
-      issueOfficeCredential({
-        officeId: OFFICE_A,
-        identity: IDENTITY_A,
-        scope: { visibility: 'readonly', contactable: 'lead-only', discoverable: false, canReinvite: false },
-      }),
-    ).toThrow('OFFICE_SCOPE_NOT_SUPPORTED')
+  it('issues a well-formed narrow scope (enforced end-to-end once identity is device-key proven)', () => {
+    // Narrow scope is now issuable: the joiner's identity is proven at the WS
+    // handshake (device-key challenge–response), the overlay is persisted on the
+    // admitted member row, and the authority scope gate enforces it against the
+    // authenticated node — a working narrow membership, not a dead invite.
+    const scope = { visibility: 'readonly' as const, contactable: 'lead-only' as const, discoverable: false, canReinvite: false }
+    const { token } = issueOfficeCredential({ officeId: OFFICE_A, identity: IDENTITY_A, scope })
+    const cred = verifyOfficeCredential(token)
+    expect(cred?.scope).toEqual(scope)
   })
 
   it('rejects issuing a malformed scope (out-of-domain field)', () => {

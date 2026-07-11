@@ -33,6 +33,8 @@ export function TeamTabContent() {
   const detail = useTeamStore(s => s.detail)
   const loadTeams = useTeamStore(s => s.loadTeams)
   const selectTeam = useTeamStore(s => s.selectTeam)
+  const pendingInviteLink = useTeamStore(s => s.pendingInviteLink)
+  const setPendingInviteLink = useTeamStore(s => s.setPendingInviteLink)
 
   const setShowInstallDialog = useAppsPageStore(s => s.setShowInstallDialog)
   const loadApps = useAppsStore(s => s.loadApps)
@@ -45,6 +47,12 @@ export function TeamTabContent() {
     // Member pickers need the full app list (across spaces) available.
     void loadApps()
   }, [loadTeams, loadApps])
+
+  // One-click join: an invite staged by a halo:// deep link opens the join
+  // dialog pre-filled the moment this tab is visible.
+  useEffect(() => {
+    if (pendingInviteLink) setShowJoin(true)
+  }, [pendingInviteLink])
 
   const openCreate = () => setShowCreate(true)
   const openJoin = () => setShowJoin(true)
@@ -93,7 +101,13 @@ export function TeamTabContent() {
 
       {showJoin && (
         <TeamJoinDialog
-          onClose={() => setShowJoin(false)}
+          initialLink={pendingInviteLink ?? undefined}
+          onClose={() => {
+            setShowJoin(false)
+            // A staged deep-link invite is one-shot: closing the dialog (joined
+            // or dismissed) consumes it so it never re-opens later.
+            if (pendingInviteLink) setPendingInviteLink(null)
+          }}
           onCreateDigitalHuman={() => setShowInstallDialog(true)}
         />
       )}

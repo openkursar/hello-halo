@@ -27,7 +27,7 @@ import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
 import { registerSecurityHandlers } from '../ipc/security'
 import { enableRemoteAccess } from '../services/remote.service'
-import { getConfig, migrateCredentialEncryption } from '../foundation/config.service'
+import { getConfig, getFederationGatewayUrl, migrateCredentialEncryption } from '../foundation/config.service'
 import { registerBrowserHandlers } from '../ipc/browser'
 import { registerBrowserPolicyHandlers } from '../ipc/browser-policy'
 import { cleanupAIBrowser } from '../services/ai-browser'
@@ -59,10 +59,11 @@ import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdo
 import type { TeamStore } from '../apps/team'
 import { initFederationStore, shutdownFederationStore, getFederationStore, getAuthorityStore } from '../apps/federation'
 import { recoverPersistedOffices } from './office-recovery'
-import { initIdentity, getLocalIdentity } from '../http/identity'
+import { initIdentity, getLocalIdentity, getLocalPublicKeyPem, signWithLocalKey } from '../http/identity'
 import { verifyOfficeCredential } from '../http/auth'
 import { setFederationInbound, sendFederationFrameToClient, listOfficeClientIds, broadcastToAll, getSessionIdentity } from '../http/websocket'
-import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, withOwnerResolvedSpace, createRelayCapture, createLocationAwareBlackboard } from '../apps/runtime/federation'
+import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, withOwnerResolvedSpace, createRelayCapture, createLocationAwareBlackboard, WsFederationClient } from '../apps/runtime/federation'
+import { getRemoteAccessStatus } from '../services/remote.service'
 import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtime/federation'
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
 import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamUpdatedEvent } from '../../shared/apps/team-types'
@@ -296,6 +297,22 @@ async function initPlatformAndApps(): Promise<void> {
         }
       }
 
+      // Joiner leg of the node-identity handshake: sign a host's one-shot auth
+      // nonce with this node's device key so the session binds the portable
+      // identity (the receiving side then enforces fromNode === session id).
+      // Shared by the primary join client and the peer dialer's re-form client.
+      const makeAuthProof = (nonce: string) => {
+        const identity = getLocalIdentity()
+        return {
+          method: 'device-key',
+          identityId: identity.id,
+          publicKey: getLocalPublicKeyPem(),
+          displayName: identity.displayName,
+          challenge: nonce,
+          signature: signWithLocalKey(Buffer.from(nonce, 'base64')).toString('base64'),
+        }
+      }
+
       const federationManager = createFederationManager({
         hostSend: sendFederationFrameToClient,
         hostListOfficeClients: listOfficeClientIds,
@@ -307,9 +324,51 @@ async function initPlatformAndApps(): Promise<void> {
         // handshake. Null (unknown/unauthenticated client) skips the assertion.
         getSessionIdentity: (clientId) => getSessionIdentity(clientId),
         getLocalNodeId: () => getLocalIdentity().id,
+        makeAuthProof,
+        // Address book: what this node advertises so peers can dial it after a
+        // transport loss. Null while remote access is off — the node can then
+        // dial out but not be dialed.
+        getLocalAdvertisedUrl: () => {
+          const status = getRemoteAccessStatus()
+          return status.server.running ? status.server.lanUrl ?? null : null
+        },
+        // Production peer dialer: open a federation WS client against the target
+        // node's advertised URL. Auth rides the saved invite token when the peer
+        // can still verify it, and falls back to roster re-entry (device-key
+        // proof + admitted-node check) when it cannot — e.g. dialing a newly-
+        // elected authority that never issued our invite.
+        peerDialer: (officeId, authorityNodeId) => {
+          const manager = getFederationManager()
+          const url = manager?.getNodeAddress(officeId, authorityNodeId)
+          if (!url) {
+            console.warn(`[Federation] peer dialer: no advertised URL office=${officeId} node=${authorityNodeId}`)
+            return null
+          }
+          const savedToken = getFederationStore()
+            ?.listJoinedOfficeConnections()
+            .find((c) => c.officeId === officeId)?.inviteToken
+          const client = new WsFederationClient({
+            serverUrl: url,
+            credentialToken: savedToken ?? '',
+            officeId,
+            makeAuthProof,
+            onFrame: (frame) => getFederationManager()?.deliverInbound(officeId, frame),
+          })
+          return {
+            sender: (_to, frame) => client.send(frame),
+            dispose: () => client.close(),
+          }
+        },
         // Advertised on join so the host renders the owner badge ("brought by
         // Alice") instead of a generic label on the members this node brings.
         getLocalDisplayName: () => getLocalIdentity().displayName,
+        // Gateway relay: when configured (user setting or product default), a
+        // hosted office also attaches to the gateway so off-LAN members can be
+        // relayed. The announce signature uses the same device key as the
+        // auth proof, keeping the federation layer identity-import-free.
+        getGatewayUrl: () => getFederationGatewayUrl(),
+        signGatewayAnnounce: (payload) =>
+          signWithLocalKey(Buffer.from(payload, 'utf8')).toString('base64'),
         // Stamp each member's live status into the roster snapshot so a joiner's
         // topology animates the working pulse in step with the host. Reads the
         // team runtime's host-local getMemberStatus; idle when the runtime is not
@@ -517,6 +576,12 @@ async function initPlatformAndApps(): Promise<void> {
                 selfNodeId,
                 sendBlackboardWrite: (hostNodeId, write) =>
                   getFederationManager()?.sendMemberWrite({ ...write, hostNodeId }),
+                // Partition write gate: while this node sees the office paused
+                // (authority lost, no elected successor / minority side), shadow
+                // writes are refused with a calm retryable error instead of
+                // piling up divergent optimistic rows (AC-5.4).
+                isOfficePaused: (teamId) =>
+                  getFederationManager()?.getOfficeAuthority(teamId)?.isPaused() ?? false,
               })
           : undefined,
       })

@@ -6,8 +6,10 @@
  * An office maps 1:1 to a team (officeId === teamId). The invite is a bearer
  * office credential issued into a plain http(s) URL; the joiner app parses the
  * `office` + `invite` query params and connects its federation client to the
- * lanUrl origin. The credential's `identity` is a placeholder at issue time —
- * the real joiner identity is asserted later in the join-request handshake.
+ * lanUrl origin. The credential's `identity` is a placeholder at issue time by
+ * design (a shareable link cannot know its future holder); the joiner's REAL
+ * identity is proven at the WS auth handshake (device-key challenge–response)
+ * and bound to the session, which the host asserts on every inbound frame.
  */
 
 import { getTeamStore } from '../apps/team'
@@ -56,23 +58,32 @@ export async function generateTeamInvite(teamId: string, ttlMs?: number, scope?:
     return { success: false, error: 'TEAM_NOT_FOUND' }
   }
 
-  // Lazy import: remote.service pulls electron at load; keeping it out of this
-  // controller's static graph lets the team routes (which import this file) load
-  // in non-electron contexts (tests, web) without dragging BrowserWindow in.
-  const { getRemoteAccessStatus } = await import('../services/remote.service')
-  const status = getRemoteAccessStatus()
-  if (!status.server.running || !status.server.lanUrl) {
-    return { success: false, error: 'REMOTE_ACCESS_OFF' }
+  // Relayed office: when a federation gateway is configured, the invite points
+  // joiners at the gateway (no LAN address in the link, §9.4) and the host
+  // reaches the gateway outbound — the local server need not be running.
+  const { getFederationGatewayUrl } = await import('../foundation/config.service')
+  const gatewayUrl = getFederationGatewayUrl()
+
+  let serverUrl = gatewayUrl ? gatewayUrl.replace(/\/+$/, '') : null
+  if (!serverUrl) {
+    // Lazy import: remote.service pulls electron at load; keeping it out of this
+    // controller's static graph lets the team routes (which import this file) load
+    // in non-electron contexts (tests, web) without dragging BrowserWindow in.
+    const { getRemoteAccessStatus } = await import('../services/remote.service')
+    const status = getRemoteAccessStatus()
+    if (!status.server.running || !status.server.lanUrl) {
+      return { success: false, error: 'REMOTE_ACCESS_OFF' }
+    }
+    serverUrl = status.server.lanUrl
   }
 
   const manager = getFederationManager()
   if (!manager) {
     return { success: false, error: 'FEDERATION_UNAVAILABLE' }
   }
-  // Ensure the host coordinator exists so the office is ready to accept joins.
+  // Ensure the host coordinator exists so the office is ready to accept joins
+  // (and, when a gateway is configured, attaches to it).
   manager.hostOffice(teamId)
-
-  const serverUrl = status.server.lanUrl
 
   // Reuse the office's still-valid credential from the ledger instead of minting
   // on every dialog open, so a shared link keeps working across restarts (the

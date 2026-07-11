@@ -58,7 +58,24 @@ export interface LocationAwareBlackboardDeps {
   selfNodeId: NodeId
   /** Route a shadow office's write to its host (the office authority). */
   sendBlackboardWrite: (hostNodeId: NodeId, write: OutboundBlackboardWrite) => void
+  /**
+   * Partition write gate: whether the office is currently PAUSED on this node
+   * (partition minority / authority loss with no elected successor). While
+   * paused, shadow writes are refused with a calm retryable error instead of
+   * being optimistically applied — a paused side must not accumulate divergent
+   * local rows that a later convergence would have to discard. Reads stay open
+   * (the local replica remains the read projection). Absent → never paused.
+   */
+  isOfficePaused?: (teamId: string) => boolean
 }
+
+/**
+ * Calm, retryable refusal for writes during a pause. Surfaces to the AGENT as
+ * a tool error; deliberately position-free (no partition/authority/node words)
+ * per the product's no-technical-leakage rule.
+ */
+const SYNC_PENDING_MESSAGE =
+  'The shared board is syncing right now. Please try this write again in a moment.'
 
 export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps): Blackboard {
   const { base, store, sendBlackboardWrite } = deps
@@ -68,9 +85,18 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
     return team?.hostNodeId ?? null
   }
 
+  /** Refuse a shadow write while the office is paused (see isOfficePaused). */
+  function assertWritable(teamId: string): void {
+    if (deps.isOfficePaused?.(teamId)) {
+      console.warn(`${LOG_TAG} write refused while office paused team=${teamId}`)
+      throw new Error(SYNC_PENDING_MESSAGE)
+    }
+  }
+
   function postTask(input: PostTaskInput): { taskId: string } {
     const host = hostOf(input.teamId)
     if (host === null) return base.postTask(input)
+    assertWritable(input.teamId)
 
     // Shadow office: own the id locally so the host applies the SAME id.
     const now = Date.now()
@@ -106,6 +132,7 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
       base.updateTask(input)
       return
     }
+    assertWritable(input.teamId)
     const now = Date.now()
     const patch = {
       status: input.status,
@@ -126,6 +153,7 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
   function postFinding(input: PostFindingInput): { findingId: string } {
     const host = hostOf(input.teamId)
     if (host === null) return base.postFinding(input)
+    assertWritable(input.teamId)
 
     const finding: BlackboardFinding = {
       id: randomUUID(),

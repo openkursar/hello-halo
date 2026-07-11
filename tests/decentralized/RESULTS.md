@@ -1,38 +1,37 @@
 # Decentralized Office · Backend Consistency Test Results (RESULTS)
 
-> Run at 2026-07-11T04:44:03.849Z · cluster=5 ready node(s) · model key present=true
+> Run at 2026-07-11T07:21:19.688Z · cluster=5 ready node(s) · model key present=true
 > Spec: SCENARIOS.md · Driver: run-scenarios.mjs · HTTP/backend-only, real multi-process cluster.
 
 ## Summary
 
 | Total | ✅ PASS | ❌ FAIL | ⚠️ PARTIAL | ⏭️ SKIP |
 |---|---|---|---|---|
-| 62 | 41 | 0 | 3 | 18 |
+| 62 | 42 | 0 | 2 | 18 |
 
 ### ⚠️ PARTIALs (incomplete / weak signal)
 
 - **E2** — no working status observed within 40s (model may be slow/idle)
 - **E3** — activity/task counts per node=[0,0,0] agree=true
-- **K1** — 50 concurrent sends: transportOk=false repliedWithContent=2 deliveredInTranscript=50/50 elapsed=301056ms alive=true (coalescing per-send-reply semantics flagged in RESULTS for product review)
 
 ## Per-scenario
 
 | ID | Status | Evidence |
 |---|---|---|
 | A1 | ✅ PASS | 5 nodes status=all200, uniqueIds=true, uniquePorts=true |
-| A2 | ✅ PASS | identity before=id_jMc9oKWnkb9oZeLafjx7Cir9llTFnuiY after=id_jMc9oKWnkb9oZeLafjx7Cir9llTFnuiY |
+| A2 | ✅ PASS | identity before=id_kUPj2ziTmAB5X097oG_M-ZJnuhoAiHMi after=id_kUPj2ziTmAB5X097oG_M-ZJnuhoAiHMi |
 | A3 | ✅ PASS | 5 nodes, uniquePorts=true, isolatedDataDirs=true |
-| B1 | ✅ PASS | all 5 nodes agree: 6 members, lead=5c171fff-5b10-420e-a7ff-9aecf785b0ae; host sees remote member=true |
-| B5 | ✅ PASS | 5 nodes: all 5 nodes agree: 6 members, lead=5c171fff-5b10-420e-a7ff-9aecf785b0ae |
-| B2 | ✅ PASS | jti1=8711bc24-7aa9-4a2d-8bc6-f494ad0c3f4d jti2=8711bc24-7aa9-4a2d-8bc6-f494ad0c3f4d tokenSame=true |
-| B3 | ✅ PASS | revokedJoinRejected=true (node-3 POST /api/teams/ff3b3437-c511-439a-99b2-35215a07fc70/join → AUTH_REJECTED (status 200)); seatedMemberRetained=true |
+| B1 | ✅ PASS | all 5 nodes agree: 6 members, lead=97df9468-61c2-41f6-b50d-2af6e4dd7b95; host sees remote member=true |
+| B5 | ✅ PASS | 5 nodes: all 5 nodes agree: 6 members, lead=97df9468-61c2-41f6-b50d-2af6e4dd7b95 |
+| B2 | ✅ PASS | jti1=bf3713a1-f933-43cc-b4e7-84dfba80dd99 jti2=bf3713a1-f933-43cc-b4e7-84dfba80dd99 tokenSame=true |
+| B3 | ✅ PASS | revokedJoinRejected=true (node-3 POST /api/teams/21daca50-cc41-44b2-ae6b-40a88887623f/join → AUTH_REJECTED (status 200)); seatedMemberRetained=true |
 | B4 | ⏭️ SKIP | no one-time invite option on POST /invite (default invites are reusable per B2); cannot drive single-use semantics over HTTP |
 | B6 | ✅ PASS | dotToken status=401, nodeStillServes=true (note: cannot drive a real custom-PIN login over this harness; auth-path probe only) |
 | B7 | ⏭️ SKIP | office-member HTTP bearer not mintable via harness (PIN-only auth available); cannot exercise dual-credential 401/403 matrix |
 | B8 | ⏭️ SKIP | WS office-scope event filtering requires a WS office-credential client; not drivable from this HTTP harness |
-| D1 | ✅ PASS | all nodes converged to new lead=e3852d01-59e1-4f0b-b827-261286841104 |
-| D2 | ✅ PASS | all 3 nodes agree: 5 members, lead=e3852d01-59e1-4f0b-b827-261286841104 |
-| D3 | ✅ PASS | removed 06fc2820-2fef-4b43-9291-bdf38c0defd6; all 3 nodes agree: 4 members, lead=e3852d01-59e1-4f0b-b827-261286841104 |
+| D1 | ✅ PASS | all nodes converged to new lead=ecfe2488-3dba-4399-abb6-0f9bcccd6742 |
+| D2 | ✅ PASS | all 3 nodes agree: 5 members, lead=ecfe2488-3dba-4399-abb6-0f9bcccd6742 |
+| D3 | ✅ PASS | removed 3b0a47ce-5808-4166-a844-b3cdc94a55f8; all 3 nodes agree: 4 members, lead=ecfe2488-3dba-4399-abb6-0f9bcccd6742 |
 | D4 | ✅ PASS | edges agree across nodes |
 | D5 | ✅ PASS | both concurrent writes applied and converged; no silent drop |
 | C1 | ✅ PASS | victim node marked suspect in presence |
@@ -42,7 +41,7 @@
 | C5 | ✅ PASS | host auto re-hosted, 2 nodes online |
 | C6 | ✅ PASS | joiner role=joined selfAuthority=false hostStatus=suspect (expect no self-promotion) |
 | C7 | ⏭️ SKIP | >24h offline rejoin needs clock injection; shared wall clock on one machine (SCENARIOS §0.3) |
-| E1 | ✅ PASS | all nodes status=running, epoch=c88deb6b-65e4-47b2-a0fd-f820038d43c3 byte-identical |
+| E1 | ✅ PASS | all nodes status=running, epoch=501e045e-b234-4afd-b45a-dc720d415d61 byte-identical |
 | E2 | ⚠️ PARTIAL | no working status observed within 40s (model may be slow/idle) |
 | E3 | ⚠️ PARTIAL | activity/task counts per node=[0,0,0] agree=true |
 | F1 | ✅ PASS | task-id sets agree (n1:0,n2:0,n3:0); authoritySelf=1 |
@@ -52,15 +51,15 @@
 | F3 | ⏭️ SKIP | replication_log fid idempotency on replay is internal DB state not exposed over HTTP |
 | G1 | ✅ PASS | statuses=[200,200] lens=[0,0] noHistoryNotFound=true |
 | G2 | ✅ PASS | message+reply persisted, both nodes read 2 msgs |
-| G3 | ✅ PASS | owner-down history fetch took 8003ms status=502 (expect <12s + neutral error) |
+| G3 | ✅ PASS | owner-down history fetch took 8007ms status=502 (expect <12s + neutral error) |
 | G4 | ✅ PASS | non-member appId history request status=404 rejected=true |
 | H1 | ✅ PASS | transcript consistent len=2 across nodes |
 | H2 | ✅ PASS | transcript consistent len=2 across nodes |
 | H3 | ✅ PASS | transcript consistent len=2 across nodes |
-| H7 | ✅ PASS | send acked in 6120ms status=200 (server-side dispatch ack; true UI optimistic echo is renderer-only) |
-| H4 | ✅ PASS | post-seal dispatch: transcript consistent len=7 across nodes |
+| H7 | ✅ PASS | send acked in 5545ms status=200 (server-side dispatch ack; true UI optimistic echo is renderer-only) |
+| H4 | ✅ PASS | post-seal dispatch: transcript consistent len=6 across nodes |
 | H5 | ⏭️ SKIP | in-agent team_send tool dispatch is driven by the model from inside a run, not directly invokable over the HTTP control plane |
-| H6 | ✅ PASS | joiner reads its own member transcript (len=7) |
+| H6 | ✅ PASS | joiner reads its own member transcript (len=6) |
 | I1 | ✅ PASS | kicked member removed from host roster (del status=200) |
 | I4 | ✅ PASS | post-kick persisted join-conn rows=0 (expect 0 → no auto-rejoin on next start); live presence=joined |
 | I2 | ✅ PASS | joiner left; both views consistent (leave status=200) |
@@ -70,10 +69,10 @@
 | J2 | ⏭️ SKIP | empty-identity ('') sentinel join-admission is internal to the WS join handshake; not observable/injectable via HTTP |
 | J3 | ✅ PASS | narrow scope rejected: OFFICE_SCOPE_INVALID |
 | J4 | ⏭️ SKIP | narrow-scope end-to-end enforcement gated on device-key (D10 deferred) per SCENARIOS J4 |
-| K1 | ⚠️ PARTIAL | 50 concurrent sends: transportOk=false repliedWithContent=2 deliveredInTranscript=50/50 elapsed=301056ms alive=true (coalescing per-send-reply semantics flagged in RESULTS for product review) |
+| K1 | ✅ PASS | 50 concurrent sends: transportOk=true repliedWithContent=50 deliveredInTranscript=50/50 elapsed=5217ms alive=true (coalescing per-send-reply semantics flagged in RESULTS for product review) |
 | K2 | ⏭️ SKIP | super-long transcript GET needs a long real run to build volume; covered functionally by G1/G2, perf/OOM not asserted at HTTP layer |
-| K3 | ✅ PASS | 5-node office roster: all 5 nodes agree: 6 members, lead=69ddb639-56ee-44be-9e8a-d16ddc807920 |
-| K4 | ✅ PASS | after 8 join/leave cycles: all 1 nodes agree: 2 members, lead=13688439-d7d7-4137-b885-8ba0d11b68a4; lingering remote members=0 (expect 0) |
+| K3 | ✅ PASS | 5-node office roster: all 5 nodes agree: 6 members, lead=9af9bb46-0f21-4a9e-94ac-3a73a1fa3697 |
+| K4 | ✅ PASS | after 8 join/leave cycles: all 1 nodes agree: 2 members, lead=4132bfd9-0429-45b9-a068-cd42118df5bb; lingering remote members=0 (expect 0) |
 | K5 | ⏭️ SKIP | host+9 (10 nodes) exceeds this run’s cluster size; would need --nodes 10 and heavy CPU; not run by default |
 | K6 | ⏭️ SKIP | run-time repeated kill/revive of a member-owner is timing-fragile under shared-CPU model contention (same class as E5) |
 | K7 | ✅ PASS | two offices isolated: A=3 B=3 members, overlap=0 |

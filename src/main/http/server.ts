@@ -21,6 +21,9 @@ import {
 } from './auth'
 import { initWebSocket, shutdownWebSocket, getClientCount } from './websocket'
 import { registerApiRoutes } from './routes'
+import { getInvitePage } from './invite-page'
+import { getTeamStore } from '../apps/team'
+import { getLocalIdentity } from './identity/index'
 import { getMainWindow as getMainWindowFromService } from '../foundation/window.service'
 
 // Vite dev server URL
@@ -115,6 +118,30 @@ export async function startHttpServer(
       return res.sendStatus(200)
     }
     next()
+  })
+
+  // Office-invite landing page (public, before every auth gate). A shareable
+  // invite link opened in a BROWSER lands here instead of the remote-control
+  // login page: the page hands off into the installed app via halo://join, or
+  // guides installation. Token is never echoed server-side (see invite-page.ts).
+  expressApp.get('/', (req: Request, res: Response, next) => {
+    if (typeof req.query.office !== 'string' || typeof req.query.invite !== 'string') {
+      return next()
+    }
+    const officeId = req.query.office
+    let officeName: string | null = null
+    try {
+      officeName = getTeamStore()?.getTeamById(officeId)?.name ?? null
+    } catch {
+      /* team store not ready — the page renders with a neutral title */
+    }
+    let inviterName: string | null = null
+    try {
+      inviterName = getLocalIdentity().displayName
+    } catch {
+      /* identity not ready — neutral title */
+    }
+    res.send(getInvitePage({ officeName, inviterName }))
   })
 
   // Login endpoint (before auth middleware). Owns rate-limit + lockout

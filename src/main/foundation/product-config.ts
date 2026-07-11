@@ -263,6 +263,17 @@ export interface ProductConfig {
    * to its own SecurityPolicy type at access time.
    */
   security?: Record<string, unknown>
+
+  /**
+   * Office federation defaults (optional, enterprise/custom builds only).
+   *
+   * `gatewayUrl` pre-configures the federation gateway used to relay office
+   * collaboration across networks. User config (`federation.gatewayUrl` in
+   * config.json) takes precedence; omitting both keeps pure-LAN behaviour.
+   */
+  federation?: {
+    gatewayUrl?: string
+  }
 }
 
 // ============================================================================
@@ -359,6 +370,14 @@ export function getIdentitySource(): string | undefined {
  */
 export function getTelemetryConfig(): ProductConfig['telemetry'] | undefined {
   return loadProductConfig().telemetry
+}
+
+/**
+ * Get the federation gateway default from product.json.
+ * Returns undefined when not configured (pure-LAN default).
+ */
+export function getProductFederationGatewayUrl(): string | undefined {
+  return loadProductConfig().federation?.gatewayUrl
 }
 
 /**

@@ -83,6 +83,12 @@ interface TeamState {
   presence: Map<string, Map<string, NodePresence>>
   /** Office liveness overlay: teamId → 'paused' while the office is resting. Absent = live. */
   officeLiveness: Map<string, OfficeLiveness>
+  /**
+   * An invite link delivered by a halo:// deep link (one-click join). Set by
+   * the App-level listener; the Teams tab opens the join dialog pre-filled and
+   * clears it. Distinct from any dialog state so the link survives navigation.
+   */
+  pendingInviteLink: string | null
 
   // ── Loading flags ────────────────────────
   isLoadingList: boolean
@@ -125,6 +131,8 @@ interface TeamState {
   applyTeamMessage: (event: TeamMessageEvent) => void
   applyTeamPresence: (event: TeamPresenceEvent) => void
   applyTeamOfficeStatus: (event: TeamOfficeStatusEvent) => void
+  /** Stage an invite link from a halo:// deep link (null clears it). */
+  setPendingInviteLink: (link: string | null) => void
   /** Remove flows older than FLOW_TTL_MS (called on a timer after each message). */
   expireFlows: () => void
 
@@ -173,6 +181,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   activeFlows: [],
   presence: new Map(),
   officeLiveness: new Map(),
+  pendingInviteLink: null,
   epochs: [],
   isLoadingEpochs: false,
 
@@ -588,6 +597,8 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       })
     }
   },
+
+  setPendingInviteLink: (link) => set({ pendingInviteLink: link }),
 
   getMemberPresence: (teamId, member) => {
     const isRemote = isRemoteMember(member)

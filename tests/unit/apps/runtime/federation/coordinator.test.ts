@@ -102,6 +102,7 @@ describe('FederationCoordinator', () => {
   function makeHost(opts?: {
     verify?: (token: string) => OfficeCredentialLike | null
     onPresenceChange?: (snap: PresenceSnapshot) => void
+    onWake?: (request: { conversationId: string }) => Promise<{ finalMessage: string | null }>
   }) {
     const hostLink = new InMemoryFederationLink(HOST, hub)
     const coordinator = createFederationCoordinator({
@@ -115,6 +116,7 @@ describe('FederationCoordinator', () => {
       now,
       presence: { suspectAfterMs: SUSPECT_MS, confirmedOfflineMs: CONFIRMED_MS },
       onPresenceChange: opts?.onPresenceChange,
+      onWake: opts?.onWake as never,
     })
     coordinator.start()
     return { coordinator, hostLink }
@@ -214,6 +216,80 @@ describe('FederationCoordinator', () => {
       const reject = bob.received.find((r) => r.msg.kind === 'join-reject')
       expect(reject?.msg).toMatchObject({ kind: 'join-reject', reason: 'OFFICE_MISMATCH' })
       expect(federationStore.getNode(OFFICE, BOB)).toBeNull()
+    })
+
+    it('negotiates a compatible protocol version: the grant echoes the negotiated pv + caps', () => {
+      makeHost()
+      const bob = recordingPeer(hub, BOB)
+
+      // A current-version joiner (pv=3, min=3) is admitted and the grant carries
+      // the negotiated version and an effective cap mask.
+      bob.link.send(HOST, makeJoinRequest({ pv: 3, minSupported: 3, caps: 0xff }))
+
+      const grant = bob.received.find((r) => r.msg.kind === 'join-grant')
+      expect(grant?.msg).toMatchObject({ kind: 'join-grant', assignedNodeId: BOB, pv: 3 })
+      expect(typeof (grant?.msg as { caps?: number }).caps).toBe('number')
+      expect(federationStore.getNode(OFFICE, BOB)).toBeTruthy()
+    })
+
+    it('rejects a join whose PRESENT protocol version is below the floor (VERSION_INCOMPATIBLE)', () => {
+      makeHost()
+      const bob = recordingPeer(hub, BOB)
+
+      // A legacy node that advertises pv=1/min=1 cannot satisfy the current floor.
+      bob.link.send(HOST, makeJoinRequest({ pv: 1, minSupported: 1 }))
+
+      const reject = bob.received.find((r) => r.msg.kind === 'join-reject')
+      expect(reject?.msg).toMatchObject({ kind: 'join-reject', reason: 'VERSION_INCOMPATIBLE' })
+      expect(federationStore.getNode(OFFICE, BOB)).toBeNull()
+      expect(teamStore.listMembersByTeam(OFFICE)).toHaveLength(0)
+    })
+
+    it('admits a join that omits pv (pre-negotiation peer / in-process link): gate is lenient on absent version', () => {
+      makeHost()
+      const bob = recordingPeer(hub, BOB)
+
+      // No pv field at all — admitted (security is the WS-layer device-key proof,
+      // not the version gate).
+      bob.link.send(HOST, makeJoinRequest())
+
+      expect(federationStore.getNode(OFFICE, BOB)).toBeTruthy()
+    })
+
+    it('coalesced wakes on ONE session all get a turn-complete (K1): no waiter hangs to timeout', async () => {
+      // Two concurrent wakes aimed at the SAME member session (identical
+      // conversationId) — the owner absorbs them into one in-flight turn. The
+      // owner must reply turn-complete to BOTH correlationIds, not just the first.
+      let release!: (v: { finalMessage: string | null }) => void
+      const turn = new Promise<{ finalMessage: string | null }>((r) => { release = r })
+      makeHost({ onWake: () => turn })
+      const bob = recordingPeer(hub, BOB)
+
+      const convId = `app-chat:app-m:team:${OFFICE}:e1`
+      const wake = (correlationId: string) => ({
+        kind: 'wake' as const,
+        officeId: OFFICE,
+        correlationId,
+        request: {
+          appId: 'app-m', spaceId: 's', message: 'do', conversationId: convId,
+          teamContext: { teamId: OFFICE, epochId: 'e1', correlationId, fromAppId: null, wait: true, kind: 'message' },
+        },
+        fromNode: BOB,
+      })
+      hub.deliver(BOB, HOST, wake('corr-1'))
+      hub.deliver(BOB, HOST, wake('corr-2'))
+
+      // One turn resolves → BOTH correlations are acked with the same outcome.
+      release({ finalMessage: 'done' })
+      await turn
+      await new Promise((r) => setTimeout(r, 0))
+
+      const completes = bob.received.filter((r) => r.msg.kind === 'turn-complete')
+      const corrs = completes.map((r) => (r.msg as { correlationId: string }).correlationId).sort()
+      expect(corrs).toEqual(['corr-1', 'corr-2'])
+      for (const c of completes) {
+        expect((c.msg as { outcome: { kind: string; content?: string } }).outcome).toMatchObject({ kind: 'result', content: 'done' })
+      }
     })
 
     it('rejects an office mismatch (request office differs from context)', () => {

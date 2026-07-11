@@ -116,7 +116,7 @@ export function SettingsPage() {
 
               {/* Remote Access Section - Desktop only */}
               {!isRemoteMode && (
-                <RemoteAccessSection />
+                <RemoteAccessSection config={config} setConfig={setConfig} />
               )}
 
               {/* Recommend Section */}

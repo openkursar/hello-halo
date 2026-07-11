@@ -129,7 +129,10 @@ if (!gotTheLock) {
 
 // Handle second-instance event (when user tries to launch another instance)
 // Note: This event only fires on the primary instance
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv) => {
+  // Windows/Linux deliver halo:// deep links via the second instance's argv.
+  handleDeepLinkArgv(argv)
+
   // Focus the existing window when a second instance is launched
   if (!mainWindow || mainWindow.isDestroyed()) {
     createWindow()
@@ -152,6 +155,10 @@ app.on('second-instance', () => {
     app.dock?.show()
   }
 })
+
+// halo:// deep links (office invites): register the protocol handler + macOS
+// open-url listener before ready — a link click can be what launches the app.
+registerDeepLinkHandling()
 
 // Trust certificates for hosts covered by built-in browser allowlist domain
 // patterns (never user custom entries or CIDR ranges — see
@@ -177,6 +184,7 @@ import {
 import { initializeApp } from './foundation/config.service'
 import { flushAllPendingIndexWrites } from './services/conversation.service'
 import { shutdownRemoteAccess } from './services/remote.service'
+import { registerDeepLinkHandling, handleDeepLinkArgv } from './services/deep-link.service'
 import { stopOpenAICompatRouter } from './openai-compat-router'
 import { manualCheckForUpdates } from './services/updater.service'
 import { initAnalytics } from './services/analytics'
@@ -469,6 +477,11 @@ app.whenReady().then(async () => {
 
   // Create window first (before analytics, so Baidu provider can find the window)
   createWindow()
+
+  // Windows/Linux cold start FROM a halo:// link: the URL rides this process's
+  // own argv (no second instance exists yet). Buffered until the renderer pulls
+  // it via team:consume-pending-invite.
+  handleDeepLinkArgv(process.argv)
 
   // ========================================
   // PHASED INITIALIZATION

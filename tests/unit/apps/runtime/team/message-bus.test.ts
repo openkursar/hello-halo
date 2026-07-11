@@ -397,6 +397,33 @@ describe('MessageBus', () => {
       expect(wakes[0].envelope.body).toBe('queued')
       expect(wakes[0].appId).toBe(RESEARCHER_APP)
     })
+
+    it('caps the per-session mailbox, shedding the OLDEST when the bound is exceeded (M-4)', async () => {
+      seedTeam(store, 'free')
+      const { hooks, wakes, busy } = makeHooks()
+      // Raise the circuit ceiling so this test exercises the mailbox bound, not
+      // the message-count breaker (the two are independent guards).
+      const bus = createMessageBus({ store, hooks, circuitOverrides: { maxMessages: 1000 } })
+
+      const researcherSession = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID)
+      busy.add(researcherSession) // researcher stays mid-turn the whole time
+
+      // Buffer more than the cap (128). The first two must be shed as oldest.
+      const total = 130
+      for (let i = 0; i < total; i++) {
+        await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: `msg-${i}`, wait: false })
+      }
+      expect(wakes).toHaveLength(0) // all buffered, none woken while busy
+
+      // Drain one: the oldest SURVIVOR is msg-2 (msg-0 and msg-1 were shed).
+      busy.delete(researcherSession)
+      bus.completeTurn({
+        sessionKey: researcherSession,
+        trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'c0', fromAppId: null, wait: false },
+        outcome: { kind: 'result', content: '' },
+      })
+      expect(wakes[0].envelope.body).toBe('msg-2')
+    })
   })
 
   // ===========================================================================

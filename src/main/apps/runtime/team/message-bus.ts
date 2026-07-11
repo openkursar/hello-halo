@@ -168,6 +168,16 @@ interface BufferedDelivery {
 
 const DEFAULT_SYNC_WAIT_TIMEOUT_MS = TEAM_CIRCUIT_DEFAULTS.maxDurationMs
 
+/**
+ * Upper bound of buffered deliveries per busy member session. The mailbox is
+ * volatile coordination state (never replicated, dropped on epoch seal), so an
+ * unbounded buffer is pure OOM exposure under a runaway sender. Overflow sheds
+ * the OLDEST entry with a warning: the newest instruction is the one most worth
+ * keeping, and the blackboard — not the mailbox — is the durable driver a lead
+ * falls back to for anything shed.
+ */
+const MAILBOX_BUFFER_CAP = 128
+
 export function createMessageBus(deps: MessageBusDeps): MessageBus {
   const { store, hooks } = deps
   const limits: CircuitLimits = {
@@ -284,6 +294,12 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     const sessionKey = buildTeamSessionKey(env.toAppId, env.teamId, env.epochId)
     if (hooks.isBusy(sessionKey)) {
       const buffer = mailboxBuffers.get(sessionKey) ?? []
+      if (buffer.length >= MAILBOX_BUFFER_CAP) {
+        const shed = buffer.shift()
+        console.warn(
+          `${LOG_TAG} Mailbox full (${MAILBOX_BUFFER_CAP}); shed oldest: session=${sessionKey} messageId=${shed?.envelope.id}`
+        )
+      }
       buffer.push({ envelope: env, trigger, appId: env.toAppId })
       mailboxBuffers.set(sessionKey, buffer)
       console.log(`${LOG_TAG} Target busy, buffered: session=${sessionKey} bufferSize=${buffer.length}`)

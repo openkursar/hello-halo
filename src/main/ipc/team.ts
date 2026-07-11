@@ -242,5 +242,13 @@ export function registerTeamIpc(): void {
     }
   })
 
+  // ── Remote office: cold-start deep-link pickup (one-shot) ─────────────────
+  // A halo:// invite clicked before the renderer existed is buffered in the
+  // deep-link service; the renderer pulls it once on startup.
+  ipcMain.handle(TEAM_IPC.consumePendingInvite, async () => {
+    const { consumePendingInviteLink } = await import('../services/deep-link.service')
+    return { success: true, data: consumePendingInviteLink() }
+  })
+
   console.log('[TeamIPC] Team handlers registered (25 channels)')
 }

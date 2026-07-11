@@ -45,6 +45,7 @@ const listEpochs = vi.fn<[string], unknown[]>()
 const getTeamDetail = vi.fn<[string], unknown>()
 const getEpochBoard = vi.fn<[string, string], unknown>()
 const sendToMember = vi.fn<[unknown], Promise<unknown>>()
+const listArtifacts = vi.fn<[string, string?], Promise<unknown[]>>()
 
 vi.mock('../../../../src/main/apps/team', () => ({
   getTeamService: () => ({
@@ -52,6 +53,7 @@ vi.mock('../../../../src/main/apps/team', () => ({
     getTeamDetail: (teamId: string) => getTeamDetail(teamId),
     getEpochBoard: (teamId: string, epochId: string) => getEpochBoard(teamId, epochId),
     sendToMember: (input: unknown) => sendToMember(input),
+    listArtifacts: (teamId: string, epochId?: string) => listArtifacts(teamId, epochId),
   }),
   getTeamStore: () => ({
     listMembersByTeam: (teamId: string) => listMembersByTeam(teamId),
@@ -401,6 +403,56 @@ describe('GET /api/teams/:teamId/detail scope projection', () => {
       const body = await res.json()
       expect(body.data.tasks).toHaveLength(2)
       expect(body.data.findings).toHaveLength(2)
+    })
+  })
+})
+
+// ── Per-invite artifact scope projection ──────────────────────────────────
+
+describe('GET /api/teams/:teamId/artifacts scope projection', () => {
+  const groups = [
+    { appId: 'member-self', memberName: 'self', spaceId: 's1', artifacts: [] },
+    { appId: 'member-other', memberName: 'other', spaceId: 's2', artifacts: [] },
+  ]
+
+  it('PIN request (no credential) sees every member group', async () => {
+    listArtifacts.mockResolvedValue(groups)
+    await withServer(buildApp(null), async (base) => {
+      const res = await fetch(`${base}/api/teams/X/artifacts`)
+      const body = await res.json()
+      expect(body.data.map((g: { appId: string }) => g.appId)).toEqual(['member-self', 'member-other'])
+    })
+  })
+
+  it('narrow reader (assigned, non-discoverable) sees ONLY its own member group', async () => {
+    listMembersByTeam.mockReturnValue([
+      { appId: 'member-self', memberIdentity: 'id-reader', scopeJson: JSON.stringify({ visibility: 'assigned', discoverable: false }) },
+    ])
+    listArtifacts.mockResolvedValue(groups)
+    await withServer(buildApp('X'), async (base) => {
+      const res = await fetch(`${base}/api/teams/X/artifacts`)
+      const body = await res.json()
+      expect(body.data.map((g: { appId: string }) => g.appId)).toEqual(['member-self'])
+    })
+  })
+
+  it('full+discoverable reader sees every group; epoch artifacts route projects too', async () => {
+    listMembersByTeam.mockReturnValue([{ appId: 'member-self', memberIdentity: 'id-reader' }])
+    listArtifacts.mockResolvedValue(groups)
+    await withServer(buildApp('X'), async (base) => {
+      const res = await fetch(`${base}/api/teams/X/epochs/e1/artifacts`)
+      const body = await res.json()
+      expect(body.data).toHaveLength(2)
+    })
+  })
+
+  it('credential mapping to NO member sees nothing (fail-closed)', async () => {
+    listMembersByTeam.mockReturnValue([{ appId: 'member-self', memberIdentity: 'id-other' }])
+    listArtifacts.mockResolvedValue(groups)
+    await withServer(buildApp('X'), async (base) => {
+      const res = await fetch(`${base}/api/teams/X/artifacts`)
+      const body = await res.json()
+      expect(body.data).toEqual([])
     })
   })
 })

@@ -24,7 +24,15 @@ import {
   type StreamFramesFrame,
   type WakeFrame,
 } from './types'
-import { isM2Frame, type M2Frame } from './protocol-m2'
+import {
+  DEFAULT_P2P_CAPS,
+  PROTOCOL_VERSION_CURRENT,
+  isM2Frame,
+  negotiateCaps,
+  negotiateVersion,
+  CAP,
+  type M2Frame,
+} from './protocol-m2'
 import { SELF_NODE_ID, type TeamMemberRuntimeStatus } from '../../../../shared/apps/team-types'
 import {
   PRESENCE_CONFIRMED_OFFLINE_MS,
@@ -394,6 +402,15 @@ export function createFederationCoordinator(
         fromAppId: e.fromAppId,
         toAppId: e.toAppId,
       })),
+      // Address book: every admitted node's contact card, so joiners can dial a
+      // peer (e.g. a newly-elected authority) after the host is gone. Consumed
+      // in memory on the joiner — never materialized into its office_nodes.
+      nodes: federationStore.listNodesByOffice(officeId).map((n) => ({
+        nodeId: n.nodeId,
+        displayName: n.displayName,
+        advertisedUrl: n.advertisedUrl,
+        joinedAt: n.joinedAt,
+      })),
     }
   }
 
@@ -433,6 +450,28 @@ export function createFederationCoordinator(
       rejectJoin(req.fromNode, 'OFFICE_MISMATCH')
       return
     }
+    // Version negotiation: only a PRESENT-and-incompatible protocol version is
+    // rejected. An absent pv is a pre-negotiation peer — it is not trusted on
+    // that basis (genuine security is the WS-layer device-key handshake, which a
+    // pre-v3 node cannot answer, so it never reaches here over a real socket);
+    // the coordinator stays lenient so in-process/test links without pv still
+    // admit. A present pv below the floor (or above our ceiling with no overlap)
+    // is refused.
+    let grantPv = PROTOCOL_VERSION_CURRENT
+    if (req.pv !== undefined) {
+      const negotiatedPv = negotiateVersion(req.pv, req.minSupported ?? req.pv)
+      if (negotiatedPv === null) {
+        rejectJoin(req.fromNode, 'VERSION_INCOMPATIBLE')
+        return
+      }
+      grantPv = negotiatedPv
+    }
+    // Persisted identity for this node's bindings. In production a node's wire id
+    // IS its portable Identity.id (identityId === fromNode), and the host edge has
+    // already asserted fromNode === the device-key-proven session id — so the
+    // control plane cannot be spoofed regardless. identityId is carried through
+    // for the member/presence bindings.
+    const nodeIdentity = req.identityId
 
     const ts = now()
 
@@ -441,11 +480,14 @@ export function createFederationCoordinator(
     federationStore.upsertNode({
       nodeId: req.fromNode,
       officeId,
-      identity: req.identityId,
+      identity: nodeIdentity,
       displayName: req.displayName ?? null,
       joinedAt: existing?.joinedAt ?? ts,
       lastSeen: ts,
       status: 'online',
+      // Address book: how peers dial this node after a transport loss. A rejoin
+      // without a URL keeps the previously-learned one (store COALESCEs too).
+      advertisedUrl: req.advertisedUrl ?? existing?.advertisedUrl ?? null,
     })
     // Rejoin is the ONLY exit from confirmed-offline. Clearing the flag here
     // re-arms the node so a later confirmed transition can fire again. Reset its
@@ -484,7 +526,7 @@ export function createFederationCoordinator(
           addedAt: ts,
           ownerNodeId: req.fromNode,
           origin: 'remote',
-          memberIdentity: req.identityId,
+          memberIdentity: nodeIdentity,
           // Persisted for the owner badge: joiners keep no office_nodes rows for
           // their peers, so the name must travel with the member row itself.
           ownerDisplayName: req.displayName ?? null,
@@ -510,14 +552,24 @@ export function createFederationCoordinator(
     // the roster carries the new edges.
     ensureLeadEdges(joinedAppIds)
 
-    console.log(`${LOG_TAG} node joined node=${req.fromNode} identity=${req.identityId} ts=${ts}`)
+    console.log(
+      `${LOG_TAG} node joined node=${req.fromNode} identity=${nodeIdentity} pv=${grantPv} ts=${ts}`
+    )
     const grantExtras = getJoinGrantExtras?.() ?? {}
+    // Effective caps = the intersection of what the joiner advertised and what
+    // this authority runs (grant extras when the M2 module is on, defaults
+    // otherwise). CORE_CONTROL is the floor for an admitted node.
+    const effectiveCaps = negotiateCaps(
+      req.caps ?? CAP.CORE_CONTROL,
+      grantExtras.caps ?? DEFAULT_P2P_CAPS
+    )
     link.send(req.fromNode, {
       kind: 'join-grant',
       officeId,
       assignedNodeId: req.fromNode,
+      pv: grantPv,
+      caps: effectiveCaps,
       ...(grantExtras.term !== undefined ? { term: grantExtras.term } : {}),
-      ...(grantExtras.caps !== undefined ? { caps: grantExtras.caps } : {}),
     })
 
     link.broadcast({
@@ -525,7 +577,7 @@ export function createFederationCoordinator(
       officeId,
       nodeId: req.fromNode,
       status: 'online',
-      members: [req.identityId],
+      members: [nodeIdentity],
       since: ts,
     })
     notifyPresence()
@@ -587,12 +639,26 @@ export function createFederationCoordinator(
 
   // ── Owner side: run a remote member's turn, then report completion ──
 
+  // Coalesced-wake ledger. Concurrent wakes aimed at the SAME member session
+  // (identical conversationId) are absorbed by the engine into the one turn
+  // already in flight (mid-turn injection), so only the first caller's promise
+  // carries the turn's real completion. Every arriving wake registers its
+  // correlation here; the FIRST completion for a conversation drains and acks
+  // the WHOLE batch with the same outcome, so no coalesced sender is left
+  // hanging until its sync-wait timeout. A later (already-drained) completion
+  // finds nothing to ack — turn-completes are one-shot per correlation.
+  const pendingWakeAcks = new Map<string, Array<{ from: NodeId; correlationId: string }>>()
+
   function handleWake(from: NodeId, msg: WakeFrame): void {
     if (!onWake) {
       console.warn(`${LOG_TAG} wake for non-owner office=${officeId} corr=${msg.correlationId}; dropping`)
       return
     }
     console.log(`${LOG_TAG} wake received office=${officeId} app=${msg.request.appId} corr=${msg.correlationId}`)
+    const convId = msg.request.conversationId
+    const pending = pendingWakeAcks.get(convId) ?? []
+    pending.push({ from, correlationId: msg.correlationId })
+    pendingWakeAcks.set(convId, pending)
     void onWake(msg.request)
       .then((res): TurnCompletion => ({ kind: 'result', content: res.finalMessage ?? '' }))
       .catch((err): TurnCompletion => ({
@@ -600,9 +666,24 @@ export function createFederationCoordinator(
         message: err instanceof Error ? err.message : String(err),
       }))
       .then((outcome) => {
-        // The joiner link routes only to its single host peer, so the target node
-        // id is a label; `from` keeps it consistent with the wake's origin.
-        link.send(from, { kind: 'turn-complete', officeId, correlationId: msg.correlationId, outcome })
+        const batch = pendingWakeAcks.get(convId)
+        if (!batch || batch.length === 0) return // already drained by an earlier completion
+        pendingWakeAcks.delete(convId)
+        if (batch.length > 1) {
+          console.log(
+            `${LOG_TAG} acking ${batch.length} coalesced wakes office=${officeId} conv=${convId}`
+          )
+        }
+        for (const entry of batch) {
+          // The joiner link routes only to its single host peer, so the target
+          // node id is a label; each wake's origin keeps its own reflux address.
+          link.send(entry.from, {
+            kind: 'turn-complete',
+            officeId,
+            correlationId: entry.correlationId,
+            outcome,
+          })
+        }
       })
   }
 

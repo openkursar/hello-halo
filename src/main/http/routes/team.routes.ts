@@ -23,6 +23,7 @@ import type {
   BlackboardTask,
   BlackboardFinding,
   BlackboardSnapshot,
+  TeamArtifactGroup,
 } from '../../../shared/apps/team-types'
 
 export function registerTeamRoutes(app: Express): void {
@@ -91,6 +92,34 @@ export function registerTeamRoutes(app: Express): void {
       }
     }
     return { tasks: visibleTasks, findings: visibleFindings }
+  }
+
+  // Per-invite scope projection for artifact listings, mirroring the transcript
+  // rule: a credentialed reader always sees the artifacts of the member(s) its
+  // identity owns; seeing PEERS' artifacts requires a board-wide scope (full
+  // visibility AND discoverable). Fail-closed: a credential mapping to no member
+  // sees nothing. PIN requests (no credential) pass through unchanged.
+  function projectArtifactsForCredential(
+    req: Request,
+    teamId: string,
+    groups: TeamArtifactGroup[],
+  ): TeamArtifactGroup[] {
+    const cred = getOfficeCredential(req)
+    if (!cred) return groups
+    const store = getTeamStore()
+    if (!store) return []
+    const ownAppIds = resolveOfficeMemberAppIds(teamId, cred.identity)
+    if (ownAppIds.length === 0) return []
+    const gate = createScopeGate({ store })
+    const members = store.listMembersByTeam(teamId)
+    const canSeePeers = ownAppIds.some((own) => {
+      const member = members.find((m) => m.appId === own)
+      if (!member) return false
+      const scope = gate.parseScope(member)
+      return scope.visibility === 'full' && scope.discoverable
+    })
+    if (canSeePeers) return groups
+    return groups.filter((g) => ownAppIds.includes(g.appId))
   }
 
   // GET /api/teams — list teams (optional ?spaceId=)
@@ -343,7 +372,8 @@ export function registerTeamRoutes(app: Express): void {
       if (!officeGateOk(req, res, req.params.teamId)) return
       const service = getServiceOrFail(res)
       if (!service) return
-      res.json({ success: true, data: await service.listArtifacts(req.params.teamId) })
+      const groups = await service.listArtifacts(req.params.teamId)
+      res.json({ success: true, data: projectArtifactsForCredential(req, req.params.teamId, groups) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -388,7 +418,8 @@ export function registerTeamRoutes(app: Express): void {
       if (!officeGateOk(req, res, req.params.teamId)) return
       const service = getServiceOrFail(res)
       if (!service) return
-      res.json({ success: true, data: await service.listArtifacts(req.params.teamId, req.params.epochId) })
+      const groups = await service.listArtifacts(req.params.teamId, req.params.epochId)
+      res.json({ success: true, data: projectArtifactsForCredential(req, req.params.teamId, groups) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

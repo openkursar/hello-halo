@@ -31,6 +31,7 @@ function rowToNode(row: OfficeNodeRow): OfficeNode {
     joinedAt: row.joined_at,
     lastSeen: row.last_seen,
     status: row.status as OfficeNode['status'],
+    advertisedUrl: row.advertised_url,
   }
 }
 
@@ -103,16 +104,17 @@ export class FederationStore implements IFederationStore {
     // semantics (this upsert does not protect it).
     this.stmtUpsertNode = db.prepare(`
       INSERT INTO office_nodes (
-        office_id, node_id, identity, display_name, joined_at, last_seen, status
+        office_id, node_id, identity, display_name, joined_at, last_seen, status, advertised_url
       ) VALUES (
-        @office_id, @node_id, @identity, @display_name, @joined_at, @last_seen, @status
+        @office_id, @node_id, @identity, @display_name, @joined_at, @last_seen, @status, @advertised_url
       )
       ON CONFLICT(office_id, node_id) DO UPDATE SET
         identity = excluded.identity,
         display_name = excluded.display_name,
         joined_at = excluded.joined_at,
         last_seen = excluded.last_seen,
-        status = excluded.status
+        status = excluded.status,
+        advertised_url = COALESCE(excluded.advertised_url, office_nodes.advertised_url)
     `)
     this.stmtGetNode = db.prepare(`
       SELECT * FROM office_nodes WHERE office_id = ? AND node_id = ?
@@ -181,6 +183,9 @@ export class FederationStore implements IFederationStore {
       joined_at: node.joinedAt,
       last_seen: node.lastSeen,
       status: node.status,
+      // COALESCE in the upsert keeps a previously-learned URL when a caller
+      // (e.g. a presence refresh) upserts without one.
+      advertised_url: node.advertisedUrl ?? null,
     })
   }
 

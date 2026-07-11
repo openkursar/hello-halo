@@ -675,12 +675,30 @@ export default function App() {
       useTeamStore.getState().applyTeamOfficeStatus(data as TeamOfficeStatusEvent)
     })
 
+    // One-click join (halo:// deep link): stage the invite and bring the Teams
+    // tab forward — TeamTabContent opens the join dialog pre-filled from it.
+    const stageInvite = (link: unknown) => {
+      if (typeof link !== 'string' || !link) return
+      useTeamStore.getState().setPendingInviteLink(link)
+      useAppsPageStore.getState().setCurrentTab('team')
+      useAppStore.getState().setView('apps')
+    }
+    const unsubTeamInviteLink = api.onTeamInviteLink((data) => {
+      stageInvite((data as { link?: unknown } | null)?.link)
+    })
+    // Cold start FROM a link click: the deep link arrived before this renderer
+    // existed, so pull the buffered copy once.
+    void api.teamConsumePendingInvite().then((res) => {
+      if (res.success) stageInvite((res.data as string | null) ?? null)
+    })
+
     return () => {
       unsubTeamUpdated()
       unsubTeamBlackboard()
       unsubTeamMessage()
       unsubTeamPresence()
       unsubTeamOfficeStatus()
+      unsubTeamInviteLink()
     }
   }, [])
 

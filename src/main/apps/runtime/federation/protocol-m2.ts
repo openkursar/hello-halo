@@ -28,10 +28,19 @@ import type { NodeId } from './types'
 //
 // `pv` is the monotonic major version. A bump = a non-backward-compatible
 // envelope/handshake change. Backward-compatible additions ride capability bits,
-// never a `pv` bump. M1 nodes that omit `pv` are treated as version 1.
+// never a `pv` bump. Nodes that omit `pv` are treated as version 1.
+//
+// History:
+//   1 — M1 join/presence/wake/relay (no negotiation on the wire).
+//   2 — M2 authority/replication/artifact family.
+//   3 — device-key node-identity handshake (WS auth challenge–response) +
+//       negotiation enforced at join. Pre-3 nodes cannot prove a node identity,
+//       so the minimum supported version is 3: an unprovable node is rejected at
+//       join (VERSION_INCOMPATIBLE) instead of being half-admitted and then
+//       having every federation frame dropped at the transport gate.
 
-export const PROTOCOL_VERSION_CURRENT = 2
-export const PROTOCOL_VERSION_MIN_SUPPORTED = 1
+export const PROTOCOL_VERSION_CURRENT = 3
+export const PROTOCOL_VERSION_MIN_SUPPORTED = 3
 
 // ── Capability bits ──
 //

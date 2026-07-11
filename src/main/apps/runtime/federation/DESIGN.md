@@ -1,0 +1,162 @@
+# runtime/federation — Cross-Node Office Federation
+
+Lets one node **host** offices it created and **join** offices hosted elsewhere,
+so digital humans from different machines collaborate in one office. A peer of
+`runtime/team` (the in-process coordination kernel) and `runtime/im-channels`:
+this module owns the office **join handshake**, **presence** runtime, activity
+**relay**, and the M2 **authority/replication/resilience** layer. It reads/writes
+only through `TeamStore` + `FederationStore` (+ `AuthorityStore` for M2) and the
+link; it never touches the team coordination kernel state.
+
+## Layer position — downward-only dependency direction
+
+```
+runtime/federation  (this module)
+  ├── may import: apps/team (TeamStore), apps/federation (FederationStore/AuthorityStore/OfficeScope),
+  │               the `ws` npm library (a library, not the http tier)
+  └── MUST NOT import: http/* (websocket.ts, auth/*, identity/*), bootstrap, services/*
+```
+
+Everything the module needs from the transport/identity tiers is **injected** by
+`bootstrap/extended.ts` through `FederationManagerDeps`:
+
+- host→joiner send + office-client listing (`websocket.ts` primitives),
+- office-credential verification (`http/auth/office-credential`),
+- local node id / display name / advertised URL (`http/identity`),
+- the device-key auth-proof factory and gateway-announce signer (`http/identity`),
+- run/roster/presence UI callbacks (mapped to `team:*` renderer events),
+- the M2 owner-status / reassign / artifact / history hooks.
+
+The cycle (federation needs transport primitives; transport routes frames into
+federation) is broken by the module-level accessor `setFederationManager` /
+`getFederationManager` in `manager.ts` (mirrors `setActiveTeamRuntime`).
+
+## Two roles on one node
+
+| | HOST role | JOINER role |
+|---|---|---|
+| Transport | inbound `federation` frames arrive on this node's WS **server**, routed here by `websocket.ts` → `handleHostInbound` | an outbound `WsFederationClient` connects to the host's server |
+| Send | `hostSend(clientId, frame)`, nodeId→clientId resolved from a per-office map | frames ride the single upstream client link |
+| Authority (M2) | this node is the office authority (term 0 on first host) | hot-standby; may be elected on host loss |
+
+A node holds a `HostedOffice` per office it authorities and a `JoinedOffice` per
+office it joined; both wrap a `Federation` (coordinator + link).
+
+## Files
+
+**Assembly & transport seam**
+- `index.ts` — `createFederation(deps)` (coordinator over a link) + the
+  `setActiveFederation` accessor and the module's public re-exports.
+- `link.ts` — the `FederationLink` dumb-pipe contract
+  (`send`/`broadcast`/`onMessage`/`close`) + the in-memory hub/link used by tests.
+- `lan-mesh-provider.ts` — `LanMeshLink`, the production link whose outbound
+  sender is **repointable** (the transport re-form seam) and whose `deliver`
+  feeds inbound frames to the coordinator.
+- `ws-federation-client.ts` — joiner-side outbound WS client. Thin transport
+  (no join/presence semantics), exponential backoff, per-plane bounded queues
+  (control → stream → artifact priority drain).
+- `gateway-attach.ts` — host-side **outbound** attachment to a federation gateway
+  (one socket per hosted office) speaking the `gw:*` addressed vocabulary, so
+  off-LAN members reach the office through the relay. Separate from the joiner
+  client by design (addressed sends + attach state vs. un-addressed join client).
+
+**Coordinator & protocol**
+- `coordinator.ts` — all join + presence logic. Transport-agnostic; persists
+  through `FederationStore` (office_nodes) + `TeamStore` (remote members). Owns
+  the suspect/confirmed-offline presence FSM (monotonic silence clock, suspend-safe).
+- `protocol-m2.ts` — SSOT for M2 frame shapes, capability bits, reject reasons,
+  and version negotiation. **`pv` is the protocol major version; current = min
+  supported = 3** (device-key node-identity handshake). Pre-3 nodes cannot prove
+  a node identity and are rejected at join with `VERSION_INCOMPATIBLE`.
+- `types.ts` — M1 frame shapes (join/presence/wake/turn-complete/stream-frames/
+  roster) + frame-plane classification. `presence-constants.ts` — FSM thresholds.
+- `deps.ts` — the `FederationStore` / `OfficeCredentialLike` structural contracts.
+
+**Manager (the facade)**
+- `manager.ts` — `createFederationManager(deps)`: per-node facade over all hosted
+  + joined offices. Owns host/join lifecycle, inbound routing + origin assertions,
+  wake dispatch, roster egress, and the transport re-form seam. See below.
+- `remote-busy-overlay.ts` — a small self-contained collaborator the manager
+  composes: tracks members whose turn is running on a **remote** owner (keyed by
+  wake correlationId, TTL-backstopped) so the roster projected to viewers pulses
+  joiner-owned members too. Every mutation asks the manager to schedule a
+  throttled roster refresh.
+- `relay.ts` — `createRelayCapture` (owned member's activity → relaySink) +
+  `createStreamReplay` (received activity frames → local agent events, viewer
+  renderer zero-change).
+- `session-deps.ts` — location-aware session deps so a woken member runs with the
+  right owner-resolved space.
+
+**M2 authority — `authority/`**
+- `office-authority.ts` — the per-office integration root composing the pieces
+  below behind one `handle(from, frame)` dispatcher the manager routes `onM2Frame`
+  to. Derives election/replication "views" from the office_nodes ledger.
+- `term-state.ts` (tenure), `election.ts` + `handover.ts` (authority election &
+  post-handover reconcile), `reconcile.ts` (owner reachability / orphan re-drive),
+  `replication.ts` (blackboard write log + acks to hot-standbys),
+  `scope-gate.ts` (invite-scope enforcement), `governance.ts`,
+  `escalation-routing.ts`, `location-aware-blackboard.ts`,
+  `artifact-fetch.ts` (lazy artifact bytes), `history-fetch.ts` (transcript pull).
+
+## Manager internals (`manager.ts`)
+
+Shared per-node state (all keyed by officeId): `hosted`, `joined`,
+`turnCompleteWaiters`, the `remoteBusy` overlay, `dialedPeers`,
+`officeAddressBooks`, `rosterRefreshTimers`. Function groups:
+
+- **Lifecycle** — `hostOffice` / `joinOffice` build a `Federation` (link +
+  coordinator + optional M2 authority + optional gateway attach); `teardownOffice`
+  (keeps the re-join record) vs `leaveOffice` (forgets it).
+- **Inbound routing + origin assertions** — `handleHostInbound`,
+  `handleGatewayInbound`, `handleJoinedInbound`. Every inbound frame is checked:
+  its inner `officeId` must match the session's credentialed office, and its
+  self-reported `fromNode` must match the identity the session **proved** at the
+  WS auth handshake (`getSessionIdentity`) — closing same-office node spoofing.
+  `stream-frames`/`turn-complete` (no source node) are asserted by session
+  ownership instead. Relayed (gateway) frames trust the gateway's session binding.
+- **Wake dispatch** — `sendWakeToMember` + `runOrForwardWakeOnHost` (a joiner→
+  joiner wake is relayed through the host to the real owner and refluxed back).
+- **Roster egress** — `broadcastRosterFor` (immediate) / `scheduleRosterRefresh`
+  (coalesced during a run) / `projectMemberRemoved` / `projectOfficeDissolved`.
+- **Transport re-form seam** — after a host loss the authority moves to a peer;
+  `repointLink` swaps a link's outbound sender in place (coordinator/authority
+  untouched), `redialToAuthority` resolves a sender via the injected `PeerDialer`
+  (dialing a peer's **advertised URL** from the address book) and repoints to it.
+  This is why nodes advertise a URL at join/host time (`advertisedUrl`,
+  migration v5 on office_nodes).
+
+## Node address book
+
+- **Hosted** office: peer addresses are the persisted `office_nodes.advertised_url`
+  rows (this node's own ledger).
+- **Joined** office: peer addresses are learned **in memory** from the host's
+  roster projection (`officeAddressBooks`) and deliberately NOT persisted — a
+  joiner has no direct transport to its peers, so persisting them would mislead
+  the presence FSM (which assumes a direct transport to every row it sweeps).
+
+## Gateway relay (optional, off by default)
+
+When `getGatewayUrl()` returns a URL, `hostOffice` additionally opens a
+`GatewayAttachClient`. A node's return path is either `nodeToClient` (direct LAN
+WS) or `nodeToGateway` (via relay), kept **mutually exclusive** per node —
+whichever path a node's frames last arrived on is its return path. Absent gateway
+config → pure-LAN behaviour, unchanged.
+
+## Where to make a change
+
+| Task | Start here |
+|---|---|
+| Join/presence semantics, roster snapshot shape | `coordinator.ts` |
+| A new M2 control frame / capability / reject reason | `protocol-m2.ts`, then the `authority/*` handler |
+| Host/join lifecycle, inbound routing, wake, egress | `manager.ts` |
+| Election / replication / reconcile / scope | `authority/*` (via `office-authority.ts`) |
+| Transport wiring / injected deps | `bootstrap/extended.ts` (`FederationManagerDeps`) |
+| Gateway relay behaviour | `gateway-attach.ts` (+ the gateway Go module, out of this tree) |
+
+## Tests
+
+Unit tests live in `tests/unit/apps/runtime/federation/*` (in-memory hub +
+in-process links; `_fake-gateway.ts` / `gateway-interop.ts` exercise the real Go
+binary). Federation/team changes additionally require the multi-process cluster
+tier in `tests/decentralized/` (`npm run test:team -- federation`) — build first,
+never run suites in parallel.

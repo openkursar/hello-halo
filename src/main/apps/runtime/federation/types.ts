@@ -59,6 +59,12 @@ export interface JoinRequest {
   pv?: number
   minSupported?: number
   caps?: number
+  /**
+   * Base URL of this node's own HTTP/WS server, advertised so peers can dial it
+   * after a transport loss (address book for re-form). Absent when the node
+   * runs no reachable server.
+   */
+  advertisedUrl?: string
 }
 
 /** Second handshake leg on success (host → node): admits the node. */
@@ -77,7 +83,12 @@ export interface JoinGrant {
 export interface JoinReject {
   kind: 'join-reject'
   officeId: string
-  reason: 'CREDENTIAL_INVALID' | 'CREDENTIAL_REVOKED' | 'OFFICE_MISMATCH' | 'MALFORMED'
+  reason:
+    | 'CREDENTIAL_INVALID'
+    | 'CREDENTIAL_REVOKED'
+    | 'OFFICE_MISMATCH'
+    | 'MALFORMED'
+    | 'VERSION_INCOMPATIBLE'
 }
 
 /**
@@ -221,6 +232,19 @@ export interface RosterMemberSnap {
   currentTaskTitle?: string
 }
 
+/**
+ * One office node's reachability entry in the roster's address book. Lets every
+ * participant learn how to DIAL a peer (e.g. a newly-elected authority) without
+ * a discovery protocol — the invite model stays intact, this is just "the
+ * contact card of nodes already admitted".
+ */
+export interface RosterNodeSnap {
+  nodeId: NodeId
+  displayName: string | null
+  advertisedUrl: string | null
+  joinedAt: number
+}
+
 /** Full office roster the host projects to joiners (team meta + members + edges). */
 export interface RosterSnapshot {
   team: {
@@ -246,6 +270,12 @@ export interface RosterSnapshot {
   }
   members: RosterMemberSnap[]
   edges: Array<{ fromAppId: string; toAppId: string }>
+  /**
+   * Node address book (see RosterNodeSnap). Joiners keep it in memory only —
+   * NEVER as office_nodes rows, whose presence FSM assumes a direct transport
+   * to every row it sweeps. Absent on pre-address-book hosts.
+   */
+  nodes?: RosterNodeSnap[]
 }
 
 /** Host → joiner(s): the current office roster, sent on every membership change. */

@@ -1,0 +1,38 @@
+# Halo federation gateway configuration.
+# Every value shown here is the built-in default; the file is optional.
+# Precedence: command-line flags > HALO_GW_* environment variables > this file.
+
+# v1-gw supports relay mode only (dumb relay + discovery + invite page).
+# "authority" is reserved for a later milestone and refuses to start.
+mode: relay
+
+# Listen address for the combined HTTP + WebSocket endpoint.
+# Env: HALO_GW_LISTEN, flag: -listen
+listen: ":3100"
+
+# Optional TLS termination. Leave both empty to serve plain HTTP (put the
+# gateway behind a TLS-terminating reverse proxy in that case).
+# Env: HALO_GW_TLS_CERT / HALO_GW_TLS_KEY, flags: -tls-cert / -tls-key
+tls:
+  cert: ""
+  key: ""
+
+# Structured logging (slog). Env: HALO_GW_LOG_LEVEL / HALO_GW_LOG_FORMAT.
+log:
+  level: info   # debug | info | warn | error
+  format: json  # json | text
+
+# Protocol limits (spec §9 defaults).
+limits:
+  maxFrameBytes: 1048576   # 1 MiB frame cap; larger frames disconnect the peer
+  connPerIPRate: 10        # new connections per second per client IP
+  connPerIPBurst: 20
+  sessionFrameRate: 500    # frames per second per authenticated session
+
+room:
+  hostRetention: 5m        # keep a room alive waiting for its host to re-attach
+  admissionTimeout: 60s    # pending members must be granted within this window
+
+directory:
+  ttl: 90s                 # announce entries expire unless refreshed
+  maxClockSkew: 5m         # announces with a timestamp further off are rejected

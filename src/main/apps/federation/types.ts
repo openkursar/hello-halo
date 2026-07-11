@@ -37,6 +37,7 @@ export interface OfficeNodeRow {
   joined_at: number
   last_seen: number
   status: string
+  advertised_url: string | null
 }
 
 export interface OfficeCredentialRow {
@@ -77,6 +78,13 @@ export interface OfficeNode {
    * is TEXT and stores it verbatim, so no migration is needed.
    */
   status: 'online' | 'suspect' | 'offline'
+  /**
+   * Base URL of the node's own HTTP/WS server (its remote-access lanUrl),
+   * advertised at join so peers can dial it after a transport loss (e.g. a
+   * survivor re-pointing at a newly-elected authority). Null when the node
+   * runs no reachable server — it can dial out but cannot be dialed.
+   */
+  advertisedUrl: string | null
 }
 
 export interface OfficeCredentialRecord {

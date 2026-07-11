@@ -174,6 +174,16 @@ export const teamApi = {
     return { success: false, error: 'DESKTOP_ONLY' }
   },
 
+  /**
+   * One-shot pull of an office-invite link that arrived via a halo:// deep link
+   * before the renderer was ready (cold start from a browser click). Desktop
+   * only — web clients are never a deep-link target.
+   */
+  teamConsumePendingInvite: async (): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.teamConsumePendingInvite()
+    return { success: true, data: null }
+  },
+
   // ===== Triggers (schedule / etc.) =====
   teamListTriggers: async (teamId: string): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamListTriggers(teamId)
@@ -196,4 +206,5 @@ export const teamApi = {
   onTeamMessage: (callback: (data: unknown) => void) => onEvent('team:message', callback),
   onTeamPresence: (callback: (data: unknown) => void) => onEvent('team:presence', callback),
   onTeamOfficeStatus: (callback: (data: unknown) => void) => onEvent('team:office-status', callback),
+  onTeamInviteLink: (callback: (data: unknown) => void) => onEvent('team:invite-link', callback),
 }

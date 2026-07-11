@@ -598,6 +598,8 @@ export const TEAM_EVENTS = {
   message: 'team:message',
   presence: 'team:presence',
   officeStatus: 'team:office-status',
+  /** A halo:// office-invite deep link arrived; payload: { link: string }. */
+  inviteLink: 'team:invite-link',
 } as const
 
 export const TEAM_IPC = {
@@ -622,6 +624,8 @@ export const TEAM_IPC = {
   joinOffice: 'team:join-office',
   leaveOffice: 'team:leave-office',
   sendToMember: 'team:send-to-member',
+  /** One-shot pull of an invite link that arrived via halo:// before the renderer was up. */
+  consumePendingInvite: 'team:consume-pending-invite',
 } as const
 
 export const TEAM_CIRCUIT_DEFAULTS = {

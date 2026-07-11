@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>Halo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      padding: 1.5rem;
+    }
+    .card { text-align: center; max-width: 420px; width: 100%; }
+    .logo {
+      width: 72px; height: 72px; border-radius: 50%;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      margin: 0 auto 1.25rem;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.75rem;
+      box-shadow: 0 0 30px rgba(102, 126, 234, 0.4);
+    }
+    h1 { font-size: 1.35rem; margin-bottom: 0.5rem; line-height: 1.4; }
+    .sub { color: #999; font-size: 0.95rem; margin-bottom: 2rem; line-height: 1.6; }
+    .open-btn {
+      display: inline-block; width: 100%; padding: 0.95rem 1.5rem;
+      border: none; border-radius: 12px; cursor: pointer;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #fff; font-size: 1rem; font-weight: 600; text-decoration: none;
+      transition: opacity 0.15s ease;
+    }
+    .open-btn:hover { opacity: 0.9; }
+    .hint { color: #777; font-size: 0.85rem; margin-top: 1.25rem; line-height: 1.7; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">&#10024;</div>
+    <h1 id="title"></h1>
+    <p class="sub" id="sub"></p>
+    <a class="open-btn" id="open" href="#"></a>
+    <p class="hint" id="hint"></p>
+  </div>
+  <script>
+    (function () {
+      var zh = (navigator.language || '').toLowerCase().indexOf('zh') === 0
+
+      document.getElementById('title').textContent = zh
+        ? '你被邀请加入一间办公室'
+        : 'You are invited to join an office'
+      document.getElementById('sub').textContent = zh
+        ? '带上你自己的数字人加入，和大家在同一间办公室实时协作。'
+        : 'Bring your own digital humans and collaborate live in the same office.'
+
+      // Hand off into the installed app. The deep link is built from THIS
+      // page's own query string, so the invite secret never appears in the
+      // page body served by the gateway.
+      var params = new URLSearchParams(location.search)
+      var deepLink = 'halo://join?office=' + encodeURIComponent(params.get('office') || '')
+        + '&invite=' + encodeURIComponent(params.get('invite') || '')
+        + '&server=' + encodeURIComponent(location.origin)
+      var open = document.getElementById('open')
+      open.setAttribute('href', deepLink)
+      open.textContent = zh ? '在 Halo 中打开' : 'Open in Halo'
+
+      document.getElementById('hint').textContent = zh
+        ? '还没有安装 Halo？安装后重新打开这条邀请链接即可。'
+        : 'Don\u2019t have Halo yet? Install it, then open this invite link again.'
+    })()
+  </script>
+</body>
+</html>

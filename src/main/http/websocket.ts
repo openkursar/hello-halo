@@ -5,9 +5,12 @@
 
 import { WebSocket, WebSocketServer } from 'ws'
 import { IncomingMessage } from 'http'
+import { randomBytes } from 'crypto'
 import { v4 as uuidv4 } from 'uuid'
 import { validateToken, parseCredentialType, verifyOfficeCredential, type CredentialType } from './auth/index'
-import type { OfficeScope } from '../apps/federation/index'
+import { resolveIdentity, type AuthProof } from './identity/index'
+import { getFederationStore, DEFAULT_OFFICE_SCOPE, type OfficeScope } from '../apps/federation/index'
+import { getTeamStore } from '../apps/team'
 import { parseTeamSessionKey } from '../../shared/apps/im-keys'
 
 // The credential a client authenticated with. Drives per-credential event
@@ -18,13 +21,31 @@ interface ClientCredential {
   officeId?: string
   scope?: OfficeScope
   /**
-   * The node identity this office-member session proved at the credential
-   * handshake. The federation host asserts an inbound frame's self-reported
-   * `fromNode` against this bound value to reject spoofed-origin frames
-   * (a joiner can only speak as the node its credential authenticated as).
+   * The node identity this office-member session PROVED at the auth handshake
+   * via a device-key challenge–response (see the 'auth' case). Set only for
+   * federation-node sessions; a bearer-only office session (viewer) has none
+   * and is never allowed to speak federation frames. The federation host
+   * asserts an inbound frame's self-reported `fromNode` against this bound
+   * value to reject spoofed-origin frames (a joiner can only speak as the node
+   * its session proved).
    */
   nodeId?: string
 }
+
+/**
+ * One-shot auth challenge issued to a client that requested a federation-node
+ * session. The nonce is signed by the client's identity key and verified via
+ * the identity resolver registry; it is consumed on first use and expires so a
+ * captured challenge cannot be replayed on a later connection.
+ */
+interface PendingChallenge {
+  /** base64 nonce bytes the client must sign. */
+  nonce: string
+  issuedAt: number
+}
+
+/** A challenge older than this is void; the client must re-auth to get a new one. */
+const CHALLENGE_TTL_MS = 60_000
 
 interface WebSocketClient {
   id: string
@@ -32,6 +53,8 @@ interface WebSocketClient {
   authenticated: boolean
   subscriptions: Set<string> // conversationIds this client is subscribed to
   credential: ClientCredential | null
+  /** Outstanding federation-auth challenge, if any (one-shot, TTL-bound). */
+  pendingChallenge: PendingChallenge | null
   /** Liveness flag for the ping/pong keepalive sweep (reset each ping). */
   isAlive: boolean
 }
@@ -88,17 +111,15 @@ export function sendFederationFrameToClient(clientId: string, frame: unknown): b
 
 /**
  * The node identity bound to a connected client's office-member session (proved
- * at the credential handshake; a joined node's nodeId equals its Identity.id).
- * Returns null for unknown/unauthenticated clients or non-office credentials.
+ * by the device-key challenge–response at auth; a joined node's nodeId equals
+ * its Identity.id). Returns null for unknown/unauthenticated clients, bearer-only
+ * viewer sessions, or non-office credentials — and a null here means the session
+ * may never speak federation frames (enforced in the 'federation' case below).
  */
 export function getSessionIdentity(clientId: string): string | null {
   const client = clients.get(clientId)
   if (!client || !client.authenticated) return null
   if (client.credential?.type !== 'office-member') return null
-  // An empty nodeId is the unproven-placeholder identity (device-key identity
-  // binding is deferred, so issuance mints `identity: ''`). Treat it as null so
-  // the host anti-spoof gate stays inert until a real identity is bound; a
-  // non-empty nodeId activates the gate for genuine identities.
   return client.credential.nodeId || null
 }
 
@@ -131,6 +152,7 @@ export function initWebSocket(server: any): WebSocketServer {
       authenticated: false,
       subscriptions: new Set(),
       credential: null,
+      pendingChallenge: null,
       isAlive: true
     }
 
@@ -190,6 +212,55 @@ export function initWebSocket(server: any): WebSocketServer {
 }
 
 /**
+ * Consume the client's pending challenge (one-shot, TTL-bound) and resolve the
+ * presented proof to an identity. Returns null on any failure: no outstanding
+ * challenge, expired challenge, proof not signed over THIS challenge, or an
+ * unresolvable/invalid proof. The challenge is cleared unconditionally so a
+ * failed attempt can never retry against the same nonce.
+ */
+function consumeChallengeAndResolve(
+  client: WebSocketClient,
+  proof: unknown
+): { id: string; displayName: string } | null {
+  const challenge = client.pendingChallenge
+  client.pendingChallenge = null
+  if (!challenge) return null
+  if (Date.now() - challenge.issuedAt > CHALLENGE_TTL_MS) return null
+  if (typeof proof !== 'object' || proof === null) return null
+  const p = proof as Record<string, unknown>
+  // The proof must be over the nonce THIS connection issued — a signature over
+  // any other bytes (e.g. a captured older challenge) is rejected before crypto.
+  if (p.challenge !== challenge.nonce) return null
+  return resolveIdentity(p as unknown as AuthProof)
+}
+
+/**
+ * Roster re-entry admission check. A proven identity qualifies only when it is
+ * ALREADY an admitted node of the office in the local ledger (fail-closed: no
+ * ledger, no row → refused; this path never performs a first admission). The
+ * session's scope is the invite overlay persisted on a member row this identity
+ * brought in, falling back to the default-open overlay for pre-scope rows.
+ */
+function resolveReentrySession(
+  officeId: string,
+  identityId: string
+): { scope: OfficeScope } | null {
+  const node = getFederationStore()?.getNode(officeId, identityId)
+  if (!node) return null
+  const member = getTeamStore()
+    ?.listMembersByTeam(officeId)
+    .find((m) => m.memberIdentity === identityId && m.scopeJson)
+  if (member?.scopeJson) {
+    try {
+      return { scope: JSON.parse(member.scopeJson) as OfficeScope }
+    } catch {
+      /* fall through to the default overlay */
+    }
+  }
+  return { scope: DEFAULT_OFFICE_SCOPE }
+}
+
+/**
  * Handle incoming message from client
  */
 function handleClientMessage(
@@ -203,17 +274,59 @@ function handleClientMessage(
       if (typeof token === 'string' && parseCredentialType(token) === 'office-member') {
         const cred = verifyOfficeCredential(token)
         if (cred) {
+          const wantsFederation = message.payload?.federation === true
+          const proof: unknown = message.payload?.proof
+
+          if (wantsFederation && !proof) {
+            // Federation-node session leg 1: the invite token is a shareable
+            // bearer and proves nothing about WHO presents it, so a node session
+            // must additionally prove its portable identity. Issue a one-shot
+            // nonce; the client answers with a device-key signature over it.
+            client.pendingChallenge = {
+              nonce: randomBytes(32).toString('base64'),
+              issuedAt: Date.now(),
+            }
+            sendToClient(client, {
+              type: 'auth:challenge',
+              payload: { nonce: client.pendingChallenge.nonce },
+            })
+            console.log(`[WS] Client ${client.id} federation auth: challenge issued`)
+            break
+          }
+
+          if (wantsFederation && proof) {
+            // Leg 2: verify the signed challenge through the identity-resolver
+            // registry (device-key today; SSO/internet resolvers plug in later).
+            const identity = consumeChallengeAndResolve(client, proof)
+            if (!identity) {
+              sendToClient(client, { type: 'auth:failed', error: 'Invalid identity proof' })
+              console.warn(`[WS] Client ${client.id} federation auth: proof rejected`)
+              setTimeout(() => client.ws.close(), 100)
+              break
+            }
+            client.authenticated = true
+            client.credential = {
+              type: 'office-member',
+              officeId: cred.officeId,
+              scope: cred.scope,
+              nodeId: identity.id,
+            }
+            sendToClient(client, { type: 'auth:success' })
+            console.log(`[WS] Client ${client.id} authenticated (office node ${identity.id})`)
+            break
+          }
+
+          // Bearer-only office session (viewer): may subscribe to its office's
+          // events and read via the scoped HTTP routes, but holds NO proven node
+          // identity — it can never speak federation frames (gated below).
           client.authenticated = true
-          // Currently a node's id equals its office-member identity; bind it here
-          // so getSessionIdentity can later assert it against inbound frames.
           client.credential = {
             type: 'office-member',
             officeId: cred.officeId,
             scope: cred.scope,
-            nodeId: cred.identity,
           }
           sendToClient(client, { type: 'auth:success' })
-          console.log(`[WS] Client ${client.id} authenticated (office-member)`)
+          console.log(`[WS] Client ${client.id} authenticated (office viewer)`)
           break
         }
       } else if (typeof token === 'string' && validateToken(token)) {
@@ -221,6 +334,49 @@ function handleClientMessage(
         client.credential = { type: 'remote-control' }
         sendToClient(client, { type: 'auth:success' })
         console.log(`[WS] Client ${client.id} authenticated successfully`)
+        break
+      }
+      // Roster re-entry (federation only). A node whose invite token can no
+      // longer be verified HERE — it was signed by a lost creator's key, e.g. a
+      // survivor dialing a newly-elected authority — is re-admitted when its
+      // PROVEN identity is already an admitted node of the office in the local
+      // ledger. Never a first admission: an identity with no node row is refused.
+      if (
+        message.payload?.federation === true &&
+        typeof message.payload?.officeId === 'string' &&
+        message.payload.officeId
+      ) {
+        const reentryOfficeId: string = message.payload.officeId
+        const proof: unknown = message.payload?.proof
+        if (!proof) {
+          client.pendingChallenge = {
+            nonce: randomBytes(32).toString('base64'),
+            issuedAt: Date.now(),
+          }
+          sendToClient(client, {
+            type: 'auth:challenge',
+            payload: { nonce: client.pendingChallenge.nonce },
+          })
+          console.log(`[WS] Client ${client.id} roster re-entry: challenge issued office=${reentryOfficeId}`)
+          break
+        }
+        const identity = consumeChallengeAndResolve(client, proof)
+        const admitted = identity ? resolveReentrySession(reentryOfficeId, identity.id) : null
+        if (!identity || !admitted) {
+          sendToClient(client, { type: 'auth:failed', error: 'Invalid identity proof' })
+          console.warn(`[WS] Client ${client.id} roster re-entry rejected office=${reentryOfficeId}`)
+          setTimeout(() => client.ws.close(), 100)
+          break
+        }
+        client.authenticated = true
+        client.credential = {
+          type: 'office-member',
+          officeId: reentryOfficeId,
+          scope: admitted.scope,
+          nodeId: identity.id,
+        }
+        sendToClient(client, { type: 'auth:success' })
+        console.log(`[WS] Client ${client.id} re-admitted (office node ${identity.id})`)
         break
       }
       sendToClient(client, { type: 'auth:failed', error: 'Invalid token' })
@@ -261,9 +417,16 @@ function handleClientMessage(
 
     case 'federation':
       // Federation control/activity frames from a joiner node. Only authenticated
-      // office-member clients may speak federation, and only for their own office
-      // (the inbound handler + coordinator re-verify the frame's officeId).
-      if (!client.authenticated || client.credential?.type !== 'office-member' || !client.credential.officeId) {
+      // office-member sessions with a PROVEN node identity may speak federation
+      // (bearer-only viewers cannot — the invite link alone must never let its
+      // holder inject frames), and only for their own office (the inbound handler
+      // + coordinator re-verify the frame's officeId).
+      if (
+        !client.authenticated ||
+        client.credential?.type !== 'office-member' ||
+        !client.credential.officeId ||
+        !client.credential.nodeId
+      ) {
         sendToClient(client, { type: 'error', error: 'Federation not permitted' })
         break
       }

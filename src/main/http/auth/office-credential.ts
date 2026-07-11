@@ -77,11 +77,6 @@ function scopeEquals(a: OfficeScope, b: OfficeScope): boolean {
   )
 }
 
-/** True when a requested scope is the default-open overlay. */
-function isDefaultScope(scope: OfficeScope): boolean {
-  return scopeEquals(scope, DEFAULT_OFFICE_SCOPE)
-}
-
 /**
  * Reject a scope whose fields fall outside the closed enum/boolean domain. The
  * scope crosses the issuance boundary (it can arrive from the renderer via IPC),
@@ -142,15 +137,11 @@ export function issueOfficeCredential(input: IssueInput): { token: string; jti: 
   if (!isValidScope(scope)) {
     throw new Error('OFFICE_SCOPE_INVALID')
   }
-  // Only the default-open scope is issuable until a joiner's identity is proven at
-  // join (device-key bound), not self-reported. While the credential identity is a
-  // placeholder, a narrow-scope invite would resolve to an empty board (fail-closed)
-  // — a dead invite, not a working narrow one. Gate it at the source so no
-  // unusable narrow-scope token is ever minted; narrow scope is enabled once the
-  // join handshake carries a device-key proof.
-  if (!isDefaultScope(scope)) {
-    throw new Error('OFFICE_SCOPE_NOT_SUPPORTED')
-  }
+  // Narrow scopes are issuable: the joiner's identity is proven at the WS auth
+  // handshake (device-key challenge–response), the invite's scope overlay is
+  // persisted on each admitted member row at join, and the authority-side scope
+  // gate enforces it against the AUTHENTICATED fromNode — so a narrow invite
+  // yields a working, enforced narrow membership rather than a dead link.
   const exp = input.ttlMs ? Date.now() + input.ttlMs : undefined
 
   const claims = buildClaims({ officeId: input.officeId, identity: input.identity, scope, exp, jti })

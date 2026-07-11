@@ -64,6 +64,7 @@ import {
 } from '../../../../../src/main/http/websocket'
 import { createFederationManager } from '../../../../../src/main/apps/runtime/federation/manager'
 import type { FederationManager } from '../../../../../src/main/apps/runtime/federation/manager'
+import { localAuthProof } from './_ws-auth'
 
 const OFFICE = 'office-ws-1'
 
@@ -134,6 +135,10 @@ describe('FederationManager (real ws transport)', () => {
       teamStore: joinerTeamStore,
       verifyCredential: () => null,
       getLocalNodeId: () => 'joiner-node-b',
+      // D10: the WS node handshake requires a device-key proof (the shared
+      // in-process identity signs it). The base host omits getSessionIdentity so
+      // the anti-spoof gate stays inert and the joiner's label is admitted.
+      makeAuthProof: (nonce) => localAuthProof(nonce),
     })
   })
 
@@ -184,17 +189,15 @@ describe('FederationManager (real ws transport)', () => {
     expect(ownMember.origin).toBe('local')
   })
 
-  it('admits a joiner whose office credential carries the unproven-placeholder identity (D-NEW-1 production path)', async () => {
-    // The invite controller mints office credentials with identity:'' (device-key
-    // binding deferred — team-invite.controller.ts). The host binds the WS session
-    // to that empty identity, and the F1 anti-spoof gate is wired via
-    // getSessionIdentity exactly as bootstrap does. If getSessionIdentity reported
-    // '' instead of null, the gate would drop the first join-request and no joiner
-    // could ever join in production; assert the join is admitted instead.
-    const placeholderToken = issueOfficeCredential({ officeId: OFFICE, identity: '' }).token
+  it('device-key handshake binds the real identity; a join whose fromNode matches it is admitted with the anti-spoof gate ACTIVE (D10)', async () => {
+    // D10: the invite token is a shareable bearer (identity:'' at issue), but a
+    // federation node session additionally PROVES its portable identity via the
+    // device-key challenge–response. So getSessionIdentity now reports the real
+    // proven id — not null and not '' — and the anti-spoof gate is live. A join
+    // whose fromNode equals that proven id (as production always sets:
+    // selfNodeId = getLocalIdentity().id) is admitted through the active gate.
+    const provenId = getLocalIdentity().id
 
-    // Re-wire the host with the production anti-spoof seam (the base wiring omits it
-    // so the gate is inert; here we prove the gate stays inert for '' specifically).
     hostManager.stopAll()
     const federationStore = initFederationStore({ db: dbManager })
     hostManager = createFederationManager({
@@ -203,7 +206,7 @@ describe('FederationManager (real ws transport)', () => {
       federationStore,
       teamStore,
       verifyCredential: (t) => verifyOfficeCredential(t),
-      getLocalNodeId: () => getLocalIdentity().id,
+      getLocalNodeId: () => provenId,
       getSessionIdentity: (clientId) => getSessionIdentity(clientId),
     })
     hostManager.hostOffice(OFFICE)
@@ -212,8 +215,9 @@ describe('FederationManager (real ws transport)', () => {
     const result = await joinerManager.joinOffice({
       officeId: OFFICE,
       serverUrl: `http://127.0.0.1:${port}`,
-      credentialToken: placeholderToken,
-      selfContext: { officeId: OFFICE, selfNodeId: 'joiner-node-b' },
+      credentialToken: token,
+      // fromNode === the device-key-proven session id, as production sets it.
+      selfContext: { officeId: OFFICE, selfNodeId: provenId },
       bringMembers: [
         { appId: 'app-ph-1', memberName: 'ph-writer', role: 'Writer', spaceId: 'space-ph-1' },
       ],
@@ -226,7 +230,7 @@ describe('FederationManager (real ws transport)', () => {
     expect(members[0]).toMatchObject({
       appId: 'app-ph-1',
       origin: 'remote',
-      ownerNodeId: 'joiner-node-b',
+      ownerNodeId: provenId,
     })
   })
 

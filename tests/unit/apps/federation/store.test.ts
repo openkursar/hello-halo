@@ -27,6 +27,7 @@ function makeNode(overrides?: Partial<OfficeNode>): OfficeNode {
     joinedAt: now,
     lastSeen: now,
     status: 'online',
+    advertisedUrl: null,
     ...overrides,
   }
 }

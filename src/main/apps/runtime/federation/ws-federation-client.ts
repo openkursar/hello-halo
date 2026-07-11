@@ -44,11 +44,34 @@ const PLANE_DRAIN_ORDER: readonly FramePlane[] = ['control', 'stream', 'artifact
 
 export type WsFederationClientState = 'connecting' | 'open' | 'closed'
 
+/**
+ * A signed identity proof answering the host's auth challenge. Shape mirrors the
+ * host-side device-key resolver contract (http/identity); this module treats it
+ * as opaque data — building/signing it is injected so the federation layer never
+ * imports the identity/key modules (dependency direction).
+ */
+export type FederationAuthProof = Record<string, unknown>
+
 export interface WsFederationClientDeps {
   /** Host server base URL, e.g. ws://host:3017 or http://host:3017 (upgraded). */
   serverUrl: string
   /** Office-member credential token presented on the WS auth handshake. */
   credentialToken: string
+  /**
+   * Build the signed proof for a host-issued auth challenge (base64 nonce →
+   * device-key proof). A federation session REQUIRES a proven node identity:
+   * when this is absent or returns null the client cannot complete the node
+   * handshake and closes (the host would reject its frames anyway).
+   */
+  makeAuthProof?: (nonce: string) => FederationAuthProof | null
+  /**
+   * The office this connection speaks for, carried in the auth payload. Enables
+   * ROSTER RE-ENTRY on the receiving side: when the invite token cannot be
+   * verified there (it was signed by a lost creator's key — e.g. dialing a
+   * newly-elected authority), a proven identity that is already an admitted
+   * node of this office is re-admitted without a fresh invite.
+   */
+  officeId?: string
   /** Delivered every inbound 'federation' frame after auth succeeds. */
   onFrame: (frame: FederationMessage) => void
   /** Connection lifecycle, surfaced for the manager's logging/diagnostics. */
@@ -151,7 +174,18 @@ export class WsFederationClient {
 
     socket.on('open', () => {
       console.log(`${LOG_TAG} socket open url=${this.wsUrl}`)
-      socket.send(JSON.stringify({ type: 'auth', payload: { token: this.deps.credentialToken } }))
+      // Leg 1 of the node handshake: request a federation session. The host
+      // answers with auth:challenge; the signed proof rides the second auth.
+      socket.send(
+        JSON.stringify({
+          type: 'auth',
+          payload: {
+            token: this.deps.credentialToken,
+            federation: true,
+            ...(this.deps.officeId ? { officeId: this.deps.officeId } : {}),
+          },
+        })
+      )
     })
 
     socket.on('message', (data: WebSocket.RawData) => {
@@ -183,6 +217,32 @@ export class WsFederationClient {
     }
 
     switch (message.type) {
+      case 'auth:challenge': {
+        // Leg 2: sign the host's one-shot nonce with the local identity key and
+        // re-auth with the proof attached. Without a proof factory (or when it
+        // cannot sign) the node handshake is impossible — close instead of
+        // hammering the host with an unprovable session.
+        const nonce = (message.payload as { nonce?: unknown } | undefined)?.nonce
+        const proof =
+          typeof nonce === 'string' ? this.deps.makeAuthProof?.(nonce) ?? null : null
+        if (!proof) {
+          console.warn(`${LOG_TAG} auth challenge received but no identity proof available url=${this.wsUrl}`)
+          this.close()
+          break
+        }
+        this.socket?.send(
+          JSON.stringify({
+            type: 'auth',
+            payload: {
+              token: this.deps.credentialToken,
+              federation: true,
+              proof,
+              ...(this.deps.officeId ? { officeId: this.deps.officeId } : {}),
+            },
+          })
+        )
+        break
+      }
       case 'auth:success': {
         const isReauth = this.hasAuthedEver
         this.authed = true

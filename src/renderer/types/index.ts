@@ -260,6 +260,11 @@ export interface BrowserConfig {
   customAllowlist?: string[];  // User-added allowlist patterns; only honored when the build sets browserPolicy.userExtensible
 }
 
+// Office federation configuration
+export interface FederationConfig {
+  gatewayUrl?: string;  // Federation gateway base URL. Empty = pure-LAN offices.
+}
+
 export interface HaloConfig {
   api: ApiConfig;  // Legacy, kept for backward compatibility
   aiSources: AISourcesConfig;  // v2 format: { version: 2, currentId, sources: [] }
@@ -278,6 +283,7 @@ export interface HaloConfig {
   chat?: ChatConfig;  // Chat behavior preferences
   network?: NetworkConfig;  // Network settings (proxy, etc.)
   browser?: BrowserConfig;  // Browser settings (user custom allowlist)
+  federation?: FederationConfig;  // Office federation settings (gateway relay)
   isFirstLaunch: boolean;
 }
 

@@ -523,6 +523,8 @@ export interface HaloAPI {
   teamLeaveOffice: (input: { officeId: string }) => Promise<IpcResponse>
   /** Send a message to a remote member via the office owner (team wake). */
   teamSendToMember: (input: { teamId: string; appId: string; epochId: string; message: string; images?: { type: string; media_type: string; data: string }[]; thinkingEnabled?: boolean }) => Promise<IpcResponse>
+  /** One-shot pull of an invite link that arrived via halo:// before the renderer was up. */
+  teamConsumePendingInvite: () => Promise<IpcResponse>
 
   // Digital Team Event Listeners
   onTeamUpdated: (callback: (data: unknown) => void) => () => void
@@ -530,6 +532,7 @@ export interface HaloAPI {
   onTeamMessage: (callback: (data: unknown) => void) => () => void
   onTeamPresence: (callback: (data: unknown) => void) => () => void
   onTeamOfficeStatus: (callback: (data: unknown) => void) => () => void
+  onTeamInviteLink: (callback: (data: unknown) => void) => () => void
 
   // Notification (in-app toast)
   onNotificationToast: (callback: (data: unknown) => void) => () => void
@@ -833,6 +836,7 @@ const api: HaloAPI = {
   teamJoinOffice: (input) => ipcRenderer.invoke(TEAM_IPC.joinOffice, input),
   teamLeaveOffice: (input) => ipcRenderer.invoke(TEAM_IPC.leaveOffice, input),
   teamSendToMember: (input) => ipcRenderer.invoke(TEAM_IPC.sendToMember, input),
+  teamConsumePendingInvite: () => ipcRenderer.invoke(TEAM_IPC.consumePendingInvite),
 
   // Digital Team Event Listeners
   onTeamUpdated: (callback) => createEventListener(TEAM_EVENTS.updated, callback),
@@ -840,6 +844,7 @@ const api: HaloAPI = {
   onTeamMessage: (callback) => createEventListener(TEAM_EVENTS.message, callback),
   onTeamPresence: (callback) => createEventListener(TEAM_EVENTS.presence, callback),
   onTeamOfficeStatus: (callback) => createEventListener(TEAM_EVENTS.officeStatus, callback),
+  onTeamInviteLink: (callback) => createEventListener(TEAM_EVENTS.inviteLink, callback),
 
   // Store (App Registry) — most methods derived from storeRpc contract;
   // storeInstall keeps its custom progress-listener wrapper below.

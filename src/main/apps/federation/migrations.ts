@@ -151,5 +151,16 @@ export const migrations: Migration[] = [
           ON office_nodes(office_id, joined_at)
       `)
     }
+  },
+  {
+    version: 5,
+    description: 'office_nodes: advertised reachable URL (transport re-form address book)',
+    up(db) {
+      // Each node advertises the base URL of its own HTTP/WS server at join, so
+      // survivors can DIAL a peer (e.g. a newly-elected authority) after the
+      // host is gone. NULL when the node runs no reachable server — such a node
+      // can dial out but cannot be dialed.
+      db.exec(`ALTER TABLE office_nodes ADD COLUMN advertised_url TEXT`)
+    }
   }
 ]

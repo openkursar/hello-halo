@@ -130,6 +130,17 @@ function detectApiFormat(apiUrl) {
   return 'openai'
 }
 
+// Resolve the request URL. If apiUrl already points to the full endpoint
+// (e.g. GLM's ".../paas/v4/chat/completions"), use it as-is; otherwise append
+// the conventional path so bare-base configs keep working.
+function resolveEndpoint(apiUrl, apiFormat) {
+  const base = apiUrl.trim().replace(/\/+$/, '')
+  if (apiFormat === 'anthropic') {
+    return base.endsWith('/messages') ? base : `${base}/v1/messages`
+  }
+  return base.endsWith('/chat/completions') ? base : `${base}/v1/chat/completions`
+}
+
 // Call LLM API for translation (supports both Anthropic and OpenAI formats)
 async function translateBatch(texts, targetLocale) {
   const apiKey = process.env.HALO_TEST_API_KEY
@@ -191,10 +202,12 @@ ${JSON.stringify(texts, null, 2)}
 \`\`\`
 `
 
+  const endpoint = resolveEndpoint(apiUrl, apiFormat)
+
   let response
   if (apiFormat === 'anthropic') {
     // Anthropic Messages API
-    response = await fetch(`${apiUrl}/v1/messages`, {
+    response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -209,7 +222,7 @@ ${JSON.stringify(texts, null, 2)}
     })
   } else {
     // OpenAI Chat Completions API (compatible with OpenAI, DeepSeek, Moonshot, etc.)
-    response = await fetch(`${apiUrl}/v1/chat/completions`, {
+    response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

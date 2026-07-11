@@ -5,8 +5,8 @@
  * office. Failure text is people-centric and never mentions hosts, nodes, or
  * networks.
  *
- * Deep-link auto-open (handling ?office=&invite= on launch) is intentionally
- * out of scope here — manual paste is the supported entry point for now.
+ * Entry points: manual paste, or one-click join — a halo:// deep link staged in
+ * team.store pre-fills the link via `initialLink` (see TeamTabContent).
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -22,6 +22,8 @@ interface TeamJoinDialogProps {
   onClose: () => void
   /** Open the create-digital-human flow when the user has none to bring. */
   onCreateDigitalHuman?: () => void
+  /** Pre-filled invite link (one-click join via halo:// deep link). */
+  initialLink?: string
 }
 
 interface ParsedInvite {
@@ -44,7 +46,7 @@ function parseInviteLink(raw: string): ParsedInvite | null {
   }
 }
 
-export function TeamJoinDialog({ onClose, onCreateDigitalHuman }: TeamJoinDialogProps) {
+export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: TeamJoinDialogProps) {
   const { t } = useTranslation()
 
   const apps = useAppsStore(s => s.apps)
@@ -52,7 +54,7 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman }: TeamJoinDialog
   const teams = useTeamStore(s => s.teams)
   const loadTeams = useTeamStore(s => s.loadTeams)
 
-  const [link, setLink] = useState('')
+  const [link, setLink] = useState(initialLink ?? '')
   const [selectedAppIds, setSelectedAppIds] = useState<string[]>([])
   const [consented, setConsented] = useState(false)
   const [joining, setJoining] = useState(false)
