@@ -69,6 +69,14 @@ log.errorHandler.startCatching({
       log.warn(`[Main] Ignored transient network error: ${code || 'no-code'} ${message}`)
       return false
     }
+
+    // Node 20 Happy-Eyeballs internal timer race (nodejs/node#47644). Primary
+    // mitigation is the autoSelectFamily=false above; this branch covers callers
+    // that opt in explicitly per-connection.
+    if (code === 'ERR_INTERNAL_ASSERTION' && /internalConnectMultiple/.test(stack)) {
+      log.warn(`[Main] Ignored Node autoSelectFamily assertion: ${message}`)
+      return false
+    }
   }
 })
 
@@ -78,6 +86,16 @@ Object.assign(console, log.functions)
 // Logging subsystem: subscribe to config changes and control log level + transports.
 // Must load after console replacement so its initial log calls go through electron-log.
 import './foundation/logging'
+
+// ========================================
+// NETWORK SAFETY (must run before any outbound socket)
+// ========================================
+// Node 20 defaults autoSelectFamily=true; its internal timer race surfaces as
+// ERR_INTERNAL_ASSERTION in internalConnectMultiple (nodejs/node#47644).
+// Restoring the pre-20 sequential fallback for Node-side sockets removes the
+// trigger. Chromium's network stack is separate and unaffected.
+import net from 'net'
+net.setDefaultAutoSelectFamily(false)
 
 // Fix PATH for macOS GUI apps
 // GUI apps don't inherit shell environment variables (.zshrc, .bash_profile, etc.)
