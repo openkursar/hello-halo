@@ -237,6 +237,12 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
   let lastTextTs = ''
   let hadSubstantiveTool = false
 
+  // ── Terminal result fallback ──
+  // Final text + timestamp from the `result` envelope; adopted as bubble
+  // content when a turn reconstructed no assistant text.
+  let pendingResultText = ''
+  let pendingResultTs = ''
+
   const streamBlocks = new Map<number, {
     type: 'text' | 'thinking' | 'tool_use'
     content: string
@@ -248,13 +254,14 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
 
   /** Flush accumulated thoughts + lastText into one assistant Message, then reset state. */
   function flush(): void {
-    if (pendingThoughts.length === 0 && !lastText) return
+    const content = lastText || pendingResultText
+    if (pendingThoughts.length === 0 && !content) return
 
     const record: MessageRecord = {
       id: `session-msg-${++msgIdx}`,
       role: 'assistant',
-      content: lastText,
-      timestamp: lastTextTs || lastThoughtTs || new Date().toISOString(),
+      content,
+      timestamp: lastTextTs || lastThoughtTs || pendingResultTs || new Date().toISOString(),
     }
 
     if (pendingThoughts.length > 0) {
@@ -270,6 +277,8 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
     lastText = ''
     lastTextTs = ''
     hadSubstantiveTool = false
+    pendingResultText = ''
+    pendingResultTs = ''
   }
 
   for (const event of events) {
@@ -495,7 +504,30 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
       continue
     }
 
-    // Skip 'result', 'system' events — they are metadata, not displayable messages
+    // ── Result events: final-text fallback for suppressed assistant text ──
+    //
+    // The Codex event normalizer suppresses the aggregate `assistant` text
+    // envelope in live-UI mode (includePartialMessages=true) so the token-
+    // level stream_event is the sole live bubble source and isn't double-
+    // counted. Digital-human chat persists only the aggregate envelopes (not
+    // stream_event), so such a turn lands in JSONL with thinking/tool
+    // aggregates but no recoverable bubble text. The engine still reports the
+    // turn's final text in `result.result`; adopt it when no text block was
+    // reconstructed. Engine-agnostic: Claude carries text in assistant events,
+    // so `lastText` is already set and this stays inert. Error results are
+    // skipped — emitTerminalError already surfaces the message as assistant text.
+    if (event.type === 'result') {
+      if (event.is_error !== true) {
+        const resultText = typeof event.result === 'string' ? event.result : ''
+        if (resultText) {
+          pendingResultText = resultText
+          pendingResultTs = ts
+        }
+      }
+      continue
+    }
+
+    // Skip 'system' and other metadata events — not displayable messages
   }
 
   // Flush any remaining turn (the common case — most runs are a single turn).

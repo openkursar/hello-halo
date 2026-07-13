@@ -105,12 +105,17 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
-  // Vision support detection — block image input for non-multimodal models
+  // Vision support detection — block image input for non-multimodal models.
+  // An explicit per-model "Vision" override (Model Config) wins over the name
+  // heuristic, using the same key as the backend converter so the upload gate
+  // matches the backend's keep/strip decision for the selected model.
   const aiSources = useAppStore(state => state.config?.aiSources)
   const visionEnabled = useMemo(() => {
     if (!aiSources) return true
     const source = getCurrentSource(aiSources)
     if (!source) return true
+    const override = source.modelOverrides?.[source.model]?.vision
+    if (typeof override === 'boolean') return override
     const model = source.availableModels.find(m => m.id === source.model)
     return model ? supportsVision(model) : true
   }, [aiSources])

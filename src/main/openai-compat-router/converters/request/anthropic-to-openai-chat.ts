@@ -10,6 +10,9 @@ import {
   convertAnthropicThinkingToChatReasoningEffort
 } from '../tools'
 import { supportsVisionById } from '../../../../shared/constants/model-capabilities'
+import type { ConvertRequestOptions } from './types'
+
+export type { ConvertRequestOptions } from './types'
 
 export interface ConversionResult {
   request: OpenAIChatRequest
@@ -20,13 +23,18 @@ export interface ConversionResult {
 /**
  * Convert Anthropic request to OpenAI Chat Completions request
  */
-export function convertAnthropicToOpenAIChat(anthropicRequest: AnthropicRequest): ConversionResult {
+export function convertAnthropicToOpenAIChat(
+  anthropicRequest: AnthropicRequest,
+  options?: ConvertRequestOptions
+): ConversionResult {
   // Strip image blocks for non-vision models. The OpenAI Chat spec encodes
   // images as `{type:'image_url', ...}`, but strict non-vision providers
   // reject this variant entirely. Image content can leak in via tool results
   // (Read on image, screenshots, MCP image returns) or mid-conv model
   // switches — the renderer UI input gate alone is not sufficient.
-  const stripImages = !supportsVisionById(anthropicRequest.model)
+  // An explicit user vision override wins over the name heuristic so models
+  // the blacklist misjudges (e.g. minimax-*) can still receive images.
+  const stripImages = !(options?.visionOverride ?? supportsVisionById(anthropicRequest.model))
 
   // Convert messages
   const { messages, hasImages } = convertAnthropicMessagesToOpenAIChat(

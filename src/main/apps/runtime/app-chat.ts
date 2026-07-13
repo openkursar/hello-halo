@@ -60,7 +60,6 @@ import { NATIVE_CHAT_ENTRY } from './prompt/entry-native'
 import { buildImEntry, buildImConstraints, type ImSessionContext } from './im-channels/im-prompt'
 import { createFileSendMcpServer } from './im-channels/file-send-mcp'
 import { mergeConfigWithDefaults } from './config-defaults'
-import { createReportToolServer, type ReportToolContext } from './report-tool'
 import { tmpdir as osTmpdir } from 'os'
 import { createNotifyToolServer } from './notify-tool'
 import { FileExportGate } from './file-export-gate'
@@ -70,14 +69,18 @@ import { createWebSearchMcpServer } from '../../services/web-search'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { getSpace, getSpaceDir } from '../../services/space.service'
 import { openSessionWriter, readSessionMessages, saveChatSessionId, loadChatSessionId, deleteChatSessionId } from './session-store'
-import { getAppMemoryService, getActivityStore } from './index'
+import { getAppMemoryService } from './index'
 import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
 // Key builders live in shared/ so the renderer can import them without
 // depending on main-process modules.
-import { getAppChatConversationId, buildImSessionKey } from '../../../shared/apps/im-keys'
+import { getAppChatConversationId, buildImSessionKey, parseAppChatKey } from '../../../shared/apps/im-keys'
+import { classifySessionSource } from '../../../shared/types/im-channel'
+import { sendToRenderer } from '../../foundation/window.service'
+import { broadcastToAll } from '../../http/websocket'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../services/agent/types'
 import { ProgressEventParser } from './progress-formatter'
+import { ReplyTextAccumulator } from './reply-accumulator'
 import { flushSupplementBuffer } from './dispatch-inbound'
 export { getAppChatConversationId, buildImSessionKey }
 
@@ -124,7 +127,7 @@ const ALL_BUILTIN_TOOLS = [
  * Halo MCP servers that are always safe for guests (read-only, no side effects).
  * These are injected into guest sessions regardless of GuestPolicy.
  */
-const GUEST_SAFE_MCP = new Set(['web-search', 'halo-report', 'halo-memory'])
+const GUEST_SAFE_MCP = new Set(['web-search', 'halo-memory'])
 
 /**
  * Halo MCP servers controlled by GuestPolicy toggle switches.
@@ -144,7 +147,7 @@ const GUEST_TOGGLEABLE_MCP: Record<string, keyof GuestPolicy> = {
  *
  * Three-tier filtering:
  *   1. User-installed MCPs (from db) → only if listed in allowedUserMcp whitelist
- *   2. Halo safe MCPs → always injected (web-search, halo-report, halo-memory)
+ *   2. Halo safe MCPs → always injected (web-search, halo-memory)
  *   3. Halo toggleable MCPs → injected only if corresponding GuestPolicy flag is true
  *   4. Unknown MCPs (future additions) → NOT injected (conservative strategy)
  *
@@ -281,6 +284,46 @@ function deriveRunId(conversationId: string, appId: string): string {
  */
 const scopedContexts = new Map<string, BrowserContext>()
 
+/**
+ * Register an external (HTTP) app-chat session so it shows in the conversation
+ * list and is readable via the same HTTP path as IM sessions.
+ *
+ * IM sessions are skipped: dispatch-inbound already registers them with a live
+ * instanceId, and re-registering here with an empty instanceId would clobber
+ * that binding and break IM push. Native chat keys parse to null and are ignored.
+ */
+function registerExternalChatSession(
+  conversationId: string,
+  appId: string,
+  opts?: { displayName?: string; lastSender?: string; lastMessage?: string }
+): void {
+  const parsed = parseAppChatKey(conversationId)
+  if (!parsed || parsed.appId !== appId) return
+  if (classifySessionSource(parsed.channel) === 'im') return
+
+  const registry = getImSessionRegistry()
+  if (!registry) return
+
+  registry.register(appId, parsed.channel, parsed.chatId, parsed.chatType, '', {
+    displayName: opts?.displayName,
+    lastSender: opts?.lastSender,
+    lastMessage: opts?.lastMessage,
+  })
+
+  // Notify desktop + remote clients so the session panel refreshes in real time.
+  const sessionEvent = {
+    appId,
+    channel: parsed.channel,
+    chatId: parsed.chatId,
+    chatType: parsed.chatType,
+    instanceId: '',
+    lastMessage: opts?.lastMessage?.slice(0, 50),
+    lastSender: opts?.lastSender,
+  }
+  sendToRenderer('app:im-session-updated', sessionEvent)
+  broadcastToAll('app:im-session-updated', sessionEvent)
+}
+
 // ============================================
 // Core
 // ============================================
@@ -310,6 +353,14 @@ export async function sendAppChatMessage(
 
   const app = manager.getApp(appId)
   if (!app) throw new Error(`App not found: ${appId}`)
+
+  // Register external (HTTP/API) sessions for UI visibility + HTTP read parity.
+  // No-op for native chat and for IM sessions (owned by dispatch-inbound).
+  registerExternalChatSession(conversationId, app.id, {
+    displayName: senderIdentity?.name,
+    lastSender: senderIdentity?.name,
+    lastMessage: message,
+  })
 
   const memory = getAppMemoryService()
   if (!memory) throw new Error('Memory service not initialized')
@@ -389,7 +440,7 @@ export async function sendAppChatMessage(
   // space.path (internal storage) — see getSpaceDir().
   const exportGate = new FileExportGate([getSpaceDir(app.spaceId!), osTmpdir()])
   const imSessions = usesImPush
-    ? (getImSessionRegistry()?.getAllSessions(app.id) ?? [])
+    ? (getImSessionRegistry()?.getPushableSessions(app.id) ?? [])
     : []
   const notifyMcpServer = createNotifyToolServer({
     appId: app.id,
@@ -399,21 +450,14 @@ export async function sendAppChatMessage(
     usesImPush,
     exportGate,
   })
-
-  // Report tool: allows AI to write activity entries in chat mode
-  const activityStore = getActivityStore()
-  const reportContext: ReportToolContext = {
-    appId: app.id,
-    appName: app.spec.name,
-    runId: CHAT_RUN_ID,
-    sessionKey: conversationId,
-    notificationLevel: app.userOverrides?.notificationLevel,
-  }
-
+  // NOTE: report_to_user (halo-report) is intentionally NOT injected in chat/IM
+  // mode. It writes to activity_entries, whose run_id has a FK to automation_runs.
+  // Chat sessions have no automation_runs row, so any call fails with a FOREIGN
+  // KEY constraint and the model retries in a loop (see issue #200). Chat replies
+  // reach the user directly as text, so the Activity Thread is not needed here.
   const mcpServers: Record<string, any> = {
     ...(dbMcpServers ?? {}),
     'halo-memory': memoryMcpServer,
-    ...(activityStore ? { 'halo-report': createReportToolServer(activityStore, reportContext) } : {}),
     'halo-notify': notifyMcpServer,
     ...(digitalHumansEnabled ? { 'halo-apps': createHaloAppsMcpServer(spaceId) } : {}),
     'web-search': createWebSearchMcpServer(),
@@ -543,14 +587,12 @@ export async function sendAppChatMessage(
     // ── 8. Process stream ──────────────────────────────
     const messageContent = buildMessageContent(message, images)
 
-    // Track the last assistant message's text content from raw SDK messages.
-    // This is the authoritative source for IM replies — same principle as the JSONL
-    // path used by AppChatView (readSessionMessages → extractTextContent).
-    // Unlike processStream's internal lastTextContent which can be corrupted by
-    // dual-path (stream_event + SDK message) state interference, this reads directly
-    // from the SDK's output which is always correct.
-    // See: stream-processor.ts TODO about lastTextContent pollution.
-    let lastAssistantText = ''
+    // Accumulate the final reply text from raw SDK assistant messages. Keeps the
+    // last contiguous run of text blocks so multi-segment answers survive intact
+    // (a tool_use resets the run — preceding text is intermediate narration).
+    // This is the authoritative source for IM replies; reading directly from SDK
+    // output sidesteps processStream's lastTextContent dual-path pollution.
+    const replyAccumulator = new ReplyTextAccumulator()
 
     // One stateful parser per message: accumulates tool input JSON and thinking
     // text across delta events, emits complete ProgressEvents on block_stop.
@@ -576,11 +618,12 @@ export async function sendAppChatMessage(
 
           // App chat doesn't use conversation.service for storage.
           // Messages are persisted to JSONL via onRawMessage for reload.
-          const replyContent = lastAssistantText || streamResult.finalContent
+          const assistantText = replyAccumulator.getReply()
+          const replyContent = assistantText || streamResult.finalContent
           console.log(
             `[AppChat][${appId}] Stream complete: ` +
             `content=${replyContent.length} chars` +
-            `${lastAssistantText ? ' (from SDK message)' : ' (from streamResult)'}, ` +
+            `${assistantText ? ' (from SDK message)' : ' (from streamResult)'}, ` +
             `thoughts=${streamResult.thoughts.length}, ` +
             `tokens=${streamResult.tokenUsage ? 'yes' : 'no'}`
           )
@@ -614,19 +657,10 @@ export async function sendAppChatMessage(
             sessionWriter.writeEvent(sdkMessage)
           }
 
-          // Extract text from assistant messages for IM reply.
-          // SDK assistant messages contain the complete, correct text blocks
-          // (unlike processStream's stateful lastTextContent which can be corrupted).
-          if (sdkMessage.type === 'assistant') {
-            const content = sdkMessage.message?.content
-            if (Array.isArray(content)) {
-              const text = content
-                .filter((b: any) => b.type === 'text' && b.text)
-                .map((b: any) => b.text)
-                .join('')
-              if (text) lastAssistantText = text
-            }
-          }
+          // Accumulate assistant text for the IM reply. SDK assistant messages
+          // carry complete text blocks in order, so the accumulator can track
+          // the last contiguous run across a multi-step (text/tool_use) flow.
+          replyAccumulator.feed(sdkMessage)
 
           // Emit progress events to IM channel if callback provided
           if (onProgress && progressParser) {
@@ -742,6 +776,14 @@ export function isAppChatGenerating(appId: string): boolean {
     if (key === prefix || key.startsWith(prefix + ':')) return true
   }
   return false
+}
+
+/**
+ * Whether a single conversation is generating, for the HTTP status endpoint's
+ * per-conversation polling. (isAppChatGenerating reports across all sessions.)
+ */
+export function isAppChatConversationGenerating(conversationId: string): boolean {
+  return activeSessions.has(conversationId)
 }
 
 /**

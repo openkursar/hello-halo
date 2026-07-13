@@ -33,6 +33,12 @@ export class ImChannelManager {
   private instances = new Map<string, ImChannelInstance>()
   /** Current config snapshot (for change detection) */
   private currentConfigs: ImChannelInstanceConfig[] = []
+  /**
+   * Last failure reason per instance id (invalid/undecodable config, missing
+   * provider, creation error). Provider-agnostic; surfaced in status so a
+   * non-UI channel can explain why it is disconnected. Cleared on success/stop.
+   */
+  private statusReasons = new Map<string, string>()
   /** Callback fired after each instance is torn down (for resource cleanup). */
   private onInstanceStop: ((instanceId: string) => void) | null = null
 
@@ -123,6 +129,11 @@ export class ImChannelManager {
     // Save current config snapshot
     this.currentConfigs = configs.map(c => ({ ...c, config: { ...c.config } }))
 
+    // Drop failure reasons for instances no longer in config.
+    for (const id of Array.from(this.statusReasons.keys())) {
+      if (!newConfigMap.has(id)) this.statusReasons.delete(id)
+    }
+
     const running = Array.from(this.instances.values()).filter(i => i.isConnected()).length
     console.log(
       `[ImChannelManager] Config applied: ${configs.length} configured, ` +
@@ -168,6 +179,7 @@ export class ImChannelManager {
       this.stopInstance(id)
     }
     this.currentConfigs = []
+    this.statusReasons.clear()
     console.log('[ImChannelManager] All instances stopped')
   }
 
@@ -248,6 +260,8 @@ export class ImChannelManager {
       connected,
       state,
       appId: cfg.appId,
+      // Only meaningful while disconnected; a live instance has no failure.
+      reason: connected ? undefined : this.statusReasons.get(cfg.id),
     }
   }
 
@@ -259,13 +273,16 @@ export class ImChannelManager {
   ): void {
     const provider = this.providers.get(cfg.type)
     if (!provider) {
-      console.error(`[ImChannelManager] No provider for type "${cfg.type}" — skipping instance "${cfg.id}"`)
+      const reason = `No provider registered for type "${cfg.type}"`
+      console.error(`[ImChannelManager] ${reason} — skipping instance "${cfg.id}"`)
+      this.statusReasons.set(cfg.id, reason)
       return
     }
 
     const validationError = provider.validateConfig(cfg.config)
     if (validationError) {
       console.warn(`[ImChannelManager] Invalid config for instance "${cfg.id}": ${validationError}`)
+      this.statusReasons.set(cfg.id, validationError)
       return
     }
 
@@ -279,8 +296,10 @@ export class ImChannelManager {
 
       instance.start()
       this.instances.set(cfg.id, instance)
+      this.statusReasons.delete(cfg.id)
       console.log(`[ImChannelManager] Instance started: id=${cfg.id}, type=${cfg.type}, appId=${cfg.appId}`)
     } catch (err) {
+      this.statusReasons.set(cfg.id, (err as Error).message)
       console.error(`[ImChannelManager] Failed to create instance "${cfg.id}":`, err)
     }
   }
@@ -294,6 +313,7 @@ export class ImChannelManager {
         console.error(`[ImChannelManager] Error stopping instance "${id}":`, err)
       }
       this.instances.delete(id)
+      this.statusReasons.delete(id)
       if (this.onInstanceStop) {
         try {
           this.onInstanceStop(id)

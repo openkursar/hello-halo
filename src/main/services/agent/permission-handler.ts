@@ -47,13 +47,50 @@ interface CanUseToolDeps {
 // Pending Questions Registry
 // ============================================
 
+/** A single AskUserQuestion item, as supplied by the model. */
+export interface AskUserQuestionItem {
+  question: string
+  header: string
+  options: Array<{ label: string; description: string }>
+  multiSelect: boolean
+}
+
+/**
+ * Recoverable snapshot of an in-flight question, used by remote/mobile clients
+ * to rebuild the AskUserQuestion card after a reconnect or page refresh (the
+ * original `agent:ask-question` event is a one-shot push that disconnected
+ * clients miss).
+ */
+export interface RecoverablePendingQuestion {
+  id: string
+  questions: AskUserQuestionItem[]
+}
+
 interface PendingQuestionEntry {
   resolve: (answers: Record<string, string>) => void
   reject: (reason?: unknown) => void
+  /** Owning conversation, for recovery lookups by conversationId. */
+  conversationId: string
+  /** Original question payload, replayed verbatim on recovery. */
+  questions: AskUserQuestionItem[]
 }
 
 /** Map of question ID -> Promise handlers. Module-level for IPC handler access. */
 const pendingQuestions = new Map<string, PendingQuestionEntry>()
+
+/**
+ * The active (still-unanswered) question for a conversation, or null. A returned
+ * entry is always awaiting an answer since resolve/reject/abort all delete it.
+ * At most one is active per conversation — the turn blocks before asking again.
+ */
+export function getActivePendingQuestion(conversationId: string): RecoverablePendingQuestion | null {
+  for (const [id, entry] of pendingQuestions) {
+    if (entry.conversationId === conversationId) {
+      return { id, questions: entry.questions }
+    }
+  }
+  return null
+}
 
 /**
  * Resolve a pending question with user answers.
@@ -135,18 +172,13 @@ export function createCanUseTool(deps?: CanUseToolDeps): CanUseToolFn {
 
     const { spaceId, conversationId } = deps
     const id = `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const questions = input.questions as Array<{
-      question: string
-      header: string
-      options: Array<{ label: string; description: string }>
-      multiSelect: boolean
-    }>
+    const questions = (input.questions as AskUserQuestionItem[]) ?? []
 
     console.log(`[PermissionHandler] AskUserQuestion: id=${id}, questions=${questions?.length || 0}`)
 
     // Create promise that will be resolved by IPC handler
     const answersPromise = new Promise<Record<string, string>>((resolve, reject) => {
-      pendingQuestions.set(id, { resolve, reject })
+      pendingQuestions.set(id, { resolve, reject, conversationId, questions })
 
       // Clean up on abort (user stops generation)
       if (options.signal) {

@@ -66,6 +66,7 @@ export type BuiltinProviderId =
   | 'moonshot'
   | 'moonshot-global'
   | 'zhipu'
+  | 'zhipu-coding'
   | 'minimax'
   | 'minimax-global'
   | 'minimax-token-plan'
@@ -329,6 +330,14 @@ export interface BackendRequestConfig {
   profileArn?: string
   /** Provider adapter ID — selects a registered adapter for request/response transformations */
   adapterId?: string
+  /**
+   * Explicit per-model vision override from Settings > Provider > Model Config.
+   * When set, it overrides the OpenAI-compat converter's name-based vision
+   * inference when deciding whether to keep or strip image content.
+   * `undefined` = no override; the converter falls back to its built-in
+   * blacklist/keyword heuristic (`supportsVisionById`).
+   */
+  visionOverride?: boolean
 }
 
 // ============================================================================
@@ -594,7 +603,7 @@ export interface ProviderDocsLink {
  *
  * Used as the single source of truth across the main process loader
  * (`src/main/services/ai-sources/auth-loader.ts`) and the renderer setup UI
- * (`LoginSelector.tsx`, `SetupPage.tsx`, `ApiSetup.tsx`). Keeping the type here
+ * (`LoginSelector.tsx`, `SetupPage.tsx`, `SetupProviderConfig.tsx`). Keeping the type here
  * prevents the two layers from drifting as fields are added (e.g. `preset`).
  *
  * Three mutually-exclusive shapes are supported by the loader:

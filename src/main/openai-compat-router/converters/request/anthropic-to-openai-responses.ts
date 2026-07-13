@@ -10,6 +10,9 @@ import {
   convertAnthropicThinkingToResponsesReasoning
 } from '../tools'
 import { supportsVisionById } from '../../../../shared/constants/model-capabilities'
+import type { ConvertRequestOptions } from './types'
+
+export type { ConvertRequestOptions } from './types'
 
 export interface ConversionResult {
   request: OpenAIResponsesRequest
@@ -20,11 +23,15 @@ export interface ConversionResult {
 /**
  * Convert Anthropic request to OpenAI Responses API request
  */
-export function convertAnthropicToOpenAIResponses(anthropicRequest: AnthropicRequest): ConversionResult {
+export function convertAnthropicToOpenAIResponses(
+  anthropicRequest: AnthropicRequest,
+  options?: ConvertRequestOptions
+): ConversionResult {
   // Mirror the Chat-Completions path: drop image content when the target
   // model has no vision capability so the Responses API does not reject
   // `input_image` parts. Symmetric handling keeps both paths consistent.
-  const stripImages = !supportsVisionById(anthropicRequest.model)
+  // An explicit user vision override wins over the name heuristic.
+  const stripImages = !(options?.visionOverride ?? supportsVisionById(anthropicRequest.model))
 
   // Detect images on the original input so we can log/report accurately
   // even after stripping.

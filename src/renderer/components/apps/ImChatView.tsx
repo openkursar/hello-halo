@@ -20,7 +20,7 @@ import { useRemoteSubscription } from '../../hooks/useRemoteSubscription'
 import { useWsRecovery } from '../../hooks/useWsRecovery'
 import { useTranslation } from '../../i18n'
 import type { Message } from '../../types'
-import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import type { ImSessionRecord, SessionSource } from '../../../shared/types/im-channel'
 import { buildImSessionKey } from '../../../shared/apps/im-keys'
 import { CHANNEL_LABELS } from './im-channel-labels'
 
@@ -174,7 +174,7 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
   if (loadState === 'loading') {
     return (
       <div className="flex flex-col h-full">
-        <ImChatInfoBar name={displayName} channel={channelLabel} chatType={chatTypeLabel} isGenerating={false} hasMessages={false} showClearConfirm={false} onClearClick={() => {}} onClearConfirm={() => {}} onClearCancel={() => {}} t={t} />
+        <ImChatInfoBar name={displayName} channel={channelLabel} chatType={chatTypeLabel} source={session.source} isGenerating={false} hasMessages={false} showClearConfirm={false} onClearClick={() => {}} onClearConfirm={() => {}} onClearCancel={() => {}} t={t} />
         <div className="flex-1 flex items-center justify-center">
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -189,7 +189,7 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
   if (loadState === 'error') {
     return (
       <div className="flex flex-col h-full">
-        <ImChatInfoBar name={displayName} channel={channelLabel} chatType={chatTypeLabel} isGenerating={false} hasMessages={false} showClearConfirm={false} onClearClick={() => {}} onClearConfirm={() => {}} onClearCancel={() => {}} t={t} />
+        <ImChatInfoBar name={displayName} channel={channelLabel} chatType={chatTypeLabel} source={session.source} isGenerating={false} hasMessages={false} showClearConfirm={false} onClearClick={() => {}} onClearConfirm={() => {}} onClearCancel={() => {}} t={t} />
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <AlertCircle className="w-5 h-5 text-destructive" />
@@ -206,6 +206,7 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
         name={displayName}
         channel={channelLabel}
         chatType={chatTypeLabel}
+        source={session.source}
         isGenerating={isGenerating}
         hasMessages={messages.length > 0}
         showClearConfirm={showClearConfirm}
@@ -257,6 +258,7 @@ interface ImChatInfoBarProps {
   name: string
   channel: string
   chatType: string
+  source: SessionSource
   isGenerating: boolean
   hasMessages: boolean
   showClearConfirm: boolean
@@ -266,7 +268,10 @@ interface ImChatInfoBarProps {
   t: (key: string) => string
 }
 
-function ImChatInfoBar({ name, channel, chatType, isGenerating, hasMessages, showClearConfirm, onClearClick, onClearConfirm, onClearCancel, t }: ImChatInfoBarProps) {
+function ImChatInfoBar({ name, channel, chatType, source, isGenerating, hasMessages, showClearConfirm, onClearClick, onClearConfirm, onClearCancel, t }: ImChatInfoBarProps) {
+  const interactionNotice = source === 'http'
+    ? t('Read-only · Interact via API')
+    : t('Read-only · Interact via IM channel')
   return (
     <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-muted/30 flex-shrink-0">
       <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -304,7 +309,7 @@ function ImChatInfoBar({ name, channel, chatType, isGenerating, hasMessages, sho
                 <Eraser className="w-3.5 h-3.5 text-muted-foreground/60 hover:text-muted-foreground" />
               </button>
             )}
-            <span>{t('Read-only · Interact via IM channel')}</span>
+            <span>{interactionNotice}</span>
           </>
         )}
       </div>

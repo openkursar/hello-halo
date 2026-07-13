@@ -636,6 +636,20 @@ function resolveClaudeCodeCliPath(): string {
   return resolved
 }
 
+// On spawn ENOENT the SDK always blames cliPath ("executable not found"), even
+// when the real culprit is a missing cwd — the classic Node cause (#170). Log the
+// triplet and surface a bad cwd with its true cause. Don't existsSync cliPath: it
+// lives in app.asar (served from app.asar.unpacked), so existsSync false-negatives.
+function validateSpawnInputs(electronPath: string, cliPath: string, workDir: string): void {
+  console.log(`[SDK Config] spawn inputs: command="${electronPath}", cli="${cliPath}", cwd="${workDir}"`)
+  if (!existsSync(workDir)) {
+    throw new Error(
+      `[SDK Config] Working directory does not exist: "${workDir}". ` +
+      `Claude Code cannot be spawned with a missing cwd; verify the space's working directory.`
+    )
+  }
+}
+
 // ============================================
 // SDK Options Builder
 // ============================================
@@ -674,6 +688,7 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
   })
 
   const cliPath = resolveClaudeCodeCliPath()
+  validateSpawnInputs(electronPath, cliPath, workDir)
 
   // Build base options
   const sdkOptions: Record<string, any> = {

@@ -656,6 +656,75 @@ describe('Request Converters', () => {
       expect(fco.output).toContain('ok')
     })
   })
+
+  // The name heuristic blacklists whole families (e.g. minimax-*) as
+  // text-only. When a user ticks "Vision" in Model Config, that explicit
+  // override must win and keep image content; conversely an explicit `false`
+  // must strip images even for a name the heuristic would treat as vision.
+  describe('vision override', () => {
+    const PNG_SOURCE = {
+      type: 'base64' as const,
+      media_type: 'image/png',
+      data: 'abc123'
+    }
+
+    const imageRequest = (model: string): AnthropicRequest => ({
+      model,
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What is in the image?' },
+            { type: 'image', source: PNG_SOURCE }
+          ]
+        }
+      ]
+    })
+
+    it('keeps images for a blacklisted model when visionOverride=true (Chat)', () => {
+      const result = convertAnthropicToOpenAIChat(imageRequest('minimax-m3-tc-pfs'), {
+        visionOverride: true
+      })
+
+      const content = result.request.messages[0].content as any[]
+      expect(content.some((p: any) => p.type === 'image_url')).toBe(true)
+    })
+
+    it('strips images for the same model without an override (Chat)', () => {
+      const result = convertAnthropicToOpenAIChat(imageRequest('minimax-m3-tc-pfs'))
+
+      const content = result.request.messages[0].content as any[]
+      expect(content.some((p: any) => p.type === 'image_url')).toBe(false)
+    })
+
+    it('strips images when visionOverride=false overrides a vision-capable name (Chat)', () => {
+      const result = convertAnthropicToOpenAIChat(imageRequest('gpt-4o'), {
+        visionOverride: false
+      })
+
+      const content = result.request.messages[0].content as any[]
+      expect(content.some((p: any) => p.type === 'image_url')).toBe(false)
+    })
+
+    it('keeps images for a blacklisted model when visionOverride=true (Responses)', () => {
+      const result = convertAnthropicToOpenAIResponses(imageRequest('minimax-m3-tc-pfs'), {
+        visionOverride: true
+      })
+
+      const userMsg = (result.request.input as any[]).find((i) => i.role === 'user')
+      expect(userMsg.content.some((p: any) => p.type === 'input_image')).toBe(true)
+    })
+
+    it('strips images when visionOverride=false overrides a vision-capable name (Responses)', () => {
+      const result = convertAnthropicToOpenAIResponses(imageRequest('gpt-4o'), {
+        visionOverride: false
+      })
+
+      const userMsg = (result.request.input as any[]).find((i) => i.role === 'user')
+      expect(userMsg.content.some((p: any) => p.type === 'input_image')).toBe(false)
+    })
+  })
 })
 
 describe('Response Converters', () => {
