@@ -21,6 +21,7 @@ import { Virtuoso, VirtuosoHandle } from 'react-virtuoso'
 import { MessageRow } from './MessageRow'
 import { StreamingSection } from './StreamingSection'
 import { useBrowserToolCalls, type BrowserToolCall } from './useBrowserToolCalls'
+import { useTerminalToolCalls, type TerminalToolCall } from './useTerminalToolCalls'
 import { CompactNotice } from './CompactNotice'
 import { InterruptedBubble } from './InterruptedBubble'
 import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion } from '../../types'
@@ -98,6 +99,7 @@ interface StreamingRevision {
   isThinking: boolean
   textBlockVersion: number
   streamingBrowserToolCalls: BrowserToolCall[]
+  streamingTerminalToolCalls: TerminalToolCall[]
   pendingQuestion: PendingQuestion | null
   onAnswerQuestion?: (answers: Record<string, string>) => void
 }
@@ -129,6 +131,7 @@ function StreamingFooterContent({
       isThinking={rev.isThinking}
       textBlockVersion={rev.textBlockVersion}
       browserToolCalls={rev.streamingBrowserToolCalls}
+      terminalToolCalls={rev.streamingTerminalToolCalls}
       showBrowserViewButton={showBrowserViewButton}
       pendingQuestion={rev.pendingQuestion}
       onAnswerQuestion={rev.onAnswerQuestion}
@@ -239,6 +242,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   // Extract real-time browser tool calls from streaming thoughts
   const streamingBrowserToolCalls = useBrowserToolCalls(thoughts)
+  const streamingTerminalToolCalls = useTerminalToolCalls(thoughts)
 
   // Track at-bottom state via native DOM scroll events (independent of Virtuoso).
   const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
@@ -312,9 +316,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   // the store to trigger re-renders when streaming state changes.
   const streamingRevision = useMemo(() => {
     return { streamingContent, isStreaming, thoughts, isThinking, textBlockVersion,
-             streamingBrowserToolCalls, pendingQuestion, onAnswerQuestion }
+             streamingBrowserToolCalls, streamingTerminalToolCalls, pendingQuestion, onAnswerQuestion }
   }, [streamingContent, isStreaming, thoughts, isThinking, textBlockVersion,
-      streamingBrowserToolCalls, pendingQuestion, onAnswerQuestion])
+      streamingBrowserToolCalls, streamingTerminalToolCalls, pendingQuestion, onAnswerQuestion])
   const streamingRevisionRef = useRef(streamingRevision)
   streamingRevisionRef.current = streamingRevision
 

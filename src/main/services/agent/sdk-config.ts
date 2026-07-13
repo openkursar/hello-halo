@@ -7,15 +7,15 @@
  */
 
 import path from 'path'
+import { createHash } from 'crypto'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs'
 import { app } from 'electron'
 import { resolveClaudeConfigDir, getConfig } from '../../foundation/config.service'
-import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../openai-compat-router'
+import { ensureOpenAICompatRouter, encodeBackendConfig, decodeBackendConfig } from '../../openai-compat-router'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
 import { inferOpenAIWireApi, credentialsToBackendConfig } from './helpers'
 import { resolveModelId } from '../../../shared/types/ai-sources'
-import { buildSystemPrompt, buildSystemPromptWithAIBrowser, DEFAULT_ALLOWED_TOOLS } from './system-prompt'
-import { AI_BROWSER_SYSTEM_PROMPT } from '../ai-browser'
+import { buildSystemPrompt, DEFAULT_ALLOWED_TOOLS } from './system-prompt'
 import { createCanUseTool } from './permission-handler'
 import { DEFAULT_DISABLED_TOOLS, TEAM_TOOLS } from '../../../shared/constants/disabled-tools'
 import {
@@ -202,10 +202,15 @@ export interface BaseSdkOptionsParams {
   enableTeams?: boolean
   /** Tools disabled by user (Extended Capabilities toggles) */
   disabledTools?: string[]
-  /** Whether AI Browser is enabled for this session */
-  aiBrowserEnabled?: boolean
   /** Whether Digital Humans MCP tools are enabled */
   digitalHumansEnabled?: boolean
+  /**
+   * Enabled-toolset guides section for toolset-broker sessions (main chat).
+   * Chat callers pass buildToolsetSection(spaceId, conversationId) — possibly ''.
+   * Leave undefined for legacy static-injection sessions (apps/runtime), which
+   * override systemPrompt entirely after this builder returns.
+   */
+  toolsetIndex?: string
 }
 
 // ============================================
@@ -297,6 +302,46 @@ export async function resolveCredentialsForSdk(
     displayModel,
     capabilities: credentials.capabilities,
   }
+}
+
+/**
+ * Compute a per-session credential fingerprint from built SDK options.
+ *
+ * The model is baked into the encoded `ANTHROPIC_API_KEY` at session creation
+ * (see resolveCredentialsForSdk) and, for direct Anthropic, into the top-level
+ * `model` option. This is the per-conversation analog of the global
+ * `credentialsGeneration`: it lets a single conversation's session rebuild
+ * when its own model/source pin changes, without affecting other
+ * conversations (session-manager compares it on session reuse).
+ *
+ * MUST be deterministic for unchanged credentials. Router-encoded keys embed
+ * per-resolution request headers (e.g. a fresh `x-client-request-id` UUID from
+ * claude.provider getBackendConfig), so the raw blob differs on every resolve —
+ * hashing it verbatim rebuilds the session on every warm-up and tears down
+ * in-flight agent teams. Only the stable identity fields participate.
+ */
+export function computeCredentialsFingerprint(sdkOptions: Record<string, any>): string {
+  const env = (sdkOptions.env || {}) as Record<string, unknown>
+  const rawKey = String(env.ANTHROPIC_API_KEY ?? '')
+
+  const backend = decodeBackendConfig(rawKey)
+  const keyIdentity = backend
+    ? [
+        backend.url,
+        backend.key,
+        backend.model ?? '',
+        backend.apiType ?? '',
+        backend.adapterId ?? '',
+        backend.profileArn ?? '',
+      ].join('|')
+    : rawKey  // Direct Anthropic: plain key, stable as-is
+
+  const material = [
+    String(sdkOptions.model ?? ''),
+    String(env.ANTHROPIC_BASE_URL ?? ''),
+    keyIdentity,
+  ].join('|')
+  return createHash('sha256').update(material).digest('hex').slice(0, 16)
 }
 
 /**
@@ -642,14 +687,17 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
     stderr: stderrHandler || ((data: string) => {
       console.error(`[Agent][${conversationId}] CLI stderr:`, data)
     }),
-    // Use Halo's custom system prompt instead of SDK's 'claude_code' preset
-    // When AI Browser is enabled, appends full browser tool workflow guide
-    systemPrompt: params.aiBrowserEnabled
-      ? buildSystemPromptWithAIBrowser(
-          { workDir, modelInfo: credentials.displayModel, promptProfile: params.promptProfile, aiBrowserEnabled: true, digitalHumansEnabled: params.digitalHumansEnabled },
-          AI_BROWSER_SYSTEM_PROMPT
-        )
-      : buildSystemPrompt({ workDir, modelInfo: credentials.displayModel, promptProfile: params.promptProfile, digitalHumansEnabled: params.digitalHumansEnabled }),
+    // Use Halo's custom system prompt instead of SDK's 'claude_code' preset.
+    // The capability index advertises optional toolsets (agent/toolsets) the AI
+    // can ask the user to enable; full tool schemas enter context only once the
+    // toolset is enabled and the session is rebuilt.
+    systemPrompt: buildSystemPrompt({
+      workDir,
+      modelInfo: credentials.displayModel,
+      promptProfile: params.promptProfile,
+      digitalHumansEnabled: params.digitalHumansEnabled,
+      toolsetIndex: params.toolsetIndex
+    }),
     maxTurns: params.maxTurns ?? 50,
     allowedTools: [...DEFAULT_ALLOWED_TOOLS],
     // Enable Skills loading from $CLAUDE_CONFIG_DIR/skills/ and <workspace>/.claude/skills/

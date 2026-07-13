@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.11",
+  "version": "2.1.12-rc.5",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.mjs",
@@ -14,7 +14,7 @@
     "start": "electron-vite preview",
     "postinstall": "node scripts/postinstall.mjs",
     "bump-rc": "node scripts/bump-rc-version.mjs",
-    "build:mac": "npm run bump-rc && npm run prepare:all && npm run build && electron-builder --mac",
+    "build:mac": "export CSC_IDENTITY_AUTO_DISCOVERY=false && npm run bump-rc && npm run prepare:all && npm run build && electron-builder --mac",
     "build:win": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform win && npm run build && electron-builder --win",
     "build:win-x64": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform win && npm run build && electron-builder --win --x64",
     "prepare": "node scripts/prepare-binaries.mjs",
@@ -97,6 +97,9 @@
     "@tailwindcss/typography": "^0.5.19",
     "@types/diff": "^7.0.2",
     "@wecom/aibot-node-sdk": "^1.0.6",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/headless": "^5.5.0",
+    "@xterm/xterm": "^5.5.0",
     "better-sqlite3": "^12.6.2",
     "boring-avatars": "^2.0.4",
     "cloudflared": "^0.7.1",
@@ -194,7 +197,8 @@
       "resources/**/*",
       "product.json",
       "halo-local/dist/**/*",
-      "!node_modules/better-sqlite3/prebuilds"
+      "!node_modules/better-sqlite3/prebuilds",
+      "!node_modules/@capacitor/**"
     ],
     "asarUnpack": [
       "node_modules/@openai/codex/bin/**/*",
@@ -217,6 +221,8 @@
       "icon": "resources/icon.icns",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist",
       "notarize": false,
       "target": [
         {

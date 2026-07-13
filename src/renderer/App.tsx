@@ -7,11 +7,13 @@ import { useAppStore } from './stores/app.store'
 import { useChatStore } from './stores/chat.store'
 import { useOnboardingStore } from './stores/onboarding.store'
 import { initAIBrowserStoreListeners } from './stores/ai-browser.store'
+import { initTerminalStoreListeners } from './stores/terminal.store'
 import { initPerfStoreListeners } from './stores/perf.store'
 import { useSpaceStore } from './stores/space.store'
 import { useSearchStore } from './stores/search.store'
 import { useAppsStore } from './stores/apps.store'
 import { useAppsPageStore } from './stores/apps-page.store'
+import { useToolsetsStore, type ToolsetsChangedEvent, type ToolsetsRequestedEvent } from './stores/toolsets.store'
 import { SplashPage } from './pages/SplashPage'
 import { SetupPage } from './pages/SetupPage'
 import { GitBashSetupPage } from './pages/GitBashSetupPage'
@@ -492,8 +494,12 @@ export default function App() {
   useEffect(() => {
     console.log('[App] Initializing AI Browser store listeners')
     initPerfStoreListeners()
-    const cleanup = initAIBrowserStoreListeners()
-    return cleanup
+    const cleanupBrowser = initAIBrowserStoreListeners()
+    const cleanupTerminal = initTerminalStoreListeners()
+    return () => {
+      cleanupBrowser()
+      cleanupTerminal()
+    }
   }, [])
 
   // Register agent event listeners (global - handles events for all conversations)
@@ -581,6 +587,17 @@ export default function App() {
       }
     })
 
+    // Toolset broker changes (user toggle). Keeps the input toolbar menu/pills in
+    // sync with the authoritative main-process open set.
+    const unsubToolsets = api.onToolsetsChanged((data) => {
+      useToolsetsStore.getState().applyChangedEvent(data as ToolsetsChangedEvent)
+    })
+
+    // AI asked the user to enable a toolset — pop the Tools menu + highlight it.
+    const unsubToolsetReq = api.onToolsetsRequested((data) => {
+      useToolsetsStore.getState().applyRequestedEvent(data as ToolsetsRequestedEvent)
+    })
+
     return () => {
       unsubThought()
       unsubThoughtDelta()
@@ -594,6 +611,8 @@ export default function App() {
       unsubSessionInfo()
       unsubTurnStart()
       unsubMcpStatus()
+      unsubToolsets()
+      unsubToolsetReq()
     }
   }, [
     handleAgentMessage,

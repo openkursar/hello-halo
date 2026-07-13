@@ -268,4 +268,75 @@ describe('config-encryption', () => {
       expect((incoming.remoteAccess as any).password).toBe('123456')
     })
   })
+
+  // --------------------------------------------------------------------------
+  // Device identity + named tunnel (permanent remote-access hostname)
+  // --------------------------------------------------------------------------
+
+  describe('deviceIdentity + remoteAccess.namedTunnel', () => {
+    function makeTunnelConfig(): Record<string, unknown> {
+      return makeConfig({
+        deviceIdentity: {
+          deviceId: '74b24652-1dac-4ab4-9a41-6d94d0f8624c',
+          deviceSecret: 'f'.repeat(64),
+        },
+        remoteAccess: {
+          enabled: true,
+          port: 3847,
+          password: '123456',
+          tunnelEnabled: true,
+          namedTunnel: {
+            hostname: 'r-abc123.example.com',
+            tunnelId: 'tid-1',
+            accountTag: 'acc-1',
+            tunnelSecret: 'base64-tunnel-secret',
+            issuerUrl: 'https://issuer.example.com',
+            issuedAt: 1,
+          },
+        },
+      })
+    }
+
+    it('encrypts both secrets at rest when credentialAtRestSafe is on', () => {
+      setProfile(true)
+      const config = makeTunnelConfig()
+
+      encryptConfigFields(config)
+      expect((config.deviceIdentity as any).deviceSecret).toMatch(/^gmcred:v1:/)
+      expect((config.remoteAccess as any).namedTunnel.tunnelSecret).toMatch(/^gmcred:v1:/)
+      // Non-secret grant fields stay readable
+      expect((config.remoteAccess as any).namedTunnel.hostname).toBe('r-abc123.example.com')
+
+      decryptConfigFields(config)
+      expect((config.deviceIdentity as any).deviceSecret).toBe('f'.repeat(64))
+      expect((config.remoteAccess as any).namedTunnel.tunnelSecret).toBe('base64-tunnel-secret')
+    })
+
+    it('masks both secrets on output', () => {
+      setProfile(false)
+      const masked = maskConfigFields(makeTunnelConfig())
+      expect((masked.deviceIdentity as any).deviceSecret).toBe(MASK_SENTINEL)
+      expect((masked.remoteAccess as any).namedTunnel.tunnelSecret).toBe(MASK_SENTINEL)
+      expect((masked.remoteAccess as any).namedTunnel.hostname).toBe('r-abc123.example.com')
+    })
+
+    it('restores masked sentinels on write-back', () => {
+      const existing = makeTunnelConfig()
+      const incoming = makeTunnelConfig()
+      ;(incoming.deviceIdentity as any).deviceSecret = MASK_SENTINEL
+      ;(incoming.remoteAccess as any).namedTunnel.tunnelSecret = MASK_SENTINEL
+
+      unmaskSentinels(incoming, existing)
+
+      expect((incoming.deviceIdentity as any).deviceSecret).toBe('f'.repeat(64))
+      expect((incoming.remoteAccess as any).namedTunnel.tunnelSecret).toBe('base64-tunnel-secret')
+    })
+
+    it('handles configs without deviceIdentity or namedTunnel gracefully', () => {
+      setProfile(true)
+      const config = makeConfig()
+      expect(() => encryptConfigFields(config)).not.toThrow()
+      expect(() => unmaskSentinels(makeConfig(), makeConfig())).not.toThrow()
+    })
+  })
 })

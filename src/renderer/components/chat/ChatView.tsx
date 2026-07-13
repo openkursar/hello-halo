@@ -13,7 +13,6 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useSpaceStore } from '../../stores/space.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
-import { useAIBrowserStore } from '../../stores/ai-browser.store'
 import { MessageList } from './MessageList'
 import type { MessageListHandle } from './MessageList'
 import { InputArea } from './InputArea'
@@ -303,9 +302,6 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     setMockAnimating(false)
   }, [currentSpace, onboardingHtml, onboardingPrompt, onboardingResponse, setMockAnimating, setMockThinking])
 
-  // AI Browser state
-  const { enabled: aiBrowserEnabled } = useAIBrowserStore()
-
   // Handle send (with optional images for multi-modal messages, optional thinking mode)
   const handleSend = async (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => {
     // In onboarding mode, intercept and play mock response
@@ -317,8 +313,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
     // Can send if has text OR has images
     if ((!content.trim() && (!images || images.length === 0)) || isGenerating) return
 
-    // Pass both AI Browser and thinking state to sendMessage
-    await sendMessage(content, images, aiBrowserEnabled, thinkingEnabled)
+    await sendMessage(content, images, thinkingEnabled)
   }
 
   // Handle stop - stops the current conversation's generation

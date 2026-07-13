@@ -441,6 +441,15 @@ interface HaloConfig {
   }
   // Multi-source AI configuration (OAuth + Custom API)
   aiSources?: AISourcesConfig
+  /**
+   * Last-used toolset selection, the toolset analog of the global model
+   * selection in `aiSources`. Updated only on a user toggle (broker.ts,
+   * opener='user') and stamped onto each new conversation's `toolsets` in
+   * `createConversation`, so a new conversation inherits the previous window's
+   * enabled toolsets. Per-conversation state stays authoritative on the
+   * conversation record — this is purely the seed for the next new conversation.
+   */
+  lastToolsets?: string[]
   permissions: {
     fileAccess: 'allow' | 'ask' | 'deny'
     commandExecution: 'allow' | 'ask' | 'deny'
@@ -477,6 +486,33 @@ interface HaloConfig {
      * keep working after a restart. Generated on first enable when absent.
      */
     password?: string
+    /**
+     * User turned the internet tunnel on. Restored on next start together
+     * with the HTTP server so the fixed hostname comes back automatically.
+     */
+    tunnelEnabled?: boolean
+    /**
+     * Named-tunnel grant issued by the tunnel issuer service, bound to
+     * `deviceIdentity`. Same device always receives the same hostname.
+     * `tunnelSecret` is in the sensitive-field roster (encrypted at rest
+     * when credentialAtRestSafe is on, always masked on output).
+     */
+    namedTunnel?: {
+      hostname: string
+      tunnelId: string
+      accountTag: string
+      tunnelSecret: string
+      issuerUrl: string
+      issuedAt: number
+    }
+  }
+  /**
+   * Persistent per-installation identity — see foundation/device-identity.ts.
+   * `deviceSecret` is in the sensitive-field roster.
+   */
+  deviceIdentity?: {
+    deviceId: string
+    deviceSecret: string
   }
   onboarding: {
     completed: boolean

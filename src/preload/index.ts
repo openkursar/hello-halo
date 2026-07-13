@@ -22,6 +22,7 @@ import { systemRpc } from '../shared/rpc/contracts/system.contract'
 import { healthRpc } from '../shared/rpc/contracts/health.contract'
 import { configRpc } from '../shared/rpc/contracts/config.contract'
 import { agentRpc } from '../shared/rpc/contracts/agent.contract'
+import { terminalRpc } from '../shared/rpc/contracts/terminal.contract'
 import { artifactRpc } from '../shared/rpc/contracts/artifact.contract'
 import { searchRpc } from '../shared/rpc/contracts/search.contract'
 import { wecomBotRpc } from '../shared/rpc/contracts/wecom-bot.contract'
@@ -136,7 +137,6 @@ export interface HaloAPI {
       name?: string
       size?: number
     }>
-    aiBrowserEnabled?: boolean  // Enable AI Browser tools
     thinkingEnabled?: boolean  // Enable extended thinking mode
     canvasContext?: {  // Canvas context for AI awareness
       isOpen: boolean
@@ -146,12 +146,14 @@ export interface HaloAPI {
         title: string
         url?: string
         path?: string
+        terminalSessionId?: string
       } | null
       tabs: Array<{
         type: string
         title: string
         url?: string
         path?: string
+        terminalSessionId?: string
         isActive: boolean
       }>
     }
@@ -165,6 +167,19 @@ export interface HaloAPI {
   answerQuestion: (data: { conversationId: string; id: string; answers: Record<string, string> }) => Promise<IpcResponse>
   injectMessage: (data: { conversationId: string; message: string }) => Promise<IpcResponse>
   getEngineCapabilities: () => Promise<IpcResponse>
+  listToolsets: (data: { spaceId: string; conversationId: string }) => Promise<IpcResponse>
+  openToolset: (data: { spaceId: string; conversationId: string; toolsetId: string }) => Promise<IpcResponse>
+  closeToolset: (data: { spaceId: string; conversationId: string; toolsetId: string }) => Promise<IpcResponse>
+
+  // Terminal (derived from terminalRpc contract)
+  listTerminals: () => Promise<IpcResponse>
+  createTerminal: (data: { spaceId: string; shell?: string; cwd?: string; title?: string }) => Promise<IpcResponse>
+  terminalInput: (data: { sessionId: string; data: string }) => Promise<IpcResponse>
+  terminalResize: (data: { sessionId: string; cols: number; rows: number }) => Promise<IpcResponse>
+  killTerminal: (data: { sessionId: string }) => Promise<IpcResponse>
+  getTerminalReplay: (data: { sessionId: string }) => Promise<IpcResponse>
+  onTerminalData: (callback: (data: unknown) => void) => () => void
+  onTerminalLifecycle: (callback: (data: unknown) => void) => () => void
 
   // Event listeners
   onAgentMessage: (callback: (data: unknown) => void) => () => void
@@ -180,6 +195,8 @@ export interface HaloAPI {
   onAgentAskQuestion: (callback: (data: unknown) => void) => () => void
   onAgentSessionInfo: (callback: (data: unknown) => void) => () => void
   onAgentTurnStart: (callback: (data: unknown) => void) => () => void
+  onToolsetsChanged: (callback: (data: unknown) => void) => () => void
+  onToolsetsRequested: (callback: (data: unknown) => void) => () => void
 
   // Artifact
   listArtifacts: (spaceId: string, maxDepth?: number) => Promise<IpcResponse>
@@ -237,6 +254,7 @@ export interface HaloAPI {
   getRemoteQRCode: (includeToken?: boolean) => Promise<IpcResponse>
   setRemotePassword: (password: string) => Promise<IpcResponse>
   regenerateRemotePassword: () => Promise<IpcResponse>
+  resetTunnelAddress: () => Promise<IpcResponse>
   onRemoteStatusChange: (callback: (data: unknown) => void) => () => void
 
   // Security policy (renderer-safe slice — see ipc/security.ts)
@@ -318,6 +336,7 @@ export interface HaloAPI {
 
   // AI Browser
   onAIBrowserActiveViewChanged: (callback: (data: { viewId: string; url: string | null; title: string | null }) => void) => () => void
+  onAIBrowserViewGone: (callback: (data: { viewId: string }) => void) => () => void
 
   // Overlay (for floating UI above BrowserView)
   showChatCapsuleOverlay: () => Promise<IpcResponse>
@@ -606,6 +625,13 @@ const api: HaloAPI = {
   onAgentAskQuestion: (callback) => createEventListener('agent:ask-question', callback),
   onAgentSessionInfo: (callback) => createEventListener('agent:session-info', callback),
   onAgentTurnStart: (callback) => createEventListener('agent:turn-start', callback),
+  onToolsetsChanged: (callback) => createEventListener('toolsets:changed', callback),
+  onToolsetsRequested: (callback) => createEventListener('toolsets:requested', callback),
+
+  // Terminal (methods derived from terminalRpc contract; event listeners kept)
+  ...bindRpc(terminalRpc),
+  onTerminalData: (callback) => createEventListener('terminal:data', callback),
+  onTerminalLifecycle: (callback) => createEventListener('terminal:lifecycle', callback),
 
   // Artifact (methods derived from artifactRpc contract; event listeners kept)
   ...bindRpc(artifactRpc),
@@ -672,8 +698,9 @@ const api: HaloAPI = {
   showCanvasTabContextMenu: (options) => ipcRenderer.invoke('canvas:show-tab-context-menu', options),
   onCanvasTabAction: (callback) => createEventListener('canvas:tab-action', callback),
 
-  // AI Browser - active view change notification from main process
+  // AI Browser - active view change / view gone notifications from main process
   onAIBrowserActiveViewChanged: (callback) => createEventListener('ai-browser:active-view-changed', callback),
+  onAIBrowserViewGone: (callback) => createEventListener('ai-browser:view-gone', callback),
 
   // Overlay (for floating UI above BrowserView)
   ...bindRpc(overlayRpc),

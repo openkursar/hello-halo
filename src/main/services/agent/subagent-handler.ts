@@ -54,6 +54,19 @@ export interface SubAgentContext {
  * 2. All Agent tool_use thoughts have taskProgress.status !== 'running'.
  *    (Handles the case where task_notification events do arrive, e.g. Anthropic API.)
  */
+/**
+ * True for the thoughts hasActiveTeamTasks keys off: team spawns (Agent
+ * tool_use with team_name) and TeamDelete calls. The session consumer carries
+ * these across turn boundaries so team liveness survives between turns — a
+ * team spawned in an earlier turn must keep blocking session rebuilds and
+ * idle cleanup until it is disbanded.
+ */
+export function isTeamLifecycleThought(t: Thought): boolean {
+  if (t.type !== 'tool_use') return false
+  if (t.toolName === 'TeamDelete') return true
+  return t.toolName === 'Agent' && !!(t.toolInput as Record<string, unknown>)?.team_name
+}
+
 export function hasActiveTeamTasks(thoughts: Thought[]): boolean {
   // Any team agents spawned at all?
   const hasTeamAgents = thoughts.some(

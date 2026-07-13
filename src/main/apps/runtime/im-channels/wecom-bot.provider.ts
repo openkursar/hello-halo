@@ -56,6 +56,7 @@ import type {
   ImFileCapability,
   ImChannelConfigFieldDef,
   ImChannelType,
+  ImConnectionState,
 } from '../../../../shared/types/im-channel'
 import type {
   InboundMessage,
@@ -72,6 +73,8 @@ import {
   type StreamLogLevel,
 } from './wecom-stream-session'
 import { ensureUtf8 } from './wecom-content-utf8'
+import { ConnectionArbiter } from './connection-arbiter'
+import { notifyAppEvent } from '../../../services/notification.service'
 
 // ============================================
 // Constants
@@ -86,6 +89,14 @@ const PUSH_QUEUE_WAIT_MS = 2 * 60 * 1000
 const HEALTH_SNAPSHOT_INTERVAL_MS = 5 * 60_000
 /** Cleanup cadence for the inbound-frame cache (24h-expired entries). */
 const REQ_ID_CLEANUP_INTERVAL_MS = 5 * 60_000
+/**
+ * A standby probe that stays authenticated for this long is treated as
+ * recovered — the competing device has gone and we reclaim the slot for good.
+ * Short enough that recovery is quick; long enough to outlast an active
+ * device's own reconnect backoff (so a probe against a live competitor is
+ * kicked well before this elapses).
+ */
+const STANDBY_CONFIRM_MS = 60_000
 /** Local temp directory for downloaded WeCom media. */
 const TEMP_DIR = join(tmpdir(), 'halo-wecom')
 /** Image file extensions that map to WeCom 'image' media type. */
@@ -254,6 +265,25 @@ class WecomBotInstance implements ImChannelInstance {
   /** Timer handles for cleanup on stop(). */
   private cacheCleanupTimer: ReturnType<typeof setInterval> | null = null
   private healthSnapshotTimer: ReturnType<typeof setInterval> | null = null
+
+  // ── Multi-device slot arbitration ──────────────────────────────
+  // WeCom grants the bot slot to the newest connection. When the same
+  // credential runs on two machines they repeatedly kick each other; the
+  // arbiter decides when to stop defending and yield to a standby state.
+  /** Defend-vs-yield decision logic (pure; no timers/IO). */
+  private readonly arbiter = new ConnectionArbiter()
+  /** 'active' = defend the slot; 'yielding' = conceded, probing periodically. */
+  private connMode: 'active' | 'yielding' = 'active'
+  /** The SDK client whose events we currently honor (guards stale-client events). */
+  private currentClient: InstanceType<typeof AiBot.WSClient> | null = null
+  /** Pending active-mode reconnect timer (jittered backoff). */
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  /** Pending standby probe timer. */
+  private probeTimer: ReturnType<typeof setTimeout> | null = null
+  /** Pending probe-confirm timer (probe survived long enough → recovered). */
+  private confirmTimer: ReturnType<typeof setTimeout> | null = null
+  /** Whether the standby desktop notification has fired for the current episode. */
+  private standbyNotified = false
   /** Counters surfaced in the periodic health snapshot. */
   private counters = {
     totalInbound: 0,
@@ -280,6 +310,9 @@ class WecomBotInstance implements ImChannelInstance {
   start(): void {
     this.active = true
     this.startedAt = Date.now()
+    this.connMode = 'active'
+    this.standbyNotified = false
+    this.arbiter.reset()
     if (!this.config.botId || !this.config.secret) {
       logEvent(this.instanceId, 'warn', 'start_skip', {
         reason: 'missing botId or secret',
@@ -304,6 +337,11 @@ class WecomBotInstance implements ImChannelInstance {
   stop(): void {
     this.active = false
     this.authenticated = false
+    this.connMode = 'active'
+    this.standbyNotified = false
+    this.arbiter.reset()
+    this.clearConflictTimers()
+    this.currentClient = null
     this.emitHealthSnapshot('stop')
     if (this.cacheCleanupTimer) {
       clearInterval(this.cacheCleanupTimer)
@@ -335,15 +373,20 @@ class WecomBotInstance implements ImChannelInstance {
     logEvent(this.instanceId, 'info', 'instance_stop', {})
   }
 
+  /**
+   * Reconnect with current config. Also serves as the manual "use on this
+   * device" takeover: it forcibly exits standby and reclaims the bot slot
+   * (WeCom hands the slot to this newest connection, and the other device then
+   * detects the supersede storm and yields in turn). Resetting the arbiter here
+   * means an explicit user action always wins over the automatic backoff.
+   */
   reconnect(): void {
     if (!this.active) return
-    try {
-      this.wsClient?.disconnect()
-    } catch {
-      /* ignore */
-    }
-    this.wsClient = null
-    this.authenticated = false
+    this.connMode = 'active'
+    this.standbyNotified = false
+    this.arbiter.reset()
+    this.clearConflictTimers()
+    this.teardownClient()
     if (this.config.botId && this.config.secret) {
       this.openClient()
     }
@@ -351,6 +394,18 @@ class WecomBotInstance implements ImChannelInstance {
 
   isConnected(): boolean {
     return this.wsClient?.isConnected === true && this.authenticated
+  }
+
+  /**
+   * Fine-grained connection state for the settings UI. 'standby' means we have
+   * intentionally yielded the bot slot to another device and are probing to
+   * reclaim it when that device goes away.
+   */
+  getConnectionState(): ImConnectionState {
+    if (!this.active) return 'offline'
+    if (this.authenticated && this.wsClient?.isConnected === true) return 'online'
+    if (this.connMode === 'yielding') return 'standby'
+    return 'connecting'
   }
 
   /**
@@ -434,15 +489,31 @@ class WecomBotInstance implements ImChannelInstance {
       logger: sdkLogger,
     })
 
+    // Ignore events from a superseded client object. teardownClient() /
+    // openClient() swap currentClient; the old client may still emit late
+    // events (or auto-reconnect) that must not mutate our state.
+    const isCurrent = (): boolean => this.currentClient === client
+
     client.on('connected', () => {
+      if (!isCurrent()) return
       logEvent(this.instanceId, 'info', 'ws_open', { wsUrl })
     })
     client.on('authenticated', () => {
+      if (!isCurrent()) return
       this.authenticated = true
+      this.arbiter.resetReconnectBackoff()
       logEvent(this.instanceId, 'info', 'subscribe_ok', {})
-      this.flushPendingPushes()
+      if (this.connMode === 'yielding') {
+        // This authenticated session is a standby probe. If it survives the
+        // confirm window without being superseded, the competing device is
+        // gone and we fully recover.
+        this.startProbeConfirm()
+      } else {
+        this.flushPendingPushes()
+      }
     })
     client.on('disconnected', (reason: string) => {
+      if (!isCurrent()) return
       const wasAuthenticated = this.authenticated
       this.authenticated = false
       logEvent(this.instanceId, 'warn', 'ws_close', {
@@ -457,9 +528,11 @@ class WecomBotInstance implements ImChannelInstance {
       )
     })
     client.on('reconnecting', (attempt: number) => {
+      if (!isCurrent()) return
       logEvent(this.instanceId, 'info', 'reconnect_scheduled', { attempt })
     })
     client.on('error', (err: Error) => {
+      if (!isCurrent()) return
       this.counters.totalError++
       logEvent(this.instanceId, 'error', 'ws_error', {
         cat: 'network',
@@ -469,34 +542,192 @@ class WecomBotInstance implements ImChannelInstance {
 
     // Inbound routing — one handler per message type, each translates to the
     // normalized InboundMessage contract.
-    client.on('message.text', (data) => this.handleInbound(data, 'text'))
-    client.on('message.image', (data) => this.handleInbound(data, 'image'))
-    client.on('message.mixed', (data) => this.handleInbound(data, 'mixed'))
-    client.on('message.voice', (data) => this.handleInbound(data, 'voice'))
-    client.on('message.file', (data) => this.handleInbound(data, 'file'))
-    client.on('message.video', (data) => this.handleInbound(data, 'video'))
+    client.on('message.text', (data) => { if (isCurrent()) this.handleInbound(data, 'text') })
+    client.on('message.image', (data) => { if (isCurrent()) this.handleInbound(data, 'image') })
+    client.on('message.mixed', (data) => { if (isCurrent()) this.handleInbound(data, 'mixed') })
+    client.on('message.voice', (data) => { if (isCurrent()) this.handleInbound(data, 'voice') })
+    client.on('message.file', (data) => { if (isCurrent()) this.handleInbound(data, 'file') })
+    client.on('message.video', (data) => { if (isCurrent()) this.handleInbound(data, 'video') })
 
     client.on('event.disconnected_event', () => {
-      // Server kicked us off because a newer connection took the bot slot.
-      // The SDK already marks isManualClose and won't auto-reconnect; we
-      // re-open here so the bot stays online if Halo is still running.
-      logEvent(this.instanceId, 'warn', 'disconnected_event', {
-        reason: 'new connection took bot slot',
-        cat: 'protocol',
-      })
+      if (!isCurrent()) return
+      // Server kicked us off because a newer connection took the bot slot
+      // (the same bot credential is live on another device). The SDK marks
+      // isManualClose and won't auto-reconnect — we own the recovery policy.
       this.activeStreamSessions.forEach((s) =>
         s.markStreamBroken('disconnected_event: superseded'),
       )
-      if (this.active) {
-        // Schedule via microtask so SDK has a chance to finish its own close.
-        Promise.resolve().then(() => {
-          if (this.active) this.reconnect()
-        })
-      }
+      this.handleSuperseded()
     })
 
     this.wsClient = client
+    this.currentClient = client
     client.connect()
+  }
+
+  /**
+   * Decide how to react to a supersede ("a newer connection took the slot").
+   *
+   *   yielding mode  — the superseded connection was a standby probe, so the
+   *                    competing device is still present: give up the probe and
+   *                    schedule the next one (backoff grows).
+   *   active mode    — ask the arbiter: a lone supersede means the competitor
+   *                    may already be gone, so reclaim with backoff; repeated
+   *                    supersedes within the window mean a live competitor, so
+   *                    yield to standby and stop the ping-pong.
+   */
+  private handleSuperseded(): void {
+    if (!this.active) return
+
+    if (this.connMode === 'yielding') {
+      logEvent(this.instanceId, 'info', 'standby_probe_superseded', {
+        reason: 'competing device still holds the slot',
+        cat: 'protocol',
+      })
+      this.cancelProbeConfirm()
+      this.teardownClient()
+      this.scheduleProbe()
+      return
+    }
+
+    const now = Date.now()
+    const decision = this.arbiter.recordSupersede(now)
+    logEvent(this.instanceId, 'warn', 'disconnected_event', {
+      reason: 'new connection took bot slot',
+      decision,
+      supersedes: this.arbiter.supersedeCount(now),
+      cat: 'protocol',
+    })
+    if (decision === 'yield') {
+      this.enterStandby()
+    } else {
+      this.scheduleReconnect()
+    }
+  }
+
+  // ── Standby / slot-arbitration timers ──────────────────────────
+
+  /** Yield the bot slot to another device and begin periodic probing. */
+  private enterStandby(): void {
+    this.connMode = 'yielding'
+    this.clearReconnectTimer()
+    this.cancelProbeConfirm()
+    this.teardownClient()
+    this.arbiter.resetProbeBackoff()
+    logEvent(this.instanceId, 'warn', 'standby_enter', {
+      reason: 'superseded repeatedly by another device',
+      cat: 'protocol',
+    })
+    this.notifyStandbyOnce()
+    this.scheduleProbe()
+  }
+
+  /** Active-mode reconnect after a lone supersede, with jittered backoff. */
+  private scheduleReconnect(): void {
+    this.clearReconnectTimer()
+    const delay = this.arbiter.nextReconnectDelay()
+    logEvent(this.instanceId, 'info', 'reconnect_backoff', { delayMs: delay })
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      if (!this.active || this.connMode !== 'active') return
+      this.teardownClient()
+      if (this.config.botId && this.config.secret) this.openClient()
+    }, delay)
+  }
+
+  /** Schedule the next standby probe (jittered exponential backoff). */
+  private scheduleProbe(): void {
+    this.clearProbeTimer()
+    const delay = this.arbiter.nextProbeDelay()
+    logEvent(this.instanceId, 'info', 'standby_probe_scheduled', { delayMs: delay })
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = null
+      if (!this.active || this.connMode !== 'yielding') return
+      logEvent(this.instanceId, 'info', 'standby_probe_start', {})
+      this.teardownClient()
+      if (this.config.botId && this.config.secret) this.openClient()
+    }, delay)
+  }
+
+  /** A standby probe authenticated — wait to see if it survives (competitor gone). */
+  private startProbeConfirm(): void {
+    this.cancelProbeConfirm()
+    logEvent(this.instanceId, 'info', 'standby_probe_connected', {
+      confirmMs: STANDBY_CONFIRM_MS,
+    })
+    this.confirmTimer = setTimeout(() => {
+      this.confirmTimer = null
+      if (!this.active || this.connMode !== 'yielding') return
+      this.recoverToActive()
+    }, STANDBY_CONFIRM_MS)
+  }
+
+  /** Standby probe survived — reclaim the slot and resume normal operation. */
+  private recoverToActive(): void {
+    this.connMode = 'active'
+    this.standbyNotified = false
+    this.arbiter.reset()
+    logEvent(this.instanceId, 'info', 'standby_recovered', {
+      reason: 'no competing device detected',
+    })
+    this.flushPendingPushes()
+  }
+
+  /** Fire a single desktop notification per standby episode (avoids spam). */
+  private notifyStandbyOnce(): void {
+    if (this.standbyNotified) return
+    this.standbyNotified = true
+    try {
+      notifyAppEvent(
+        'WeCom bot on standby',
+        'This bot is now active on another device, so Halo put this connection on standby to avoid a conflict. Open Settings → Message Channels and choose "Use on this device" to take over here.',
+      )
+    } catch (err) {
+      logEvent(this.instanceId, 'warn', 'standby_notify_failed', {
+        err: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /** Disconnect and forget the current SDK client. */
+  private teardownClient(): void {
+    try {
+      this.wsClient?.disconnect()
+    } catch (err) {
+      logEvent(this.instanceId, 'warn', 'ws_disconnect_error', {
+        err: err instanceof Error ? err.message : String(err),
+      })
+    }
+    this.wsClient = null
+    this.currentClient = null
+    this.authenticated = false
+  }
+
+  private clearConflictTimers(): void {
+    this.clearReconnectTimer()
+    this.clearProbeTimer()
+    this.cancelProbeConfirm()
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+  }
+
+  private clearProbeTimer(): void {
+    if (this.probeTimer) {
+      clearTimeout(this.probeTimer)
+      this.probeTimer = null
+    }
+  }
+
+  private cancelProbeConfirm(): void {
+    if (this.confirmTimer) {
+      clearTimeout(this.confirmTimer)
+      this.confirmTimer = null
+    }
   }
 
   /**

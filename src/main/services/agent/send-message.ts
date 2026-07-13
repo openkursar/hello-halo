@@ -18,17 +18,15 @@
 
 import { getConfig } from '../../foundation/config.service'
 import { addMessage } from '../conversation.service'
-import { createAIBrowserMcpServer } from '../ai-browser'
-import { createWebSearchMcpServer } from '../web-search'
-import { createHaloAppsMcpServer } from '../app-bridge'
+import { buildCreationTimeServers } from './toolsets/broker'
+import { buildToolsetSection } from './toolsets/capability-index'
 import type {
   AgentRequest,
-  SessionConfig,
 } from './types'
 import {
   getHeadlessElectronPath,
   getWorkingDir,
-  getApiCredentials,
+  getApiCredentialsForConversation,
   getDbMcpServers
 } from './helpers'
 import { emitAgentEvent } from './events'
@@ -67,12 +65,11 @@ export async function sendMessage(
     message,
     resumeSessionId,
     images,
-    aiBrowserEnabled,
     thinkingEnabled,
     canvasContext
   } = request
 
-  console.log(`[Agent] sendMessage: conv=${conversationId}${images && images.length > 0 ? `, images=${images.length}` : ''}${aiBrowserEnabled ? ', AI Browser enabled' : ''}${thinkingEnabled ? ', thinking=ON' : ''}${canvasContext?.isOpen ? `, canvas tabs=${canvasContext.tabCount}` : ''}`)
+  console.log(`[Agent] sendMessage: conv=${conversationId}${images && images.length > 0 ? `, images=${images.length}` : ''}${thinkingEnabled ? ', thinking=ON' : ''}${canvasContext?.isOpen ? `, canvas tabs=${canvasContext.tabCount}` : ''}`)
 
   const config = getConfig()
   const workDir = getWorkingDir(spaceId)
@@ -93,32 +90,27 @@ export async function sendMessage(
   })
 
   try {
-    // Get API credentials and resolve for SDK use
-    const credentials = await getApiCredentials(config)
+    // Load the conversation first: it carries both the resume sessionId and the
+    // per-conversation model pin used to resolve credentials.
+    const { getConversation } = await import('../conversation.service')
+    const conversation = getConversation(spaceId, conversationId)
+    const sessionId = resumeSessionId || conversation?.sessionId
+
+    // Get API credentials (per-conversation pin, falling back to global) and resolve for SDK use
+    const credentials = await getApiCredentialsForConversation(config, conversation)
     console.log(`[Agent] sendMessage using: ${credentials.provider}, model: ${credentials.model}, prompt: ${config.agent?.promptProfile ?? 'halo'}`)
     console.log(`[Agent] turn_start conv=${conversationId} model=${credentials.model} ts=${Date.now()}`)
 
     const resolvedCredentials = await resolveCredentialsForSdk(credentials)
-
-    // Get conversation for session resumption
-    const { getConversation } = await import('../conversation.service')
-    const conversation = getConversation(spaceId, conversationId)
-    const sessionId = resumeSessionId || conversation?.sessionId
     const electronPath = getHeadlessElectronPath()
 
-    // Get MCP servers from installed apps database (global + space-scoped, with override)
+    // Creation-time MCP servers: external process-based servers (user-installed
+    // apps) plus the complete in-process set (always-on web-search / halo-apps,
+    // broker meta tools, and currently-enabled toolsets). All engines seed at
+    // creation; a toolset toggle rebuilds the session so the new set is picked up.
     const dbMcpServers = getDbMcpServers(spaceId)
-
-    // Build MCP servers config (DB apps + built-in MCPs)
     const mcpServers: Record<string, any> = dbMcpServers ? { ...dbMcpServers } : {}
-    if (aiBrowserEnabled) {
-      mcpServers['ai-browser'] = createAIBrowserMcpServer(undefined, workDir)
-    }
-    if (digitalHumansEnabled) {
-      const haloApps = createHaloAppsMcpServer(spaceId)
-      if (haloApps) mcpServers['halo-apps'] = haloApps
-    }
-    mcpServers['web-search'] = createWebSearchMcpServer()
+    Object.assign(mcpServers, buildCreationTimeServers({ spaceId, conversationId, workDir }))
 
     // Build base SDK options
     const sdkOptions = buildBaseSdkOptions({
@@ -138,8 +130,8 @@ export async function sendMessage(
       customConfigDir: config.agent?.customConfigDir,
       enableTeams: config.agent?.enableTeams,
       disabledTools: config.agent?.disabledTools,
-      aiBrowserEnabled: !!aiBrowserEnabled,
       digitalHumansEnabled,
+      toolsetIndex: buildToolsetSection(spaceId, conversationId),
     })
 
     // Apply dynamic configurations (Thinking mode)
@@ -150,14 +142,9 @@ export async function sendMessage(
     const t0 = Date.now()
     console.log(`[Agent][${conversationId}] Getting or creating V2 session...`)
 
-    // Session config for rebuild detection
-    const sessionConfig: SessionConfig = {
-      aiBrowserEnabled: !!aiBrowserEnabled
-    }
-
     // Get or create persistent V2 session (also starts persistent consumer if new)
     const v2Session = await getOrCreateV2Session(
-      spaceId, conversationId, sdkOptions, sessionId, sessionConfig, workDir,
+      spaceId, conversationId, sdkOptions, sessionId, workDir,
       resolvedCredentials.displayModel,  // Passed to consumer for thought parsing
       resolvedCredentials.capabilities?.contextWindow
     )
@@ -171,11 +158,11 @@ export async function sendMessage(
       conversationId, resolvedCredentials.displayModel, resolvedCredentials.capabilities?.contextWindow
     )
 
-    // Dynamic runtime parameter adjustment
+    // Dynamic runtime parameter adjustment. Model is intentionally NOT set
+    // here: model changes rebuild the session via credentialsFingerprint, and
+    // the CLI's set_model handler injects "/model" replay messages into the
+    // transcript on every call, polluting context and surfacing in the chat UI.
     try {
-      if (v2Session.setModel) {
-        await v2Session.setModel(resolvedCredentials.sdkModel)
-      }
       if (v2Session.setMaxThinkingTokens) {
         await v2Session.setMaxThinkingTokens(thinkingEnabled ? 10240 : null)
       }

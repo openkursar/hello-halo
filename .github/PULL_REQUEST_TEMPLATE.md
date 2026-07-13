@@ -3,13 +3,12 @@
 Fixes #
 
 ## Changes
-<!-- Describe what this PR changes -->
+<!-- Describe what this PR changes and why -->
 
-## Testing
-<!-- How did you test these changes? -->
-- [ ] Ran `npm run dev`
-- [ ] Tested locally with ` "test:unit"`
-- [ ] Ran `npm run i18n` (if added new text)
+## Pre-submit Checklist
+- [ ] Ran the `/code-review` skill to review this change
+- [ ] Ran the `/code-commit` skill to create the commit
+- [ ] Ran `test:unit`
 - [ ] Ran `test:e2e:smoke` (Optional, recommended for large changes)
 
 ## Screenshots (if applicable)

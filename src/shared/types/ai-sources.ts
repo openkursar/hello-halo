@@ -414,6 +414,30 @@ export function getCurrentModelName(config: AISourcesConfig): string {
 }
 
 /**
+ * Resolve the display name for an explicit source + model pair, used by the
+ * per-conversation model selector (a conversation may be pinned to a model that
+ * differs from the current global selection).
+ *
+ * Falls back to the current global model name when the pin is absent or its
+ * source is no longer available — so legacy conversations and pins whose source
+ * was deleted still render a sensible label.
+ */
+export function getModelDisplayName(
+  config: AISourcesConfig,
+  sourceId?: string,
+  modelId?: string
+): string {
+  if (sourceId && modelId) {
+    const source = config.sources.find(s => s.id === sourceId)
+    if (source) {
+      const modelOption = source.availableModels.find(m => m.id === modelId)
+      return modelOption?.name || modelId
+    }
+  }
+  return getCurrentModelName(config)
+}
+
+/**
  * Check if any AI source is configured and ready to use
  */
 export function hasAnyAISource(config: AISourcesConfig): boolean {

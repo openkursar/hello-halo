@@ -67,4 +67,11 @@ export const remoteApi = {
     return window.halo.regenerateRemotePassword()
   },
 
+  resetTunnelAddress: async (): Promise<ApiResponse> => {
+    if (!isElectron()) {
+      return { success: false, error: 'Only available in desktop app' }
+    }
+    return window.halo.resetTunnelAddress()
+  },
+
 }

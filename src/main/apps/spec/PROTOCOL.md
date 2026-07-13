@@ -174,8 +174,11 @@ source:
 | `path` | string | Webhook path, mounted under `/hooks/{path}`. Triggers on POST requests to this path. When omitted, all paths are accepted. |
 | `secret` | string | HMAC-SHA256 signing secret. When provided, the `x-hub-signature-256` or `x-webhook-signature` request header is verified. Returns 401 if verification fails. |
 
-> **Runtime behavior**: `WebhookSource` registers a `POST /hooks/*` route on the Express server and
+> **Runtime behavior**: `WebhookSource` registers its POST route on the webhook ingress router
+> (mounted at `/hooks` by the HTTP server ahead of auth middleware and frontend fallbacks) and
 > produces `webhook.received` events. `path` matches against `payload.path` (exact match).
+> Only JSON payloads are supported, up to 256KB; HMAC verification runs against the raw
+> request bytes.
 
 ---
 

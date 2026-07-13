@@ -24,6 +24,7 @@ import {
 } from 'lucide-react'
 import { getToolIcon } from '../icons/ToolIcons'
 import { BrowserTaskCard, isBrowserTool } from '../tool/BrowserTaskCard'
+import { TerminalTaskCard, isTerminalTool } from '../tool/TerminalTaskCard'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { FileChangesFooter } from '../diff'
 import { normalizeFileChangesSummary } from '../../../shared/file-changes'
@@ -289,6 +290,19 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
   // Check if there are running browser tools (based on isWorking state)
   const hasBrowserActivity = isWorking && browserToolCalls.length > 0
 
+  // Extract terminal tool calls from thoughts (same pattern as browser tools)
+  const terminalToolCalls = useMemo(() => {
+    if (!Array.isArray(message.thoughts)) return []
+    return message.thoughts
+      .filter(t => t.type === 'tool_use' && t.toolName && isTerminalTool(t.toolName))
+      .map(t => ({
+        id: t.id,
+        name: t.toolName!,
+        status: 'success' as const,
+        input: t.toolInput || {},
+      }))
+  }, [message.thoughts])
+
   // Error-only message (no content): render standalone error block without bubble wrapper.
   // Treat whitespace-only content as empty — the empty-response repair placeholder
   // (a single space) must not mask the error block behind a blank bubble.
@@ -370,6 +384,15 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
           browserToolCalls={browserToolCalls}
           isActive={isWorking || hasBrowserActivity}
           showViewButton={!hideBrowserViewButton}
+        />
+      )}
+
+      {/* Terminal task card - terminal tools displayed separately */}
+      {terminalToolCalls.length > 0 && (
+        <TerminalTaskCard
+          terminalToolCalls={terminalToolCalls}
+          isActive={isWorking}
+          showOpenButton={!hideBrowserViewButton}
         />
       )}
 

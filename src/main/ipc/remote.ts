@@ -13,8 +13,10 @@ import {
   generateQRCode,
   onRemoteAccessStatusChange,
   setCustomPassword,
-  regeneratePassword
+  regeneratePassword,
+  resetTunnelAddress
 } from '../services/remote.service'
+import { TunnelIssueError } from '../services/tunnel-issuer.client'
 import { getMainWindow, onMainWindowChange } from '../foundation/window.service'
 import {
   isTunnelSafe,
@@ -42,7 +44,7 @@ export function registerRemoteHandlers(): void {
       console.log('[Settings] remote:enable - Enabling remote access', port ? `on port ${port}` : '')
       try {
         const status = await enableRemoteAccess(port)
-        console.log('[Settings] remote:enable - Enabled, port:', status.port)
+        console.log('[Settings] remote:enable - Enabled, port:', status.server.port)
         return { success: true, data: status }
       } catch (error: unknown) {
         const err = error as Error
@@ -151,6 +153,32 @@ export function registerRemoteHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] remote:set-password - Failed:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // Change the permanent address: revoke + re-issue. Surfaces the issuer
+    // error codes (rate limit etc.) so the UI can distinguish a product
+    // limit from a fault.
+    resetTunnelAddress: async () => {
+      if (isTunnelSafe()) {
+        return {
+          success: false,
+          error: TUNNEL_DISABLED_BY_POLICY_MESSAGE,
+          code: TUNNEL_DISABLED_BY_POLICY,
+        }
+      }
+      console.log('[Settings] remote:tunnel:reset-address - Resetting address')
+      try {
+        const url = await resetTunnelAddress()
+        console.log('[Settings] remote:tunnel:reset-address - Done, new url:', url ?? '(issued on next start)')
+        return { success: true, data: { url, status: getRemoteAccessStatus() } }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[Settings] remote:tunnel:reset-address - Failed:', err.message)
+        if (error instanceof TunnelIssueError) {
+          return { success: false, error: err.message, code: error.code }
+        }
         return { success: false, error: err.message }
       }
     },

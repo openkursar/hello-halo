@@ -3,7 +3,7 @@
  * Exposes REST API and serves the frontend for remote access
  */
 
-import express, { Express, Request, Response } from 'express'
+import express, { Express, Request, Response, Router, NextFunction } from 'express'
 import { createServer, Server, request as httpRequest, IncomingMessage } from 'http'
 import { join } from 'path'
 import { BrowserWindow } from 'electron'
@@ -36,6 +36,74 @@ let serverPort: number = 0
 // Default port
 const DEFAULT_PORT = 3847
 const MAX_PORT_SEARCH_ATTEMPTS = 20
+
+// ---------------------------------------------------------------------------
+// Webhook ingress
+// ---------------------------------------------------------------------------
+
+// Mount point and body limit. The limit must match the contract expected by
+// apps/runtime WebhookSource (MAX_BODY_BYTES = 256KB).
+const WEBHOOK_INGRESS_PATH = '/hooks'
+const WEBHOOK_INGRESS_BODY_LIMIT = '256kb'
+
+// The ingress router is a process-lifetime singleton, NOT tied to a server
+// instance: apps/runtime initializes (and mounts WebhookSource routes) before
+// the HTTP server first starts, and the server may be stopped/restarted with
+// a fresh Express app at any time. Each startHttpServer() re-attaches this
+// same router, so routes registered on it survive server restarts.
+let webhookIngressRouter: Router | null = null
+
+/**
+ * Get the webhook ingress router (mounted at /hooks ahead of auth and
+ * frontend fallbacks whenever the HTTP server runs). apps/runtime
+ * WebhookSource registers its routes here; safe to call before the server
+ * has ever started.
+ */
+export function getWebhookIngressRouter(): Router {
+  if (!webhookIngressRouter) {
+    webhookIngressRouter = express.Router()
+  }
+  return webhookIngressRouter
+}
+
+/**
+ * Mount the webhook ingress on a freshly created Express app, ahead of every
+ * other middleware, so external callers (GitHub, Stripe, ...) are never
+ * intercepted by the global JSON body limit, auth middleware, or frontend
+ * fallbacks. Authentication is per-hook HMAC inside WebhookSource.
+ *
+ * Chain: content-type guard -> dedicated JSON parser (webhook body limit +
+ * raw bytes for HMAC -- re-serialized JSON is not byte-identical) -> ingress
+ * router -> 404 terminal (no route consumed the request, e.g. automation
+ * runtime inactive) -> JSON error handler (body-parser errors such as 413
+ * must never leak an HTML stack trace to external callers).
+ */
+function attachWebhookIngress(app: Express): void {
+  app.use(WEBHOOK_INGRESS_PATH, (req: Request, res: Response, next: NextFunction) => {
+    if (!req.is('application/json')) {
+      res.status(415).json({ error: 'Webhook payloads must be application/json' })
+      return
+    }
+    next()
+  })
+  app.use(
+    WEBHOOK_INGRESS_PATH,
+    express.json({
+      limit: WEBHOOK_INGRESS_BODY_LIMIT,
+      verify: (req, _res, buf) => {
+        ;(req as Request & { rawBody?: Buffer }).rawBody = buf
+      }
+    }),
+    getWebhookIngressRouter()
+  )
+  app.use(WEBHOOK_INGRESS_PATH, (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'Webhook ingress not available' })
+  })
+  app.use(WEBHOOK_INGRESS_PATH, (err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
+    console.warn(`[HTTP] Webhook ingress request rejected: ${err.message}`)
+    res.status(err.status ?? 400).json({ error: 'Invalid webhook request' })
+  })
+}
 
 async function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -100,6 +168,8 @@ export async function startHttpServer(
 
   // Create Express app
   expressApp = express()
+
+  attachWebhookIngress(expressApp)
 
   // Middleware
   expressApp.use(express.json())
@@ -375,14 +445,6 @@ export function getServerInfo(): {
  */
 export function getMainWindow(): BrowserWindow | null {
   return getMainWindowFromService()
-}
-
-/**
- * Get the Express app instance (for webhook route mounting).
- * Returns null if the HTTP server is not running.
- */
-export function getExpressApp(): Express | null {
-  return expressApp
 }
 
 /**

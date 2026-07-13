@@ -108,7 +108,6 @@ export interface EngineCapabilities {
     mcp: boolean
     hooks: boolean
     sessionResume: boolean
-    midTurnInjection: boolean
     interrupt: boolean
     multimodalImage: boolean
     contextCompaction: boolean
@@ -149,7 +148,6 @@ export const ANTHROPIC_CAPABILITIES: EngineCapabilities = {
     mcp: true,
     hooks: true,
     sessionResume: true,
-    midTurnInjection: true,
     interrupt: true,
     multimodalImage: true,
     contextCompaction: true,

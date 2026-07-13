@@ -14,7 +14,7 @@
  */
 
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
-import { Save, RotateCcw, Unplug, Loader2, FileCode, Settings, Code, AlertTriangle, Globe, Bell, Download, ExternalLink, FolderOpen, Wrench, Send, Trash2, Mail, HelpCircle, RefreshCw, X } from 'lucide-react'
+import { Save, RotateCcw, Unplug, Loader2, FileCode, Settings, Code, AlertTriangle, Globe, Bell, Download, ExternalLink, FolderOpen, Wrench, Send, Trash2, Mail, HelpCircle, RefreshCw, X, TerminalSquare } from 'lucide-react'
 import { stringify as stringifyYaml, parse as parseYaml } from 'yaml'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppStore } from '../../stores/app.store'
@@ -591,6 +591,36 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
           <p className="text-xs text-amber-500 flex items-center gap-1 -mt-2">
             <AlertTriangle className="w-3 h-3 flex-shrink-0" />
             {t('This app may require AI Browser to work properly')}
+          </p>
+        )}
+
+        {/* AI Terminal toggle (default off — powerful capability) */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <TerminalSquare className="w-3.5 h-3.5 text-muted-foreground" />
+              <span className="text-sm text-foreground">{t('AI Terminal')}</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {t('Allow this app to run shell commands and interactive terminals')}
+            </p>
+          </div>
+          <Switch
+            checked={resolvePermission(app, 'ai-terminal', false)}
+            onCheckedChange={async (checked) => {
+              if (checked) {
+                await grantPermission(appId, 'ai-terminal')
+              } else {
+                await revokePermission(appId, 'ai-terminal')
+              }
+            }}
+            size="sm"
+          />
+        </div>
+        {!resolvePermission(app, 'ai-terminal', false) && app.spec.permissions?.includes('ai-terminal') && (
+          <p className="text-xs text-amber-500 flex items-center gap-1 -mt-2">
+            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
+            {t('This app may require AI Terminal to work properly')}
           </p>
         )}
 

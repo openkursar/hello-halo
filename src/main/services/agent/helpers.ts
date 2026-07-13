@@ -356,6 +356,37 @@ export async function getApiCredentialsForSource(
 }
 
 /**
+ * Get API credentials for a conversation, honoring its per-conversation model
+ * pin (Cursor-style) and falling back to the global selection.
+ *
+ * Resolution order:
+ *  1. Conversation has a `modelSourceId` that still exists in config → resolve
+ *     from that source + `modelId` (reuses the per-app override path).
+ *  2. Otherwise (legacy conversation with no pin, or a pin whose source was
+ *     deleted) → fall back to the global current source via getApiCredentials.
+ *
+ * Accepts a minimal structural shape rather than the full Conversation type to
+ * avoid coupling the agent module to conversation.service's internal interface.
+ */
+export async function getApiCredentialsForConversation(
+  config: ReturnType<typeof getConfig>,
+  conversation: { modelSourceId?: string; modelId?: string } | null | undefined
+): Promise<ApiCredentials> {
+  const sourceId = conversation?.modelSourceId
+  if (sourceId) {
+    const aiSources = config.aiSources
+    const sourceExists = aiSources?.version === 2 && aiSources.sources.some(s => s.id === sourceId)
+    if (sourceExists) {
+      return getApiCredentialsForSource(config, sourceId, conversation?.modelId)
+    }
+    console.warn(
+      `[AgentService] Conversation model pin source ${sourceId} unavailable, falling back to global selection`
+    )
+  }
+  return getApiCredentials(config)
+}
+
+/**
  * Infer OpenAI wire API type from URL or environment
  */
 export function inferOpenAIWireApi(apiUrl: string): 'responses' | 'chat_completions' {

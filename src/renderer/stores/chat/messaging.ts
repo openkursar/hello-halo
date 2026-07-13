@@ -6,7 +6,7 @@ import { api, canvasLifecycle, createEmptySessionState } from './internal'
 import type { CanvasContext, Message } from './internal'
 
 export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 'injectMessage' | 'approveTool' | 'rejectTool' | 'continueAfterInterrupt'> = (set, get) => ({
-  sendMessage: async (content, images, aiBrowserEnabled, thinkingEnabled) => {
+  sendMessage: async (content, images, thinkingEnabled) => {
     const conversation = get().getCurrentConversation()
     const conversationMeta = get().getCurrentConversationMeta()
     const { currentSpaceId } = get()
@@ -97,25 +97,26 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
             type: activeTab.type,
             title: activeTab.title,
             url: activeTab.url,
-            path: activeTab.path
+            path: activeTab.path,
+            terminalSessionId: activeTab.terminalSessionId
           } : null,
           tabs: tabs.map(t => ({
             type: t.type,
             title: t.title,
             url: t.url,
             path: t.path,
+            terminalSessionId: t.terminalSessionId,
             isActive: t.id === activeTabId
           }))
         }
       }
 
-      // Send to agent (with images, AI Browser state, thinking mode, and canvas context)
+      // Send to agent (with images, thinking mode, and canvas context)
       await api.sendMessage({
         spaceId: currentSpaceId,
         conversationId,
         message: content,
         images: images,  // Pass images to API
-        aiBrowserEnabled,  // Pass AI Browser state to API
         thinkingEnabled,  // Pass thinking mode to API
         canvasContext: buildCanvasContext()  // Pass canvas context for AI awareness
       })

@@ -111,6 +111,37 @@ function handleClientMessage(
       sendToClient(client, { type: 'pong' })
       break
 
+    case 'terminal-input':
+      // Low-latency remote keyboard → pty. Authenticated clients only.
+      if (!client.authenticated) {
+        sendToClient(client, { type: 'error', error: 'Not authenticated' })
+        break
+      }
+      if (message.payload?.sessionId && typeof message.payload.data === 'string') {
+        void import('../services/ai-terminal').then(({ terminalInput }) => {
+          terminalInput(message.payload.sessionId, message.payload.data)
+        })
+      }
+      break
+
+    case 'terminal-resize': {
+      if (!client.authenticated) {
+        sendToClient(client, { type: 'error', error: 'Not authenticated' })
+        break
+      }
+      const cols = Number(message.payload?.cols)
+      const rows = Number(message.payload?.rows)
+      if (
+        typeof message.payload?.sessionId === 'string' &&
+        Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0
+      ) {
+        void import('../services/ai-terminal').then(({ terminalResize }) => {
+          terminalResize(message.payload.sessionId, cols, rows)
+        })
+      }
+      break
+    }
+
     default:
       console.log(`[WS] Unknown message type: ${message.type}`)
   }

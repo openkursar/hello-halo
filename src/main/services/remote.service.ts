@@ -13,11 +13,21 @@ import {
 } from '../http/server'
 import {
   startTunnel,
+  startNamedTunnel,
   stopTunnel,
   getTunnelStatus,
   onTunnelStatusChange,
   TunnelDisabledByPolicyError,
+  NamedTunnelAuthError,
+  type TunnelMode,
 } from './tunnel.service'
+import {
+  issueNamedTunnel,
+  revokeNamedTunnel,
+  TunnelIssueError,
+  type NamedTunnelGrant,
+} from './tunnel-issuer.client'
+import { getDeviceIdentity } from '../foundation/device-identity'
 import { getConfig, saveConfig } from '../foundation/config.service'
 import {
   setCustomAccessToken,
@@ -58,9 +68,25 @@ export interface RemoteAccessStatus {
     status: 'stopped' | 'starting' | 'running' | 'error'
     url: string | null
     error: string | null
+    /** 'named' = permanent hostname, 'quick' = random per-run fallback */
+    mode: TunnelMode | null
+    /**
+     * Why the tunnel is running in quick-fallback mode instead of the
+     * permanent hostname. Lets the UI tell "product limit reached" apart
+     * from "issuer outage" — users must never mistake a quota for a bug.
+     */
+    fallbackReason: TunnelFallbackReason | null
   }
   clients: number
 }
+
+export type TunnelFallbackReason =
+  | 'issuer_unreachable'
+  | 'issuer_rate_limited'
+  | 'issuer_rejected'
+
+// In-memory only: meaningful just while a quick fallback tunnel is running.
+let tunnelFallbackReason: TunnelFallbackReason | null = null
 
 // Callback for status updates
 type StatusCallback = (status: RemoteAccessStatus) => void
@@ -219,13 +245,15 @@ export async function disableRemoteAccess(): Promise<void> {
   await stopTunnel()
   stopHttpServer()
 
-  // Update config
+  // Update config — tunnelEnabled is cleared too: a user-initiated full
+  // disable withdraws the tunnel intent, so nothing auto-restores.
   const config = getConfig()
   saveConfig({
     ...config,
     remoteAccess: {
       ...config.remoteAccess,
-      enabled: false
+      enabled: false,
+      tunnelEnabled: false
     }
   })
 }
@@ -242,12 +270,41 @@ export async function shutdownRemoteAccess(): Promise<void> {
   stopHttpServer()
 }
 
+/** Persist (or clear) the named-tunnel grant inside remoteAccess. */
+function persistNamedTunnel(grant: NamedTunnelGrant | null): void {
+  const config = getConfig()
+  const remoteAccess = { ...config.remoteAccess }
+  if (grant) {
+    remoteAccess.namedTunnel = grant
+  } else {
+    delete remoteAccess.namedTunnel
+  }
+  saveConfig({ ...config, remoteAccess })
+}
+
+/** Persist the user's tunnel on/off intent so it survives restarts. */
+function persistTunnelEnabled(enabled: boolean): void {
+  const config = getConfig()
+  saveConfig({
+    ...config,
+    remoteAccess: { ...config.remoteAccess, tunnelEnabled: enabled },
+  })
+}
+
 /**
  * Start tunnel for external access.
  *
+ * Named-tunnel first: uses the persisted grant (offline), requesting one
+ * from the issuer only when absent. When the edge rejects the credentials
+ * (tunnel revoked/deleted server-side) it re-issues once — the issuer heals
+ * dead tunnels while keeping the hostname — and retries. Only when no grant
+ * can be obtained at all (issuer unreachable) does it degrade to a Quick
+ * Tunnel so the user still gets internet access, with `mode: 'quick'`
+ * surfacing the temporary nature in the UI.
+ *
  * Re-checks `tunnelSafe` here so that any future caller that bypasses
  * the IPC layer still hits the policy gate (defense in depth). The
- * underlying {@link startTunnel} will reject as well.
+ * underlying start functions reject as well.
  */
 export async function enableTunnel(): Promise<string> {
   if (isTunnelSafe()) {
@@ -260,7 +317,48 @@ export async function enableTunnel(): Promise<string> {
     throw new Error('HTTP server is not running. Enable remote access first.')
   }
 
-  const url = await startTunnel(serverInfo.port)
+  let url: string
+  tunnelFallbackReason = null
+  try {
+    let grant = getConfig().remoteAccess.namedTunnel
+    if (!grant) {
+      grant = await issueNamedTunnel(getDeviceIdentity())
+      persistNamedTunnel(grant)
+    }
+    try {
+      url = await startNamedTunnel(serverInfo.port, grant)
+    } catch (err) {
+      if (!(err instanceof NamedTunnelAuthError)) throw err
+      console.warn('[Remote] Named tunnel credentials rejected, re-issuing:', err.message)
+      grant = await issueNamedTunnel(getDeviceIdentity())
+      persistNamedTunnel(grant)
+      url = await startNamedTunnel(serverInfo.port, grant)
+    }
+  } catch (err) {
+    if (!(err instanceof TunnelIssueError)) throw err
+    tunnelFallbackReason =
+      err.code === 'ISSUER_RATE_LIMITED'
+        ? 'issuer_rate_limited'
+        : err.code === 'ISSUER_REJECTED'
+          ? 'issuer_rejected'
+          : 'issuer_unreachable'
+    console.warn(
+      `[Remote] Falling back to quick tunnel (${tunnelFallbackReason}):`,
+      err.message,
+    )
+    try {
+      url = await startTunnel(serverInfo.port)
+    } catch (quickErr) {
+      tunnelFallbackReason = null
+      throw quickErr
+    }
+  }
+
+  persistTunnelEnabled(true)
+  // Push so the settings page reflects mode + fallback reason immediately.
+  if (statusCallback) {
+    statusCallback(getRemoteAccessStatus())
+  }
   return url
 }
 
@@ -271,6 +369,43 @@ export async function enableTunnel(): Promise<string> {
  */
 export async function disableTunnel(): Promise<void> {
   await stopTunnel()
+  tunnelFallbackReason = null
+  persistTunnelEnabled(false)
+}
+
+/**
+ * Change this device's permanent address: revoke the current hostname at
+ * the issuer, drop the local grant, and — when the tunnel was on — start
+ * again, which issues a brand-new hostname. The old address becomes
+ * unreachable immediately and cannot be reclaimed.
+ *
+ * The revoke must succeed before anything is dropped locally; otherwise
+ * the issuer would still hold the old record and the next issue would
+ * return the old hostname, silently "un-changing" the address.
+ *
+ * Returns the new URL when the tunnel was restarted, null when the tunnel
+ * was off (the new address is issued on the next tunnel start).
+ */
+export async function resetTunnelAddress(): Promise<string | null> {
+  if (isTunnelSafe()) {
+    throw new TunnelDisabledByPolicyError()
+  }
+
+  const wasOn = getTunnelStatus().status === 'running' || getTunnelStatus().status === 'starting'
+
+  await stopTunnel()
+  await revokeNamedTunnel(getDeviceIdentity())
+  persistNamedTunnel(null)
+  console.log('[Remote] Tunnel address reset, old hostname released')
+
+  let url: string | null = null
+  if (wasOn && getServerInfo().running) {
+    url = await enableTunnel()
+  }
+  if (statusCallback) {
+    statusCallback(getRemoteAccessStatus())
+  }
+  return url
 }
 
 /**
@@ -293,7 +428,9 @@ export function getRemoteAccessStatus(): RemoteAccessStatus {
     tunnel: {
       status: tunnelStatus.status,
       url: tunnelStatus.url,
-      error: tunnelStatus.error
+      error: tunnelStatus.error,
+      mode: tunnelStatus.mode,
+      fallbackReason: tunnelStatus.mode === 'quick' ? tunnelFallbackReason : null
     },
     clients: serverInfo.clients
   }
@@ -314,21 +451,20 @@ export function onRemoteAccessStatusChange(callback: StatusCallback): void {
 }
 
 /**
- * Generate QR code data for easy mobile access
+ * Generate QR code data for easy mobile access.
+ *
+ * Only the public tunnel URL is encoded — a LAN URL in a QR code fails
+ * silently whenever the phone is not on the same Wi-Fi, which reads as a
+ * bug. No tunnel, no QR.
  */
 export async function generateQRCode(includeToken: boolean = false): Promise<string | null> {
   const status = getRemoteAccessStatus()
 
-  if (!status.enabled) {
+  if (!status.enabled || status.tunnel.status !== 'running' || !status.tunnel.url) {
     return null
   }
 
-  // Prefer tunnel URL, fallback to LAN URL
-  let url = status.tunnel.url || status.server.lanUrl
-
-  if (!url) {
-    return null
-  }
+  let url = status.tunnel.url
 
   // Optionally include token in URL for auto-login
   if (includeToken && status.server.token) {

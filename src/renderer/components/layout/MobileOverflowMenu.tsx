@@ -10,7 +10,8 @@
 import { useState } from 'react'
 import { MoreHorizontal, Sparkles, Search, Settings, ChevronRight, X } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
-import { getCurrentModelName, type AISourcesConfig } from '../../types'
+import { useChatStore } from '../../stores/chat.store'
+import { getModelDisplayName, type AISourcesConfig } from '../../types'
 import { useTranslation } from '../../i18n'
 import { ModelSelectSheet } from './ModelSelector'
 
@@ -28,7 +29,14 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
   const aiSources: AISourcesConfig = config?.aiSources?.version === 2
     ? config.aiSources
     : { version: 2, currentId: null, sources: [] }
-  const currentModelName = getCurrentModelName(aiSources)
+  // Show the current conversation's pinned model (falls back to global selection).
+  const currentConversation = useChatStore(s => {
+    const conversationId = s.getCurrentSpaceState().currentConversationId
+    return conversationId ? s.conversationCache.get(conversationId) ?? null : null
+  })
+  const currentModelName = getModelDisplayName(
+    aiSources, currentConversation?.modelSourceId, currentConversation?.modelId
+  )
 
   const closeMenu = (after?: () => void) => {
     setIsAnimatingOut(true)

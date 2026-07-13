@@ -67,6 +67,12 @@ export interface SystemPromptContext {
   aiBrowserEnabled?: boolean
   /** Whether Digital Humans MCP tools are enabled */
   digitalHumansEnabled?: boolean
+  /**
+   * Capability index for toolset-broker sessions (see agent/toolsets).
+   * When set (even to ''), the session uses on-demand toolsets and the legacy
+   * "AI Browser (Not Enabled)" guidance is skipped.
+   */
+  toolsetIndex?: string
 }
 
 // ============================================
@@ -496,8 +502,17 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
   let prompt = applyTemplateVariables(template, ctx)
 
-  // When AI Browser is NOT enabled, append guidance so the AI can direct users to enable it.
-  // When enabled, AI_BROWSER_SYSTEM_PROMPT is appended via buildSystemPromptWithAIBrowser instead.
+  // Toolset-broker sessions (main chat): append the usage guides of currently-
+  // enabled optional toolsets. Awareness of disabled ones lives in the
+  // request_toolset tool description, not here.
+  if (ctx.toolsetIndex !== undefined) {
+    if (ctx.toolsetIndex) prompt += '\n\n' + ctx.toolsetIndex.trim()
+    return prompt
+  }
+
+  // Legacy static-injection sessions (apps/runtime): when AI Browser is NOT
+  // enabled, append guidance so the AI can direct users to enable it.
+  // When enabled, AI_BROWSER_SYSTEM_PROMPT is appended via buildSystemPromptWithAIBrowser.
   if (!ctx.aiBrowserEnabled) {
     prompt += '\n\n'
       + '# AI Browser (Not Enabled)\n'

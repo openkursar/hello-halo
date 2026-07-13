@@ -67,9 +67,15 @@ spread into the `buildAllTools()` return array.
 
 ## Entry Points
 
-`createAIBrowserMcpServer()` is the **sole primary entry point**. All session-level
-side effects (download handler, future monitoring, etc.) are initialized here
+`createAIBrowserMcpServer()` is the **sole primary entry point** for tool/session
+side effects (download handler, future monitoring, etc.), initialized here
 idempotently — not in a separate init function.
+
+**Transport is the one exception:** view-lifecycle event *forwarding*
+(`registerAIBrowserHandlers()` in `ipc/ai-browser.ts`) is wired once at startup
+from `bootstrap/extended.ts`. It only subscribes the process-global bus to the
+window/WS layer — it does not touch tool state — and must exist before the first
+AI turn so the very first `active-view` event reaches the renderer.
 
 ### Callers
 
@@ -90,13 +96,38 @@ of which caller path is used.
 ## Context Model
 
 ```
-BrowserContext (singleton)          — used by main chat
-BrowserContext (scoped, per-agent)  — used by app-chat / automation
+BrowserContext (singleton)          — used by main chat (interactive UI)
+BrowserContext (scoped, per-agent)  — used by app-chat / automation (no UI)
 ```
 
-Scoped contexts are created via `createScopedBrowserContext(null)` and passed
+Scoped contexts are created via `createScopedBrowserContext()` and passed
 to `createAIBrowserMcpServer(scopedCtx, workDir)`. They isolate view ownership,
 download tracking, and monitoring state per agent session.
+
+The context holds **no BrowserWindow reference**. UI notifications go through a
+process-global event bus (see "View Lifecycle Events"), so delivery is owned by
+the transport layer, not the context. Only the singleton (non-scoped) emits;
+scoped automation contexts stay silent.
+
+## View Lifecycle Events
+
+The interactive singleton broadcasts its view lifecycle to `events.ts` (a
+process-global bus, modeled on `ai-terminal/events.ts`). The transport module
+`ipc/ai-browser.ts` subscribes once at startup and fans events to the
+BrowserWindow + remote WebSocket clients:
+
+| Event | Channel | Meaning | Renderer effect |
+|-------|---------|---------|-----------------|
+| active-view | `ai-browser:active-view-changed` | AI created/selected a view | `activeViewId` → "View live feed" attaches the exact view; identity for the operating indicator |
+| gone | `ai-browser:view-gone` | AI's active view destroyed | store clears; live-session tray drops it |
+
+`gone` is emitted from `context.handleViewDestroyed(viewId)`, invoked by the
+`browser:destroy` IPC handler (covers canvas-tab close and the live-session tray
+"stop"). This keeps `activeViewId` from dangling on a dead WebContents.
+
+The renderer reveals the AI's view by **viewId identity** (`attachAIBrowserView`),
+never by re-opening the URL — so the user sees and can take over the exact page
+the AI drives (shared `persist:browser` session across all views).
 
 ### Lifecycle
 
@@ -108,9 +139,10 @@ download tracking, and monitoring state per agent session.
 
 | File | Responsibility |
 |------|---------------|
-| `index.ts` | Public API: re-exports, system prompt, cleanup |
+| `index.ts` | Public API: re-exports, system prompt, cleanup, event-bus subscribers |
 | `sdk-mcp-server.ts` | MCP server factory (primary entry point) |
-| `context.ts` | BrowserContext class (state, CDP, element ops, downloads) |
+| `events.ts` | Process-global view-lifecycle bus (active-view / gone); transport subscribes here |
+| `context.ts` | BrowserContext class (state, CDP, element ops, downloads); emits view lifecycle |
 | `snapshot.ts` | Accessibility tree snapshot creation |
 | `download-handler.ts` | Session-level `will-download` handler for silent AI downloads |
 | `download-utils.ts` | Shared filename sanitization / unique path resolution |

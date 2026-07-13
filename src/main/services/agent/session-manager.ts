@@ -18,23 +18,23 @@ import { getConversation } from '../conversation.service'
 import type {
   V2SDKSession,
   V2SessionInfo,
-  SessionConfig,
   SessionState,
 } from './types'
 import {
   getHeadlessElectronPath,
   getWorkingDir,
-  getApiCredentials,
+  getApiCredentialsForConversation,
   getDbMcpServers
 } from './helpers'
 import { isImSessionKey } from '../../../shared/apps/im-keys'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
-import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
-import { createHaloAppsMcpServer } from '../app-bridge'
-import { createWebSearchMcpServer } from '../web-search'
+import { resolveCredentialsForSdk, buildBaseSdkOptions, computeCredentialsFingerprint } from './sdk-config'
 import { startConsumer, type ConsumerHandle } from './session-consumer'
 import { hasActiveTeamTasks } from './subagent-handler'
+import { setSessionInvalidator, buildCreationTimeServers } from './toolsets/broker'
+import { buildToolsetSection } from './toolsets/capability-index'
+import { dropConversationState } from './toolsets/state'
 
 // ============================================
 // Session Maps
@@ -53,6 +53,37 @@ export const activeSessions = new Map<string, SessionState>()
  * Persistent sessions that can be reused across multiple messages
  */
 export const v2Sessions = new Map<string, V2SessionInfo>()
+
+/**
+ * Rebuild a conversation's session so a toolset toggle takes effect: the new set
+ * is seeded at the next session creation from the persisted open-set
+ * (buildCreationTimeServers). Deferred when the consumer is mid-turn or a legacy
+ * turn is in flight (rebuilds after the turn, like a credential change); a no-op
+ * when no session exists yet, since creation will seed the current set anyway.
+ */
+function invalidateSessionForToolsetChange(conversationId: string): void {
+  const info = v2Sessions.get(conversationId)
+  if (!info) return
+
+  // Legacy callers (app-chat/execute) close on turn idle via unregisterActiveSession.
+  if (activeSessions.has(conversationId)) {
+    pendingInvalidations.add(conversationId)
+    return
+  }
+
+  // Consumer mid-turn: defer so we don't kill an in-flight response; the
+  // consumer breaks after the turn and the next sendMessage rebuilds.
+  const consumer = consumers.get(conversationId)
+  if (consumer?.isRunning && consumer.getActiveSessionState()) {
+    pendingConsumerRebuilds.add(conversationId)
+    return
+  }
+
+  cleanupSession(conversationId, 'toolset change')
+}
+
+// Wire the toolset broker's rebuild trigger (DI seam, avoids module cycle)
+setSessionInvalidator(invalidateSessionForToolsetChange)
 
 /**
  * Consumer handles map: conversationId -> ConsumerHandle
@@ -89,7 +120,7 @@ function isSessionBusy(conversationId: string): boolean {
   // Consumer is idle between turns (waiting in stream()), but the CC subprocess
   // may still have team agents running. Their results will arrive as a future turn.
   // Treat such sessions as busy to prevent the 30-min cleanup from killing them.
-  return hasActiveTeamTasks(consumer.getLastTurnThoughts())
+  return hasActiveTeamTasks(consumer.getTeamLifecycleThoughts())
 }
 
 // ============================================
@@ -131,6 +162,11 @@ function cleanupSession(conversationId: string, reason: string, skipMapCheck = f
 
   unregisterProcess(conversationId, 'v2-session')
   v2Sessions.delete(conversationId)
+
+  // Drop in-memory toolset state (open set + cached server instances).
+  // Persisted toolset selection on the conversation record is preserved and
+  // rehydrated on the next session, so this is safe on rebuild.
+  dropConversationState(conversationId)
 }
 
 // ============================================
@@ -371,18 +407,6 @@ function migrateSessionIfNeeded(workDir: string, sessionId: string): boolean {
   }
 }
 
-// ============================================
-// Session Config Comparison
-// ============================================
-
-/**
- * Check if session config requires rebuild
- * Only "process-level" params need rebuild; runtime params use setXxx() methods
- */
-export function needsSessionRebuild(existing: V2SessionInfo, newConfig: SessionConfig): boolean {
-  return existing.config.aiBrowserEnabled !== newConfig.aiBrowserEnabled
-}
-
 /**
  * Close and remove an existing V2 session (internal helper for rebuild)
  *
@@ -435,7 +459,6 @@ function closeV2SessionForRebuild(conversationId: string): void {
  * @param conversationId - Conversation ID
  * @param sdkOptions - SDK options for session creation
  * @param sessionId - Optional session ID for resumption
- * @param config - Session configuration for rebuild detection
  * @param workDir - Working directory (required for session migration when sessionId is provided)
  * @param displayModel - Display model name for thought parsing (when provided, starts persistent consumer)
  * @param contextWindow - Source-resolved context window for token-usage display
@@ -445,11 +468,15 @@ export async function getOrCreateV2Session(
   conversationId: string,
   sdkOptions: Record<string, any>,
   sessionId?: string,
-  config?: SessionConfig,
   workDir?: string,
   displayModel?: string,
   contextWindow?: number
 ): Promise<V2SessionInfo['session']> {
+  // Per-conversation credential/model fingerprint — used to rebuild this
+  // conversation's session when its own model pin changes (the global
+  // credentialsGeneration only tracks the current source's model).
+  const currentFingerprint = computeCredentialsFingerprint(sdkOptions)
+
   // Check if we have an existing session for this conversation
   const existing = v2Sessions.get(conversationId)
   if (existing) {
@@ -473,10 +500,11 @@ export async function getOrCreateV2Session(
       // This catches race conditions where session was created with stale credentials
       // (e.g., warm-up started before config save completed)
       const currentGen = getCredentialsGeneration()
-      const needsCredentialRebuild = existing.credentialsGeneration !== currentGen
-      const needsConfigRebuild = config && needsSessionRebuild(existing, config)
+      const needsCredentialRebuild =
+        existing.credentialsGeneration !== currentGen ||
+        existing.credentialsFingerprint !== currentFingerprint
 
-      if (needsCredentialRebuild || needsConfigRebuild) {
+      if (needsCredentialRebuild) {
         const consumer = consumers.get(conversationId)
 
         // Guard 1: Consumer is actively processing a turn (mid-API-call, mid-tool, etc.)
@@ -487,12 +515,9 @@ export async function getOrCreateV2Session(
         const isActivelyProcessing = consumer?.isRunning && consumer.getActiveSessionState() !== null
         if (isActivelyProcessing) {
           pendingConsumerRebuilds.add(conversationId)
-          const reason = needsCredentialRebuild
-            ? `gen ${existing.credentialsGeneration}→${currentGen}`
-            : 'config changed'
           console.log(
             `[Agent][${conversationId}] Session rebuild deferred — consumer is actively processing a turn ` +
-            `(${reason}). Will rebuild after turn completes.`
+            `(gen ${existing.credentialsGeneration}→${currentGen}). Will rebuild after turn completes.`
           )
           existing.lastUsedAt = Date.now()
           return existing.session
@@ -502,29 +527,24 @@ export async function getOrCreateV2Session(
         // Their results arrive as a future autonomous turn. Killing the session now would
         // abort all in-flight agent tasks.
         const isIdleBetweenTurns = consumer?.isRunning && !consumer.getActiveSessionState()
-        if (isIdleBetweenTurns && hasActiveTeamTasks(consumer!.getLastTurnThoughts())) {
+        if (isIdleBetweenTurns && hasActiveTeamTasks(consumer!.getTeamLifecycleThoughts())) {
           // Clear the flag that invalidateAllSessions may have set — we don't want
           // the consumer to break after the next team turn while messages are queued.
           pendingConsumerRebuilds.delete(conversationId)
           console.log(
             `[Agent][${conversationId}] Session rebuild deferred — active team agents detected ` +
-            `(${needsCredentialRebuild ? `gen ${existing.credentialsGeneration}→${currentGen}` : 'config changed'}). ` +
-            `Will rebuild after team tasks complete.`
+            `(gen ${existing.credentialsGeneration}→${currentGen}). Will rebuild after team tasks complete.`
           )
           existing.lastUsedAt = Date.now()
           return existing.session
         }
 
         // No active processing and no team agents — safe to rebuild now.
-        if (needsCredentialRebuild) {
-          console.log(`[Agent][${conversationId}] Credentials changed (gen ${existing.credentialsGeneration} → ${currentGen}), recreating session`)
-        } else {
-          console.log(`[Agent][${conversationId}] Config changed (aiBrowser: ${existing.config.aiBrowserEnabled} → ${config!.aiBrowserEnabled}), rebuilding session...`)
-        }
+        console.log(`[Agent][${conversationId}] Credentials changed (gen ${existing.credentialsGeneration}→${currentGen}, fp ${existing.credentialsFingerprint}→${currentFingerprint}), recreating session`)
         closeV2SessionForRebuild(conversationId)
         // Fall through to create new session
       } else {
-        // Session is alive and config is compatible, reuse it
+        // Session is alive and credentials are current, reuse it
         console.log(`[Agent][${conversationId}] Reusing existing V2 session`)
         existing.lastUsedAt = Date.now()
         return existing.session
@@ -587,7 +607,7 @@ export async function getOrCreateV2Session(
   // This is event-driven (better than polling) - when process dies, we clean up immediately
   registerProcessExitListener(session, conversationId)
 
-  // Store session with config and current credentials generation
+  // Store session with current credentials generation
   // Generation is used to detect stale credentials on session reuse
   v2Sessions.set(conversationId, {
     session,
@@ -595,8 +615,8 @@ export async function getOrCreateV2Session(
     conversationId,
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
-    config: config || { aiBrowserEnabled: false },
-    credentialsGeneration: getCredentialsGeneration()
+    credentialsGeneration: getCredentialsGeneration(),
+    credentialsFingerprint: currentFingerprint
   })
 
   // Start cleanup if not already running
@@ -643,23 +663,21 @@ export async function ensureSessionWarm(
   const sessionId = conversation?.sessionId
   const electronPath = getHeadlessElectronPath()
 
-  // Get API credentials and resolve for SDK use
-  const credentials = await getApiCredentials(config)
+  // Get API credentials (per-conversation pin, falling back to global) and resolve for SDK use.
+  // Must match sendMessage's resolution exactly so the warmed session isn't
+  // immediately rebuilt on the first message (fingerprint mismatch).
+  const credentials = await getApiCredentialsForConversation(config, conversation)
   console.log(`[Agent] Session warm using: ${credentials.provider}, model: ${credentials.model}`)
 
   // Resolve credentials for SDK (handles OpenAI compat router for non-Anthropic providers)
   const resolvedCredentials = await resolveCredentialsForSdk(credentials)
 
-  // Get MCP servers from installed apps database (global + space-scoped)
+  // Creation-time MCP servers: external process-based servers plus the complete
+  // in-process set (must match sendMessage exactly to avoid a session rebuild on
+  // the first message).
   const dbMcpServers = getDbMcpServers(spaceId)
-
-  // Build MCP servers config (must match sendMessage to avoid session rebuild)
   const mcpServers: Record<string, any> = dbMcpServers ? { ...dbMcpServers } : {}
-  if (digitalHumansEnabled) {
-    const haloApps = createHaloAppsMcpServer(spaceId)
-    if (haloApps) mcpServers['halo-apps'] = haloApps
-  }
-  mcpServers['web-search'] = createWebSearchMcpServer()
+  Object.assign(mcpServers, buildCreationTimeServers({ spaceId, conversationId, workDir }))
 
   // Build SDK options using shared configuration
   const sdkOptions = buildBaseSdkOptions({
@@ -679,11 +697,12 @@ export async function ensureSessionWarm(
     enableTeams: config.agent?.enableTeams,
     disabledTools: config.agent?.disabledTools,
     digitalHumansEnabled,
+    toolsetIndex: buildToolsetSection(spaceId, conversationId),
   })
 
   try {
     const session = await getOrCreateV2Session(
-      spaceId, conversationId, sdkOptions, sessionId, undefined, workDir,
+      spaceId, conversationId, sdkOptions, sessionId, workDir,
       resolvedCredentials.displayModel, resolvedCredentials.capabilities?.contextWindow
     )
 

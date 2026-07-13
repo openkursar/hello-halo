@@ -204,6 +204,21 @@ export interface ImChannelProvider {
 // ============================================
 
 /**
+ * Fine-grained connection state for an IM channel instance.
+ *
+ * Richer than the `isConnected()` boolean — lets the UI distinguish an ordinary
+ * disconnection from a `standby` state, where the instance has intentionally
+ * yielded the connection because the same bot credential is active on another
+ * device (protocols such as WeCom grant the slot to the newest connection).
+ *
+ *   'connecting' — starting up / retrying, not yet serving
+ *   'online'     — connected and serving messages
+ *   'standby'    — yielded; another device holds the bot slot
+ *   'offline'    — disabled or stopped
+ */
+export type ImConnectionState = 'connecting' | 'online' | 'standby' | 'offline'
+
+/**
  * A running IM channel connection instance.
  *
  * Each instance owns exactly one connection (e.g., one WebSocket to WeCom).
@@ -224,6 +239,13 @@ export interface ImChannelInstance {
   reconnect(): void
   /** Check if the connection is active and ready. */
   isConnected(): boolean
+
+  /**
+   * Optional fine-grained connection state. Providers that can distinguish a
+   * standby (superseded-by-another-device) state implement this; the manager
+   * falls back to deriving state from isConnected() when it is absent.
+   */
+  getConnectionState?(): ImConnectionState
 
   /**
    * Push a message proactively to a specific chat.
@@ -348,6 +370,13 @@ export interface ImChannelInstanceStatus {
   enabled: boolean
   /** Whether the connection is currently active */
   connected: boolean
+  /**
+   * Fine-grained connection state. Additive to `connected` (which stays true
+   * only for 'online'); consumers unaware of this field keep working off
+   * `connected`. Absent only for providers that don't report it — the UI then
+   * derives online/offline from `connected`.
+   */
+  state?: ImConnectionState
   /** Bound digital human App ID */
   appId: string
   /** Bound digital human App name (resolved at query time) */

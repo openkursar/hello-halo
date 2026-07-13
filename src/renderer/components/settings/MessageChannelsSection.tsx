@@ -342,7 +342,11 @@ function InstanceCard({
   permissionDefaults,
 }: InstanceCardProps) {
   const { t } = useTranslation()
-  const isConnected = status?.connected ?? false
+  // Prefer the fine-grained state; fall back to the connected boolean for
+  // providers/statuses that don't report it.
+  const state = status?.state ?? (status?.connected ? 'online' : 'offline')
+  const isConnected = state === 'online'
+  const isStandby = state === 'standby'
   const isEnabled = instance.enabled
   const cfg = instance.config as Record<string, unknown>
   const botId = (cfg.botId as string) || ''
@@ -351,18 +355,23 @@ function InstanceCard({
   const boundApp = automationApps.find(a => a.id === instance.appId)
   const displayName = boundApp?.spec.name || t('Not bound')
 
-  // Status indicator
+  // Status indicator. Standby (superseded by another device) is informational
+  // rather than an error, so it gets its own colour.
   const statusDot = !isEnabled
     ? 'bg-muted-foreground/30'
     : isConnected
       ? 'bg-green-500'
-      : 'bg-amber-500'
+      : isStandby
+        ? 'bg-sky-500'
+        : 'bg-amber-500'
 
   const statusText = !isEnabled
     ? t('Disabled')
     : isConnected
       ? t('Connected')
-      : t('Disconnected')
+      : isStandby
+        ? t('Standby')
+        : t('Disconnected')
 
   const [showMenu, setShowMenu] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -667,10 +676,30 @@ function InstanceCard({
 
           {/* Connection status */}
           {isEnabled && (
-            <div className={`flex items-center gap-1.5 text-sm ${isConnected ? 'text-green-500' : 'text-amber-500'}`}>
-              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-amber-500'}`} />
-              <span>{isConnected ? t('Connected') : t('Disconnected')}</span>
-            </div>
+            isStandby ? (
+              <div className="space-y-2 rounded-lg bg-sky-500/10 border border-sky-500/30 px-3 py-2">
+                <div className="flex items-center gap-1.5 text-sm text-sky-500">
+                  <div className="w-2 h-2 rounded-full bg-sky-500" />
+                  <span>{t('In use on another device')}</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {t('This bot is currently active on another device. Take over to use it here — the other device will switch to standby.')}
+                </p>
+                <button
+                  type="button"
+                  onClick={onReconnect}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  {t('Use on this device')}
+                </button>
+              </div>
+            ) : (
+              <div className={`flex items-center gap-1.5 text-sm ${isConnected ? 'text-green-500' : 'text-amber-500'}`}>
+                <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-amber-500'}`} />
+                <span>{isConnected ? t('Connected') : t('Disconnected')}</span>
+              </div>
+            )
           )}
         </div>
       )}
@@ -1439,19 +1468,24 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   const weixinIlinkInstances = (instances as ImChannelInstanceConfig[]).filter(i => i.type === 'weixin-ilink-bot')
 
   const wecomConnectedCount = imStatuses.filter(s => s.type === 'wecom-bot' && s.connected).length
+  const wecomStandbyCount = imStatuses.filter(s => s.type === 'wecom-bot' && s.state === 'standby').length
   const weixinConnectedCount = imStatuses.filter(s => s.type === 'weixin-ilink-bot' && s.connected).length
 
   const wecomStatusSummary = wecomInstances.length === 0
     ? t('Not configured')
     : wecomConnectedCount > 0
       ? `${wecomConnectedCount} ${t('connected')}`
-      : t('Disconnected')
+      : wecomStandbyCount > 0
+        ? t('Standby')
+        : t('Disconnected')
 
   const wecomStatusColor = wecomInstances.length === 0
     ? 'bg-muted-foreground/30'
     : wecomConnectedCount > 0
       ? 'bg-green-500'
-      : 'bg-amber-500'
+      : wecomStandbyCount > 0
+        ? 'bg-sky-500'
+        : 'bg-amber-500'
 
   const weixinStatusSummary = weixinIlinkInstances.length === 0
     ? t('Not configured')

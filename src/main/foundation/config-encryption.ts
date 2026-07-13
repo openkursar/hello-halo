@@ -59,6 +59,15 @@ function visitSensitiveFields(config: Record<string, unknown>, fn: Visitor): voi
   // but included in the MASKING roster so GET /api/config never leaks the
   // plaintext PIN. Encryption is skipped (see encryptConfigFields).
 
+  // remoteAccess.namedTunnel.tunnelSecret — named-tunnel credential
+  const remoteAccess = config.remoteAccess as Record<string, unknown> | undefined
+  const namedTunnel = remoteAccess?.namedTunnel as Record<string, unknown> | undefined
+  if (namedTunnel && typeof namedTunnel.tunnelSecret === 'string') fn(namedTunnel, 'tunnelSecret')
+
+  // deviceIdentity.deviceSecret — proves device ownership toward the tunnel issuer
+  const deviceIdentity = config.deviceIdentity as Record<string, unknown> | undefined
+  if (deviceIdentity && typeof deviceIdentity.deviceSecret === 'string') fn(deviceIdentity, 'deviceSecret')
+
   // MCP servers: env values matching the pattern + auth-like headers
   const mcpServers = config.mcpServers as Record<string, Record<string, unknown>> | undefined
   if (mcpServers) {
@@ -216,6 +225,14 @@ export function unmaskSentinels(
 
   // Remote access
   restore(incoming.remoteAccess, existing.remoteAccess, 'password')
+  restore(
+    (incoming.remoteAccess as Record<string, unknown>)?.namedTunnel,
+    (existing.remoteAccess as Record<string, unknown>)?.namedTunnel,
+    'tunnelSecret',
+  )
+
+  // Device identity
+  restore(incoming.deviceIdentity, existing.deviceIdentity, 'deviceSecret')
 
   // MCP servers (keyed by name)
   const iMcp = incoming.mcpServers as Record<string, Record<string, unknown>> | undefined

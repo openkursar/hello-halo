@@ -98,7 +98,9 @@ src/
 │   ├── openai-compat-router/          # Anthropic <-> OpenAI bridge
 │   └── services/                      # Domain services — grouped by role:
 │       ├── agent/                     # Agent engine — largest subsystem. See agent/DESIGN.md
+│       │   └── toolsets/              #   Toolset Broker — on-demand in-process MCP loading. See toolsets/DESIGN.md
 │       ├── ai-browser/                # AI Browser + tools/
+│       ├── ai-terminal/              # AI Terminal (pty + xterm headless + MCP tools). See ai-terminal/DESIGN.md
 │       ├── ai-sources/                # Multi-provider auth + providers/
 │       ├── analytics/                 # Usage analytics
 │       ├── email-mcp/                 # Email-as-MCP tool server
@@ -216,7 +218,8 @@ All channels follow `module:action` format. Modules are organized by functional 
 | Area | IPC modules |
 |------|-------------|
 | Auth & config | `auth`, `config`, `cli-config`, `model-capabilities` |
-| Conversation & agent | `conversation`, `agent` |
+| Conversation & agent | `conversation`, `agent` (incl. `agent:toolsets-*` + `toolsets:changed` event) |
+| Terminal | `terminal` (`terminal:list/create/input/resize/kill/replay` + `terminal:data`/`terminal:lifecycle` events) |
 | Space & artifact | `space`, `artifact`, `search` |
 | Browser | `browser`, `browser-policy`, `ai-browser`, `overlay` |
 | Apps & store | `app`, `store`, `onboarding` |
@@ -607,6 +610,8 @@ See `quick.md §4` for the current list. Keep the two documents in sync when clo
 
 When touching a module, read its design doc first:
 - `src/main/services/agent/DESIGN.md` — Agent engine (largest subsystem, read this before any agent-related change)
+- `src/main/services/agent/toolsets/DESIGN.md` — Toolset Broker (on-demand in-process MCP loading; how tool capabilities enter a session)
+- `src/main/services/ai-terminal/DESIGN.md` — AI Terminal (pty + xterm headless, MCP tools, xterm.js viewer)
 - `src/main/apps/spec/DESIGN.md`
 - `src/main/apps/manager/DESIGN.md`
 - `src/main/apps/runtime/DESIGN.md`

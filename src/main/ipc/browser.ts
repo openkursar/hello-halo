@@ -7,6 +7,9 @@
 
 import { ipcMain, BrowserWindow, Menu, clipboard, nativeImage, shell, nativeTheme, MenuItemConstructorOptions } from 'electron'
 import { browserViewManager, CHROME_USER_AGENT, type BrowserViewBounds, type DeviceMode } from '../services/browser-view.service'
+// Import the lightweight context module directly (NOT the ai-browser index,
+// which pulls the Agent SDK) to keep this startup-path handler cheap.
+import { browserContext } from '../services/ai-browser/context'
 import { getDefaultBrowserHomepage } from '../services/browser-policy.service'
 import { buildLoginLoadingPage, buildLoginErrorPage, loginPageBg } from '../services/browser-login-pages'
 
@@ -66,6 +69,9 @@ export function registerBrowserHandlers(mainWindow: BrowserWindow | null) {
   ipcMain.handle('browser:destroy', async (_event, { viewId }: { viewId: string }) => {
     try {
       browserViewManager.destroy(viewId)
+      // Keep the AI Browser singleton in sync: if this was the AI's active view,
+      // clear it and announce the removal so the renderer drops the live session.
+      browserContext.handleViewDestroyed(viewId)
       return { success: true }
     } catch (error) {
       console.error('[Browser IPC] Destroy failed:', error)

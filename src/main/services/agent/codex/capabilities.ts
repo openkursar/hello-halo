@@ -53,7 +53,6 @@ export const CODEX_CAPABILITIES: EngineCapabilities = {
     mcp: true,
     hooks: false,
     sessionResume: true,
-    midTurnInjection: false,
     interrupt: true,
     multimodalImage: true,
     contextCompaction: true,

@@ -81,16 +81,18 @@ export interface CanvasContext {
   isOpen: boolean
   tabCount: number
   activeTab: {
-    type: string  // 'browser' | 'code' | 'markdown' | 'image' | 'pdf' | 'text' | 'json' | 'csv'
+    type: string  // 'browser' | 'code' | 'markdown' | 'image' | 'pdf' | 'text' | 'json' | 'csv' | 'terminal'
     title: string
     url?: string   // For browser/pdf tabs
     path?: string  // For file tabs
+    terminalSessionId?: string  // For terminal tabs - the pty session id the AI drives via terminal_* tools
   } | null
   tabs: Array<{
     type: string
     title: string
     url?: string
     path?: string
+    terminalSessionId?: string  // For terminal tabs - the pty session id the AI drives via terminal_* tools
     isActive: boolean
   }>
 }
@@ -105,7 +107,6 @@ export interface AgentRequest {
   message: string
   resumeSessionId?: string
   images?: ImageAttachment[]  // Optional images for multi-modal messages
-  aiBrowserEnabled?: boolean  // Enable AI Browser tools for this request
   thinkingEnabled?: boolean   // Enable extended thinking mode (maxThinkingTokens: 10240)
   model?: string              // Model to use (for future model switching)
   canvasContext?: CanvasContext  // Current canvas state for AI awareness
@@ -206,27 +207,22 @@ export type V2SDKSession = {
   stream: () => AsyncIterable<any>
   close: () => void
   interrupt?: () => Promise<void> | void
-  // Dynamic runtime methods (exposed via patch)
-  setModel?: (model: string | undefined) => Promise<void>
+  // Dynamic runtime methods forwarded from the SDK Query object to the v2
+  // session by patches/@anthropic-ai+claude-agent-sdk (anthropic engine).
+  // Optional because alternate engines may not expose them — callers must guard.
   setMaxThinkingTokens?: (maxThinkingTokens: number | null) => Promise<void>
   setPermissionMode?: (mode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan') => Promise<void>
 }
 
 /**
- * Session configuration that requires session rebuild when changed
- * These are "process-level" parameters fixed at Claude Code subprocess startup
- *
- * Note: model changes are handled via credentialsGeneration in config.service
- * (model is part of the aiSources signature), not through SessionConfig.
- */
-export interface SessionConfig {
-  aiBrowserEnabled: boolean
-  // thinkingEnabled is dynamic via setMaxThinkingTokens, no rebuild needed
-  // digitalHumansEnabled: intentionally excluded — low-frequency toggle, relies on new conversation to take effect (UI hints this)
-}
-
-/**
  * V2 Session info stored in the sessions map
+ *
+ * Note: session rebuilds are driven by credentialsGeneration (global model /
+ * API-config changes) plus a per-conversation credentialsFingerprint (this
+ * conversation's own model/source pin — see session-manager
+ * computeCredentialsFingerprint). Toolset changes are seeded at creation and
+ * take effect via a session rebuild (toolset broker), so no config snapshot needs
+ * to be tracked here for rebuild detection.
  */
 export interface V2SessionInfo {
   session: V2SDKSession
@@ -234,11 +230,13 @@ export interface V2SessionInfo {
   conversationId: string
   createdAt: number
   lastUsedAt: number
-  // Track config at session creation time for rebuild detection
-  config: SessionConfig
   // Credentials generation at session creation time
-  // Used to detect stale credentials (session created before config change)
+  // Used to detect stale credentials (session created before global config change)
   credentialsGeneration: number
+  // Per-conversation credential/model fingerprint at session creation time.
+  // Detects a change to THIS conversation's model pin (which the global
+  // credentialsGeneration does not track), triggering a targeted rebuild.
+  credentialsFingerprint: string
 }
 
 // ============================================

@@ -5,7 +5,7 @@ import type { ChatSlice } from './internal'
 import { CONVERSATION_CACHE_SIZE, api, createEmptySessionState, createEmptySpaceState } from './internal'
 import type { Conversation, ConversationMeta, Thought } from './internal'
 
-export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConversations' | 'preloadAllSpaceConversations' | 'createConversation' | 'selectConversation' | 'deleteConversation' | 'renameConversation' | 'toggleStarConversation'> = (set, get) => ({
+export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConversations' | 'preloadAllSpaceConversations' | 'createConversation' | 'selectConversation' | 'deleteConversation' | 'renameConversation' | 'toggleStarConversation' | 'setConversationModel'> = (set, get) => ({
   setCurrentSpace: (spaceId: string) => {
     set({ currentSpaceId: spaceId })
   },
@@ -435,6 +435,31 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
       return false
     } catch (error) {
       console.error('Failed to toggle star:', error)
+      return false
+    }
+  },
+
+  // Set the per-conversation model pin (Cursor-style). Persists the source +
+  // model to the conversation and updates the cache so the selector reflects it
+  // immediately. The session rebuilds lazily on the next send (credential
+  // fingerprint change), matching the historical global model-switch behavior.
+  setConversationModel: async (spaceId, conversationId, modelSourceId, modelId) => {
+    try {
+      const response = await api.updateConversation(spaceId, conversationId, { modelSourceId, modelId })
+      if (response.success) {
+        set((state) => {
+          const newCache = new Map(state.conversationCache)
+          const cached = newCache.get(conversationId)
+          if (cached) {
+            newCache.set(conversationId, { ...cached, modelSourceId, modelId })
+          }
+          return { conversationCache: newCache }
+        })
+        return true
+      }
+      return false
+    } catch (error) {
+      console.error('Failed to set conversation model:', error)
       return false
     }
   },

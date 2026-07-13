@@ -391,6 +391,19 @@ export function unsubscribeFromConversation(conversationId: string): void {
 }
 
 /**
+ * Send a raw message over the active WebSocket (remote/Capacitor only).
+ * Returns true if the message was sent. Used for low-latency terminal input so
+ * remote keyboard takeover does not incur an HTTP round-trip per keystroke.
+ */
+export function sendWsMessage(type: string, payload: unknown): boolean {
+  if (wsConnection?.readyState === WebSocket.OPEN) {
+    wsConnection.send(JSON.stringify({ type, payload }))
+    return true
+  }
+  return false
+}
+
+/**
  * Force immediate WebSocket reconnection (skip backoff timer).
  * Used when the app returns to foreground and needs to recover immediately.
  */
@@ -432,11 +445,16 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
       'agent:ask-question': 'onAgentAskQuestion',
       'agent:session-info': 'onAgentSessionInfo',
       'agent:turn-start': 'onAgentTurnStart',
+      'toolsets:changed': 'onToolsetsChanged',
+      'toolsets:requested': 'onToolsetsRequested',
+      'terminal:data': 'onTerminalData',
+      'terminal:lifecycle': 'onTerminalLifecycle',
       'remote:status-change': 'onRemoteStatusChange',
       'browser:state-change': 'onBrowserStateChange',
       'browser:zoom-changed': 'onBrowserZoomChanged',
       'canvas:tab-action': 'onCanvasTabAction',
       'ai-browser:active-view-changed': 'onAIBrowserActiveViewChanged',
+      'ai-browser:view-gone': 'onAIBrowserViewGone',
       'artifact:tree-update': 'onArtifactTreeUpdate',
       'perf:snapshot': 'onPerfSnapshot',
       'perf:warning': 'onPerfWarning',

@@ -249,6 +249,16 @@ export interface ProductConfig {
   }
 
   /**
+   * Tunnel issuer endpoint override (optional).
+   *
+   * Base URL of the named-tunnel issuer service that grants each device a
+   * permanent remote-access hostname. When omitted, the built-in default in
+   * `services/tunnel-issuer.client.ts` applies. Enterprise builds may point
+   * this at a self-hosted issuer.
+   */
+  tunnelIssuerUrl?: string
+
+  /**
    * Security policy (optional, enterprise/custom builds only).
    *
    * Each flag is "safe mode ON" — set to true to enable restrictions.

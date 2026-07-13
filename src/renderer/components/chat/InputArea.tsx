@@ -20,11 +20,13 @@
  */
 
 import { useState, useRef, useEffect, useMemo, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
-import { Plus, ImagePlus, Loader2, AlertCircle, Atom, Globe } from 'lucide-react'
+import { Plus, ImagePlus, Loader2, AlertCircle, Atom } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
-import { useAIBrowserStore } from '../../stores/ai-browser.store'
 import { getOnboardingPrompt } from '../onboarding/onboardingData'
+import { ToolsetControls } from './ToolsetControls'
+import { NewTerminalMenuItem } from './NewTerminalMenuItem'
+import { LiveSessionsHeader } from './LiveSessionsHeader'
 import { ImageAttachmentPreview } from './ImageAttachmentPreview'
 import { processImage, isValidImageType, formatFileSize } from '../../utils/imageProcessor'
 import type { ImageAttachment, Artifact } from '../../types'
@@ -130,9 +132,6 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const attachMenuRef = useRef<HTMLDivElement>(null)
-
-  // AI Browser state
-  const { enabled: aiBrowserEnabled, setEnabled: setAIBrowserEnabled } = useAIBrowserStore()
 
   // Auto-clear error after 3 seconds
   useEffect(() => {
@@ -625,6 +624,10 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
           onChange={handleFileInputChange}
         />
 
+        {/* Live AI sessions — capsule tab adhered to the input's top-left edge.
+            Sibling above the input card; the input box itself is untouched. */}
+        <LiveSessionsHeader />
+
         {/* Input container */}
         <div
           className={`
@@ -770,8 +773,6 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             isProcessingImages={isProcessingImages}
             thinkingEnabled={thinkingEnabled}
             onThinkingToggle={() => setThinkingEnabled(!thinkingEnabled)}
-            aiBrowserEnabled={aiBrowserEnabled}
-            onAIBrowserToggle={() => setAIBrowserEnabled(!aiBrowserEnabled)}
             showAttachMenu={showAttachMenu}
             onAttachMenuToggle={() => setShowAttachMenu(!showAttachMenu)}
             onImageClick={handleImageButtonClick}
@@ -802,8 +803,6 @@ interface InputToolbarProps {
   isProcessingImages: boolean
   thinkingEnabled: boolean
   onThinkingToggle: () => void
-  aiBrowserEnabled: boolean
-  onAIBrowserToggle: () => void
   showAttachMenu: boolean
   onAttachMenuToggle: () => void
   onImageClick: () => void
@@ -823,8 +822,6 @@ function InputToolbar({
   isProcessingImages,
   thinkingEnabled,
   onThinkingToggle,
-  aiBrowserEnabled,
-  onAIBrowserToggle,
   showAttachMenu,
   onAttachMenuToggle,
   onImageClick,
@@ -890,33 +887,14 @@ function InputToolbar({
                     </span>
                   )}
                 </button>
-                {/* Future extensibility: add more options here */}
+                <NewTerminalMenuItem onClose={onAttachMenuToggle} />
               </div>
             )}
           </div>
         )}
 
-        {/* AI Browser toggle */}
-        {!isGenerating && !isOnboarding && (
-          <button
-            onClick={onAIBrowserToggle}
-            className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg
-              transition-colors duration-200 relative
-              ${aiBrowserEnabled
-                ? 'bg-primary/10 text-primary'
-                : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50'
-              }
-            `}
-            title={aiBrowserEnabled ? t('AI Browser enabled (click to disable)') : t('Enable AI Browser')}
-          >
-            <Globe size={15} />
-            <span className="text-xs">{t('Web Control')}</span>
-            {/* Active indicator dot */}
-            {aiBrowserEnabled && (
-              <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-primary rounded-full" />
-            )}
-          </button>
-        )}
+        {/* On-demand toolsets (catalog menu + activation pills) */}
+        {!isGenerating && !isOnboarding && <ToolsetControls />}
 
         {/* Thinking mode toggle - always show full label, no expansion */}
         {!isGenerating && !isOnboarding && (

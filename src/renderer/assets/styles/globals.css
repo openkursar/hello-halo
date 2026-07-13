@@ -342,6 +342,20 @@ body {
   animation: fade-in 0.3s ease-out;
 }
 
+/* Toolset pill pulse — draws attention when the AI opens a toolset itself */
+@keyframes pulse-highlight {
+  0%, 100% {
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px hsl(var(--primary) / 0.35);
+  }
+}
+
+.animate-pulse-highlight {
+  animation: pulse-highlight 1s ease-in-out 2;
+}
+
 /* Fade out animation */
 @keyframes fade-out {
   from {

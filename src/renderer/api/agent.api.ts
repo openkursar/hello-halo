@@ -26,7 +26,6 @@ export const agentApi = {
       name?: string
       size?: number
     }>
-    aiBrowserEnabled?: boolean  // Enable AI Browser tools
     thinkingEnabled?: boolean  // Enable extended thinking mode
     canvasContext?: {  // Canvas context for AI awareness
       isOpen: boolean
@@ -36,12 +35,14 @@ export const agentApi = {
         title: string
         url?: string
         path?: string
+        terminalSessionId?: string
       } | null
       tabs: Array<{
         type: string
         title: string
         url?: string
         path?: string
+        terminalSessionId?: string
         isActive: boolean
       }>
     }
@@ -138,6 +139,59 @@ export const agentApi = {
       return window.halo.getEngineCapabilities()
     }
     return httpRequest('GET', '/api/agent/engine-capabilities')
+  },
+
+  // ===== Toolset broker (on-demand MCP toolsets) =====
+  listToolsets: async (spaceId: string, conversationId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.listToolsets({ spaceId, conversationId })
+    }
+    return httpRequest('POST', '/api/agent/toolsets/list', { spaceId, conversationId })
+  },
+
+  openToolset: async (spaceId: string, conversationId: string, toolsetId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.openToolset({ spaceId, conversationId, toolsetId })
+    }
+    return httpRequest('POST', '/api/agent/toolsets/open', { spaceId, conversationId, toolsetId })
+  },
+
+  closeToolset: async (spaceId: string, conversationId: string, toolsetId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.closeToolset({ spaceId, conversationId, toolsetId })
+    }
+    return httpRequest('POST', '/api/agent/toolsets/close', { spaceId, conversationId, toolsetId })
+  },
+
+  // ===== Terminal (user-facing viewer operations) =====
+  listTerminals: async (): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.listTerminals()
+    return httpRequest('GET', '/api/terminal/list')
+  },
+
+  createTerminal: async (data: { spaceId: string; shell?: string; cwd?: string; title?: string }): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.createTerminal(data)
+    return httpRequest('POST', '/api/terminal/create', data)
+  },
+
+  terminalInput: async (sessionId: string, data: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.terminalInput({ sessionId, data })
+    return httpRequest('POST', '/api/terminal/input', { sessionId, data })
+  },
+
+  terminalResize: async (sessionId: string, cols: number, rows: number): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.terminalResize({ sessionId, cols, rows })
+    return httpRequest('POST', '/api/terminal/resize', { sessionId, cols, rows })
+  },
+
+  killTerminal: async (sessionId: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.killTerminal({ sessionId })
+    return httpRequest('POST', '/api/terminal/kill', { sessionId })
+  },
+
+  getTerminalReplay: async (sessionId: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.getTerminalReplay({ sessionId })
+    return httpRequest('POST', '/api/terminal/replay', { sessionId })
   },
 
 }

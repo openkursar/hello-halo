@@ -10,15 +10,14 @@ import {
 export function registerAgentRoutes(app: Express): void {
   // ===== Agent Routes =====
   app.post('/api/agent/message', async (req: Request, res: Response) => {
-    const { spaceId, conversationId, message, resumeSessionId, images, thinkingEnabled, aiBrowserEnabled } = req.body
+    const { spaceId, conversationId, message, resumeSessionId, images, thinkingEnabled } = req.body
     const result = await agentController.sendMessage({
       spaceId,
       conversationId,
       message,
       resumeSessionId,
       images,  // Pass images for multi-modal messages (remote access)
-      thinkingEnabled,  // Pass thinking mode for extended thinking (remote access)
-      aiBrowserEnabled  // Pass AI Browser toggle for remote access
+      thinkingEnabled  // Pass thinking mode for extended thinking (remote access)
     })
     res.json(result)
   })
@@ -80,6 +79,36 @@ export function registerAgentRoutes(app: Express): void {
       const { defaultCapabilitiesFor } = await import('../../services/agent/capabilities')
       const caps = getEngineCapabilities() ?? defaultCapabilitiesFor(getActiveEngine() ?? 'anthropic')
       res.json({ success: true, data: caps })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // ===== Toolset broker (on-demand MCP toolsets) — mirrors ipc/agent.ts =====
+  app.post('/api/agent/toolsets/list', async (req: Request, res: Response) => {
+    try {
+      const { listToolsets } = await import('../../services/agent')
+      res.json({ success: true, data: listToolsets(req.body.spaceId, req.body.conversationId) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  app.post('/api/agent/toolsets/open', async (req: Request, res: Response) => {
+    try {
+      const { openToolsetByUser } = await import('../../services/agent')
+      const result = await openToolsetByUser(req.body.spaceId, req.body.conversationId, req.body.toolsetId)
+      res.json(result.ok ? { success: true } : { success: false, error: result.error })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  app.post('/api/agent/toolsets/close', async (req: Request, res: Response) => {
+    try {
+      const { closeToolsetByUser } = await import('../../services/agent')
+      const result = await closeToolsetByUser(req.body.spaceId, req.body.conversationId, req.body.toolsetId)
+      res.json(result.ok ? { success: true } : { success: false, error: result.error })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

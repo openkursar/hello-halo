@@ -39,7 +39,7 @@ import type { BackgroundService } from '../../platform/background'
 import { join } from 'path'
 import { homedir } from 'os'
 import { getSpace } from '../../services/space.service'
-import { getExpressApp } from '../../http/server'
+import { getWebhookIngressRouter } from '../../http/server'
 import * as watcherHost from '../../services/watcher-host.service'
 import { ActivityStore } from './store'
 import { createAppRuntimeService } from './service'
@@ -220,8 +220,11 @@ export async function initAppRuntime(
   const fileWatcherSource = new FileWatcherSource(watcherHost)
   eventRouter.registerSource(fileWatcherSource)
 
-  // WebhookSource: mounts POST /hooks/* on the Express server to receive
-  // inbound webhooks from external services (GitHub, Stripe, etc.).
+  // WebhookSource: registers its POST route on the webhook ingress router
+  // (mounted at /hooks by http/server ahead of auth middleware) to receive
+  // inbound webhooks from external services (GitHub, Stripe, etc.). The
+  // router is a process-lifetime singleton, so this works even though the
+  // HTTP server starts after initAppRuntime and may be restarted later.
   // The secret resolver looks up HMAC secrets from installed Apps' webhook
   // subscription configs for per-hook signature verification.
   const webhookSecretResolver: WebhookSecretResolver = (hookPath: string) => {
@@ -239,7 +242,7 @@ export async function initAppRuntime(
     }
     return null
   }
-  const webhookSource = new WebhookSource(getExpressApp(), webhookSecretResolver)
+  const webhookSource = new WebhookSource(getWebhookIngressRouter(), webhookSecretResolver)
   eventRouter.registerSource(webhookSource)
 
   // ── IM Session Registry ─────────────────────────────────────────────
