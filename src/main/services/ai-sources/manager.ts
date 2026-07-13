@@ -41,6 +41,7 @@ import { getConfig, saveConfig } from '../../foundation/config.service'
 import { getCustomProvider } from './providers/custom.provider'
 import { getGitHubCopilotProvider } from './providers/github-copilot.provider'
 import { getClaudeProvider } from './providers/claude.provider'
+import { getZhipuCodingOAuthProvider } from './providers/zhipu-coding-oauth.provider'
 import { loadAuthProvidersAsync } from './auth-loader'
 import { loadProductConfig } from '../../foundation/product-config'
 import { decryptString } from '../../foundation/secure-storage.service'
@@ -81,6 +82,7 @@ class AISourceManager {
     this.registerProvider(getCustomProvider())
     this.registerProvider(getGitHubCopilotProvider())
     this.registerProvider(getClaudeProvider())
+    this.registerProvider(getZhipuCodingOAuthProvider())
 
     // Sync saved sources' model lists with current BUILTIN_PROVIDERS
     this.syncBuiltinModels()
@@ -540,6 +542,62 @@ class AISourceManager {
     }
 
     const aiSources = this.getAiSourcesConfig()
+
+    // Multi-account providers (e.g. Zhipu Coding Plan returns one entry per
+    // organization) create/update one source per account so the user can see and
+    // switch organizations from the source list. Sources are matched by the stable
+    // account id carried in user.uid. Backward compatible: providers that do not
+    // return `_accounts` fall through to the single-source path below.
+    const accounts = data._accounts as Array<{ key: string; label: string; id: string }> | undefined
+    if (Array.isArray(accounts) && accounts.length > 0) {
+      // The source list already groups by provider, so the source name is just
+      // the organization label (no redundant provider prefix). The org id is kept
+      // in user.uid to match sources across re-logins.
+      let sources = [...aiSources.sources]
+      let firstId: string | null = null
+      for (const acct of accounts) {
+        const existing = sources.find(
+          s => s.provider === providerType && s.authType === 'oauth' && s.user?.uid === acct.id
+        )
+        if (existing) {
+          const keepModel = models.some(m => m.id === existing.model) ? existing.model : (defaultModel || existing.model)
+          sources = sources.map(s => s.id === existing.id ? {
+            ...s,
+            name: acct.label,
+            accessToken: acct.key,
+            refreshToken: '',
+            tokenExpires: tokenData?.expiresAt,
+            user: { name: '', uid: acct.id },
+            model: keepModel,
+            availableModels: models.length > 0 ? models : s.availableModels,
+            updatedAt: now
+          } : s)
+          if (!firstId) firstId = existing.id
+        } else {
+          const id = uuidv4()
+          sources.push({
+            id,
+            name: acct.label,
+            provider: providerType,
+            authType: 'oauth',
+            apiUrl: '',
+            accessToken: acct.key,
+            refreshToken: '',
+            tokenExpires: tokenData?.expiresAt,
+            user: { name: '', uid: acct.id },
+            model: defaultModel,
+            availableModels: models,
+            createdAt: now,
+            updatedAt: now
+          })
+          if (!firstId) firstId = id
+        }
+      }
+      const newConfig: AISourcesConfig = { version: 2, currentId: firstId, sources }
+      saveConfig({ aiSources: newConfig, isFirstLaunch: false } as any)
+      console.log(`[AISourceManager] OAuth login for ${providerType} upserted ${accounts.length} account source(s)`)
+      return
+    }
 
     // Check if an OAuth source with the same provider already exists
     const existingSource = aiSources.sources.find(

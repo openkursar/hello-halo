@@ -13,7 +13,7 @@
  * - Dynamic OAuth provider support (configured via product.json)
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type ComponentType } from 'react'
 import {
   Plus, Check, ChevronDown, ChevronRight, Edit2, Trash2, LogOut, Loader2, Key, Globe,
   LogIn, User, Cloud, Server, Shield, Lock, Zap, MessageSquare, Wrench, Github, Copy,
@@ -30,6 +30,7 @@ import { getBuiltinProvider, isOAuthProvider as isOAuthProviderFn } from '../../
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
 import { ProviderSelector } from './ProviderSelector'
+import { getBrandIcon } from '../icons/BrandIcons'
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
 
 // ============================================================================
@@ -429,11 +430,13 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
             isCurrent ? 'bg-primary/20' : 'bg-surface-tertiary'
           }`}>
-            {isOAuth ? (
-              <Globe size={18} className="text-text-secondary" />
-            ) : (
-              <Key size={18} className="text-text-secondary" />
-            )}
+            {(() => {
+              const Brand = getBrandIcon(source.provider)
+              if (Brand) return <Brand size={18} className="text-text-secondary" />
+              return isOAuth
+                ? <Globe size={18} className="text-text-secondary" />
+                : <Key size={18} className="text-text-secondary" />
+            })()}
           </div>
 
           {/* Name & Model */}
@@ -815,7 +818,8 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           provider: AuthProviderConfig,
           onClick: () => void
         ) => {
-          const IconComponent = getIconComponent(provider.icon)
+          // Brand mark by provider type takes precedence over the lucide icon.
+          const IconComponent = (getBrandIcon(provider.type) || getIconComponent(provider.icon)) as ComponentType<{ size?: number; className?: string }>
           return (
             <button
               key={provider.type}

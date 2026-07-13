@@ -4,10 +4,12 @@
  */
 
 import { useState, useEffect } from 'react'
+import type React from 'react'
 import { Globe, ChevronDown, ChevronRight, MessageSquare, Wrench, Key, KeyRound, Cloud, Server, Shield, Lock, Zap, LogIn, User, Github, Brain, ExternalLink, type LucideIcon } from 'lucide-react'
 import { useTranslation, setLanguage, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
 import { api } from '../../api'
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
+import { getBrandIcon } from '../icons/BrandIcons'
 import { ByokEntry } from './ByokEntry'
 
 // Re-export so existing renderer imports (`from './LoginSelector'`) continue
@@ -146,7 +148,9 @@ export function LoginSelector({ onSelectProvider, onSelectCustom, onSelectPreset
 
   // Uniform navigate-on-click card for a managed-login entry.
   const renderCard = (provider: AuthProviderConfig) => {
-    const IconComponent = getIcon(provider.icon)
+    // Brand mark by provider type takes precedence over the lucide icon name.
+    const IconComponent: React.ComponentType<{ className?: string; style?: React.CSSProperties }> =
+      getBrandIcon(provider.type) || getIcon(provider.icon)
     const bgColor = hexToRgba(provider.iconBgColor, 0.15)
     const textColor = provider.iconBgColor
 
