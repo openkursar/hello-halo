@@ -13,6 +13,7 @@ import {
   getSessionState,
   ensureSessionWarm,
   testMcpConnections,
+  probeMcpApp,
   resolveQuestion,
   listToolsets,
   openToolsetByUser,
@@ -224,6 +225,18 @@ export function registerAgentHandlers(): void {
         const err = error as Error
         analytics.trackErrorSurface('mcp-connect', err)
         return { success: false, servers: [], error: err.message }
+      }
+    },
+
+    // Probe a single installed MCP app (native handshake, no agent session).
+    // Updates the shared status cache and broadcasts agent:mcp-status.
+    probeMcpApp: async (appId: string) => {
+      try {
+        return await probeMcpApp(appId)
+      } catch (error: unknown) {
+        const err = error as Error
+        analytics.trackErrorSurface('mcp-probe', err)
+        return { success: false, error: err.message }
       }
     },
 

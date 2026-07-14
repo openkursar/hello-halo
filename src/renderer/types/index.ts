@@ -236,6 +236,10 @@ export interface McpServerStatus {
   error?: string;
   /** Short tool names provided by this server (without mcp__ prefix) */
   tools?: string[];
+  /** Human-readable failure reason from the native connection probe */
+  errorDetail?: string;
+  /** Epoch ms of the last probe/SDK report that produced this entry */
+  lastCheckedAt?: number;
 }
 
 export interface NotificationConfig {

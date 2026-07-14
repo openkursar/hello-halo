@@ -58,6 +58,7 @@ import { onMcpAppsChange } from '../manager/service'
 import { createHaloAppsMcpServer } from '../conversation-mcp'
 import { registerAppBridge } from '../../services/app-bridge'
 import { handleMcpAppsChange } from '../../services/agent/session-manager'
+import { handleMcpAppsChangeForStatus } from '../../services/agent/mcp-probe'
 import type { AppRuntimeService } from './types'
 
 // Re-export types for consumers
@@ -201,6 +202,9 @@ export async function initAppRuntime(
   // the MCP-apps-change event from this side.
   registerAppBridge({ getAppManager, createHaloAppsMcpServer, onMcpAppsChange })
   onMcpAppsChange(handleMcpAppsChange)
+  // Keep the shared MCP status cache honest: probe on enable/install/update,
+  // drop stale entries on pause/uninstall.
+  onMcpAppsChange(handleMcpAppsChangeForStatus)
 
   // Get the app-level database
   const appDb = deps.db.getAppDatabase()

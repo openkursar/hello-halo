@@ -56,7 +56,7 @@ import { isBuiltinApp } from './types'
 // High-level module (services/agent) subscribes without creating circular deps.
 // ============================================
 
-type McpChangeHandler = (spaceId: string | null) => void
+type McpChangeHandler = (spaceId: string | null, change?: McpAppChange) => void
 const mcpChangeHandlers: McpChangeHandler[] = []
 
 /**
@@ -75,10 +75,10 @@ export function onMcpAppsChange(handler: McpChangeHandler): () => void {
   }
 }
 
-function emitMcpChange(spaceId: string | null): void {
+function emitMcpChange(spaceId: string | null, change?: McpAppChange): void {
   for (const handler of mcpChangeHandlers) {
     try {
-      handler(spaceId)
+      handler(spaceId, change)
     } catch (err) {
       console.error('[AppManager] mcpChange handler error:', err)
     }
@@ -410,7 +410,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       // Notify session-manager to invalidate affected sessions
       if (spec.type === 'mcp') {
-        emitMcpChange(spaceId)
+        emitMcpChange(spaceId, { appId, specId, action: 'installed' })
       }
 
       // Fire install event for analytics / external subscribers.
@@ -442,7 +442,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       // Notify session-manager to invalidate affected sessions
       if (app.spec.type === 'mcp') {
-        emitMcpChange(app.spaceId)
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'uninstalled' })
       }
 
       // Cascade-delete bundled skills when parent is uninstalled.
@@ -499,7 +499,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       // Notify session-manager to invalidate affected sessions
       if (app.spec.type === 'mcp') {
-        emitMcpChange(app.spaceId)
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'reinstalled' })
       }
 
       console.log(`[AppManager] Reinstalled app ${appId}`)
@@ -570,7 +570,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       // MCP paused = no longer available in sessions
       if (app.spec.type === 'mcp') {
-        emitMcpChange(app.spaceId)
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'paused' })
       }
 
       console.log(`[AppManager] App ${appId}: ${oldStatus} -> ${newStatus}`)
@@ -596,7 +596,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       // MCP resumed = available again in sessions
       if (app.spec.type === 'mcp') {
-        emitMcpChange(app.spaceId)
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'resumed' })
       }
 
       console.log(`[AppManager] App ${appId}: ${oldStatus} -> ${newStatus}`)
@@ -639,7 +639,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       // rebuild with the correct tool set (e.g. active→error stops the
       // server; error/needs_login→active makes it available again).
       if (app.spec.type === 'mcp') {
-        emitMcpChange(app.spaceId)
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'status' })
       }
 
       console.log(`[AppManager] App ${appId}: ${oldStatus} -> ${status}`)
@@ -727,7 +727,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       // MCP server definition may have changed (command/args/env/etc.):
       // invalidate affected sessions so they reconnect with the new config.
       if (validatedSpec.type === 'mcp') {
-        emitMcpChange(app.spaceId)
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'updated' })
       }
 
       console.log(`[AppManager] Updated spec for app ${appId}`)
@@ -798,8 +798,8 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       // For MCP apps: notify both old and new scopes so session-manager
       // can invalidate the affected sessions on both sides.
       if (app.spec.type === 'mcp') {
-        emitMcpChange(oldSpaceId)
-        emitMcpChange(newSpaceId)
+        emitMcpChange(oldSpaceId, { appId, specId: app.specId, action: 'moved' })
+        emitMcpChange(newSpaceId, { appId, specId: app.specId, action: 'moved' })
       }
 
       const fromScope = oldSpaceId === null ? 'global' : `space ${oldSpaceId}`

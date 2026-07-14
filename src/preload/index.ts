@@ -166,6 +166,7 @@ export interface HaloAPI {
   getSessionState: (conversationId: string) => Promise<IpcResponse>
   ensureSessionWarm: (spaceId: string, conversationId: string) => Promise<IpcResponse>
   testMcpConnections: () => Promise<{ success: boolean; servers: unknown[]; error?: string }>
+  probeMcpApp: (appId: string) => Promise<{ success: boolean; result?: unknown; error?: string }>
   answerQuestion: (data: { conversationId: string; id: string; answers: Record<string, string> }) => Promise<IpcResponse>
   injectMessage: (data: { conversationId: string; message: string }) => Promise<IpcResponse>
   getEngineCapabilities: () => Promise<IpcResponse>

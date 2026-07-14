@@ -132,6 +132,15 @@ export const agentApi = {
     return result as { success: boolean; servers: unknown[]; error?: string }
   },
 
+  // Probe a single installed MCP app (native handshake, updates agent:mcp-status)
+  probeMcpApp: async (appId: string): Promise<{ success: boolean; result?: unknown; error?: string }> => {
+    if (isElectron()) {
+      return window.halo.probeMcpApp(appId)
+    }
+    const result = await httpRequest('POST', '/api/agent/probe-mcp', { appId })
+    return result as { success: boolean; result?: unknown; error?: string }
+  },
+
   // Get the active engine's capability descriptor. Renderer caches this in
   // a Zustand store and uses the flags to drive engine-aware UI affordances.
   getEngineCapabilities: async (): Promise<ApiResponse> => {

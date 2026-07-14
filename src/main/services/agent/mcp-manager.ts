@@ -119,7 +119,7 @@ export function broadcastMcpStatus(
       lastCheckedAt: now
     })
   }
-  cachedMcpStatus = [...byName.values()]
+  cachedMcpStatus = Array.from(byName.values())
 
   emitMcpStatusBroadcast()
 }
