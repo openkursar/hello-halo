@@ -1382,5 +1382,5 @@
   "Non-owners have no tool access — chat only": "Non-owners have no tool access — chat only",
   "Restrict access: owners have full control; everyone else follows the default permissions below": "Restrict access: owners have full control; everyone else follows the default permissions below",
   "Owners always have full access and are not restricted by the default permissions below.": "Owners always have full access and are not restricted by the default permissions below.",
-  "No Owner IDs set. All users will be treated as non-owners and cannot use any tools — chat only.": "No Owner IDs set. All users will be treated as non-owners and cannot use any tools — chat only."
+  "No Owner IDs set. Send any direct message to this bot and your user ID will be registered as the owner automatically. Until then, all users are non-owners and can only chat — no tool access.": "No Owner IDs set. Send any direct message to this bot and your user ID will be registered as the owner automatically. Until then, all users are non-owners and can only chat — no tool access."
 }

@@ -867,7 +867,6 @@
   "No models found": "找不到模型",
   "No other MCP servers installed in this space.": "此空間中未安裝其他 MCP 伺服器。",
   "No output": "無輸出",
-  "No owner bound yet. The first user to send this bot a direct message will be bound as the owner automatically. Until then, all users are deny-all guests.": "尚未綁定擁有者。第一位向此機器人發送直接訊息的用戶將自動被綁定為擁有者。在此之前，所有用戶皆為被拒絕所有權限的訪客。",
   "No preset found — verify these values match your model": "找不到預設設定 — 請確認這些值符合您的模型",
   "No providers found": "找不到供應商",
   "No readable text found": "找不到可讀取的文字",

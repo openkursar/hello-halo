@@ -867,7 +867,6 @@
   "No models found": "Keine Modelle gefunden",
   "No other MCP servers installed in this space.": "Keine weiteren MCP-Server in diesem Bereich installiert.",
   "No output": "Keine Ausgabe",
-  "No owner bound yet. The first user to send this bot a direct message will be bound as the owner automatically. Until then, all users are deny-all guests.": "Noch ist kein Besitzer gebunden. Der erste Benutzer, der diesem Bot eine Direktnachricht sendet, wird automatisch als Besitzer gebunden. Bis dahin sind alle Benutzer Gäste mit vollständiger Zugriffsverweigerung.",
   "No preset found — verify these values match your model": "Keine Voreinstellung gefunden — prüfen Sie, ob diese Werte zu Ihrem Modell passen",
   "No providers found": "Keine Anbieter gefunden",
   "No readable text found": "Kein lesbarer Text gefunden",

@@ -867,7 +867,6 @@
   "No models found": "モデルが見つかりません",
   "No other MCP servers installed in this space.": "このスペースには他にインストールされたMCPサーバーはありません。",
   "No output": "出力なし",
-  "No owner bound yet. The first user to send this bot a direct message will be bound as the owner automatically. Until then, all users are deny-all guests.": "まだオーナーが設定されていません。このボットにダイレクトメッセージを送信した最初のユーザーが自動的にオーナーとして設定されます。それまでは、すべてのユーザーはアクセスが拒否されたゲストです。",
   "No preset found — verify these values match your model": "プリセットが見つかりません — これらの値がモデルと一致しているか確認してください",
   "No providers found": "プロバイダーが見つかりません",
   "No readable text found": "読み取り可能なテキストが見つかりませんでした",

@@ -1382,5 +1382,5 @@
   "Non-owners have no tool access — chat only": "非授权成员无法访问工具——仅可聊天",
   "Restrict access: owners have full control; everyone else follows the default permissions below": "权限分层：Owner 拥有完全控制权；其他成员默认应用下方权限",
   "Owners always have full access and are not restricted by the default permissions below.": "Owner 始终拥有全部权限，不受下方默认权限限制。",
-  "No Owner IDs set. All users will be treated as non-owners and cannot use any tools — chat only.": "未设置 Owner ID。所有用户均按默认权限处理，无法使用任何工具——只能聊天。"
+  "No Owner IDs set. Send any direct message to this bot and your user ID will be registered as the owner automatically. Until then, all users are non-owners and can only chat — no tool access.": "未设置 Owner ID。向此 bot 发送任意私聊消息，您的用户 ID 将自动注册为 Owner。在此之前，所有用户均为非授权成员，仅可聊天——无法使用任何工具。"
 }

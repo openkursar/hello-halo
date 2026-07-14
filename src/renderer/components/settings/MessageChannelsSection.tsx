@@ -16,7 +16,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Mail, MessageSquare, Bell, Webhook, Loader2,
   CheckCircle, XCircle, ChevronDown, RefreshCw, Bot,
-  Plus, Trash2, MoreVertical, Smartphone, AlertTriangle,
+  Plus, Trash2, MoreVertical, Smartphone,
   QrCode,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
@@ -942,24 +942,16 @@ function PermissionSection({ instance, onChange, onDebouncedChange, permissionDe
             </p>
           </div>
 
-          {/* Pending owner auto-claim hint (wecom-bot scan-auth only) — shown
-              instead of the empty-owners warning because this is an expected
-              interim state, not a misconfiguration. */}
-          {!hasOwners && pendingOwnerClaim && (
+          {/* No-owner hint — auto-claim is channel-agnostic (see owner-claim.ts):
+              whenever permissionEnabled is on and owners is empty, the first
+              direct-message sender is bound as owner automatically. Until then
+              everyone is chat-only. This block doubles as the issue-required
+              "no owner configured" warning. */}
+          {!hasOwners && (
             <div className="flex items-center gap-2 rounded-lg bg-primary/10 border border-primary/30 px-3 py-2">
               <QrCode className="w-4 h-4 text-primary shrink-0" />
               <p className="text-xs text-foreground/80">
-                {t('Send any message to this bot in WeCom — your user ID will be registered as the owner automatically. No manual lookup needed.')}
-              </p>
-            </div>
-          )}
-
-          {/* Warning: no owners set (suppressed during pending claim) */}
-          {!hasOwners && !pendingOwnerClaim && (
-            <div className="flex items-center gap-2 rounded-lg bg-yellow-500/10 border border-yellow-500/30 px-3 py-2">
-              <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 shrink-0" />
-              <p className="text-xs text-yellow-700 dark:text-yellow-300">
-                {t('No Owner IDs set. All users will be treated as non-owners and cannot use any tools — chat only.')}
+                {t('No Owner IDs set. Send any direct message to this bot and your user ID will be registered as the owner automatically. Until then, all users are non-owners and can only chat — no tool access.')}
               </p>
             </div>
           )}
