@@ -263,6 +263,15 @@ export interface McpServerStatusInfo {
   error?: string
   /** Short tool names provided by this server (without mcp__ prefix) */
   tools?: string[]
+  /**
+   * Human-readable failure reason from the native connection probe
+   * (e.g. "HTTP 401 Unauthorized", "connect ECONNREFUSED ..."). The SDK
+   * only reports failed/connected; this field is how the UI escapes the
+   * black box. Cleared when the server connects.
+   */
+  errorDetail?: string
+  /** Epoch ms of the last probe/SDK report that produced this entry */
+  lastCheckedAt?: number
 }
 
 // ============================================

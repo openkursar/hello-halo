@@ -23,9 +23,10 @@ enter context only while it is enabled. Disabled toolsets cost one summary line.
   the user to flip the switch (and highlights it in the input "Tools" menu). Once
   the user enables it, the session rebuilds and its tools are available from the
   next message.
-- **Resident cost** = one summary line per DISABLED toolset in the system prompt
-  (`buildToolsetSection`) + the two meta tools (`toolsets_list`, `request_toolset`).
-  ENABLED toolsets additionally get their full `usageGuide` appended to the prompt.
+- **Resident cost** = the single `request_toolset` meta tool, whose description
+  bakes in the current disabled-toolset summaries (meta-server.ts). ENABLED
+  toolsets get their full `usageGuide` appended to the system prompt
+  (`buildToolsetSection`); disabled ones add nothing to the prompt itself.
 
 Historical note: an earlier design let the AI hot-open toolsets via
 `session.setMcpServers` + an interrupt/auto-continuation dance to make "open and
@@ -42,8 +43,8 @@ SDK path is no longer used.
 | `registry.ts` | The catalog. **Adding a toolset = one entry here** |
 | `state.ts` | Per-conversation open-set; write-through persisted on the conversation record; per-conversation MCP server instance cache |
 | `broker.ts` | Builds the creation-time MCP record (`buildCreationTimeServers`); `openToolset`/`closeToolset` (user toggle → persist + schedule rebuild); `requestToolset` (AI → user, emits `toolsets:requested`); emits `toolsets:changed`. Rebuild via an injected invalidator (DI seam, avoids a cycle with session-manager) |
-| `meta-server.ts` | The resident `toolsets_list` + `request_toolset` MCP server |
-| `capability-index.ts` | `buildToolsetSection`: disabled-toolset index + enabled-toolset usage guides for the system prompt |
+| `meta-server.ts` | The resident `request_toolset` MCP server (disabled-toolset awareness lives in its tool description) |
+| `capability-index.ts` | `buildToolsetSection`: enabled-toolset usage guides for the system prompt |
 | `service.ts` | User-initiated open/close/list façade for transport |
 
 ## 4) Seeding & rebuild

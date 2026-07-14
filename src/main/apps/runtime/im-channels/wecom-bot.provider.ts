@@ -526,6 +526,13 @@ class WecomBotInstance implements ImChannelInstance {
       this.activeStreamSessions.forEach((s) =>
         s.markStreamBroken(`ws disconnected: ${reason}`),
       )
+      // A standby probe that drops mid-confirm has NOT survived the window —
+      // without this, the confirm timer would still fire and recoverToActive()
+      // would flush pending pushes into a dead connection (all dropped).
+      if (this.connMode === 'yielding' && this.confirmTimer) {
+        this.cancelProbeConfirm()
+        this.scheduleProbe()
+      }
     })
     client.on('reconnecting', (attempt: number) => {
       if (!isCurrent()) return

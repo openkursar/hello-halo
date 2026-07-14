@@ -841,12 +841,13 @@ function InputToolbar({
 }: InputToolbarProps) {
   const { t } = useTranslation()
   return (
-    <div className="flex items-center justify-between px-2 pb-2 pt-1">
-      {/* Left section: attachment button + thinking toggle */}
-      <div className="flex items-center gap-1">
+    <div className="flex items-center justify-between gap-1 px-2 pb-2 pt-1">
+      {/* Left section: attachment + toolsets + thinking. Scrolls horizontally
+          on narrow widths so the fixed Send/Stop group is never pushed off. */}
+      <div className="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-none">
         {/* Attachment menu */}
         {!isGenerating && !isOnboarding && (
-          <div className="relative" ref={attachMenuRef}>
+          <div className="relative shrink-0" ref={attachMenuRef}>
             <button
               onClick={onAttachMenuToggle}
               disabled={isProcessingImages}
@@ -905,7 +906,7 @@ function InputToolbar({
         {!isGenerating && !isOnboarding && (
           <button
             onClick={onThinkingToggle}
-            className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg
+            className={`h-8 shrink-0 flex items-center gap-1.5 px-2.5 rounded-lg
               transition-colors duration-200
               ${thinkingEnabled
                 ? 'bg-primary/10 text-primary'
@@ -915,13 +916,13 @@ function InputToolbar({
             title={thinkingEnabled ? t('Disable Deep Thinking') : t('Enable Deep Thinking')}
           >
             <Atom size={15} />
-            <span className="text-xs">{t('Deep Thinking')}</span>
+            <span className="hidden sm:inline text-xs">{t('Deep Thinking')}</span>
           </button>
         )}
       </div>
 
-      {/* Right section: Stop (when generating) + Send */}
-      <div className="flex items-center gap-1">
+      {/* Right section: Stop (when generating) + Send — fixed, never scrolls */}
+      <div className="flex items-center gap-1 shrink-0">
         {isGenerating && onStop && (
           <button
             onClick={onStop}

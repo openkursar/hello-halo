@@ -184,6 +184,9 @@ class BrowserViewManager {
         // Minimal prefs — this window never loads content itself
         nodeIntegration: false,
         contextIsolation: true,
+        // Hidden host window: keep child views rendering so CDP/capturePage
+        // can obtain frames instead of hanging on a throttled compositor.
+        backgroundThrottling: false,
       },
     })
 
@@ -237,6 +240,10 @@ class BrowserViewManager {
         partition: 'persist:browser',
         // Enable smooth scrolling and other web features
         scrollBounce: true,
+        // Keep rendering when the view is hidden or docked off-screen. AI
+        // automation drives views that are not visible; without this the
+        // compositor throttles and Page.captureScreenshot hangs (esp. Windows).
+        backgroundThrottling: false,
       },
     })
     console.log(`[BrowserView] BrowserView instance created`)

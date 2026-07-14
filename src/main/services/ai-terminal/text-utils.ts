@@ -199,21 +199,24 @@ export function capOutput(
 ): { text: string; truncated: boolean } {
   let out = text
   let truncated = false
-  const totalLines = out.split('\n').length
-  const lines = out.split('\n')
+  const lines = text.split('\n')
+  const totalLines = lines.length
+  let keptLines = totalLines
   if (lines.length > MAX_RETURN_LINES) {
     out = lines.slice(lines.length - MAX_RETURN_LINES).join('\n')
+    keptLines = MAX_RETURN_LINES
     truncated = true
   }
   if (out.length > MAX_RETURN_BYTES) {
     out = out.slice(out.length - MAX_RETURN_BYTES)
+    keptLines = out.split('\n').length
     truncated = true
   }
   if (truncated) {
     const advice = opts.pagingHint !== false
       ? `; use terminal_read(mode:'scrollback', offset:...) for earlier output`
       : ''
-    out = `[...truncated to the last ${MAX_RETURN_LINES} of ${totalLines} lines${advice}]\n${out}`
+    out = `[...truncated to the last ${keptLines} of ${totalLines} lines${advice}]\n${out}`
   }
   return { text: out, truncated }
 }

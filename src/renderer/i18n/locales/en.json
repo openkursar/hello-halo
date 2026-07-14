@@ -1134,6 +1134,7 @@
   "Server is not responding correctly": "Server is not responding correctly",
   "Service Status": "Service Status",
   "Session ended": "Session ended",
+  "Session ended (exit {{code}})": "Session ended (exit {{code}})",
   "Session ended (output no longer available)": "Session ended (output no longer available)",
   "Sessions appear automatically when users message the bot": "Sessions appear automatically when users message the bot",
   "Settings": "Settings",

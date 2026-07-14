@@ -41,6 +41,7 @@ import {
   McpCommandBlockedError,
 } from './errors'
 import { isMcpCommandBlocked } from '../../services/security-policy'
+import type { McpAppChange } from '../../services/app-bridge'
 import { syncSkillToFilesystem, removeSkillFromFilesystem } from './skill-sync'
 import { isBuiltinApp } from './types'
 

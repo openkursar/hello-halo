@@ -82,11 +82,11 @@ function visitSensitiveFields(config: Record<string, unknown>, fn: Visitor): voi
   // remoteAccess.namedTunnel.tunnelSecret — named-tunnel credential
   const remoteAccess = config.remoteAccess as Record<string, unknown> | undefined
   const namedTunnel = remoteAccess?.namedTunnel as Record<string, unknown> | undefined
-  if (namedTunnel && typeof namedTunnel.tunnelSecret === 'string') fn(namedTunnel, 'tunnelSecret')
+  if (namedTunnel && typeof namedTunnel.tunnelSecret === 'string') fn(namedTunnel, 'tunnelSecret', 'remoteAccess.namedTunnel.tunnelSecret', 'Named tunnel secret')
 
   // deviceIdentity.deviceSecret — proves device ownership toward the tunnel issuer
   const deviceIdentity = config.deviceIdentity as Record<string, unknown> | undefined
-  if (deviceIdentity && typeof deviceIdentity.deviceSecret === 'string') fn(deviceIdentity, 'deviceSecret')
+  if (deviceIdentity && typeof deviceIdentity.deviceSecret === 'string') fn(deviceIdentity, 'deviceSecret', 'deviceIdentity.deviceSecret', 'Device secret')
 
   // MCP servers: env values matching the pattern + auth-like headers
   const mcpServers = config.mcpServers as Record<string, Record<string, unknown>> | undefined

@@ -112,6 +112,11 @@ import open from 'open'
 if (process.platform === 'win32') {
   app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('disable-gpu')
+  // Windows-only native occlusion tracking pauses compositor frames for
+  // minimized/covered windows, stalling Page.captureScreenshot on the
+  // routinely off-screen views used by AI automation (macOS has no
+  // equivalent). Disabling it keeps frames flowing for background AI browser work.
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 }
 
 // Anti-fingerprinting: Disable automation detection features in Chromium

@@ -407,8 +407,8 @@ describe('config-encryption', () => {
       const config = makeTunnelConfig()
 
       encryptConfigFields(config)
-      expect((config.deviceIdentity as any).deviceSecret).toMatch(/^gmcred:v1:/)
-      expect((config.remoteAccess as any).namedTunnel.tunnelSecret).toMatch(/^gmcred:v1:/)
+      expect((config.deviceIdentity as any).deviceSecret).toMatch(/^gmcred:v2:/)
+      expect((config.remoteAccess as any).namedTunnel.tunnelSecret).toMatch(/^gmcred:v2:/)
       // Non-secret grant fields stay readable
       expect((config.remoteAccess as any).namedTunnel.hostname).toBe('r-abc123.example.com')
 

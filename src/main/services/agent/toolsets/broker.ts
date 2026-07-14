@@ -205,7 +205,7 @@ export function requestToolset(scope: ToolsetScope, toolsetId: string): RequestT
   return { ok: true, displayName: def.displayName }
 }
 
-/** Current statuses for the AI (toolsets_list) and the renderer menu */
+/** Current toolset statuses for the renderer "Tools" menu */
 export function listToolsetStatuses(spaceId: string, conversationId: string): ToolsetStatus[] {
   const open = getOpenToolsets(spaceId, conversationId)
   return getAvailableToolsets().map(def => ({

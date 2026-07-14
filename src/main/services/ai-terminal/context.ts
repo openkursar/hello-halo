@@ -5,8 +5,10 @@
  * SDK session or UI window — a terminal keeps running across model switches,
  * session rebuilds, and canvas open/close (design hard constraint).
  *
- * A global singleton backs the main chat; scoped contexts isolate automation
- * (digital-human / app-chat) runs, mirroring ai-browser's context model.
+ * A single process-global context backs every caller — main chat and automation
+ * (digital-human / app-chat) runs alike. Cross-space isolation is enforced at
+ * the tool layer (sdk-mcp-server scopes lookups by spaceId), not by separate
+ * registries, so ptys survive session rebuilds and stay visible in the UI.
  */
 
 import { EventEmitter } from 'events'
@@ -145,11 +147,6 @@ export function getGlobalTerminalContext(workDir: string): TerminalContext {
 
 export function peekGlobalTerminalContext(): TerminalContext | null {
   return globalContext
-}
-
-/** Isolated context for an automation run. Caller owns destroy(). */
-export function createScopedTerminalContext(workDir: string): TerminalContext {
-  return new TerminalContext(workDir)
 }
 
 /** Shutdown hook (bootstrap/extended.ts). */

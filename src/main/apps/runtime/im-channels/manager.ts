@@ -252,7 +252,7 @@ export class ImChannelManager {
     const instance = this.instances.get(cfg.id)
     const connected = instance?.isConnected() ?? false
     const state = instance?.getConnectionState?.()
-      ?? (connected ? 'online' : cfg.enabled ? 'offline' : 'offline')
+      ?? (connected ? 'online' : cfg.enabled ? 'connecting' : 'offline')
     return {
       id: cfg.id,
       type: cfg.type,

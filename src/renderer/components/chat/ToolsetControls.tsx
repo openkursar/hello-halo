@@ -122,9 +122,9 @@ export function ToolsetControls() {
   }
 
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1 shrink-0">
       {/* Catalog menu trigger */}
-      <div className="relative" ref={menuRef}>
+      <div className="relative shrink-0" ref={menuRef}>
         <button
           onClick={() => setMenuOpen((v) => !v)}
           className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg transition-colors duration-200
@@ -179,7 +179,7 @@ export function ToolsetControls() {
           <button
             key={ts.id}
             onClick={() => void closeToolset(spaceId, conversationId, ts.id)}
-            className="h-8 flex items-center gap-1.5 pl-2.5 pr-2 rounded-lg bg-primary/10 text-primary
+            className="h-8 shrink-0 flex items-center gap-1.5 pl-2.5 pr-2 rounded-lg bg-primary/10 text-primary
               transition-colors duration-200 hover:bg-primary/20 group relative"
             title={t('Click to turn off')}
           >

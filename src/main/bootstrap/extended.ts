@@ -35,6 +35,7 @@ import { registerBrowserPolicyHandlers } from '../ipc/browser-policy'
 import { registerAIBrowserHandlers, cleanupAIBrowserHandlers } from '../ipc/ai-browser'
 import { cleanupAIBrowser } from '../services/ai-browser'
 import { cleanupAITerminal } from '../services/ai-terminal'
+import { cleanupTerminalHandlers } from '../ipc/terminal'
 import { registerOverlayHandlers, cleanupOverlayHandlers } from '../ipc/overlay'
 import { initializeSearchHandlers, cleanupSearchHandlers } from '../ipc/search'
 import { registerPerfHandlers } from '../ipc/perf'
@@ -435,7 +436,8 @@ export async function cleanupExtendedServices(): Promise<void> {
   cleanupAIBrowserHandlers()
   cleanupAIBrowser()
 
-  // AI Terminal: Kill all pty sessions in the global context
+  // AI Terminal: Unsubscribe event forwarding, then kill all pty sessions
+  cleanupTerminalHandlers()
   cleanupAITerminal()
 
   // Web Search: Dispose search context (cleanup any in-flight BrowserViews)
