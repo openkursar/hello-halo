@@ -8,13 +8,13 @@ import {
   isValidEndpointUrl,
   getEndpointUrlError,
   shouldForceStream
-} from '../server/api-type'
+} from '../../../src/main/openai-compat-router/server/api-type'
 import {
   withRequestQueue,
   generateQueueKey,
   clearRequestQueues,
   getPendingRequestCount
-} from '../server/request-queue'
+} from '../../../src/main/openai-compat-router/server/request-queue'
 
 describe('API Type Resolution', () => {
   describe('getApiTypeFromUrl', () => {

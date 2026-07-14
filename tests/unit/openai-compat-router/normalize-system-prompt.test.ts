@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { normalizeSystemPrompt } from '../utils'
-import type { AnthropicRequest } from '../types'
+import { normalizeSystemPrompt } from '../../../src/main/openai-compat-router/utils'
+import type { AnthropicRequest } from '../../../src/main/openai-compat-router/types'
 
 const PREFIX = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
 

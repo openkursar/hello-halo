@@ -9,8 +9,8 @@ import {
   convertOpenAIChatToAnthropic,
   convertOpenAIResponsesToAnthropic,
   createAnthropicErrorResponse
-} from '../converters'
-import type { AnthropicRequest, OpenAIChatResponse } from '../types'
+} from '../../../src/main/openai-compat-router/converters'
+import type { AnthropicRequest, OpenAIChatResponse } from '../../../src/main/openai-compat-router/types'
 
 describe('Request Converters', () => {
   describe('convertAnthropicToOpenAIChat', () => {

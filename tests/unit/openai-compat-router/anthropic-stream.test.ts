@@ -20,7 +20,7 @@ vi.mock('electron', () => ({
 }))
 
 import { Readable } from 'node:stream'
-import { streamAnthropicPassthrough, pipeAnthropicPassthrough } from '../stream/anthropic-stream'
+import { streamAnthropicPassthrough, pipeAnthropicPassthrough } from '../../../src/main/openai-compat-router/stream/anthropic-stream'
 
 /** Build a mock Express response that captures written chunks */
 function createMockRes() {

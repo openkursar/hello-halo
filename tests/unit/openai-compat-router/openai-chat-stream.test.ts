@@ -20,7 +20,7 @@ vi.mock('electron', () => ({
   }
 }))
 
-import { streamOpenAIChatToAnthropic } from '../stream/openai-chat-stream'
+import { streamOpenAIChatToAnthropic } from '../../../src/main/openai-compat-router/stream/openai-chat-stream'
 
 /** Build a mock Express response that captures written chunks */
 function createMockRes() {

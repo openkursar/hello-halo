@@ -23,7 +23,7 @@ import {
   buildCodexToolNamespaceMap,
   codexResponsesToAnthropicRequest,
   createCodexStreamBridgeForTest
-} from '../server/codex-responses-handler'
+} from '../../../src/main/openai-compat-router/server/codex-responses-handler'
 
 describe('Codex Responses compatibility', () => {
   it('converts Codex Responses text input and developer instructions to Anthropic format', () => {
@@ -429,7 +429,7 @@ describe('Codex Responses compatibility', () => {
     // immediately followed by 2 tool messages whose tool_call_ids match the
     // assistant's tool_calls in order. This is the shape DeepSeek's strict
     // validator demands.
-    const { convertAnthropicToOpenAIChat } = await import('../converters')
+    const { convertAnthropicToOpenAIChat } = await import('../../../src/main/openai-compat-router/converters')
     const { request: chatRequest } = convertAnthropicToOpenAIChat(request)
     expect(chatRequest.messages).toHaveLength(4)
     const [userMsg, assistantMsg, toolA, toolB] = chatRequest.messages as any[]
@@ -545,7 +545,7 @@ describe('Codex Responses compatibility', () => {
     // (anthropic-to-openai-chat.ts:52-64) must also fill the field on every
     // other assistant message — DeepSeek requires this on every assistant
     // turn once thinking has appeared.
-    const { convertAnthropicToOpenAIChat } = await import('../converters')
+    const { convertAnthropicToOpenAIChat } = await import('../../../src/main/openai-compat-router/converters')
     const anthropicRequest = codexResponsesToAnthropicRequest({
       model: 'deepseek-reasoner',
       input: [
