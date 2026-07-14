@@ -10,12 +10,13 @@
  *    override, and the user can always instruct the AI in plain language.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { SlidersHorizontal, Globe, TerminalSquare, X } from 'lucide-react'
 import { useToolsetsStore, type ToolsetStatus } from '../../stores/toolsets.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
+import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 
 /** Icon per known toolset id; falls back to a generic tools glyph. */
 function toolsetIcon(id: string, size = 15) {
@@ -48,7 +49,6 @@ function toolsetLabel(t: (key: string) => string, ts: ToolsetStatus): string {
 export function ToolsetControls() {
   const { t } = useTranslation()
   const [menuOpen, setMenuOpen] = useState(false)
-  const menuRef = useRef<HTMLDivElement | null>(null)
 
   const currentSpace = useSpaceStore((s) => s.currentSpace)
   const getCurrentConversationId = useChatStore((s) => s.getCurrentConversationId)
@@ -97,18 +97,6 @@ export function ToolsetControls() {
     return () => timers.forEach((tid) => window.clearTimeout(tid))
   }, [conversationId, menuOpen, aiRequested, consumeRequestHighlight])
 
-  // Close the catalog menu on outside click.
-  useEffect(() => {
-    if (!menuOpen) return
-    const onDown = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [menuOpen])
-
   if (!spaceId || !conversationId) return null
 
   const list: ToolsetStatus[] = statuses ?? []
@@ -123,55 +111,50 @@ export function ToolsetControls() {
 
   return (
     <div className="flex items-center gap-1 shrink-0">
-      {/* Catalog menu trigger */}
-      <div className="relative shrink-0" ref={menuRef}>
-        <button
-          onClick={() => setMenuOpen((v) => !v)}
-          className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg transition-colors duration-200
+      {/* Catalog menu: portal-rendered so the toolbar's horizontal-scroll
+          container (overflow clips vertically too) cannot hide it. */}
+      <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+        <PopoverTrigger
+          title={t('Tools')}
+          className={`h-8 shrink-0 items-center gap-1.5 px-2.5 rounded-lg cursor-pointer transition-colors duration-200
             ${menuOpen
               ? 'bg-primary/10 text-primary'
               : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50'
             }`}
-          title={t('Tools')}
         >
           <SlidersHorizontal size={15} />
           <span className="text-xs">{t('Tools')}</span>
-        </button>
+        </PopoverTrigger>
 
-        {menuOpen && (
-          <div
-            className="absolute bottom-full left-0 mb-2 py-1.5 bg-popover border border-border
-              rounded-xl shadow-lg min-w-[260px] z-20 animate-fade-in"
-          >
-            {list.map((ts) => (
-              <button
-                key={ts.id}
-                onClick={() => handleToggle(ts)}
-                className={`w-full px-3 py-2 flex items-start gap-3 text-left hover:bg-muted/50 transition-colors
-                  ${aiRequested?.has(ts.id) && !ts.open ? 'animate-pulse-highlight rounded-lg' : ''}`}
+        <PopoverContent side="top" align="start" sideOffset={8} className="py-1.5 rounded-xl min-w-[260px]">
+          {list.map((ts) => (
+            <button
+              key={ts.id}
+              onClick={() => handleToggle(ts)}
+              className={`w-full px-3 py-2 flex items-start gap-3 text-left hover:bg-muted/50 transition-colors
+                ${aiRequested?.has(ts.id) && !ts.open ? 'animate-pulse-highlight rounded-lg' : ''}`}
+            >
+              <span className="mt-0.5 text-muted-foreground">{toolsetIcon(ts.id)}</span>
+              <span className="flex-1 min-w-0">
+                <span className="block text-sm text-foreground">{toolsetLabel(t, ts)}</span>
+                <span className="block text-xs text-muted-foreground/70 truncate">
+                  {ts.open ? t('On') : t('AI turns this on when needed')}
+                </span>
+              </span>
+              {/* Switch */}
+              <span
+                className={`mt-0.5 shrink-0 w-8 h-[18px] rounded-full transition-colors duration-200 relative
+                  ${ts.open ? 'bg-primary' : 'bg-muted-foreground/25'}`}
               >
-                <span className="mt-0.5 text-muted-foreground">{toolsetIcon(ts.id)}</span>
-                <span className="flex-1 min-w-0">
-                  <span className="block text-sm text-foreground">{toolsetLabel(t, ts)}</span>
-                  <span className="block text-xs text-muted-foreground/70 truncate">
-                    {ts.open ? t('On') : t('AI turns this on when needed')}
-                  </span>
-                </span>
-                {/* Switch */}
                 <span
-                  className={`mt-0.5 shrink-0 w-8 h-[18px] rounded-full transition-colors duration-200 relative
-                    ${ts.open ? 'bg-primary' : 'bg-muted-foreground/25'}`}
-                >
-                  <span
-                    className={`absolute top-[2px] left-[2px] w-[14px] h-[14px] rounded-full bg-background
-                      shadow transition-transform duration-200 ${ts.open ? 'translate-x-[14px]' : ''}`}
-                  />
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+                  className={`absolute top-[2px] left-[2px] w-[14px] h-[14px] rounded-full bg-background
+                    shadow transition-transform duration-200 ${ts.open ? 'translate-x-[14px]' : ''}`}
+                />
+              </span>
+            </button>
+          ))}
+        </PopoverContent>
+      </Popover>
 
       {/* Activation pills for open toolsets */}
       {openList.map((ts) => {

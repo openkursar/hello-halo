@@ -27,6 +27,7 @@ import { getOnboardingPrompt } from '../onboarding/onboardingData'
 import { ToolsetControls } from './ToolsetControls'
 import { NewTerminalMenuItem } from './NewTerminalMenuItem'
 import { LiveSessionsHeader } from './LiveSessionsHeader'
+import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { ImageAttachmentPreview } from './ImageAttachmentPreview'
 import { processImage, isValidImageType, formatFileSize } from '../../utils/imageProcessor'
 import type { ImageAttachment, Artifact } from '../../types'
@@ -136,7 +137,6 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const [cursorPos, setCursorPos] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const attachMenuRef = useRef<HTMLDivElement>(null)
 
   // Auto-clear error after 3 seconds
   useEffect(() => {
@@ -145,20 +145,6 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       return () => clearTimeout(timer)
     }
   }, [imageError])
-
-  // Close attachment menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (attachMenuRef.current && !attachMenuRef.current.contains(event.target as Node)) {
-        setShowAttachMenu(false)
-      }
-    }
-
-    if (showAttachMenu) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [showAttachMenu])
 
   // Show error to user
   const showError = (message: string) => {
@@ -779,11 +765,10 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             thinkingEnabled={thinkingEnabled}
             onThinkingToggle={() => setThinkingEnabled(!thinkingEnabled)}
             showAttachMenu={showAttachMenu}
-            onAttachMenuToggle={() => setShowAttachMenu(!showAttachMenu)}
+            onAttachMenuChange={setShowAttachMenu}
             onImageClick={handleImageButtonClick}
             imageCount={images.length}
             maxImages={MAX_IMAGES}
-            attachMenuRef={attachMenuRef}
             canSend={canSend}
             onSend={handleSend}
             onStop={onStop}
@@ -809,11 +794,10 @@ interface InputToolbarProps {
   thinkingEnabled: boolean
   onThinkingToggle: () => void
   showAttachMenu: boolean
-  onAttachMenuToggle: () => void
+  onAttachMenuChange: (open: boolean) => void
   onImageClick: () => void
   imageCount: number
   maxImages: number
-  attachMenuRef: React.RefObject<HTMLDivElement | null>
   canSend: boolean
   onSend: () => void
   onStop?: () => void
@@ -828,11 +812,10 @@ function InputToolbar({
   thinkingEnabled,
   onThinkingToggle,
   showAttachMenu,
-  onAttachMenuToggle,
+  onAttachMenuChange,
   onImageClick,
   imageCount,
   maxImages,
-  attachMenuRef,
   canSend,
   onSend,
   onStop,
@@ -847,11 +830,16 @@ function InputToolbar({
       <div className="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-none">
         {/* Attachment menu */}
         {!isGenerating && !isOnboarding && (
-          <div className="relative shrink-0" ref={attachMenuRef}>
-            <button
-              onClick={onAttachMenuToggle}
-              disabled={isProcessingImages}
-              className={`w-8 h-8 flex items-center justify-center rounded-lg
+          <Popover
+            open={showAttachMenu}
+            onOpenChange={(open) => {
+              if (open && isProcessingImages) return
+              onAttachMenuChange(open)
+            }}
+          >
+            <PopoverTrigger
+              title={t('Add attachment')}
+              className={`w-8 h-8 shrink-0 items-center justify-center rounded-lg cursor-pointer
                 transition-all duration-150
                 ${showAttachMenu
                   ? 'bg-primary/10 text-primary'
@@ -859,44 +847,39 @@ function InputToolbar({
                 }
                 ${isProcessingImages ? 'opacity-50 cursor-not-allowed' : ''}
               `}
-              title={t('Add attachment')}
             >
               <Plus size={18} className={`transition-transform duration-200 ${showAttachMenu ? 'rotate-45' : ''}`} />
-            </button>
+            </PopoverTrigger>
 
-            {/* Attachment menu dropdown */}
-            {showAttachMenu && (
-              <div className="absolute bottom-full left-0 mb-2 py-1.5 bg-popover border border-border
-                rounded-xl shadow-lg min-w-[160px] z-20 animate-fade-in">
-                <button
-                  onClick={onImageClick}
-                  disabled={!visionEnabled || imageCount >= maxImages}
-                  className={`w-full px-3 py-2 flex items-center gap-3 text-sm
-                    transition-colors duration-150
-                    ${!visionEnabled || imageCount >= maxImages
-                      ? 'text-muted-foreground/40 cursor-not-allowed'
-                      : 'text-foreground hover:bg-muted/50'
-                    }
-                  `}
-                  title={!visionEnabled ? t('Current model does not support image input') : undefined}
-                >
-                  <ImagePlus size={16} className="text-muted-foreground" />
-                  <span>{t('Add image')}</span>
-                  {!visionEnabled && (
-                    <span className="ml-auto text-xs text-muted-foreground/60">
-                      {t('Not supported')}
-                    </span>
-                  )}
-                  {visionEnabled && imageCount > 0 && (
-                    <span className="ml-auto text-xs text-muted-foreground">
-                      {imageCount}/{maxImages}
-                    </span>
-                  )}
-                </button>
-                <NewTerminalMenuItem onClose={onAttachMenuToggle} />
-              </div>
-            )}
-          </div>
+            <PopoverContent side="top" align="start" sideOffset={8} className="py-1.5 rounded-xl min-w-[160px]">
+              <button
+                onClick={onImageClick}
+                disabled={!visionEnabled || imageCount >= maxImages}
+                className={`w-full px-3 py-2 flex items-center gap-3 text-sm
+                  transition-colors duration-150
+                  ${!visionEnabled || imageCount >= maxImages
+                    ? 'text-muted-foreground/40 cursor-not-allowed'
+                    : 'text-foreground hover:bg-muted/50'
+                  }
+                `}
+                title={!visionEnabled ? t('Current model does not support image input') : undefined}
+              >
+                <ImagePlus size={16} className="text-muted-foreground" />
+                <span>{t('Add image')}</span>
+                {!visionEnabled && (
+                  <span className="ml-auto text-xs text-muted-foreground/60">
+                    {t('Not supported')}
+                  </span>
+                )}
+                {visionEnabled && imageCount > 0 && (
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {imageCount}/{maxImages}
+                  </span>
+                )}
+              </button>
+              <NewTerminalMenuItem onClose={() => onAttachMenuChange(false)} />
+            </PopoverContent>
+          </Popover>
         )}
 
         {/* On-demand toolsets (catalog menu + activation pills) */}
