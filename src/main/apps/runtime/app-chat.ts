@@ -63,6 +63,7 @@ import { mergeConfigWithDefaults } from './config-defaults'
 import { tmpdir as osTmpdir } from 'os'
 import { createNotifyToolServer } from './notify-tool'
 import { FileExportGate } from './file-export-gate'
+import { truncateUtf16Safe } from './text-truncate'
 import { getImSessionRegistry } from './im-session-registry'
 import { createHaloAppsMcpServer } from '../conversation-mcp'
 import { createWebSearchMcpServer } from '../../services/web-search'
@@ -317,7 +318,7 @@ function registerExternalChatSession(
     chatId: parsed.chatId,
     chatType: parsed.chatType,
     instanceId: '',
-    lastMessage: opts?.lastMessage?.slice(0, 50),
+    lastMessage: opts?.lastMessage !== undefined ? truncateUtf16Safe(opts.lastMessage, 50) : undefined,
     lastSender: opts?.lastSender,
   }
   sendToRenderer('app:im-session-updated', sessionEvent)

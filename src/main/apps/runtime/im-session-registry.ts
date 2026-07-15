@@ -18,6 +18,7 @@ import { readFileSync, writeFile, mkdirSync } from 'fs'
 import { dirname } from 'path'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { classifySessionSource } from '../../../shared/types/im-channel'
+import { truncateUtf16Safe } from './text-truncate'
 
 // ============================================
 // Types
@@ -103,7 +104,7 @@ export class ImSessionRegistry {
       existing.lastActiveAt = Date.now()
       existing.instanceId = instanceId // Always update to latest instance
       if (opts?.lastSender !== undefined) existing.lastSender = opts.lastSender
-      if (opts?.lastMessage !== undefined) existing.lastMessage = opts.lastMessage.slice(0, 50)
+      if (opts?.lastMessage !== undefined) existing.lastMessage = truncateUtf16Safe(opts.lastMessage, 50)
       // Activity-only update → throttled persist (high-frequency, low-value).
       this.requestPersist(false)
     } else {
@@ -119,7 +120,7 @@ export class ImSessionRegistry {
         proactive: false,
         lastActiveAt: Date.now(),
         lastSender: opts?.lastSender,
-        lastMessage: opts?.lastMessage?.slice(0, 50),
+        lastMessage: opts?.lastMessage !== undefined ? truncateUtf16Safe(opts.lastMessage, 50) : undefined,
       })
       // Bound HTTP-source growth before the new record is durably persisted.
       if (source === 'http') {

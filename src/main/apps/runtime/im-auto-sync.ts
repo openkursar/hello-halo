@@ -23,6 +23,7 @@
 
 import { getImSessionRegistry } from './im-session-registry'
 import { getActiveImChannelManager } from './im-channels'
+import { truncateUtf16Safe } from './text-truncate'
 
 /**
  * Maximum text body length sent to IM. WeCom markdown messages cap around
@@ -88,7 +89,7 @@ export async function autoSyncRunResult(input: AutoSyncInput): Promise<AutoSyncR
   }
 
   const body = text.length > MAX_PUSH_LENGTH
-    ? text.slice(0, MAX_PUSH_LENGTH) + TRUNCATION_MARKER
+    ? truncateUtf16Safe(text, MAX_PUSH_LENGTH) + TRUNCATION_MARKER
     : text
 
   // Sequential dispatch preserves message ordering on the same IM connection
