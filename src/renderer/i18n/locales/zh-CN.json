@@ -1382,5 +1382,9 @@
   "Non-owners have no tool access — chat only": "非授权成员无法访问工具——仅可聊天",
   "Restrict access: owners have full control; everyone else follows the default permissions below": "权限分层：Owner 拥有完全控制权；其他成员默认应用下方权限",
   "Owners always have full access and are not restricted by the default permissions below.": "Owner 始终拥有全部权限，不受下方默认权限限制。",
-  "No Owner IDs set. Send any direct message to this bot and your user ID will be registered as the owner automatically. Until then, all users are non-owners and can only chat — no tool access.": "未设置 Owner ID。向此 bot 发送任意私聊消息，您的用户 ID 将自动注册为 Owner。在此之前，所有用户均为非授权成员，仅可聊天——无法使用任何工具。"
+  "No Owner IDs set. Send any direct message to this bot and your user ID will be registered as the owner automatically. Until then, all users are non-owners and can only chat — no tool access.": "未设置 Owner ID。向此 bot 发送任意私聊消息，您的用户 ID 将自动注册为 Owner。在此之前，所有用户均为非授权成员，仅可聊天——无法使用任何工具。",
+  "This build ships with permission control enabled by default (internal/enterprise). Owners have full tool access; everyone else follows the default permissions below.": "此版本默认开启权限控制（内网/企业版）。Owner 拥有全部工具执行权限；其他成员应用下方默认权限。",
+  "This build ships with permission control enabled by default (internal/enterprise). You have turned it off — everyone has full access.": "此版本默认开启权限控制（内网/企业版）。你已手动关闭——所有人拥有全部权限。",
+  "This build ships with permission control off by default (personal/open-source). You have turned it on — make sure an Owner is set below, otherwise all users are chat-only.": "此版本默认关闭权限控制（个人/开源版）。你已手动开启——请确保下方设置了 Owner，否则所有用户仅可聊天。",
+  "This build ships with permission control off by default (personal/open-source). Everyone has full access.": "此版本默认关闭权限控制（个人/开源版）。所有人拥有全部权限。"
 }

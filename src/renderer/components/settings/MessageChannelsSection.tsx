@@ -918,6 +918,27 @@ function PermissionSection({ instance, onChange, onDebouncedChange, permissionDe
         </label>
       </div>
 
+      {/* Product-default badge — distinguishes internal (forced-on) vs
+          external (default-off) builds. permissionDefaults.defaultEnabled
+          is the product.json signal: enterprise/internal builds set it true,
+          open-source builds omit it. The toggle is still user-editable in
+          both; this badge only documents the build's default so users
+          understand why their instance was initialised on or off. */}
+      {permissionDefaults?.defaultEnabled && (
+        <p className="text-xs text-muted-foreground/70 pl-0.5">
+          {permissionEnabled
+            ? t('This build ships with permission control enabled by default (internal/enterprise). Owners have full tool access; everyone else follows the default permissions below.')
+            : t('This build ships with permission control enabled by default (internal/enterprise). You have turned it off — everyone has full access.')}
+        </p>
+      )}
+      {permissionDefaults && permissionDefaults.defaultEnabled !== true && (
+        <p className="text-xs text-muted-foreground/70 pl-0.5">
+          {permissionEnabled
+            ? t('This build ships with permission control off by default (personal/open-source). You have turned it on — make sure an Owner is set below, otherwise all users are chat-only.')
+            : t('This build ships with permission control off by default (personal/open-source). Everyone has full access.')}
+        </p>
+      )}
+
       {/* Permission details (only when enabled) */}
       {permissionEnabled && (
         <div className="space-y-3 pl-1 animate-in slide-in-from-top-1 duration-150">
