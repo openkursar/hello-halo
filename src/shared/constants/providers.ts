@@ -347,7 +347,6 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     description: 'Requesty router with 400+ models across providers',
     website: 'https://requesty.ai/',
     region: 'global',
-    recommended: true,
     icon: 'route',
     notes: 'OpenAI-compatible. Supports optional HTTP-Referer and X-Title headers'
   },
