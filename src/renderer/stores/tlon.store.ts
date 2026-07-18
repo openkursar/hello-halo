@@ -23,7 +23,6 @@ import i18n from '../i18n'
 import type {
   KnowledgeBaseEntry,
   RawFileStatus,
-  WikiPageMeta,
   IngestProgressEvent,
   CreateKBInput,
   UpdateKBInput,
@@ -62,10 +61,6 @@ interface TlonState {
   selectedKBId: string | null
   /** Raw files per KB (with learned status). Keyed by kbId. */
   rawFiles: Record<string, RawFileStatus[]>
-  /** Wiki pages per KB. Keyed by kbId. */
-  wikiPages: Record<string, WikiPageMeta[]>
-  /** index.md content per KB. Keyed by kbId. */
-  indexContent: Record<string, string>
   /** Live ingest progress per KB (animation only). Keyed by kbId. */
   ingestProgress: Record<string, IngestProgressEvent>
   /** Ephemeral chat session per KB. Keyed by kbId. */
@@ -98,10 +93,6 @@ interface TlonState {
   removeRawFile: (kbId: string, relativePath: string) => Promise<boolean>
   pickAndAddFiles: (kbId: string) => Promise<void>
   pickAndImportFolder: (kbId: string) => Promise<void>
-
-  // ── Wiki ──────────────────────────────────
-  loadWiki: (kbId: string) => Promise<void>
-  readWikiPage: (kbId: string, pagePath: string) => Promise<string | null>
 
   // ── Ingest ────────────────────────────────
   triggerIngest: (kbId: string) => Promise<void>
@@ -138,8 +129,6 @@ export const useTlonStore = create<TlonState>((set, get) => ({
   kbs: [],
   selectedKBId: null,
   rawFiles: {},
-  wikiPages: {},
-  indexContent: {},
   ingestProgress: {},
   chatSessions: {},
   isLoading: false,
@@ -168,7 +157,6 @@ export const useTlonStore = create<TlonState>((set, get) => ({
     set({ selectedKBId: kbId })
     if (kbId) {
       void get().loadRawFiles(kbId)
-      void get().loadWiki(kbId)
       void get().loadIngestStatus(kbId)
     }
   },
@@ -381,36 +369,6 @@ export const useTlonStore = create<TlonState>((set, get) => ({
     }
   },
 
-  // ── Wiki ──────────────────────────────────
-
-  loadWiki: async (kbId) => {
-    try {
-      const [wikiRes, indexRes] = await Promise.all([
-        api.tlon.listWiki(kbId),
-        api.tlon.readIndex(kbId),
-      ])
-      if (wikiRes.success && wikiRes.data) {
-        set(state => ({ wikiPages: { ...state.wikiPages, [kbId]: wikiRes.data as WikiPageMeta[] } }))
-      }
-      if (indexRes.success) {
-        set(state => ({ indexContent: { ...state.indexContent, [kbId]: (indexRes.data as string) ?? '' } }))
-      }
-    } catch (err) {
-      console.error('[TlonStore] loadWiki error:', err)
-    }
-  },
-
-  readWikiPage: async (kbId, pagePath) => {
-    try {
-      const res = await api.tlon.readWiki(kbId, pagePath)
-      if (res.success) return (res.data as string) ?? null
-      return null
-    } catch (err) {
-      console.error('[TlonStore] readWikiPage error:', err)
-      return null
-    }
-  },
-
   // ── Ingest ────────────────────────────────
 
   triggerIngest: async (kbId) => {
@@ -433,9 +391,8 @@ export const useTlonStore = create<TlonState>((set, get) => ({
         })
         return false
       }
-      // Wiki is wiped immediately; re-ingest progress arrives via events.
+      // Text index is wiped immediately; re-ingest progress arrives via events.
       await get().loadRawFiles(kbId)
-      await get().loadWiki(kbId)
       return true
     } catch (err) {
       console.error('[TlonStore] clearAndRelearn error:', err)
@@ -680,7 +637,6 @@ export const useTlonStore = create<TlonState>((set, get) => ({
     // per-file status icons reflect reality, never the event stream.
     void get().loadRawFiles(event.kbId)
     if (event.phase === 'done' || event.phase === 'error') {
-      void get().loadWiki(event.kbId)
       void get().refreshKB(event.kbId)
     }
   },

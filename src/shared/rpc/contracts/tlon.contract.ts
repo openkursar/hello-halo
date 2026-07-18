@@ -21,8 +21,6 @@ export const tlonRpc = {
   tlonAddFiles: rawRpcMethod('tlon:add-files'),
   tlonListRaw: rawRpcMethod('tlon:list-raw'),
   tlonRemoveRaw: rawRpcMethod('tlon:remove-raw'),
-  tlonListWiki: rawRpcMethod('tlon:list-wiki'),
-  tlonReadWiki: rawRpcMethod('tlon:read-wiki'),
   tlonReadIndex: rawRpcMethod('tlon:read-index'),
   tlonResolveSources: rawRpcMethod('tlon:resolve-sources'),
   tlonTriggerIngest: rawRpcMethod('tlon:trigger-ingest'),

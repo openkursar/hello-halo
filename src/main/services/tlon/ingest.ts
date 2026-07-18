@@ -9,9 +9,6 @@
  * index.md is rebuilt programmatically as a document map (name → absolute text
  * path) injected into agent prompts. Learned status is persisted only on
  * success (hashes.json: textPath per source).
- *
- * The compounding LLM wiki is an optional, offline path (see wiki-builder.ts)
- * and is not invoked here.
  */
 
 import { join, sep } from 'path'
@@ -259,6 +256,11 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
   }
   if (!fileContent.trim()) {
     console.warn(`[Tlon] No text extracted from ${job.sourcePath}, skipping`)
+    // Record the attempt so a text-less source (e.g. an image with no text) is
+    // not re-extracted on every launch; it retries only when its bytes change.
+    const hashes: IngestHashesV1 = readHashes(kbId)
+    hashes.files[job.sourcePath] = { hash: contentHash, ingestedAt: new Date().toISOString(), empty: true }
+    writeHashes(kbId, hashes)
     job.status = 'skipped'
     return
   }

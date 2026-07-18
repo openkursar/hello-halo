@@ -31,8 +31,6 @@ export function registerTlonHandlers(): void {
     tlonAddFiles: async (kbId: string, filePaths: string[]) => tlonController.addRawFiles(kbId, filePaths),
     tlonListRaw: async (kbId: string) => tlonController.listRawFiles(kbId),
     tlonRemoveRaw: async (kbId: string, relativePath: string) => tlonController.removeRawFile(kbId, relativePath),
-    tlonListWiki: async (kbId: string) => tlonController.listWikiPages(kbId),
-    tlonReadWiki: async (kbId: string, pagePath: string) => tlonController.readWikiPage(kbId, pagePath),
     tlonReadIndex: async (kbId: string) => tlonController.readIndexMd(kbId),
     tlonResolveSources: async (kbId: string, readPaths: string[]) => tlonController.resolveSources(kbId, readPaths),
     tlonTriggerIngest: async (kbId: string) => tlonController.triggerIngest(kbId),

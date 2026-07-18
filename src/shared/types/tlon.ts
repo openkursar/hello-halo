@@ -57,25 +57,18 @@ export interface KBIndexV1 {
   knowledgeBases: Record<KnowledgeBaseId, KnowledgeBaseEntry>
 }
 
-export interface WikiPageMeta {
-  /** Wiki-relative path, e.g. "topics/foo.md" */
-  path: string
-  title: string
-  sources: string[]
-  generatedAt: string
-  sourceHash: string
-}
-
 /**
  * Persisted learned-status facts (the source of truth for "learned").
  * Keyed by raw-relative path (for raw/) or absolute path (for linked dirs).
  *
  * `textPath` is the text/-relative path of the extracted plaintext (agentic
- * search). `wikiPages` is retained only for the offline wiki-compile path.
+ * search). `empty` marks a source whose extraction yielded no text, so it is
+ * not retried on every launch (distinct from a legacy entry that predates
+ * text extraction and has neither field).
  */
 export interface IngestHashesV1 {
   version: 1
-  files: Record<string, { hash: string; ingestedAt: string; textPath?: string; wikiPages?: string[] }>
+  files: Record<string, { hash: string; ingestedAt: string; textPath?: string; empty?: boolean }>
 }
 
 export interface IngestJob {
@@ -91,7 +84,6 @@ export interface IngestJob {
   startedAt?: string
   completedAt?: string
   error?: string
-  wikiPagesAffected?: string[]
 }
 
 /** Lightweight reference injected into agent/app system prompts. */

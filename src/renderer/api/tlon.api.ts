@@ -78,14 +78,6 @@ export const tlonApi = {
       if (isElectron()) return window.halo.tlonRemoveRaw(kbId, relativePath)
       return httpRequest('POST', `/api/tlon/${kbId}/remove-raw`, { relativePath })
     },
-    listWiki: async (kbId: string): Promise<ApiResponse> => {
-      if (isElectron()) return window.halo.tlonListWiki(kbId)
-      return httpRequest('GET', `/api/tlon/${kbId}/wiki`)
-    },
-    readWiki: async (kbId: string, pagePath: string): Promise<ApiResponse> => {
-      if (isElectron()) return window.halo.tlonReadWiki(kbId, pagePath)
-      return httpRequest('POST', `/api/tlon/${kbId}/read-wiki`, { pagePath })
-    },
     readIndex: async (kbId: string): Promise<ApiResponse> => {
       if (isElectron()) return window.halo.tlonReadIndex(kbId)
       return httpRequest('GET', `/api/tlon/${kbId}/index`)

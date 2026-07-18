@@ -37,7 +37,9 @@ export function ImageViewer({ tab }: ImageViewerProps) {
   const fitScaleFor = useCallback((w: number, h: number): number => {
     const c = containerRef.current
     if (!c || !w || !h) return 1
-    return Math.min((c.clientWidth - 48) / w, (c.clientHeight - 48) / h, 1)
+    // Clamp to a positive floor: a container narrower than the padding (or 0
+    // while hidden / mid-resize) would otherwise yield a negative, mirrored scale.
+    return Math.max(0.05, Math.min((c.clientWidth - 48) / w, (c.clientHeight - 48) / h, 1))
   }, [])
 
   // Get image URL

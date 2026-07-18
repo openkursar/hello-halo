@@ -20,8 +20,6 @@ import {
   addRawFiles as svcAddRawFiles,
   listRawFiles as svcListRawFiles,
   removeRawFile as svcRemoveRawFile,
-  listWikiPages as svcListWikiPages,
-  readWikiPage as svcReadWikiPage,
   readIndexMd as svcReadIndexMd,
   triggerFullIngest as svcTriggerFullIngest,
   getIngestProgress as svcGetIngestProgress,
@@ -148,21 +146,6 @@ export function listRawFiles(kbId: string): ControllerResponse {
 export function removeRawFile(kbId: string, relativePath: string): ControllerResponse {
   try {
     return ok(svcRemoveRawFile(kbId, relativePath))
-  } catch (e) { return fail(e) }
-}
-
-export function listWikiPages(kbId: string): ControllerResponse {
-  try {
-    return ok(svcListWikiPages(kbId))
-  } catch (e) { return fail(e) }
-}
-
-export function readWikiPage(kbId: string, pagePath: string): ControllerResponse {
-  try {
-    const content = svcReadWikiPage(kbId, pagePath)
-    return content === null
-      ? { success: false, error: 'Wiki page not found' }
-      : ok(content)
   } catch (e) { return fail(e) }
 }
 

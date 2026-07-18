@@ -200,8 +200,6 @@ export interface HaloAPI {
   tlonAddFiles: (kbId: string, filePaths: string[]) => Promise<IpcResponse>
   tlonListRaw: (kbId: string) => Promise<IpcResponse>
   tlonRemoveRaw: (kbId: string, relativePath: string) => Promise<IpcResponse>
-  tlonListWiki: (kbId: string) => Promise<IpcResponse>
-  tlonReadWiki: (kbId: string, pagePath: string) => Promise<IpcResponse>
   tlonReadIndex: (kbId: string) => Promise<IpcResponse>
   tlonResolveSources: (kbId: string, readPaths: string[]) => Promise<IpcResponse>
   tlonTriggerIngest: (kbId: string) => Promise<IpcResponse>

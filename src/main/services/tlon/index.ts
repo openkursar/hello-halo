@@ -42,9 +42,6 @@ export {
   addRawFiles,
   listRawFiles,
   removeRawFile,
-  // wiki reads
-  listWikiPages,
-  readWikiPage,
   readIndexMd,
   // conversation integration (hot path)
   getKBReferencesForSpace,

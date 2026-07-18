@@ -32,7 +32,6 @@ import type {
   KBStats,
   KBStatus,
   LinkedDirectory,
-  WikiPageMeta,
   KBReference,
   KBSource,
   RawFileStatus,
@@ -591,60 +590,6 @@ function stripMarkdownFence(content: string): string {
   return content
 }
 
-export function listWikiPages(kbId: string): WikiPageMeta[] {
-  const wikiDir = getKBWikiDir(kbId)
-  const hashes = readHashes(kbId)
-  const sourcesByPage = new Map<string, string[]>()
-  for (const [src, info] of Object.entries(hashes.files)) {
-    for (const page of info.wikiPages ?? []) {
-      const arr = sourcesByPage.get(page) || []
-      arr.push(src)
-      sourcesByPage.set(page, arr)
-    }
-  }
-
-  const pages: WikiPageMeta[] = []
-  for (const rel of walkFiles(wikiDir)) {
-    if (!rel.toLowerCase().endsWith('.md')) continue
-    const abs = join(wikiDir, rel)
-    let content = ''
-    let generatedAt = ''
-    try {
-      content = readFileSync(abs, 'utf-8')
-      generatedAt = statSync(abs).mtime.toISOString()
-    } catch { continue }
-    const normalizedRel = rel.split(sep).join('/')
-    pages.push({
-      path: normalizedRel,
-      title: extractTitle(content) || normalizedRel,
-      sources: sourcesByPage.get(normalizedRel) || [],
-      generatedAt,
-      sourceHash: sha256(content),
-    })
-  }
-  pages.sort((a, b) => a.path.localeCompare(b.path))
-  return pages
-}
-
-function extractTitle(content: string): string | null {
-  for (const line of content.split('\n')) {
-    const m = line.match(/^#\s+(.+)$/)
-    if (m) return m[1].trim()
-  }
-  return null
-}
-
-export function readWikiPage(kbId: string, pagePath: string): string | null {
-  const wikiDir = getKBWikiDir(kbId)
-  const abs = resolveWithinDir(wikiDir, pagePath)
-  if (!abs || !existsSync(abs)) return null
-  try {
-    return stripMarkdownFence(readFileSync(abs, 'utf-8'))
-  } catch {
-    return null
-  }
-}
-
 export function readIndexMd(kbId: string): string | null {
   const path = getKBIndexMdPath(kbId)
   if (!existsSync(path)) return null
@@ -744,8 +689,12 @@ export function getKBChatContext(
   if (!kb) return null
   const indexContent = readIndexMd(kb.id)
   if (indexContent === null) return null
+  // A wiki-era KB may not have a text/ dir yet (migration runs async on launch);
+  // ensure it exists so the agent's working dir is never a nonexistent path.
+  const workDir = getKBTextDir(kb.id)
+  if (!existsSync(workDir)) mkdirSync(workDir, { recursive: true })
   return {
-    workDir: getKBTextDir(kb.id),
+    workDir,
     reference: { id: kb.id, name: kb.name, indexContent },
   }
 }
@@ -949,9 +898,11 @@ export function collectIngestCandidates(kbId: string): Array<{
       current = sha256(buf)
     } catch { return }
     const recorded = hashes.files[sourcePath]
-    // Already indexed IFF the bytes match AND its extracted text still exists.
-    if (recorded && recorded.hash === current && recorded.textPath
-        && existsSync(join(textDir, recorded.textPath))) return
+    // Skip when the bytes are unchanged and we've already handled them: either
+    // the extracted text still exists, or extraction was attempted and yielded
+    // nothing (`empty`). A legacy entry (neither field) still re-extracts.
+    if (recorded && recorded.hash === current
+        && ((recorded.textPath && existsSync(join(textDir, recorded.textPath))) || recorded.empty)) return
     candidates.push({ sourcePath, absolutePath, sourceType })
   }
 
