@@ -14,6 +14,7 @@ import { Globe, ChevronDown, ArrowLeft, Eye, EyeOff, Loader2, RefreshCw, Externa
 import { AVAILABLE_MODELS, DEFAULT_MODEL, type AISourcesConfig, type AISource, type ModelOption } from '../../types'
 import { getBuiltinProvider } from '../../types'
 import { resolveLocalizedText, type LocalizedText } from '../../../shared/types'
+import { formatModelFetchError } from '../../utils/model-fetch-error'
 import { useTranslation, setLanguage, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
 import type { AuthProviderConfig } from './LoginSelector'
 import { usePresetModels } from '../../hooks/usePresetModels'
@@ -140,55 +141,22 @@ export function ApiSetup({ onBack, showBack = false, preset }: ApiSetupProps) {
     setError(null)
 
     try {
-      // Construct models endpoint
-      let baseUrl = apiUrl
-      if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1)
+      const response = await api.fetchModels(apiKey, apiUrl)
 
-      // Remove /chat/completions suffix if present (common mistake)
-      if (baseUrl.endsWith('/chat/completions')) {
-        baseUrl = baseUrl.replace(/\/chat\/completions$/, '')
+      if (!response.success || !response.data) {
+        setError(formatModelFetchError(t, response.code, response.error))
+        return
       }
 
-      const url = `${baseUrl}/models`
+      const { models } = response.data as { models: ModelOption[] }
+      const modelIds = models.map(item => item.id)
+      setFetchedModels(modelIds)
 
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
-        }
-      })
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch models (${response.status})`)
-      }
-
-      const data = await response.json()
-
-      // OpenAI compatible format: { data: [{ id: 'model-id', ... }] }
-      if (data.data && Array.isArray(data.data)) {
-        const models = data.data
-          .map((m: any) => m.id)
-          .filter((id: any) => typeof id === 'string')
-          .sort()
-
-        if (models.length === 0) {
-          throw new Error('No models found in response')
-        }
-
-        setFetchedModels(models)
-
-        // If current model is not in list (and we found models), select the first one?
-        // Or just let user decide.
-        // If current model is default generic one, maybe switch to first fetched.
-        if (models.length > 0 && (!model || model === 'gpt-4o-mini' || model === 'deepseek-chat')) {
-          setModel(models[0])
-        }
-      } else {
-        throw new Error('Invalid API response format (expected data array)')
+      if (!model || model === 'gpt-4o-mini' || model === 'deepseek-chat') {
+        setModel(modelIds[0])
       }
     } catch {
-      setError(t('Failed to fetch models. Check URL and Key.'))
+      setError(formatModelFetchError(t, 'MODEL_FETCH_NETWORK'))
     } finally {
       setIsFetchingModels(false)
     }
@@ -683,7 +651,7 @@ export function ApiSetup({ onBack, showBack = false, preset }: ApiSetupProps) {
 
         {/* Error message */}
         {error && (
-          <p className="text-center mt-4 text-sm text-red-500">{error}</p>
+          <p className="text-center mt-4 text-sm text-red-500 break-words">{error}</p>
         )}
 
         {/* Validation result */}
@@ -691,7 +659,7 @@ export function ApiSetup({ onBack, showBack = false, preset }: ApiSetupProps) {
           <div className={`mt-4 p-3 rounded-lg ${validationResult.valid ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
             <p className={`text-sm flex items-center gap-2 ${validationResult.valid ? 'text-green-500' : 'text-red-500'}`}>
               {validationResult.valid ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <XCircle className="w-4 h-4 shrink-0" />}
-              <span>{validationResult.message}</span>
+              <span className="min-w-0 break-words">{validationResult.message}</span>
             </p>
           </div>
         )}
