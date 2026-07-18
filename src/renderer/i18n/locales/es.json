@@ -1435,5 +1435,10 @@
   "{{name}} running": "{{name}} en ejecución",
   "{{name}} was installed, but some bundled skills failed.": "{{name}} se instaló, pero algunas habilidades incluidas fallaron.",
   "← → to switch files": "← → para cambiar archivos",
-  "🤖 AI Browser": "🤖 Navegador IA"
+  "🤖 AI Browser": "🤖 Navegador IA",
+  "Cannot reach server, check network or proxy": "No se puede conectar con el servidor. Comprueba la red o el proxy",
+  "Endpoint not found, check the URL": "No se encontró el endpoint. Comprueba la URL",
+  "Invalid API Key or no permission": "Clave API no válida o sin permisos",
+  "Rate limited or out of quota": "Límite de solicitudes alcanzado o cuota agotada",
+  "Request timed out, check the server or proxy": "La solicitud agotó el tiempo de espera. Comprueba el servidor o el proxy"
 }

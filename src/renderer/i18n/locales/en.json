@@ -1393,5 +1393,10 @@
   "Zoom in": "Zoom in",
   "Zoom in (+)": "Zoom in (+)",
   "Zoom out": "Zoom out",
-  "Zoom out (-)": "Zoom out (-)"
+  "Zoom out (-)": "Zoom out (-)",
+  "Cannot reach server, check network or proxy": "Cannot reach server, check network or proxy",
+  "Endpoint not found, check the URL": "Endpoint not found, check the URL",
+  "Invalid API Key or no permission": "Invalid API Key or no permission",
+  "Rate limited or out of quota": "Rate limited or out of quota",
+  "Request timed out, check the server or proxy": "Request timed out, check the server or proxy"
 }
