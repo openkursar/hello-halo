@@ -10,6 +10,7 @@ import {
   hasAnyAISource
 } from '../../shared/types/ai-sources';
 import { NotificationChannelsConfig }  from '../../shared/types/notification-channels';
+import type { KBSource } from '../../shared/types/tlon';
 // Re-export them
 export { DEFAULT_MODEL, getCurrentModelName, hasAnyAISource };
 
@@ -477,6 +478,7 @@ export interface Message {
   };
   error?: string;  // Error message when assistant response failed (e.g., 429 rate limit)
   source?: 'injection';  // How the message entered the conversation (SDK-agnostic)
+  sources?: KBSource[];  // Knowledge-base documents the agent Read this turn (clickable citations)
 }
 
 // ============================================

@@ -24,6 +24,7 @@ export const tlonRpc = {
   tlonListWiki: rawRpcMethod('tlon:list-wiki'),
   tlonReadWiki: rawRpcMethod('tlon:read-wiki'),
   tlonReadIndex: rawRpcMethod('tlon:read-index'),
+  tlonResolveSources: rawRpcMethod('tlon:resolve-sources'),
   tlonTriggerIngest: rawRpcMethod('tlon:trigger-ingest'),
   tlonClearRelearn: rawRpcMethod('tlon:clear-relearn'),
   tlonGetIngestStatus: rawRpcMethod('tlon:get-ingest-status'),

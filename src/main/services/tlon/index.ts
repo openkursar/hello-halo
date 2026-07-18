@@ -54,8 +54,17 @@ export {
   // stats / status
   refreshStats,
   getRawFileLearnedStatus,
+  // chat citations
+  resolveSources,
+  resolveSourcesForReadPaths,
 } from './service'
 
-export { triggerFullIngest, getIngestProgress, clearAndRelearn, isIngesting } from './ingest'
+export {
+  triggerFullIngest,
+  getIngestProgress,
+  clearAndRelearn,
+  isIngesting,
+  migrateKBsToTextIndex,
+} from './ingest'
 
 export { initTlonWatchers, shutdownTlon } from './watcher'

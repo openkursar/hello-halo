@@ -117,9 +117,16 @@ export function KnowledgeBaseButton() {
                     {isLoaded ? <Check className="w-4 h-4 text-primary" /> : <BookOpen className="w-4 h-4 text-muted-foreground" />}
                   </span>
                   <div className="min-w-0 flex-1 text-left">
-                    <p className="truncate">{kb.name}</p>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <p className="truncate">{kb.name}</p>
+                      {isDefault && (
+                        <span className="text-[9px] leading-none px-1 py-0.5 rounded bg-primary/15 text-primary flex-shrink-0 uppercase tracking-wide">
+                          {t('Default')}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[11px] text-muted-foreground truncate">
-                      {t('{{notes}} notes', { notes: kb.stats.wikiPageCount })}
+                      {t('{{count}} documents', { count: kb.stats.rawFileCount })}
                     </p>
                   </div>
                   <span

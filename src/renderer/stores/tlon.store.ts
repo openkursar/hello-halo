@@ -28,6 +28,7 @@ import type {
   CreateKBInput,
   UpdateKBInput,
   AddRawFilesResult,
+  KBSource,
 } from '../../shared/types/tlon'
 import type { Conversation, Message, Thought } from '../types'
 
@@ -37,6 +38,8 @@ export interface TlonChatMessage {
   role: 'user' | 'assistant'
   content: string
   error?: boolean
+  /** Source documents this answer drew from (clickable citations). */
+  sources?: KBSource[]
 }
 
 interface TlonChatSession {
@@ -46,6 +49,8 @@ interface TlonChatSession {
   generating: boolean
   /** Live activity label shown while the agent works (from thought events). */
   status?: string
+  /** Text-corpus files the agent Read this turn, resolved to sources on finish. */
+  readPaths?: string[]
 }
 
 /** KB chats run as ephemeral conversations under the Halo temp space. */
@@ -496,6 +501,7 @@ export const useTlonStore = create<TlonState>((set, get) => ({
           messages: [...(state.chatSessions[kbId]?.messages ?? []), userMsg],
           generating: true,
           status: i18n.t('Thinking…'),
+          readPaths: [],
         },
       },
     }))
@@ -557,6 +563,27 @@ export const useTlonStore = create<TlonState>((set, get) => ({
       else if (thought.type === 'text') setStatus(kbId, i18n.t('Writing the answer…'))
     })
 
+    // Track the source files the agent Reads this turn (for citations). The
+    // tool-call event carries the tool name AND its fully-parsed input together,
+    // unlike the initial tool_use thought whose input is still empty.
+    const unsubToolCall = api.onAgentToolCall((data) => {
+      const kbId = matchKb(data)
+      if (!kbId) return
+      const tc = data as { name?: string; input?: Record<string, unknown> }
+      const fp = tc.name === 'Read' ? tc.input?.file_path : undefined
+      if (typeof fp !== 'string') return
+      set(state => {
+        const session = state.chatSessions[kbId]
+        if (!session?.generating) return {}
+        return {
+          chatSessions: {
+            ...state.chatSessions,
+            [kbId]: { ...session, readPaths: [...(session.readPaths ?? []), fp] },
+          },
+        }
+      })
+    })
+
     const unsubComplete = api.onAgentComplete((data) => {
       const kbId = matchKb(data)
       if (!kbId) return
@@ -572,6 +599,7 @@ export const useTlonStore = create<TlonState>((set, get) => ({
 
     return () => {
       unsubThought()
+      unsubToolCall()
       unsubComplete()
       unsubError()
     }
@@ -601,14 +629,30 @@ export const useTlonStore = create<TlonState>((set, get) => ({
       get().pushAssistantError(kbId, i18n.t('No answer was produced.'))
       return
     }
+    // Resolve the source documents the agent read this turn into clickable citations.
+    let sources: KBSource[] = []
+    const readPaths = get().chatSessions[kbId]?.readPaths
+    if (readPaths?.length) {
+      try {
+        const res = await api.tlon.resolveSources(kbId, readPaths)
+        if (res.success && Array.isArray(res.data)) sources = res.data as KBSource[]
+      } catch (err) {
+        console.error('[TlonStore] resolveSources error:', err)
+      }
+    }
     set(state => {
       const session = state.chatSessions[kbId]
       if (!session) return {}
-      const assistantMsg: TlonChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: answer }
+      const assistantMsg: TlonChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: answer,
+        sources: sources.length ? sources : undefined,
+      }
       return {
         chatSessions: {
           ...state.chatSessions,
-          [kbId]: { ...session, messages: [...session.messages, assistantMsg], generating: false, status: undefined },
+          [kbId]: { ...session, messages: [...session.messages, assistantMsg], generating: false, status: undefined, readPaths: undefined },
         },
       }
     })

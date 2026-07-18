@@ -3,7 +3,7 @@
  */
 
 import { useTranslation } from '../../i18n'
-import { FileText, NotebookText, BookOpen } from 'lucide-react'
+import { FileText, BookOpen } from 'lucide-react'
 import type { KnowledgeBaseEntry } from '../../../shared/types/tlon'
 
 interface KBListItemProps {
@@ -43,11 +43,7 @@ export function KBListItem({ kb, active, onClick }: KBListItemProps) {
       <div className="mt-1 flex items-center gap-3 text-[11px] text-muted-foreground">
         <span className="inline-flex items-center gap-1">
           <FileText className="w-3 h-3" />
-          {t('{{count}} files', { count: kb.stats.rawFileCount })}
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <NotebookText className="w-3 h-3" />
-          {t('{{count}} notes', { count: kb.stats.wikiPageCount })}
+          {t('{{count}} documents', { count: kb.stats.rawFileCount })}
         </span>
       </div>
     </button>

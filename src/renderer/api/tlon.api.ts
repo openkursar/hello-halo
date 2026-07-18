@@ -90,6 +90,10 @@ export const tlonApi = {
       if (isElectron()) return window.halo.tlonReadIndex(kbId)
       return httpRequest('GET', `/api/tlon/${kbId}/index`)
     },
+    resolveSources: async (kbId: string, readPaths: string[]): Promise<ApiResponse> => {
+      if (isElectron()) return window.halo.tlonResolveSources(kbId, readPaths)
+      return httpRequest('POST', `/api/tlon/${kbId}/resolve-sources`, { readPaths })
+    },
     triggerIngest: async (kbId: string): Promise<ApiResponse> => {
       if (isElectron()) return window.halo.tlonTriggerIngest(kbId)
       return httpRequest('POST', `/api/tlon/${kbId}/ingest`)

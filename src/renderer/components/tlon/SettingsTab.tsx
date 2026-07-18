@@ -70,9 +70,9 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
 
   const handleClearRelearn = async () => {
     const ok = await showConfirm({
-      title: t('Clear & relearn'),
-      message: t('Discard all AI notes and rebuild them from the source files? The sources are kept; only the generated notes are regenerated. This can take a while.'),
-      confirmLabel: t('Clear & relearn'),
+      title: t('Re-index documents'),
+      message: t('Re-index all documents from their source files? The sources are kept; only the extracted text is rebuilt. This is usually quick.'),
+      confirmLabel: t('Re-index'),
       cancelLabel: t('Cancel'),
       variant: 'danger',
     })
@@ -222,10 +222,10 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
             className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-secondary hover:bg-secondary/80 rounded-lg text-sm transition-colors"
           >
             <RefreshCw className="w-4 h-4" />
-            {t('Clear & relearn')}
+            {t('Re-index documents')}
           </button>
           <p className="mt-1.5 text-[11px] text-muted-foreground">
-            {t('Rebuilds AI notes from the source files. Use after adding many sources or to apply newer learning.')}
+            {t('Re-extracts all documents from their source files. Use after changing sources.')}
           </p>
         </div>
 

@@ -34,6 +34,7 @@ export function registerTlonHandlers(): void {
     tlonListWiki: async (kbId: string) => tlonController.listWikiPages(kbId),
     tlonReadWiki: async (kbId: string, pagePath: string) => tlonController.readWikiPage(kbId, pagePath),
     tlonReadIndex: async (kbId: string) => tlonController.readIndexMd(kbId),
+    tlonResolveSources: async (kbId: string, readPaths: string[]) => tlonController.resolveSources(kbId, readPaths),
     tlonTriggerIngest: async (kbId: string) => tlonController.triggerIngest(kbId),
     tlonClearRelearn: async (kbId: string) => tlonController.clearAndRelearn(kbId),
     tlonGetIngestStatus: async (kbId: string) => tlonController.getIngestStatus(kbId),

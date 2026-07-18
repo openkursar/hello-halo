@@ -77,8 +77,9 @@ export async function sendMessage(
 
   const config = getConfig()
   // "Chat with this KB" turns (tlonKbId set) target one KB directly: the
-  // working dir becomes that KB's wiki dir so Read/Glob/Grep navigate its pages.
-  // Resolved up front so the working dir is correct for MCP setup below too.
+  // working dir becomes that KB's text/ dir so Read/Glob/Grep search its
+  // extracted documents. Resolved up front so the working dir is correct for
+  // MCP setup below too.
   const kbChatCtx = request.tlonKbId ? getKBChatContext(request.tlonKbId) : null
   if (request.tlonKbId && !kbChatCtx) {
     console.warn(`[Agent] tlonKbId ${request.tlonKbId} has no chat context; falling back to space context`)

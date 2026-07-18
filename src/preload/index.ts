@@ -203,6 +203,7 @@ export interface HaloAPI {
   tlonListWiki: (kbId: string) => Promise<IpcResponse>
   tlonReadWiki: (kbId: string, pagePath: string) => Promise<IpcResponse>
   tlonReadIndex: (kbId: string) => Promise<IpcResponse>
+  tlonResolveSources: (kbId: string, readPaths: string[]) => Promise<IpcResponse>
   tlonTriggerIngest: (kbId: string) => Promise<IpcResponse>
   tlonClearRelearn: (kbId: string) => Promise<IpcResponse>
   tlonGetIngestStatus: (kbId: string) => Promise<IpcResponse>

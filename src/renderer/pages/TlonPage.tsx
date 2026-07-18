@@ -5,17 +5,20 @@
  * and the selected KB's detail. Mobile uses push navigation (list ↔ detail).
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from '../i18n'
 import { ChevronLeft, Settings, Plus } from 'lucide-react'
 import { Header } from '../components/layout/Header'
 import { useAppStore } from '../stores/app.store'
 import { useTlonStore } from '../stores/tlon.store'
 import { useIsMobile } from '../hooks/useIsMobile'
+import { useLayoutPreferences } from '../hooks/useLayoutPreferences'
 import { KBList } from '../components/tlon/KBList'
 import { KBDetail } from '../components/tlon/KBDetail'
 import { CreateKBDialog } from '../components/tlon/CreateKBDialog'
 import { EmptyState } from '../components/tlon/EmptyState'
+import { ContentCanvas } from '../components/canvas'
+import { useCanvasIsOpen } from '../stores/canvas.store'
 
 export function TlonPage() {
   const { t } = useTranslation()
@@ -29,6 +32,44 @@ export function TlonPage() {
   const selectKB = useTlonStore(s => s.selectKB)
 
   const [showCreate, setShowCreate] = useState(false)
+
+  // A source citation opens the original file in the Content Canvas. This page
+  // has no canvas of its own, so it renders one using the same resizable
+  // chat/canvas split as SpacePage (shared width prefs + drag handle).
+  const canvasOpen = useCanvasIsOpen()
+  const { effectiveChatWidth, setChatWidth, chatWidthMin, chatWidthMax } =
+    useLayoutPreferences('halo-temp', false)
+  const [isDraggingChat, setIsDraggingChat] = useState(false)
+  const [dragChatWidth, setDragChatWidth] = useState(effectiveChatWidth)
+  const detailRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!isDraggingChat) setDragChatWidth(effectiveChatWidth)
+  }, [effectiveChatWidth, isDraggingChat])
+
+  const handleChatDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsDraggingChat(true)
+  }, [])
+
+  useEffect(() => {
+    if (!isDraggingChat) return
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!detailRef.current) return
+      const rect = detailRef.current.getBoundingClientRect()
+      setDragChatWidth(Math.max(chatWidthMin, Math.min(chatWidthMax, e.clientX - rect.left)))
+    }
+    const handleMouseUp = () => {
+      setIsDraggingChat(false)
+      setChatWidth(dragChatWidth)
+    }
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isDraggingChat, dragChatWidth, chatWidthMin, chatWidthMax, setChatWidth])
 
   useEffect(() => {
     loadKBs()
@@ -50,7 +91,7 @@ export function TlonPage() {
   }
 
   return (
-    <div className="h-full flex flex-col bg-background">
+    <div className="h-full flex flex-col bg-background relative">
       <Header
         left={
           <button
@@ -77,7 +118,9 @@ export function TlonPage() {
           <EmptyState hasKBs={false} onCreate={() => setShowCreate(true)} />
         </div>
       ) : !isMobile ? (
-        /* Desktop: split layout */
+        /* Desktop: split layout — KB list · detail · optional source canvas.
+           A citation click opens the source in a right-side canvas (Halo style):
+           the detail narrows and ContentCanvas fills the rest. */
         <div className="flex-1 flex overflow-hidden">
           <div className="w-64 flex-shrink-0 border-r border-border flex flex-col overflow-hidden">
             <KBList
@@ -86,11 +129,36 @@ export function TlonPage() {
               onCreate={() => setShowCreate(true)}
             />
           </div>
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div
+            ref={detailRef}
+            className={`flex flex-col overflow-hidden min-w-0 relative ${
+              canvasOpen ? 'border-r border-border/60' : 'flex-1'
+            }`}
+            style={{
+              width: canvasOpen ? dragChatWidth : undefined,
+              flex: canvasOpen ? 'none' : '1',
+              minWidth: canvasOpen ? chatWidthMin : undefined,
+              maxWidth: canvasOpen ? chatWidthMax : undefined,
+            }}
+          >
             {selectedKB
               ? <KBDetail kb={selectedKB} onDeleted={() => selectKB(null)} />
               : <EmptyState hasKBs={true} onCreate={() => setShowCreate(true)} />}
+            {canvasOpen && (
+              <div
+                className={`absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize z-20 hover:bg-primary/50 transition-colors ${
+                  isDraggingChat ? 'bg-primary/50' : ''
+                }`}
+                onMouseDown={handleChatDragStart}
+                title={t('Drag to resize')}
+              />
+            )}
           </div>
+          {canvasOpen && (
+            <div className="flex-1 min-w-0 overflow-hidden">
+              <ContentCanvas className="h-full" />
+            </div>
+          )}
         </div>
       ) : (
         /* Mobile: list OR detail (push navigation) */
@@ -136,6 +204,13 @@ export function TlonPage() {
           onClose={() => setShowCreate(false)}
           onCreated={handleCreated}
         />
+      )}
+
+      {/* Mobile: no room for a split, so the source preview takes over the screen. */}
+      {canvasOpen && isMobile && (
+        <div className="absolute inset-0 z-30 bg-background">
+          <ContentCanvas className="h-full" />
+        </div>
       )}
     </div>
   )

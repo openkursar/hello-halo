@@ -94,7 +94,7 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
         <Upload className="w-6 h-6 mx-auto text-muted-foreground" />
         <p className="mt-2 text-sm font-medium">{t('Drop files or folders here')}</p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {t('PDF, documents, spreadsheets, presentations, Markdown, text, CSV, HTML. Folders import recursively — source code and system files are skipped.')}
+          {t('PDF, Office docs, images (OCR), Markdown, text, CSV, HTML. Folders import recursively — source code and system files are skipped.')}
         </p>
         {isElectron && (
           <div className="mt-3 flex flex-wrap items-center justify-center gap-2">

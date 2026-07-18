@@ -27,6 +27,7 @@ import {
   getIngestProgress as svcGetIngestProgress,
   clearAndRelearn as svcClearAndRelearn,
   isIngesting as svcIsIngesting,
+  resolveSources as svcResolveSources,
 } from '../services/tlon'
 import type {
   CreateKBInput,
@@ -198,5 +199,11 @@ export function clearAndRelearn(kbId: string): ControllerResponse {
 export function getIngestStatus(kbId: string): ControllerResponse {
   try {
     return ok(svcGetIngestProgress(kbId))
+  } catch (e) { return fail(e) }
+}
+
+export function resolveSources(kbId: string, readPaths: string[]): ControllerResponse {
+  try {
+    return ok(svcResolveSources(kbId, readPaths))
   } catch (e) { return fail(e) }
 }
