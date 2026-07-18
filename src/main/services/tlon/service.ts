@@ -31,7 +31,6 @@ import type {
   KnowledgeBaseEntry,
   KBIndexV1,
   KBStats,
-  KBStatus,
   LinkedDirectory,
   KBReference,
   KBSource,
@@ -859,22 +858,14 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
 export function markIngestCompleted(kbId: string): void {
   const entry = getRegistry().get(kbId)
   if (!entry) return
-  // A completed batch clears a stale 'error' (a prior failed file), but leaves a
-  // user-set 'paused' KB paused.
+  // 'error' is a legacy status from older builds (nothing sets it now); a
+  // completed batch heals it, while leaving a user-set 'paused' KB paused.
   if (entry.status === 'error') entry.status = 'active'
   entry.stats.lastIngestAt = new Date().toISOString()
   try {
     writeFileSync(getKBMetaPath(kbId), JSON.stringify(entry, null, 2), 'utf-8')
   } catch { /* ignore */ }
   persistIndex(getRegistry())
-}
-
-/** Set status (e.g. 'error') and persist. */
-export function setKBStatus(kbId: string, status: KBStatus): void {
-  const entry = getRegistry().get(kbId)
-  if (!entry || entry.status === status) return
-  entry.status = status
-  saveEntry(entry)
 }
 
 /** Compute the full list of changed raw + linked source files for a KB. */
