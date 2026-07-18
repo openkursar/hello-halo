@@ -7,7 +7,7 @@
 import { randomUUID } from 'crypto'
 import { broadcastToAll } from '../../../http/websocket'
 import { sendToRenderer } from '../../../foundation/window.service'
-import { TEAM_EVENTS } from '../../../../shared/apps/team-types'
+import { TEAM_EVENTS, isRemoteMember } from '../../../../shared/apps/team-types'
 import type { TeamStore } from '../../team'
 import type {
   BlackboardTask,
@@ -76,6 +76,14 @@ export interface BlackboardWriteRecord {
 export interface BlackboardDeps {
   store: TeamStore
   getMemberStatus?: (appId: string) => TeamMemberRuntimeStatus
+  /**
+   * Reachability of a member's owner, for the roster's presence column. Injected
+   * (bootstrap wires it to the federation manager) so the kernel stays
+   * transport-free. Returns true for a locally-owned member (always reachable) and
+   * for an online remote owner; false only for a confirmed-offline remote owner.
+   * Absent → every member is treated as reachable (non-federated runtime).
+   */
+  getMemberReachable?: (appId: string, teamId: string) => boolean
   /**
    * Fired AFTER each successful local blackboard write. Notification-only: the
    * write is already applied; the replication layer assigns a seq and fans the
@@ -202,6 +210,15 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
         status === 'working'
           ? tasks.find((t) => t.assigneeAppId === m.appId && t.status === 'in_progress')
           : undefined
+      // Cross-machine awareness: a remote teammate carries its owner label and is
+      // shown offline when its owner is confirmed unreachable; a locally-owned
+      // member is same-machine and always reachable.
+      const remote = isRemoteMember(m)
+      const presence: RosterMember['presence'] = remote
+        ? deps.getMemberReachable?.(m.appId, teamId) === false
+          ? 'offline'
+          : 'online'
+        : 'online'
       return {
         appId: m.appId,
         memberName: m.memberName,
@@ -209,6 +226,9 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
         isLead: m.isLead,
         spaceId: null,
         status,
+        owner: remote ? m.ownerDisplayName ?? 'a teammate' : null,
+        sameMachine: !remote,
+        presence,
         ...(currentTask ? { currentTaskTitle: currentTask.title } : {}),
       }
     })

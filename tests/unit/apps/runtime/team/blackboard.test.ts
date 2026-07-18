@@ -170,6 +170,70 @@ describe('Blackboard', () => {
       expect(done.tasks[0].id).toBe(t1)
     })
 
+    it('labels a local member same-machine, online, no owner', () => {
+      const board = createBlackboard({ store })
+      const snapshot = board.readBoard(TEAM_ID, EPOCH_ID, LEAD_APP)
+      const researcher = snapshot.roster.find((r) => r.appId === RESEARCHER_APP)
+      expect(researcher?.sameMachine).toBe(true)
+      expect(researcher?.owner).toBeNull()
+      expect(researcher?.presence).toBe('online')
+    })
+
+    it('labels a remote member with its owner + sameMachine=false and reflects reachability', () => {
+      const now = Date.now()
+      // A teammate brought by another machine.
+      store.addMember({
+        teamId: TEAM_ID,
+        appId: 'app-remote',
+        memberName: 'analyst',
+        role: 'Analyst',
+        isLead: false,
+        aiProvisioned: false,
+        addedAt: now,
+        ownerNodeId: 'node-B',
+        origin: 'remote',
+        ownerDisplayName: 'Bob',
+      })
+
+      const reachable: Record<string, boolean> = { 'app-remote': true }
+      const board = createBlackboard({
+        store,
+        getMemberReachable: (appId) => reachable[appId] ?? true,
+      })
+
+      let remote = board.readBoard(TEAM_ID, EPOCH_ID, LEAD_APP).roster.find((r) => r.appId === 'app-remote')
+      expect(remote?.sameMachine).toBe(false)
+      expect(remote?.owner).toBe('Bob')
+      expect(remote?.presence).toBe('online')
+
+      // Owner goes offline → presence flips to offline; local members stay online.
+      reachable['app-remote'] = false
+      const snapshot = board.readBoard(TEAM_ID, EPOCH_ID, LEAD_APP)
+      remote = snapshot.roster.find((r) => r.appId === 'app-remote')
+      expect(remote?.presence).toBe('offline')
+      expect(snapshot.roster.find((r) => r.appId === LEAD_APP)?.presence).toBe('online')
+    })
+
+    it('falls back to a generic owner label when the remote owner name is unknown', () => {
+      const now = Date.now()
+      store.addMember({
+        teamId: TEAM_ID,
+        appId: 'app-remote-2',
+        memberName: 'scribe',
+        role: 'Scribe',
+        isLead: false,
+        aiProvisioned: false,
+        addedAt: now,
+        ownerNodeId: 'node-C',
+        origin: 'remote',
+        ownerDisplayName: null,
+      })
+      const board = createBlackboard({ store })
+      const remote = board.readBoard(TEAM_ID, EPOCH_ID, LEAD_APP).roster.find((r) => r.appId === 'app-remote-2')
+      expect(remote?.owner).toBe('a teammate')
+      expect(remote?.sameMachine).toBe(false)
+    })
+
     it('injected getMemberStatus drives roster status + currentTaskTitle', () => {
       const status: Record<string, TeamMemberRuntimeStatus> = {
         [RESEARCHER_APP]: 'working',

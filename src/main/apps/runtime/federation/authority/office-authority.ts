@@ -231,6 +231,13 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     send: (to, frame) => deps.send(to, frame as FederationMessage),
     now,
     resolveArtifactBytes: deps.resolveArtifactBytes,
+    // HOST relay fast-fail: an owner whose presence row is suspect/offline is not
+    // worth a relay round-trip — reply owner-unreachable immediately (parity with
+    // the history plane).
+    isNodeReachable: (nodeId) => {
+      const status = federationStore.getNode(officeId, nodeId)?.status
+      return status !== 'offline' && status !== 'suspect'
+    },
   })
 
   const history = createHistoryService({

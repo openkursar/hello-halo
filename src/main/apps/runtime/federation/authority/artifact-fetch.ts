@@ -10,6 +10,7 @@
 
 import { randomUUID } from 'crypto'
 import type { TeamStore } from '../../../team/types'
+import { isPublishedArtifactRef } from '../../../team/artifact-refs'
 import type {
   ArtifactRef,
   ArtifactFetchFrame,
@@ -18,13 +19,54 @@ import type {
 } from '../protocol-m2'
 import { createFidDedup } from '../protocol-m2'
 import type { FederationMessage, NodeId } from '../types'
+import { SELF_NODE_ID } from '../../../../../shared/apps/team-types'
 
 /** Default ceiling for an unanswered viewer fetch before it rejects. */
 const DEFAULT_FETCH_TIMEOUT_MS = 15000
 
-/** Owner-side rejection messages (technical, never user-facing). */
-const ERR_NOT_PUBLISHED = 'artifact-not-published'
-const ERR_NOT_FOUND = 'artifact-not-found'
+/**
+ * Rejection codes carried on the wire and thrown from {@link ArtifactService.fetch}
+ * (technical, never user-facing). Exported so callers classify failures by code
+ * instead of matching prose — see {@link classifyArtifactFetchFailure}.
+ */
+export const ARTIFACT_ERR_NOT_PUBLISHED = 'artifact-not-published'
+export const ARTIFACT_ERR_NOT_FOUND = 'artifact-not-found'
+export const ARTIFACT_ERR_RELAY_FAILED = 'artifact-relay-failed'
+export const ARTIFACT_ERR_OWNER_UNREACHABLE = 'artifact-owner-unreachable'
+export const ARTIFACT_ERR_FETCH_TIMEOUT = 'artifact-fetch-timeout'
+
+const ERR_NOT_PUBLISHED = ARTIFACT_ERR_NOT_PUBLISHED
+const ERR_NOT_FOUND = ARTIFACT_ERR_NOT_FOUND
+const ERR_RELAY_FAILED = ARTIFACT_ERR_RELAY_FAILED
+const ERR_OWNER_UNREACHABLE = ARTIFACT_ERR_OWNER_UNREACHABLE
+
+/**
+ * Classify a fetch failure message (a rejection code or transport prose) into
+ * the categories a caller acts on. Lives here, next to the codes, so a wording
+ * change can never silently break a caller's classification.
+ */
+export function classifyArtifactFetchFailure(
+  message: string
+): 'owner-unreachable' | 'not-published' | 'not-found' | 'error' {
+  if (
+    message === ARTIFACT_ERR_OWNER_UNREACHABLE ||
+    message === ARTIFACT_ERR_RELAY_FAILED ||
+    message.startsWith(ARTIFACT_ERR_FETCH_TIMEOUT)
+  ) {
+    return 'owner-unreachable'
+  }
+  if (message === ARTIFACT_ERR_NOT_PUBLISHED) return 'not-published'
+  if (message === ARTIFACT_ERR_NOT_FOUND) return 'not-found'
+  return 'error'
+}
+
+/**
+ * Headroom subtracted from the fetch timeout for the relay's upstream leg, so the
+ * host reports a definite relay failure to the requester BEFORE the requester's
+ * own deadline fires (a raced double-timeout would surface as a silent drop).
+ * Mirrors the history plane's relay headroom.
+ */
+const RELAY_TIMEOUT_HEADROOM_MS = 1500
 
 export interface ArtifactServiceDeps {
   /** The office this node speaks for. */
@@ -44,6 +86,12 @@ export interface ArtifactServiceDeps {
   resolveArtifactBytes: (ref: ArtifactRef) => Promise<Uint8Array | null>
   /** OWNER side: is this ref a published artifact of THIS office? Default: see {@link defaultIsPublished}. */
   isPublishedRef?: (ref: ArtifactRef) => boolean
+  /**
+   * HOST relay: whether the artifact's true owner is currently reachable, so a
+   * relayed fetch fails fast with a definite code instead of waiting out the relay
+   * timeout on a known-dead owner. Absent → always attempt the relay.
+   */
+  isNodeReachable?: (nodeId: NodeId) => boolean
   /** Viewer-side fetch timeout; defaults to {@link DEFAULT_FETCH_TIMEOUT_MS}. */
   fetchTimeoutMs?: number
 }
@@ -94,7 +142,7 @@ export function createArtifactService(deps: ArtifactServiceDeps): ArtifactServic
       const fid = randomUUID()
       const timer = setTimeout(() => {
         if (settle(fid)) {
-          reject(new Error(`artifact-fetch timed out after ${fetchTimeoutMs}ms`))
+          reject(new Error(`${ARTIFACT_ERR_FETCH_TIMEOUT} after ${fetchTimeoutMs}ms`))
         }
       }, fetchTimeoutMs)
       // Do not keep the event loop alive solely for an in-flight fetch.
@@ -113,28 +161,83 @@ export function createArtifactService(deps: ArtifactServiceDeps): ArtifactServic
     })
   }
 
+  /** Send an artifact-bytes reply (success or error) to `to` for `reqFrame`. */
+  function reply(
+    to: NodeId,
+    reqFrame: ArtifactFetchFrame,
+    body: { bytesBase64: string } | { error: string }
+  ): void {
+    const response: ArtifactBytesFrame = {
+      kind: 'artifact-bytes',
+      officeId: deps.officeId,
+      fromNode: deps.selfNodeId,
+      reFid: reqFrame.fid,
+      ref: reqFrame.ref,
+      ...body,
+      fid: randomUUID(),
+    }
+    deps.send(to, response)
+  }
+
+  /**
+   * HOST relay: a fetch for an artifact owned by ANOTHER node landed here because
+   * joiners only link to the host — forward it one hop to the true owner and pipe
+   * the owner's bytes back to the requester. The forwarded frame keeps the
+   * original `fromNode`/`fid` (the owner's reply reFid then correlates the relay's
+   * pending entry); `relayed` caps it to a single hop. Returns false when this node
+   * cannot relay (already relayed / owner unknown or unreachable) → caller falls
+   * back to the plain not-owned refusal. Mirrors history-fetch's relayRequest.
+   */
+  function relayFetch(from: NodeId, frame: ArtifactFetchFrame): boolean {
+    if (frame.relayed) return false
+    const owner = frame.ref.ownerNodeId
+    if (!owner || owner === SELF_NODE_ID || owner === deps.selfNodeId || owner === from) return false
+
+    if (deps.isNodeReachable && !deps.isNodeReachable(owner)) {
+      reply(from, frame, { error: ERR_OWNER_UNREACHABLE })
+      return true
+    }
+
+    const relayTimeoutMs = Math.max(1000, fetchTimeoutMs - RELAY_TIMEOUT_HEADROOM_MS)
+    const timer = setTimeout(() => {
+      if (settle(frame.fid)) {
+        console.warn(
+          `[ArtifactFetch] relay timed out office=${deps.officeId} owner=${owner} after ${relayTimeoutMs}ms`
+        )
+        reply(from, frame, { error: ERR_RELAY_FAILED })
+      }
+    }, relayTimeoutMs)
+    if (typeof timer.unref === 'function') timer.unref()
+
+    pending.set(frame.fid, {
+      resolve: (bytes) => reply(from, frame, { bytesBase64: Buffer.from(bytes).toString('base64') }),
+      reject: (err) => reply(from, frame, { error: err.message }),
+      timer,
+    })
+    deps.send(owner, { ...frame, relayed: true })
+    return true
+  }
+
   async function handleFetch(from: NodeId, frame: ArtifactFetchFrame): Promise<void> {
     // Retransmit safety: a duplicate fetch is answered at most once.
     if (inboundDedup.seen(from, frame.fid)) return
 
-    const replyError = (error: string) => {
-      const reply: ArtifactBytesFrame = {
-        kind: 'artifact-bytes',
-        officeId: deps.officeId,
-        fromNode: deps.selfNodeId,
-        reFid: frame.fid,
-        ref: frame.ref,
-        error,
-        fid: randomUUID(),
-      }
-      deps.send(from, reply)
+    // Ownership gate: serve bytes ONLY for an artifact this node OWNS. A ref for a
+    // member owned by another node is relayed to its true owner (host hop) when
+    // possible, else refused. The owner id is carried on the ref itself. The local
+    // SELF sentinel is meaningless on the wire (a viewer always addresses a real
+    // node id), so it is NOT accepted as ownership.
+    const owned = frame.ref.ownerNodeId === deps.selfNodeId
+    if (frame.ref.teamId !== deps.officeId || !owned) {
+      if (frame.ref.teamId === deps.officeId && relayFetch(from, frame)) return
+      reply(from, frame, { error: ERR_NOT_PUBLISHED })
+      return
     }
 
-    // Only PUBLISHED team artifacts of THIS office are servable — a ref for a
-    // different office or with no backing finding is refused outright, before
-    // any path is ever resolved or read.
-    if (frame.ref.teamId !== deps.officeId || !isPublished(frame.ref)) {
-      replyError(ERR_NOT_PUBLISHED)
+    // Only PUBLISHED team artifacts are servable — a ref with no backing finding
+    // is refused before any path is resolved or read.
+    if (!isPublished(frame.ref)) {
+      reply(from, frame, { error: ERR_NOT_PUBLISHED })
       return
     }
 
@@ -145,20 +248,11 @@ export function createArtifactService(deps: ArtifactServiceDeps): ArtifactServic
       bytes = null
     }
     if (!bytes) {
-      replyError(ERR_NOT_FOUND)
+      reply(from, frame, { error: ERR_NOT_FOUND })
       return
     }
 
-    const reply: ArtifactBytesFrame = {
-      kind: 'artifact-bytes',
-      officeId: deps.officeId,
-      fromNode: deps.selfNodeId,
-      reFid: frame.fid,
-      ref: frame.ref,
-      bytesBase64: Buffer.from(bytes).toString('base64'),
-      fid: randomUUID(),
-    }
-    deps.send(from, reply)
+    reply(from, frame, { bytesBase64: Buffer.from(bytes).toString('base64') })
   }
 
   function handleBytes(_from: NodeId, frame: ArtifactBytesFrame): void {
@@ -188,11 +282,12 @@ export function createArtifactService(deps: ArtifactServiceDeps): ArtifactServic
 }
 
 /**
- * Default published-ref recognition: a ref is a published team artifact iff some
- * finding in its epoch carries that exact `ref`. Findings are how an authored
- * artifact is published to the office, and they carry the authoring app's id, so
- * a ref recognized here is necessarily owner-anchored.
+ * Default published-ref recognition, delegated to the team-domain SSOT
+ * (`apps/team/artifact-refs`): a ref is published when a finding carries it or
+ * a task delivers it as resultRef. Both anchor the ref to a producing app, so a
+ * ref recognized here is necessarily owner-anchored — and the owner-serve gate
+ * stays in lockstep with the viewer-side producer resolution.
  */
 function defaultIsPublished(store: TeamStore, ref: ArtifactRef): boolean {
-  return store.listFindingsByEpoch(ref.teamId, ref.epochId).some((f) => f.ref === ref.ref)
+  return isPublishedArtifactRef(store, ref.teamId, ref.epochId, ref.ref)
 }

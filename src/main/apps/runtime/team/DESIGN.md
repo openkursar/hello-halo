@@ -38,6 +38,16 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
 - `team-tools.ts` — `createTeamMcpServer(context)` building the `halo-team` MCP
   server with the 5 team tools. Topology/unknown-member violations surface as
   error tool_results so the LLM sees them.
+- `artifact-read.ts` — the location-transparent logic behind
+  `team_read_artifact`. Resolves the producing member through the published-ref
+  SSOT (`apps/team/artifact-refs`: a finding's ref OR a task's resultRef), then
+  reads bytes locally (`createLocalArtifactResolver`, traversal-guarded, shared
+  with the federation owner-serve path) or through the injected remote fetch.
+  Applies a binary guard and a UTF-8-boundary-safe inline ceiling. Remote
+  failures arrive as the typed `RemoteArtifactError` contract (bootstrap maps
+  federation codes via `classifyArtifactFetchFailure`), so raw transport codes
+  never reach the agent-facing message. No remote fetch injected → cross-machine
+  reads report an honest "unavailable".
 
 ## The two channels (do not conflate)
 

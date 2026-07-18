@@ -43,8 +43,6 @@ import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
 import { closeAllV2Sessions, activeSessions } from '../services/agent/session-manager'
-import { join as pathJoin, resolve as pathResolve, relative as pathRelative, isAbsolute as pathIsAbsolute, sep as pathSep } from 'path'
-import { readFile as fsReadFile } from 'fs/promises'
 import { registerHealthHandlers } from '../ipc/health'
 import { initBackground, shutdownBackground, getBackgroundService, setDaemonStealthInjector } from '../platform/background'
 import { injectStealthScripts } from '../services/stealth'
@@ -63,13 +61,13 @@ import { recoverPersistedOffices } from './office-recovery'
 import { initIdentity, getLocalIdentity, getLocalPublicKeyPem, signWithLocalKey } from '../http/identity'
 import { verifyOfficeCredential } from '../http/auth'
 import { setFederationInbound, sendFederationFrameToClient, listOfficeClientIds, broadcastToAll, getSessionIdentity } from '../http/websocket'
-import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, withOwnerResolvedSpace, createRelayCapture, createLocationAwareBlackboard, WsFederationClient } from '../apps/runtime/federation'
+import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, withOwnerResolvedSpace, createRelayCapture, createLocationAwareBlackboard, WsFederationClient, classifyArtifactFetchFailure } from '../apps/runtime/federation'
 import { getRemoteAccessStatus } from '../services/remote.service'
 import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtime/federation'
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
 import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamUpdatedEvent } from '../../shared/apps/team-types'
 import { parseTeamSessionKey } from '../../shared/apps/im-keys'
-import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps } from '../apps/runtime/team'
+import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createLocalArtifactResolver, RemoteArtifactError } from '../apps/runtime/team'
 import { readTeamMemberMessages } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
 import { createSpace, deleteSpace, getSpace } from '../services/space.service'
@@ -202,6 +200,17 @@ async function initPlatformAndApps(): Promise<void> {
     // Local session layer: runs members OWNED by this node (origin=local).
     const localSessionDeps = createDefaultSessionDeps(teamStore)
 
+    // Local artifact byte resolution (apps/runtime/team/artifact-read): bootstrap
+    // only supplies the app→space path lookup. Shared by the federation
+    // owner-serve path and the team_read_artifact reader below.
+    const readLocalArtifactBytes = createLocalArtifactResolver({
+      store: teamStore,
+      getSpacePathForApp: (appId) => {
+        const app = appManager.getApp(appId)
+        return app?.spaceId ? getSpace(app.spaceId)?.path ?? null : null
+      },
+    })
+
     // Federation manager: per-office host/joiner coordinators. Bootstrap is the
     // only tier bridging http and apps, so the http send/listing + credential
     // verifier are injected here. Owner role runs a brought member's turn via
@@ -271,33 +280,11 @@ async function initPlatformAndApps(): Promise<void> {
         })
       }
 
-      // Owner-side artifact resolution: a published finding's `ref` identifies the
-      // authoring member → its space → the file. Path-traversal guarded; never an
-      // arbitrary path, never a shell.
-      const resolveOfficeArtifactBytes = async (ref: ArtifactRef): Promise<Uint8Array | null> => {
-        const findings = teamStore.listFindingsByEpoch(ref.teamId, ref.epochId)
-        const finding = findings.find((f) => f.ref === ref.ref)
-        if (!finding) return null
-        const app = appManager.getApp(finding.authorAppId)
-        const spaceId = app?.spaceId
-        const spacePath = spaceId ? getSpace(spaceId)?.path : null
-        if (!spacePath) return null
-        const base = pathResolve(spacePath)
-        const abs = pathResolve(pathJoin(base, ref.ref))
-        // Traversal guard via path.relative: `abs` is inside `base` only when the
-        // relative path neither escapes upward ('..') nor is absolute. A bare
-        // startsWith() check is unsafe — a sibling like `${base}-evil` shares the
-        // prefix and would slip through.
-        const rel = pathRelative(base, abs)
-        if (rel === '..' || rel.startsWith('..' + pathSep) || pathIsAbsolute(rel)) {
-          return null
-        }
-        try {
-          return await fsReadFile(abs)
-        } catch {
-          return null
-        }
-      }
+      // Owner-side artifact resolution (federation serve path): delegates to the
+      // shared, path-traversal-guarded local resolver. Only a published ref of a
+      // locally-owned producer resolves; never an arbitrary path or shell.
+      const resolveOfficeArtifactBytes = (ref: ArtifactRef): Promise<Uint8Array | null> =>
+        readLocalArtifactBytes({ teamId: ref.teamId, epochId: ref.epochId, ref: ref.ref })
 
       // Joiner leg of the node-identity handshake: sign a host's one-shot auth
       // nonce with this node's device key so the session binds the portable
@@ -621,10 +608,39 @@ async function initPlatformAndApps(): Promise<void> {
     const selfNodeId = getLocalIdentity().id
     // Last board-discard notice per office (see onWriteDiscarded coalescing).
     const boardDiscardNoticeAt = new Map<string, number>()
+
+    // Location-transparent artifact reader powering `team_read_artifact` (logic
+    // in apps/runtime/team/artifact-read). Bootstrap only bridges: local bytes
+    // via the shared resolver, remote bytes via the federation manager with its
+    // fetch failures translated into the reader's typed contract — so raw
+    // transport codes never leak into agent-facing messages.
+    const readTeamArtifact = createTeamArtifactReader({
+      store: teamStore,
+      readLocalBytes: readLocalArtifactBytes,
+      ...(fedManager
+        ? {
+            fetchRemote: async ({ teamId, epochId, ref, ownerNodeId }) => {
+              try {
+                return (
+                  (await getFederationManager()?.fetchArtifact({
+                    officeId: teamId,
+                    ref: { ownerNodeId, teamId, epochId, ref },
+                  })) ?? null
+                )
+              } catch (err) {
+                const msg = (err as Error).message
+                throw new RemoteArtifactError(classifyArtifactFetchFailure(msg), msg)
+              }
+            },
+          }
+        : {}),
+    })
+
     setActiveTeamRuntime(
       createTeamRuntime({
         store: teamStore,
         session: teamSessionDeps,
+        readArtifact: readTeamArtifact,
         onBlackboardWrite: (record) => getFederationManager()?.routeAuthorityWrite(record),
         // Auto-seal (quiescence) / breach end a run without going through the
         // service-level pauseTeam, so they must also push the rested run-state to

@@ -11,6 +11,7 @@ import type { Orchestration, OrchestrationSessionDeps } from './orchestration'
 import type { MessageBus, TurnCompletion, CircuitLimits } from './message-bus'
 import type { Blackboard, BlackboardWriteRecord } from './blackboard'
 import type { TeamPromptContext } from './team-prompt'
+import type { ReadTeamArtifact } from './artifact-read'
 import type { TeamStore } from '../../team'
 import type {
   TeamEpoch,
@@ -86,6 +87,8 @@ async function resolveImRoute(
 export interface TeamRuntime {
   bus: MessageBus
   blackboard: Blackboard
+  /** Location-transparent read of a published team artifact (see {@link ReadTeamArtifact}). */
+  readArtifact?: ReadTeamArtifact
   /**
    * A member's live runtime status (idle/working/waiting_user/error) on this node,
    * derived from its active team sessions. Read-only projection consumed by the
@@ -162,6 +165,12 @@ export interface CreateTeamRuntimeDeps {
    * Absent → all members treated as reachable (non-federated runtime).
    */
   checkMemberReachable?: (appId: string, teamId: string) => boolean
+  /**
+   * Location-transparent published-artifact reader (bootstrap wires it to the
+   * space service + federation manager). Powers the `team_read_artifact` tool.
+   * Absent → the tool reports the capability is unavailable.
+   */
+  readArtifact?: ReadTeamArtifact
 }
 
 export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
@@ -205,6 +214,9 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
   const baseBlackboard = createBlackboard({
     store,
     getMemberStatus: memberStatus,
+    // Reuse the same reachability seam the bus uses for its honest-delivery gate,
+    // so the roster's presence column and delivery decisions agree.
+    ...(deps.checkMemberReachable ? { getMemberReachable: deps.checkMemberReachable } : {}),
     onWrite: deps.onBlackboardWrite,
   })
   // The location-aware decorator (if injected) routes shadow-office writes to the
@@ -216,6 +228,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
   return {
     bus,
     blackboard,
+    ...(deps.readArtifact ? { readArtifact: deps.readArtifact } : {}),
     getMemberStatus: memberStatus,
     startEpoch: (teamId, trigger) => orchestration!.startEpoch(teamId, trigger),
     ensureConversationEpoch: (teamId, chatKey) => orchestration!.ensureConversationEpoch(teamId, chatKey),
@@ -296,5 +309,7 @@ export { buildTeamSessionKey }
 export type { Orchestration, OrchestrationSessionDeps } from './orchestration'
 export type { Blackboard, BlackboardWriteRecord } from './blackboard'
 export type { MessageBus, TurnCompletion } from './message-bus'
+export { createTeamArtifactReader, createLocalArtifactResolver, RemoteArtifactError } from './artifact-read'
+export type { ReadTeamArtifact, TeamArtifactReadResult, RemoteArtifactFailure } from './artifact-read'
 export { createTeamTriggerScheduler, TEAM_JOB_KIND } from './team-triggers'
 export type { TeamTriggerScheduler } from './team-triggers'

@@ -453,17 +453,18 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       clearTimeout(pending.timer)
       pendingWaits.delete(corr)
       // A confirmed-offline unblock keeps timeout semantics but tells the sender
-      // explicitly that the teammate is gone so it can reassign.
+      // explicitly that the teammate is gone so it can reassign (naming them so a
+      // lead waiting on several teammates knows exactly who dropped).
       if (outcome.kind === 'timeout') {
         pending.resolve({
           from: pending.fromMemberName,
-          message: 'The teammate is unavailable right now; reassign or proceed without them.',
+          message: `"${pending.fromMemberName}" just went offline and cannot finish this now — reassign the work to an available teammate or hold it; do not keep waiting on them.`,
           status: 'timeout',
         })
       } else if (outcome.kind === 'undelivered') {
         pending.resolve({
           from: pending.fromMemberName,
-          message: 'This message was not delivered (the teammate is offline or unreachable).',
+          message: `"${pending.fromMemberName}" is offline — this message was not delivered. Reassign the work or retry once they are back online.`,
           status: 'undelivered',
         })
       } else if (outcome.kind === 'error') {

@@ -557,7 +557,9 @@ describe('message-bus M-1: resolvePendingWaitsForMember', () => {
     const result = await pending
     expect(result.status).toBe('timeout')
     expect(result.from).toBe('member')
-    expect(result.message).toMatch(/unavailable/i)
+    // Names the teammate and steers the sender to reassign instead of waiting.
+    expect(result.message).toMatch(/offline/i)
+    expect(result.message).toMatch(/reassign/i)
 
     // Idempotent: a second pass resolves nothing.
     expect(bus.resolvePendingWaitsForMember(M1_MEMBER, { kind: 'timeout' })).toBe(0)

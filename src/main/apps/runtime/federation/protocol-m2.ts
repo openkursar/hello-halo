@@ -318,6 +318,13 @@ export interface ArtifactFetchFrame {
   officeId: string
   fromNode: NodeId
   ref: ArtifactRef
+  /**
+   * Set by the host when forwarding a joiner's fetch to the artifact's true owner
+   * (joiners only link to the host, so a joiner-to-joiner read must hop through
+   * it). One hop max: a relayed fetch is never relayed again. Mirrors
+   * {@link HistoryRequestFrame.relayed}.
+   */
+  relayed?: boolean
   fid: Fid
 }
 

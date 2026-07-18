@@ -441,6 +441,15 @@ export interface FederationManager {
     sinceSeq?: number
   }): Promise<HistoryFetchResult>
   /**
+   * Viewer: pull a published artifact's bytes from the node that OWNS it, on
+   * demand. The owner serves only PUBLISHED team artifacts it owns; a fetch for a
+   * member owned by another joiner is relayed one hop through the host. Used by the
+   * team runtime's `team_read_artifact` tool so a teammate can read a peer's
+   * deliverable regardless of which machine produced it. Rejects when the office is
+   * not present here / M2 off, or the owner refuses/times out.
+   */
+  fetchArtifact(params: { officeId: string; ref: ArtifactRef }): Promise<Uint8Array>
+  /**
    * Transport-only reconfiguration seam: swap the outbound sender of an office's
    * link in place. The coordinator, authority, and inbound handler are untouched;
    * only where outgoing frames go changes. Lets a survivor's outbound leg be
@@ -2028,6 +2037,18 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     return out
   }
 
+  function fetchArtifact(params: { officeId: string; ref: ArtifactRef }): Promise<Uint8Array> {
+    const authority = getOfficeAuthority(params.officeId)
+    if (!authority) {
+      return Promise.reject(new Error(`artifact: office not present or M2 off office=${params.officeId}`))
+    }
+    // No node-level cache: unlike an append-only transcript, an artifact's bytes
+    // can change under a stable ref, so always pull fresh from the owner. The
+    // viewer's fetch addresses ref.ownerNodeId directly (host) or routes to the
+    // host which relays one hop to the true owner (joiner).
+    return authority.artifact.fetch(params.ref)
+  }
+
   function fetchMemberHistory(params: {
     officeId: string
     ownerNodeId: NodeId
@@ -2256,6 +2277,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     projectMemberRemoved,
     projectOfficeDissolved,
     fetchMemberHistory,
+    fetchArtifact,
     repointLink,
     redialToAuthority,
     reenrollWithAuthority,

@@ -10,6 +10,7 @@ import { broadcastToAll } from '../../../http/websocket'
 import { sendToRenderer } from '../../../foundation/window.service'
 import {
   buildTeamSessionKey,
+  isRemoteMember,
   TEAM_EVENTS,
 } from '../../../../shared/apps/team-types'
 import type {
@@ -766,13 +767,18 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
     const roster = members
       .filter((m) => m.appId !== selfAppId)
-      .map((m) => ({
-        memberName: m.memberName,
-        role: m.role,
-        isLead: m.isLead,
-        contactable:
-          team.collabMode === 'free' || store.isEdgeAllowed(trigger.teamId, selfAppId, m.appId),
-      }))
+      .map((m) => {
+        const remote = isRemoteMember(m)
+        return {
+          memberName: m.memberName,
+          role: m.role,
+          isLead: m.isLead,
+          contactable:
+            team.collabMode === 'free' || store.isEdgeAllowed(trigger.teamId, selfAppId, m.appId),
+          owner: remote ? m.ownerDisplayName ?? 'a teammate' : null,
+          sameMachine: !remote,
+        }
+      })
 
     return {
       teamName: team.name,

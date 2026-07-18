@@ -252,6 +252,15 @@ export interface TeamRunTrigger {
 
 export type TeamMemberRuntimeStatus = 'working' | 'idle' | 'error' | 'waiting_user'
 
+/**
+ * Reachability of a teammate, orthogonal to its activity status. Derived from the
+ * federation presence FSM: 'online' = the owner is reachable (a local member is
+ * always online); 'offline' = the owner is confirmed unreachable. Deliberately
+ * two-valued — the FSM's transient 'suspect' maps to 'online' so a brief network
+ * flap never makes a teammate look gone (and never provokes a needless reassign).
+ */
+export type TeamMemberPresence = 'online' | 'offline'
+
 export interface RosterMember {
   appId: string
   memberName: string
@@ -260,6 +269,21 @@ export interface RosterMember {
   spaceId: string | null
   status: TeamMemberRuntimeStatus
   currentTaskTitle?: string
+  /**
+   * Display name of the person who owns/brought this teammate. Null when the
+   * member runs on THIS machine (owned by you). Lets a teammate reason about
+   * "whose digital human this is" for coordination and accountability.
+   */
+  owner?: string | null
+  /**
+   * True when this member runs on the same machine as the reader (shared
+   * filesystem). False when it runs on a teammate's machine — a local file path
+   * produced here is NOT readable there, so deliverables must be published as
+   * team artifacts / findings instead of passed as bare paths.
+   */
+  sameMachine?: boolean
+  /** Reachability (see {@link TeamMemberPresence}). Absent → treat as online. */
+  presence?: TeamMemberPresence
 }
 
 export interface BlackboardSnapshot {
@@ -623,6 +647,7 @@ export const TEAM_TOOL_NAMES = {
   updateTask: 'team_update_task',
   postFinding: 'team_post_finding',
   readBoard: 'team_read_board',
+  readArtifact: 'team_read_artifact',
   complete: 'team_complete',
 } as const
 

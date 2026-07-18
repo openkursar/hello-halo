@@ -462,6 +462,11 @@ export async function sendAppChatMessage(
             selfIsLead: teamPromptCtx.selfIsLead,
             bus: getActiveTeamRuntime()!.bus,
             blackboard: getActiveTeamRuntime()!.blackboard,
+            // Location-transparent artifact read (wired by bootstrap); absent →
+            // the tool reports the capability is unavailable.
+            ...(getActiveTeamRuntime()!.readArtifact
+              ? { readArtifact: getActiveTeamRuntime()!.readArtifact }
+              : {}),
             // Lead-only team_complete → deferred seal after the lead's turn ends.
             requestComplete: (summary) =>
               getActiveTeamRuntime()!.requestSeal(teamContext.teamId, teamContext.epochId, summary),

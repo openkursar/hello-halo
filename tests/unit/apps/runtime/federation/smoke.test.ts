@@ -478,7 +478,8 @@ describe('M1b multi-node smoke rig (end-to-end distributed office)', () => {
 
     const result = await pending
     expect(result.status).toBe('timeout')
-    expect(result.message).toMatch(/unavailable/i)
+    expect(result.message).toMatch(/offline/i)
+    expect(result.message).toMatch(/reassign/i)
   })
 
   it('S5 presence FSM: heartbeat keeps online; silence → suspect (no offline action); confirmed fires once; suspect heartbeat rolls back clean', () => {

@@ -112,6 +112,8 @@
 | Add event source/filter behavior | `src/main/platform/event/*` | `src/main/bootstrap/extended.ts` |
 | Change memory behavior/tools | `src/main/platform/memory/index.ts` | `memory/tools.ts`, `memory/prompt.ts`, `tests/unit/platform/memory/*` |
 | Change agent engine (session / stream / prompt / subagent / permissions / MCP) | **Read `src/main/services/agent/DESIGN.md` first**, then jump to named file | Co-edits depend on the exact concern — see DESIGN.md routing |
+| Change digital-team coordination (send/wait/blackboard/orchestration) | **Read `src/main/apps/runtime/federation/DESIGN.md` first**, then `src/main/apps/runtime/team/*` | `apps/team/store.ts`, `tests/unit/apps/runtime/team/*`; kernel stays transport-free |
+| Change cross-node offices (join/presence/wake/replication/feeds/gateway) | **Read `src/main/apps/runtime/federation/DESIGN.md` + `log/DESIGN.md` first** | `manager.ts`/`coordinator.ts`/`ctrl-feed.ts`/`session-feed.ts`, `apps/federation/*`, `tests/unit/apps/runtime/federation/*`; then the cluster tier (§5) |
 | **Support a new IM platform** | New file: `src/main/apps/runtime/im-channels/<brand>.provider.ts` | Register in `runtime/index.ts`, extend `ImChannelType` in `shared/types/im-channel.ts`. **Do NOT touch `manager.ts` / `dispatch-inbound.ts`.** Only add `ipc/<brand>.ts` if the brand has unique setup/auth flow. |
 | Change generic IM channel lifecycle / session mgmt | `src/main/apps/runtime/im-channels/manager.ts` / `dispatch-inbound.ts` | `ipc/im-channels.ts`, `ipc/im-sessions.ts`, `shared/types/im-channel.ts`. Must remain provider-agnostic. |
 

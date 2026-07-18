@@ -93,7 +93,13 @@ src/
 │   │                                  #   index.ts (thin aggregator). NO business logic.
 │   ├── ipc/                           # IPC handlers (one module per domain)
 │   │   └── rpc.ts                     #   registerRpcHandlers() — typed-RPC registrar
-│   ├── apps/                          # Apps Layer (spec, manager, runtime, conversation-mcp)
+│   ├── apps/                          # Apps Layer (spec, manager, runtime, conversation-mcp,
+│   │                                  #   team, federation). runtime/ also hosts sub-runtimes:
+│   │                                  #   runtime/team (coordination kernel: message-bus,
+│   │                                  #   blackboard, orchestration), runtime/federation
+│   │                                  #   (cross-node offices: coordinator, manager, feed
+│   │                                  #   substrate log/, ctrl-feed, session-feed, authority/),
+│   │                                  #   runtime/im-channels (IM providers)
 │   ├── platform/                      # Platform Layer (store, scheduler, event, memory, background)
 │   ├── openai-compat-router/          # Anthropic <-> OpenAI bridge
 │   └── services/                      # Domain services — grouped by role:
@@ -123,7 +129,7 @@ src/
 ├── worker/                            # Utility processes (file-watcher)
 ├── shared/                            # Cross-process types, constants, protocols
 │   ├── types/                         # ai-sources, artifact, health, notification-channels
-│   ├── apps/                          # app-types, spec-types
+│   ├── apps/                          # app-types, spec-types, team-types, im-keys
 │   └── constants/                     # providers, ignore-patterns
 │
 ├── preload/
@@ -157,11 +163,12 @@ src/
     │   │                              #   the same theme-token pattern. Home for any future
     │   │                              #   generic primitive (Toast, Popover, Tooltip, ...)
     │   ├── brand/, icons/, tool/, updater/, notification/
+    │   ├── team/                      #   Digital team / office UI (board, member chat, join)
     │   ├── diff/, search/, pulse/, onboarding/, artifact/
     │   └── ErrorBoundary.tsx
     ├── stores/                        # Zustand stores (one per domain: app, chat, space, canvas,
     │   │                              # search, apps, apps-page, ai-browser, notification,
-    │   │                              # onboarding, perf, server)
+    │   │                              # onboarding, perf, server, team)
     │   └── server.store.ts            # Multi-server list for Capacitor (ServerEntry[])
     ├── hooks/                         # useIsMobile, useCanvasLifecycle, useLayoutPreferences,
     │                                  # useConfirmDialog, useFileOperations, useRemoteSubscription,
@@ -173,6 +180,10 @@ src/
     ├── i18n/                          # Internationalization
     └── assets/styles/                 # globals.css, syntax-theme.css, canvas-tabs.css, browser-task-card.css
 ```
+
+Outside `src/`: `gateway/` is a standalone Go module (the federation relay gateway —
+a dumb frame router for off-LAN offices; see §24), and `tests/decentralized/` is the
+cluster regression tier that boots REAL multi-process nodes (see its README.md).
 
 ## 5) Data Types
 
@@ -221,6 +232,7 @@ All channels follow `module:action` format. Modules are organized by functional 
 | Browser | `browser`, `browser-policy`, `ai-browser`, `overlay` |
 | Apps & store | `app`, `store`, `onboarding` |
 | IM channels | `im-channels`, `im-sessions`, `wecom-bot`, `weixin-ilink` |
+| Digital team | `team` (offices, members, blackboard, invites, federation presence) |
 | Transport & remote | `remote`, `notification-channels` |
 | System & diag | `system`, `perf`, `health`, `git-bash` |
 
@@ -615,6 +627,8 @@ When touching a module, read its design doc first:
 - `src/main/platform/scheduler/DESIGN.md`
 - `src/main/platform/memory/DESIGN.md`
 - `src/main/platform/background/DESIGN.md`
+- `src/main/apps/runtime/federation/DESIGN.md` — cross-node office federation (read before any team/federation change)
+- `src/main/apps/runtime/federation/log/DESIGN.md` — unified feed substrate (durable outbox / replication)
 
 ## 22) IM Integration (Plugin Architecture)
 
@@ -713,3 +727,29 @@ from ~70 to ~35 lines and the preload entries are now contract-derived.
    they are unless the domain is also being moved onto a generated HTTP binding —
    the renderer↔main round-trip must be validated with the app running, since
    build/tsc verify compilation but not live channel behavior.
+
+## 24) Digital Team & Office Federation (overview + routing)
+
+A digital team is a set of installed apps coordinated by an in-process kernel; an
+**office** is a team whose members can live on different machines (federation).
+Deep details live in the module docs (§21) — this section only fixes the mental
+model and where things are:
+
+| Piece | Location | Role |
+|---|---|---|
+| Coordination kernel | `apps/runtime/team/` | message-bus (send/wait/turn-complete), blackboard (tasks/findings), orchestration, artifact-read (location-transparent `team_read_artifact`). **Never imports the federation transport** — cross-node behavior arrives only through bootstrap-injected seams. |
+| Team persistence | `apps/team/` | teams/members/edges/epochs (SQLite, `app_team`) + published-ref semantics SSOT (`artifact-refs.ts`, shared with the federation owner-serve gate) |
+| Federation runtime | `apps/runtime/federation/` | join/presence coordinator, per-node manager (host+joiner roles), M2 authority (election/replication/handover), activity relay |
+| Feed substrate | `apps/runtime/federation/log/` + `ctrl-feed.ts` + `session-feed.ts` | per-author append-only feeds: durable ctrl outbox (effectively-once wake/turn-complete) + multi-replica session transcripts (local-first history) |
+| Federation persistence | `apps/federation/` | office nodes/credentials/authority + FeedStore (`app_federation`) |
+| Relay gateway | `gateway/` (repo-root Go module) | dumb frame router for off-LAN offices; never interprets payloads |
+| Transport seams | injected by `bootstrap/extended.ts` | federation imports no `http/*`; WS server routes inbound frames via `setFederationInbound` |
+| UI | `components/team/`, `stores/team.store.ts` | board, member chat, join dialog; events under `team:*` (see `shared/apps/team-types.ts` TEAM_EVENTS) |
+
+Key invariants (violating these is an architecture bug):
+- Kernel imports no federation transport (links/frames/routes) — renderer event fan-out
+  (`broadcastToAll`/`sendToRenderer`) is UI egress, not the federation link; federation
+  reads/writes only through stores + injected deps.
+- Star topology: joiners talk only to the office authority; joiner↔joiner traffic is relayed/mirror-served by it.
+- Directed control messages ride the durable feed outbox (no fire-and-forget); transcripts are multi-replica (every node keeps a local copy).
+- Team/federation changes additionally require the cluster tier: `npm run build` then `npm run test:team -- federation` (never in parallel with other suites).

@@ -9,6 +9,7 @@ import { TEAM_MCP_SERVER_NAME, TEAM_TOOL_NAMES } from '../../../../shared/apps/t
 import { TeamBusError } from './message-bus'
 import type { MessageBus } from './message-bus'
 import type { Blackboard } from './blackboard'
+import type { ReadTeamArtifact } from './index'
 import type { CollabMode, TaskStatus } from '../../../../shared/apps/team-types'
 
 const LOG_TAG = '[TeamTools]'
@@ -23,6 +24,12 @@ export interface TeamMcpContext {
   selfIsLead: boolean
   bus: MessageBus
   blackboard: Blackboard
+  /**
+   * Location-transparent read of a published team artifact. Absent → the tool is
+   * still registered but reports the capability is unavailable (non-federated
+   * test runtimes).
+   */
+  readArtifact?: ReadTeamArtifact
   /** Deferred: applied after the lead's turn ends, never aborts mid-turn. */
   requestComplete: (summary: string) => void
 }
@@ -223,6 +230,11 @@ function buildReadBoardTool(ctx: TeamMcpContext) {
     TEAM_TOOL_NAMES.readBoard,
     'Read the team blackboard: tasks, findings, and the member roster. Use this ' +
       'to reconcile state instead of relying on your own (compactable) context.\n\n' +
+      'Each roster member also reports: `presence` ("online" | "offline" — check ' +
+      'this before dispatching so you skip/reassign offline teammates), `owner` ' +
+      '(who brought this teammate; null = runs on your machine), and `sameMachine` ' +
+      '(false = runs on a teammate\u2019s machine, so file paths from there are not ' +
+      'readable here — use team_read_artifact for their outputs).\n\n' +
       'Optional filters: { "mine": true } for tasks assigned to you, ' +
       '{ "status": "pending" } for tasks in a given state.',
     {
@@ -243,6 +255,49 @@ function buildReadBoardTool(ctx: TeamMcpContext) {
           status: input.status as TaskStatus | undefined,
         })
         return textResult(JSON.stringify(snapshot))
+      } catch (err) {
+        return busErrorResult(err)
+      }
+    }
+  )
+}
+
+function buildReadArtifactTool(ctx: TeamMcpContext) {
+  return tool(
+    TEAM_TOOL_NAMES.readArtifact,
+    'Read a teammate\u2019s published artifact by its reference, wherever it was ' +
+      'produced. Use this to open a deliverable a teammate shared — a finding\u2019s ' +
+      '`ref` or a task\u2019s `resultRef` from team_read_board.\n\n' +
+      'It fetches the file even when the teammate runs on another machine (where a ' +
+      'raw file path would be unreadable). If the owner is offline you get a clear ' +
+      'message instead of a hang — ask them to share the content, or retry later.\n\n' +
+      'Example: { "ref": "competitors.md" }',
+    {
+      ref: z
+        .string()
+        .describe('The artifact reference: a finding ref or a task resultRef (as shown on the board).'),
+    },
+    async (input) => {
+      console.log(
+        `${LOG_TAG} ${TEAM_TOOL_NAMES.readArtifact}: team=${ctx.teamId} epoch=${ctx.epochId} ref="${input.ref}"`
+      )
+      if (!ctx.readArtifact) {
+        return textResult('Reading team artifacts is not available in this context.', true)
+      }
+      try {
+        const res = await ctx.readArtifact({
+          teamId: ctx.teamId,
+          epochId: ctx.epochId,
+          ref: input.ref,
+        })
+        if (!res.ok) {
+          return textResult(res.message ?? `Could not read artifact "${input.ref}".`, true)
+        }
+        const ownerLabel = res.owner ? ` (produced by ${res.owner})` : ''
+        const truncNote = res.truncated
+          ? `\n\n[Truncated: showing the first part of a ${res.bytes ?? 0}-byte file.]`
+          : ''
+        return textResult(`Artifact "${input.ref}"${ownerLabel}:\n\n${res.content ?? ''}${truncNote}`)
       } catch (err) {
         return busErrorResult(err)
       }
@@ -285,6 +340,7 @@ export function createTeamMcpServer(context: TeamMcpContext): SdkMcpServer {
     buildUpdateTaskTool(context),
     buildPostFindingTool(context),
     buildReadBoardTool(context),
+    buildReadArtifactTool(context),
     buildCompleteTool(context),
   ]
 

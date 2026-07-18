@@ -113,6 +113,7 @@ export { createLocationAwareBlackboard } from './authority/location-aware-blackb
 export type { OutboundBlackboardWrite } from './authority/location-aware-blackboard'
 export type { OwnerStatus } from './authority/reconcile'
 export type { MemberWriteRecord } from './authority/replication'
+export { classifyArtifactFetchFailure } from './authority/artifact-fetch'
 export type { ArtifactRef } from './protocol-m2'
 export type {
   RelayCapture,

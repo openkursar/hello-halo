@@ -10,6 +10,15 @@ export interface TeamPromptRosterEntry {
   role: string
   isLead: boolean
   contactable: boolean
+  /**
+   * Display name of the person who owns/brought this teammate. Null when the
+   * member runs on the SAME machine as you. Stable for the life of a run, so it
+   * belongs in the (cached) system prompt; live reachability does NOT — read it
+   * from `team_read_board` at dispatch time.
+   */
+  owner?: string | null
+  /** True when this teammate runs on the same machine as you (shared filesystem). */
+  sameMachine?: boolean
 }
 
 export interface TeamPromptContext {
@@ -90,7 +99,11 @@ function renderRoster(ctx: TeamPromptContext): string[] {
   }
   const rows = ctx.roster.map((m) => {
     const tags = [m.isLead ? 'lead' : null].filter(Boolean).join(', ')
-    return `- ${m.memberName} — ${m.role || 'member'}${tags ? ` (${tags})` : ''}`
+    // Owner label: a teammate on another machine is "brought by <person>";
+    // same-machine teammates need no label (they are yours, on this machine).
+    const ownership =
+      m.sameMachine === false ? ` — ${m.owner ? `${m.owner}\u2019s digital human` : 'a teammate\u2019s digital human'}` : ''
+    return `- ${m.memberName} — ${m.role || 'member'}${tags ? ` (${tags})` : ''}${ownership}`
   })
 
   if (ctx.collabMode === 'structured') {
@@ -102,6 +115,28 @@ function renderRoster(ctx: TeamPromptContext): string[] {
         : 'You have no outgoing contacts in the team topology; wait to be contacted.'
     )
   }
+
+  // Cross-machine guidance only when the team actually spans machines — keeps a
+  // pure single-machine team's prompt lean.
+  if (ctx.roster.some((m) => m.sameMachine === false)) {
+    rows.push('')
+    rows.push('### Working across machines')
+    rows.push(
+      '',
+      '- Some teammates run on another person\u2019s machine. Their reachability can',
+      '  change (a teammate\u2019s machine may go offline). Before you dispatch work,',
+      '  call `team_read_board()` and check each teammate\u2019s `presence` — skip or',
+      '  reassign anyone shown `offline` instead of waiting on them.',
+      '- File paths do NOT cross machines. A path you write here is unreadable on a',
+      '  teammate\u2019s machine (and vice versa). To hand a file to a teammate on',
+      '  another machine, publish it with `team_post_finding(ref, content)` (or set',
+      '  a task\u2019s `resultRef`) and let them read it with `team_read_artifact(ref)`.',
+      '  Never pass a bare local path across machines and assume they can open it.',
+      '- When you receive a deliverable from a teammate, read it with',
+      '  `team_read_artifact(ref)` — it fetches the file wherever it lives.'
+    )
+  }
+
   return rows
 }
 
@@ -172,6 +207,30 @@ function buildTeamRules(ctx: TeamPromptContext): string {
     '  produced and verified the result. If you wrote a file, reference its path;',
     "  do not invent outcomes you did not produce."
   )
+
+  // Side-effect discipline (all members). A "not delivered" receipt means the
+  // message did not reach the teammate — it does NOT mean an already-started
+  // external action was undone. Re-running such actions can double-charge the user.
+  lines.push(
+    '- Side-effect safety: before repeating an external action with real-world',
+    '  consequences (sending email/messages, placing orders, submitting forms,',
+    '  making payments), reconcile with `team_read_board()` first. If the task is',
+    '  already `done` or its result is recorded, do NOT run the action again. Treat',
+    '  a "not delivered" reply as a COORDINATION failure to retry — never as a',
+    '  signal to redo an action that may have already taken effect.'
+  )
+
+  if (ctx.selfIsLead) {
+    lines.push(
+      '- Dispatch to who is available: before assigning or messaging a teammate,',
+      '  check their `presence` on `team_read_board()`. If a teammate is `offline`,',
+      '  reassign the work to an available teammate, or hold the task (leave a note',
+      '  on the board) — do not send it and sit waiting for a reply that cannot come.',
+      '- If a teammate goes offline mid-run, you will be told promptly instead of',
+      '  waiting out a long timeout. Reassign or hold their in-flight task; never',
+      '  block the whole run on one unavailable teammate.'
+    )
+  }
 
   return lines.join('\n')
 }
