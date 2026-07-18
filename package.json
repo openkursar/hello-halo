@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.10-rc.32",
+  "version": "2.1.10-rc.35",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.mjs",
@@ -14,7 +14,7 @@
     "start": "electron-vite preview",
     "postinstall": "node scripts/postinstall.mjs",
     "bump-rc": "node scripts/bump-rc-version.mjs",
-    "build:mac": "npm run bump-rc && npm run prepare:all && npm run build && electron-builder --mac",
+    "build:mac": "export CSC_IDENTITY_AUTO_DISCOVERY=false && npm run bump-rc && npm run prepare:all && npm run build && electron-builder --mac",
     "build:win": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform win && npm run build && electron-builder --win",
     "build:win-x64": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform win && npm run build && electron-builder --win --x64",
     "prepare": "node scripts/prepare-binaries.mjs",
