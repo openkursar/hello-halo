@@ -241,6 +241,37 @@ func TestMemberFramesRouteToHost(t *testing.T) {
 	if env.To != nil {
 		t.Fatal("gateway must strip the to field on forwarded frames")
 	}
+	// The gateway stamps the proven sender identity so no-fromNode frames keep
+	// their origin across the relay (§9.2).
+	if env.From != memberNode.ID {
+		t.Fatalf("forwarded frame from = %q, want proven member id %q", env.From, memberNode.ID)
+	}
+}
+
+func TestForwardedFromStampSurvivesWithoutPayloadFromNode(t *testing.T) {
+	srv, _ := newGateway(t, gatewayOpts{})
+	hostNode, memberNode := gwtest.NewNode(t, 1), gwtest.NewNode(t, 2)
+
+	host := gwtest.Dial(t, srv)
+	host.Auth(hostNode, office)
+	host.HostAttach(office)
+
+	member := gwtest.Dial(t, srv)
+	member.Auth(memberNode, office)
+	// turn-complete carries NO fromNode in its payload; the envelope stamp is
+	// the only origin signal the host can use.
+	member.SendFederation("", fedPayload(memberNode, "turn-complete", map[string]any{
+		"correlationId": "c1",
+		"outcome":       map[string]any{"kind": "result", "content": "done"},
+	}))
+
+	env := host.Expect(wire.TypeFederation, 2*time.Second)
+	if payloadKind(t, env) != "turn-complete" {
+		t.Fatalf("host received wrong kind")
+	}
+	if env.From != memberNode.ID {
+		t.Fatalf("no-fromNode frame lost its origin: from = %q, want %q", env.From, memberNode.ID)
+	}
 }
 
 func TestHostUnreachable(t *testing.T) {

@@ -74,8 +74,13 @@ export interface GatewayAttachDeps {
    * this defaults to ''.
    */
   credentialToken?: string
-  /** Delivered every inbound relayed federation frame after attach. */
-  onFrame: (frame: FederationMessage) => void
+  /**
+   * Delivered every inbound relayed federation frame after attach. `from` is the
+   * gateway-stamped, already-proven origin identity (§9.2) — authoritative for
+   * frames whose payload carries no fromNode (presence-update/stream-frames/
+   * turn-complete); absent on host→member frames that never reach a host.
+   */
+  onFrame: (frame: FederationMessage, from?: string) => void
   /** Lifecycle for logging/diagnostics; 'attached' means the room is claimed. */
   onStateChange?: (state: GatewayAttachState) => void
   /**
@@ -224,7 +229,7 @@ export class GatewayAttachClient {
   }
 
   private handleMessage(data: WebSocket.RawData): void {
-    let message: { type?: string; payload?: unknown; error?: string }
+    let message: { type?: string; payload?: unknown; error?: string; from?: string }
     try {
       message = JSON.parse(data.toString())
     } catch {
@@ -292,7 +297,7 @@ export class GatewayAttachClient {
         break
       }
       case 'federation':
-        this.deps.onFrame(message.payload as FederationMessage)
+        this.deps.onFrame(message.payload as FederationMessage, message.from)
         break
       // gw:host-lost is a member-facing notice; a host session never receives it.
     }

@@ -74,14 +74,22 @@ export function createRemoteBusyOverlay(onChange: (officeId: string) => void): R
 
   function isBusy(appId: string): boolean {
     const now = Date.now()
+    let busy = false
     for (const [corr, entry] of byCorr) {
       if (now - entry.startedAt > REMOTE_BUSY_TTL_MS) {
         byCorr.delete(corr)
+        // The backstop finally fired: a turn-complete never arrived and the owner
+        // was never confirmed offline. Signal a roster refresh so the stale
+        // 'working' projection is corrected — otherwise the eviction is silent
+        // and the pulse lingers until an unrelated event happens to re-project.
+        onChange(entry.officeId)
         continue
       }
-      if (entry.appId === appId) return true
+      // Do not early-return: sweep the whole map so every expired entry is
+      // evicted (and its refresh scheduled) in this pass, not just up to the match.
+      if (entry.appId === appId) busy = true
     }
-    return false
+    return busy
   }
 
   function ownerNodeId(correlationId: string): NodeId | undefined {

@@ -15,12 +15,15 @@
  * INV-NO-LOOP is enforced structurally at each guard below (isOwnTeamSession +
  * the relayed flag) and asserted in tests.
  *
- * Scope: in-memory streamSeq (persist-before-send / crash rehydration are
- * backlog hardening), drop-incremental backpressure, ordered replay + dedup.
- * Full reorder/gap-fill is future work.
+ * Scope: in-memory streamSeq with a per-process originRun so viewers survive an
+ * owner restart (the watermark resets with the new run instead of dropping the
+ * new frames), drop-incremental backpressure, ordered replay + dedup. Full
+ * reorder/gap-fill is future work.
  *
  * Dependency direction: imports services/agent (downward, allowed); never http/*.
  */
+
+import { randomUUID } from 'crypto'
 
 import { onAgentEvent, emitAgentEvent } from '../../../services/agent/events'
 import type { IDisposable } from '../../../platform/event'
@@ -75,8 +78,14 @@ export function createRelayCapture(deps: RelayCaptureDeps): RelayCapture {
   const { isOwnTeamSession, resolveOffice, sink } = deps
   const now = deps.now ?? (() => Date.now())
 
+  // Fresh per capture instance (= per process run). Stamped on every batch so
+  // viewers can tell "this producer restarted, its seq domain restarted at 1"
+  // apart from "these frames are duplicates" — without it, an owner restart made
+  // viewers silently drop every new frame below the old watermark.
+  const originRun = randomUUID()
+
   // Per-sessionKey monotonic counter (starts at 1; a new epoch ⇒ new sessionKey
-  // ⇒ fresh counter). In-memory only; persistence is backlog.
+  // ⇒ fresh counter). In-memory only; a restart is signaled via originRun above.
   const streamSeq = new Map<string, number>()
   const pending = new Map<string, PendingBatch>()
 
@@ -104,6 +113,7 @@ export function createRelayCapture(deps: RelayCaptureDeps): RelayCapture {
       sessionKey,
       baseSeq: batch.frames[0].seq,
       frames: batch.frames,
+      originRun,
     })
   }
 
@@ -197,8 +207,17 @@ export function createStreamReplay(_deps: StreamReplayDeps = {}): StreamReplay {
   // Per-sessionKey highest applied seq. Same-machine LAN ⇒ in-order; a basic seq
   // guard + dedup is sufficient for now (full reorder/gap-fill is backlog).
   const lastSeq = new Map<string, number>()
+  // Per-sessionKey producer run id last seen (see StreamFramesFrame.originRun).
+  const lastRun = new Map<string, string>()
 
   function apply(batch: StreamFramesFrame): void {
+    // A NEW producer run means the owner restarted and its seq domain restarted
+    // at 1: reset the watermark so post-restart frames are replayed instead of
+    // silently dropped as "duplicates" of the previous run's higher seqs.
+    if (batch.originRun && lastRun.get(batch.sessionKey) !== batch.originRun) {
+      lastRun.set(batch.sessionKey, batch.originRun)
+      lastSeq.delete(batch.sessionKey)
+    }
     const seen = lastSeq.get(batch.sessionKey) ?? 0
     let highest = seen
     // Sort by seq so an out-of-order batch still replays in stream order.

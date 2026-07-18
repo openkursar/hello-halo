@@ -243,11 +243,20 @@ export interface TeamStore {
   insertTask(task: BlackboardTask): void
   getTaskById(taskId: string): BlackboardTask | null
   updateTask(taskId: string, patch: TaskPatch, updatedAt: number): void
+  /** Remove one task by id (no-op if absent). Used to roll back a rejected
+   *  optimistic write and to reconcile a replica against an authority snapshot. */
+  deleteTask(taskId: string): void
   listTasksByEpoch(teamId: string, epochId: string): BlackboardTask[]
   listTasksByTeam(teamId: string): BlackboardTask[]
+  /** Epoch id of the most recently written task/finding, or null when the board
+   *  is empty. Lets a JOINED office bind its feed to replicated data before the
+   *  run-epoch pointer materializes from a roster snapshot. */
+  getLatestBoardEpochId(teamId: string): string | null
 
   // ── blackboard_findings ───────────────────────
   insertFinding(finding: BlackboardFinding): void
+  /** Remove one finding by id (no-op if absent). Same reconcile/rollback use. */
+  deleteFinding(findingId: string): void
   listFindingsByEpoch(teamId: string, epochId: string): BlackboardFinding[]
 
   // ── team_epochs ───────────────────────────────

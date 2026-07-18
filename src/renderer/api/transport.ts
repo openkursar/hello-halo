@@ -452,6 +452,7 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
       'team:presence': 'onTeamPresence',
       'team:office-status': 'onTeamOfficeStatus',
       'team:invite-link': 'onTeamInviteLink',
+      'team:member-history': 'onTeamMemberHistory',
       'notification:toast': 'onNotificationToast',
       'store:sync-status-changed': 'onStoreSyncStatusChanged',
       'store:upgrade-available': 'onStoreUpgradeAvailable',

@@ -6,6 +6,7 @@ import { getOfficeCredential } from '../auth/middleware'
 import { resolveOfficeMemberAppIds } from '../identity/office-membership'
 import { createScopeGate } from '../../apps/runtime/federation/authority/scope-gate'
 import { getFederationManager } from '../../apps/runtime/federation/manager'
+import { memberChatKey } from '../../../shared/apps/team-types'
 import {
   generateTeamInvite,
   revokeTeamInvite,
@@ -249,21 +250,25 @@ export function registerTeamRoutes(app: Express): void {
           }
         }
       }
-      // Fall back to the latest (possibly sealed) epoch so a member's history
-      // stays readable after the run that produced it has ended.
+      // Resolve the SAME epoch the send path uses so a message and its transcript
+      // never diverge: the requested epoch, else an open run epoch, else the
+      // member's long-lived conversation epoch (read-only — never created here).
       const epochId =
         (typeof req.query.epochId === 'string' && req.query.epochId
           ? req.query.epochId
-          : (store.getCurrentEpochForTeam(teamId)?.id ?? store.listEpochsByTeam(teamId)[0]?.id)) ?? ''
-      if (!epochId) {
-        res.status(400).json({ success: false, error: 'No run has started for this team yet' })
-        return
-      }
+          : (store.getCurrentEpochForTeam(teamId)?.id ??
+             store.getOpenConversationEpoch(teamId, memberChatKey(appId))?.id)) ?? ''
       // A remote-owned member's transcript lives on the node that OWNS it, not
       // here. Pull it over the office link from that owner; the owner
       // authorizes and serves only members it owns. A locally-owned member is
       // read straight from local chat storage as before.
       if (targetMember.origin === 'remote' && targetMember.ownerNodeId) {
+        // Nothing sent yet (no run, no conversation epoch) → empty, not an error:
+        // 1:1 chat does not require a run first (parity with the IPC surface).
+        if (!epochId) {
+          res.json({ success: true, data: [] })
+          return
+        }
         const manager = getFederationManager()
         if (!manager) {
           res.status(503).json({ success: false, error: 'Federation is not yet initialized. Please try again shortly.' })
@@ -273,17 +278,27 @@ export function registerTeamRoutes(app: Express): void {
         // not-owned / not-found / timeout. Never surface it: log it and answer a
         // neutral 502 so the transcript simply reads as unavailable.
         try {
-          const messages = await manager.fetchMemberHistory({
+          const sinceRaw = typeof req.query.sinceSeq === 'string' ? Number(req.query.sinceSeq) : NaN
+          const sinceSeq = Number.isInteger(sinceRaw) && sinceRaw > 0 ? sinceRaw : undefined
+          const result = await manager.fetchMemberHistory({
             officeId: teamId,
             ownerNodeId: targetMember.ownerNodeId,
             appId,
             epochId,
+            sinceSeq,
           })
-          res.json({ success: true, data: messages })
+          // stale=true → cached copy served because the owner is unreachable.
+          res.json({ success: true, data: result.messages, stale: result.stale })
         } catch (err) {
           console.warn(`[TeamRoutes] remote history fetch failed office=${teamId} appId=${appId}:`, (err as Error).message)
           res.status(502).json({ success: false, error: 'History is temporarily unavailable.' })
         }
+        return
+      }
+      // Locally-owned member: its transcript is per-epoch on disk. No epoch yet
+      // means nothing has run for it here → empty (never an error).
+      if (!epochId) {
+        res.json({ success: true, data: [] })
         return
       }
       res.json({ success: true, data: readTeamMemberMessages(appId, teamId, epochId) })

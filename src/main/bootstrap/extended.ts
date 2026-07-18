@@ -25,6 +25,7 @@
 
 import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
+import { powerMonitor } from 'electron'
 import { registerSecurityHandlers } from '../ipc/security'
 import { enableRemoteAccess } from '../services/remote.service'
 import { getConfig, getFederationGatewayUrl, migrateCredentialEncryption } from '../foundation/config.service'
@@ -100,6 +101,7 @@ let platformDb: DatabaseManager | null = null
 // a bare function — dispose() it on shutdown.
 let disposeRelayCapture: { dispose(): void } | null = null
 let flushRelayCapture: (() => void) | null = null
+let onSystemResume: (() => void) | null = null
 
 /**
  * Initialize platform (store, scheduler, memory) and apps
@@ -313,6 +315,24 @@ async function initPlatformAndApps(): Promise<void> {
         }
       }
 
+      // Owner-side transcript serialization, shared by the pull path
+      // (readMemberHistory) and the proactive session-feed replication
+      // (readOwnedTranscript) so both surfaces always agree. seq is the 1-based
+      // ordinal in the append-only transcript — stable across reads, so viewers
+      // pull/replicate only the tail. Carries the thoughts/tool trace so a remote
+      // viewer's backfill shows the same thinking the live relay did.
+      const serializeTeamTranscript = (teamId: string, appId: string, epochId: string) => {
+        const messages = readTeamMemberMessages(appId, teamId, epochId)
+        return messages.map((m, i) => ({
+          seq: i + 1,
+          role: m.role,
+          content: m.content,
+          ...(m.thoughts ? { thoughts: m.thoughts } : {}),
+          ...(m.thoughtsSummary ? { thoughtsSummary: m.thoughtsSummary } : {}),
+          ...(m.timestamp ? { ts: Date.parse(m.timestamp) || undefined } : {}),
+        }))
+      }
+
       const federationManager = createFederationManager({
         hostSend: sendFederationFrameToClient,
         hostListOfficeClients: listOfficeClientIds,
@@ -353,6 +373,10 @@ async function initPlatformAndApps(): Promise<void> {
             officeId,
             makeAuthProof,
             onFrame: (frame) => getFederationManager()?.deliverInbound(officeId, frame),
+            // Reconnect of the dialed leg: re-drive the join-request so the newly
+            // elected authority re-enrolls this survivor (first-dial enrollment is
+            // done by redialToAuthority; this covers a later drop+reconnect).
+            onReauth: () => getFederationManager()?.reenrollWithAuthority(officeId),
           })
           return {
             sender: (_to, frame) => client.send(frame),
@@ -385,12 +409,12 @@ async function initPlatformAndApps(): Promise<void> {
           localSessionDeps.sendAppChatMessage(
             withOwnerResolvedSpace(request, (appId) => localSessionDeps.getMemberSpaceId(appId))
           ),
-        // A member confirmed offline immediately unblocks any lead waiting on it
-        // (wait=true) instead of hanging to the sync-wait timeout. The federation
-        // FSM decides confirmed-offline; the bus performs the unblock.
-        onMemberConfirmedOffline: (appId) => {
-          getActiveTeamRuntime()?.bus.resolvePendingWaitsForMember(appId, { kind: 'timeout' })
-        },
+        // Deliberately NO kernel unblock on confirmed-offline: over a WAN tunnel
+        // a confirmed-offline is routinely a transient outage, and the durable
+        // ctrl outbox delivers the wake when the owner returns. Failing the wait
+        // here judged live members "undelivered" on every flap; the ctrl-feed
+        // give-up deadline is now the sole bounded arbiter of a wake that truly
+        // never lands.
         // Presence projection → office-scoped UI event (teamId === officeId, so
         // broadcastToAll's per-credential filter delivers it only to that office).
         onPresenceChange: (officeId, snapshot) => {
@@ -450,13 +474,22 @@ async function initPlatformAndApps(): Promise<void> {
         // hasn't spoken in this epoch) — answering not-found here made viewers
         // show "history temporarily unavailable" (502) for a perfectly healthy
         // member, diverging from how the same member reads on its own node.
-        readMemberHistory: ({ teamId, appId, epochId }) => {
-          const messages = readTeamMemberMessages(appId, teamId, epochId)
-          return messages.map((m) => ({
-            role: m.role,
-            content: m.content,
-            ...(m.timestamp ? { ts: Date.parse(m.timestamp) || undefined } : {}),
-          }))
+        readMemberHistory: ({ teamId, appId, epochId }) =>
+          serializeTeamTranscript(teamId, appId, epochId),
+        // The same read without the request-scoped seam, driving the session-feed
+        // plane's proactive replication of owned transcripts to every office node.
+        readOwnedTranscript: (teamId, appId, epochId) =>
+          serializeTeamTranscript(teamId, appId, epochId),
+        // A session with a live turn has a provisional trailing message the
+        // publisher must withhold (session keys ARE conversation ids).
+        isSessionActive: (sessionKey) => activeSessions.has(sessionKey),
+        // A member's local transcript replica grew → tell any open member panel
+        // to silently reload (the read path serves the local copy instantly;
+        // this signal is what keeps it live across nodes).
+        onMemberHistoryUpdated: ({ officeId, appId, epochId }) => {
+          const payload = { teamId: officeId, appId, epochId }
+          broadcastToAll(TEAM_EVENTS.memberHistory, payload)
+          sendToRenderer(TEAM_EVENTS.memberHistory, payload)
         },
         // A hot-standby applied a replicated task/finding to its replica store.
         // The signal carries no concrete task/finding object (only op + taskId),
@@ -471,18 +504,33 @@ async function initPlatformAndApps(): Promise<void> {
         },
         // Joiner-side: the host kicked a member → drop the row by re-fetching the
         // office. The roster also re-converges via the accompanying re-broadcast.
-        onMemberRemovedRemote: (officeId) => {
+        // A kick of one of THIS node's own members additionally carries a
+        // memberKicked notice so the renderer tells the user (never silent). The
+        // name is resolved before the roster converges past the removed row.
+        onMemberRemovedRemote: (officeId, appId, ownMember) => {
           const team = teamStore.getTeamById(officeId)
-          const payload = team ? { teamId: officeId, team } : { teamId: officeId }
-          broadcastToAll(TEAM_EVENTS.updated, payload)
+          const kickedName = ownMember
+            ? teamStore.listMembersByTeam(officeId).find((m) => m.appId === appId)?.memberName
+            : undefined
+          const payload: TeamUpdatedEvent = {
+            teamId: officeId,
+            ...(team ? { team } : {}),
+            ...(ownMember ? { memberKicked: { appId, ...(kickedName ? { memberName: kickedName } : {}) } } : {}),
+          }
+          broadcastToAll(TEAM_EVENTS.updated, payload as unknown as Record<string, unknown>)
           sendToRenderer(TEAM_EVENTS.updated, payload)
         },
-        // Joiner-side: the host dissolved the office → remove the local shadow
-        // from every view (team:updated with removed). The manager already calls
-        // leaveOffice locally after invoking this, so this is the UI projection of
-        // that teardown — mirroring how leaveTeamOffice signals a removed office.
+        // Joiner-side: the host dissolved the office → tear down the local shadow
+        // exactly like an explicit leave. The manager already dropped the re-join
+        // connection record via leaveOffice; here we ALSO purge the mirrored team
+        // rows (team/members/edges/triggers) so the dissolved office does not
+        // resurrect in the list on the next restart, then project the removal to
+        // every view — mirroring leaveTeamOffice's teardown sequence.
         onOfficeDissolvedRemote: (officeId) => {
-          const event: TeamUpdatedEvent = { teamId: officeId, removed: true }
+          teamStore.purgeJoinedOffice(officeId)
+          // Mark it host-initiated so the renderer tells the user their office was
+          // closed (a self leave / self dissolve stays silent — no reason set).
+          const event: TeamUpdatedEvent = { teamId: officeId, removed: true, removedReason: 'dissolved-remote' }
           broadcastToAll(TEAM_EVENTS.updated, event as unknown as Record<string, unknown>)
           sendToRenderer(TEAM_EVENTS.updated, event)
         },
@@ -511,13 +559,27 @@ async function initPlatformAndApps(): Promise<void> {
         isOwnTeamSession: (conversationId) => {
           const parsed = parseTeamSessionKey(conversationId)
           if (!parsed) return false
-          return teamStore.listMembersByAppId(parsed.appId)[0]?.ownerNodeId === SELF_NODE_ID
+          // Scoped to the session's own team — a cross-team first-match could
+          // read another office's owner for the same appId (see resolveOwnerNode).
+          return (
+            teamStore
+              .listMembersByAppId(parsed.appId)
+              .find((m) => m.teamId === parsed.teamId)?.ownerNodeId === SELF_NODE_ID
+          )
         },
         resolveOffice: (conversationId) => parseTeamSessionKey(conversationId)?.teamId ?? null,
         sink: (officeId, batch) => federationManager.relaySink(officeId, batch),
       })
       disposeRelayCapture = relayCapture.start()
       flushRelayCapture = () => relayCapture.flushAll()
+
+      // Waking from sleep must not register the sleep as peer silence: grant
+      // every office a presence grace window on the OS resume event. This is the
+      // platform-independent path; the coordinator's clock-delta guard is a
+      // secondary net (performance.now() advances across sleep on some OSes).
+      onSystemResume = () => getFederationManager()?.handleSystemResume()
+      powerMonitor.on('resume', onSystemResume)
+
       console.log('[Bootstrap] Federation manager + activity relay initialized')
     } else {
       console.warn('[Bootstrap] Federation store unavailable; federation manager not initialized')
@@ -533,13 +595,22 @@ async function initPlatformAndApps(): Promise<void> {
       ? makeLocationAwareSessionDeps({
           local: localSessionDeps,
           selfNodeId: getLocalIdentity().id,
-          resolveOwnerNode: (appId) => teamStore.listMembersByAppId(appId)[0]?.ownerNodeId ?? SELF_NODE_ID,
-          resolveOfficeId: (appId) => teamStore.listMembersByAppId(appId)[0]?.teamId ?? null,
+          // Scoped to the turn's team: the same app can be a member of several
+          // teams with a different owner in each, so a cross-team first-match
+          // would route the wake to another office's owner. Falls back to any
+          // membership only for team-agnostic calls (no teamId).
+          resolveOwnerNode: (appId, teamId) => {
+            const memberships = teamStore.listMembersByAppId(appId)
+            const scoped = teamId ? memberships.find((m) => m.teamId === teamId) : undefined
+            return (scoped ?? memberships[0])?.ownerNodeId ?? SELF_NODE_ID
+          },
           getRemoteSpaceId: (appId) => fedManager.getRemoteMemberSpaceId(appId),
           sendWake: (p) => fedManager.sendWakeToMember(p),
-          registerTurnComplete: (corr, cb) => {
-            fedManager.registerTurnComplete(corr, cb)
-          },
+          // Return the unregister closure — session-deps stores it and calls it on
+          // settle. A block body without `return` dropped it (unregister became
+          // undefined → `unregister()` threw → the remote wake promise never
+          // resolved → 30-min hang + "no waiter; dropping").
+          registerTurnComplete: (corr, cb) => fedManager.registerTurnComplete(corr, cb),
         })
       : localSessionDeps
 
@@ -548,6 +619,8 @@ async function initPlatformAndApps(): Promise<void> {
     // office delegates to the kernel board → onBlackboardWrite → replicate. Both
     // are no-ops when the federation manager is unavailable.
     const selfNodeId = getLocalIdentity().id
+    // Last board-discard notice per office (see onWriteDiscarded coalescing).
+    const boardDiscardNoticeAt = new Map<string, number>()
     setActiveTeamRuntime(
       createTeamRuntime({
         store: teamStore,
@@ -564,6 +637,11 @@ async function initPlatformAndApps(): Promise<void> {
         // flight; overlay it so boards/rosters pulse the member everywhere.
         getMemberStatusOverlay: (appId) =>
           getFederationManager()?.isMemberRemoteBusy(appId) ? 'working' : null,
+        // Immediate reachability for the wait=false honest-delivery gate: a member
+        // owned by an offline/unreachable remote node is reported "not delivered" at
+        // send time. No federation manager (non-federated) → default reachable.
+        checkMemberReachable: (appId, teamId) =>
+          getFederationManager()?.isMemberReachable(appId, teamId) ?? true,
         // Push each status flip (turn start/end, escalation) to joiners via the
         // coalesced roster refresh — without it a viewer's board froze on the
         // last projected status until an unrelated write refreshed the roster.
@@ -582,6 +660,20 @@ async function initPlatformAndApps(): Promise<void> {
                 // piling up divergent optimistic rows (AC-5.4).
                 isOfficePaused: (teamId) =>
                   getFederationManager()?.getOfficeAuthority(teamId)?.isPaused() ?? false,
+                // A rolled-back optimistic write must reach the user, not just the
+                // log: emit team:updated with the discard notice so the renderer
+                // toasts + refetches the open board (the phantom row disappears).
+                // Coalesced per office — a partition can expire several pending
+                // writes at once and one notice covers the whole burst.
+                onWriteDiscarded: (teamId) => {
+                  const now = Date.now()
+                  const last = boardDiscardNoticeAt.get(teamId) ?? 0
+                  if (now - last < 5_000) return
+                  boardDiscardNoticeAt.set(teamId, now)
+                  const event: TeamUpdatedEvent = { teamId, boardWriteDiscarded: true }
+                  broadcastToAll(TEAM_EVENTS.updated, event as unknown as Record<string, unknown>)
+                  sendToRenderer(TEAM_EVENTS.updated, event)
+                },
               })
           : undefined,
       })
@@ -899,6 +991,10 @@ export async function cleanupExtendedServices(): Promise<void> {
   // the App Manager goes away (the service holds an App Manager reference).
   shutdownTeamService()
   setActiveTeamRuntime(null)
+  if (onSystemResume) {
+    powerMonitor.removeListener('resume', onSystemResume)
+    onSystemResume = null
+  }
   try {
     flushRelayCapture?.()
     disposeRelayCapture?.dispose()

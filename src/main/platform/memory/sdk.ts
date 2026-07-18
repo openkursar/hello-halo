@@ -13,8 +13,15 @@
  * server is built (during agent session setup), long after injection.
  */
 
+import type { z } from 'zod'
+
 type ToolFn = (...args: any[]) => any
 type CreateSdkMcpServerFn = (options: any) => any
+
+/** Handler input inferred from the zod shape a tool declares (mirrors resolved-sdk). */
+type ToolInput<Shape extends Record<string, z.ZodTypeAny>> = {
+  [K in keyof Shape]: z.infer<Shape[K]>
+}
 
 let _tool: ToolFn | null = null
 let _createSdkMcpServer: CreateSdkMcpServerFn | null = null
@@ -26,9 +33,14 @@ export function setMemorySdk(sdk: { tool: ToolFn; createSdkMcpServer: CreateSdkM
 }
 
 /** Define an MCP tool. Throws if the SDK was not wired (a startup-order bug). */
-export function tool(...args: any[]): any {
+export function tool<Shape extends Record<string, z.ZodTypeAny>>(
+  name: string,
+  description: string,
+  inputSchema: Shape,
+  handler: (input: ToolInput<Shape>, extra?: unknown) => Promise<any>
+): any {
   if (!_tool) throw new Error('[Memory] SDK not initialized — call setMemorySdk() at startup')
-  return _tool(...args)
+  return _tool(name, description, inputSchema, handler)
 }
 
 /** Build an in-process MCP server. Throws if the SDK was not wired. */

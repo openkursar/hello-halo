@@ -55,7 +55,15 @@ export function recoverPersistedOffices(teamStore: TeamStore | null): void {
       .then((res) =>
         res.success
           ? console.log(`[Bootstrap] Re-joined office=${conn.officeId}`)
-          : console.warn(`[Bootstrap] Re-join failed office=${conn.officeId}: ${res.error}`)
+          : // A re-join failure is NOT a safe purge trigger: AUTH_REJECTED here fires
+            // both for a genuinely revoked/dissolved office AND for a host that is
+            // merely down/restarting (the socket closes before auth either way, see
+            // ws-federation-client), so purging on it would delete a legitimate
+            // office whenever its host is slow to come up on a shared reboot. Leave
+            // the connection for the next boot to retry; the dissolved-office ghost
+            // is instead cleaned on the live `office-dissolved` frame (see
+            // onOfficeDissolvedRemote) and its credentials are revoked on dissolve.
+            console.warn(`[Bootstrap] Re-join failed office=${conn.officeId}: ${res.error}`)
       )
       .catch((err) => console.error(`[Bootstrap] Re-join threw office=${conn.officeId}:`, err))
   }

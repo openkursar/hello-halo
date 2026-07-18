@@ -39,6 +39,7 @@
  *   before initialization.
  */
 
+import type { z } from 'zod'
 import { getConfig } from '../../foundation/config.service'
 import { installSdkLogger } from '../../foundation/logging'
 import {
@@ -223,22 +224,36 @@ function ensureInitialized(): SdkModule {
 // All functions delegate to the dynamically loaded SDK module.
 // Consumer code does not need to change — same function signatures.
 
+/** Handler input inferred from the zod shape a tool declares. */
+type ToolInput<Shape extends Record<string, z.ZodTypeAny>> = {
+  [K in keyof Shape]: z.infer<Shape[K]>
+}
+
 /**
  * Define an MCP tool with schema validation.
+ *
+ * The runtime behavior is whatever the active SDK provides; this wrapper only
+ * adds compile-time typing so handler `input` is inferred from the zod shape
+ * instead of falling to implicit `any`.
  *
  * @example
  * const myTool = tool(
  *   'my_tool',
  *   'Does something useful',
- *   z.object({ path: z.string() }),
- *   async (args) => { ... }
+ *   { path: z.string() },
+ *   async (input) => { ... }  // input: { path: string }
  * )
  */
-export function tool(...args: any[]): any {
+export function tool<Shape extends Record<string, z.ZodTypeAny>>(
+  name: string,
+  description: string,
+  inputSchema: Shape,
+  handler: (input: ToolInput<Shape>, extra?: unknown) => Promise<any>
+): any {
   if (process.env.SDK_DEBUG) {
     console.log(`[SDK] tool() called, engine=${_engine}`)
   }
-  return ensureInitialized().tool(...args)
+  return ensureInitialized().tool(name, description, inputSchema, handler)
 }
 
 /**

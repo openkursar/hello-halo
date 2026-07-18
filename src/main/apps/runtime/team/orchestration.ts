@@ -37,7 +37,16 @@ export interface OrchestrationSessionDeps {
     message: string
     conversationId: string
     teamContext: TeamTriggerContext
-  }): Promise<{ finalMessage: string | null }>
+  }): Promise<{
+    finalMessage: string | null
+    /**
+     * Set by the location-aware (federation) impl when the wake never reached the
+     * owner (offline/unreachable) or no completion signal came back. The local
+     * impl never sets it (a local turn always runs). Kept OUT of the turn-outcome
+     * type so "not delivered" is never confused with an empty reply.
+     */
+    undelivered?: { reason: string }
+  }>
   isSessionActive(sessionKey: string): boolean
   /**
    * Tear down the live V2 process but preserve the JSONL transcript + saved
@@ -222,11 +231,17 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     void turnPromise
       .then(
         (res): TurnCompletion =>
-          capturedEscalations.get(trigger.correlationId) ?? {
-            kind: 'result',
-            content: res.finalMessage ?? '',
-            ...(trigger.taskId ? { taskId: trigger.taskId } : {}),
-          },
+          capturedEscalations.get(trigger.correlationId) ??
+          // A wake that never reached the owner (or whose completion never returned)
+          // is NOT a result — surface it as 'undelivered' so the sender learns the
+          // truth instead of reading an empty finalMessage as a real reply.
+          (res.undelivered
+            ? { kind: 'undelivered', reason: res.undelivered.reason }
+            : {
+                kind: 'result',
+                content: res.finalMessage ?? '',
+                ...(trigger.taskId ? { taskId: trigger.taskId } : {}),
+              }),
         (err): TurnCompletion => {
           if (err instanceof TurnTimeoutError) {
             return capturedEscalations.get(trigger.correlationId) ?? { kind: 'timeout' }

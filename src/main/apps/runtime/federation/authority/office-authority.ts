@@ -31,6 +31,7 @@ import { createReplication, type Replication, type MemberWriteRecord } from './r
 import { createScopeGate, type ScopeGate } from './scope-gate'
 import { createArtifactService, type ArtifactService } from './artifact-fetch'
 import { createHistoryService, type HistoryService, type ReadMemberHistory } from './history-fetch'
+import { handleShadowWriteReject, confirmShadowWrite } from './location-aware-blackboard'
 import type { ArtifactRef } from '../protocol-m2'
 
 const LOG_TAG = '[OfficeAuthority]'
@@ -199,6 +200,9 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     onReplicaApplied: deps.onReplicaApplied
       ? (info) => deps.onReplicaApplied!({ officeId, op: info.op, taskId: info.taskId })
       : undefined,
+    // Positive-ack a member's own shadow write once the authority replicates it
+    // back, so the unconfirmed-rollback backstop only fires for genuinely lost writes.
+    onReplicatedFid: (fid) => confirmShadowWrite(fid),
   })
 
   const handover = createHandover({
@@ -298,6 +302,13 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
       case 'ack':
         replication.handleM2Frame(from, frame)
         break
+      case 'catchup-request':
+      case 'catchup-response':
+        // Gap-fill replay between a standby and the authority (both directions
+        // owned by replication). A response may carry a newer tenure → re-align.
+        if (frame.kind === 'catchup-response') handover.observeFrameTerm(from, frame.term)
+        replication.handleM2Frame(from, frame)
+        break
       case 'artifact-fetch':
       case 'artifact-bytes':
         artifact.handleM2Frame(from, frame)
@@ -310,6 +321,10 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
         // A reject is observed (e.g. EPOCH_STALE → step down / re-align). The
         // term-observe above already handled the common case; log for diagnostics.
         console.debug(`${LOG_TAG} reject office=${officeId} reason=${frame.reason} from=${from}`)
+        // Consume a shadow-write reject: EPOCH_STALE (retryable) resends the
+        // member's optimistic write to the re-resolved authority so a write made
+        // mid-handover is not silently lost (the local row would otherwise fork).
+        handleShadowWriteReject(frame.reFid, frame.retryable)
         break
     }
   }

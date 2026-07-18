@@ -29,4 +29,9 @@ export interface ApiResponse<T = unknown> {
    * the raw error text. Absent for unknown/unexpected failures.
    */
   code?: string
+  /**
+   * True when `data` is a cached, possibly-incomplete copy served because the
+   * live source was unreachable (remote member history while owner offline).
+   */
+  stale?: boolean
 }

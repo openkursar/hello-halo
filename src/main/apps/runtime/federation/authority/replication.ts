@@ -40,6 +40,8 @@ import type {
   AckFrame,
   BlackboardReplicateFrame,
   BlackboardWriteFrame,
+  CatchupRequestFrame,
+  CatchupResponseFrame,
   Fid,
   M2Frame,
   RejectFrame,
@@ -58,6 +60,17 @@ import type {
 import { SELF_NODE_ID } from '../../../../../shared/apps/team-types'
 
 const LOG_TAG = '[Replication]'
+
+/**
+ * A better-sqlite3 PRIMARY KEY / UNIQUE violation — i.e. "this exact row id is
+ * already present". On the idempotent replica-apply path this is EXPECTED (an
+ * author's optimistic local copy, or a catch-up redelivery), not an error, so it
+ * is swallowed there; any other store failure still propagates.
+ */
+function isDuplicateRowError(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code
+  return code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || code === 'SQLITE_CONSTRAINT_UNIQUE'
+}
 
 // ── Constants ──
 
@@ -145,6 +158,13 @@ export interface ReplicationDeps {
    * mutate no blackboard row). Default: no-op.
    */
   onReplicaApplied?: (info: { op: ReplicationOp; taskId?: string }) => void
+  /**
+   * Fired for every committed replicate frame this standby receives (a post-commit
+   * fan-out proves the authority accepted that fid). Used as the POSITIVE ack for a
+   * member's own shadow write — confirming it so the unconfirmed-rollback backstop
+   * does not fire. A no-op for fids this node did not author. Default: no-op.
+   */
+  onReplicatedFid?: (fid: Fid) => void
 }
 
 export interface Replication {
@@ -196,6 +216,7 @@ export function createReplication(deps: ReplicationDeps): Replication {
   const admitMemberWrite = deps.admitMemberWrite ?? (() => true)
   const bumpRosterEpoch = deps.bumpRosterEpoch ?? (() => {})
   const onReplicaApplied = deps.onReplicaApplied ?? (() => {})
+  const onReplicatedFid = deps.onReplicatedFid ?? (() => {})
 
   // No safe default for getKnownStandbyCount (see the deps doc above) — assert
   // at construction so a non-typed JS caller can't silently omit it and fail open.
@@ -217,7 +238,21 @@ export function createReplication(deps: ReplicationDeps): Replication {
 
   // Highest seq applied to the LOCAL replica (hot-standby side). On the authority
   // side, appliedSeq is the log max — both feed getAppliedSeq().
-  let replicaAppliedSeq = 0
+  //
+  // Seeded from the persisted durable log on construction, NOT 0: after a standby
+  // restart the entries it already applied are in the log (appended only AFTER a
+  // successful apply), so without this seed the in-memory water mark would reset to
+  // 0 and every new frame would look like a gap — catch-up would then replay the
+  // whole tail, find each entry already persisted (hasFid), ack without advancing,
+  // and never move past 0: a permanent post-restart catch-up livelock. Seeding to
+  // the log max restores the true applied position so new frames apply contiguously.
+  let replicaAppliedSeq = authorityStore.getMaxSeq(officeId)
+
+  // Catch-up debounce: a standby that detects a gap asks its authority to replay
+  // the missing run, at most one in-flight request per node (cleared on response
+  // or after a short window so a persistent gap re-asks).
+  let catchupInFlight = false
+  let catchupTimer: ReturnType<typeof setTimeout> | null = null
 
   // Per-node highest acked seq (not per-seq ack sets), recomputed into commit —
   // keeps tracking O(standbys) and monotone.
@@ -374,7 +409,15 @@ export function createReplication(deps: ReplicationDeps): Replication {
   function applyToReplica(frame: BlackboardReplicateFrame): boolean {
     switch (frame.op) {
       case 'post_task':
-        replicaStore.insertTask(frame.payload as unknown as BlackboardTask)
+        // Idempotent upsert (not a bare insert): the author of a shadow write
+        // optimistically applied this SAME id locally before the authority echoed
+        // it back (location-aware-blackboard), and catch-up can redeliver an
+        // already-applied entry. A primary-key clash here would abort the apply,
+        // strand replicaAppliedSeq, and livelock every later catch-up of this seq
+        // behind the persisted fid — exactly the convergence the shadow-write
+        // design already promises ("host applies the SAME id … converge
+        // idempotently").
+        upsertReplicaTask(frame.payload as unknown as BlackboardTask)
         return true
       case 'update_task': {
         const p = frame.payload as {
@@ -401,7 +444,10 @@ export function createReplication(deps: ReplicationDeps): Replication {
         return true
       }
       case 'post_finding':
-        replicaStore.insertFinding(frame.payload as unknown as BlackboardFinding)
+        // Idempotent (findings are immutable + append-only): tolerate a redelivered
+        // or optimistically-pre-applied duplicate id instead of throwing (see
+        // post_task) — a duplicate is a no-op, any other failure still propagates.
+        insertFindingIdempotent(frame.payload as unknown as BlackboardFinding)
         return true
       case 'roster_join':
       case 'roster_leave':
@@ -419,17 +465,48 @@ export function createReplication(deps: ReplicationDeps): Replication {
       reject(from, frame.fid, 'EPOCH_STALE')
       return
     }
-    // Idempotent apply: (officeId, seq) monotonic AND (officeId, fid) dedup. Either
-    // hit means we already applied this write → re-ack (ack may have been lost) but
-    // do not re-apply.
-    const duplicateBySeq = frame.seq <= replicaAppliedSeq
-    const duplicateByFid = fidDedup.seen(frame.fromNode, frame.fid) || authorityStore.hasFid(officeId, frame.fid)
-    if (duplicateBySeq || duplicateByFid) {
+    // A replicate frame is a post-commit fan-out: reaching here proves the authority
+    // accepted this fid. Positive-ack the member's own shadow write (no-op otherwise)
+    // regardless of whether the local replica row changes, so a confirmed write is
+    // never later rolled back by the unconfirmed backstop.
+    onReplicatedFid(frame.fid)
+    // Idempotent apply. Order matters: the two side-effect-free duplicate checks
+    // run BEFORE the gap check, and the in-memory fid dedup (which RECORDS the
+    // fid) runs only on the apply path — otherwise a gap-dropped frame would
+    // record its fid and the catch-up re-delivery of that same seq would be
+    // falsely deduped and never applied (the hole would persist).
+    if (frame.seq <= replicaAppliedSeq) {
+      sendAck(from, frame) // already applied (monotonic) → re-ack, don't re-apply
+      return
+    }
+    if (authorityStore.hasFid(officeId, frame.fid)) {
+      sendAck(from, frame) // cross-restart/handover replay of a persisted write
+      return
+    }
+    // Gap: this seq is beyond the next contiguous one → frames were missed while
+    // briefly disconnected. Applying out of order would skip the hole forever, so
+    // instead ask the authority to replay the missing run (which re-delivers this
+    // seq too, contiguously). Drop this frame; do NOT advance past or record it.
+    if (frame.seq > replicaAppliedSeq + 1) {
+      requestCatchup(from)
+      return
+    }
+    // Contiguous first delivery: record in the live-window dedup, then apply.
+    if (fidDedup.seen(frame.fromNode, frame.fid)) {
       sendAck(from, frame)
       return
     }
+    // Apply to the read-only replica FIRST (idempotently), THEN persist the durable
+    // log entry and advance the applied water mark. Ordering is load-bearing: if the
+    // apply were to abort AFTER the log append (the previous order), the fid would be
+    // persisted while replicaAppliedSeq stayed put — and every later catch-up of this
+    // seq would short-circuit on hasFid and never fill the hole, a permanent livelock
+    // that also stalls the authority's committedSeq. Applying first makes the trio
+    // fail-safe: any abort leaves the seq unadvanced and the fid unpersisted, so a
+    // retransmit / catch-up cleanly retries.
+    const rowChanged = applyToReplica(frame)
     // Persist to the local durable log too (so a standby promoted to authority can
-    // serve catch-up + continue the seq), then apply to the read-only replica.
+    // serve catch-up + continue the seq).
     authorityStore.appendLogEntry({
       officeId,
       seq: frame.seq,
@@ -440,7 +517,6 @@ export function createReplication(deps: ReplicationDeps): Replication {
       taskId: frame.taskId ?? null,
       createdAt: now(),
     })
-    const rowChanged = applyToReplica(frame)
     replicaAppliedSeq = Math.max(replicaAppliedSeq, frame.seq)
     // A fresh task/finding landed on this standby's replica → signal the
     // renderer to refresh live (roster ops change no row, so they do not emit).
@@ -559,6 +635,162 @@ export function createReplication(deps: ReplicationDeps): Replication {
     }
   }
 
+  // ── Catch-up transport (standby ⇄ authority) ──
+
+  /** STANDBY: ask the authority to replay the run above our applied water mark. */
+  function requestCatchup(authority: NodeId): void {
+    if (catchupInFlight) return
+    catchupInFlight = true
+    const frame: CatchupRequestFrame = {
+      kind: 'catchup-request',
+      officeId,
+      fromNode: selfNodeId,
+      lastAckedSeq: replicaAppliedSeq,
+      fid: randomUUID(),
+    }
+    console.log(`${LOG_TAG} requesting catch-up office=${officeId} from=${replicaAppliedSeq}`)
+    send(authority, frame)
+    // Clear the in-flight latch after a bounded window so a lost response re-asks.
+    if (catchupTimer) clearTimeout(catchupTimer)
+    catchupTimer = setTimeout(() => {
+      catchupInFlight = false
+      catchupTimer = null
+    }, REPLICATION_ACK_TIMEOUT_MS * 2)
+    if (typeof catchupTimer.unref === 'function') catchupTimer.unref()
+  }
+
+  /** AUTHORITY: serve a standby's catch-up request from the durable log/snapshot. */
+  function handleCatchupRequest(from: NodeId, frame: CatchupRequestFrame): void {
+    if (frame.officeId !== officeId) return
+    const result = buildCatchup(frame.lastAckedSeq)
+    const response: CatchupResponseFrame =
+      result.mode === 'incremental'
+        ? {
+            kind: 'catchup-response',
+            officeId,
+            fromNode: selfNodeId,
+            term: getTerm(),
+            reFid: frame.fid,
+            mode: 'incremental',
+            entries: result.entries.map((e) => ({
+              seq: e.seq,
+              term: e.term,
+              op: e.op,
+              payload: e.payload,
+              ...(e.taskId !== null ? { taskId: e.taskId } : {}),
+              fid: e.fid,
+            })),
+            fid: randomUUID(),
+          }
+        : {
+            kind: 'catchup-response',
+            officeId,
+            fromNode: selfNodeId,
+            term: getTerm(),
+            reFid: frame.fid,
+            mode: 'snapshot',
+            snapshot: result.snapshot,
+            fid: randomUUID(),
+          }
+    send(from, response)
+  }
+
+  /** STANDBY: apply a catch-up reply — replay entries in order, or a snapshot. */
+  function handleCatchupResponse(from: NodeId, frame: CatchupResponseFrame): void {
+    if (frame.officeId !== officeId) return
+    if (frame.term < getTerm()) return // from a sealed tenure
+    catchupInFlight = false
+    if (catchupTimer) {
+      clearTimeout(catchupTimer)
+      catchupTimer = null
+    }
+
+    if (frame.mode === 'snapshot' && frame.snapshot) {
+      applySnapshot(frame.snapshot)
+      return
+    }
+    // Incremental: feed each entry through the normal apply path (dedup + ack +
+    // gap guard). Entries are contiguous above lastAckedSeq, so they fill the hole.
+    for (const e of frame.entries ?? []) {
+      handleReplicate(from, {
+        kind: 'blackboard-replicate',
+        officeId,
+        fromNode: from,
+        term: e.term,
+        seq: e.seq,
+        op: e.op,
+        payload: e.payload,
+        ...(e.taskId !== undefined ? { taskId: e.taskId } : {}),
+        fid: e.fid,
+      })
+    }
+  }
+
+  /** Insert a finding, treating a duplicate id as a no-op (findings are immutable). */
+  function insertFindingIdempotent(finding: BlackboardFinding): void {
+    try {
+      replicaStore.insertFinding(finding)
+    } catch (err) {
+      // The identical immutable row is already present — keep it. A non-duplicate
+      // store failure is a real error and must propagate.
+      if (!isDuplicateRowError(err)) throw err
+    }
+  }
+
+  /** Overwrite (or insert) a replica task to match the authority snapshot's row. */
+  function upsertReplicaTask(task: BlackboardTask): void {
+    if (replicaStore.getTaskById(task.id)) {
+      // Mutable fields only; a task's identity fields (title/epoch/parent/created)
+      // are immutable and identical for the same id.
+      replicaStore.updateTask(
+        task.id,
+        { status: task.status, assigneeAppId: task.assigneeAppId, resultRef: task.resultRef, note: task.note },
+        task.updatedAt
+      )
+    } else {
+      replicaStore.insertTask(task)
+    }
+  }
+
+  /**
+   * STANDBY: reconcile the replica to a full authority snapshot (the gap predated
+   * the retained log). This is a true replace, not a best-effort merge: a standby
+   * that held a stale/extra row — e.g. a rejected optimistic write, or a task the
+   * authority deleted during the gap — must converge exactly to authority truth,
+   * or the board diverges forever (insert-only kept the stale row). Scope is
+   * bounded by what the snapshot actually carries: tasks are the COMPLETE team set
+   * (safe to prune to it), while findings are gathered per task-epoch, so findings
+   * are reconciled ONLY within epochs the snapshot covers — an epoch outside that
+   * set is left untouched rather than wrongly emptied.
+   */
+  function applySnapshot(snapshot: NonNullable<CatchupResponseFrame['snapshot']>): void {
+    const snapTasks = snapshot.tasks as BlackboardTask[]
+    const snapFindings = snapshot.findings as BlackboardFinding[]
+
+    // Tasks: prune local rows the snapshot omits, then upsert each snapshot row.
+    const wantTaskIds = new Set(snapTasks.map((t) => t.id))
+    for (const local of replicaStore.listTasksByTeam(officeId)) {
+      if (!wantTaskIds.has(local.id)) replicaStore.deleteTask(local.id)
+    }
+    for (const task of snapTasks) upsertReplicaTask(task)
+
+    // Findings (immutable, append-only): prune extras only within covered epochs.
+    const coveredEpochs = new Set<string>()
+    for (const t of snapTasks) coveredEpochs.add(t.epochId)
+    for (const f of snapFindings) coveredEpochs.add(f.epochId)
+    const wantFindingIds = new Set(snapFindings.map((f) => f.id))
+    for (const epochId of coveredEpochs) {
+      for (const local of replicaStore.listFindingsByEpoch(officeId, epochId)) {
+        if (!wantFindingIds.has(local.id)) replicaStore.deleteFinding(local.id)
+      }
+    }
+    for (const finding of snapFindings) insertFindingIdempotent(finding)
+
+    replicaAppliedSeq = Math.max(replicaAppliedSeq, snapshot.appliedSeq)
+    onReplicaApplied({ op: 'post_task' })
+    console.log(`${LOG_TAG} applied snapshot office=${officeId} appliedSeq=${replicaAppliedSeq}`)
+  }
+
   // ── Dispatch ──
 
   function handleM2Frame(from: NodeId, frame: M2Frame): void {
@@ -571,6 +803,12 @@ export function createReplication(deps: ReplicationDeps): Replication {
         break
       case 'blackboard-write':
         handleBlackboardWrite(from, frame)
+        break
+      case 'catchup-request':
+        handleCatchupRequest(from, frame)
+        break
+      case 'catchup-response':
+        handleCatchupResponse(from, frame)
         break
       default:
         // Other M2 frames (authority/artifact) belong to other modules.

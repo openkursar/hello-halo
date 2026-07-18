@@ -19,6 +19,18 @@ export function getAppChatConversationId(appId: string): string {
 }
 
 /**
+ * Build the chatKey for a member's 1:1 direct-chat 'conversation' epoch — one
+ * long-lived thread per member, decoupled from team runs. The SAME key MUST be
+ * used by the send path (open/reuse the epoch) and the history read (find it), so
+ * a message and its transcript always resolve to the same epoch.
+ *
+ * Format: "direct:{appId}"
+ */
+export function memberChatKey(appId: string): string {
+  return `direct:${appId}`
+}
+
+/**
  * Build a fully-qualified session key for IM channel conversations.
  *
  * Format: "app-chat:{appId}:{channel}:{chatType}:{chatId}"

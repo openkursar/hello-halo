@@ -33,6 +33,7 @@ import {
   CAP,
   type M2Frame,
 } from './protocol-m2'
+import { isFeedSyncFrame, type FeedSyncFrame } from './log/types'
 import { SELF_NODE_ID, type TeamMemberRuntimeStatus } from '../../../../shared/apps/team-types'
 import {
   PRESENCE_CONFIRMED_OFFLINE_MS,
@@ -149,6 +150,15 @@ export interface FederationCoordinatorDeps {
    */
   onM2Frame?: (from: NodeId, frame: M2Frame) => void
   /**
+   * Unified feed-log sync frames (`feed-subscribe`/`feed-entries`/`feed-ack`/
+   * `feed-nack`): routed verbatim to the manager's per-office ctrl-feed transport.
+   * The coordinator carries the correct `from` (the delivering peer), which the
+   * feed producer/consumer need to track cursors — so routing here, not at the
+   * manager's many inbound entrypoints, keeps the source attribution in one place.
+   * Absent → a feed-sync frame is dropped (an office with FEED_SYNC off).
+   */
+  onFeedFrame?: (from: NodeId, frame: FeedSyncFrame) => void
+  /**
    * M2 join enrichment: the authority's current tenure (term) + effective caps at
    * admission, folded into the join-grant so a joiner aligns its term baseline.
    * Absent → grant carries no term (M1 behaviour).
@@ -193,6 +203,13 @@ export interface FederationCoordinator {
    */
   sweepPresence(): void
   tick(): void
+  /**
+   * OS-resume grace: re-baseline every non-confirmed node's silence and emit a
+   * heartbeat, so a machine waking from sleep does not mass-confirm healthy
+   * peers offline. Driven by the power event, independent of the clock-delta
+   * guard in sweepPresence (which is platform-dependent).
+   */
+  notifyResume(): void
   getPresence(): PresenceSnapshot
   /**
    * Host role: re-project the full roster to every joiner + refresh local UI.
@@ -224,6 +241,7 @@ export function createFederationCoordinator(
     onRosterChanged,
     onRoster,
     onM2Frame,
+    onFeedFrame,
     getJoinGrantExtras,
     getCurrentRunEpoch,
     getMemberRuntimeStatus,
@@ -608,10 +626,21 @@ export function createFederationCoordinator(
       const last = lastRejoinNudge.get(fromNode) ?? -Infinity
       if (mono - last >= REJOIN_NUDGE_INTERVAL_MS) {
         lastRejoinNudge.set(fromNode, mono)
-        console.warn(
-          `${LOG_TAG} heartbeat from confirmed-offline node=${fromNode} on live session; sending rejoin-request`
-        )
-        link.send(fromNode, { kind: 'rejoin-request', officeId })
+        if (lastJoinRequest) {
+          // JOINER role (this node joined via a join-request): the confirmed
+          // peer is the HOST — nudging IT to rejoin is meaningless (it never
+          // joined anything). Re-drive OUR OWN join instead; the fresh grant
+          // clears this node's latch and recovery completes.
+          console.warn(
+            `${LOG_TAG} heartbeat from confirmed-offline host=${fromNode} on live session; re-driving join`
+          )
+          link.send(fromNode, lastJoinRequest)
+        } else {
+          console.warn(
+            `${LOG_TAG} heartbeat from confirmed-offline node=${fromNode} on live session; sending rejoin-request`
+          )
+          link.send(fromNode, { kind: 'rejoin-request', officeId })
+        }
       }
       return
     }
@@ -621,7 +650,9 @@ export function createFederationCoordinator(
 
     // Recovery: a single heartbeat while in suspect rolls back to online with
     // NO side effects (the jitter was absorbed; no member was ever reassigned).
-    if (node.status === 'suspect') {
+    // An unlatched 'offline' row recovers the same way — the no-silent-revive
+    // invariant is enforced by confirmedNodes, not by row status.
+    if (node.status === 'suspect' || node.status === 'offline') {
       federationStore.setNodeStatus(officeId, fromNode, 'online', ts)
       console.log(`${LOG_TAG} node recovered suspect→online node=${fromNode} ts=${ts}`)
       link.broadcast({
@@ -649,15 +680,63 @@ export function createFederationCoordinator(
   // finds nothing to ack — turn-completes are one-shot per correlation.
   const pendingWakeAcks = new Map<string, Array<{ from: NodeId; correlationId: string }>>()
 
+  // Idempotency ledger so a RE-delivered wake (a network duplicate, or a future
+  // sender-side retransmit) never starts a second turn — double execution is a
+  // correctness bug, not just waste. A correlationId is at most once "run":
+  //   · in flight        → the turn is already running; swallow the duplicate.
+  //   · recently completed → replay the stored turn-complete (the sender's ack
+  //                          was lost) instead of re-running.
+  // recentlyCompleted evicts by AGE, not by count: a purely count-capped FIFO
+  // could, in a busy office, drop a correlationId while a delayed duplicate wake
+  // is still arriving → the duplicate would re-run (double execution). A TTL
+  // retains each outcome long past any realistic duplicate/retransmit window
+  // (sender retransmit tops out ~10s), so a late duplicate re-acks instead. The
+  // count cap is only a memory backstop for a pathological burst.
+  const inFlightWakes = new Set<string>()
+  const recentlyCompleted = new Map<string, { outcome: TurnCompletion; at: number }>()
+  const COMPLETED_LEDGER_TTL_MS = 10 * 60_000
+  const COMPLETED_LEDGER_CAP = 4096
+  function rememberCompleted(correlationId: string, outcome: TurnCompletion): void {
+    const at = now()
+    // Map preserves insertion order (chronological, keys unique per wake), so the
+    // expired entries are a prefix — delete until the first still-live one.
+    for (const [key, entry] of recentlyCompleted) {
+      if (at - entry.at > COMPLETED_LEDGER_TTL_MS) recentlyCompleted.delete(key)
+      else break
+    }
+    recentlyCompleted.set(correlationId, { outcome, at })
+    if (recentlyCompleted.size > COMPLETED_LEDGER_CAP) {
+      const oldest = recentlyCompleted.keys().next().value
+      if (oldest !== undefined) recentlyCompleted.delete(oldest)
+    }
+  }
+
   function handleWake(from: NodeId, msg: WakeFrame): void {
     if (!onWake) {
       console.warn(`${LOG_TAG} wake for non-owner office=${officeId} corr=${msg.correlationId}; dropping`)
       return
     }
-    console.log(`${LOG_TAG} wake received office=${officeId} app=${msg.request.appId} corr=${msg.correlationId}`)
+    const corr = msg.correlationId
+
+    // Duplicate after completion: re-ack with the stored outcome, do NOT re-run.
+    const done = recentlyCompleted.get(corr)
+    if (done) {
+      console.log(`${LOG_TAG} duplicate wake after completion office=${officeId} corr=${corr}; re-acking`)
+      link.send(from, { kind: 'turn-complete', officeId, correlationId: corr, outcome: done.outcome })
+      return
+    }
+    // Duplicate while in flight: the turn is already running and will ack on
+    // completion; swallow the resend (no second execution, no second injection).
+    if (inFlightWakes.has(corr)) {
+      console.log(`${LOG_TAG} duplicate wake in flight office=${officeId} corr=${corr}; swallowing`)
+      return
+    }
+
+    console.log(`${LOG_TAG} wake received office=${officeId} app=${msg.request.appId} corr=${corr}`)
+    inFlightWakes.add(corr)
     const convId = msg.request.conversationId
     const pending = pendingWakeAcks.get(convId) ?? []
-    pending.push({ from, correlationId: msg.correlationId })
+    pending.push({ from, correlationId: corr })
     pendingWakeAcks.set(convId, pending)
     void onWake(msg.request)
       .then((res): TurnCompletion => ({ kind: 'result', content: res.finalMessage ?? '' }))
@@ -675,6 +754,10 @@ export function createFederationCoordinator(
           )
         }
         for (const entry of batch) {
+          inFlightWakes.delete(entry.correlationId)
+          // Remember the outcome so a late duplicate of this wake re-acks instead
+          // of re-running (its sender's turn-complete may have been lost).
+          rememberCompleted(entry.correlationId, outcome)
           // The joiner link routes only to its single host peer, so the target
           // node id is a label; each wake's origin keeps its own reflux address.
           link.send(entry.from, {
@@ -694,10 +777,28 @@ export function createFederationCoordinator(
       case 'join-request':
         handleJoinRequest(msg)
         break
-      case 'join-grant':
+      case 'join-grant': {
         console.log(`${LOG_TAG} join granted assignedNodeId=${msg.assignedNodeId}`)
+        // A grant is a fresh handshake: clear this node's confirmed-offline
+        // latches on its peers. Without it a host confirmed-offline during a
+        // transport blip stays latched forever on the joiner — the host clears
+        // its latch on our join-request, but nothing cleared ours (the
+        // asymmetric half of the no-silent-revive invariant).
+        confirmedNodes.clear()
+        lastRejoinNudge.clear()
+        let revived = false
+        for (const node of federationStore.listNodesByOffice(officeId)) {
+          if (node.nodeId === context.selfNodeId) continue
+          markSeen(node.nodeId)
+          if (node.status !== 'online') {
+            federationStore.setNodeStatus(officeId, node.nodeId, 'online', now())
+            revived = true
+          }
+        }
+        if (revived) notifyPresence()
         onJoinGrant?.(msg.assignedNodeId)
         break
+      }
       case 'join-reject':
         onJoinReject?.(msg.reason)
         break
@@ -760,6 +861,13 @@ export function createFederationCoordinator(
         else console.warn(`${LOG_TAG} member-leave with no handler office=${officeId}; dropping`)
         break
       default:
+        // Feed-sync transport frames: routed to the manager's ctrl-feed with the
+        // delivering peer as the source (feeds route acks/subscribes by author).
+        if (isFeedSyncFrame(msg)) {
+          if (onFeedFrame) onFeedFrame(from, msg)
+          else console.debug(`${LOG_TAG} feed-sync frame with no ctrl-feed office=${officeId} kind=${msg.kind}; dropping`)
+          break
+        }
         // M2 family (authority / replication / artifact): delegated verbatim to
         // the injected authority module. Unknown future frames are ignored
         // (forward-compat: an unknown optional frame never crashes the node).
@@ -882,13 +990,10 @@ export function createFederationCoordinator(
       const wallDelta = ts - lastSweep.wall
       const monoDelta = mono - lastSweep.mono
       if (wallDelta - monoDelta >= confirmedOfflineMs) {
-        for (const node of federationStore.listNodesByOffice(officeId)) {
-          if (!confirmedNodes.has(node.nodeId)) markSeen(node.nodeId)
-        }
+        regraceNonConfirmed()
         console.warn(
           `${LOG_TAG} presence resume guard office=${officeId} wallDelta=${wallDelta} monoDelta=${monoDelta}; granting grace`
         )
-        lastSweep = { wall: ts, mono }
         return
       }
     }
@@ -920,6 +1025,34 @@ export function createFederationCoordinator(
         }
       }
     }
+  }
+
+  /**
+   * Re-baseline every non-confirmed peer's silence to now and reset the sweep
+   * pair, so the next tick measures fresh silence. The shared core of both the
+   * sweep's clock-delta resume guard and the explicit OS-resume path. Latched
+   * (confirmed-offline) nodes are left as a real prior departure.
+   */
+  function regraceNonConfirmed(): void {
+    for (const node of federationStore.listNodesByOffice(officeId)) {
+      if (node.nodeId === context.selfNodeId) continue
+      if (!confirmedNodes.has(node.nodeId)) markSeen(node.nodeId)
+    }
+    lastSweep = { wall: now(), mono: monotonicNow() }
+  }
+
+  /**
+   * Explicit system-resume grace, driven by the OS power event rather than
+   * inferred from a wall/monotonic clock gap — the sweep's clock-delta guard is
+   * platform-dependent (some platforms advance performance.now() across sleep,
+   * defeating it), so this is the reliable path.
+   */
+  function notifyResume(): void {
+    regraceNonConfirmed()
+    // Announce liveness immediately so peers that did NOT sleep re-baseline this
+    // node too, instead of waiting a full heartbeat interval.
+    sendHeartbeat()
+    console.log(`${LOG_TAG} resume grace applied office=${officeId}`)
   }
 
   function requestJoin(req: JoinRequest): void {
@@ -958,6 +1091,7 @@ export function createFederationCoordinator(
     requestJoin,
     sendHeartbeat,
     sweepPresence,
+    notifyResume,
     tick: sweepPresence,
     getPresence: snapshot,
     broadcastRoster,

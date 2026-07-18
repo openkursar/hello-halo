@@ -33,10 +33,26 @@ export const teamApi = {
     return httpRequest('GET', `/api/teams/${teamId}/artifacts`)
   },
 
-  /** Load a member's team-channel chat history for one run (the work they did). */
-  teamChatMessages: async (appId: string, spaceId: string, teamId: string, epochId: string): Promise<ApiResponse> => {
-    if (isElectron()) return window.halo.teamChatMessages({ appId, spaceId, teamId, epochId })
-    return httpRequest('GET', `/api/teams/${teamId}/chat-messages?appId=${encodeURIComponent(appId)}&epochId=${encodeURIComponent(epochId)}`)
+  /**
+   * Load a member's team-channel chat history for one run (the work they did).
+   * `sinceSeq` requests only the tail newer than an already-cached watermark, so
+   * a refresh transfers a small delta instead of the whole transcript (the fix
+   * for slow full re-pulls of a remote member's history).
+   */
+  teamChatMessages: async (
+    appId: string,
+    spaceId: string,
+    teamId: string,
+    epochId: string,
+    sinceSeq?: number
+  ): Promise<ApiResponse> => {
+    if (isElectron())
+      return window.halo.teamChatMessages({ appId, spaceId, teamId, epochId, ...(sinceSeq ? { sinceSeq } : {}) })
+    const since = sinceSeq ? `&sinceSeq=${sinceSeq}` : ''
+    return httpRequest(
+      'GET',
+      `/api/teams/${teamId}/chat-messages?appId=${encodeURIComponent(appId)}&epochId=${encodeURIComponent(epochId)}${since}`
+    )
   },
 
   /**
@@ -207,4 +223,5 @@ export const teamApi = {
   onTeamPresence: (callback: (data: unknown) => void) => onEvent('team:presence', callback),
   onTeamOfficeStatus: (callback: (data: unknown) => void) => onEvent('team:office-status', callback),
   onTeamInviteLink: (callback: (data: unknown) => void) => onEvent('team:invite-link', callback),
+  onTeamMemberHistory: (callback: (data: unknown) => void) => onEvent('team:member-history', callback),
 }

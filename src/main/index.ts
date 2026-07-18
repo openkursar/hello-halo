@@ -114,6 +114,21 @@ if (dataFolderName !== DEFAULT_DATA_FOLDER_NAME) {
   console.log(`[Main] userData isolated to: ${joinPath(appDataPath, dataFolderName)}`)
 }
 
+// Log isolation mirrors the data-dir rule (config.service getHaloDir): a dev
+// run and per-variant builds must not interleave their logs with the packaged
+// default's ~/Library/Logs/halo — electron-log keys its path on the app name,
+// which is identical across instances.
+{
+  const logFolderName = !app.isPackaged ? `${dataFolderName}-dev` : dataFolderName
+  if (logFolderName !== DEFAULT_DATA_FOLDER_NAME) {
+    const logsPath = joinPath(app.getPath('logs'), '..', logFolderName)
+    app.setPath('logs', logsPath)
+    log.transports.file.resolvePathFn = (variables) =>
+      joinPath(logsPath, variables.fileName ?? 'main.log')
+    console.log(`[Main] logs isolated to: ${logsPath}`)
+  }
+}
+
 // Single instance lock: Prevent multiple instances of the application
 // Must be called before app.whenReady()
 // Skip in development mode and E2E tests to allow multiple instances

@@ -2,7 +2,7 @@
 
 import { ipcMain } from 'electron'
 import { getTeamService } from '../apps/team'
-import { TEAM_IPC } from '../../shared/apps/team-types'
+import { TEAM_IPC, memberChatKey } from '../../shared/apps/team-types'
 import { readTeamMemberMessages } from '../apps/runtime/app-chat'
 import { getTeamStore } from '../apps/team'
 import { getFederationManager } from '../apps/runtime/federation/manager'
@@ -112,27 +112,50 @@ export function registerTeamIpc(): void {
   // The read logic lives in readTeamMemberMessages (apps/runtime/app-chat) so the
   // IPC and HTTP surfaces share a single source of truth. spaceId is accepted for
   // wire compatibility but ignored — the app's installed spaceId is authoritative.
-  ipcMain.handle('team:chat-messages', async (_e, input: { appId: string; spaceId?: string; teamId: string; epochId: string }) => {
+  ipcMain.handle('team:chat-messages', async (_e, input: { appId: string; spaceId?: string; teamId: string; epochId: string; sinceSeq?: number }) => {
     try {
       // A remote-owned member's transcript lives on the node that OWNS it, not
       // here. Mirror the HTTP route (team.routes.ts) and pull it over the office
       // link from that owner; a locally-owned member reads from local chat
       // storage as before. Without this branch a desktop joiner refreshing a
       // remote member's history sees blank.
-      const target = getTeamStore()?.listMembersByTeam(input.teamId).find((m) => m.appId === input.appId)
+      // Accept only a positive integer cursor (mirror the HTTP route); anything
+      // else means "full transcript" rather than trusting a bogus wire value.
+      const sinceSeq =
+        Number.isInteger(input.sinceSeq) && (input.sinceSeq as number) > 0 ? input.sinceSeq : undefined
+      const teamStore = getTeamStore()
+      const target = teamStore?.listMembersByTeam(input.teamId).find((m) => m.appId === input.appId)
       if (target?.origin === 'remote' && target.ownerNodeId) {
         const manager = getFederationManager()
         if (!manager) {
           return { success: false, error: 'Federation is not yet initialized. Please try again shortly.' }
         }
-        const messages = await manager.fetchMemberHistory({
+        // Resolve the SAME epoch the send path uses so a message and its transcript
+        // never diverge: an open run epoch, else the member's long-lived conversation
+        // epoch. Read-only — never CREATE one here (that is the send path's job); if
+        // none exists yet (nothing sent), there is simply nothing to show.
+        const epochId =
+          input.epochId ||
+          teamStore?.getCurrentEpochForTeam(input.teamId)?.id ||
+          teamStore?.getOpenConversationEpoch(input.teamId, memberChatKey(input.appId))?.id
+        if (!epochId) return { success: true, data: [] }
+        const result = await manager.fetchMemberHistory({
           officeId: input.teamId,
           ownerNodeId: target.ownerNodeId,
           appId: input.appId,
-          epochId: input.epochId,
+          epochId,
+          sinceSeq,
         })
-        return { success: true, data: messages }
+        // stale=true → served from cache because the owner is unreachable; the
+        // renderer shows an "offline, may not be up to date" notice.
+        return { success: true, data: result.messages, stale: result.stale }
       }
+      // Locally-owned member: its transcript is per-epoch on disk. No epoch yet
+      // means nothing has run for it here → empty (never an error).
+      if (!input.epochId) return { success: true, data: [] }
+      // A local JSONL read is already fast, so return the full transcript regardless
+      // of sinceSeq — the renderer dedups by seq, so re-sending known rows is harmless
+      // and avoids a second read path.
       const messages = readTeamMemberMessages(input.appId, input.teamId, input.epochId)
       return { success: true, data: messages }
     } catch (err) {

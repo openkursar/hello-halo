@@ -75,6 +75,9 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
 
   const [messages, setMessages] = useState<Message[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
+  // True when the transcript shown is a cached copy served because the owner is
+  // offline — it may be missing their latest messages, so we say so honestly.
+  const [isStale, setIsStale] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const session = useChatStore(s => s.getSession(conversationId))
@@ -93,15 +96,74 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
 
   const streamingBrowserToolCalls = useBrowserToolCalls(thoughts)
 
+  // Highest transcript seq currently held. A silent refresh (post-turn) pulls
+  // only the tail above it (sinceSeq) and appends, instead of re-downloading the
+  // whole transcript — the fix for a remote member's history reloading slowly on
+  // every turn. Reset on member/epoch switch so a new member does a full load.
+  const seqCursorRef = useRef(0)
+  useEffect(() => { seqCursorRef.current = 0; setIsStale(false) }, [appId, epochId])
+
   const loadMessages = useCallback(async (silent = false) => {
-    if (!epochId) { setLoadState('empty'); return }
+    // No local "no epoch → skip" short-circuit: a remote member with no run yet
+    // still has a per-member conversation epoch resolved SERVER-side (1:1 chat needs
+    // no run — parity with local chat). The backend returns an empty list when there
+    // is genuinely nothing to show.
     if (!silent) setLoadState('loading')
     try {
-      const res = await api.teamChatMessages(appId, spaceId, teamId, epochId)
+      const cursor = seqCursorRef.current
+      const incremental = silent && cursor > 0
+      // Re-fetch from one BELOW the cursor: the transcript's last message is
+      // provisional while a turn runs (the reader flushes the in-flight turn at
+      // end-of-file), so the row under the cursor may have been completed since
+      // it was first seen — always refresh it rather than trusting the snapshot.
+      const res = await api.teamChatMessages(
+        appId, spaceId, teamId, epochId ?? '',
+        incremental && cursor > 1 ? cursor - 1 : undefined
+      )
       if (res.success && res.data) {
-        const msgs = (res.data as Message[]) ?? []
-        setMessages(msgs)
-        setLoadState(msgs.length > 0 ? 'loaded' : 'empty')
+        // Honest offline signal: a stale response means these are cached messages
+        // served because the owner is offline; a fresh one clears the notice.
+        setIsStale(res.stale === true)
+        const batch = (res.data as Message[]) ?? []
+        const seqOf = (m: Message): number | undefined => (m as { seq?: number }).seq
+        const maxSeq = batch.reduce((hi, m) => Math.max(hi, seqOf(m) ?? 0), cursor)
+        if (incremental) {
+          // Merge by seq: a known row is REPLACED (its provisional snapshot may
+          // have been completed), a new one appended. An empty delta leaves the
+          // screen exactly as it is.
+          if (batch.length > 0) {
+            setMessages((prev) => {
+              const bySeq = new Map<number, Message>()
+              for (const m of batch) {
+                const s = seqOf(m)
+                if (s !== undefined) bySeq.set(s, m)
+              }
+              const appendSeqs = new Set(bySeq.keys())
+              const replaced = prev.map((m) => {
+                const s = seqOf(m)
+                if (s === undefined || !bySeq.has(s)) return m
+                appendSeqs.delete(s)
+                return bySeq.get(s)!
+              })
+              const fresh = batch.filter((m) => { const s = seqOf(m); return s !== undefined && appendSeqs.has(s) })
+              // A locally-echoed send (optimistic, no seq) reappears in this
+              // persisted batch with a seq — drop the echo it supersedes (matched
+              // by role+content) so the user's own message is not rendered twice.
+              // Echoes with no persisted counterpart yet are kept as-is.
+              const supersededKeys = new Set(fresh.map((m) => `${m.role}\u0000${m.content}`))
+              const base = replaced.filter(
+                (m) => seqOf(m) !== undefined || !supersededKeys.has(`${m.role}\u0000${m.content}`)
+              )
+              return [...base, ...fresh]
+            })
+          }
+          seqCursorRef.current = maxSeq
+          setLoadState('loaded')
+        } else {
+          setMessages(batch)
+          seqCursorRef.current = maxSeq
+          setLoadState(batch.length > 0 ? 'loaded' : 'empty')
+        }
       } else {
         // Only surface the error state on an explicit load — a silent
         // post-turn reload should leave whatever is already on screen.
@@ -123,8 +185,25 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
     prevGen.current = isGenerating
   }, [isGenerating, loadMessages])
 
+  // Replicated transcript rows landed locally (a remote member's turn, or late
+  // replication after a network outage): silently reload so the panel follows
+  // without depending on live-stream continuity.
+  useEffect(() => {
+    return api.onTeamMemberHistory((data) => {
+      const d = data as { teamId?: string; appId?: string }
+      if (d?.teamId === teamId && d?.appId === appId) void loadMessages(true)
+    })
+  }, [teamId, appId, loadMessages])
+
   const presence = useMemberPresence(teamId, appId)
   const showOwner = presence.isRemote
+
+  // Mark an optimistically-rendered user message as failed so a non-delivery is
+  // never left looking like a successful send (the bubble carries the truth, not
+  // just a transient banner).
+  const markSendFailed = useCallback((messageId: string, reason: string) => {
+    setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, error: reason } : m)))
+  }, [])
 
   const handleSend = useCallback(async (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => {
     resetSession(conversationId)
@@ -154,21 +233,48 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
         ? await api.teamSendToMember({ teamId, appId, epochId: epochId ?? '', message: content, images: apiImages, thinkingEnabled })
         : await api.appChatSend({ appId, spaceId, message: content, images: apiImages, thinkingEnabled, conversationId, teamContext })
 
-      if (!res.success) {
-        // Keep remote failures people-centric — never surface the raw transport/IPC code.
-        const reason = presence.isRemote
-          ? t('Couldn\u2019t reach {{owner}} just now. Your message will need another try when they\u2019re back.', { owner: presence.ownerName || t('this teammate') })
-          : String(res.error || t('Failed to send message'))
+      // The envelope's `success` only means the IPC/HTTP call itself succeeded. For
+      // a remote member the ACTUAL delivery verdict is the inner sendToMember result
+      // (`data.ok` + `data.reason`); a wake that never reached the owner returns
+      // `success:true` with `data.ok:false`. Unwrap it so a non-delivery surfaces as
+      // a failed bubble instead of being masked as a normally-sent one.
+      const remoteResult =
+        presence.isRemote && res.success
+          ? (res.data as { ok?: boolean; reason?: string } | undefined)
+          : undefined
+      const failed = presence.isRemote ? !res.success || remoteResult?.ok === false : !res.success
+      if (failed) {
+        const owner = presence.ownerName || t('this teammate')
+        // Keep remote failures people-centric AND HONEST — map each reason to what
+        // actually happened, never collapse everything to "offline". Only a real
+        // non-delivery (UNDELIVERED) says the teammate is unreachable.
+        const remoteReason = (): string => {
+          switch (remoteResult?.reason) {
+            case 'TIMEOUT':
+              return t('No reply from {{owner}} in time — they may be busy. Try again shortly.', { owner })
+            case 'UNDELIVERED':
+              return t('Couldn\u2019t reach {{owner}} — your message was not delivered. Try again when they\u2019re back online.', { owner })
+            case 'NO_LEAD':
+              return t('This office needs a lead before teammates can chat. Set one, then try again.')
+            case 'MEMBER_NOT_FOUND':
+              return t('{{owner}} is no longer in this office.', { owner })
+            default:
+              return t('Couldn\u2019t send your message just now. Please try again.')
+          }
+        }
+        const reason = presence.isRemote ? remoteReason() : String(res.error || t('Failed to send message'))
         useChatStore.getState().setSessionError(conversationId, reason)
+        markSendFailed(userMsg.id, reason)
       }
       requestAnimationFrame(() => scrollToBottom('auto'))
     } catch (err) {
       const reason = presence.isRemote
-        ? t('Couldn\u2019t reach {{owner}} just now. Your message will need another try when they\u2019re back.', { owner: presence.ownerName || t('this teammate') })
+        ? t('Couldn\u2019t reach {{owner}} just now — your message was not delivered. Try again when they\u2019re back online.', { owner: presence.ownerName || t('this teammate') })
         : String((err as Error).message || t('Failed to send message'))
       useChatStore.getState().setSessionError(conversationId, reason)
+      markSendFailed(userMsg.id, reason)
     }
-  }, [appId, spaceId, teamId, conversationId, epochId, presence.isRemote, presence.ownerName, resetSession, scrollToBottom, t])
+  }, [appId, spaceId, teamId, conversationId, epochId, presence.isRemote, presence.ownerName, resetSession, scrollToBottom, markSendFailed, t])
 
   const handleStop = useCallback(async () => {
     try {
@@ -252,6 +358,14 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
                 >
                   {t('Try again')}
                 </button>
+              </div>
+            )}
+
+            {isStale && messages.length > 0 && (
+              <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+                <p className="text-xs text-amber-600 dark:text-amber-500">
+                  {t('Offline — showing saved messages, which may not be up to date.')}
+                </p>
               </div>
             )}
 

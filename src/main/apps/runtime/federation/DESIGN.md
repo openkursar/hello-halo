@@ -84,6 +84,16 @@ office it joined; both wrap a `Federation` (coordinator + link).
 - `relay.ts` — `createRelayCapture` (owned member's activity → relaySink) +
   `createStreamReplay` (received activity frames → local agent events, viewer
   renderer zero-change).
+- `session-feed.ts` — multi-replica session-transcript plane over the feed
+  substrate (`log/`): the OWNER appends each transcript message to its own
+  `session:<sessionKey>` feed (single writer, never pruned); every peer
+  replicates it into a local mirror + the history cache the manager's
+  cache-first `fetchMemberHistory` reads, so history opens locally and survives
+  an offline owner. The office authority serves the mirrored feeds onward
+  (joiner↔joiner replication over the star). Discovery = the `feed-advertise`
+  frame (on append / peer-online / slow re-announce tick); a behind consumer
+  answers with `feed-subscribe` from its watermark. Publish triggers: the
+  manager's `relaySink` (debounced + finalize pass) and a start-time heal.
 - `session-deps.ts` — location-aware session deps so a woken member runs with the
   right owner-resolved space.
 

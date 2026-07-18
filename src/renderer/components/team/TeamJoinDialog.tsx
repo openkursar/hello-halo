@@ -278,6 +278,10 @@ function joinErrorText(code: string | undefined, t: (k: string) => string): stri
       return t('Joining an office is only available in the desktop app.')
     case 'NO_MEMBERS':
       return t('Select at least one digital human to bring.')
+    case 'VERSION_INCOMPATIBLE':
+      return t('Your Halo version is not compatible with the host. Update both apps to the latest version and try again.')
+    case 'AUTH_REJECTED':
+      return t('This invite is no longer valid — it may have expired, been revoked, or the office was closed. Ask for a new invite link.')
     default:
       return t('Could not join the office. Check the link and that the person who invited you is online.')
   }

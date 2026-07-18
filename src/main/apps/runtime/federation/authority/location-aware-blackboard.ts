@@ -40,6 +40,100 @@ import type {
 
 const LOG_TAG = '[LocationAwareBlackboard]'
 
+/** A shadow write unconfirmed (neither replicated back nor rejected) this long is
+ *  treated as lost — its optimistic row is rolled back, not assumed a success. */
+const SHADOW_WRITE_TTL_MS = 30_000
+/** Cap resends of one write so a persistently-rejecting authority can't loop. */
+const SHADOW_WRITE_MAX_RESENDS = 3
+
+interface PendingShadowWrite {
+  resend: () => void
+  /** Undo the optimistic local apply (delete an insert, restore an update's
+   *  pre-image) so a definitively-rejected write does not diverge the board. */
+  rollback: () => void
+  /** Surface the discard to the user (deps.onWriteDiscarded) — a rolled-back
+   *  write must never be silent: the writer saw the row land optimistically. */
+  notifyDiscarded?: () => void
+  attempts: number
+  timer: ReturnType<typeof setTimeout>
+}
+
+/**
+ * Shadow writes awaiting the host's verdict, keyed by fid. A blackboard-write is
+ * fire-and-forget; the ONLY negative signal is a reject frame. Without consuming
+ * it, a write refused mid-handover (EPOCH_STALE) was silently lost and the local
+ * optimistic row diverged from the authority forever. This registry lets the
+ * manager route a reject back here (handleShadowWriteReject) to resend or roll
+ * back. Module-level: one blackboard per node, and fids are globally unique.
+ */
+const pendingShadowWrites = new Map<string, PendingShadowWrite>()
+
+function clearPendingShadowWrite(fid: string): void {
+  const p = pendingShadowWrites.get(fid)
+  if (p) {
+    clearTimeout(p.timer)
+    pendingShadowWrites.delete(fid)
+  }
+}
+
+/**
+ * Positive ack: the authority committed this write and replicated it back (the
+ * commit carries the member's ORIGINAL fid), so stop tracking it — it is
+ * confirmed and must not later hit the unconfirmed-rollback backstop. Routed from
+ * replication's apply path; a no-op for a fid this node never authored.
+ */
+export function confirmShadowWrite(fid: string): void {
+  clearPendingShadowWrite(fid)
+}
+
+/**
+ * A shadow write that within the TTL neither confirmed (replicated back) nor
+ * rejected: the authority most likely never received it (the write frame was
+ * lost). It was NOT silently a success — roll back the optimistic local row so the
+ * board reflects authority truth instead of a phantom row teammates never see.
+ * Safe against a merely-slow replication: a late catch-up re-applies the committed
+ * write idempotently, so the row reappears if it did in fact land.
+ */
+function rollbackUnconfirmedShadowWrite(fid: string): void {
+  const pending = pendingShadowWrites.get(fid)
+  if (!pending) return
+  console.warn(
+    `${LOG_TAG} shadow write unconfirmed within ${SHADOW_WRITE_TTL_MS}ms fid=${fid}; rolling back optimistic row`
+  )
+  pending.rollback()
+  pending.notifyDiscarded?.()
+  pendingShadowWrites.delete(fid)
+}
+
+/**
+ * Consume a host's reject of a shadow blackboard-write (routed by the manager).
+ * EPOCH_STALE is retryable — a write sent during a handover: resend it to the
+ * re-resolved authority with its ORIGINAL fid (the host dedups any overlap), so
+ * it is not silently lost. A definitive (non-retryable, e.g. scope) reject means
+ * the authority will NEVER accept this write, so its optimistic local row must be
+ * rolled back — otherwise it diverges from authority truth forever (replication
+ * only carries APPLIED writes, so a never-applied row is never corrected). A
+ * retryable reject that exhausts its resend cap is left in place: a handover is
+ * still settling and a later catch-up/snapshot reconciles it.
+ */
+export function handleShadowWriteReject(fid: string, retryable: boolean): void {
+  const pending = pendingShadowWrites.get(fid)
+  if (!pending) return
+  if (retryable && pending.attempts < SHADOW_WRITE_MAX_RESENDS) {
+    console.warn(`${LOG_TAG} shadow write rejected (retryable); resending fid=${fid} attempt=${pending.attempts + 1}`)
+    pending.resend()
+  } else {
+    if (retryable) {
+      console.warn(`${LOG_TAG} shadow write reject: resend cap reached fid=${fid}; leaving for reconcile`)
+    } else {
+      console.warn(`${LOG_TAG} shadow write rejected (non-retryable) fid=${fid}; rolling back optimistic row`)
+      pending.rollback()
+      pending.notifyDiscarded?.()
+    }
+    clearPendingShadowWrite(fid)
+  }
+}
+
 /** A blackboard write routed to an office's host (member → authority). */
 export interface OutboundBlackboardWrite {
   teamId: string
@@ -67,6 +161,13 @@ export interface LocationAwareBlackboardDeps {
    * (the local replica remains the read projection). Absent → never paused.
    */
   isOfficePaused?: (teamId: string) => boolean
+  /**
+   * An optimistic shadow write was rolled back (lost in transit past the TTL,
+   * or definitively rejected by the authority). The writer's user saw the row
+   * land — bootstrap maps this to a UI signal so the undo is never silent.
+   * Absent → rollback still happens, log-only.
+   */
+  onWriteDiscarded?: (teamId: string) => void
 }
 
 /**
@@ -83,6 +184,37 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
   function hostOf(teamId: string): NodeId | null {
     const team = store.getTeamById(teamId)
     return team?.hostNodeId ?? null
+  }
+
+  /**
+   * Send a shadow write to its host and track it by fid so a reject can resend or
+   * roll it back. Each attempt re-resolves the host (a handover may have moved
+   * authority) and keeps the ORIGINAL fid so the host dedups any overlap. The
+   * `rollback` undoes the caller's optimistic local apply on a definitive reject.
+   */
+  function emitShadowWrite(
+    teamId: string,
+    host: NodeId,
+    write: OutboundBlackboardWrite,
+    rollback: () => void,
+    attempt = 1
+  ): void {
+    sendBlackboardWrite(host, write)
+    const prev = pendingShadowWrites.get(write.fid)
+    if (prev) clearTimeout(prev.timer)
+    const timer = setTimeout(() => rollbackUnconfirmedShadowWrite(write.fid), SHADOW_WRITE_TTL_MS)
+    if (typeof timer.unref === 'function') timer.unref()
+    pendingShadowWrites.set(write.fid, {
+      attempts: attempt,
+      timer,
+      rollback,
+      notifyDiscarded: deps.onWriteDiscarded ? () => deps.onWriteDiscarded!(teamId) : undefined,
+      resend: () => {
+        const nextHost = hostOf(teamId)
+        if (nextHost) emitShadowWrite(teamId, nextHost, write, rollback, attempt + 1)
+        else clearPendingShadowWrite(write.fid)
+      },
+    })
   }
 
   /** Refuse a shadow write while the office is paused (see isOfficePaused). */
@@ -115,13 +247,18 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
       updatedAt: now,
     }
     store.insertTask(task) // optimistic local apply (position transparency)
-    sendBlackboardWrite(host, {
-      teamId: input.teamId,
-      op: 'post_task',
-      payload: task as unknown as Record<string, unknown>,
-      taskId: task.id,
-      fid: randomUUID(),
-    })
+    emitShadowWrite(
+      input.teamId,
+      host,
+      {
+        teamId: input.teamId,
+        op: 'post_task',
+        payload: task as unknown as Record<string, unknown>,
+        taskId: task.id,
+        fid: randomUUID(),
+      },
+      () => store.deleteTask(task.id) // rollback: undo the optimistic insert
+    )
     console.log(`${LOG_TAG} shadow postTask team=${input.teamId} task=${task.id} → host=${host}`)
     return { taskId: task.id }
   }
@@ -139,14 +276,31 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
       ...(input.resultRef !== undefined ? { resultRef: input.resultRef } : {}),
       ...(input.note !== undefined ? { note: input.note } : {}),
     }
+    // Capture the pre-image BEFORE the optimistic apply so a definitive reject can
+    // restore the exact prior field values (an update has no delete to undo it).
+    const preImage = store.getTaskById(input.taskId)
     store.updateTask(input.taskId, patch, now) // optimistic local apply
-    sendBlackboardWrite(host, {
-      teamId: input.teamId,
-      op: 'update_task',
-      payload: { taskId: input.taskId, ...patch, updatedAt: now },
-      taskId: input.taskId,
-      fid: randomUUID(),
-    })
+    emitShadowWrite(
+      input.teamId,
+      host,
+      {
+        teamId: input.teamId,
+        op: 'update_task',
+        payload: { taskId: input.taskId, ...patch, updatedAt: now },
+        taskId: input.taskId,
+        fid: randomUUID(),
+      },
+      () => {
+        // rollback: restore the pre-image fields; if the task did not exist
+        // before, the optimistic update was a no-op so there is nothing to undo.
+        if (!preImage) return
+        store.updateTask(
+          input.taskId,
+          { status: preImage.status, resultRef: preImage.resultRef, note: preImage.note },
+          preImage.updatedAt
+        )
+      }
+    )
     console.log(`${LOG_TAG} shadow updateTask team=${input.teamId} task=${input.taskId} → host=${host}`)
   }
 
@@ -165,12 +319,17 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
       createdAt: Date.now(),
     }
     store.insertFinding(finding) // optimistic local apply
-    sendBlackboardWrite(host, {
-      teamId: input.teamId,
-      op: 'post_finding',
-      payload: finding as unknown as Record<string, unknown>,
-      fid: randomUUID(),
-    })
+    emitShadowWrite(
+      input.teamId,
+      host,
+      {
+        teamId: input.teamId,
+        op: 'post_finding',
+        payload: finding as unknown as Record<string, unknown>,
+        fid: randomUUID(),
+      },
+      () => store.deleteFinding(finding.id) // rollback: undo the optimistic insert
+    )
     console.log(`${LOG_TAG} shadow postFinding team=${input.teamId} finding=${finding.id} → host=${host}`)
     return { findingId: finding.id }
   }

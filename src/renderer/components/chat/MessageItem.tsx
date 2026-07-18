@@ -364,6 +364,20 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
         </div>
       )}
 
+      {/* A user message that failed to send carries a compact red marker so a
+          non-delivery is never mistaken for delivered — the bubble itself shows the
+          truth, not just a transient banner (WeChat-style failed indicator). */}
+      {isUser && message.error && (
+        <div className="mt-1.5 flex items-start gap-1.5 text-destructive">
+          <svg className="w-3.5 h-3.5 mt-0.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <span className="text-xs leading-snug">{message.error}</span>
+        </div>
+      )}
+
       {/* Browser task card - browser tools displayed separately */}
       {browserToolCalls.length > 0 && (
         <BrowserTaskCard

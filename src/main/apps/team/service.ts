@@ -10,7 +10,7 @@ import { randomUUID } from 'crypto'
 import { basename, isAbsolute, join } from 'path'
 import { broadcastToAll } from '../../http/websocket'
 import { sendToRenderer } from '../../foundation/window.service'
-import { TEAM_EVENTS, AI_MEMBER_HARD_LIMIT } from '../../../shared/apps/team-types'
+import { TEAM_EVENTS, AI_MEMBER_HARD_LIMIT, memberChatKey } from '../../../shared/apps/team-types'
 import { provisionLeadSpec } from './lead'
 import type { TeamRuntime } from '../runtime/team'
 import type { AppManagerService } from '../manager'
@@ -823,22 +823,30 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const target = store.listMembersByTeam(params.teamId).find((m) => m.appId === params.appId)
     if (!target) return { ok: false, finalMessage: null, reason: 'MEMBER_NOT_FOUND' }
 
-    // Reuse the latest (possibly sealed) epoch when no run is currently open, so
-    // ad-hoc 1:1 chat works after a run ended; it is reactivated just below.
-    const epochId =
-      params.epochId || store.getCurrentEpochForTeam(params.teamId)?.id || store.listEpochsByTeam(params.teamId)[0]?.id
-    if (!epochId) return { ok: false, finalMessage: null, reason: 'NO_EPOCH' }
-
-    // Host-operator surface: the local owner drives the member directly, so the
-    // turn is attributed to the office lead (the operator's standing identity).
+    // Host-operator surface: the turn is attributed to the office lead (the
+    // operator's standing identity). Opening a conversation epoch also requires a
+    // lead, so resolve it BEFORE opening one.
     const fromAppId = team.leadAppId
     if (!fromAppId) return { ok: false, finalMessage: null, reason: 'NO_LEAD' }
+
+    const rt = requireRuntime()
+
+    // 1:1 direct chat must NOT require first starting a run — that leaks the internal
+    // run/epoch mechanism and breaks "remote = local" (local chat needs no run). Ride
+    // an OPEN run epoch when one exists (a message mid-run lands in that context),
+    // else open/reuse a long-lived per-member 'conversation' epoch: a chat container
+    // that does NOT trigger the run orchestration (sets no currentEpochId/status). A
+    // brand-new office therefore chats fine. The history read (team:chat-messages)
+    // resolves the SAME epoch via memberChatKey.
+    const epochId =
+      params.epochId ||
+      store.getCurrentEpochForTeam(params.teamId)?.id ||
+      rt.ensureConversationEpoch(params.teamId, memberChatKey(params.appId)).id
 
     // A sealed epoch drops completions, so the operator would see "sent, no
     // reply" after a run ended. Reactivate first (no-op when already open); a
     // remote member's completion refluxes to this authority node, where the
     // seal check is enforced.
-    const rt = requireRuntime()
     rt.reactivateEpoch(params.teamId, epochId)
 
     const result = await rt.bus.send({
@@ -856,6 +864,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
     if ('messageId' in result) return { ok: true, finalMessage: null }
     if (result.status === 'timeout') return { ok: false, finalMessage: null, reason: 'TIMEOUT' }
+    // The wake never reached the member (offline/unreachable): report failure, not a
+    // silent empty success, so the operator UI can show "not delivered".
+    if (result.status === 'undelivered') return { ok: false, finalMessage: null, reason: 'UNDELIVERED' }
     return { ok: true, finalMessage: result.message }
   }
 

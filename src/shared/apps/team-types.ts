@@ -335,11 +335,28 @@ export interface TeamSendInput {
 }
 export interface TeamSendAsyncResult {
   messageId: string
+  /**
+   * Set to 'undelivered' when an immediate reachability check found the target's
+   * owner offline/unreachable at send time. Async (wait=false) sends have no
+   * persistent offline outbox, so such a message will NOT auto-deliver later —
+   * the sender is told NOW instead of falsely seeing "sent". Absent → accepted for
+   * delivery (a busy-but-reachable target is buffered = queued).
+   */
+  delivery?: 'undelivered'
 }
 export interface TeamSendSyncResult {
   from: string
   message: string
-  status: 'ok' | 'timeout'
+  /**
+   * Sender-facing delivery truth, so a teammate never mistakes a non-delivery for
+   * a real (empty) reply:
+   *   - 'ok'          the turn ran and reported back (message may still be empty).
+   *   - 'timeout'     it was reachable but did not finish within the wait window.
+   *   - 'undelivered' the wake never reached the owner (offline/unreachable) or no
+   *                   completion signal ever came back — definitively NOT a reply.
+   * This is the seam the durable feed outbox later feeds (delivered/pending/failed).
+   */
+  status: 'ok' | 'timeout' | 'undelivered'
 }
 
 export interface TeamPostTaskInput {
@@ -484,6 +501,25 @@ export interface TeamUpdatedEvent {
   teamId: string
   team?: Team
   removed?: boolean
+  /**
+   * Why the office left this node's list. Only set for a removal the user did NOT
+   * initiate, so the renderer can tell them (vs staying silent for a self leave /
+   * self dissolve). 'dissolved-remote' = the host closed an office this node joined.
+   */
+  removedReason?: 'dissolved-remote'
+  /**
+   * Set when the office host removed a member THIS node brought — a kick the
+   * local user did not initiate, so the renderer tells them instead of the row
+   * silently vanishing. Name is best-effort (the local mirror may have already
+   * converged past the removed row).
+   */
+  memberKicked?: { appId: string; memberName?: string }
+  /**
+   * Set when an optimistic board write of this node could not be confirmed by
+   * the office authority and was rolled back — the renderer tells the user a
+   * recent board update did not stick (and refetches the open board).
+   */
+  boardWriteDiscarded?: boolean
 }
 
 export interface TeamBlackboardEvent {
@@ -600,6 +636,8 @@ export const TEAM_EVENTS = {
   officeStatus: 'team:office-status',
   /** A halo:// office-invite deep link arrived; payload: { link: string }. */
   inviteLink: 'team:invite-link',
+  /** A member's local transcript replica grew; payload: { teamId, appId, epochId }. */
+  memberHistory: 'team:member-history',
 } as const
 
 export const TEAM_IPC = {
@@ -636,4 +674,4 @@ export const TEAM_CIRCUIT_DEFAULTS = {
 
 // ── Session-key helper (re-exported SSOT) ──
 
-export { buildTeamSessionKey, isTeamSessionKey } from './im-keys'
+export { buildTeamSessionKey, isTeamSessionKey, memberChatKey } from './im-keys'

@@ -89,6 +89,11 @@ export function getInvitePage(ctx: InvitePageContext): string {
     .hint { color: #777; font-size: 0.85rem; margin-top: 1.25rem; line-height: 1.7; }
     .hint a { color: #a5b4fc; text-decoration: none; }
     .hint a:hover { text-decoration: underline; }
+    .note {
+      color: #c9a94e; font-size: 0.82rem; margin-top: 1rem; line-height: 1.6;
+      background: rgba(201, 169, 78, 0.08); border: 1px solid rgba(201, 169, 78, 0.25);
+      border-radius: 10px; padding: 0.7rem 0.9rem;
+    }
     .divider { color: #555; margin: 0 0.4rem; }
   </style>
 </head>
@@ -98,6 +103,7 @@ export function getInvitePage(ctx: InvitePageContext): string {
     <h1 id="title"></h1>
     <p class="sub" id="sub"></p>
     <a class="open-btn" id="open" href="#"></a>
+    <p class="note" id="note"></p>
     <p class="hint" id="hint"></p>
   </div>
   <script>
@@ -125,6 +131,13 @@ export function getInvitePage(ctx: InvitePageContext): string {
       var open = document.getElementById('open')
       open.setAttribute('href', deepLink)
       open.textContent = zh ? '在 Halo 中打开' : 'Open in Halo'
+
+      // Set expectations up front: joining connects to the inviter's machine, so
+      // both sides must be on the same network (or a gateway is configured). Without
+      // this, a cross-network click looks like a broken link with no explanation.
+      document.getElementById('note').textContent = zh
+        ? '需要和邀请你的人在同一网络（或已配置网关）才能加入。若打不开或加入失败，多半是不在同一网络。'
+        : 'You must be on the same network as the person who invited you (or have a gateway configured) to join. A broken link or failed join usually means you are on different networks.'
 
       var download = ${JSON.stringify(downloadUrl)}
       var hint = document.getElementById('hint')

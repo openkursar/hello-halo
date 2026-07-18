@@ -91,6 +91,7 @@ interface InitTeamServiceDeps {
   // to office peers by the injected federation layer (the service itself imports
   // no federation). Optional — absent in a non-federated build.
   onRosterMutated?: TeamServiceDeps['onRosterMutated']
+  onRunStateChanged?: TeamServiceDeps['onRunStateChanged']
   onMemberRemoved?: TeamServiceDeps['onMemberRemoved']
   onOfficeDissolved?: TeamServiceDeps['onOfficeDissolved']
 }
@@ -108,6 +109,7 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
     proposeMembersFromGoal: deps.proposeMembersFromGoal ?? proposeMembersViaSdk,
     getTriggerSync: deps.getTriggerSync,
     onRosterMutated: deps.onRosterMutated,
+    onRunStateChanged: deps.onRunStateChanged,
     onMemberRemoved: deps.onMemberRemoved,
     onOfficeDissolved: deps.onOfficeDissolved,
   })

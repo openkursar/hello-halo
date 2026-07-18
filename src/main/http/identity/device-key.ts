@@ -24,11 +24,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from '
 import { dirname, join } from 'path'
 
 import { getHaloDir } from '../../foundation/config.service'
-import {
-  encryptString,
-  decryptString,
-  isEncryptionAvailable,
-} from '../../foundation/secure-storage.service'
+import { decryptString } from '../../foundation/secure-storage.service'
 import type { Identity } from './types'
 
 const LOG_TAG = '[Identity]'
@@ -128,17 +124,6 @@ function writeIdentityFile(file: IdentityFile): void {
   renameSync(tmpPath, filePath)
 }
 
-/** Encrypt the private key PEM at rest when possible, else warn and keep plaintext. */
-function protectPrivateKey(privateKeyPem: string): string {
-  if (isEncryptionAvailable()) {
-    return encryptString(privateKeyPem)
-  }
-  console.warn(
-    `${LOG_TAG} secure storage unavailable; persisting node private key in plaintext`
-  )
-  return privateKeyPem
-}
-
 /** Load and decrypt an on-disk identity into the in-memory cache. */
 function loadFromFile(file: IdentityFile): LoadedIdentity {
   // decryptString returns plaintext as-is when the value was never encrypted.
@@ -162,7 +147,11 @@ function generateAndPersist(displayName: string): LoadedIdentity {
     id,
     displayName,
     publicKey: publicKeyPem,
-    privateKey: protectPrivateKey(privateKeyPem),
+    // Plaintext, like the app's other on-disk secrets: the user-scoped data dir
+    // (OS account + file permissions) is the trust boundary. At-rest encryption
+    // via safeStorage was dropped as it popped a macOS Keychain prompt;
+    // loadFromFile still decrypts any legacy key.
+    privateKey: privateKeyPem,
   })
 
   console.log(`${LOG_TAG} generated local identity ${id}`)

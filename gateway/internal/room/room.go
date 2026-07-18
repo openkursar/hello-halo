@@ -156,7 +156,10 @@ func (r *Room) routeFromMember(s *session.Session, hdr *wire.FederationHeader, e
 		s.SendGwError(wire.CodeHostUnreachable, "host is not online")
 		return
 	}
-	data := marshalForward(env)
+	// Stamp the proven session identity so frames without a payload fromNode
+	// (presence-update/stream-frames/turn-complete) keep their origin across
+	// the relay; the host reads envelope.from as authoritative (§9.2).
+	data := marshalForward(env, s.IdentityID())
 	if data == nil {
 		s.SendGwError(wire.CodeMalformed, "unencodable frame")
 		return
@@ -172,7 +175,9 @@ func (r *Room) routeFromMember(s *session.Session, hdr *wire.FederationHeader, e
 // admission gate.
 func (r *Room) routeFromHost(s *session.Session, hdr *wire.FederationHeader, env *wire.Envelope) {
 	plane := wire.ClassifyPlane(hdr.Kind)
-	data := marshalForward(env)
+	// Host→member frames need no from stamp: the member's single upstream peer
+	// IS the host, so origin is unambiguous.
+	data := marshalForward(env, "")
 	if data == nil {
 		s.SendGwError(wire.CodeMalformed, "unencodable frame")
 		return
@@ -340,9 +345,10 @@ func (r *Room) isHost(s *session.Session) bool {
 }
 
 // marshalForward re-encodes an inbound federation envelope for delivery,
-// stripping the gateway-only "to" field.
-func marshalForward(env *wire.Envelope) []byte {
-	out := wire.Envelope{Type: wire.TypeFederation, Payload: env.Payload}
+// stripping the gateway-only "to" field and stamping "from" (empty = omit) with
+// the proven sender identity on member→host forwards.
+func marshalForward(env *wire.Envelope, from string) []byte {
+	out := wire.Envelope{Type: wire.TypeFederation, From: from, Payload: env.Payload}
 	data, err := json.Marshal(&out)
 	if err != nil {
 		return nil

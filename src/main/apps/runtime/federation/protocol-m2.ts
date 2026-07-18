@@ -63,6 +63,22 @@ export const CAP = {
   GOVERNANCE_EGRESS: 1 << 5,
   /** Owner-served run history pull (`history-request`/`history-response`). */
   HISTORY_PULL: 1 << 6,
+  /**
+   * Unified feed-log sync for the control plane (`feed-subscribe`/`feed-entries`/
+   * `feed-ack`/`feed-nack`): effectively-once wake / turn-complete delivery over a
+   * persistent per-author outbox. Advertised in DEFAULT_P2P_CAPS; see the mask
+   * comment below for how routing actually behaves.
+   */
+  FEED_SYNC: 1 << 7,
+  /**
+   * Session-transcript feed replication (`feed-advertise` + `session:<key>`
+   * feeds): every member's run transcript is proactively replicated to every
+   * office node (multi-replica, IM-style), so history opens from the local copy
+   * and survives an offline owner. Advertised in DEFAULT_P2P_CAPS; like
+   * FEED_SYNC the bit is informational — an older node simply ignores the
+   * frames (forward-compatible) and stays on the pull path.
+   */
+  SESSION_FEED: 1 << 8,
 } as const
 
 export type CapMask = number
@@ -75,7 +91,13 @@ export const DEFAULT_P2P_CAPS: CapMask =
   CAP.REPLICATION |
   CAP.AUTHORITY_ELECTION |
   CAP.GOVERNANCE_EGRESS |
-  CAP.HISTORY_PULL
+  CAP.HISTORY_PULL |
+  // Control-plane feed sync ON by default: a directed wake/turn-complete always
+  // rides the durable, effectively-once feed outbox (the manager's ctrl shim).
+  // The cap bit is advertised but NOT consulted for routing — the only fallback
+  // to the raw send path is a node whose feed store is unavailable.
+  CAP.FEED_SYNC |
+  CAP.SESSION_FEED
 
 export function negotiateCaps(a: CapMask, b: CapMask): CapMask {
   return (a & b) >>> 0
@@ -228,6 +250,56 @@ export interface AckFrame {
   fid: Fid
 }
 
+/**
+ * Hot-standby → authority: a standby whose applied seq fell behind (it missed
+ * `blackboard-replicate` frames while briefly disconnected) asks the authority
+ * to replay the gap. Without this a missed frame left a PERMANENT hole — the
+ * standby applied later, higher seqs on top of the gap and never backfilled it.
+ */
+export interface CatchupRequestFrame {
+  kind: 'catchup-request'
+  officeId: string
+  fromNode: NodeId
+  /** Highest contiguous seq the standby holds; the authority replays above it. */
+  lastAckedSeq: number
+  fid: Fid
+}
+
+/** One replayed log entry inside a catch-up response (a replicate frame's core). */
+export interface CatchupEntry {
+  seq: number
+  term: AuthorityTerm
+  op: ReplicationOp
+  payload: Record<string, unknown>
+  taskId?: string
+  fid: Fid
+}
+
+/**
+ * Authority → hot-standby: the gap replay. `incremental` carries the missing log
+ * entries (contiguous above the request's lastAckedSeq); `snapshot` is sent when
+ * the gap predates the retained log, carrying the full board to replace-apply.
+ */
+export interface CatchupResponseFrame {
+  kind: 'catchup-response'
+  officeId: string
+  fromNode: NodeId
+  term: AuthorityTerm
+  reFid: Fid
+  mode: 'incremental' | 'snapshot'
+  /** Present when mode='incremental'. */
+  entries?: CatchupEntry[]
+  /** Present when mode='snapshot' (opaque board state the standby replace-applies). */
+  snapshot?: {
+    tasks: unknown[]
+    findings: unknown[]
+    roster: unknown[]
+    appliedSeq: number
+    term: number
+  }
+  fid: Fid
+}
+
 /** Generic reliable-control reject with a reason code. */
 export interface RejectFrame {
   kind: 'reject'
@@ -301,10 +373,49 @@ export interface OfficeDissolvedFrame {
 // already-serialized transcript the owner reads from its local store via an
 // injected reader; the federation layer never opens chat storage itself.
 
+/**
+ * A rendered thought carried with a transcript message. Transport-opaque: mirrors
+ * the renderer Thought shape so a viewer renders it without an adaptation layer.
+ */
+export interface SerializedThought {
+  id: string
+  type: 'thinking' | 'text' | 'tool_use' | 'tool_result' | 'system' | 'result' | 'error'
+  content: string
+  timestamp: string
+  toolName?: string
+  toolInput?: Record<string, unknown>
+  toolOutput?: string
+  isError?: boolean
+  toolResult?: { output: string; isError: boolean; timestamp: string }
+}
+
+/** Lightweight thought summary carried with a transcript message. */
+export interface SerializedThoughtsSummary {
+  count: number
+  types: Partial<Record<string, number>>
+  duration?: number
+}
+
 /** A single serialized transcript message (owner-local shape, transport-opaque). */
 export interface SerializedHistoryMessage {
+  /**
+   * 1-based ordinal position in the member's full transcript. The transcript is
+   * append-only and immutable, so this is stable across reads — it is the anchor
+   * a viewer sends back as `sinceSeq` to pull only the tail instead of the whole
+   * transcript every time (the fix for slow full re-pulls).
+   */
+  seq: number
   role: string
   content: string
+  /**
+   * Full thinking / tool-call trace for an assistant message, so a remote viewer's
+   * post-run history backfill shows the SAME thought process the live relay did —
+   * not just the final text. Without this, a finished remote member's thinking
+   * vanishes the moment the live stream is replaced by the backfilled transcript.
+   * Absent for user messages and pre-thoughts transcripts.
+   */
+  thoughts?: SerializedThought[]
+  thoughtsSummary?: SerializedThoughtsSummary
   /** epoch-ms timestamp; optional for messages that predate timestamping. */
   ts?: number
 }
@@ -318,6 +429,12 @@ export interface HistoryRequestFrame {
   /** The member whose transcript is requested (must be owned by the receiver). */
   appId: string
   epochId: string
+  /**
+   * Highest transcript seq the viewer already holds cached. The owner replies
+   * with only messages whose seq is greater — an incremental tail pull. Absent
+   * or 0 means "send the whole transcript" (first load / no cache).
+   */
+  sinceSeq?: number
   /**
    * Set by the host when forwarding a joiner's request to the member's true
    * owner (joiners only link to the host, so a joiner-to-joiner read must hop
@@ -351,6 +468,8 @@ export type M2Frame =
   | BlackboardReplicateFrame
   | AckFrame
   | RejectFrame
+  | CatchupRequestFrame
+  | CatchupResponseFrame
   | ArtifactFetchFrame
   | ArtifactBytesFrame
   | MemberRemovedFrame
@@ -366,6 +485,8 @@ export const M2_FRAME_KINDS: ReadonlySet<string> = new Set<M2Frame['kind']>([
   'blackboard-replicate',
   'ack',
   'reject',
+  'catchup-request',
+  'catchup-response',
   'artifact-fetch',
   'artifact-bytes',
   'member-removed',

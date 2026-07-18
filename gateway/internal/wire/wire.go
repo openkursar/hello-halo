@@ -11,8 +11,14 @@ import "encoding/json"
 // "error" is used by auth:failed and error frames (top-level, matching the
 // TS node implementation).
 type Envelope struct {
-	Type    string          `json:"type"`
-	To      *string         `json:"to,omitempty"`
+	Type string  `json:"type"`
+	To   *string `json:"to,omitempty"`
+	// From is stamped by the gateway on member→host forwards: the proven
+	// session identity of the sender. Frames whose kind carries no fromNode
+	// (presence-update uses nodeId; stream-frames/turn-complete carry none)
+	// would otherwise lose their origin across the relay. The host treats it
+	// as authoritative — the gateway already asserted it (§9.1/§9.2).
+	From    string          `json:"from,omitempty"`
 	Error   string          `json:"error,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"`
 }

@@ -79,6 +79,14 @@ function buildSendTool(ctx: TeamMcpContext) {
         })
 
         if ('messageId' in result) {
+          if (result.delivery === 'undelivered') {
+            // Do NOT report success: the teammate's owner is offline/unreachable and
+            // an async send has no offline queue, so this will not arrive later.
+            return textResult(
+              `"${input.to}" is offline right now — this message was NOT delivered and will not be queued. ` +
+                `Reassign the work, or wait until they are back online and send again.`
+            )
+          }
           return textResult(
             `Message sent (id: ${result.messageId}). The reply will arrive later as a new turn.`
           )
@@ -86,6 +94,13 @@ function buildSendTool(ctx: TeamMcpContext) {
         if (result.status === 'timeout') {
           return textResult(
             `No reply from "${result.from}" within the time limit. Proceed without it or follow up.`
+          )
+        }
+        if (result.status === 'undelivered') {
+          // Do NOT report success: the message never reached the teammate.
+          return textResult(
+            `Message to "${result.from}" was NOT delivered — they appear to be offline or unreachable. ` +
+              `Reassign the work or try again once they are back online.`
           )
         }
         return textResult(`Reply from "${result.from}": ${result.message}`)

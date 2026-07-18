@@ -87,6 +87,8 @@ export interface HistoryService {
     teamId: string
     appId: string
     epochId: string
+    /** Highest seq already cached; the owner replies with only the tail above it. */
+    sinceSeq?: number
   }): Promise<SerializedHistoryMessage[]>
   /** OWNER: authorize + serve (or error) an incoming history-request. */
   handleRequest(from: NodeId, frame: HistoryRequestFrame): void
@@ -127,6 +129,7 @@ export function createHistoryService(deps: HistoryServiceDeps): HistoryService {
     teamId: string
     appId: string
     epochId: string
+    sinceSeq?: number
   }): Promise<SerializedHistoryMessage[]> {
     return new Promise<SerializedHistoryMessage[]>((resolve, reject) => {
       const fid = randomUUID()
@@ -146,6 +149,7 @@ export function createHistoryService(deps: HistoryServiceDeps): HistoryService {
         teamId: args.teamId,
         appId: args.appId,
         epochId: args.epochId,
+        ...(args.sinceSeq ? { sinceSeq: args.sinceSeq } : {}),
         fid,
       }
       deps.send(args.ownerNodeId, frame)
@@ -245,7 +249,12 @@ export function createHistoryService(deps: HistoryServiceDeps): HistoryService {
       return
     }
 
-    reply(from, frame, { messages })
+    // Incremental tail: when the viewer already holds up to sinceSeq, send only
+    // the newer messages. The transcript is append-only so a cached prefix never
+    // changes — this is what turns a full re-pull into a small delta.
+    const since = frame.sinceSeq ?? 0
+    const tail = since > 0 ? messages.filter((m) => m.seq > since) : messages
+    reply(from, frame, { messages: tail })
   }
 
   function handleResponse(_from: NodeId, frame: HistoryResponseFrame): void {

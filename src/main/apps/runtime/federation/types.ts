@@ -18,6 +18,7 @@ import type {
 } from '../../../../shared/apps/team-types'
 import type { TurnCompletion } from '../team/message-bus'
 import type { M2Frame } from './protocol-m2'
+import type { FeedSyncFrame } from './log/types'
 
 /** Stable per-node identifier (office_nodes.node_id). */
 export type NodeId = string
@@ -193,6 +194,15 @@ export interface StreamFramesFrame {
   sessionKey: string
   baseSeq: number
   frames: StreamFrame[]
+  /**
+   * The producing process's run id (fresh per process start). Stream seq is
+   * in-memory on the owner, so an owner restart begins a NEW seq domain at 1;
+   * viewers key their dedup watermark on this and reset it when the run
+   * changes — otherwise every post-restart frame reads as a duplicate of the
+   * previous run's higher seqs and is silently dropped. Absent on frames from
+   * older producers (legacy watermark behavior preserved).
+   */
+  originRun?: string
 }
 
 /**
@@ -312,6 +322,9 @@ export type FederationMessage =
   | MemberLeaveFrame
   // ── M2 family (authority / replication / artifact), defined in ./protocol-m2 ──
   | M2Frame
+  // ── Unified feed-log sync (control-plane outbox), defined in ./log/types ──
+  // Type-only import; classified as the 'control' plane by framePlane's default.
+  | FeedSyncFrame
 
 // ── Transport planes (outbound prioritization) ──
 

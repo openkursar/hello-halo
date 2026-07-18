@@ -210,6 +210,112 @@ export interface AuthorityStore {
   patchAuthorityState(officeId: string, patch: AuthorityStatePatch, at: number): AuthorityState
 }
 
+// ── Unified feed log substrate ──
+
+/**
+ * One persisted feed entry (app_federation.feed_log). A feed is a per-author,
+ * append-only, immutable log; every cross-node datum (message / wake /
+ * turn-complete / activity frame / transcript line) is one entry. Single-writer
+ * by construction (only the author node writes its own feed), so there is never
+ * a conflict — reliability is delivery + cursor sync, not consensus.
+ */
+export interface FeedEntryRecord {
+  officeId: string
+  /** Feed identity within the office (e.g. 'ctrl', 'act', 'session:<key>'). */
+  feedId: string
+  /** Per-(office,feed) monotonic, assigned by the author; survives restart. */
+  seq: number
+  /** Packed hybrid logical clock — lexicographically sortable (see log/hlc). */
+  hlc: string
+  /** Cross-restart globally-unique idempotency key (UUIDv4). */
+  fid: string
+  /** Entry-type discriminator (domain-defined). */
+  type: string
+  /** JSON-serializable payload (already-serializable domain data). */
+  payload: unknown
+  /** Author wall clock (display only; ordering uses hlc). */
+  ts: number
+  createdAt: number
+}
+
+export interface FeedEntryRow {
+  office_id: string
+  feed_id: string
+  seq: number
+  hlc: string
+  fid: string
+  type: string
+  payload: string
+  ts: number
+  created_at: number
+}
+
+/** Per-feed high-water marks (app_federation.feed_meta). */
+export interface FeedMeta {
+  officeId: string
+  feedId: string
+  /** Retention floor — entries with seq <= this are pruned. */
+  truncatedBeforeSeq: number
+  /** Persisted clock high-water (null until first append). */
+  hlcHigh: string | null
+}
+
+export interface FeedMetaRow {
+  office_id: string
+  feed_id: string
+  truncated_before_seq: number
+  hlc_high: string | null
+}
+
+/**
+ * Persistence contract for the unified feed substrate. Separate from
+ * FederationStore/AuthorityStore so each store stays focused; all three are
+ * backed by the same app_federation database. Synchronous (better-sqlite3);
+ * enforces only SQLite constraints — delivery/retention policy lives in
+ * runtime/federation/log.
+ */
+export interface FeedStore {
+  // ── feed_log (authored entries = durable outbox) ──
+  /** Append one entry. Throws on (office,feed,seq) or (office,feed,fid) clash. */
+  appendEntry(entry: FeedEntryRecord): void
+  /** Highest seq persisted for a feed (0 if none) — monotonic continuation. */
+  getMaxSeq(officeId: string, feedId: string): number
+  /** Lowest seq still retained (0 if none). */
+  getMinSeq(officeId: string, feedId: string): number
+  /** True if (office,feed,fid) already exists (cross-restart idempotency). */
+  hasFid(officeId: string, feedId: string, fid: string): boolean
+  /** Entries with seq in (afterSeq, +∞) ordered ascending, capped at limit. */
+  listAfter(officeId: string, feedId: string, afterSeq: number, limit: number): FeedEntryRecord[]
+  /** Drop entries with seq <= beforeSeq (retention trim). Returns rows removed. */
+  pruneBefore(officeId: string, feedId: string, beforeSeq: number): number
+  /** Distinct feed ids this node authored in an office (feed enumeration). */
+  listLogFeedIds(officeId: string): string[]
+
+  // ── feed_peer_cursor (delivery watermark, authored feeds) ──
+  getPeerCursor(officeId: string, feedId: string, peerNode: string): number
+  setPeerCursor(officeId: string, feedId: string, peerNode: string, ackedSeq: number, at: number): void
+  /** Min acked_seq across all known peers of a feed (retention safety). Null when no peers. */
+  getMinPeerCursor(officeId: string, feedId: string): number | null
+
+  // ── feed_local_cursor (applied watermark, consumed remote feeds) ──
+  getLocalCursor(officeId: string, feedId: string): number
+  setLocalCursor(officeId: string, feedId: string, appliedSeq: number, at: number): void
+
+  // ── feed_cache (viewer-side persistent copy) ──
+  putCache(officeId: string, feedId: string, seq: number, entryJson: string): void
+  listCache(officeId: string, feedId: string, afterSeq: number, limit: number): { seq: number; entryJson: string }[]
+  getCacheMaxSeq(officeId: string, feedId: string): number
+  /** Distinct feed ids with cached rows in an office (replica enumeration). */
+  listCacheFeedIds(officeId: string): string[]
+
+  // ── feed_meta (per-feed high-water marks) ──
+  getMeta(officeId: string, feedId: string): FeedMeta | null
+  setTruncatedBefore(officeId: string, feedId: string, beforeSeq: number): void
+  setHlcHigh(officeId: string, feedId: string, hlc: string): void
+  /** Highest persisted hlc_high across all feeds of an office (clock rehydrate). */
+  getOfficeHlcHigh(officeId: string): string | null
+}
+
 // ── FederationStore Interface ──
 
 /**

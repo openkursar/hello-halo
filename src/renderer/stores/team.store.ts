@@ -158,6 +158,26 @@ function notifyError(title: string, detail?: string): void {
   })
 }
 
+/**
+ * Toast when someone else's machine joined this office (new remote members that
+ * were not present on the previous load). Deduped by the person who brought them
+ * so one teammate bringing several members is a single toast. Local members you
+ * added yourself never reach here (the caller filters to remote joiners).
+ */
+function notifyMembersJoined(officeName: string, joined: Array<{ ownerDisplayName?: string | null }>): void {
+  if (joined.length === 0) return
+  const people = Array.from(
+    new Set(joined.map(m => m.ownerDisplayName?.trim()).filter((n): n is string => !!n))
+  )
+  const who = people.length > 0 ? people.join(', ') : i18n.t('A new teammate')
+  useNotificationStore.getState().show({
+    title: i18n.t('New teammate joined'),
+    body: i18n.t('{{who}} joined "{{office}}".', { who, office: officeName }),
+    variant: 'default',
+    duration: 6000,
+  })
+}
+
 /** Sort: waiting-for-decision first, then running, then most-recent activity. */
 function sortTeams(teams: TeamListItem[]): TeamListItem[] {
   const rank = (t: TeamListItem): number => {
@@ -220,13 +240,23 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   },
 
   loadDetail: async (teamId) => {
+    // Snapshot the current roster so we can tell if someone new joined once the
+    // refetch lands (null when this is the first load of this team = no toast).
+    const prev = get().detail
+    const prevMembers = prev && prev.team.id === teamId ? prev.members : null
     set({ isLoadingDetail: true, error: null })
     try {
       const res = await api.teamGetDetail(teamId)
       // Guard against races: ignore stale responses for a no-longer-selected team.
       if (get().currentTeamId !== teamId) return
       if (res.success && res.data) {
-        set({ detail: res.data as TeamDetail })
+        const detail = res.data as TeamDetail
+        // A remote member present now but not before = someone else's machine joined.
+        if (prevMembers) {
+          const known = new Set(prevMembers.map(m => m.appId))
+          notifyMembersJoined(detail.team.name, detail.members.filter(m => isRemoteMember(m) && !known.has(m.appId)))
+        }
+        set({ detail })
       } else if (!res.success) {
         set({ error: (res.error as string) || i18n.t('Couldn\u2019t open this office. Please try again.') })
       }
@@ -463,9 +493,52 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   // ── Real-time Event Handlers ──────────────
 
   applyTeamUpdated: (event) => {
-    const { teamId, team, removed } = event
+    const { teamId, team, removed, removedReason } = event
+
+    // A kick of one of this user's members (host-initiated) must not be a silent
+    // row disappearance — tell them who was removed and from which office.
+    if (event.memberKicked) {
+      const officeName = get().teams.find(t => t.id === teamId)?.name
+      const memberName = event.memberKicked.memberName
+      useNotificationStore.getState().show({
+        title: i18n.t('Member removed by host'),
+        body: memberName && officeName
+          ? i18n.t('"{{member}}" was removed from "{{office}}" by its host.', { member: memberName, office: officeName })
+          : officeName
+            ? i18n.t('One of your members was removed from "{{office}}" by its host.', { office: officeName })
+            : i18n.t('One of your members was removed from an office by its host.'),
+        variant: 'warning',
+        duration: 6000,
+      })
+    }
+
+    // An optimistic board write was rolled back (never confirmed by the office
+    // authority) — the row the user saw is gone; say so instead of staying silent.
+    // The detail refetch below reflects the removal on an open board.
+    if (event.boardWriteDiscarded) {
+      useNotificationStore.getState().show({
+        title: i18n.t('Board update not saved'),
+        body: i18n.t('A recent board update could not reach the office and was undone.'),
+        variant: 'warning',
+        duration: 6000,
+      })
+    }
 
     if (removed) {
+      // A removal the user did NOT initiate (the host closed an office they joined)
+      // must not just make the office vanish — tell them why. Self leave / self
+      // dissolve carry no reason and stay silent.
+      if (removedReason === 'dissolved-remote') {
+        const existing = get().teams.find(t => t.id === teamId)
+        useNotificationStore.getState().show({
+          title: i18n.t('Office closed'),
+          body: existing
+            ? i18n.t('"{{office}}" was closed by its host.', { office: existing.name })
+            : i18n.t('An office you joined was closed by its host.'),
+          variant: 'warning',
+          duration: 6000,
+        })
+      }
       set(s => ({
         teams: s.teams.filter(t => t.id !== teamId),
         currentTeamId: s.currentTeamId === teamId ? null : s.currentTeamId,

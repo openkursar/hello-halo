@@ -169,5 +169,96 @@ export const migrations: Migration[] = [
       // can dial out but cannot be dialed.
       db.exec(`ALTER TABLE office_nodes ADD COLUMN advertised_url TEXT`)
     }
+  },
+  {
+    version: 6,
+    description: 'Unified feed log substrate (per-author append-only feeds + cursors + cache)',
+    up(db) {
+      // feed_log: entries this node AUTHORS for a feed = the durable outbox. One
+      // row per (office, feed, seq); seq is per-feed monotonic assigned by the
+      // author and survives process restart (fixing the in-memory seq-reset that
+      // let viewers silently drop post-restart frames). `hlc` is the packed,
+      // lexicographically-sortable hybrid logical clock (physical ms + logical
+      // counter) that gives cross-author causal order without a wall-clock race;
+      // `ts` is the author wall clock kept for display only. `fid` is the
+      // cross-restart globally-unique idempotency key.
+      db.exec(`
+        CREATE TABLE feed_log (
+          office_id TEXT NOT NULL,
+          feed_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          hlc TEXT NOT NULL,
+          fid TEXT NOT NULL,
+          type TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          ts INTEGER NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (office_id, feed_id, seq)
+        )
+      `)
+      // Idempotent append: (office, feed, fid) guards a retransmit/replay from
+      // creating a second row, complementing the (office, feed, seq) monotonic PK.
+      db.exec(`
+        CREATE UNIQUE INDEX idx_feed_log_fid
+          ON feed_log(office_id, feed_id, fid)
+      `)
+
+      // feed_peer_cursor: per-peer DELIVERY watermark for feeds this node authors.
+      // acked_seq is the highest contiguous seq the peer has confirmed; the
+      // producer resends everything above it on reconnect / retransmit tick, so a
+      // dropped frame is redelivered instead of lost.
+      db.exec(`
+        CREATE TABLE feed_peer_cursor (
+          office_id TEXT NOT NULL,
+          feed_id TEXT NOT NULL,
+          peer_node TEXT NOT NULL,
+          acked_seq INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (office_id, feed_id, peer_node)
+        )
+      `)
+
+      // feed_local_cursor: APPLIED watermark for REMOTE feeds this node consumes.
+      // On (re)subscribe the consumer sends afterSeq = applied_seq so the author
+      // replays only the tail — the one mechanism serving reconnect gap-fill,
+      // history load, and late-join backfill alike.
+      db.exec(`
+        CREATE TABLE feed_local_cursor (
+          office_id TEXT NOT NULL,
+          feed_id TEXT NOT NULL,
+          applied_seq INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (office_id, feed_id)
+        )
+      `)
+
+      // feed_cache: viewer-side persistent copy of a remote feed's entries
+      // (transcript/messages). History is immutable, so this cache never
+      // invalidates — reopening a panel shows the cache instantly and only the
+      // tail is pulled.
+      db.exec(`
+        CREATE TABLE feed_cache (
+          office_id TEXT NOT NULL,
+          feed_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          entry_json TEXT NOT NULL,
+          PRIMARY KEY (office_id, feed_id, seq)
+        )
+      `)
+
+      // feed_meta: per-feed high-water marks. truncated_before_seq is the
+      // retention floor (entries at/below it are pruned once all peers acked);
+      // hlc_high persists the clock so it cannot regress across a restart even if
+      // the log tail was truncated.
+      db.exec(`
+        CREATE TABLE feed_meta (
+          office_id TEXT NOT NULL,
+          feed_id TEXT NOT NULL,
+          truncated_before_seq INTEGER NOT NULL DEFAULT 0,
+          hlc_high TEXT,
+          PRIMARY KEY (office_id, feed_id)
+        )
+      `)
+    }
   }
 ]

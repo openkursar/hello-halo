@@ -156,6 +156,12 @@ export interface CreateTeamRuntimeDeps {
    * viewers see pulses start AND stop in step. Absent → no propagation.
    */
   onMemberStatusChanged?: (teamId: string) => void
+  /**
+   * Immediate reachability of a member's owner at send time (bootstrap wires it to
+   * the federation manager). Drives the wait=false honest "not delivered" gate.
+   * Absent → all members treated as reachable (non-federated runtime).
+   */
+  checkMemberReachable?: (appId: string, teamId: string) => boolean
 }
 
 export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
@@ -173,6 +179,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
         return orchestration.wakeTarget(params)
       },
       isBusy: (sessionKey) => (orchestration ? orchestration.isBusy(sessionKey) : false),
+      ...(deps.checkMemberReachable ? { checkReachable: deps.checkMemberReachable } : {}),
     },
     circuitOverrides: deps.circuitOverrides,
     syncWaitTimeoutMs: deps.syncWaitTimeoutMs,

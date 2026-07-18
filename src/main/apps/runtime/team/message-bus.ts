@@ -38,6 +38,14 @@ export interface TeamDeliveryHooks {
     trigger: TeamTriggerContext
   }): Promise<void>
   isBusy(sessionKey: string): boolean
+  /**
+   * Immediate reachability of a member's OWNER at send time. True for a locally
+   * owned member (always runnable) and for a remote owner that is currently online
+   * + connected; false only when a remote owner is offline/unreachable. Absent →
+   * treated as reachable (non-federated runtimes). Used by the wait=false path to
+   * report a non-delivery NOW instead of a false "sent".
+   */
+  checkReachable?(appId: string, teamId: string): boolean
 }
 
 /**
@@ -49,6 +57,11 @@ export type TurnCompletion =
   | { kind: 'escalation'; content: string }
   | { kind: 'error'; message: string }
   | { kind: 'timeout' }
+  // The wake never reached the target (owner offline/unreachable) or no completion
+  // signal ever returned. Distinct from 'result' with empty content (a real but
+  // silent reply) and from 'timeout' (reachable but slow): the sender must be able
+  // to tell "not delivered" apart so it can reassign rather than assume a reply.
+  | { kind: 'undelivered'; reason: string }
 
 // ── Bus errors ──────────────────────────────────────────────────────────────
 
@@ -320,6 +333,20 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     const forwardDepth = input.forwardDepth ?? 0
 
     const toAppId = resolveMemberAppId(input.teamId, input.to)
+
+    // Immediate outbound reachability gate (async sends only). A wait=false send to
+    // a remote member whose owner is offline/unreachable will NEVER be delivered —
+    // there is no persistent offline outbox — so report it NOW rather than a false
+    // "sent" that only self-corrects at the hours-long backstop. A local or online
+    // target proceeds normally (a busy-but-reachable target is buffered = queued);
+    // the wait=true path keeps its richer three-state via the completion receipt.
+    if (!wait && hooks.checkReachable && !hooks.checkReachable(toAppId, input.teamId)) {
+      console.warn(
+        `${LOG_TAG} send: target owner unreachable, not delivered: team=${input.teamId} to=${input.to} app=${toAppId}`
+      )
+      return { messageId: randomUUID(), delivery: 'undelivered' }
+    }
+
     // Topology is enforced at the tool layer (assertCanContact before send).
     chargeCircuit(input.teamId, input.epochId, forwardDepth)
 
@@ -399,6 +426,14 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
 
     if (outcome.kind === 'timeout') {
       pending.resolve({ from: pending.fromMemberName, message: '', status: 'timeout' })
+    } else if (outcome.kind === 'undelivered') {
+      // Never delivered / no completion — surface as a non-ok status so the sender
+      // reassigns instead of reading an empty string as a reply.
+      pending.resolve({
+        from: pending.fromMemberName,
+        message: 'This message was not delivered (the teammate is offline or unreachable).',
+        status: 'undelivered',
+      })
     } else if (outcome.kind === 'error') {
       pending.resolve({
         from: pending.fromMemberName,
@@ -424,6 +459,12 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
           from: pending.fromMemberName,
           message: 'The teammate is unavailable right now; reassign or proceed without them.',
           status: 'timeout',
+        })
+      } else if (outcome.kind === 'undelivered') {
+        pending.resolve({
+          from: pending.fromMemberName,
+          message: 'This message was not delivered (the teammate is offline or unreachable).',
+          status: 'undelivered',
         })
       } else if (outcome.kind === 'error') {
         pending.resolve({
@@ -456,6 +497,8 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
         return `The member's turn failed: ${outcome.message}`
       case 'timeout':
         return 'The member did not finish in time (timeout). Read the board to reconcile.'
+      case 'undelivered':
+        return 'The message was not delivered (the member is offline or unreachable). Reassign or retry later.'
       default:
         return '(no result)'
     }

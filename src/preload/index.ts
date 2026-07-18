@@ -492,7 +492,7 @@ export interface HaloAPI {
   teamRemoveTrigger: (input: { teamId: string; triggerId: string }) => Promise<IpcResponse>
   teamListArtifacts: (teamId: string) => Promise<IpcResponse>
   /** Load a member's team-channel chat history for one run (JSONL). */
-  teamChatMessages: (input: { appId: string; spaceId: string; teamId: string; epochId: string }) => Promise<IpcResponse>
+  teamChatMessages: (input: { appId: string; spaceId: string; teamId: string; epochId: string; sinceSeq?: number }) => Promise<IpcResponse>
   /** Run history (epochs), newest first. */
   teamListEpochs: (teamId: string) => Promise<IpcResponse>
   /** Tasks/findings/members snapshot for one past run. */
@@ -533,6 +533,7 @@ export interface HaloAPI {
   onTeamPresence: (callback: (data: unknown) => void) => () => void
   onTeamOfficeStatus: (callback: (data: unknown) => void) => () => void
   onTeamInviteLink: (callback: (data: unknown) => void) => () => void
+  onTeamMemberHistory: (callback: (data: unknown) => void) => () => void
 
   // Notification (in-app toast)
   onNotificationToast: (callback: (data: unknown) => void) => () => void
@@ -583,6 +584,10 @@ interface IpcResponse<T = unknown> {
   // (e.g. TUNNEL_DISABLED_BY_POLICY, CREDENTIAL_RESTORE_FAILED) without
   // depending on the English `error` string.
   code?: string
+  // True when `data` is a cached/possibly-incomplete copy served because the
+  // live source was unreachable (currently: remote member history while the
+  // owner is offline). The renderer surfaces an "offline" notice.
+  stale?: boolean
 }
 
 // Type-safe event listener creator
@@ -845,6 +850,7 @@ const api: HaloAPI = {
   onTeamPresence: (callback) => createEventListener(TEAM_EVENTS.presence, callback),
   onTeamOfficeStatus: (callback) => createEventListener(TEAM_EVENTS.officeStatus, callback),
   onTeamInviteLink: (callback) => createEventListener(TEAM_EVENTS.inviteLink, callback),
+  onTeamMemberHistory: (callback) => createEventListener(TEAM_EVENTS.memberHistory, callback),
 
   // Store (App Registry) — most methods derived from storeRpc contract;
   // storeInstall keeps its custom progress-listener wrapper below.

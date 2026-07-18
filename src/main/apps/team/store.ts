@@ -758,6 +758,10 @@ export class TeamStore implements ITeamStore {
     this.db.prepare(`UPDATE blackboard_tasks SET ${sets.join(', ')} WHERE id = @id`).run(params)
   }
 
+  deleteTask(taskId: string): void {
+    this.db.prepare(`DELETE FROM blackboard_tasks WHERE id = ?`).run(taskId)
+  }
+
   listTasksByEpoch(teamId: string, epochId: string): BlackboardTask[] {
     return (this.stmtListTasksByEpoch.all(teamId, epochId) as BlackboardTaskRow[]).map(rowToTask)
   }
@@ -799,6 +803,10 @@ export class TeamStore implements ITeamStore {
       ref: finding.ref,
       created_at: finding.createdAt,
     })
+  }
+
+  deleteFinding(findingId: string): void {
+    this.db.prepare(`DELETE FROM blackboard_findings WHERE id = ?`).run(findingId)
   }
 
   listFindingsByEpoch(teamId: string, epochId: string): BlackboardFinding[] {
