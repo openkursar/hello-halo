@@ -32,12 +32,17 @@ export interface FakeGateway {
   evictions: string[]
   /** Device-key proofs presented on auth leg 2, in order of session. */
   authProofs: Array<Record<string, unknown>>
+  /** Full auth payloads received (both legs), in order — carries token/officeId. */
+  authPayloads: Array<Record<string, unknown>>
   /** How many times a session completed gw:host-attach. */
   attachCount: () => number
   /** Push a message object to the current host session (JSON-encoded). */
   sendToHost: (message: Record<string, unknown>) => void
-  /** Relay a member federation frame to the host: { type:'federation', payload }. */
-  relayToHost: (frame: Record<string, unknown>) => void
+  /**
+   * Relay a member federation frame to the host: { type:'federation', from?, payload }.
+   * `from` mirrors the real gateway's stamped sender identity (§9.2).
+   */
+  relayToHost: (frame: Record<string, unknown>, from?: string) => void
   /** Server-side drop of the host socket (drives client reconnect). */
   dropHost: () => void
   close: () => Promise<void>
@@ -56,6 +61,7 @@ export async function startFakeGateway(options: FakeGatewayOptions = {}): Promis
   const announces: CapturedAnnounce[] = []
   const evictions: string[] = []
   const authProofs: Array<Record<string, unknown>> = []
+  const authPayloads: Array<Record<string, unknown>> = []
   let attaches = 0
   let attachRejectsLeft = options.rejectAttaches ?? 0
   let hostSocket: WebSocket | null = null
@@ -70,6 +76,7 @@ export async function startFakeGateway(options: FakeGatewayOptions = {}): Promis
       }
       switch (message.type) {
         case 'auth': {
+          if (message.payload) authPayloads.push(message.payload)
           const proof = message.payload?.proof as Record<string, unknown> | undefined
           if (!proof) {
             socket.send(
@@ -127,9 +134,11 @@ export async function startFakeGateway(options: FakeGatewayOptions = {}): Promis
     announces,
     evictions,
     authProofs,
+    authPayloads,
     attachCount: () => attaches,
     sendToHost: (message) => hostSocket?.send(JSON.stringify(message)),
-    relayToHost: (frame) => hostSocket?.send(JSON.stringify({ type: 'federation', payload: frame })),
+    relayToHost: (frame, from) =>
+      hostSocket?.send(JSON.stringify({ type: 'federation', ...(from ? { from } : {}), payload: frame })),
     dropHost: () => hostSocket?.terminate(),
     close: () =>
       new Promise<void>((resolve) => {

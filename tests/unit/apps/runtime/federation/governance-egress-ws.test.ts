@@ -95,7 +95,7 @@ describe('governance egress + run-epoch + restart recovery (real ws)', () => {
   let port: number
   let token: string
 
-  let memberRemoved: Array<{ officeId: string; appId: string }>
+  let memberRemoved: Array<{ officeId: string; appId: string; ownMember: boolean }>
   let officeDissolved: string[]
   let openRunEpoch: { teamId: string; epochId: string } | null
 
@@ -147,7 +147,8 @@ describe('governance egress + run-epoch + restart recovery (real ws)', () => {
       // does not wire getSessionIdentity, so the anti-spoof gate stays inert and
       // the joiner's selfNodeId label is admitted as-is.
       makeAuthProof: (nonce) => localAuthProof(nonce),
-      onMemberRemovedRemote: (officeId, appId) => memberRemoved.push({ officeId, appId }),
+      onMemberRemovedRemote: (officeId, appId, ownMember) =>
+        memberRemoved.push({ officeId, appId, ownMember }),
       onOfficeDissolvedRemote: (officeId) => officeDissolved.push(officeId),
     })
   })
@@ -193,9 +194,25 @@ describe('governance egress + run-epoch + restart recovery (real ws)', () => {
     await joinAsB()
     hostManager.projectMemberRemoved(OFFICE, 'app-removed-1')
     await waitFor(() => memberRemoved.length > 0)
-    expect(memberRemoved).toContainEqual({ officeId: OFFICE, appId: 'app-removed-1' })
+    // Someone ELSE's member was removed → not flagged as this node's own.
+    expect(memberRemoved).toContainEqual({ officeId: OFFICE, appId: 'app-removed-1', ownMember: false })
     // The office is still joined (a single member removal is not a full exit).
     expect(joinerManager.listJoinedOffices()).toContain(OFFICE)
+  })
+
+  it('G-1: host removes a member THIS node brought → flagged ownMember + re-join record dropped', async () => {
+    const federationStore = initFederationStore({ db: dbManager })
+    await joinAsB()
+    expect(federationStore.listJoinedOfficeConnections().some((c) => c.officeId === OFFICE)).toBe(true)
+
+    hostManager.projectMemberRemoved(OFFICE, 'app-ws-1')
+    await waitFor(() => memberRemoved.length > 0)
+    // The kicked member is one the joiner brought → the UI callback learns it so
+    // the user is told (never a silent row disappearance).
+    expect(memberRemoved).toContainEqual({ officeId: OFFICE, appId: 'app-ws-1', ownMember: true })
+    // It was the LAST brought member → the re-join record is gone, so the next
+    // start does not auto-rejoin an office that kicked this node.
+    expect(federationStore.listJoinedOfficeConnections().some((c) => c.officeId === OFFICE)).toBe(false)
   })
 
   it('G-3: host dissolves the office → joiner tears the joined office down, no residue', async () => {

@@ -29,6 +29,8 @@ import type {
   AckFrame,
   BlackboardReplicateFrame,
   BlackboardWriteFrame,
+  CatchupRequestFrame,
+  CatchupResponseFrame,
   M2Frame,
 } from '../../../../../../src/main/apps/runtime/federation/protocol-m2'
 import type { BlackboardWriteRecord } from '../../../../../../src/main/apps/runtime/team/blackboard'
@@ -273,6 +275,55 @@ describe('replication — idempotent apply (O-R5-3)', () => {
     expect(teamStore.getTaskById('t1-dup')).toBeNull()
   })
 
+  it('BK-1: replicate of an id the author already applied optimistically converges (no livelock)', () => {
+    // Reproduce the shadow-write round-trip on the AUTHOR's own node: the author
+    // optimistically inserted t1 locally (location-aware-blackboard), THEN the
+    // authority echoes the same id back as a replicate. A bare INSERT would throw on
+    // the primary-key clash, strand replicaAppliedSeq at 0, and livelock every later
+    // seq behind hasFid. The idempotent upsert must converge instead.
+    teamStore.insertTask(makeTaskPayload('t1') as unknown as BlackboardTask) // optimistic local row
+
+    expect(() => repl.handleReplicate(AUTHORITY, replicate(1, 'fid-1', 't1'))).not.toThrow()
+    // The applied water mark advanced past the echoed write — not stranded at 0.
+    expect(repl.getAppliedSeq()).toBe(1)
+    expect(teamStore.listTasksByTeam(OFFICE)).toHaveLength(1)
+
+    // The next contiguous seq applies cleanly (proves no permanent hole/livelock).
+    repl.handleReplicate(AUTHORITY, replicate(2, 'fid-2', 't2'))
+    expect(repl.getAppliedSeq()).toBe(2)
+    expect(teamStore.listTasksByTeam(OFFICE).map((t) => t.id).sort()).toEqual(['t1', 't2'])
+
+    // Every delivery acked (author, then the follow-on) — the log did not stall.
+    expect(acks.length).toBe(2)
+  })
+
+  it('BK-1: an optimistic finding row (same id) converges on replicate instead of throwing', () => {
+    const findingPayload = {
+      id: 'f1',
+      teamId: OFFICE,
+      epochId: 'epoch-1',
+      authorAppId: 'app-x',
+      body: 'finding',
+      ref: null,
+      createdAt: Date.now(),
+    }
+    teamStore.insertFinding(findingPayload as never) // optimistic local finding
+
+    const frame: BlackboardReplicateFrame = {
+      kind: 'blackboard-replicate',
+      officeId: OFFICE,
+      fromNode: AUTHORITY,
+      term: 1,
+      seq: 1,
+      op: 'post_finding',
+      payload: findingPayload,
+      fid: 'fid-f1',
+    }
+    expect(() => repl.handleReplicate(AUTHORITY, frame)).not.toThrow()
+    expect(repl.getAppliedSeq()).toBe(1)
+    expect(teamStore.listFindingsByEpoch(OFFICE, 'epoch-1')).toHaveLength(1)
+  })
+
   it('cross-restart dedup via authorityStore.hasFid (in-memory dedup bypassed)', () => {
     const frame = replicate(1, 'fid-persist', 't1')
     repl.handleReplicate(AUTHORITY, frame)
@@ -294,6 +345,42 @@ describe('replication — idempotent apply (O-R5-3)', () => {
     })
     repl2.handleReplicate(AUTHORITY, frame) // same fid; seq 1 also already in log
     expect(teamStore.listTasksByTeam(OFFICE)).toHaveLength(1)
+  })
+
+  it('restart recovery: a rebuilt standby recovers its applied water mark and keeps applying (no post-restart livelock)', () => {
+    // A standby applies seqs 1..3, then "restarts": a fresh instance over the SAME
+    // db. Its in-memory replicaAppliedSeq must be seeded from the persisted log, or
+    // the next frame (seq 4) looks like a gap that catch-up can never fill (every
+    // replayed entry is already persisted → hasFid → ack without advancing).
+    for (let i = 1; i <= 3; i++) {
+      repl.handleReplicate(AUTHORITY, replicate(i, `fid-${i}`, `t${i}`))
+    }
+    expect(repl.getAppliedSeq()).toBe(3)
+
+    const repl2 = createReplication({
+      officeId: OFFICE,
+      selfNodeId: HEIR,
+      authorityStore,
+      replicaStore: teamStore,
+      send: (_to, f) => {
+        if (f.kind === 'ack') acks.push(f)
+      },
+      broadcast: () => {},
+      getTerm: () => 1,
+      getCommittedSeq: () => 0,
+      setCommittedSeq: () => {},
+      getOnlineStandbys: () => [],
+      getHeir: () => null,
+      getKnownStandbyCount: () => 0,
+    })
+    // The rebuilt instance already knows it is at seq 3 (seeded from the log).
+    expect(repl2.getAppliedSeq()).toBe(3)
+
+    // A NEW frame (seq 4) applies contiguously — no gap, no catch-up livelock.
+    repl2.handleReplicate(AUTHORITY, replicate(4, 'fid-4', 't4'))
+    expect(repl2.getAppliedSeq()).toBe(4)
+    expect(teamStore.getTaskById('t4')).not.toBeNull()
+    expect(teamStore.listTasksByTeam(OFFICE).map((t) => t.id).sort()).toEqual(['t1', 't2', 't3', 't4'])
   })
 })
 
@@ -555,5 +642,136 @@ describe('replication — member write admission (O-R5-7)', () => {
     repl.handleBlackboardWrite('node-member', memberWrite(2, 'fid-dup'))
     repl.handleBlackboardWrite('node-member', memberWrite(2, 'fid-dup'))
     expect(applied).toHaveLength(1)
+  })
+})
+
+describe('replication — catch-up backfills a missed seq (C9)', () => {
+  it('a standby that misses a middle frame requests catch-up and fills the hole', () => {
+    // Authority produces three writes; capture the replicate frames it fans out
+    // and any directed sends (the catch-up response).
+    const authStores = makeStores()
+    const broadcasts: BlackboardReplicateFrame[] = []
+    const authSent: M2Frame[] = []
+    let committed = 0
+    const authority = createReplication({
+      officeId: OFFICE,
+      selfNodeId: AUTHORITY,
+      authorityStore: authStores.authorityStore,
+      replicaStore: authStores.teamStore,
+      send: (_to, frame) => authSent.push(frame),
+      broadcast: (f) => broadcasts.push(f as BlackboardReplicateFrame),
+      getTerm: () => 1,
+      getCommittedSeq: () => committed,
+      setCommittedSeq: (s) => (committed = s),
+      getOnlineStandbys: () => [],
+      getHeir: () => null,
+      getKnownStandbyCount: () => 0,
+    })
+    for (let i = 1; i <= 3; i++) {
+      authority.captureLocalWrite({
+        teamId: OFFICE,
+        epochId: 'epoch-1',
+        op: 'post_task',
+        payload: makeTaskPayload(`t${i}`),
+        taskId: `t${i}`,
+      })
+    }
+    expect(broadcasts.map((f) => f.seq)).toEqual([1, 2, 3])
+
+    // A standby on its own store. Its outbound frames route back to the authority.
+    const sbStores = makeStores()
+    const sbSent: Array<{ to: string; frame: M2Frame }> = []
+    const standby = createReplication({
+      officeId: OFFICE,
+      selfNodeId: HEIR,
+      authorityStore: sbStores.authorityStore,
+      replicaStore: sbStores.teamStore,
+      send: (to, frame) => sbSent.push({ to, frame }),
+      broadcast: () => {},
+      getTerm: () => 1,
+      getCommittedSeq: () => 0,
+      setCommittedSeq: () => {},
+      getOnlineStandbys: () => [],
+      getHeir: () => null,
+      getKnownStandbyCount: () => 0,
+    })
+
+    // Deliver seq 1, DROP seq 2, deliver seq 3 → the standby sees a gap.
+    standby.handleReplicate(AUTHORITY, broadcasts[0])
+    standby.handleReplicate(AUTHORITY, broadcasts[2])
+
+    // The hole is NOT skipped: applied stays at 1, and a catch-up was requested.
+    expect(standby.getAppliedSeq()).toBe(1)
+    const req = sbSent.find((s) => s.frame.kind === 'catchup-request')
+    expect(req).toBeDefined()
+    expect((req!.frame as CatchupRequestFrame).lastAckedSeq).toBe(1)
+
+    // Authority serves the catch-up; deliver the response back to the standby.
+    authority.handleM2Frame(HEIR, req!.frame)
+    const resp = authSent.find((f) => f.kind === 'catchup-response') as CatchupResponseFrame
+    expect(resp.mode).toBe('incremental')
+    expect(resp.entries!.map((e) => e.seq)).toEqual([2, 3])
+
+    standby.handleM2Frame(AUTHORITY, resp)
+
+    // The hole is filled: standby now holds all three, contiguously.
+    expect(standby.getAppliedSeq()).toBe(3)
+    expect(sbStores.teamStore.listTasksByTeam(OFFICE).map((t) => t.id).sort()).toEqual(['t1', 't2', 't3'])
+    sbStores.dbManager.closeAll()
+    authStores.dbManager.closeAll()
+  })
+})
+
+describe('replication — snapshot reconcile (replace-apply, #4)', () => {
+  it('a snapshot prunes a stale/extra standby row and overwrites a diverged field', () => {
+    const sbStores = makeStores()
+    const standby = createReplication({
+      officeId: OFFICE,
+      selfNodeId: HEIR,
+      authorityStore: sbStores.authorityStore,
+      replicaStore: sbStores.teamStore,
+      send: () => {},
+      broadcast: () => {},
+      getTerm: () => 1,
+      getCommittedSeq: () => 0,
+      setCommittedSeq: () => {},
+      getOnlineStandbys: () => [],
+      getHeir: () => null,
+      getKnownStandbyCount: () => 0,
+    })
+
+    // Standby holds a stale board: t1 with a diverged status (e.g. a rejected
+    // optimistic write) and an extra task the authority no longer has.
+    sbStores.teamStore.insertTask({
+      ...(makeTaskPayload('t1') as unknown as BlackboardTask),
+      status: 'done',
+    })
+    sbStores.teamStore.insertTask(makeTaskPayload('t-stale') as unknown as BlackboardTask)
+
+    const snapshot: CatchupResponseFrame = {
+      kind: 'catchup-response',
+      officeId: OFFICE,
+      fromNode: AUTHORITY,
+      term: 1,
+      reFid: 'req-1',
+      mode: 'snapshot',
+      snapshot: {
+        tasks: [makeTaskPayload('t1'), makeTaskPayload('t2')], // authoritative: status 'pending'
+        findings: [],
+        roster: [],
+        appliedSeq: 12,
+        term: 1,
+      },
+      fid: 'resp-1',
+    }
+
+    standby.handleM2Frame(AUTHORITY, snapshot)
+
+    // Extra row pruned; missing row inserted; the board matches authority exactly.
+    expect(sbStores.teamStore.listTasksByTeam(OFFICE).map((t) => t.id).sort()).toEqual(['t1', 't2'])
+    // The diverged field was overwritten back to authority truth (not kept).
+    expect(sbStores.teamStore.getTaskById('t1')!.status).toBe('pending')
+    expect(standby.getAppliedSeq()).toBe(12)
+    sbStores.dbManager.closeAll()
   })
 })

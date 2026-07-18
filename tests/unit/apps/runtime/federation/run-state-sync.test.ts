@@ -277,6 +277,70 @@ describe('federation live run-state propagation', () => {
     }
   })
 
+  // ── 4. Self-healing liveness re-projection ─────────────────────────────────
+
+  it('re-projects the roster while a member stays working, then self-terminates when idle', () => {
+    vi.useFakeTimers()
+    try {
+      seedHostTeam({ status: 'running', currentEpochId: EPOCH })
+      // Mutable status source: the member works, then goes idle mid-test.
+      const status: Record<string, TeamMemberRuntimeStatus> = { [HOST_MEMBER]: 'working' }
+      const { hostManager, bReceived } = wireTwoNodes({
+        getMemberRuntimeStatus: (appId) => status[appId] ?? 'idle',
+        getCurrentRunEpoch: () => ({ teamId: OFFICE, epochId: EPOCH }),
+      })
+      hostManager.handleHostInbound({ clientId: B_CLIENT_ID, officeId: OFFICE, frame: joinRequestFromB() })
+      const rosterCount = () => bReceived.filter((f) => f.kind === 'roster').length
+
+      const afterJoin = rosterCount()
+
+      // While the member stays working, the liveness loop supplies the periodic
+      // re-baseline that best-effort roster broadcasts lack — a lost 'idle' edge
+      // could never latch because a fresh projection keeps arriving.
+      vi.advanceTimersByTime(10_000)
+      const whileWorking = rosterCount()
+      expect(whileWorking).toBeGreaterThan(afterJoin)
+
+      vi.advanceTimersByTime(10_000)
+      expect(rosterCount()).toBeGreaterThan(whileWorking)
+
+      // The member goes idle. A bounded grace of extra projections carries the
+      // terminal idle out (covering a dropped idle edge), then the office quiets.
+      status[HOST_MEMBER] = 'idle'
+      vi.advanceTimersByTime(30_000)
+      const settled = rosterCount()
+
+      // A further long idle stretch produces NO more roster frames: the renewal
+      // self-terminated instead of flooding the wire forever.
+      vi.advanceTimersByTime(30_000)
+      expect(rosterCount()).toBe(settled)
+
+      hostManager.stopAll()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not re-project an idle office (no liveness flood at rest)', () => {
+    vi.useFakeTimers()
+    try {
+      seedHostTeam() // status 'idle', no epoch
+      const { hostManager, bReceived } = wireTwoNodes({
+        getMemberRuntimeStatus: () => 'idle',
+      })
+      hostManager.handleHostInbound({ clientId: B_CLIENT_ID, officeId: OFFICE, frame: joinRequestFromB() })
+      const afterJoin = bReceived.filter((f) => f.kind === 'roster').length
+
+      // Long stretch with every member idle → the loop must stay silent.
+      vi.advanceTimersByTime(60_000)
+      expect(bReceived.filter((f) => f.kind === 'roster').length).toBe(afterJoin)
+
+      hostManager.stopAll()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('scheduleRosterRefresh is a no-op for an office not hosted here', () => {
     // No hostOffice → manager hosts nothing; a refresh must not throw or emit.
     const { hostManager, bReceived } = (() => {

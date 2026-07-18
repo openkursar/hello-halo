@@ -565,9 +565,13 @@ async function categoryG(host, joiner, hasModel) {
         const chats = await chatOnAll([host, joiner], office.officeId, remote.appId)
         const bothHave = chats.every((c) => (c.messages ?? []).length > 0)
         const lens = chats.map((c) => (c.messages ?? []).length)
-        return bothHave && lens.every((l) => l === lens[0]) ? lens : null
+        // CONTENT-level agreement, not just length: a replica that froze a
+        // provisional last message has equal length but truncated text — the
+        // "final text missing on other nodes" bug this must catch.
+        const sigs = chats.map((c) => JSON.stringify((c.messages ?? []).map((m) => [m.role, m.content])))
+        return bothHave && sigs.every((s) => s === sigs[0]) ? lens : null
       }, { timeoutMs: 90_000, intervalMs: 3000 })
-      reporter[persisted ? 'pass' : 'fail']('G2', persisted ? `message+reply persisted, both nodes read ${persisted[0]} msgs` : `transcript not persisted/consistent (send status=${send.status})`)
+      reporter[persisted ? 'pass' : 'fail']('G2', persisted ? `message+reply content-consistent, both nodes read ${persisted[0]} msgs` : `transcript not persisted/consistent (send status=${send.status})`)
     }
   }
 
@@ -575,16 +579,25 @@ async function categoryG(host, joiner, hasModel) {
     if (!remote) {
       reporter.skip('G3', 'no remote member')
     } else {
-      // Kill the OWNER (joiner) then GET its history from host → fast neutral error.
+      // Kill the OWNER (joiner) then GET its history from host. With the owner
+      // gone the host must NOT hang: the multi-replica read path serves the
+      // local copy instantly (stale-flagged once presence confirms the owner
+      // offline; fresh-flagged in the pre-confirm window — either way the
+      // transcript is served), or, with no replica at all, returns a neutral
+      // error. A ~15s hang is the only real failure here.
       killNode(joiner)
       await sleep(2000)
       const t0 = Date.now()
       const r = await api(host, 'GET', `/api/teams/${office.officeId}/chat-messages?appId=${remote.appId}`)
       const dt = Date.now() - t0
-      // Expect a quick failure (502/neutral), NOT a 15s hang.
       const quick = dt < 12_000
+      const replicaServed =
+        r.status === 200 && r.json && r.json.success === true && Array.isArray(r.json.data)
       const neutral = r.status === 502 || r.status === 503 || (r.json && r.json.success === false)
-      reporter[quick && neutral ? 'pass' : 'fail']('G3', `owner-down history fetch took ${dt}ms status=${r.status} (expect <12s + neutral error)`)
+      reporter[quick && (replicaServed || neutral) ? 'pass' : 'fail'](
+        'G3',
+        `owner-down history fetch took ${dt}ms status=${r.status} rows=${r.json?.data?.length} stale=${r.json && r.json.stale} (expect <12s + local replica or neutral)`
+      )
       await reviveNode(joiner, CLUSTER_DIR)
       await sleep(3000)
     }
@@ -621,10 +634,13 @@ async function categoryH(host, joiners, hasModel) {
     const got = await pollUntil(async () => {
       const chats = await chatOnAll([host, ...parts], office.officeId, targetAppId)
       const lens = chats.map((c) => (c.messages ?? []).length)
-      const consistent = lens.every((l) => l === lens[0])
+      // Content-level agreement (see G2): equal lengths can hide a frozen
+      // provisional last message on a replica.
+      const sigs = chats.map((c) => JSON.stringify((c.messages ?? []).map((m) => [m.role, m.content])))
+      const consistent = sigs.every((s) => s === sigs[0])
       return lens[0] > 0 && consistent ? lens : null
     }, { timeoutMs: 90_000, intervalMs: 3000 })
-    return { ok: !!got, why: got ? `transcript consistent len=${got[0]} across nodes` : 'no consistent reply within 90s' }
+    return { ok: !!got, why: got ? `transcript content-consistent len=${got[0]} across nodes` : 'no consistent reply within 90s' }
   }
 
   if (want('H1')) {

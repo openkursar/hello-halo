@@ -277,7 +277,6 @@ function makeAuthoritySession(
     selfNodeId: NODE_A,
     resolveOwnerNode: (appId) =>
       teamStore.listMembersByTeam(OFFICE).find((m) => m.appId === appId)?.ownerNodeId ?? SELF_NODE_ID,
-    resolveOfficeId: () => OFFICE,
     getRemoteSpaceId: (appId) => node.manager.getRemoteMemberSpaceId(appId),
     sendWake: (p) => node.manager.sendWakeToMember(p),
     registerTurnComplete: (corr, cb) => node.manager.registerTurnComplete(corr, cb),

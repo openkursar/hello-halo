@@ -261,6 +261,31 @@ describe('governance egress + roster re-sync + run-epoch (D-1/G-1/G-3/B-2)', () 
     expect(() => hostManager.projectOfficeDissolved('not-hosted')).not.toThrow()
   })
 
+  it('G-3: dissolving an office revokes its issued credentials (leaked invite cannot rejoin)', () => {
+    seedHostTeam()
+    // An invite + a member credential the office issued.
+    federationStore.insertCredential({
+      jti: 'jti-invite', officeId: OFFICE, identity: '', scope: DEFAULT_OFFICE_SCOPE,
+      exp: null, issuedAt: Date.now(), revoked: false,
+    })
+    federationStore.insertCredential({
+      jti: 'jti-member', officeId: OFFICE, identity: 'identity-b', scope: DEFAULT_OFFICE_SCOPE,
+      exp: null, issuedAt: Date.now(), revoked: false,
+    })
+    // A credential for a DIFFERENT office must be left untouched.
+    federationStore.insertCredential({
+      jti: 'jti-other', officeId: 'other-office', identity: 'x', scope: DEFAULT_OFFICE_SCOPE,
+      exp: null, issuedAt: Date.now(), revoked: false,
+    })
+    const { hostManager } = wireTwoNodes()
+
+    hostManager.projectOfficeDissolved(OFFICE)
+
+    expect(federationStore.isRevoked('jti-invite')).toBe(true)
+    expect(federationStore.isRevoked('jti-member')).toBe(true)
+    expect(federationStore.isRevoked('jti-other')).toBe(false) // other office untouched
+  })
+
   it('B-2: an open run epoch rides the roster snapshot so the joiner can derive the live session key', () => {
     seedHostTeam()
     const rosters: RosterSnapshot[] = []

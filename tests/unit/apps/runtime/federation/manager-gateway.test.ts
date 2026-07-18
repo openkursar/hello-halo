@@ -27,7 +27,10 @@ import {
   createFederationManager,
   type FederationManager,
 } from '../../../../../src/main/apps/runtime/federation/manager'
-import type { FederationMessage } from '../../../../../src/main/apps/runtime/federation/types'
+import type {
+  FederationMessage,
+  SerializedWakeRequest,
+} from '../../../../../src/main/apps/runtime/federation/types'
 import { startFakeGateway, waitFor, type FakeGateway } from './_fake-gateway'
 
 const OFFICE = 'office-gwm-1'
@@ -115,6 +118,28 @@ describe('FederationManager gateway routing (fake gateway over real ws)', () => 
     expect(members[0]).toMatchObject({ appId: 'app-b-1', origin: 'remote', ownerNodeId: NODE_B })
   })
 
+  it('attributes a relayed frame with no payload fromNode via the gateway-stamped `from`', async () => {
+    // Admit B first so a turn-complete has a home.
+    relayJoinFromB()
+    await waitFor(() => federationStore.getNode(OFFICE, NODE_B) != null)
+
+    // turn-complete carries no fromNode; only the envelope `from` identifies it.
+    // Before the fix this was dropped ("without source node"); now it is routed.
+    gateway.relayToHost(
+      { kind: 'turn-complete', officeId: OFFICE, correlationId: 'no-corr', outcome: { kind: 'result', content: '' } },
+      NODE_B
+    )
+
+    // The node's return path is learned as gateway-reachable from the stamped
+    // origin — a subsequent unicast to it must ride the gateway, proving the
+    // frame was attributed to NODE_B rather than discarded.
+    await waitFor(() => manager.getOffice(OFFICE)!.link != null)
+    const before = gateway.hostFrames.length
+    manager.getOffice(OFFICE)!.link.send(NODE_B, heartbeat(NODE_A))
+    await waitFor(() => gateway.hostFrames.length > before)
+    expect(gateway.hostFrames.at(-1)!.to).toBe(NODE_B)
+  })
+
   it('unicast prefers a direct client mapping and falls back to the gateway', async () => {
     // NODE_B is known via the gateway; NODE_C via a direct WS client.
     relayJoinFromB()
@@ -170,6 +195,34 @@ describe('FederationManager gateway routing (fake gateway over real ws)', () => 
     expect(gateway.hostFrames.at(-1)!.to).toBeNull()
   })
 
+  it('sendWakeToMember reaches an owner connected via the GATEWAY (no direct client mapping)', async () => {
+    // NODE_B is admitted through the relay only — nodeToClient never learns it.
+    relayJoinFromB()
+    await waitFor(() => federationStore.getNode(OFFICE, NODE_B) != null)
+
+    const before = gateway.hostFrames.length
+    const sent = manager.sendWakeToMember({
+      officeId: OFFICE,
+      ownerNodeId: NODE_B,
+      correlationId: 'wake-corr-1',
+      request: {
+        appId: 'app-b-1',
+        spaceId: 'space-b-1',
+        message: 'run it',
+        conversationId: 'conv-1',
+        teamContext: { teamId: OFFICE } as SerializedWakeRequest['teamContext'],
+      },
+    })
+
+    // Pre-fix this returned false ("owner unreachable"): the reachability check
+    // only consulted nodeToClient, blind to the gateway path.
+    expect(sent).toBe(true)
+    await waitFor(() => gateway.hostFrames.length > before)
+    const wake = gateway.hostFrames.at(-1)!
+    expect(wake.to).toBe(NODE_B)
+    expect((wake.payload as { kind?: string }).kind).toBe('wake')
+  })
+
   it('a member-leave from a gateway node evicts its gateway session', async () => {
     relayJoinFromB()
     await waitFor(() => teamStore.listMembersByTeam(OFFICE).length === 1)
@@ -183,5 +236,60 @@ describe('FederationManager gateway routing (fake gateway over real ws)', () => 
 
     await waitFor(() => gateway.evictions.length >= 1)
     expect(gateway.evictions[0]).toBe(NODE_B)
+  })
+
+  it('an office hosted BEFORE the gateway URL was configured attaches on the next hostOffice call', async () => {
+    // Fresh manager whose gateway URL starts unset (simulates: user hosts an
+    // office first, saves the gateway setting afterwards, then mints an invite).
+    let configuredUrl: string | null = null
+    const lateManager = createFederationManager({
+      hostSend: () => true,
+      hostListOfficeClients: () => [],
+      federationStore,
+      teamStore,
+      verifyCredential: (token) => (token === VALID_TOKEN ? { officeId: 'office-late-gw' } : null),
+      getLocalNodeId: () => NODE_A,
+      getGatewayUrl: () => configuredUrl,
+      makeAuthProof: (nonce) => ({ method: 'device-key', identityId: NODE_A, challenge: nonce }),
+    })
+    try {
+      const attachesBefore = gateway.attachCount()
+      lateManager.hostOffice('office-late-gw')
+      // No URL yet → no attachment is opened.
+      await new Promise((r) => setTimeout(r, 100))
+      expect(gateway.attachCount()).toBe(attachesBefore)
+
+      // The user saves the gateway setting; minting an invite re-invokes
+      // hostOffice, which must heal the missing attachment.
+      configuredUrl = gateway.url
+      lateManager.hostOffice('office-late-gw')
+      await waitFor(() => gateway.attachCount() > attachesBefore)
+    } finally {
+      lateManager.stopAll()
+    }
+  })
+
+  it('joinOffice auth payload carries officeId (gateway sessions require it, §9.1)', async () => {
+    const joinerOffice = 'office-joined-via-gw'
+    const before = gateway.authPayloads.length
+
+    // Fire the join; the fake gateway grants auth but never a join-grant, so we
+    // only assert the handshake and let teardown reap the pending join.
+    void manager.joinOffice({
+      officeId: joinerOffice,
+      serverUrl: gateway.url,
+      credentialToken: 'opaque-invite-token',
+      selfContext: { officeId: joinerOffice, selfNodeId: NODE_A },
+      bringMembers: [{ appId: 'app-a-1', memberName: 'a-writer' }],
+    })
+
+    await waitFor(() => gateway.authPayloads.length > before)
+    const payload = gateway.authPayloads[gateway.authPayloads.length - 1]
+    expect(payload.federation).toBe(true)
+    // The regression this guards: the joiner client MUST carry officeId — a
+    // gateway cannot read it out of the (opaque) invite token like a LAN host.
+    expect(payload.officeId).toBe(joinerOffice)
+
+    manager.leaveOffice(joinerOffice)
   })
 })

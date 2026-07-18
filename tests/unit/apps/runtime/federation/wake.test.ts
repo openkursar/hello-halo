@@ -57,7 +57,7 @@ import type {
   OfficeCredentialLike,
 } from '../../../../../src/main/apps/runtime/federation'
 import type { OrchestrationSessionDeps } from '../../../../../src/main/apps/runtime/team'
-import { SELF_NODE_ID } from '../../../../../src/shared/apps/team-types'
+import { SELF_NODE_ID, TEAM_CIRCUIT_DEFAULTS } from '../../../../../src/shared/apps/team-types'
 import type { Team, TeamMember, TeamEpoch, TeamTriggerContext } from '../../../../../src/main/apps/team/types'
 
 const OFFICE = 'office-1'
@@ -185,7 +185,6 @@ describe('federation remote wake (position transparency)', () => {
       sendWake: (p) => hostManager.sendWakeToMember(p),
       registerTurnComplete: (corr, cb) => hostManager.registerTurnComplete(corr, cb),
       getRemoteSpaceId: (appId) => hostManager.getRemoteMemberSpaceId(appId),
-      resolveOfficeId: () => OFFICE,
     })
 
     const result = await locationAware.sendAppChatMessage(makeRequest(MEMBER_M))
@@ -245,7 +244,6 @@ describe('federation remote wake (position transparency)', () => {
       sendWake,
       registerTurnComplete: (corr, cb) => hostManager.registerTurnComplete(corr, cb),
       getRemoteSpaceId: () => undefined,
-      resolveOfficeId: () => OFFICE,
     })
 
     const result = await locationAware.sendAppChatMessage(makeRequest('app-local'))
@@ -268,9 +266,8 @@ describe('federation remote wake (position transparency)', () => {
       resolveOwnerNode: () => NODE_B,
       selfNodeId: NODE_A,
       sendWake: () => true,
-      registerTurnComplete: () => {},
+      registerTurnComplete: () => () => {},
       getRemoteSpaceId: (appId) => hostManager.getRemoteMemberSpaceId(appId),
-      resolveOfficeId: () => OFFICE,
     })
 
     const spaceId = locationAware.getMemberSpaceId(MEMBER_M)
@@ -281,7 +278,48 @@ describe('federation remote wake (position transparency)', () => {
     expect(locationAware.getMemberSpaceId('app-unknown')).toBe('app-unknown')
   })
 
-  it('resolves empty (not rejected) when the owner is unreachable', async () => {
+  it("scopes owner + office to the turn's team when the app belongs to two teams (template-app collision)", async () => {
+    // The same app is a member of TWO teams with a different owner in each — a
+    // template digital human brought into multiple offices. A cross-team
+    // first-match resolver (the row of the OTHER team sorts first after its
+    // roster replay refreshes added_at) routed the wake over the wrong office's
+    // link to the wrong owner: a silent black hole. Owner and office must come
+    // from the TURN's team, never from an arbitrary membership row.
+    const memberships = [
+      { teamId: 'office-stale', ownerNodeId: 'node-stale' }, // sorts first
+      { teamId: OFFICE, ownerNodeId: NODE_B },
+    ]
+    const sends: Array<{ officeId: string; ownerNodeId: string }> = []
+    const locationAware = makeLocationAwareSessionDeps({
+      local: {
+        sendAppChatMessage: async () => ({ finalMessage: null }),
+        isSessionActive: () => false,
+        closeTeamSession: async () => {},
+        getMemberSpaceId: () => 'local-space',
+      },
+      resolveOwnerNode: (_appId, teamId) =>
+        (teamId ? memberships.find((m) => m.teamId === teamId) : memberships[0])?.ownerNodeId ??
+        SELF_NODE_ID,
+      selfNodeId: NODE_A,
+      sendWake: (p) => {
+        sends.push({ officeId: p.officeId, ownerNodeId: p.ownerNodeId })
+        return true
+      },
+      registerTurnComplete: (_corr, cb) => {
+        setTimeout(() => cb({ kind: 'result', content: 'scoped-ok' }), 0)
+        return () => {}
+      },
+      getRemoteSpaceId: () => undefined,
+    })
+
+    // The request's teamContext.teamId is OFFICE → the wake must ride OFFICE's
+    // link to OFFICE's owner of this member, not the stale team's.
+    const result = await locationAware.sendAppChatMessage(makeRequest(MEMBER_M))
+    expect(result).toEqual({ finalMessage: 'scoped-ok' })
+    expect(sends).toEqual([{ officeId: OFFICE, ownerNodeId: NODE_B }])
+  })
+
+  it('resolves UNDELIVERED (not a fake empty reply) when the owner is unreachable', async () => {
     const locationAware = makeLocationAwareSessionDeps({
       local: {
         sendAppChatMessage: async () => ({ finalMessage: null }),
@@ -292,13 +330,54 @@ describe('federation remote wake (position transparency)', () => {
       resolveOwnerNode: () => NODE_B,
       selfNodeId: NODE_A,
       sendWake: () => false, // unreachable
-      registerTurnComplete: () => {},
+      registerTurnComplete: () => () => {},
       getRemoteSpaceId: () => undefined,
-      resolveOfficeId: () => OFFICE,
     })
+    // The wake never went out → the sender must be able to tell this apart from a
+    // real (empty) reply, so the result carries an `undelivered` marker.
     await expect(locationAware.sendAppChatMessage(makeRequest(MEMBER_M))).resolves.toEqual({
       finalMessage: null,
+      undelivered: { reason: 'owner-unreachable' },
     })
+  })
+
+  it('resolves UNDELIVERED via the backstop when turn-complete never arrives (no infinite hang)', async () => {
+    vi.useFakeTimers()
+    try {
+      let registered: ((o: TurnCompletion) => void) | null = null
+      const locationAware = makeLocationAwareSessionDeps({
+        local: {
+          sendAppChatMessage: async () => ({ finalMessage: null }),
+          isSessionActive: () => false,
+          closeTeamSession: async () => {},
+          getMemberSpaceId: () => 'local-space',
+        },
+        resolveOwnerNode: () => NODE_B,
+        selfNodeId: NODE_A,
+        sendWake: () => true, // "sent" — but no completion will ever come back
+        registerTurnComplete: (_corr, cb) => {
+          registered = cb
+          return () => {
+            registered = null
+          }
+        },
+        getRemoteSpaceId: () => undefined,
+        })
+
+      const pending = locationAware.sendAppChatMessage(makeRequest(MEMBER_M))
+      // Before the backstop the turn is legitimately still outstanding.
+      expect(registered).not.toBeNull()
+      // Advance past the run's max duration: the backstop reclaims the dead wake and
+      // reports it as UNDELIVERED (not a fake empty success).
+      await vi.advanceTimersByTimeAsync(TEAM_CIRCUIT_DEFAULTS.maxDurationMs + 1000)
+      await expect(pending).resolves.toEqual({
+        finalMessage: null,
+        undelivered: { reason: 'no-completion-signal' },
+      })
+      expect(registered).toBeNull() // waiter unregistered on settle (no leak)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -386,8 +465,7 @@ describe('owner-side wake: spaceId is re-resolved locally (not the wire sentinel
         // Force the sentinel: the authority has NO cached remote space, so the wire
         // request.spaceId becomes the appId — exactly the production failure input.
         getRemoteSpaceId: () => undefined,
-        resolveOfficeId: () => OFFICE,
-      })
+        })
 
       const result = await locationAware.sendAppChatMessage(makeRequest(MEMBER_M))
       expect(result).toEqual({ finalMessage: 'persisted-ok' })

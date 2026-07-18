@@ -14,7 +14,7 @@
  * effects of the kernel blackboard.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createDatabaseManager } from '../../../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../../../src/main/platform/store/types'
 import { TeamStore } from '../../../../../../src/main/apps/team/store'
@@ -24,6 +24,8 @@ import {
 } from '../../../../../../src/main/apps/team/migrations'
 import {
   createLocationAwareBlackboard,
+  handleShadowWriteReject,
+  confirmShadowWrite,
   type OutboundBlackboardWrite,
 } from '../../../../../../src/main/apps/runtime/federation/authority/location-aware-blackboard'
 import type {
@@ -103,12 +105,13 @@ describe('location-aware blackboard', () => {
 
   afterEach(() => dbManager.closeAll())
 
-  function build(base: Blackboard) {
+  function build(base: Blackboard, onWriteDiscarded?: (teamId: string) => void) {
     return createLocationAwareBlackboard({
       base,
       store,
       selfNodeId: SELF,
       sendBlackboardWrite: (host, write) => outbound.push({ host, write }),
+      onWriteDiscarded,
     })
   }
 
@@ -206,5 +209,175 @@ describe('location-aware blackboard', () => {
     lab.readBoard(SHADOW, 'e1', 'a')
     lab.readBoard(OWNED, 'e1', 'a')
     expect(calls.readBoard).toBe(2)
+  })
+
+  it('a retryable reject (EPOCH_STALE) resends the shadow write with the SAME fid (C8)', () => {
+    const { base } = makeBaseFake()
+    const lab = build(base)
+    lab.postTask({ teamId: SHADOW, epochId: 'e1', callerAppId: 'a', title: 'T', assigneeAppId: null })
+    expect(outbound).toHaveLength(1)
+    const fid = outbound[0].write.fid
+
+    // The host rejected it (a write raced a handover): resend, same fid.
+    handleShadowWriteReject(fid, true)
+    expect(outbound).toHaveLength(2)
+    expect(outbound[1].write.fid).toBe(fid)
+  })
+
+  it('a non-retryable reject stops tracking (no resend)', () => {
+    const { base } = makeBaseFake()
+    const lab = build(base)
+    lab.postTask({ teamId: SHADOW, epochId: 'e1', callerAppId: 'a', title: 'T', assigneeAppId: null })
+    const fid = outbound[0].write.fid
+
+    handleShadowWriteReject(fid, false)
+    expect(outbound).toHaveLength(1)
+    // A second reject for the now-forgotten write is a no-op.
+    handleShadowWriteReject(fid, true)
+    expect(outbound).toHaveLength(1)
+  })
+
+  it('resend is capped so a persistently-rejecting authority cannot loop', () => {
+    const { base } = makeBaseFake()
+    const lab = build(base)
+    lab.postTask({ teamId: SHADOW, epochId: 'e1', callerAppId: 'a', title: 'T', assigneeAppId: null })
+    const fid = outbound[0].write.fid
+    // Keep rejecting; resends are bounded (initial + capped retries), not infinite.
+    for (let i = 0; i < 10; i++) handleShadowWriteReject(fid, true)
+    expect(outbound.length).toBeLessThanOrEqual(3)
+  })
+
+  it('a non-retryable reject rolls back the optimistic post_task row (#3)', () => {
+    const { base } = makeBaseFake()
+    const lab = build(base)
+    const { taskId } = lab.postTask({ teamId: SHADOW, epochId: 'e1', callerAppId: 'a', title: 'T', assigneeAppId: null })
+    expect(store.getTaskById(taskId)).not.toBeNull()
+    const fid = outbound[0].write.fid
+
+    // The authority will NEVER accept it (scope) → the optimistic row must be gone,
+    // not left to diverge (replication never corrects a never-applied row).
+    handleShadowWriteReject(fid, false)
+    expect(store.getTaskById(taskId)).toBeNull()
+  })
+
+  it('a non-retryable reject restores the pre-image of an update_task (#3)', () => {
+    const { base } = makeBaseFake()
+    const lab = build(base)
+    const { taskId } = lab.postTask({ teamId: SHADOW, epochId: 'e1', callerAppId: 'a', title: 'seed', assigneeAppId: null })
+    outbound.length = 0
+    lab.updateTask({ teamId: SHADOW, epochId: 'e1', taskId, status: 'done', resultRef: 'ref/1' })
+    expect(store.getTaskById(taskId)?.status).toBe('done')
+    const fid = outbound[0].write.fid
+
+    handleShadowWriteReject(fid, false)
+    const restored = store.getTaskById(taskId)
+    expect(restored?.status).toBe('pending') // exact pre-update value restored
+    expect(restored?.resultRef).toBeNull()
+  })
+
+  it('a non-retryable reject rolls back the optimistic post_finding row (#3)', () => {
+    const { base } = makeBaseFake()
+    const lab = build(base)
+    const { findingId } = lab.postFinding({ teamId: SHADOW, epochId: 'e1', callerAppId: 'a', content: 'note' })
+    expect(store.listFindingsByEpoch(SHADOW, 'e1').map((f) => f.id)).toContain(findingId)
+    const fid = outbound[0].write.fid
+
+    handleShadowWriteReject(fid, false)
+    expect(store.listFindingsByEpoch(SHADOW, 'e1').map((f) => f.id)).not.toContain(findingId)
+  })
+
+  it('a retryable reject that exhausts its cap leaves the row for later reconcile (#3)', () => {
+    const { base } = makeBaseFake()
+    const lab = build(base)
+    const { taskId } = lab.postTask({ teamId: SHADOW, epochId: 'e1', callerAppId: 'a', title: 'T', assigneeAppId: null })
+    const fid = outbound[0].write.fid
+    // EPOCH_STALE keeps failing: cap reached, but NOT rolled back — a handover is
+    // still settling and a catch-up/snapshot reconciles it.
+    for (let i = 0; i < 10; i++) handleShadowWriteReject(fid, true)
+    expect(store.getTaskById(taskId)).not.toBeNull()
+  })
+
+  it('an unconfirmed shadow write is rolled back after the TTL, not left as a phantom (C8)', () => {
+    vi.useFakeTimers()
+    try {
+      const { base } = makeBaseFake()
+      const lab = build(base)
+      const { taskId } = lab.postTask({ teamId: SHADOW, epochId: 'e1', callerAppId: 'a', title: 'T', assigneeAppId: null })
+      expect(store.getTaskById(taskId)).not.toBeNull()
+
+      // Neither a reject nor a confirm arrives (the write frame was lost). The TTL
+      // fires → the optimistic row is rolled back so the board matches authority
+      // truth instead of showing a phantom row teammates never see.
+      vi.advanceTimersByTime(30_001)
+      expect(store.getTaskById(taskId)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a confirmed shadow write (replicated back) survives the TTL — no false rollback (C8)', () => {
+    vi.useFakeTimers()
+    try {
+      const { base } = makeBaseFake()
+      const lab = build(base)
+      const { taskId } = lab.postTask({ teamId: SHADOW, epochId: 'e1', callerAppId: 'a', title: 'T', assigneeAppId: null })
+      const fid = outbound[0].write.fid
+
+      // The authority committed it and replicated it back → positive ack clears
+      // tracking, so the TTL backstop must NOT roll a confirmed write back.
+      confirmShadowWrite(fid)
+      vi.advanceTimersByTime(30_001)
+      expect(store.getTaskById(taskId)).not.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a TTL rollback surfaces the discard to onWriteDiscarded (never silent)', () => {
+    vi.useFakeTimers()
+    try {
+      const discarded: string[] = []
+      const { base } = makeBaseFake()
+      const lab = build(base, (teamId) => discarded.push(teamId))
+      lab.postTask({ teamId: SHADOW, epochId: 'e1', callerAppId: 'a', title: 'T', assigneeAppId: null })
+
+      vi.advanceTimersByTime(30_001)
+      expect(discarded).toEqual([SHADOW])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a non-retryable reject surfaces the discard to onWriteDiscarded', () => {
+    const discarded: string[] = []
+    const { base } = makeBaseFake()
+    const lab = build(base, (teamId) => discarded.push(teamId))
+    lab.postTask({ teamId: SHADOW, epochId: 'e1', callerAppId: 'a', title: 'T', assigneeAppId: null })
+
+    handleShadowWriteReject(outbound[0].write.fid, false)
+    expect(discarded).toEqual([SHADOW])
+  })
+
+  it('a confirmed write and an exhausted retryable reject do NOT signal a discard', () => {
+    vi.useFakeTimers()
+    try {
+      const discarded: string[] = []
+      const { base } = makeBaseFake()
+      const lab = build(base, (teamId) => discarded.push(teamId))
+
+      // Confirmed: the row stuck — no discard notice.
+      lab.postTask({ teamId: SHADOW, epochId: 'e1', callerAppId: 'a', title: 'A', assigneeAppId: null })
+      confirmShadowWrite(outbound[0].write.fid)
+
+      // Retryable cap exhausted: the row is left for reconcile, not discarded.
+      lab.postTask({ teamId: SHADOW, epochId: 'e1', callerAppId: 'a', title: 'B', assigneeAppId: null })
+      const fid = outbound[1].write.fid
+      for (let i = 0; i < 10; i++) handleShadowWriteReject(fid, true)
+
+      vi.advanceTimersByTime(30_001)
+      expect(discarded).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

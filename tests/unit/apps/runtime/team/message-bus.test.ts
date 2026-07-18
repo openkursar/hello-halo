@@ -92,6 +92,9 @@ function seedTeam(store: TeamStore, collabMode: Team['collabMode']): void {
 function makeHooks() {
   const wakes: Array<{ sessionKey: string; appId: string; envelope: any; trigger: any }> = []
   const busy = new Set<string>()
+  // Members whose owner is unreachable (empty by default → everything reachable, so
+  // existing tests are unaffected by the wait=false reachability gate).
+  const unreachable = new Set<string>()
   const hooks: TeamDeliveryHooks = {
     wakeTarget: vi.fn(async (params) => {
       wakes.push({
@@ -102,8 +105,9 @@ function makeHooks() {
       })
     }),
     isBusy: (sessionKey: string) => busy.has(sessionKey),
+    checkReachable: (appId: string) => !unreachable.has(appId),
   }
-  return { hooks, wakes, busy }
+  return { hooks, wakes, busy, unreachable }
 }
 
 // ============================================
@@ -227,6 +231,44 @@ describe('MessageBus', () => {
       expect(completionWake.trigger.kind).toBe('completion')
     })
 
+    it('wait=false to an UNREACHABLE remote member returns undelivered NOW (no false "sent", no delivery attempt)', async () => {
+      seedTeam(store, 'free')
+      const { hooks, wakes, unreachable } = makeHooks()
+      unreachable.add(RESEARCHER_APP) // researcher's owner is offline
+      const bus = createMessageBus({ store, hooks })
+
+      const result = await bus.send({
+        teamId: TEAM_ID,
+        epochId: EPOCH_ID,
+        fromAppId: LEAD_APP,
+        to: 'researcher',
+        message: 'Do T1',
+        wait: false,
+      })
+
+      // Reported as not-delivered immediately (not a false "sent"), and NOT attempted.
+      expect('messageId' in result && result.delivery).toBe('undelivered')
+      expect(wakes).toHaveLength(0)
+    })
+
+    it('wait=false to a REACHABLE member proceeds normally (no undelivered flag)', async () => {
+      seedTeam(store, 'free')
+      const { hooks, wakes } = makeHooks() // all reachable by default
+      const bus = createMessageBus({ store, hooks })
+
+      const result = await bus.send({
+        teamId: TEAM_ID,
+        epochId: EPOCH_ID,
+        fromAppId: LEAD_APP,
+        to: 'researcher',
+        message: 'Do T1',
+        wait: false,
+      })
+
+      expect('messageId' in result && result.delivery).toBeUndefined()
+      expect(wakes).toHaveLength(1)
+    })
+
     it('does NOT re-wake the sender for an escalation outcome (routed by session layer)', async () => {
       seedTeam(store, 'free')
       const { hooks, wakes } = makeHooks()
@@ -317,6 +359,26 @@ describe('MessageBus', () => {
       const result = await pending
       expect(result.status).toBe('ok')
       expect(result.message).toMatch(/failed/i)
+    })
+
+    it('maps an undelivered outcome to status=undelivered (not a fake ok reply)', async () => {
+      // The wake never reached the owner: the sender must get a NON-ok status so it
+      // reassigns, never mistaking the empty message for a real reply (S6/MB-1).
+      seedTeam(store, 'free')
+      const { hooks, wakes } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+
+      const pending = bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: TESTER_APP, to: 'lead', message: 'q', wait: true })
+      await Promise.resolve()
+      bus.completeTurn({
+        sessionKey: wakes[0].sessionKey,
+        trigger: wakes[0].trigger,
+        outcome: { kind: 'undelivered', reason: 'owner-unreachable' },
+      })
+
+      const result = await pending
+      expect(result.status).toBe('undelivered')
+      expect(result.message).toMatch(/not delivered/i)
     })
 
     it('resolves for a conversation epoch even though it does not occupy currentEpochId', async () => {

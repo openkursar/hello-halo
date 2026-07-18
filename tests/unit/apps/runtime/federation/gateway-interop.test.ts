@@ -28,6 +28,19 @@ import net from 'net'
 import { WsFederationClient } from '../../../../../src/main/apps/runtime/federation/ws-federation-client'
 import { GatewayAttachClient } from '../../../../../src/main/apps/runtime/federation/gateway-attach'
 import type { FederationMessage } from '../../../../../src/main/apps/runtime/federation/types'
+import { createDatabaseManager } from '../../../../../src/main/platform/store/database-manager'
+import { FederationStore } from '../../../../../src/main/apps/federation/store'
+import { AuthorityStore } from '../../../../../src/main/apps/federation/authority-store'
+import {
+  MIGRATION_NAMESPACE as FED_NS,
+  migrations as fedMigrations,
+} from '../../../../../src/main/apps/federation/migrations'
+import { TeamStore } from '../../../../../src/main/apps/team/store'
+import {
+  MIGRATION_NAMESPACE as TEAM_NS,
+  migrations as teamMigrations,
+} from '../../../../../src/main/apps/team/migrations'
+import { createFederationManager } from '../../../../../src/main/apps/runtime/federation/manager'
 
 const REPO_ROOT = path.resolve(__dirname, '../../../../..')
 const OFFICE = 'office-interop-1'
@@ -253,4 +266,81 @@ describe.skipIf(!hasGo())('gateway interop (real Go binary)', () => {
     evil.close()
     host.close()
   }, 30_000)
+
+  it('presence stays mutually ONLINE across the relay (reproduces the two-machine field test)', async () => {
+    // Two REAL federation managers — a host and a joiner — talk exclusively
+    // through the real Go gateway, exactly like the two-machine setup. After
+    // well past the confirmed-offline threshold (13s), BOTH sides must still
+    // see each other online: heartbeats must flow host→member and member→host
+    // through the relay.
+    const officeId = 'office-presence-relay'
+    const hostId = makeIdentity()
+    const memberId = makeIdentity()
+    const TOKEN = 'relay-presence-token'
+
+    function makeNode(identity: TestIdentity) {
+      const dbm = createDatabaseManager(':memory:')
+      const db = dbm.getAppDatabase()
+      dbm.runMigrations(db, FED_NS, fedMigrations)
+      dbm.runMigrations(db, TEAM_NS, teamMigrations)
+      const federationStore = new FederationStore(db)
+      const teamStore = new TeamStore(db)
+      const authorityStore = new AuthorityStore(db)
+      const manager = createFederationManager({
+        hostSend: () => false,
+        hostListOfficeClients: () => [],
+        federationStore,
+        teamStore,
+        authorityStore,
+        verifyCredential: (token) => (token === TOKEN ? { officeId } : null),
+        getLocalNodeId: () => identity.id,
+        getGatewayUrl: () => baseUrl,
+        makeAuthProof: (nonce) => makeProof(identity, nonce),
+      })
+      return { dbm, federationStore, teamStore, manager }
+    }
+
+    const hostNode = makeNode(hostId)
+    const memberNode = makeNode(memberId)
+    // The hosted office's team row must exist for roster snapshots.
+    hostNode.teamStore.insertTeam({
+      id: officeId,
+      name: 'Relay Office',
+      owningSpaceId: 'space-host',
+      goal: '',
+      leadAppId: null,
+      memberSourcing: 'manual',
+      collabMode: 'structured',
+      escalationRouting: 'lead',
+      status: 'idle',
+      currentEpochId: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    } as Parameters<TeamStore['insertTeam']>[0])
+
+    try {
+      hostNode.manager.hostOffice(officeId)
+      const joined = await memberNode.manager.joinOffice({
+        officeId,
+        serverUrl: baseUrl,
+        credentialToken: TOKEN,
+        selfContext: { officeId, selfNodeId: memberId.id },
+        bringMembers: [{ appId: 'app-m-1', memberName: 'relay-writer' }],
+      })
+      expect(joined.ok).toBe(true)
+
+      // Ride out the full suspect (6s) + confirmed-offline (13s) window.
+      await new Promise((r) => setTimeout(r, 16_000))
+
+      const hostViewOfMember = hostNode.federationStore.getNode(officeId, memberId.id)
+      const memberViewOfHost = memberNode.federationStore.getNode(officeId, hostId.id)
+      expect(hostViewOfMember?.status).toBe('online')
+      expect(memberViewOfHost?.status).toBe('online')
+    } finally {
+      hostNode.manager.stopAll()
+      memberNode.manager.stopAll()
+      hostNode.dbm.closeAll()
+      memberNode.dbm.closeAll()
+    }
+  }, 60_000)
 })

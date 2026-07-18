@@ -49,6 +49,9 @@ function build(busSend: (input: SendInputSeen) => unknown) {
     // Ad-hoc 1:1 chat reactivates a sealed run epoch before sending so the reply
     // is not dropped on a sealed epoch; no-op in this stub (real impl reopens).
     reactivateEpoch: vi.fn(),
+    // 1:1 chat with no run opens/reuses a per-member 'conversation' epoch — the
+    // real impl inserts one (no run orchestration); the stub returns its id.
+    ensureConversationEpoch: vi.fn((_teamId: string, _chatKey: string) => ({ id: 'conv-epoch-1' })),
     bus: {
       send: vi.fn(async (input: SendInputSeen) => {
         sends.push(input)
@@ -76,7 +79,8 @@ function build(busSend: (input: SendInputSeen) => unknown) {
 /**
  * Seed a team with a lead + a worker. The dispatch tests pass an explicit epochId
  * (sendToMember prefers the passed epoch over the store's open one), so no epoch
- * row is needed; the NO_EPOCH case passes an empty epochId and seeds none.
+ * row is needed; the no-run case passes an empty epochId and relies on the
+ * conversation-epoch fallback (stubbed ensureConversationEpoch).
  */
 function seedTeam(store: TeamStore, opts?: { leadAppId?: string | null }) {
   const now = Date.now()
@@ -182,14 +186,20 @@ describe('E-1 — teamService.sendToMember (host-operator dispatch)', () => {
     expect(ctx.sends).toHaveLength(0)
   })
 
-  it('no open epoch and none passed → NO_EPOCH (bus never consulted)', async () => {
-    const ctx = build(() => ({ messageId: 'nope' }))
+  it('no run yet → opens a per-member conversation epoch and dispatches (no run required)', async () => {
+    // 1:1 direct chat must NOT require first starting a run (zero-difference with
+    // local chat). With no open run and none passed, sendToMember opens/reuses the
+    // member's long-lived 'conversation' epoch and dispatches through it.
+    const ctx = build(() => ({ from: 'worker', message: 'hi', status: 'ok' }))
     dbManager = ctx.dbManager
     const { teamId } = seedTeam(ctx.store)
 
     const res = await ctx.service.sendToMember({ teamId, appId: WORKER, epochId: '', message: 'go' })
-    expect(res).toEqual({ ok: false, finalMessage: null, reason: 'NO_EPOCH' })
-    expect(ctx.sends).toHaveLength(0)
+
+    expect(res).toEqual({ ok: true, finalMessage: 'hi' })
+    expect(ctx.runtime.ensureConversationEpoch).toHaveBeenCalledWith(teamId, `direct:${WORKER}`)
+    expect(ctx.sends).toHaveLength(1)
+    expect(ctx.sends[0]).toMatchObject({ teamId, epochId: 'conv-epoch-1', fromAppId: LEAD, to: 'worker' })
   })
 
   it('team has no lead → NO_LEAD (cannot attribute the operator turn)', async () => {

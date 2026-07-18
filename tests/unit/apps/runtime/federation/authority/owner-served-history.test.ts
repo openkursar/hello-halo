@@ -135,8 +135,8 @@ describe('C-1 — owner-served remote member history (owner authorizes + serves)
 
   it('served: a viewer pulls an OWNED member transcript from the owner', async () => {
     const transcript = [
-      { role: 'user', content: 'hello', ts: 1 },
-      { role: 'assistant', content: 'hi there', ts: 2 },
+      { seq: 1, role: 'user', content: 'hello', ts: 1 },
+      { seq: 2, role: 'assistant', content: 'hi there', ts: 2 },
     ]
     const nodes = build(() => transcript)
 
@@ -150,11 +150,75 @@ describe('C-1 — owner-served remote member history (owner authorizes + serves)
     expect(nodes.V.office.history.pendingCount()).toBe(0) // settled
   })
 
+  it('served: an assistant message carries its full thoughts/tool trace to the viewer', async () => {
+    // The owner-served transcript must carry the thinking + tool trace so a remote
+    // viewer's post-run backfill shows the SAME thoughts the live relay did — not
+    // just the final text (a finished member otherwise loses its thinking on backfill).
+    const transcript = [
+      { seq: 1, role: 'user', content: 'go', ts: 1 },
+      {
+        seq: 2,
+        role: 'assistant',
+        content: 'done',
+        thoughts: [
+          { id: 't1', type: 'thinking' as const, content: 'let me plan', timestamp: '2026-07-15T00:00:00Z' },
+          {
+            id: 't2',
+            type: 'tool_use' as const,
+            content: 'write the file',
+            timestamp: '2026-07-15T00:00:01Z',
+            toolName: 'write_file',
+          },
+        ],
+        thoughtsSummary: { count: 2, types: { thinking: 1, tool_use: 1 } },
+        ts: 2,
+      },
+    ]
+    const nodes = build(() => transcript)
+
+    const got = await nodes.V.office.history.fetch({
+      ownerNodeId: OWNER,
+      teamId: OFFICE,
+      appId: 'wkr',
+      epochId: EPOCH,
+    })
+    expect(got).toEqual(transcript)
+    expect((got[1] as { thoughts?: unknown[] }).thoughts).toHaveLength(2)
+  })
+
+  it('incremental: sinceSeq returns only the tail newer than the cached watermark', async () => {
+    const transcript = [
+      { seq: 1, role: 'user', content: 'a', ts: 1 },
+      { seq: 2, role: 'assistant', content: 'b', ts: 2 },
+      { seq: 3, role: 'user', content: 'c', ts: 3 },
+    ]
+    const nodes = build(() => transcript)
+
+    // Viewer already holds up to seq 2 → owner sends only seq 3 (the delta).
+    const tail = await nodes.V.office.history.fetch({
+      ownerNodeId: OWNER,
+      teamId: OFFICE,
+      appId: 'wkr',
+      epochId: EPOCH,
+      sinceSeq: 2,
+    })
+    expect(tail).toEqual([{ seq: 3, role: 'user', content: 'c', ts: 3 }])
+
+    // No watermark → the whole transcript, unchanged.
+    const full = await nodes.V.office.history.fetch({
+      ownerNodeId: OWNER,
+      teamId: OFFICE,
+      appId: 'wkr',
+      epochId: EPOCH,
+    })
+    expect(full).toEqual(transcript)
+  })
+
   it('not-owned: a request for a member the receiver does NOT own is refused (reader never consulted)', async () => {
     const readerArgs: Array<{ appId: string }> = []
     const nodes = build((args) => {
       readerArgs.push({ appId: args.appId })
-      return [{ role: 'user', content: 'should-never-be-served' }]
+      return [{ seq: 1, role: 'user', content: 'should-never-be-served' }]
     })
     // Ask the owner for a member it does NOT own (`ghost` is in nobody's roster on O).
     await expect(
@@ -181,7 +245,7 @@ describe('C-1 — owner-served remote member history (owner authorizes + serves)
   })
 
   it('the reject error is a TECHNICAL code only — no transcript leaks on refusal', async () => {
-    const nodes = build(() => [{ role: 'assistant', content: 'secret' }])
+    const nodes = build(() => [{ seq: 1, role: 'assistant', content: 'secret' }])
     let caught: Error | null = null
     try {
       await nodes.V.office.history.fetch({

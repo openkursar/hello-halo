@@ -171,6 +171,34 @@ describe('FederationManager (host role, faked WS hop)', () => {
     expect(hostManager.listHostedOffices()).toEqual([OFFICE])
   })
 
+  it('isMemberReachable answers for the asking team, not an arbitrary membership of the same app', () => {
+    const { hostManager, bLink } = wireTwoNodes()
+    joinFromB(bLink)
+
+    // The SAME app is also a member of another (stale) team whose row sorts
+    // FIRST by added_at — the template-app collision. Its owner node has no
+    // link here, so an unscoped first-match would wrongly report unreachable.
+    const STALE_TEAM = 'office-stale'
+    teamStore.addMember({
+      teamId: STALE_TEAM,
+      appId: 'app-b-1',
+      memberName: 'b-analyst',
+      role: 'Analyst',
+      isLead: false,
+      aiProvisioned: false,
+      addedAt: 1, // older than the OFFICE row → sorts first in listMembersByAppId
+      ownerNodeId: 'node-nowhere',
+      origin: 'remote',
+    })
+
+    // Scoped to OFFICE: owner NODE_B holds a live client mapping → reachable.
+    expect(hostManager.isMemberReachable('app-b-1', OFFICE)).toBe(true)
+    // Scoped to the stale team: no hosted/joined transport for it here.
+    expect(hostManager.isMemberReachable('app-b-1', STALE_TEAM)).toBe(false)
+    // Not a member of the asking team at all → not reachable.
+    expect(hostManager.isMemberReachable('app-b-1', 'office-unknown')).toBe(false)
+  })
+
   it('caches the remote member spaceId on the host for later wake addressing', () => {
     const { hostManager, bLink } = wireTwoNodes()
     joinFromB(bLink)

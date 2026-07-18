@@ -50,8 +50,8 @@ const VIEWER = 'V' // joiner that asks
 const OWNER = 'O' // joiner that owns the member + serves its transcript
 
 const TRANSCRIPT = [
-  { role: 'user', content: 'hello', ts: 1 },
-  { role: 'assistant', content: 'hi from the owner', ts: 2 },
+  { seq: 1, role: 'user', content: 'hello', ts: 1 },
+  { seq: 2, role: 'assistant', content: 'hi from the owner', ts: 2 },
 ]
 
 interface Node {

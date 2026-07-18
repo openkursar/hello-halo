@@ -228,6 +228,34 @@ describe('StreamReplay (re-fire + dedup + INV-NO-LOOP)', () => {
     expect(tap.events).toHaveLength(2) // not 4 — dedup by (sessionKey, seq)
   })
 
+  it('owner restart (new originRun) resets the watermark: post-restart frames replay instead of being dropped', () => {
+    const tap = tapEvents()
+    const replay = createStreamReplay()
+    const mk = (seq: number, originRun: string): StreamFramesFrame => ({
+      kind: 'stream-frames',
+      officeId: OFFICE,
+      sessionKey: OTHER_SESSION,
+      baseSeq: seq,
+      frames: [{ seq, kind: 'milestone', channel: 'agent:message', spaceId: 's', payload: { seq } }],
+      originRun,
+    })
+
+    // First producer run climbs to seq 5.
+    replay.apply(mk(5, 'run-1'))
+    expect(tap.events).toHaveLength(1)
+
+    // Same run, lower seq → still a duplicate (watermark holds within a run).
+    replay.apply(mk(3, 'run-1'))
+    expect(tap.events).toHaveLength(1)
+
+    // Producer restarts: NEW run, seq restarts at 1. Must replay, not drop —
+    // this was the silent "viewer freezes after the owner restarts" bug.
+    replay.apply(mk(1, 'run-2'))
+    tap.dispose()
+    expect(tap.events).toHaveLength(2)
+    expect(tap.events[1].data).toEqual({ seq: 1 })
+  })
+
   it('INV-NO-LOOP: replayed frames for a NON-owned session are not re-captured', () => {
     const sink = vi.fn()
     // Capture owns SELF_SESSION only; the replayed batch is for OTHER_SESSION.

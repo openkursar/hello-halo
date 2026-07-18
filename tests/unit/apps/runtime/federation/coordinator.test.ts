@@ -103,6 +103,7 @@ describe('FederationCoordinator', () => {
     verify?: (token: string) => OfficeCredentialLike | null
     onPresenceChange?: (snap: PresenceSnapshot) => void
     onWake?: (request: { conversationId: string }) => Promise<{ finalMessage: string | null }>
+    onM2Frame?: (from: string, frame: FederationMessage) => void
   }) {
     const hostLink = new InMemoryFederationLink(HOST, hub)
     const coordinator = createFederationCoordinator({
@@ -117,6 +118,7 @@ describe('FederationCoordinator', () => {
       presence: { suspectAfterMs: SUSPECT_MS, confirmedOfflineMs: CONFIRMED_MS },
       onPresenceChange: opts?.onPresenceChange,
       onWake: opts?.onWake as never,
+      onM2Frame: opts?.onM2Frame as never,
     })
     coordinator.start()
     return { coordinator, hostLink }
@@ -290,6 +292,68 @@ describe('FederationCoordinator', () => {
       for (const c of completes) {
         expect((c.msg as { outcome: { kind: string; content?: string } }).outcome).toMatchObject({ kind: 'result', content: 'done' })
       }
+    })
+
+    it('routes catch-up frames through the dispatch gate to onM2Frame (regression: M2_FRAME_KINDS drift)', () => {
+      // A catch-up frame arriving over the wire must pass the coordinator's
+      // isM2Frame gate and reach the authority module. This drives the REAL
+      // dispatch path (not handleM2Frame directly), catching the class of bug
+      // where a kind is in the M2Frame type union but missing from
+      // M2_FRAME_KINDS — which would silently drop it and leave C9 dead on the wire.
+      const onM2Frame = vi.fn()
+      makeHost({ onM2Frame })
+      const bob = recordingPeer(hub, BOB)
+
+      const request = {
+        kind: 'catchup-request',
+        officeId: OFFICE,
+        fromNode: BOB,
+        lastAckedSeq: 3,
+        fid: 'cu-1',
+      }
+      bob.link.send(HOST, request as unknown as FederationMessage)
+
+      expect(onM2Frame).toHaveBeenCalledTimes(1)
+      expect((onM2Frame.mock.calls[0][1] as { kind: string }).kind).toBe('catchup-request')
+    })
+
+    it('a re-delivered wake (same correlationId) never runs the turn twice — no double execution', async () => {
+      // A duplicate wake — a network dup, or a future sender-side retransmit —
+      // must NOT start a second turn. Double execution is a correctness bug.
+      let runs = 0
+      let release!: (v: { finalMessage: string | null }) => void
+      const turn = new Promise<{ finalMessage: string | null }>((r) => { release = r })
+      makeHost({ onWake: () => { runs++; return turn } })
+      const bob = recordingPeer(hub, BOB)
+
+      const convId = `app-chat:app-m:team:${OFFICE}:e1`
+      const wake = {
+        kind: 'wake' as const,
+        officeId: OFFICE,
+        correlationId: 'corr-dup',
+        request: {
+          appId: 'app-m', spaceId: 's', message: 'do', conversationId: convId,
+          teamContext: { teamId: OFFICE, epochId: 'e1', correlationId: 'corr-dup', fromAppId: null, wait: true, kind: 'message' },
+        },
+        fromNode: BOB,
+      }
+
+      // Delivered twice while in flight → runs exactly once.
+      hub.deliver(BOB, HOST, wake)
+      hub.deliver(BOB, HOST, wake)
+      expect(runs).toBe(1)
+
+      release({ finalMessage: 'done' })
+      await turn
+      await new Promise((r) => setTimeout(r, 0))
+      expect(bob.received.filter((r) => r.msg.kind === 'turn-complete')).toHaveLength(1)
+
+      // A duplicate AFTER completion re-acks (recovers a lost turn-complete) but
+      // still does not re-run the turn.
+      hub.deliver(BOB, HOST, wake)
+      await new Promise((r) => setTimeout(r, 0))
+      expect(runs).toBe(1)
+      expect(bob.received.filter((r) => r.msg.kind === 'turn-complete')).toHaveLength(2)
     })
 
     it('rejects an office mismatch (request office differs from context)', () => {

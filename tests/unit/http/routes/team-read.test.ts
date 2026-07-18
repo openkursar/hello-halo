@@ -39,6 +39,7 @@ interface MockMember {
 }
 const listMembersByTeam = vi.fn<[string], MockMember[]>()
 const getCurrentEpochForTeam = vi.fn<[string], { id: string } | null>()
+const getOpenConversationEpoch = vi.fn<[string, string], { id: string } | null>()
 const listEpochsByTeam = vi.fn<[string], Array<{ id: string }>>()
 const getTeamById = vi.fn<[string], { leadAppId: string | null } | null>()
 const listEpochs = vi.fn<[string], unknown[]>()
@@ -58,6 +59,7 @@ vi.mock('../../../../src/main/apps/team', () => ({
   getTeamStore: () => ({
     listMembersByTeam: (teamId: string) => listMembersByTeam(teamId),
     getCurrentEpochForTeam: (teamId: string) => getCurrentEpochForTeam(teamId),
+    getOpenConversationEpoch: (teamId: string, chatKey: string) => getOpenConversationEpoch(teamId, chatKey),
     listEpochsByTeam: (teamId: string) => listEpochsByTeam(teamId),
     getTeamById: (teamId: string) => getTeamById(teamId),
   }),
@@ -73,7 +75,10 @@ vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
 // Federation manager: a remote-owned member's transcript is pulled from its
 // owner over the office link instead of read from local chat storage.
 const fetchMemberHistory =
-  vi.fn<[{ officeId: string; ownerNodeId: string; appId: string; epochId: string }], Promise<unknown[]>>()
+  vi.fn<
+    [{ officeId: string; ownerNodeId: string; appId: string; epochId: string }],
+    Promise<{ messages: unknown[]; stale: boolean }>
+  >()
 
 vi.mock('../../../../src/main/apps/runtime/federation/manager', () => ({
   getFederationManager: () => ({
@@ -125,12 +130,13 @@ beforeEach(() => {
   listEpochs.mockReturnValue([])
   listMembersByTeam.mockReturnValue([])
   getCurrentEpochForTeam.mockReturnValue(null)
+  getOpenConversationEpoch.mockReturnValue(null)
   listEpochsByTeam.mockReturnValue([])
   getTeamById.mockReturnValue({ leadAppId: null })
   getTeamDetail.mockReturnValue(null)
   getEpochBoard.mockReturnValue(null)
   readTeamMemberMessages.mockReturnValue([])
-  fetchMemberHistory.mockResolvedValue([])
+  fetchMemberHistory.mockResolvedValue({ messages: [], stale: false })
   sendToMember.mockResolvedValue({ ok: true, finalMessage: 'done' })
 })
 
@@ -236,26 +242,33 @@ describe('GET /api/teams/:teamId/chat-messages', () => {
     })
   })
 
-  it('falls back to the latest (sealed) epoch when no run is open', async () => {
+  it('falls back to the member conversation epoch when no run is open', async () => {
+    // With no open run, the read path resolves the SAME long-lived conversation
+    // epoch the send path uses, so a 1:1 transcript stays readable without a run.
     listMembersByTeam.mockReturnValue([{ appId: 'member-1' }])
     getCurrentEpochForTeam.mockReturnValue(null)
-    listEpochsByTeam.mockReturnValue([{ id: 'epoch-sealed' }])
+    getOpenConversationEpoch.mockReturnValue({ id: 'epoch-convo' })
 
     await withServer(buildApp(null), async (base) => {
       const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-1`)
       expect(res.status).toBe(200)
     })
-    expect(readTeamMemberMessages).toHaveBeenCalledWith('member-1', 'X', 'epoch-sealed')
+    expect(readTeamMemberMessages).toHaveBeenCalledWith('member-1', 'X', 'epoch-convo')
   })
 
-  it('400 when a member has no epoch available', async () => {
+  it('returns an empty transcript (200) when a local member has no epoch yet', async () => {
+    // 1:1 chat does not require a run first (parity with the IPC surface): no run
+    // and no conversation epoch means nothing has been said yet → empty, not 400.
     listMembersByTeam.mockReturnValue([{ appId: 'member-1', memberIdentity: 'id-reader' }])
     getCurrentEpochForTeam.mockReturnValue(null)
-  listEpochsByTeam.mockReturnValue([])
+    getOpenConversationEpoch.mockReturnValue(null)
 
     await withServer(buildApp('X'), async (base) => {
       const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-1`)
-      expect(res.status).toBe(400)
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.success).toBe(true)
+      expect(body.data).toEqual([])
     })
     expect(readTeamMemberMessages).not.toHaveBeenCalled()
   })
@@ -299,7 +312,7 @@ describe('GET /api/teams/:teamId/chat-messages', () => {
       { appId: 'member-remote', origin: 'remote', ownerNodeId: 'node-owner' },
     ])
     getCurrentEpochForTeam.mockReturnValue({ id: 'epoch-1' })
-    fetchMemberHistory.mockResolvedValue([{ role: 'assistant', content: 'from owner', ts: 1 }])
+    fetchMemberHistory.mockResolvedValue({ messages: [{ role: 'assistant', content: 'from owner', ts: 1 }], stale: false })
 
     await withServer(buildApp(null), async (base) => {
       const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-remote`)
@@ -315,6 +328,27 @@ describe('GET /api/teams/:teamId/chat-messages', () => {
       epochId: 'epoch-1',
     })
     expect(readTeamMemberMessages).not.toHaveBeenCalled()
+  })
+
+  it('marks a cached transcript served while the owner is offline as stale (Blocker-2)', async () => {
+    listMembersByTeam.mockReturnValue([
+      { appId: 'member-remote', origin: 'remote', ownerNodeId: 'node-owner' },
+    ])
+    getCurrentEpochForTeam.mockReturnValue({ id: 'epoch-1' })
+    // Owner unreachable → manager serves the cached copy flagged stale.
+    fetchMemberHistory.mockResolvedValue({
+      messages: [{ role: 'assistant', content: 'cached', ts: 1 }],
+      stale: true,
+    })
+
+    await withServer(buildApp(null), async (base) => {
+      const res = await fetch(`${base}/api/teams/X/chat-messages?appId=member-remote`)
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.success).toBe(true)
+      expect(body.data).toEqual([{ role: 'assistant', content: 'cached', ts: 1 }])
+      expect(body.stale).toBe(true) // renderer shows the "offline" notice
+    })
   })
 
   it('translates an owner fetch failure to a neutral 502 (never leaks the technical error)', async () => {

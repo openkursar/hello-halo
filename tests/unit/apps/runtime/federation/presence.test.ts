@@ -297,4 +297,120 @@ describe('FederationCoordinator presence FSM (D3 two-threshold debounce)', () =>
     expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
     expect(onMemberConfirmedOffline).toHaveBeenCalledTimes(2)
   })
+
+  it('a join-grant clears this node\u2019s confirmed-offline latch (joiner-side reset after a transport blip)', () => {
+    const { coordinator } = makeHostTrackingBob()
+
+    // A transport blip: BOB (the peer this node tracks — the HOST, from a
+    // joiner's perspective) goes silent past the confirmed threshold.
+    clock += CONFIRMED_MS + 1
+    coordinator.sweepPresence()
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
+
+    // Latched: a bare heartbeat must NOT revive (no-silent-revive invariant).
+    clock += 10
+    bobHeartbeat()
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
+
+    // The connection recovered and OUR fresh join was granted: the grant is a
+    // fresh handshake — verdicts reset, rows re-baseline online.
+    hub.deliver(BOB, HOST, {
+      kind: 'join-grant',
+      officeId: OFFICE,
+      assignedNodeId: HOST,
+    } as FederationMessage)
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
+
+    // Heartbeats now keep it online through subsequent sweeps (latch is gone).
+    clock += CONFIRMED_MS - 1
+    bobHeartbeat()
+    coordinator.sweepPresence()
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
+  })
+
+  it('notifyResume re-baselines silence so a wake does not confirm healthy peers offline', () => {
+    const { coordinator, onMemberConfirmedOffline } = makeHostTrackingBob()
+
+    // Simulate a sleep: the clock jumps far past the confirmed threshold with no
+    // heartbeats (a laptop lid closed). The very next sweep would mass-confirm.
+    clock += CONFIRMED_MS * 5
+
+    // The OS resume event fires FIRST (bootstrap wires powerMonitor → this).
+    coordinator.notifyResume()
+
+    // The post-resume sweep must NOT confirm BOB offline: the grace re-baselined
+    // its silence to "now".
+    coordinator.sweepPresence()
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
+    expect(onMemberConfirmedOffline).not.toHaveBeenCalled()
+
+    // A genuinely departed peer still confirms on a later normal silence.
+    clock += CONFIRMED_MS + 1
+    coordinator.sweepPresence()
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
+    expect(onMemberConfirmedOffline).toHaveBeenCalledTimes(1)
+  })
+
+  it('a JOINER that latched its host on a LIVE socket re-drives its own join (field deadlock: 3-node relay)', () => {
+    const { coordinator } = makeHostTrackingBob()
+    // This coordinator is a JOINER of BOB's office: it joined via requestJoin,
+    // which remembers the join-request for exactly this recovery.
+    const bobInbox: FederationMessage[] = []
+    const bobLink = new InMemoryFederationLink(BOB, hub)
+    bobLink.onMessage((_from, msg) => bobInbox.push(msg))
+    const join: JoinRequest = {
+      kind: 'join-request',
+      officeId: OFFICE,
+      fromNode: HOST,
+      identityId: 'identity-host',
+      credentialToken: 'valid-token',
+      bringMembers: [],
+    }
+    coordinator.requestJoin(join)
+    bobInbox.length = 0
+
+    // The relay stalls ≥ confirmed threshold with the socket ALIVE: the joiner
+    // latches its host offline. No socket drop → no reconnect-reauth rejoin.
+    clock += CONFIRMED_MS + 1
+    coordinator.sweepPresence()
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
+
+    // Host heartbeats resume on the live session. The joiner must NOT nudge the
+    // HOST to "rejoin" (meaningless) — it must re-drive its OWN join-request.
+    clock += 10
+    bobHeartbeat()
+    const resent = bobInbox.filter((m) => m.kind === 'join-request')
+    expect(resent).toHaveLength(1)
+    expect(resent[0]).toMatchObject({ fromNode: HOST, officeId: OFFICE })
+    expect(bobInbox.some((m) => m.kind === 'rejoin-request')).toBe(false)
+
+    // The host re-grants; the grant clears the latch and the office recovers.
+    hub.deliver(BOB, HOST, {
+      kind: 'join-grant',
+      officeId: OFFICE,
+      assignedNodeId: HOST,
+    } as FederationMessage)
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
+  })
+
+  it('a heartbeat revives an UNLATCHED offline row (latch, not row status, enforces no-silent-revive)', () => {
+    const { coordinator } = makeHostTrackingBob()
+
+    clock += CONFIRMED_MS + 1
+    coordinator.sweepPresence()
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
+
+    // Grant clears the latch; then simulate a row that is still offline (e.g.
+    // recorded after the grant reset) receiving a live heartbeat.
+    hub.deliver(BOB, HOST, {
+      kind: 'join-grant',
+      officeId: OFFICE,
+      assignedNodeId: HOST,
+    } as FederationMessage)
+    federationStore.setNodeStatus(OFFICE, BOB, 'offline', clock)
+
+    clock += 10
+    bobHeartbeat()
+    expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
+  })
 })
