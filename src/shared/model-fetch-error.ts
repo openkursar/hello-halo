@@ -59,8 +59,15 @@ export function modelFetchFailureFromResponse(
   let detail: string | undefined
 
   try {
-    const parsed = JSON.parse(body) as { error?: { message?: unknown } }
-    detail = sanitizeDetail(parsed.error?.message, apiKey)
+    const parsed = JSON.parse(body) as {
+      error?: { message?: unknown }
+      message?: unknown
+    }
+    const nestedMessage = parsed.error?.message
+    detail = sanitizeDetail(
+      typeof nestedMessage === 'string' ? nestedMessage : parsed.message,
+      apiKey
+    )
   } catch {
     detail = undefined
   }
@@ -68,10 +75,7 @@ export function modelFetchFailureFromResponse(
   return { code: codeForStatus(status), detail }
 }
 
-export function modelFetchFailureFromError(
-  error: unknown,
-  apiKey: string
-): ModelFetchFailure {
+export function modelFetchFailureFromError(error: unknown): ModelFetchFailure {
   const name = error instanceof Error ? error.name : ''
   const message = error instanceof Error ? error.message : ''
   const normalized = `${name} ${message}`.toLowerCase()
@@ -82,20 +86,14 @@ export function modelFetchFailureFromError(
     || normalized.includes('aborted')
 
   if (isTimeout) {
-    return {
-      code: 'MODEL_FETCH_TIMEOUT',
-      detail: sanitizeDetail(message, apiKey)
-    }
+    return { code: 'MODEL_FETCH_TIMEOUT' }
   }
 
   const isNetwork = error instanceof TypeError
     || /\b(econnrefused|econnreset|enotfound|enetunreach|ehostunreach)\b/i.test(message)
 
   if (isNetwork) {
-    return {
-      code: 'MODEL_FETCH_NETWORK',
-      detail: sanitizeDetail(message, apiKey)
-    }
+    return { code: 'MODEL_FETCH_NETWORK' }
   }
 
   return { code: 'MODEL_FETCH_FAILED' }

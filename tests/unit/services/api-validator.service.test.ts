@@ -98,27 +98,80 @@ describe('fetchModelsFromApi error details', () => {
     })
   })
 
-  it('classifies request failures without exposing credentials', async () => {
-    proxyFetchMock.mockRejectedValue(new TypeError('fetch failed for sk-test-placeholder'))
+  it('preserves an approved top-level provider detail', async () => {
+    proxyFetchMock.mockResolvedValue(new Response(
+      JSON.stringify({ message: 'Top-level provider detail' }),
+      { status: 500 }
+    ))
+
+    await expect(fetchModelsFromApi({
+      apiKey: 'sk-test-placeholder',
+      apiUrl: 'https://example.com/v1'
+    })).rejects.toMatchObject({
+      code: 'MODEL_FETCH_FAILED',
+      detail: 'Top-level provider detail'
+    })
+  })
+
+  it('prefers nested provider details and ignores non-string messages', async () => {
+    proxyFetchMock.mockResolvedValueOnce(new Response(
+      JSON.stringify({
+        error: { message: 'Nested detail' },
+        message: 'Top-level detail'
+      }),
+      { status: 500 }
+    ))
+
+    await expect(fetchModelsFromApi({
+      apiKey: 'sk-test-placeholder',
+      apiUrl: 'https://example.com/v1'
+    })).rejects.toMatchObject({ detail: 'Nested detail' })
+
+    proxyFetchMock.mockResolvedValueOnce(new Response(
+      JSON.stringify({ error: { message: 42 }, message: 'Top-level fallback' }),
+      { status: 500 }
+    ))
+
+    await expect(fetchModelsFromApi({
+      apiKey: 'sk-test-placeholder',
+      apiUrl: 'https://example.com/v1'
+    })).rejects.toMatchObject({ detail: 'Top-level fallback' })
+
+    proxyFetchMock.mockResolvedValueOnce(new Response(
+      JSON.stringify({ error: { message: { internal: true } }, message: 42 }),
+      { status: 500 }
+    ))
+
+    await expect(fetchModelsFromApi({
+      apiKey: 'sk-test-placeholder',
+      apiUrl: 'https://example.com/v1'
+    })).rejects.toMatchObject({ detail: undefined })
+  })
+
+  it('does not expose arbitrary request failure messages', async () => {
+    proxyFetchMock.mockRejectedValue(new TypeError('fetch failed for proxy-user:proxy-pass'))
 
     await expect(fetchModelsFromApi({
       apiKey: 'sk-test-placeholder',
       apiUrl: 'https://example.com/v1'
     })).rejects.toMatchObject({
       code: 'MODEL_FETCH_NETWORK',
-      detail: 'fetch failed for [REDACTED]'
+      detail: undefined
     })
   })
 
-  it('classifies request timeouts', async () => {
-    const timeout = new Error('The operation was aborted')
+  it('classifies request timeouts without exposing diagnostics', async () => {
+    const timeout = new Error('request to /Users/private/config timed out')
     timeout.name = 'TimeoutError'
     proxyFetchMock.mockRejectedValue(timeout)
 
     await expect(fetchModelsFromApi({
       apiKey: 'sk-test-placeholder',
       apiUrl: 'https://example.com/v1'
-    })).rejects.toMatchObject({ code: 'MODEL_FETCH_TIMEOUT' })
+    })).rejects.toMatchObject({
+      code: 'MODEL_FETCH_TIMEOUT',
+      detail: undefined
+    })
   })
 
   it('preserves successful model fetching', async () => {

@@ -1393,5 +1393,10 @@
   "{{name}} running": "{{name}} 実行中",
   "{{name}} was installed, but some bundled skills failed.": "{{name}}をインストールしましたが、一部のバンドルスキルに失敗しました。",
   "← → to switch files": "← → でファイルを切り替え",
-  "🤖 AI Browser": "🤖 AIブラウザ"
+  "🤖 AI Browser": "🤖 AIブラウザ",
+  "Cannot reach server, check network or proxy": "サーバーに接続できません。ネットワークまたはプロキシを確認してください",
+  "Endpoint not found, check the URL": "エンドポイントが見つかりません。URLを確認してください",
+  "Invalid API Key or no permission": "APIキーが無効か、権限がありません",
+  "Rate limited or out of quota": "レート制限に達したか、クォータを使い切りました",
+  "Request timed out, check the server or proxy": "リクエストがタイムアウトしました。サーバーまたはプロキシを確認してください"
 }

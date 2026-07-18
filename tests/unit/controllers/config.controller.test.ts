@@ -50,4 +50,15 @@ describe('config controller model fetching', () => {
       code: 'MODEL_FETCH_NOT_FOUND'
     })
   })
+
+  it('omits unexpected exception messages from the response', async () => {
+    fetchModelsFromApiMock.mockRejectedValue(new Error(
+      'proxy credentials at /Users/private/config'
+    ))
+
+    await expect(fetchModels('sk-test-placeholder', 'https://example.com/v1')).resolves.toEqual({
+      success: false,
+      code: 'MODEL_FETCH_FAILED'
+    })
+  })
 })

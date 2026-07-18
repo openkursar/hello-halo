@@ -105,7 +105,7 @@ export async function fetchModelsFromApi(params: FetchModelsParams): Promise<Fet
     return { models }
   } catch (error) {
     if (error instanceof ModelFetchError) throw error
-    throw new ModelFetchError(modelFetchFailureFromError(error, apiKey))
+    throw new ModelFetchError(modelFetchFailureFromError(error))
   }
 }
 

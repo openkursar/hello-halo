@@ -1393,5 +1393,10 @@
   "{{name}} running": "{{name}} 运行中",
   "{{name}} was installed, but some bundled skills failed.": "{{name}} 已安装，但部分捆绑技能安装失败。",
   "← → to switch files": "← → 切换文件",
-  "🤖 AI Browser": "🤖 AI 浏览器"
+  "🤖 AI Browser": "🤖 AI 浏览器",
+  "Cannot reach server, check network or proxy": "无法连接服务器，请检查网络或代理",
+  "Endpoint not found, check the URL": "未找到端点，请检查 URL",
+  "Invalid API Key or no permission": "API 密钥无效或没有权限",
+  "Rate limited or out of quota": "请求频率受限或配额已用尽",
+  "Request timed out, check the server or proxy": "请求超时，请检查服务器或代理"
 }

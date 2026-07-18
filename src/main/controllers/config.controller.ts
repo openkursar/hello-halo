@@ -98,7 +98,9 @@ export async function fetchModels(
       }
     }
 
-    const err = error as Error
-    return { success: false, error: err.message }
+    return {
+      success: false,
+      code: 'MODEL_FETCH_FAILED'
+    }
   }
 }

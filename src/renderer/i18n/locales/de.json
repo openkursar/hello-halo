@@ -1393,5 +1393,10 @@
   "{{name}} running": "{{name}} läuft",
   "{{name}} was installed, but some bundled skills failed.": "{{name}} wurde installiert, aber einige gebündelte Fähigkeiten sind fehlgeschlagen.",
   "← → to switch files": "← → zum Wechseln der Dateien",
-  "🤖 AI Browser": "🤖 AI-Browser"
+  "🤖 AI Browser": "🤖 AI-Browser",
+  "Cannot reach server, check network or proxy": "Server nicht erreichbar. Netzwerk oder Proxy prüfen",
+  "Endpoint not found, check the URL": "Endpunkt nicht gefunden. URL prüfen",
+  "Invalid API Key or no permission": "Ungültiger API-Schlüssel oder keine Berechtigung",
+  "Rate limited or out of quota": "Anfragelimit erreicht oder Kontingent ausgeschöpft",
+  "Request timed out, check the server or proxy": "Zeitüberschreitung. Server oder Proxy prüfen"
 }

@@ -1393,5 +1393,10 @@
   "{{name}} running": "{{name}} 正在執行",
   "{{name}} was installed, but some bundled skills failed.": "{{name}} 已安裝，但部分捆綁技能失敗。",
   "← → to switch files": "← → 切換檔案",
-  "🤖 AI Browser": "🤖 AI 瀏覽器"
+  "🤖 AI Browser": "🤖 AI 瀏覽器",
+  "Cannot reach server, check network or proxy": "無法連線至伺服器，請檢查網路或代理伺服器",
+  "Endpoint not found, check the URL": "找不到端點，請檢查 URL",
+  "Invalid API Key or no permission": "API 金鑰無效或沒有權限",
+  "Rate limited or out of quota": "請求頻率受限或配額已用盡",
+  "Request timed out, check the server or proxy": "請求逾時，請檢查伺服器或代理伺服器"
 }
