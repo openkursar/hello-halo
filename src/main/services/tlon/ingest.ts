@@ -39,7 +39,6 @@ import {
   writeHashes,
   refreshStats,
   markIngestCompleted,
-  setKBStatus,
   collectIngestCandidates,
   clearWikiAndHashes,
   sha256,
@@ -200,7 +199,8 @@ export async function processQueue(kbId: string): Promise<void> {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         console.error(`[Tlon] Extract failed for ${job.sourcePath}:`, message)
-        setKBStatus(kbId, 'error')
+        // One bad file is reported to the UI but must not error the whole KB —
+        // otherwise it drops out of agent injection (status must stay 'active').
         emitProgress({ kbId, total, completed, phase: 'error', error: message })
       }
       completed++

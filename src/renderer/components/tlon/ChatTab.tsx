@@ -33,7 +33,7 @@ export function ChatTab({ kb }: ChatTabProps) {
 
   const messages = session?.messages ?? []
   const generating = session?.generating ?? false
-  const hasSources = kb.stats.indexedCount > 0
+  const hasSources = kb.stats.rawFileCount > 0
 
   useEffect(() => subscribeChatEvents(), [subscribeChatEvents])
 

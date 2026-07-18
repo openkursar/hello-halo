@@ -132,10 +132,10 @@ export async function sendMessage(
     }
     mcpServers['web-search'] = createWebSearchMcpServer()
 
-    // Knowledge bases injected into the system prompt so the agent can Read the
-    // listed wiki pages. For a KB-chat turn it's just the targeted KB; otherwise
-    // it's the union of KBs bound to this space and KBs loaded into THIS
-    // conversation (deduped by id).
+    // Knowledge bases injected into the system prompt so the agent can Grep/Read
+    // the listed document corpus. For a KB-chat turn it's just the targeted KB;
+    // otherwise it's the union of KBs bound to this space and KBs loaded into
+    // THIS conversation (deduped by id).
     let knowledgeBases = kbChatCtx ? [kbChatCtx.reference] : getKBReferencesForSpace(spaceId)
     if (!kbChatCtx && conversation?.knowledgeBaseIds?.length) {
       const byId = new Map(knowledgeBases.map(ref => [ref.id, ref]))

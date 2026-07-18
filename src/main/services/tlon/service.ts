@@ -1,6 +1,7 @@
 /**
  * Tlon Service — knowledge base registry, CRUD, binding, file ops,
- * wiki reads, conversation-integration references, and learned-status.
+ * source-citation resolution, conversation-integration references, and
+ * learned-status.
  *
  * Registry pattern mirrors space.service.ts:
  * - module-level Map is the in-memory working copy of knowledge-bases-index.json
@@ -45,7 +46,6 @@ import {
   getKBIndexPath,
   getKBDir,
   getKBMetaPath,
-  getKBSchemaPath,
   getKBIndexMdPath,
   getKBLogPath,
   getKBRawDir,
@@ -55,7 +55,6 @@ import {
   getKBHashesPath,
 } from './paths'
 import {
-  DEFAULT_SCHEMA_MD,
   DEFAULT_INDEX_MD,
   DEFAULT_LOG_MD,
 } from './defaults'
@@ -201,7 +200,6 @@ export function createKB(input: CreateKBInput): KnowledgeBaseEntry {
   mkdirSync(getKBTextDir(id), { recursive: true })
   mkdirSync(getKBIngestDir(id), { recursive: true })
 
-  writeFileSync(getKBSchemaPath(id), DEFAULT_SCHEMA_MD, 'utf-8')
   writeFileSync(getKBIndexMdPath(id), DEFAULT_INDEX_MD, 'utf-8')
   writeFileSync(getKBLogPath(id), DEFAULT_LOG_MD, 'utf-8')
   writeFileSync(
@@ -861,6 +859,9 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
 export function markIngestCompleted(kbId: string): void {
   const entry = getRegistry().get(kbId)
   if (!entry) return
+  // A completed batch clears a stale 'error' (a prior failed file), but leaves a
+  // user-set 'paused' KB paused.
+  if (entry.status === 'error') entry.status = 'active'
   entry.stats.lastIngestAt = new Date().toISOString()
   try {
     writeFileSync(getKBMetaPath(kbId), JSON.stringify(entry, null, 2), 'utf-8')

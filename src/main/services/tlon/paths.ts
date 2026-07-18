@@ -5,10 +5,10 @@
  *   ~/.halo/
  *     knowledge-bases-index.json          (registry, KBIndexV1)
  *     knowledge-bases/<uuid>/
- *       meta.json schema.md index.md log.md
+ *       meta.json index.md log.md
  *       raw/   original source files
  *       text/  extracted plaintext, one per source (what queries grep/read)
- *       wiki/  offline LLM-compiled pages (optional, not on the default path)
+ *       wiki/  legacy LLM-compiled pages — no longer written; cleared on re-index
  *       .ingest/hashes.json
  */
 
@@ -32,10 +32,6 @@ export function getKBDir(id: KnowledgeBaseId): string {
 
 export function getKBMetaPath(id: KnowledgeBaseId): string {
   return join(getKBDir(id), 'meta.json')
-}
-
-export function getKBSchemaPath(id: KnowledgeBaseId): string {
-  return join(getKBDir(id), 'schema.md')
 }
 
 export function getKBIndexMdPath(id: KnowledgeBaseId): string {
