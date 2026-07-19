@@ -49,7 +49,7 @@ export function EventSidebar({ detail, conversations, epochs, selectedEpochId, o
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="flex flex-shrink-0 items-center justify-between border-b border-border px-3 py-2.5">
+      <div className="flex h-11 flex-shrink-0 items-center justify-between border-b border-border px-3">
         <span className="text-sm font-medium">{t('Events')}</span>
         {onClose && (
           <button onClick={onClose} className="rounded p-1 transition-colors hover:bg-secondary sm:hidden">

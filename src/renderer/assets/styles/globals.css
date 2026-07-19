@@ -1130,3 +1130,54 @@ body {
     hsl(var(--border) / 0.2)
   );
 }
+
+/* ============================================
+   Team office cartoon skin (workstation)
+   ============================================ */
+
+@keyframes ws-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+@keyframes ws-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0.15; }
+}
+
+@keyframes ws-steam {
+  0% { opacity: 0; transform: translateY(2px); }
+  40% { opacity: 0.65; }
+  100% { opacity: 0; transform: translateY(-6px); }
+}
+
+/* Head bob while typing. */
+.ws-bob {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ws-bob 2.4s ease-in-out infinite;
+}
+
+/* Blinking screen caret. */
+.ws-blink {
+  animation: ws-blink 1s steps(1) infinite;
+}
+
+/* Rising coffee steam (two offset wisps). */
+.ws-steam,
+.ws-steam-2 {
+  transform-box: fill-box;
+  animation: ws-steam 2.6s ease-in-out infinite;
+}
+.ws-steam-2 {
+  animation-delay: 1s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-bob,
+  .ws-blink,
+  .ws-steam,
+  .ws-steam-2 {
+    animation: none;
+  }
+}

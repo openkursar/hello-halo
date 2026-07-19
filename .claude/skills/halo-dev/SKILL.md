@@ -9,11 +9,12 @@ user-invocable: true
 
 ## Mandatory Entry (Read in Order)
 
+0. `LAWS.md` — **Load-bearing architecture laws. Read first; they override every other rule in this skill.**
 1. `CONTEXT.md` — Product vision, development principles (styling, responsive, security, i18n), and current state.
 2. `ARCHITECTURE.md` — Directory structure, data types, IPC channels, theme system, CSS rules, responsive design, layout modes, multi-platform, local storage, tech stack.
 3. `quick.md` — Hard development rules (with code examples), task-to-file routing, and checklists.
 
-**Do not start implementation before reading these three files.**
+**Do not start implementation before reading these files.**
 
 All code changes **must** comply with the patterns, conventions, and structures described in these documents. This includes:
 - Responsive design (mobile-first, `sm:` breakpoint at 640px)

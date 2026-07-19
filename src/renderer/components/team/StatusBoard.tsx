@@ -11,10 +11,9 @@
  */
 
 import { useMemo } from 'react'
-import { Play, CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File, Coffee, History } from 'lucide-react'
+import { CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File } from 'lucide-react'
 import type { TeamDetail, RosterMember, BlackboardTask, BlackboardFinding, TaskStatus, TeamEdge, TeamStatus, EpochOutcome, TeamRunTriggerType } from '../../../shared/apps/team-types'
 import type { Thought } from '../../types'
-import { useTeamStore } from '../../stores/team.store'
 import type { ActiveFlow } from '../../stores/team.store'
 import { TeamFlowCanvas } from './flow/TeamFlowCanvas'
 import { StructureEditor } from './StructureEditor'
@@ -22,7 +21,6 @@ import { useTeamArtifacts } from './TeamArtifacts'
 import { useChatStore } from '../../stores/chat.store'
 import { buildTeamSessionKey } from '../../../shared/apps/im-keys'
 import { getThoughtIcon, getToolFriendlyFormat, truncateText } from '../chat/thought-utils'
-import { outcomeMeta, triggerLabel, formatRunTime } from './run-history'
 import { useTranslation } from '../../i18n'
 
 /**
@@ -57,11 +55,6 @@ interface StatusBoardProps {
 export function StatusBoard({ detail, board, activeFlows, onSelectMember, editingStructure = false, onExitEditing }: StatusBoardProps) {
   const { t } = useTranslation()
 
-  const members = useMemo(() => board.roster.filter(m => !m.isLead), [board.roster])
-  const isPaused = useTeamStore(s => s.officeLiveness.get(detail.team.id) === 'paused')
-  // A joined office is run by someone else: this node only watches it, so the
-  // "Press Run" idle hint would point at a button it does not have.
-  const isJoined = detail.team.hostNodeId != null
   const isLive = board.mode === 'live'
 
   // Editing the collaboration structure takes over the whole board area with the
@@ -80,15 +73,13 @@ export function StatusBoard({ detail, board, activeFlows, onSelectMember, editin
 
   return (
     <div className="flex flex-col gap-5 p-3 sm:gap-6 sm:p-6">
-      <RunBanner board={board} members={members.length} paused={isPaused} isJoined={isJoined} />
-
       {/* Escalations awaiting the user — prominent and actionable (click a member
           to open its chat, where the decision panel is shown inline). */}
       <EscalationCallout roster={board.roster} onSelectMember={onSelectMember} />
 
       {/* ── Office topology: read-only auto-laid-out canvas (React Flow + dagre).
           A replayed run shows the final org shape (no live message flows). ── */}
-      <div className="h-[300px] overflow-hidden rounded-2xl border border-border bg-gradient-to-b from-secondary/20 to-transparent sm:h-[360px]">
+      <div className="h-[360px] overflow-hidden rounded-2xl bg-secondary/20 sm:h-[420px]">
         <TeamFlowCanvas
           roster={board.roster}
           edges={board.edges}
@@ -118,6 +109,7 @@ export function StatusBoard({ detail, board, activeFlows, onSelectMember, editin
         epochId={board.epochId}
         onSelectMember={onSelectMember}
         title={isLive ? undefined : t('What happened')}
+        summary={board.mode === 'replay' ? board.replay?.summary ?? null : null}
       />
     </div>
   )
@@ -194,7 +186,7 @@ function LiveActivityFeed({ roster, teamId, epochId, onSelectMember }: LiveActiv
 
   return (
     <div>
-      <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+      <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         <span className="relative flex h-2 w-2">
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/60" />
           <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
@@ -257,108 +249,6 @@ function EscalationCallout({ roster, onSelectMember }: { roster: RosterMember[];
 }
 
 // ──────────────────────────────────────────────
-// Run-state banner
-// ──────────────────────────────────────────────
-
-function RunBanner({ board, members, paused, isJoined }: {
-  board: BoardView
-  members: number
-  paused: boolean
-  isJoined: boolean
-}) {
-  const { t } = useTranslation()
-
-  // Replay of a PAST run: identify it by time · trigger · outcome (a run is an
-  // event, not a named thing), with the recorded summary as the sub-line.
-  if (board.mode === 'replay' && board.replay) {
-    const { startedAt, triggerType, outcome, summary } = board.replay
-    const { Icon, cls, label } = outcomeMeta(outcome ?? 'no_action', null, t)
-    return (
-      <div className="flex items-start gap-3 rounded-xl border border-border bg-secondary/20 px-3 py-2.5 sm:px-4">
-        <Icon className={`mt-0.5 h-4 w-4 flex-shrink-0 ${cls}`} />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="text-sm font-medium text-foreground">{formatRunTime(startedAt)}</span>
-            <span className="text-xs text-muted-foreground">· {triggerLabel(triggerType, t)}</span>
-            <span className={`text-xs font-medium ${cls}`}>· {label}</span>
-          </div>
-          {summary && <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground/80">{summary}</p>}
-        </div>
-        <span className="hidden flex-shrink-0 items-center gap-1 text-[11px] text-muted-foreground sm:flex">
-          <History className="h-3 w-3" />
-          {t('Past run')}
-        </span>
-      </div>
-    )
-  }
-
-  const status: TeamStatus = board.live?.status ?? 'idle'
-
-  // Paused takes precedence over run status: nothing is wrong, it just picks
-  // back up on reconnect, so this avoids the red/amber "needs you" styling.
-  if (paused) {
-    return (
-      <div className="flex items-center gap-3 rounded-xl border border-border bg-secondary/40 px-3 py-2.5 sm:px-4">
-        <Coffee className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-        <div className="min-w-0 flex-1">
-          <span className="text-sm font-medium text-foreground">{t('The office is resting')}</span>
-          <span className="ml-2 text-xs text-muted-foreground">{t('It\u2019ll pick back up when someone\u2019s online again.')}</span>
-        </div>
-      </div>
-    )
-  }
-
-  const idleHint = isJoined
-    ? t('Ready and waiting — the owner starts it. You can open any teammate to follow along.')
-    : t('Press Run to start a coordinated session.')
-
-  const config: Record<string, { dot: string; label: string; hint: string }> = {
-    running: {
-      dot: 'bg-emerald-500',
-      label: t('Running'),
-      hint: t('The lead is coordinating the team.'),
-    },
-    waiting_user: {
-      dot: 'bg-amber-500',
-      label: t('Waiting for you'),
-      hint: t('A member needs your decision.'),
-    },
-    error: {
-      dot: 'bg-red-500',
-      label: t('Stopped'),
-      hint: t('The run hit a problem.'),
-    },
-    idle: {
-      dot: 'bg-muted-foreground/40',
-      label: isJoined ? t('Ready') : t('Idle'),
-      hint: idleHint,
-    },
-  }
-  const c = config[status] ?? config.idle
-
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-border bg-secondary/30 px-3 py-2.5 sm:px-4">
-      <span className="relative flex h-2.5 w-2.5 flex-shrink-0">
-        {status === 'running' && (
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/60" />
-        )}
-        <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${c.dot}`} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <span className="text-sm font-medium text-foreground">{c.label}</span>
-        <span className="ml-2 text-xs text-muted-foreground">{c.hint}</span>
-      </div>
-      {status === 'idle' && !isJoined && (
-        <span className="hidden items-center gap-1 text-xs text-muted-foreground sm:flex">
-          <Play className="h-3 w-3" />
-          {t('{{count}} members ready', { count: members })}
-        </span>
-      )}
-    </div>
-  )
-}
-
-// ──────────────────────────────────────────────
 // Recent activity feed
 // ──────────────────────────────────────────────
 
@@ -371,6 +261,8 @@ interface RecentActivityProps {
   onSelectMember: (member: RosterMember) => void
   /** Section heading override (a replay says "What happened", live says "Recent activity"). */
   title?: string
+  /** A past run's recorded summary — the lead paragraph above its detailed log. */
+  summary?: string | null
 }
 
 /** A task transition or a posted finding, unified for the activity feed. */
@@ -408,7 +300,7 @@ function ActorName({ appId, name, onSelect }: { appId: string | null; name: stri
   )
 }
 
-function RecentActivity({ tasks, findings, roster, teamId, epochId, onSelectMember, title }: RecentActivityProps) {
+function RecentActivity({ tasks, findings, roster, teamId, epochId, onSelectMember, title, summary }: RecentActivityProps) {
   const { t } = useTranslation()
 
   // doneCount in the refetch key re-resolves artifacts as tasks complete.
@@ -445,13 +337,20 @@ function RecentActivity({ tasks, findings, roster, teamId, epochId, onSelectMemb
 
   return (
     <div>
-      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         {title ?? t('Recent activity')}
       </h3>
-      {recent.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground/70">
-          {t('No activity yet. Run the team to get started.')}
+      {summary && (
+        <p className="mb-3 text-sm leading-relaxed text-foreground/90">
+          {summary}
         </p>
+      )}
+      {recent.length === 0 ? (
+        summary ? null : (
+          <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground/70">
+            {t('No activity yet. Run the team to get started.')}
+          </p>
+        )
       ) : (
         <ul className="flex flex-col gap-1">
           {recent.map(row => {

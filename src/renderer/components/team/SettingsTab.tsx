@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   GitBranch, RefreshCw, Bot, UserCircle,
-  ExternalLink, Trash2, Plus, Info, Crown, LogOut, ChevronRight, Settings2,
+  ExternalLink, Trash2, Plus, Info, Crown, LogOut, ChevronRight, Settings2, Users, Network,
 } from 'lucide-react'
 import type { TeamDetail, TeamTrigger, TeamScheduleConfig, TeamTriggerInput } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
+import { useOfficeSkin, useTeamViewPrefsStore } from '../../stores/team-view-prefs.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
@@ -56,6 +57,7 @@ export function SettingsTab({ detail }: SettingsTabProps) {
         {/* Advanced, folded away (§6.6): collaboration structure, escalation
             routing, HTTP trigger, and disband — rarely touched, out of the way. */}
         <AdvancedSection>
+          <OfficeSkinSection teamId={detail.team.id} />
           <CollaborationSection team={detail.team} readOnly={readOnly} />
           {!readOnly && (
             <div className="border-t border-border pt-6">
@@ -250,6 +252,39 @@ function CollaborationSection({ team, readOnly }: { team: TeamDetail['team']; re
             disabled={readOnly}
           />
         </div>
+      </div>
+    </Section>
+  )
+}
+
+// ── 3b. Office appearance (client-local view preference) ──
+
+function OfficeSkinSection({ teamId }: { teamId: string }) {
+  const { t } = useTranslation()
+  const skin = useOfficeSkin(teamId)
+  const setOfficeSkin = useTeamViewPrefsStore(s => s.setOfficeSkin)
+
+  return (
+    <Section title={t('Office appearance')}>
+      <p className="mb-2 text-xs text-muted-foreground/70">
+        {t('How this office looks on your screen. Only affects your view.')}
+      </p>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <OptionCard
+          icon={<Users className="h-4 w-4" />}
+          label={t('Office cartoon')}
+          description={t('Members appear as characters at their workstations, showing what each is doing.')}
+          selected={skin === 'cartoon'}
+          onClick={() => setOfficeSkin(teamId, 'cartoon')}
+          badge={t('Default')}
+        />
+        <OptionCard
+          icon={<Network className="h-4 w-4" />}
+          label={t('Plain topology')}
+          description={t('A compact status card per member, connected by the reporting lines.')}
+          selected={skin === 'default'}
+          onClick={() => setOfficeSkin(teamId, 'default')}
+        />
       </div>
     </Section>
   )

@@ -6,7 +6,7 @@
 ```
 No need to write translation files because the translation is automated.
 Run `npm run i18n` before commit by user.
-Before making any changes, you must read the halo-dev skill.
+Before making any changes, you must read the halo-dev skill. Its `LAWS.md` (load-bearing architecture laws) is read first and overrides all other rules.
 
 **Long-term principle**
 
@@ -14,6 +14,7 @@ Always design with high maintainability and modularity, aligned with long-term a
 
 **rules.**
 - Any code changes（edit/delete/move） require human confirmation and consent.
+- Changing `services/agent` requires explicit human sign-off before proceeding.
 - You must read the halo-dev specifications before writing code.
 - Follow Long-term principle
 - Code must stand alone — no planning labels (`E1`, `F2`, `Phase X`, etc.), no chat-session IDs, no ceremonial prefixes (`Full-chain X:`, `Helper:`, `Section:`) in code or comments. If a comment only makes sense to someone who saw the design conversation, it's wrong.

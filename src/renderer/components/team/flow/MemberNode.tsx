@@ -1,24 +1,26 @@
 /**
- * MemberNode — a React Flow custom node rendering a team workstation card.
+ * MemberNode — the React Flow custom node for a team member.
  *
- * Read mode: status dot, ★ lead, working pulse, role / current-task summary;
- * clicking opens the member's chat.
+ * A thin wrapper that owns the wiring concerns (source/target handles, and the
+ * edit-mode "Connect to…" toolbar) and delegates the card's look to a skin:
+ *  - default: plain status card (DefaultMemberCard)
+ *  - cartoon: office workstation (WorkstationCard)
  *
- * Edit mode: the card is draggable (rearrange freely) and, when selected, a
- * NodeToolbar floats beneath it with a "Connect to…" picker — click the node,
- * pick a teammate, done (the Dify-style "add the next link" gesture). Dragging
- * from the side dots is the power-user shortcut. No hidden gestures.
+ * The skin is a client-local, per-office preference. Edit mode always uses the
+ * default card — wiring edges between desks is worse than between plain cards.
  */
 
 import { memo, useContext, useState } from 'react'
 import { Handle, Position, NodeToolbar } from '@xyflow/react'
 import type { NodeProps, Node } from '@xyflow/react'
-import { Star, Loader2, AlertTriangle, Plus, ArrowRight } from 'lucide-react'
-import type { RosterMember, TeamMemberRuntimeStatus } from '../../../../shared/apps/team-types'
+import { Star, Plus, ArrowRight } from 'lucide-react'
+import type { RosterMember } from '../../../../shared/apps/team-types'
 import { FlowEditContext } from './flow-context'
-import { useMemberPresence } from '../../../stores/team.store'
-import { MemberPresenceChip, OwnerLabel } from '../MemberPresenceChip'
 import { useTranslation } from '../../../i18n'
+import { useOfficeSkin } from '../../../stores/team-view-prefs.store'
+import { useMemberView } from './member-view'
+import { DefaultMemberCard } from './skins/DefaultMemberCard'
+import { WorkstationCard } from './skins/WorkstationCard'
 
 export interface MemberNodeData {
   member: RosterMember
@@ -34,88 +36,23 @@ export interface MemberNodeData {
 
 export type MemberFlowNode = Node<MemberNodeData, 'member'>
 
-function statusDotClass(status: TeamMemberRuntimeStatus): string {
-  switch (status) {
-    case 'working': return 'bg-emerald-500'
-    case 'error': return 'bg-red-500'
-    case 'waiting_user': return 'bg-amber-500'
-    default: return 'bg-muted-foreground/40'
-  }
-}
-
 function MemberNodeImpl({ id, data, selected }: NodeProps<MemberFlowNode>) {
-  const { t } = useTranslation()
   const { member, editable, active, teamId, focusedEpochId } = data
-  const presence = useMemberPresence(teamId, member.appId)
-  const isLead = member.isLead
-  const isUnreachable = presence.reachability !== 'online'
-  const isWorking = member.status === 'working' && !isUnreachable
-  const isAlert = (member.status === 'error' || member.status === 'waiting_user') && !isUnreachable
-
-  // "Busy elsewhere" (§6.3/§8.3): the member is working, but on an event OTHER
-  // than the one the floor is focused on — name what it IS (a conversation by its
-  // label, or the team run) instead of a blank/stale title.
-  const busy = member.busy ?? []
-  const onFocused = focusedEpochId ? busy.some(b => b.epochId === focusedEpochId) : busy.length > 0
-  const elsewhereEntry = isWorking && !onFocused ? busy.find(b => b.epochId !== focusedEpochId) : undefined
-  const elsewhereLabel = elsewhereEntry
-    ? elsewhereEntry.kind === 'conversation'
-      ? (elsewhereEntry.label
-          ? t('Busy with "{{name}}"', { name: elsewhereEntry.label })
-          : t('Busy with another conversation'))
-      : t('Busy with the team run')
-    : ''
-  const summary =
-    member.status === 'working'
-      ? elsewhereLabel || member.currentTaskTitle || ''
-      : member.status === 'error'
-        ? member.currentTaskTitle || ''
-        : member.role || ''
+  const view = useMemberView(member, teamId, focusedEpochId)
+  const skin = useOfficeSkin(teamId)
+  const cartoon = skin === 'cartoon' && !editable
 
   const handleStyle = editable
     ? '!h-3 !w-3 !border-2 !border-background !bg-primary shadow'
     : '!h-0 !w-0 !min-w-0 !min-h-0 !border-0 !bg-transparent'
 
   return (
-    <div
-      className={`group relative flex w-[200px] flex-col gap-1.5 rounded-xl border bg-background px-3 py-2.5 shadow-sm transition-all
-        ${isUnreachable ? 'border-dashed opacity-55 saturate-0' : ''}
-        ${selected ? 'border-primary ring-2 ring-primary/30'
-          : active ? 'border-primary ring-1 ring-primary/40'
-          : isAlert ? 'border-amber-500/50'
-          : isWorking ? 'border-emerald-500/40'
-          : isLead ? 'border-primary/40 shadow-md'
-          : 'border-border'}`}
-    >
+    <div className="relative w-[200px]">
       <Handle type="target" position={Position.Top} isConnectable={editable} className={handleStyle} />
 
-      <div className="flex items-center gap-2">
-        <span className="relative flex h-2.5 w-2.5 flex-shrink-0">
-          {isWorking && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/60" />}
-          <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${statusDotClass(member.status)}`} />
-        </span>
-        <span className="flex min-w-0 items-center gap-1 text-sm font-medium text-foreground">
-          {isLead && <Star className="h-3.5 w-3.5 flex-shrink-0 fill-current text-amber-500" />}
-          <span className="truncate">{member.memberName}</span>
-        </span>
-        {isAlert && <AlertTriangle className="ml-auto h-3.5 w-3.5 flex-shrink-0 text-amber-500" />}
-        {isWorking && !isAlert && <Loader2 className="ml-auto h-3.5 w-3.5 flex-shrink-0 animate-spin text-emerald-500" />}
-      </div>
-
-      {presence.isRemote && (
-        <div className="flex min-w-0 items-center gap-1.5">
-          <OwnerLabel ownerName={presence.ownerName} />
-          <MemberPresenceChip
-            reachability={presence.reachability}
-            ownerName={presence.ownerName}
-            showLabel={isUnreachable}
-          />
-        </div>
-      )}
-
-      <span className="truncate text-xs text-muted-foreground">
-        {summary || (isLead ? t('Team Lead') : '\u00A0')}
-      </span>
+      {cartoon
+        ? <WorkstationCard view={view} active={active} />
+        : <DefaultMemberCard view={view} selected={!!selected} active={active} />}
 
       <Handle type="source" position={Position.Bottom} isConnectable={editable} className={handleStyle} />
 

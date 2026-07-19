@@ -2,7 +2,7 @@
  * TeamCreateDialog — Create-team form.
  *
  * Captures name, goal and member sourcing (manual default / AI) up front;
- * coordination (managed default / free), lead (auto / pick) and escalation
+ * coordination (free default / managed), lead (auto / pick) and escalation
  * routing (lead default / user) live under a collapsed "Advanced options"
  * section so most users never have to touch them. Wording is kept identical to
  * the team Settings tab so the same concepts read the same everywhere.
@@ -50,7 +50,7 @@ export function TeamCreateDialog({ owningSpaceId, onClose, onCreated, onCreateMe
   const [name, setName] = useState('')
   const [goal, setGoal] = useState('')
   const [memberSourcing, setMemberSourcing] = useState<MemberSourcing>('manual')
-  const [collabMode, setCollabMode] = useState<CollabMode>('structured')
+  const [collabMode, setCollabMode] = useState<CollabMode>('free')
   const [escalationRouting, setEscalationRouting] = useState<EscalationRouting>('lead')
   const [leadMode, setLeadMode] = useState<'auto' | 'pick'>('auto')
   const [leadAppId, setLeadAppId] = useState<string | null>(null)

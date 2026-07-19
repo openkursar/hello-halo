@@ -20,7 +20,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { useTranslation } from '../../i18n'
 import { StatusBoard, type BoardView } from './StatusBoard'
 import { EventSidebar } from './EventSidebar'
-import { triggerLabel, formatRunTime, runEventTitle, conversationLabel } from './run-history'
+import { triggerLabel, formatRunTime, runEventTitle, conversationLabel, outcomeMeta } from './run-history'
 
 interface LiveTabProps {
   detail: TeamDetail
@@ -40,6 +40,7 @@ export function LiveTab({ detail, onSelectMember, editingStructure, onExitEditin
   const epochs = useTeamStore(s => s.epochs)
   const activeFlows = useTeamStore(s => s.activeFlows)
   const loadEpochBoard = useTeamStore(s => s.loadEpochBoard)
+  const isPaused = useTeamStore(s => s.officeLiveness.get(detail.team.id) === 'paused')
 
   const [panelOpen, setPanelOpen] = useState(!isMobile)
 
@@ -128,15 +129,44 @@ export function LiveTab({ detail, onSelectMember, editingStructure, onExitEditin
     return { Icon: History, label: t('Team structure'), live: false }
   }, [isLiveRun, focusedConversation, isPastRun, pastBoard, epochs, focused, liveRunId, detail.team.status, t])
 
+  // Run status / outcome, folded into the single header line (the standalone
+  // banner is gone). `toneClass` is a text color reused for the dot via
+  // `bg-current`. A quietly-viewed conversation carries no status word.
+  const isJoined = detail.team.hostNodeId != null
+  const status = useMemo<{ word: string; toneClass: string; pulse: boolean } | null>(() => {
+    if (board.mode === 'replay' && board.replay) {
+      const { cls, label } = outcomeMeta(board.replay.outcome ?? 'no_action', null, t)
+      return { word: label, toneClass: cls, pulse: false }
+    }
+    if (isPaused) return { word: t('Resting'), toneClass: 'text-muted-foreground', pulse: false }
+    switch (board.live?.status ?? 'idle') {
+      case 'running': return { word: t('Running'), toneClass: 'text-emerald-500', pulse: true }
+      case 'waiting_user': return { word: t('Waiting for you'), toneClass: 'text-amber-500', pulse: false }
+      case 'error': return { word: t('Stopped'), toneClass: 'text-red-500', pulse: false }
+      default:
+        return focusedConversation
+          ? null
+          : { word: isJoined ? t('Ready') : t('Idle'), toneClass: 'text-muted-foreground', pulse: false }
+    }
+  }, [board, isPaused, isJoined, focusedConversation, t])
+
   return (
     <div className="flex h-full overflow-hidden">
       {/* Board column */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="flex flex-shrink-0 items-center gap-2 border-b border-border px-3 py-2 sm:px-4">
-          <span className="text-xs text-muted-foreground">{t('Viewing:')}</span>
+        <div className="flex h-11 flex-shrink-0 items-center gap-2 border-b border-border px-3 sm:px-6">
+          <span className="hidden text-xs text-muted-foreground sm:inline">{t('Viewing:')}</span>
           <header.Icon className={`h-3.5 w-3.5 flex-shrink-0 ${header.live ? 'text-emerald-500' : 'text-muted-foreground'}`} />
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{header.label}</span>
-          {header.live && <span className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-emerald-500" />}
+          {status && (
+            <span className="flex flex-shrink-0 items-center gap-1.5">
+              <span className="relative flex h-1.5 w-1.5">
+                {status.pulse && <span className={`absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-60 ${status.toneClass}`} />}
+                <span className={`relative inline-flex h-1.5 w-1.5 rounded-full bg-current ${status.toneClass}`} />
+              </span>
+              <span className={`text-xs font-medium ${status.toneClass}`}>{status.word}</span>
+            </span>
+          )}
           <button
             onClick={() => setPanelOpen(v => !v)}
             className={`flex-shrink-0 rounded-md p-1.5 transition-colors ${panelOpen ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary'}`}

@@ -36,7 +36,8 @@ import { MemberNode, type MemberFlowNode } from './MemberNode'
 import { RelationEdge } from './RelationEdge'
 import { RelationshipsPanel } from './RelationshipsPanel'
 import { FlowEditContext, type FlowEdit } from './flow-context'
-import { layoutNodes } from './layout'
+import { layoutNodes, NODE_H, NODE_H_CARTOON } from './layout'
+import { useOfficeSkin } from '../../../stores/team-view-prefs.store'
 
 const nodeTypes = { member: MemberNode }
 const edgeTypes = { relation: RelationEdge }
@@ -62,11 +63,13 @@ interface TeamFlowCanvasProps {
 /** Detect Halo's current color scheme from the documentElement class. */
 function useColorMode(): ColorMode {
   const get = (): ColorMode => {
-    if (typeof document === 'undefined') return 'light'
-    const cl = document.documentElement.classList
-    if (cl.contains('dark')) return 'dark'
-    if (cl.contains('light')) return 'light'
-    return typeof matchMedia !== 'undefined' && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    if (typeof document === 'undefined') return 'dark'
+    // Halo's theme SSOT is the <html> class: `.light` = light theme, otherwise
+    // the default `:root` dark theme (there is no `.dark` class). We must NOT
+    // fall back to the OS preference — React Flow stamps this mode as a class on
+    // the canvas, and a mismatched `light` class would re-scope the light theme
+    // variables over the nodes, flipping cards to light inside a dark app.
+    return document.documentElement.classList.contains('light') ? 'light' : 'dark'
   }
   const [mode, setMode] = useState<ColorMode>(get)
   useEffect(() => {
@@ -98,11 +101,29 @@ function buildEdges(roster: RosterMember[], teamEdges: TeamEdge[], activeFlows: 
     .map(e => styleEdge(`${e.fromAppId}__${e.toAppId}`, e.fromAppId, e.toAppId, e.sync, isActive(e.fromAppId, e.toAppId)))
 }
 
+/** A single potted plant fixed in the canvas corner — a calm office accent for
+ *  the cartoon skin. Frame-fixed (not part of the pannable scene) by design. */
+function OfficePlant() {
+  return (
+    <div className="pointer-events-none absolute bottom-3 left-3 z-0 opacity-90">
+      <svg width={60} height={78} viewBox="0 0 64 84" fill="none" role="presentation">
+        <ellipse cx={32} cy={80} rx={22} ry={4} fill="hsl(var(--secondary) / 0.5)" />
+        <path d="M32 52 C10 40 8 14 20 4 C22 20 30 18 32 30 C34 18 42 12 46 4 C56 16 52 42 32 52 Z" fill="hsl(152 40% 42%)" />
+        <path d="M32 52 C25 45 21 31 25 21 C28 31 30 35 32 45 Z" fill="hsl(152 44% 33%)" />
+        <rect x={14} y={49} width={36} height={7} rx={2} fill="hsl(var(--muted))" stroke="hsl(var(--border))" strokeWidth={1.5} />
+        <path d="M17 56 h30 l-4 22 h-22 Z" fill="hsl(var(--secondary))" stroke="hsl(var(--border))" strokeWidth={1.5} />
+      </svg>
+    </div>
+  )
+}
+
 function InnerCanvas({
   roster, edges: teamEdges, teamId, editable = false, activeFlows = [],
   onSelectMember, onAddRelation, onRemoveRelation, onSetSync, focusedEpochId = null,
 }: TeamFlowCanvasProps) {
   const colorMode = useColorMode()
+  // Cartoon is a read-mode presentation; the structure editor stays on plain cards.
+  const cartoon = useOfficeSkin(teamId) === 'cartoon' && !editable
 
   // Layout positions are STABLE during editing: dagre seeds them when the member
   // set changes (read mode also re-seeds when the structure changes); after that
@@ -134,10 +155,10 @@ function InnerCanvas({
         .filter(m => m.appId !== lead.appId)
         .map(m => styleEdge(`layout-${lead.appId}__${m.appId}`, lead.appId, m.appId, false, false))
     }
-    const laid = layoutNodes(base, layoutEdges)
+    const laid = layoutNodes(base, layoutEdges, cartoon ? NODE_H_CARTOON : NODE_H)
     return new Map(laid.map(n => [n.id, n.position]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layoutKey])
+  }, [layoutKey, cartoon])
 
   // ── Controlled mode: nodes/edges are always derived from props + local drag
   //    state. No useNodesState/useEdgesState — those had timing conflicts with
@@ -219,6 +240,15 @@ function InnerCanvas({
   return (
     <FlowEditContext.Provider value={edit}>
       <div className="relative h-full w-full">
+        {/* Cartoon skin: a soft, uniform office wash behind the workstations.
+            Uniform so it never breaks when the canvas pans/zooms. */}
+        {cartoon && (
+          <div
+            className="pointer-events-none absolute inset-0"
+            style={{ background: 'radial-gradient(130% 100% at 50% -10%, hsl(var(--secondary) / 0.18), transparent 55%)' }}
+          />
+        )}
+        {cartoon && <OfficePlant />}
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -240,7 +270,7 @@ function InnerCanvas({
           proOptions={{ hideAttribution: true }}
           className="bg-transparent"
         >
-          <Background gap={16} size={1} className="opacity-50" />
+          <Background gap={cartoon ? 24 : 16} size={1} className={cartoon ? 'opacity-20' : 'opacity-50'} />
           {editable && <Controls showInteractive={false} position="bottom-left" className="!shadow-md" />}
         </ReactFlow>
         {editable && <RelationshipsPanel />}
