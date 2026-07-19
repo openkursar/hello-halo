@@ -124,6 +124,20 @@ describe('Tlon Service', () => {
       }
       expect(isAcceptedSourceFile('a.ts')).toBe(false)
     })
+
+    it('rejects Office/OS lock and owner junk despite a document extension', () => {
+      for (const p of [
+        '~$Report.docx',                  // MS Office owner file (open document)
+        'dir/~$Deck.pptx',
+        '~$Budget.xlsx',
+        '.~lock.Notes.odt#',              // LibreOffice lock
+        'folder/.DS_Store',
+        'Thumbs.db',
+        'desktop.ini',
+      ]) {
+        expect(isAcceptedSourceFile(p), p).toBe(false)
+      }
+    })
   })
 
   describe('looksBinary / sha256', () => {

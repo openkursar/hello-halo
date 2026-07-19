@@ -94,10 +94,28 @@ export function isAcceptedTextFile(filePath: string): boolean {
 }
 
 /**
+ * Lock / owner / metadata junk that carries a document extension but is not a
+ * document. `~$Report.docx` is the owner file Office writes while a document is
+ * OPEN (a ~165-byte binary, not a zip) — extracting it just errors. These are
+ * never knowledge and must be skipped before extension checks.
+ */
+function isJunkSourceName(filePath: string): boolean {
+  const base = (filePath.split(/[\\/]/).pop() || filePath).toLowerCase()
+  return (
+    base.startsWith('~$') ||       // MS Office owner/lock file
+    base.startsWith('.~lock.') ||  // LibreOffice lock file
+    base === '.ds_store' ||        // macOS
+    base === 'thumbs.db' ||        // Windows
+    base === 'desktop.ini'         // Windows
+  )
+}
+
+/**
  * True when a file can become a source: plain text, or an extractable document
  * (PDF / PPTX / DOCX / XLSX — text is pulled out at ingest time, see extract.ts).
  */
 export function isAcceptedSourceFile(filePath: string): boolean {
+  if (isJunkSourceName(filePath)) return false
   return isAcceptedTextFile(filePath) || isExtractable(filePath)
 }
 
