@@ -31,7 +31,7 @@ export interface SendMessageRequest {
   images?: ImageAttachment[]  // Optional images for multi-modal messages
   thinkingEnabled?: boolean   // Enable extended thinking mode
   aiBrowserEnabled?: boolean  // Enable AI Browser tools
-  tlonKbId?: string           // Chat-with-knowledge-base turn
+  knowledgeBaseId?: string           // Chat-with-knowledge-base turn
 }
 
 export interface ControllerResponse<T = unknown> {

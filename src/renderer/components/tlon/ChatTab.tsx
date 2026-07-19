@@ -1,7 +1,7 @@
 /**
  * ChatTab — ephemeral "ask this knowledge base" conversation.
  *
- * Runs through the normal agent engine (sendMessage with tlonKbId) so the
+ * Runs through the normal agent engine (sendMessage with knowledgeBaseId) so the
  * agent's working dir is the KB's text/ corpus and it can Read/Glob/Grep it.
  * The transcript is not saved as history: a live status line reflects the
  * agent's activity, and the final answer is pulled from the conversation on

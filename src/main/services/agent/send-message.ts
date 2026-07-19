@@ -76,17 +76,17 @@ export async function sendMessage(
   console.log(`[Agent] sendMessage: conv=${conversationId}${images && images.length > 0 ? `, images=${images.length}` : ''}${aiBrowserEnabled ? ', AI Browser enabled' : ''}${thinkingEnabled ? ', thinking=ON' : ''}${canvasContext?.isOpen ? `, canvas tabs=${canvasContext.tabCount}` : ''}`)
 
   const config = getConfig()
-  // "Chat with this KB" turns (tlonKbId set) target one KB directly: the
+  // "Chat with this KB" turns (knowledgeBaseId set) target one KB directly: the
   // working dir becomes that KB's text/ dir so Read/Glob/Grep search its
   // extracted documents. Resolved up front so the working dir is correct for
   // MCP setup below too.
-  const kbChatCtx = request.tlonKbId ? getKBChatContext(request.tlonKbId) : null
-  if (request.tlonKbId && !kbChatCtx) {
-    console.warn(`[Agent] tlonKbId ${request.tlonKbId} has no chat context; falling back to space context`)
+  const kbChatCtx = request.knowledgeBaseId ? getKBChatContext(request.knowledgeBaseId) : null
+  if (request.knowledgeBaseId && !kbChatCtx) {
+    console.warn(`[Agent] knowledgeBaseId ${request.knowledgeBaseId} has no chat context; falling back to space context`)
   }
   let workDir = kbChatCtx ? kbChatCtx.workDir : getWorkingDir(spaceId)
-  if (request.tlonKbId) {
-    console.log(`[Agent] KB chat turn: tlonKbId=${request.tlonKbId} ctx=${kbChatCtx ? 'resolved' : 'NULL'} workDir=${workDir}`)
+  if (request.knowledgeBaseId) {
+    console.log(`[Agent] KB chat turn: knowledgeBaseId=${request.knowledgeBaseId} ctx=${kbChatCtx ? 'resolved' : 'NULL'} workDir=${workDir}`)
   }
   const digitalHumansEnabled = config.agent?.enableDigitalHumans !== false
 

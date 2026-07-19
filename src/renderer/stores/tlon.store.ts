@@ -505,7 +505,7 @@ export const useTlonStore = create<TlonState>((set, get) => ({
         spaceId: TLON_CHAT_SPACE,
         conversationId,
         message: content,
-        tlonKbId: kbId,
+        knowledgeBaseId: kbId,
       })
       if (!res.success) {
         get().pushAssistantError(kbId, (res.error as string) || i18n.t('Failed to reach the model.'))
