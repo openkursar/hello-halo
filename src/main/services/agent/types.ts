@@ -117,6 +117,8 @@ export interface AgentRequest {
   thinkingEnabled?: boolean   // Enable extended thinking mode (maxThinkingTokens: 10240)
   model?: string              // Model to use (for future model switching)
   canvasContext?: CanvasContext  // Current canvas state for AI awareness
+  knowledgeBaseId?: string         // When set, run as a "chat with this knowledge base" turn:
+                              // working dir = the KB's wiki dir, that KB injected into the prompt
 }
 
 // ============================================

@@ -20,6 +20,9 @@ import { getConfig } from '../../foundation/config.service'
 import { addMessage } from '../conversation.service'
 import { buildCreationTimeServers } from './toolsets/broker'
 import { buildToolsetSection } from './toolsets/capability-index'
+// The toolset broker (above) supplies AI Browser / web-search / apps as
+// on-demand toolsets; only the knowledge-base helpers are still called directly.
+import { getKBReferencesForSpace, getKBReferenceById, getKBChatContext } from '../tlon'
 import type {
   AgentRequest,
 } from './types'
@@ -72,7 +75,18 @@ export async function sendMessage(
   console.log(`[Agent] sendMessage: conv=${conversationId}${images && images.length > 0 ? `, images=${images.length}` : ''}${thinkingEnabled ? ', thinking=ON' : ''}${canvasContext?.isOpen ? `, canvas tabs=${canvasContext.tabCount}` : ''}`)
 
   const config = getConfig()
-  const workDir = getWorkingDir(spaceId)
+  // "Chat with this KB" turns (knowledgeBaseId set) target one KB directly: the
+  // working dir becomes that KB's text/ dir so Read/Glob/Grep search its
+  // extracted documents. Resolved up front so the working dir is correct for
+  // MCP setup below too.
+  const kbChatCtx = request.knowledgeBaseId ? getKBChatContext(request.knowledgeBaseId) : null
+  if (request.knowledgeBaseId && !kbChatCtx) {
+    console.warn(`[Agent] knowledgeBaseId ${request.knowledgeBaseId} has no chat context; falling back to space context`)
+  }
+  let workDir = kbChatCtx ? kbChatCtx.workDir : getWorkingDir(spaceId)
+  if (request.knowledgeBaseId) {
+    console.log(`[Agent] KB chat turn: knowledgeBaseId=${request.knowledgeBaseId} ctx=${kbChatCtx ? 'resolved' : 'NULL'} workDir=${workDir}`)
+  }
   const digitalHumansEnabled = config.agent?.enableDigitalHumans !== false
 
   // Accumulate stderr for detailed error messages
@@ -112,6 +126,21 @@ export async function sendMessage(
     const mcpServers: Record<string, any> = dbMcpServers ? { ...dbMcpServers } : {}
     Object.assign(mcpServers, buildCreationTimeServers({ spaceId, conversationId, workDir }))
 
+    // Knowledge bases injected into the system prompt so the agent can Grep/Read
+    // the listed document corpus. For a KB-chat turn it's just the targeted KB;
+    // otherwise it's the union of KBs bound to this space and KBs loaded into
+    // THIS conversation (deduped by id).
+    let knowledgeBases = kbChatCtx ? [kbChatCtx.reference] : getKBReferencesForSpace(spaceId)
+    if (!kbChatCtx && conversation?.knowledgeBaseIds?.length) {
+      const byId = new Map(knowledgeBases.map(ref => [ref.id, ref]))
+      for (const kbId of conversation.knowledgeBaseIds) {
+        if (byId.has(kbId)) continue
+        const ref = getKBReferenceById(kbId)
+        if (ref) byId.set(kbId, ref)
+      }
+      knowledgeBases = Array.from(byId.values())
+    }
+
     // Build base SDK options
     const sdkOptions = buildBaseSdkOptions({
       credentials: resolvedCredentials,
@@ -119,6 +148,7 @@ export async function sendMessage(
       electronPath,
       spaceId,
       conversationId,
+      knowledgeBases,
       stderrHandler: (data: string) => {
         console.error(`[Agent][${conversationId}] CLI stderr:`, data)
         stderrBuffer += data

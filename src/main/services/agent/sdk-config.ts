@@ -25,6 +25,7 @@ import {
   CONTEXT_WINDOW_HARD_MIN,
   CONTEXT_WINDOW_HARD_CAP,
 } from '../../../shared/constants/model-runtime-limits'
+import type { KBReference } from '../../../shared/types/tlon'
 
 // ============================================
 // Configuration
@@ -211,6 +212,8 @@ export interface BaseSdkOptionsParams {
    * override systemPrompt entirely after this builder returns.
    */
   toolsetIndex?: string
+  /** Knowledge bases bound to this session's space (Tlon) */
+  knowledgeBases?: KBReference[]
 }
 
 // ============================================
@@ -690,13 +693,16 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
     // Use Halo's custom system prompt instead of SDK's 'claude_code' preset.
     // The capability index advertises optional toolsets (agent/toolsets) the AI
     // can ask the user to enable; full tool schemas enter context only once the
-    // toolset is enabled and the session is rebuilt.
+    // toolset is enabled and the session is rebuilt. AI Browser is one such
+    // on-demand toolset here, so no aiBrowserEnabled branch. Knowledge bases are
+    // injected into the same prompt.
     systemPrompt: buildSystemPrompt({
       workDir,
       modelInfo: credentials.displayModel,
       promptProfile: params.promptProfile,
       digitalHumansEnabled: params.digitalHumansEnabled,
-      toolsetIndex: params.toolsetIndex
+      toolsetIndex: params.toolsetIndex,
+      knowledgeBases: params.knowledgeBases
     }),
     maxTurns: params.maxTurns ?? 50,
     allowedTools: [...DEFAULT_ALLOWED_TOOLS],

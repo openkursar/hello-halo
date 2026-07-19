@@ -315,6 +315,29 @@ export interface LegacyAISourcesConfig {
 // ============================================================================
 
 /**
+ * Ready-to-POST descriptor for a direct, non-streaming HTTP call to the active
+ * source — the path used by callers that bypass the SDK and the compat router
+ * (e.g. Tlon ingest). Resolved by `AISourceManager.getDirectCallEndpoint()`
+ * from the same `getBackendConfig()` logic the agent path uses, so URL
+ * normalization, wire format and auth headers stay defined in one place.
+ */
+export interface DirectCallEndpoint {
+  /** Fully composed endpoint URL (auth path already appended). */
+  url: string
+  /** Auth + content-type headers, ready to send as-is. */
+  headers: Record<string, string>
+  /** Which request/response shape the caller must speak. */
+  wireFormat: 'anthropic' | 'openai'
+  /** Model id to send on the wire. */
+  model: string
+  /**
+   * Resolved apiType, when known. Callers that cannot speak `responses` / `kiro`
+   * (which need the router's translation layer) should reject those values.
+   */
+  apiType?: 'chat_completions' | 'responses' | 'anthropic_passthrough' | 'kiro'
+}
+
+/**
  * Configuration for making API requests
  * Used by OpenAI compat router
  */

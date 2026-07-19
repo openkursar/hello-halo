@@ -27,6 +27,7 @@ export const agentApi = {
       size?: number
     }>
     thinkingEnabled?: boolean  // Enable extended thinking mode
+    knowledgeBaseId?: string  // Chat-with-knowledge-base turn
     canvasContext?: {  // Canvas context for AI awareness
       isOpen: boolean
       tabCount: number

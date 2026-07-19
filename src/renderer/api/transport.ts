@@ -465,6 +465,8 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
       'app:im-session-updated': 'onImSessionUpdated',
       'im-channels:instance-updated': 'onImChannelInstanceUpdated',
       'notification:toast': 'onNotificationToast',
+      'tlon:stats-updated': 'onTlonStatsUpdated',
+      'tlon:ingest-progress': 'onTlonIngestProgress',
       'store:sync-status-changed': 'onStoreSyncStatusChanged',
       'store:upgrade-available': 'onStoreUpgradeAvailable',
     }

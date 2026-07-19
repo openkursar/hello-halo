@@ -34,6 +34,7 @@ import { truncateText, getToolFriendlyFormat } from './thought-utils'
 import type { Message, Thought, ThoughtsSummary } from '../../types'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
+import { SourceChips } from './SourceChips'
 
 interface MessageItemProps {
   message: Message
@@ -362,6 +363,11 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
           <span className="waiting-dots ml-1 text-muted-foreground/60" />
         )}
       </div>
+
+      {/* Knowledge-base citations — documents the agent Read this turn, click to open in the canvas */}
+      {!isUser && message.sources && message.sources.length > 0 && (
+        <SourceChips sources={message.sources} />
+      )}
 
       {/* Persisted error - shown for assistant messages that failed (e.g., 429 rate limit) */}
       {!isUser && message.error && (

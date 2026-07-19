@@ -37,6 +37,8 @@ import { saveSessionId } from '../conversation.service'
 import { notifyTaskComplete } from '../notification.service'
 import { getConversation } from '../conversation.service'
 import { type FileChangesSummary, extractFileChangesSummaryFromThoughts } from '../../../shared/file-changes'
+import { resolveSourcesForReadPaths } from '../tlon'
+import type { KBSource } from '../../../shared/types/tlon'
 import { createSessionState, consumePendingRebuild } from './session-manager'
 import { hasActiveTeamTasks, isTeamLifecycleThought } from './subagent-handler'
 
@@ -415,6 +417,7 @@ function persistTurnResult(
   if (contentToStore || hasErrorThought || thoughts.length > 0) {
     // Extract file changes summary
     let metadata: { fileChanges?: FileChangesSummary } | undefined
+    let sources: KBSource[] | undefined
     if (thoughts.length > 0) {
       try {
         const fileChangesSummary = extractFileChangesSummaryFromThoughts(thoughts)
@@ -424,6 +427,16 @@ function persistTurnResult(
       } catch (error) {
         console.error(`[Consumer][${conversationId}] Failed to extract file changes:`, error)
       }
+      // Knowledge-base documents the agent Read this turn → clickable citations.
+      try {
+        const readPaths = thoughts
+          .filter(t => t.type === 'tool_use' && t.toolName === 'Read' && typeof t.toolInput?.file_path === 'string')
+          .map(t => t.toolInput!.file_path as string)
+        const resolved = readPaths.length > 0 ? resolveSourcesForReadPaths(readPaths) : []
+        if (resolved.length > 0) sources = resolved
+      } catch (error) {
+        console.error(`[Consumer][${conversationId}] Failed to resolve KB sources:`, error)
+      }
     }
 
     updateLastMessage(spaceId, conversationId, {
@@ -431,6 +444,7 @@ function persistTurnResult(
       thoughts: thoughts.length > 0 ? [...thoughts] : undefined,
       tokenUsage: tokenUsage || undefined,
       metadata,
+      sources,
       error: errorThought?.content,
     })
   }

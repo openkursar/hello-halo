@@ -29,6 +29,7 @@ import { SidebarToggle } from '../components/layout/SidebarToggle'
 import { SpaceSelector } from '../components/layout/SpaceSelector'
 import { ModelSelector } from '../components/layout/ModelSelector'
 import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
+import { KBIndicator } from '../components/tlon/KBIndicator'
 import { ContentCanvas } from '../components/canvas'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
 import { api } from '../api'
@@ -363,6 +364,13 @@ export function SpacePage() {
             <div className="hidden sm:block">
               <SearchIcon onClick={openSearch} isInSpace={true} />
             </div>
+
+            {/* Connected knowledge bases indicator - desktop only (mobile uses the overflow menu) */}
+            {currentSpace && (
+              <div className="hidden sm:block">
+                <KBIndicator spaceId={currentSpace.id} />
+              </div>
+            )}
 
             {/* Model Selector - hidden on mobile (in overflow menu) */}
             <div className="hidden sm:block">

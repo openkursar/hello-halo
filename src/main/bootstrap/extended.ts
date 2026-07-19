@@ -68,6 +68,8 @@ import { registerStoreHandlers } from '../ipc/store'
 import { registerCliConfigHandlers } from '../ipc/cli-config'
 import { registerModelCapabilitiesHandlers } from '../ipc/model-capabilities'
 import { registerWeixinIlinkHandlers } from '../ipc/weixin-ilink'
+import { registerTlonHandlers } from '../ipc/tlon'
+import { initTlonWatchers, shutdownTlon, migrateKBsToTextIndex } from '../services/tlon'
 import { initRegistryService, shutdownRegistryService } from '../store'
 import { startUpgradeScheduler, stopUpgradeScheduler } from '../store/upgrade.service'
 import { cleanupImChannelTempFiles } from '../apps/runtime/im-channels'
@@ -146,6 +148,18 @@ async function initPlatformAndApps(): Promise<void> {
   // Wire lifecycle events (install/uninstall/run) into the analytics pipeline.
   // Must come after both appManager and runtime are ready.
   installAppsSubscribers(appManager, runtime)
+
+  // ── Phase 3.6: Tlon knowledge base watchers ───────────────────────────
+  // Subscribe to each active KB's raw/ + linked directories so file changes
+  // re-trigger ingest. Non-fatal: a watcher failure must not block bootstrap.
+  await initTlonWatchers().catch(err =>
+    console.error('[Bootstrap] Tlon watcher init failed:', err)
+  )
+  // Migrate any not-yet-indexed sources (incl. wiki-era KBs) onto the text
+  // index. Fire-and-forget: extraction is cheap and must not block bootstrap.
+  void migrateKBsToTextIndex().catch(err =>
+    console.error('[Bootstrap] Tlon text-index migration failed:', err)
+  )
 
   // ── Phase 4: Registry Service (App Store) ─────────────────────────────
   initRegistryService({ db })
@@ -329,6 +343,9 @@ export function initializeExtendedServices(): void {
   // WeChat iLink Bot: QR code login + token management IPC handlers
   registerWeixinIlinkHandlers()
 
+  // Tlon: knowledge base management IPC handlers
+  registerTlonHandlers()
+
   // Windows-specific: Initialize Git Bash in background
   if (process.platform === 'win32') {
     initializeGitBashOnStartup()
@@ -431,6 +448,9 @@ export async function cleanupExtendedServices(): Promise<void> {
 
   // Artifact Cache: Close file watchers and clear caches
   await cleanupAllCaches()
+
+  // Tlon: Unsubscribe all KB watchers and clear timers
+  await shutdownTlon().catch(err => console.error('[Bootstrap] Tlon shutdown error:', err))
 
   console.log('[Bootstrap] Extended services cleaned up')
 }

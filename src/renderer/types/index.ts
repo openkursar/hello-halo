@@ -10,6 +10,7 @@ import {
   hasAnyAISource
 } from '../../shared/types/ai-sources';
 import { NotificationChannelsConfig }  from '../../shared/types/notification-channels';
+import type { KBSource } from '../../shared/types/tlon';
 // Re-export them
 export { DEFAULT_MODEL, getCurrentModelName, hasAnyAISource };
 
@@ -381,6 +382,8 @@ export interface Conversation extends ConversationMeta {
    */
   modelSourceId?: string;
   modelId?: string;
+  /** Knowledge bases (Tlon) loaded into this conversation; injected per turn. */
+  knowledgeBaseIds?: string[];
 }
 
 // ============================================
@@ -495,6 +498,7 @@ export interface Message {
   };
   error?: string;  // Error message when assistant response failed (e.g., 429 rate limit)
   source?: 'injection';  // How the message entered the conversation (SDK-agnostic)
+  sources?: KBSource[];  // Knowledge-base documents the agent Read this turn (clickable citations)
 }
 
 // ============================================
@@ -747,7 +751,7 @@ export type AgentEvent =
 // App State Types
 // ============================================
 
-export type AppView = 'splash' | 'gitBashSetup' | 'setup' | 'home' | 'space' | 'settings' | 'apps' | 'serverConnect' | 'serverList';
+export type AppView = 'splash' | 'gitBashSetup' | 'setup' | 'home' | 'space' | 'settings' | 'apps' | 'tlon' | 'serverConnect' | 'serverList';
 
 export interface AppState {
   view: AppView;

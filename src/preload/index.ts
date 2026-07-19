@@ -14,6 +14,7 @@ import { cliConfigRpc } from '../shared/rpc/contracts/cli-config.contract'
 import { imChannelsRpc } from '../shared/rpc/contracts/im-channels.contract'
 import { weixinIlinkRpc } from '../shared/rpc/contracts/weixin-ilink.contract'
 import { conversationRpc } from '../shared/rpc/contracts/conversation.contract'
+import { tlonRpc } from '../shared/rpc/contracts/tlon.contract'
 import { spaceRpc } from '../shared/rpc/contracts/space.contract'
 import { storeRpc } from '../shared/rpc/contracts/store.contract'
 import { remoteRpc } from '../shared/rpc/contracts/remote.contract'
@@ -139,6 +140,7 @@ export interface HaloAPI {
       size?: number
     }>
     thinkingEnabled?: boolean  // Enable extended thinking mode
+    knowledgeBaseId?: string  // Chat-with-knowledge-base turn
     canvasContext?: {  // Canvas context for AI awareness
       isOpen: boolean
       tabCount: number
@@ -198,6 +200,33 @@ export interface HaloAPI {
   onAgentTurnStart: (callback: (data: unknown) => void) => () => void
   onToolsetsChanged: (callback: (data: unknown) => void) => () => void
   onToolsetsRequested: (callback: (data: unknown) => void) => () => void
+
+  // Tlon (knowledge base)
+  tlonCreate: (input: { name: string; icon?: string; description?: string; linkedDirs?: Array<{ path: string; label: string }> }) => Promise<IpcResponse>
+  tlonList: () => Promise<IpcResponse>
+  tlonListForSpace: (spaceId: string) => Promise<IpcResponse>
+  tlonGet: (kbId: string) => Promise<IpcResponse>
+  tlonUpdate: (kbId: string, updates: { name?: string; icon?: string; description?: string; status?: string }) => Promise<IpcResponse>
+  tlonDelete: (kbId: string) => Promise<IpcResponse>
+  tlonSetDefault: (kbId: string | null) => Promise<IpcResponse>
+  tlonBindSpace: (kbId: string, spaceId: string) => Promise<IpcResponse>
+  tlonUnbindSpace: (kbId: string, spaceId: string) => Promise<IpcResponse>
+  tlonBindApp: (kbId: string, appId: string) => Promise<IpcResponse>
+  tlonUnbindApp: (kbId: string, appId: string) => Promise<IpcResponse>
+  tlonAddLinkedDir: (kbId: string, dir: { path: string; label: string }) => Promise<IpcResponse>
+  tlonRemoveLinkedDir: (kbId: string, linkId: string) => Promise<IpcResponse>
+  tlonAddFiles: (kbId: string, filePaths: string[]) => Promise<IpcResponse>
+  tlonListRaw: (kbId: string) => Promise<IpcResponse>
+  tlonRemoveRaw: (kbId: string, relativePath: string) => Promise<IpcResponse>
+  tlonReadIndex: (kbId: string) => Promise<IpcResponse>
+  tlonResolveSources: (kbId: string, readPaths: string[]) => Promise<IpcResponse>
+  tlonTriggerIngest: (kbId: string) => Promise<IpcResponse>
+  tlonClearRelearn: (kbId: string) => Promise<IpcResponse>
+  tlonGetIngestStatus: (kbId: string) => Promise<IpcResponse>
+  tlonPickFiles: () => Promise<IpcResponse>
+  tlonPickFolder: (options?: { title?: string; buttonLabel?: string }) => Promise<IpcResponse>
+  onTlonStatsUpdated: (callback: (data: unknown) => void) => () => void
+  onTlonIngestProgress: (callback: (data: unknown) => void) => () => void
 
   // Artifact
   listArtifacts: (spaceId: string, maxDepth?: number) => Promise<IpcResponse>
@@ -611,6 +640,11 @@ const api: HaloAPI = {
 
   // Agent (derived from agentRpc contract)
   ...bindRpc(agentRpc),
+
+  // Tlon (knowledge base, derived from tlonRpc contract)
+  ...bindRpc(tlonRpc),
+  onTlonStatsUpdated: (callback) => createEventListener('tlon:stats-updated', callback),
+  onTlonIngestProgress: (callback) => createEventListener('tlon:ingest-progress', callback),
 
   // Event listeners
   onAgentMessage: (callback) => createEventListener('agent:message', callback),

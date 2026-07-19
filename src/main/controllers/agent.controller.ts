@@ -30,6 +30,8 @@ export interface SendMessageRequest {
   resumeSessionId?: string
   images?: ImageAttachment[]  // Optional images for multi-modal messages
   thinkingEnabled?: boolean   // Enable extended thinking mode
+  aiBrowserEnabled?: boolean  // Enable AI Browser tools
+  knowledgeBaseId?: string           // Chat-with-knowledge-base turn
 }
 
 export interface ControllerResponse<T = unknown> {
