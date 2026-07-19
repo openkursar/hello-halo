@@ -140,6 +140,16 @@ export function isIngesting(kbId: string): boolean {
   return processing.has(kbId)
 }
 
+/** Drop a deleted KB's queued jobs and last progress event. */
+export function evictIngestState(kbId: string): void {
+  const queue = queues.get(kbId)
+  // Empty in place: an in-flight processQueue drains this live array and would
+  // otherwise keep extracting for the deleted KB.
+  if (queue) queue.length = 0
+  queues.delete(kbId)
+  progress.delete(kbId)
+}
+
 /**
  * Wipe the extracted text + learned-status, then re-extract every source from
  * scratch. Used to rebuild older KBs onto the current text index.

@@ -5,8 +5,9 @@
  * Counts/learned status are authoritative elsewhere (RawFilesTab pulls them).
  */
 
+import { useState } from 'react'
 import { useTranslation } from '../../i18n'
-import { Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Loader2, CheckCircle2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react'
 import type { IngestProgressEvent } from '../../../shared/types/tlon'
 
 interface IngestProgressProps {
@@ -15,10 +16,11 @@ interface IngestProgressProps {
 
 export function IngestProgress({ progress }: IngestProgressProps) {
   const { t } = useTranslation()
+  const [showErrors, setShowErrors] = useState(false)
 
   if (!progress || progress.phase === 'idle') return null
 
-  const { phase, total, completed, current, error } = progress
+  const { phase, total, completed, current, error, errors } = progress
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0
 
   return (
@@ -51,6 +53,31 @@ export function IngestProgress({ progress }: IngestProgressProps) {
       )}
       {phase === 'error' && error && (
         <p className="mt-2 text-xs text-destructive break-words">{error}</p>
+      )}
+
+      {errors && errors.length > 0 && (
+        <div className="mt-2">
+          <button
+            onClick={() => setShowErrors(v => !v)}
+            className="inline-flex items-center gap-1 text-xs text-destructive hover:underline"
+          >
+            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+            {t('{{count}} file(s) could not be learned', { count: errors.length })}
+            {showErrors
+              ? <ChevronUp className="w-3.5 h-3.5 flex-shrink-0" />
+              : <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" />}
+          </button>
+          {showErrors && (
+            <ul className="mt-1.5 space-y-1">
+              {errors.map((e, i) => (
+                <li key={i} className="text-xs break-words">
+                  <span className="text-destructive">{e.file}</span>
+                  <span className="text-muted-foreground"> — {e.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   )

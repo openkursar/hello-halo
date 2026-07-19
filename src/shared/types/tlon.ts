@@ -7,7 +7,7 @@
  * Storage model (see src/main/services/tlon/paths.ts):
  *   ~/.halo/knowledge-bases-index.json   — registry (KBIndexV1)
  *   ~/.halo/knowledge-bases/<uuid>/       — per-KB directory
- *     meta.json schema.md index.md log.md raw/ text/ wiki/ .ingest/hashes.json
+ *     meta.json index.md log.md raw/ text/ .ingest/hashes.json  (wiki/ is legacy)
  */
 
 export type KnowledgeBaseId = string
@@ -118,13 +118,15 @@ export interface KBSource {
 
 export interface IngestProgressEvent {
   kbId: KnowledgeBaseId
-  /** Total in this batch — set ONCE after enqueue-all */
+  /** Batch total. Grows if the watcher enqueues more files mid-batch. */
   total: number
   completed: number
   /** Filename currently being processed */
   current?: string
   phase: 'idle' | 'running' | 'done' | 'error'
   error?: string
+  /** Per-file extraction failures accumulated over the batch. */
+  errors?: Array<{ file: string; message: string }>
 }
 
 export interface KBStatsUpdatedEvent {

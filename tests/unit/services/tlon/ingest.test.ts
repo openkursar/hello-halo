@@ -48,8 +48,10 @@ vi.mock('../../../../src/main/services/tlon/extract', async (importOriginal) => 
 
 import {
   _resetTlonRegistry,
+  _resetTlonHashCache,
   createKB,
   getKB,
+  deleteKB,
   addRawFiles,
   readHashes,
   writeHashes,
@@ -65,6 +67,7 @@ import {
   isIngesting,
   getIngestProgress,
   rebuildIndexMd,
+  evictIngestState,
 } from '../../../../src/main/services/tlon/ingest'
 import {
   getKBTextDir,
@@ -97,6 +100,7 @@ function textFiles(kbId: string): string[] {
 describe('Tlon Ingest', () => {
   beforeEach(async () => {
     _resetTlonRegistry()
+    _resetTlonHashCache()
     extractGate = null
     await initializeApp()
   })
@@ -200,7 +204,83 @@ describe('Tlon Ingest', () => {
       expect(hashes.files['broken.docx']).toBeUndefined()
       // …and the KB is not poisoned.
       expect(getKB(kb.id)?.status).toBe('active')
-      expect(getIngestProgress(kb.id)).toMatchObject({ total: 3, completed: 3, phase: 'done' })
+
+      // The terminal event surfaces the per-file failure to the UI.
+      const final = getIngestProgress(kb.id)
+      expect(final).toMatchObject({ total: 3, completed: 3, phase: 'done' })
+      expect(final.errors).toHaveLength(1)
+      expect(final.errors?.[0].file).toBe('broken.docx')
+      expect(final.errors?.[0].message).toBeTruthy()
+      // The broadcast terminal event carries the same error list.
+      expect(broadcastToAll).toHaveBeenCalledWith(
+        'tlon:ingest-progress',
+        expect.objectContaining({ phase: 'done', errors: [expect.objectContaining({ file: 'broken.docx' })] })
+      )
+    })
+
+    it('a clean batch reports no errors field', async () => {
+      const kb = createKB({ name: 'Clean' })
+      const scratch = makeScratchDir()
+      addRawFiles(kb.id, [writeScratchFile(scratch, 'fine.md', 'fine')])
+      await triggerFullIngest(kb.id)
+      expect(getIngestProgress(kb.id).errors).toBeUndefined()
+    })
+  })
+
+  describe('mid-batch enqueue', () => {
+    it('grows the emitted total when files are enqueued during a running batch', async () => {
+      const kb = createKB({ name: 'Grow' })
+      const scratch = makeScratchDir()
+      addRawFiles(kb.id, [writeScratchFile(scratch, 'first.md', 'first')])
+
+      let release!: () => void
+      extractGate = new Promise<void>(resolve => { release = resolve })
+      const running = triggerFullIngest(kb.id)
+      await new Promise(r => setTimeout(r, 10))
+      expect(isIngesting(kb.id)).toBe(true)
+
+      // Simulate the watcher's debounced scan adding a file mid-batch.
+      const second = writeScratchFile(getKBRawDir(kb.id), 'second.md', 'second')
+      enqueueFiles(kb.id, [{ sourcePath: 'second.md', absolutePath: second, sourceType: 'raw' }])
+
+      release()
+      await running
+
+      // The batch drained both files and the total reflects the growth (2/2, not 2/1).
+      expect(getIngestProgress(kb.id)).toMatchObject({ total: 2, completed: 2, phase: 'done' })
+      expect(readHashes(kb.id).files['second.md']?.textPath).toBeTruthy()
+    })
+  })
+
+  describe('evictIngestState', () => {
+    it('drops queued jobs and the last progress event', async () => {
+      const kb = createKB({ name: 'Evict' })
+      const scratch = makeScratchDir()
+      addRawFiles(kb.id, [writeScratchFile(scratch, 'a.md', 'aaa')])
+      await triggerFullIngest(kb.id)
+      expect(getIngestProgress(kb.id).phase).toBe('done')
+
+      enqueueFiles(kb.id, [{
+        sourcePath: 'b.md',
+        absolutePath: path.join(getKBRawDir(kb.id), 'b.md'),
+        sourceType: 'raw',
+      }])
+      evictIngestState(kb.id)
+
+      expect(getIngestProgress(kb.id)).toMatchObject({ total: 0, completed: 0, phase: 'idle' })
+      await processQueue(kb.id) // queue was emptied — nothing runs
+      expect(getIngestProgress(kb.id).phase).toBe('idle')
+    })
+
+    it('deleteKB clears the deleted KB ingest state', async () => {
+      const kb = createKB({ name: 'DelEvict' })
+      const scratch = makeScratchDir()
+      addRawFiles(kb.id, [writeScratchFile(scratch, 'a.md', 'aaa')])
+      await triggerFullIngest(kb.id)
+      expect(getIngestProgress(kb.id).phase).toBe('done')
+
+      await deleteKB(kb.id)
+      expect(getIngestProgress(kb.id).phase).toBe('idle')
     })
   })
 
