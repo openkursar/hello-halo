@@ -3,14 +3,14 @@
  *
  * Manages the Tlon knowledge-base UI state:
  * - Knowledge base list + selection
- * - Per-KB raw files, wiki pages, index content
+ * - Per-KB raw files and index content
  * - Per-KB ingest progress (live feedback only)
  *
  * Authoritative learned/unlearned status and counts come from the
  * `listRaw` / `getIngestStatus` pulls — never from progress events.
- * Progress events drive the animated progress bar only; after every
- * event the store re-pulls `listRaw` so the per-file learned status
- * (RawFileStatus.learned) stays truthful.
+ * Progress events drive the animated progress bar only; the store
+ * re-pulls `listRaw` (throttled during a batch) so the per-file
+ * learned status (RawFileStatus.learned) stays truthful.
  *
  * Real-time event handlers are wired from App.tsx using the imported
  * onEvent() transport (same pattern as agent/app events).
@@ -54,6 +54,14 @@ interface TlonChatSession {
 
 /** KB chats run as ephemeral conversations under the Halo temp space. */
 const TLON_CHAT_SPACE = 'halo-temp'
+
+/**
+ * Ingest emits an event per file and listRaw re-hashes files on disk, so an
+ * unthrottled pull-per-event is O(n²) IO during a big batch. At most one pull
+ * per KB per interval; terminal events flush immediately.
+ */
+const RAW_FILES_PULL_INTERVAL_MS = 1000
+const rawFilesPullTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 interface TlonState {
   // ── Data ─────────────────────────────────
@@ -633,11 +641,21 @@ export const useTlonStore = create<TlonState>((set, get) => ({
 
   handleIngestProgress: (event) => {
     set(state => ({ ingestProgress: { ...state.ingestProgress, [event.kbId]: event } }))
-    // Learned status is authoritative on disk — re-pull after each step so the
-    // per-file status icons reflect reality, never the event stream.
-    void get().loadRawFiles(event.kbId)
+    // Learned status is authoritative on disk — re-pull so the per-file status
+    // icons reflect reality, never the event stream (throttled per KB).
+    const timer = rawFilesPullTimers.get(event.kbId)
     if (event.phase === 'done' || event.phase === 'error') {
+      if (timer) {
+        clearTimeout(timer)
+        rawFilesPullTimers.delete(event.kbId)
+      }
+      void get().loadRawFiles(event.kbId)
       void get().refreshKB(event.kbId)
+    } else if (!timer) {
+      rawFilesPullTimers.set(event.kbId, setTimeout(() => {
+        rawFilesPullTimers.delete(event.kbId)
+        void get().loadRawFiles(event.kbId)
+      }, RAW_FILES_PULL_INTERVAL_MS))
     }
   },
 
