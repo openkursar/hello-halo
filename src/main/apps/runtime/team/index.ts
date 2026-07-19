@@ -19,6 +19,7 @@ import type {
   TeamTriggerContext,
   TeamRunTrigger,
   TeamMemberRuntimeStatus,
+  RosterBusyEntry,
 } from '../../../../shared/apps/team-types'
 import { buildTeamSessionKey } from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey, parseTeamChatKey } from '../../../../shared/apps/im-keys'
@@ -96,9 +97,15 @@ export interface TeamRuntime {
    * the host; never mutates orchestration state.
    */
   getMemberStatus(appId: string): TeamMemberRuntimeStatus
+  /** Live busy assignments (open run/conversations being served) with human labels. */
+  getMemberBusy(appId: string, teamId: string): RosterBusyEntry[]
   startEpoch(teamId: string, trigger?: TeamRunTrigger): Promise<TeamEpoch>
   /** Get/create a per-chat long-lived 'conversation' epoch (message-driven entries, e.g. IM). */
-  ensureConversationEpoch(teamId: string, chatKey: string): TeamEpoch
+  ensureConversationEpoch(teamId: string, chatKey: string, title?: string): TeamEpoch
+  /** Rename a conversation epoch (captured + replicated office-wide). */
+  renameConversationEpoch(teamId: string, epochId: string, title: string | null): void
+  /** Auto-name an untitled native conversation from the lead's first user message. */
+  maybeAutoNameConversation(teamId: string, epochId: string, appId: string, message: string): void
   /** Reversible seal: wake a hibernated epoch when re-engaged (no-op if already open). */
   reactivateEpoch(teamId: string, epochId: string): void
   sealEpoch(teamId: string, endReason: EpochEndReason, summary?: string | null): Promise<void>
@@ -171,6 +178,19 @@ export interface CreateTeamRuntimeDeps {
    * Absent → the tool reports the capability is unavailable.
    */
   readArtifact?: ReadTeamArtifact
+  /**
+   * Epoch lifecycle replication capture (open/seal/reopen/rename/outcome).
+   * Bootstrap wires it to the federation authority write log so conversations
+   * and run history converge office-wide (P0-1). Absent → no replication.
+   */
+  onEpochMutation?: (epoch: TeamEpoch) => void
+  /**
+   * Persisted unanswered-escalation check (activity store), so waiting_user
+   * survives a run seal and a restart (P0-5). Absent → in-memory only.
+   */
+  hasPendingEscalation?: (appId: string, teamId: string) => boolean
+  /** Human name for an IM chatKey (IM session registry). Absent → raw chat id. */
+  describeChatKey?: (teamId: string, chatKey: string) => string | null
 }
 
 export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
@@ -201,6 +221,9 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     turnTimeoutMs: deps.turnTimeoutMs,
     onRunStateChanged: deps.onRunStateChanged,
     onMemberStatusChanged: deps.onMemberStatusChanged,
+    onEpochMutation: deps.onEpochMutation,
+    hasPendingEscalation: deps.hasPendingEscalation,
+    describeChatKey: deps.describeChatKey,
   })
 
   // Local sessions first; when they say idle, fold in the injected overlay so a
@@ -214,6 +237,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
   const baseBlackboard = createBlackboard({
     store,
     getMemberStatus: memberStatus,
+    getMemberBusy: (appId, teamId) => orchestration!.getMemberBusy(appId, teamId),
     // Reuse the same reachability seam the bus uses for its honest-delivery gate,
     // so the roster's presence column and delivery decisions agree.
     ...(deps.checkMemberReachable ? { getMemberReachable: deps.checkMemberReachable } : {}),
@@ -230,8 +254,14 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     blackboard,
     ...(deps.readArtifact ? { readArtifact: deps.readArtifact } : {}),
     getMemberStatus: memberStatus,
+    getMemberBusy: (appId, teamId) => orchestration!.getMemberBusy(appId, teamId),
     startEpoch: (teamId, trigger) => orchestration!.startEpoch(teamId, trigger),
-    ensureConversationEpoch: (teamId, chatKey) => orchestration!.ensureConversationEpoch(teamId, chatKey),
+    ensureConversationEpoch: (teamId, chatKey, title) =>
+      orchestration!.ensureConversationEpoch(teamId, chatKey, title),
+    renameConversationEpoch: (teamId, epochId, title) =>
+      orchestration!.renameConversationEpoch(teamId, epochId, title),
+    maybeAutoNameConversation: (teamId, epochId, appId, message) =>
+      orchestration!.maybeAutoNameConversation(teamId, epochId, appId, message),
     reactivateEpoch: (teamId, epochId) => orchestration!.reactivateEpoch(teamId, epochId),
     sealEpoch: (teamId, reason, summary) => orchestration!.sealEpoch(teamId, reason, summary),
     sealConversationEpoch: (teamId, epochId, reason, summary) =>

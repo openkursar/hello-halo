@@ -523,6 +523,11 @@ export interface HaloAPI {
   teamLeaveOffice: (input: { officeId: string }) => Promise<IpcResponse>
   /** Send a message to a remote member via the office owner (team wake). */
   teamSendToMember: (input: { teamId: string; appId: string; epochId: string; message: string; images?: { type: string; media_type: string; data: string }[]; thinkingEnabled?: boolean }) => Promise<IpcResponse>
+  /** Conversations (office-shared session objects). */
+  teamListConversations: (teamId: string) => Promise<IpcResponse>
+  teamOpenConversation: (input: { teamId: string; title?: string }) => Promise<IpcResponse>
+  teamRenameConversation: (input: { teamId: string; epochId: string; title: string | null }) => Promise<IpcResponse>
+  teamArchiveConversation: (input: { teamId: string; epochId: string }) => Promise<IpcResponse>
   /** One-shot pull of an invite link that arrived via halo:// before the renderer was up. */
   teamConsumePendingInvite: () => Promise<IpcResponse>
 
@@ -841,6 +846,10 @@ const api: HaloAPI = {
   teamJoinOffice: (input) => ipcRenderer.invoke(TEAM_IPC.joinOffice, input),
   teamLeaveOffice: (input) => ipcRenderer.invoke(TEAM_IPC.leaveOffice, input),
   teamSendToMember: (input) => ipcRenderer.invoke(TEAM_IPC.sendToMember, input),
+  teamListConversations: (teamId) => ipcRenderer.invoke(TEAM_IPC.listConversations, teamId),
+  teamOpenConversation: (input) => ipcRenderer.invoke(TEAM_IPC.openConversation, input),
+  teamRenameConversation: (input) => ipcRenderer.invoke(TEAM_IPC.renameConversation, input),
+  teamArchiveConversation: (input) => ipcRenderer.invoke(TEAM_IPC.archiveConversation, input),
   teamConsumePendingInvite: () => ipcRenderer.invoke(TEAM_IPC.consumePendingInvite),
 
   // Digital Team Event Listeners

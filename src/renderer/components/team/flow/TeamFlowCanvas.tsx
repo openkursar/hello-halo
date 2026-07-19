@@ -51,6 +51,8 @@ interface TeamFlowCanvasProps {
   activeFlows?: ActiveFlow[]
   /** Open a member (read mode node click). */
   onSelectMember?: (member: RosterMember) => void
+  /** The event the floor is focused on, so a node can flag "busy elsewhere" (§6.3). */
+  focusedEpochId?: string | null
   /** Domain edit operations (edit mode). The owner persists them. */
   onAddRelation?: (fromAppId: string, toAppId: string, sync: boolean) => void
   onRemoveRelation?: (fromAppId: string, toAppId: string) => void
@@ -98,7 +100,7 @@ function buildEdges(roster: RosterMember[], teamEdges: TeamEdge[], activeFlows: 
 
 function InnerCanvas({
   roster, edges: teamEdges, teamId, editable = false, activeFlows = [],
-  onSelectMember, onAddRelation, onRemoveRelation, onSetSync,
+  onSelectMember, onAddRelation, onRemoveRelation, onSetSync, focusedEpochId = null,
 }: TeamFlowCanvasProps) {
   const colorMode = useColorMode()
 
@@ -154,11 +156,11 @@ function InnerCanvas({
     id: m.appId,
     type: 'member',
     position: dragPos.get(m.appId) ?? positions.get(m.appId) ?? { x: 0, y: 0 },
-    data: { member: m, editable, teamId, active: activeFlows.some(f => f.fromAppId === m.appId || f.toAppId === m.appId) },
+    data: { member: m, editable, teamId, active: activeFlows.some(f => f.fromAppId === m.appId || f.toAppId === m.appId), focusedEpochId },
     draggable: editable,
     selectable: true,
     selected: selNodeIds.has(m.appId),
-  })), [roster, positions, dragPos, editable, teamId, activeFlows, selNodeIds])
+  })), [roster, positions, dragPos, editable, teamId, activeFlows, selNodeIds, focusedEpochId])
 
   const edges = useMemo(() => {
     const base = buildEdges(roster, teamEdges, activeFlows)

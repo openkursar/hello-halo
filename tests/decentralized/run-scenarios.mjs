@@ -125,6 +125,7 @@ async function main() {
     await categoryJ(host, joiners[0])
     await categoryK(host, joiners, hasModel)
     await categoryL(host, joiners)
+    await categoryM(host, joiners)
   } finally {
     writeResults(manifest, hasModel)
     if (!ARGS.noStart) clusterStop(CLUSTER_DIR)
@@ -909,6 +910,65 @@ async function categoryL(host, joiners) {
   }
   if (want('L4')) {
     reporter.skip('L4', 'chained re-invite (B invites C) requires a joiner to mint an invite for an office it joined; invite minting is host/authority-only on this surface')
+  }
+}
+
+// ── M. Office-shared conversations (会话联邦化 · AC-S1) ───────────────────────
+// A conversation created on ANY node must appear — same epoch, same label — in
+// every node's session list, WITHOUT a run first (the P-1 fix). Backend-only:
+// the conversation epoch replicates over the existing authority single-writer +
+// replication plane, so no model reply is required.
+async function categoryM(host, joiners) {
+  if (!['M1', 'M2'].some(want)) return
+  if (joiners.length < 1) { reporter.skip('M1', 'need >=1 joiner'); return }
+  const joiner = joiners[0]
+  const office = await buildOffice(host, [joiner], 'M')
+  const nodes = [host, joiner]
+
+  const listConversations = async (node) => {
+    const r = await api(node, 'GET', `/api/teams/${office.officeId}/conversations`)
+    return r.status === 200 && r.json?.success ? (r.json.data ?? []) : null
+  }
+
+  if (want('M1')) {
+    // Open a native session ON THE JOINER (a non-authority node), before any run.
+    const open = await api(joiner, 'POST', `/api/teams/${office.officeId}/conversations`, { title: 'Cross-node topic' })
+    const epochId = open.json?.data?.epochId
+    if (!epochId) {
+      reporter.fail('M1', `open-conversation on joiner failed status=${open.status} err=${open.json?.error}`)
+    } else {
+      // Every node's session list must converge on the SAME conversation.
+      const converged = await pollUntil(async () => {
+        const lists = await Promise.all(nodes.map(listConversations))
+        if (lists.some((l) => l == null)) return null
+        const present = lists.every((l) => l.some((c) => c.epochId === epochId))
+        return present ? lists : null
+      }, { timeoutMs: 20_000, intervalMs: 1500 })
+      reporter[converged ? 'pass' : 'fail'](
+        'M1',
+        converged
+          ? `conversation created on joiner (pre-run) is office-wide consistent (${nodes.length} nodes)`
+          : `conversation did not replicate to all nodes epoch=${epochId}`
+      )
+    }
+  }
+
+  if (want('M2')) {
+    // Rename on the HOST → the new label must converge on the joiner too.
+    const lists = await listConversations(host)
+    const target = (lists ?? [])[0]
+    if (!target) {
+      reporter.skip('M2', 'no conversation to rename (M1 prerequisite)')
+    } else {
+      await api(host, 'PATCH', `/api/teams/${office.officeId}/conversations/${target.epochId}`, { title: 'Renamed on host' })
+      const converged = await pollUntil(async () => {
+        const l = await listConversations(joiner)
+        if (l == null) return null
+        const found = l.find((c) => c.epochId === target.epochId)
+        return found && found.label === 'Renamed on host' ? l : null
+      }, { timeoutMs: 15_000, intervalMs: 1500 })
+      reporter[converged ? 'pass' : 'fail']('M2', converged ? 'rename on host converged on the joiner' : 'rename did not converge')
+    }
   }
 }
 

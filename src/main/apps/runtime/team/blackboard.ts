@@ -14,6 +14,7 @@ import type {
   BlackboardFinding,
   BlackboardSnapshot,
   RosterMember,
+  RosterBusyEntry,
   TaskStatus,
   TeamReadBoardFilter,
   TeamMemberRuntimeStatus,
@@ -68,7 +69,7 @@ export interface Blackboard {
 export interface BlackboardWriteRecord {
   teamId: string
   epochId: string
-  op: 'post_task' | 'update_task' | 'post_finding'
+  op: 'post_task' | 'update_task' | 'post_finding' | 'epoch_upsert'
   payload: Record<string, unknown>
   taskId?: string
 }
@@ -76,6 +77,13 @@ export interface BlackboardWriteRecord {
 export interface BlackboardDeps {
   store: TeamStore
   getMemberStatus?: (appId: string) => TeamMemberRuntimeStatus
+  /**
+   * Everything a member is serving right now (run + conversations), each with a
+   * human label generated on this side (the renderer performs zero translation).
+   * Injected by the runtime (orchestration owns the live-session ledger). Absent
+   * → roster rows carry no busy list.
+   */
+  getMemberBusy?: (appId: string, teamId: string) => RosterBusyEntry[]
   /**
    * Reachability of a member's owner, for the roster's presence column. Injected
    * (bootstrap wires it to the federation manager) so the kernel stays
@@ -214,6 +222,7 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
       // shown offline when its owner is confirmed unreachable; a locally-owned
       // member is same-machine and always reachable.
       const remote = isRemoteMember(m)
+      const busy = deps.getMemberBusy?.(m.appId, teamId) ?? []
       const presence: RosterMember['presence'] = remote
         ? deps.getMemberReachable?.(m.appId, teamId) === false
           ? 'offline'
@@ -230,6 +239,7 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
         sameMachine: !remote,
         presence,
         ...(currentTask ? { currentTaskTitle: currentTask.title } : {}),
+        ...(busy.length > 0 ? { busy } : {}),
       }
     })
   }

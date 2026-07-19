@@ -282,6 +282,53 @@ hardening is intentionally not applied (no permission context for the team
 session key). Provider-agnostic: any IM brand works, since the binding lives in
 the generic config + dispatch path.
 
+## Conversations & run outcomes (office-shared session model)
+
+Epochs — runs AND conversations — are **office-shared objects** with the office
+authority as the single writer, so every node sees the same session list and the
+same history (mirrors the blackboard replication plane; no new protocol).
+
+- `orchestration.ensureConversationEpoch(teamId, chatKey, title?)` get-or-creates
+  a per-chat `'conversation'` epoch; `renameConversationEpoch` relabels it. Both
+  fire `onEpochMutation(epoch)` — the replication capture wired by bootstrap to
+  `federationManager.routeEpochWrite`, which captures into the authority's log
+  (hosted) or routes a `blackboard-write { op:'epoch_upsert' }` to the host
+  (joined). Replicas apply via `store.upsertEpoch` (idempotent whole-row, later
+  write wins). `sealEpoch`/`reactivateEpoch`/`startEpoch` publish the same way, so
+  conversation state and run history converge office-wide (P0-1, spec AC-S1).
+- **Chat-key namespaces** (`shared/apps/im-keys`): `native:{uuid}` (a user "New
+  session" from the Conversations tab), `direct:{appId}` (a 1:1 member thread),
+  and `{instanceId}:{chatType}:{chatId}` (an IM chat). `apps/team/epoch-label.ts`
+  is the SSOT that classifies a chatKey and resolves its human label (main-side;
+  the renderer performs zero translation).
+- **Naming — every "thing" is readable, auto-generated** (parity with the space
+  chat, which titles a conversation from its first message):
+  - a native conversation is auto-named from the LEAD's first user message via
+    `orchestration.maybeAutoNameConversation` (→ `deriveConversationTitle`, ≤48
+    chars, whitespace-collapsed), captured + replicated like a rename — so no node
+    is left showing "New session". A member's woken turn never names it (guarded
+    by `leadAppId === appId` + a null title).
+  - a member / IM conversation labels by the member / chat name (no title needed).
+  - a RUN is an event instance, not a named object: history identifies it by
+    time · trigger · outcome + the AI seal `summary`; the live Floor switcher —
+    where at most ONE run exists — labels it with the **team name** (its standing
+    purpose), never a fake "today's run".
+- **Run outcome** (`EpochOutcome`, spec P0-4) is classified at seal by
+  `classifyRunOutcome`: `failed` (error/timeout) > `escalation` (a decision still
+  waiting) > `output` (a produced ref) > `no_action`. Stamped on the epoch row and
+  replicated, it drives the History tab's badges + grouping.
+- **Member busy projection** (`getMemberBusy`, spec P0-2): every OPEN epoch a
+  member is actively serving, each with a human label — stamped into the roster
+  (`RosterMember.busy`) and the federation snapshot so a board can truthfully say
+  "busy with another conversation". `getMemberStatus` lights a member `working`
+  for a run OR a conversation, and keeps it `waiting_user` after a run seal while
+  a persisted escalation is unanswered (P0-5; `hasPendingEscalation` is the
+  activity-store truth, the in-memory waiter set is only the live-window mirror).
+
+The service (`apps/team`) exposes `listConversations` / `openConversation` /
+`renameConversation` / `archiveConversation` and folds `pendingEscalations` into
+`TeamDetail` (the cross-tab attention banner, C2). IPC/HTTP mirror these.
+
 ## Concurrency safety — by construction
 
 No locks anywhere. Task writes are scoped by id, findings are append-only, the

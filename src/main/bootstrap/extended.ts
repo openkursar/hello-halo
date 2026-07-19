@@ -53,7 +53,7 @@ import { initMemory } from '../platform/memory'
 import { setMemorySdk } from '../platform/memory/sdk'
 import { tool as sdkTool, createSdkMcpServer as sdkCreateMcpServer } from '../services/agent/resolved-sdk'
 import { initAppManager, shutdownAppManager } from '../apps/manager'
-import { initAppRuntime, shutdownAppRuntime, getEventRouter } from '../apps/runtime'
+import { initAppRuntime, shutdownAppRuntime, getEventRouter, getActivityStore, getImSessionRegistry } from '../apps/runtime'
 import { initTeamStore, shutdownTeamStore, getTeamStore, initTeamService, shutdownTeamService, getTeamService } from '../apps/team'
 import type { TeamStore } from '../apps/team'
 import { initFederationStore, shutdownFederationStore, getFederationStore, getAuthorityStore } from '../apps/federation'
@@ -65,8 +65,8 @@ import { createFederationManager, setFederationManager, getFederationManager, ma
 import { getRemoteAccessStatus } from '../services/remote.service'
 import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtime/federation'
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
-import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamUpdatedEvent } from '../../shared/apps/team-types'
-import { parseTeamSessionKey } from '../../shared/apps/im-keys'
+import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamUpdatedEvent, TeamEpoch } from '../../shared/apps/team-types'
+import { parseTeamSessionKey, parseTeamChatKey } from '../../shared/apps/im-keys'
 import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createLocalArtifactResolver, RemoteArtifactError } from '../apps/runtime/team'
 import { readTeamMemberMessages } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
@@ -88,7 +88,7 @@ import { registerModelCapabilitiesHandlers } from '../ipc/model-capabilities'
 import { registerWeixinIlinkHandlers } from '../ipc/weixin-ilink'
 import { initRegistryService, shutdownRegistryService } from '../store'
 import { startUpgradeScheduler, stopUpgradeScheduler } from '../store/upgrade.service'
-import { cleanupImChannelTempFiles } from '../apps/runtime/im-channels'
+import { cleanupImChannelTempFiles, getActiveImChannelManager } from '../apps/runtime/im-channels'
 import { registerIdleTask, startIdleDrain } from './idle-queue'
 import { seedDefaultAppIfNeeded } from '../apps/manager/seed'
 import { loadBuiltinApps } from '../apps/manager/builtin-loader'
@@ -265,6 +265,16 @@ async function initPlatformAndApps(): Promise<void> {
             const finding = record.payload as unknown as BlackboardFinding
             try { teamStore.insertFinding(finding) } catch { /* duplicate id → idempotent */ }
             emitBlackboard({ teamId: record.teamId, epochId: finding.epochId, kind: 'finding', finding })
+          } else if (record.op === 'epoch_upsert') {
+            // A joiner-created conversation/run epoch (P0-1): apply the shared row,
+            // then fall through to routeAuthorityWrite so it re-replicates to every
+            // node's session list. team:updated makes open detail views refresh.
+            const epoch = record.payload as unknown as TeamEpoch
+            teamStore.upsertEpoch(epoch)
+            const team = teamStore.getTeamById(record.teamId)
+            const payload = team ? { teamId: record.teamId, team } : { teamId: record.teamId }
+            broadcastToAll(TEAM_EVENTS.updated, payload)
+            sendToRenderer(TEAM_EVENTS.updated, payload)
           }
         } catch (err) {
           console.error('[Bootstrap] applyAuthorityMemberWrite failed:', err)
@@ -385,6 +395,10 @@ async function initPlatformAndApps(): Promise<void> {
         // team runtime's host-local getMemberStatus; idle when the runtime is not
         // yet wired.
         getMemberRuntimeStatus: (appId) => getActiveTeamRuntime()?.getMemberStatus(appId) ?? 'idle',
+        // Stamp each member's live busy assignments (run + conversations) with
+        // authority-generated labels so a joiner's board says "busy with another
+        // conversation" truthfully (P0-2).
+        getMemberBusy: (appId, officeId) => getActiveTeamRuntime()?.getMemberBusy(appId, officeId) ?? [],
         // Owner-authoritative space resolution: a wake's request.spaceId is the
         // SENDER's sentinel for a member it does not own (see withOwnerResolvedSpace).
         // The owner runs the member locally, so it substitutes its own real space
@@ -645,11 +659,60 @@ async function initPlatformAndApps(): Promise<void> {
         : {}),
     })
 
+    // Human name for an IM chatKey ("{instanceId}:{chatType}:{chatId}"): resolve
+    // the running IM instance + session so a conversation labels as the chat's
+    // real name, not a raw id. Null for native / member chatKeys.
+    const describeTeamChatKey = (teamId: string, chatKey: string): string | null => {
+      const parsed = parseTeamChatKey(chatKey)
+      if (!parsed) return null
+      const lead = teamStore.getTeamById(teamId)?.leadAppId
+      if (!lead) return parsed.chatId
+      try {
+        const instance = getActiveImChannelManager()?.getInstance(parsed.instanceId)
+        if (!instance) return parsed.chatId
+        const sess = getImSessionRegistry()?.findSession(lead, instance.providerType, parsed.chatId)
+        return sess?.customName || sess?.displayName || parsed.chatId
+      } catch {
+        return parsed.chatId
+      }
+    }
+
+    // Unanswered escalations across all apps (activity-store truth that survives a
+    // run seal AND a restart, P0-5). One shared read powers both the runtime's
+    // waiting_user projection and the service's per-team aggregation.
+    const readPendingEscalations = () => {
+      const store = getActivityStore()
+      if (!store) return []
+      return store.getAllPendingEscalations().map((e) => {
+        const tc = e.content.teamContext
+        return {
+          appId: e.appId,
+          entryId: e.id,
+          question: e.content.question || e.content.summary || '',
+          ...(tc?.teamId ? { teamId: tc.teamId } : {}),
+          ...(tc?.epochId ? { epochId: tc.epochId } : {}),
+          ...(tc?.taskId ? { taskId: tc.taskId } : {}),
+        }
+      })
+    }
+    const hasPendingEscalationFor = (appId: string, teamId: string): boolean =>
+      readPendingEscalations().some(
+        (e) => e.appId === appId && (e.teamId ? e.teamId === teamId : true)
+      )
+
     setActiveTeamRuntime(
       createTeamRuntime({
         store: teamStore,
         session: teamSessionDeps,
         readArtifact: readTeamArtifact,
+        // Epoch lifecycle replication (P0-1): conversations + run history become
+        // office-shared — every node's session list converges. Authority writes
+        // to the single-writer log; a joiner routes it to the host.
+        onEpochMutation: (epoch) => getFederationManager()?.routeEpochWrite(epoch),
+        // waiting_user survives a run seal + restart (P0-5): the persisted
+        // activity entry is the truth, not just the in-memory waiter set.
+        hasPendingEscalation: hasPendingEscalationFor,
+        describeChatKey: describeTeamChatKey,
         onBlackboardWrite: (record) => getFederationManager()?.routeAuthorityWrite(record),
         // Auto-seal (quiescence) / breach end a run without going through the
         // service-level pauseTeam, so they must also push the rested run-state to
@@ -727,6 +790,10 @@ async function initPlatformAndApps(): Promise<void> {
         resolveSpacePath: (spaceId) => getSpace(spaceId)?.path ?? null,
       },
       listArtifacts: (spaceId) => listArtifacts(spaceId),
+      // Decisions waiting on the user (survive a run seal, P0-5) + IM chat naming
+      // for the conversation list — share the same reads as the runtime.
+      getPendingEscalations: () => readPendingEscalations(),
+      describeChatKey: (teamId, chatKey) => describeTeamChatKey(teamId, chatKey),
       // Federation egress: project membership/lifecycle mutations to a hosted
       // office's joiners so a remote roster converges on every change. The manager
       // no-ops each when the office is not hosted here, so an unhosted office or a

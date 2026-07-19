@@ -78,6 +78,31 @@ export const teamApi = {
     })
   },
 
+  // ===== Conversations (office-shared session objects) =====
+  /** Every open conversation of this office (native / IM / member), newest first. */
+  teamListConversations: async (teamId: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.teamListConversations(teamId)
+    return httpRequest('GET', `/api/teams/${teamId}/conversations`)
+  },
+
+  /** Open a brand-new native team conversation ("New session"). */
+  teamOpenConversation: async (teamId: string, title?: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.teamOpenConversation({ teamId, title })
+    return httpRequest('POST', `/api/teams/${teamId}/conversations`, title ? { title } : {})
+  },
+
+  /** Rename a conversation (office-shared: replicated to every node). */
+  teamRenameConversation: async (teamId: string, epochId: string, title: string | null): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.teamRenameConversation({ teamId, epochId, title })
+    return httpRequest('PATCH', `/api/teams/${teamId}/conversations/${epochId}`, { title })
+  },
+
+  /** Archive (seal) a conversation — moves it to History's archived list. */
+  teamArchiveConversation: async (teamId: string, epochId: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.teamArchiveConversation({ teamId, epochId })
+    return httpRequest('DELETE', `/api/teams/${teamId}/conversations/${epochId}`)
+  },
+
   /** Run history (epochs), newest first. */
   teamListEpochs: async (teamId: string): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamListEpochs(teamId)

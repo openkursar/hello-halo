@@ -21,11 +21,13 @@ import type {
   TeamStatus,
   TaskStatus,
   EpochEndReason,
+  EpochOutcome,
   TeamTrigger,
   TeamTriggerInput,
   TeamRunTriggerType,
   JoinedOfficeSnapshot,
   TeamMemberRuntimeStatus,
+  RosterBusyEntry,
 } from '../../../shared/apps/team-types'
 
 // Re-export the frozen domain contract for apps/team consumers.
@@ -39,6 +41,7 @@ export type {
   TeamStatus,
   TaskStatus,
   EpochEndReason,
+  EpochOutcome,
   EpochLifecycle,
   MemberSourcing,
   CollabMode,
@@ -143,6 +146,10 @@ export interface TeamEpochRow {
   lifecycle?: string
   /** Chat scope for conversation epochs; added in migration v4 (null for runs). */
   chat_key?: string | null
+  /** Conversation label; added in migration v9 (null → derived label). */
+  title?: string | null
+  /** Run outcome classification; added in migration v9 (null pre-classification). */
+  outcome?: string | null
 }
 
 /** Row shape from the `team_triggers` table. */
@@ -233,6 +240,8 @@ export interface TeamStore {
   getJoinedMemberStatuses(teamId: string): Map<string, TeamMemberRuntimeStatus>
   /** The in-progress task title a working member is on, from the last snapshot. */
   getJoinedMemberTaskTitle(teamId: string, appId: string): string | undefined
+  /** Live busy assignments from the last snapshot of a joined office. */
+  getJoinedMemberBusy(teamId: string, appId: string): RosterBusyEntry[]
 
   // ── team_edges ────────────────────────────────
   replaceEdgesForTeam(teamId: string, edges: TeamEdge[]): void
@@ -262,13 +271,31 @@ export interface TeamStore {
   // ── team_epochs ───────────────────────────────
   insertEpoch(epoch: TeamEpoch, triggerType?: TeamRunTriggerType): void
   getEpochById(epochId: string): TeamEpoch | null
-  endEpoch(epochId: string, endedAt: number, endReason: EpochEndReason, summary: string | null): void
+  endEpoch(
+    epochId: string,
+    endedAt: number,
+    endReason: EpochEndReason,
+    summary: string | null,
+    outcome?: EpochOutcome | null
+  ): void
   /** Reopen a sealed epoch (clear ended_at/end_reason; keep summary) for reversible-seal wake. */
   reopenEpoch(epochId: string): void
+  /** Set a conversation epoch's user-facing title (rename). */
+  renameEpoch(epochId: string, title: string | null): void
+  /**
+   * Idempotent whole-row apply of a replicated epoch (insert-or-overwrite by id).
+   * The replication plane treats epochs as office-shared objects with the
+   * authority as single writer; later writes win field-by-field on re-apply.
+   */
+  upsertEpoch(epoch: TeamEpoch, triggerType?: TeamRunTriggerType): void
   listEpochsByTeam(teamId: string): TeamEpoch[]
   getCurrentEpochForTeam(teamId: string): TeamEpoch | null
   /** The open (not sealed) 'conversation' epoch for a (team, chat), or null. */
   getOpenConversationEpoch(teamId: string, chatKey: string): TeamEpoch | null
+  /** All open 'conversation' epochs of a team, newest first. */
+  listOpenConversationEpochs(teamId: string): TeamEpoch[]
+  /** All open epochs (run + conversation) of a team, newest first. */
+  listOpenEpochs(teamId: string): TeamEpoch[]
 
   // ── team_triggers ─────────────────────────────
   insertTrigger(trigger: TeamTrigger): void

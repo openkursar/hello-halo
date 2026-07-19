@@ -23,6 +23,18 @@ export type EpochEndReason = 'completed' | 'stopped' | 'timeout' | 'error'
  */
 export type EpochLifecycle = 'run' | 'conversation'
 
+/**
+ * Business outcome of a sealed RUN epoch, stamped at seal time (P0-4):
+ *   'output'     — the run produced at least one deliverable (task resultRef or
+ *                  finding ref).
+ *   'no_action'  — the team looked and judged nothing needed doing (quiet seal,
+ *                  no deliverables, no pending decision).
+ *   'escalation' — the run ended with a decision still waiting on the user.
+ *   'failed'     — the run was cut short (error / timeout / member unreachable).
+ * Null for conversation epochs and for runs sealed before this classification.
+ */
+export type EpochOutcome = 'output' | 'no_action' | 'escalation' | 'failed'
+
 // ── Persistent entities ──
 
 export interface Team {
@@ -132,6 +144,67 @@ export interface TeamEpoch {
    * store; dispatch uses `${instanceId}:${chatId}`. Null for 'run' epochs.
    */
   chatKey?: string | null
+  /**
+   * User-facing name of a conversation epoch (the session list label). Null →
+   * the label is derived (IM chat name / member name / first-message digest).
+   */
+  title?: string | null
+  /** Outcome classification of a sealed run epoch (see {@link EpochOutcome}). */
+  outcome?: EpochOutcome | null
+  /** What started a run epoch (mirrors team_epochs.trigger_type). */
+  triggerType?: TeamRunTriggerType
+}
+
+// ── Conversations (office-shared session objects) ──
+
+/**
+ * Kind of a team conversation, derived from its chatKey namespace:
+ *   'native' — created in the Halo UI ("New session"), user ↔ team (lead).
+ *   'im'     — an inbound IM chat handled by the team (read-only in Halo).
+ *   'member' — a 1:1 side-thread with a specific teammate (member direct chat).
+ */
+export type TeamConversationKind = 'native' | 'im' | 'member'
+
+/**
+ * A renderer-facing projection of one open conversation epoch. Labels are
+ * resolved on the MAIN side (the down-send generates the human name; the
+ * renderer performs zero translation). The list is office-shared: every node
+ * sees the same conversations because the epochs replicate.
+ */
+export interface TeamConversation {
+  epochId: string
+  teamId: string
+  kind: TeamConversationKind
+  /** Human label: title, IM chat name, or the member's name. */
+  label: string
+  /** True when Halo can only watch (IM chats are answered in the IM app). */
+  readonly: boolean
+  /** For kind='member': the teammate this thread belongs to. */
+  memberAppId?: string
+  /** IM channel type for kind='im' (e.g. 'wecom-bot'), for the badge. */
+  channel?: string
+  startedAt: number
+  /** True while a member is actively serving this conversation right now. */
+  active?: boolean
+  /** True when a decision inside this conversation is waiting on the user. */
+  waitingUser?: boolean
+}
+
+/** One busy assignment of a member: which thing it is serving, with a label. */
+export interface RosterBusyEntry {
+  epochId: string
+  label: string
+  kind: EpochLifecycle
+}
+
+/** A decision waiting on the user, aggregated per team (survives run seal). */
+export interface TeamPendingEscalation {
+  appId: string
+  memberName: string
+  entryId: string
+  question: string
+  epochId?: string
+  taskId?: string
 }
 
 // ── Runtime-only structures (not persisted) ──
@@ -284,6 +357,12 @@ export interface RosterMember {
   sameMachine?: boolean
   /** Reachability (see {@link TeamMemberPresence}). Absent → treat as online. */
   presence?: TeamMemberPresence
+  /**
+   * Everything this member is serving RIGHT NOW (a run and/or conversations),
+   * each with a human label generated on the producing side (P0-2). Lets a
+   * board focused on one thing say "busy with another conversation" truthfully.
+   */
+  busy?: RosterBusyEntry[]
 }
 
 export interface BlackboardSnapshot {
@@ -319,6 +398,8 @@ export interface JoinedOfficeMemberSnap {
   status?: TeamMemberRuntimeStatus
   /** Title of the task a working member is on, for the node summary. */
   currentTaskTitle?: string
+  /** Live busy assignments with authority-generated labels (see RosterBusyEntry). */
+  busy?: RosterBusyEntry[]
 }
 
 /**
@@ -456,6 +537,8 @@ export interface TeamListItem {
   status: TeamStatus
   memberCount: number
   hasWaitingUser: boolean
+  /** How many decisions are waiting on the user (drives the "N waiting" badge). */
+  waitingCount?: number
   /**
    * Surfaced so the renderer can hide lead apps from the digital-humans list
    * (leads are an internal coordination role, not standalone humans).
@@ -471,6 +554,11 @@ export interface TeamDetail {
   roster: RosterMember[]
   tasks: BlackboardTask[]
   findings: BlackboardFinding[]
+  /**
+   * Decisions currently waiting on the user, persisted in the members' activity
+   * feeds — they survive a run seal (P0-5) and drive the cross-tab banner.
+   */
+  pendingEscalations?: TeamPendingEscalation[]
 }
 
 export interface TeamEpochSummary {
@@ -481,6 +569,13 @@ export interface TeamEpochSummary {
   summary: string | null
   taskCount: number
   doneCount: number
+  lifecycle: EpochLifecycle
+  /** Human label for a conversation epoch (main-side resolved); null for runs. */
+  label?: string | null
+  outcome?: EpochOutcome | null
+  triggerType?: TeamRunTriggerType
+  /** Count of files the run produced (task resultRefs + finding refs, deduped). */
+  artifactCount?: number
 }
 
 export interface EpochBoard {
@@ -689,6 +784,10 @@ export const TEAM_IPC = {
   joinOffice: 'team:join-office',
   leaveOffice: 'team:leave-office',
   sendToMember: 'team:send-to-member',
+  listConversations: 'team:list-conversations',
+  openConversation: 'team:open-conversation',
+  renameConversation: 'team:rename-conversation',
+  archiveConversation: 'team:archive-conversation',
   /** One-shot pull of an invite link that arrived via halo:// before the renderer was up. */
   consumePendingInvite: 'team:consume-pending-invite',
 } as const
@@ -701,4 +800,11 @@ export const TEAM_CIRCUIT_DEFAULTS = {
 
 // ── Session-key helper (re-exported SSOT) ──
 
-export { buildTeamSessionKey, isTeamSessionKey, memberChatKey } from './im-keys'
+export {
+  buildTeamSessionKey,
+  isTeamSessionKey,
+  memberChatKey,
+  parseMemberChatKey,
+  nativeConversationChatKey,
+  isNativeConversationChatKey,
+} from './im-keys'

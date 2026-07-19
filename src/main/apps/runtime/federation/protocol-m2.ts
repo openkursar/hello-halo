@@ -172,6 +172,14 @@ export type ReplicationOp =
   | 'post_finding'
   | 'roster_join'
   | 'roster_leave'
+  /**
+   * Whole-row epoch apply (open / seal / rename / reopen / outcome). Epochs —
+   * runs AND conversations — are office-shared objects with the authority as
+   * single writer, so every node's session list and history converge. Payload =
+   * the full TeamEpoch row; replicas apply via idempotent upsert (later write
+   * wins), exactly the shadow-write convergence tasks/findings already use.
+   */
+  | 'epoch_upsert'
 
 // ── Artifact reference ──
 

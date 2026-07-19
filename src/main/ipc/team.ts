@@ -185,6 +185,24 @@ export function registerTeamIpc(): void {
     ) => handle('team:send-to-member', (s) => s.sendToMember(input))
   )
 
+  // ── Conversations (office-shared session objects) ─────────────────────────
+  ipcMain.handle(TEAM_IPC.listConversations, async (_e, teamId: string) =>
+    handle('team:list-conversations', (s) => s.listConversations(teamId))
+  )
+  ipcMain.handle(TEAM_IPC.openConversation, async (_e, input: { teamId: string; title?: string }) =>
+    handle('team:open-conversation', (s) => s.openConversation(input.teamId, input.title))
+  )
+  ipcMain.handle(
+    TEAM_IPC.renameConversation,
+    async (_e, input: { teamId: string; epochId: string; title: string | null }) =>
+      handle('team:rename-conversation', (s) => s.renameConversation(input.teamId, input.epochId, input.title))
+  )
+  ipcMain.handle(
+    TEAM_IPC.archiveConversation,
+    async (_e, input: { teamId: string; epochId: string }) =>
+      handle('team:archive-conversation', (s) => s.archiveConversation(input.teamId, input.epochId))
+  )
+
   // ── team:list-epochs — run history (newest first) ─────────────────────────
   ipcMain.handle('team:list-epochs', async (_e, teamId: string) =>
     handle('team:list-epochs', (s) => s.listEpochs(teamId))
@@ -273,5 +291,5 @@ export function registerTeamIpc(): void {
     return { success: true, data: consumePendingInviteLink() }
   })
 
-  console.log('[TeamIPC] Team handlers registered (25 channels)')
+  console.log('[TeamIPC] Team handlers registered (29 channels)')
 }

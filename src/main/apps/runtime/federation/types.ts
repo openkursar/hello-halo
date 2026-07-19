@@ -15,6 +15,7 @@ import type {
   TeamTriggerContext,
   TeamStatus,
   TeamMemberRuntimeStatus,
+  RosterBusyEntry,
 } from '../../../../shared/apps/team-types'
 import type { TurnCompletion } from '../team/message-bus'
 import type { M2Frame } from './protocol-m2'
@@ -240,6 +241,8 @@ export interface RosterMemberSnap {
   status?: TeamMemberRuntimeStatus
   /** Title of the task a working member is on, for the node summary. */
   currentTaskTitle?: string
+  /** Live busy assignments with authority-generated labels (see RosterBusyEntry). */
+  busy?: RosterBusyEntry[]
 }
 
 /**

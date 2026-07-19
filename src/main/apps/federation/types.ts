@@ -121,6 +121,8 @@ export type ReplicationOpName =
   | 'post_finding'
   | 'roster_join'
   | 'roster_leave'
+  /** Whole-row epoch apply (open/seal/rename/reopen/outcome) — office-shared. */
+  | 'epoch_upsert'
 
 /** One persisted replication-log entry (app_federation.blackboard_replication_log). */
 export interface ReplicationLogEntry {

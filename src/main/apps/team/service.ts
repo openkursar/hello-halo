@@ -10,8 +10,15 @@ import { randomUUID } from 'crypto'
 import { basename, isAbsolute, join } from 'path'
 import { broadcastToAll } from '../../http/websocket'
 import { sendToRenderer } from '../../foundation/window.service'
-import { TEAM_EVENTS, AI_MEMBER_HARD_LIMIT, memberChatKey } from '../../../shared/apps/team-types'
+import {
+  TEAM_EVENTS,
+  AI_MEMBER_HARD_LIMIT,
+  memberChatKey,
+  parseMemberChatKey,
+  nativeConversationChatKey,
+} from '../../../shared/apps/team-types'
 import { provisionLeadSpec } from './lead'
+import { conversationKindOf, deriveConversationLabel } from './epoch-label'
 import type { TeamRuntime } from '../runtime/team'
 import type { AppManagerService } from '../manager'
 import type { AppSpec } from '../spec'
@@ -36,6 +43,9 @@ import type {
   EpochBoard,
   TeamArtifactGroup,
   TeamArtifact,
+  TeamConversation,
+  TeamPendingEscalation,
+  RosterMember,
 } from '../../../shared/apps/team-types'
 
 const LOG_TAG = '[TeamService]'
@@ -76,6 +86,28 @@ export interface TeamServiceDeps {
   onMemberRemoved?: (teamId: string, appId: string) => void
   /** The office was dissolved → project an `office-dissolved` frame. */
   onOfficeDissolved?: (teamId: string) => void
+
+  /**
+   * Unanswered escalations across all apps (activity-store truth that survives a
+   * run seal, P0-5). Bootstrap wires it to the runtime activity store; the
+   * service maps the team's members onto it. Absent → no pending decisions.
+   */
+  getPendingEscalations?: () => PendingEscalationRecord[]
+  /**
+   * Human name for an IM chatKey (IM session registry), used when labeling an IM
+   * conversation. Absent → the raw chat id is shown.
+   */
+  describeChatKey?: (teamId: string, chatKey: string) => string | null
+}
+
+/** One unanswered escalation as read from the activity store (bootstrap-injected). */
+export interface PendingEscalationRecord {
+  appId: string
+  entryId: string
+  question: string
+  teamId?: string
+  epochId?: string
+  taskId?: string
 }
 
 export interface TeamTriggerSync {
@@ -137,6 +169,22 @@ export interface TeamService {
    * the team's current run when omitted/empty.
    */
   sendToMember(params: SendToMemberParams): Promise<SendToMemberResult>
+
+  // ── Conversations (office-shared session objects) ──
+  /** Every open conversation of this office, newest first (P0-1: office-wide consistent). */
+  listConversations(teamId: string): TeamConversation[]
+  /**
+   * Open a brand-new native team conversation ("New session") — a fresh,
+   * independent context whose input target is the team lead (front-desk mode).
+   * Returns the epoch id the renderer chats against.
+   */
+  openConversation(teamId: string, title?: string): { epochId: string }
+  /** Rename a conversation (office-shared: replicated to every node). */
+  renameConversation(teamId: string, epochId: string, title: string | null): void
+  /** Archive (seal) a single conversation — it moves to the History archived list. */
+  archiveConversation(teamId: string, epochId: string): Promise<void>
+  /** Decisions currently waiting on the user in this office (survives run seal, P0-5). */
+  listPendingEscalations(teamId: string): TeamPendingEscalation[]
 }
 
 export interface SendToMemberParams {
@@ -396,12 +444,16 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   function listTeamItems(spaceId?: string): TeamListItem[] {
     return listTeams(spaceId).map((team) => {
       const members = store.listMembersByTeam(team.id)
+      // Waiting decisions survive a run seal (P0-5), so a team can be idle yet
+      // still have pending escalations — count them independently of run status.
+      const waitingCount = pendingEscalationsForTeam(team.id).length
       return {
         id: team.id,
         name: team.name,
         status: team.status,
         memberCount: members.filter((m) => !m.isLead).length,
-        hasWaitingUser: team.status === 'waiting_user',
+        hasWaitingUser: team.status === 'waiting_user' || waitingCount > 0,
+        waitingCount,
         leadAppId: team.leadAppId,
         updatedAt: team.updatedAt,
       }
@@ -414,6 +466,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
     const members = store.listMembersByTeam(teamId)
     const edges = store.listEdgesByTeam(teamId)
+    // Waiting decisions drive the cross-tab banner (C2) and survive a run seal.
+    const pendingEscalations = pendingEscalationsForTeam(teamId)
 
     // A JOINED shadow office mirrors a remote authority and has no local
     // team_epochs row, so getCurrentEpochForTeam never resolves the host's run
@@ -437,6 +491,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         roster: members.map((m) => {
           const status = statuses.get(m.appId) ?? 'idle'
           const taskTitle = status === 'working' ? store.getJoinedMemberTaskTitle(teamId, m.appId) : undefined
+          const busy = store.getJoinedMemberBusy(teamId, m.appId)
           return {
             appId: m.appId,
             memberName: m.memberName,
@@ -445,10 +500,12 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
             spaceId: appManager.getApp(m.appId)?.spaceId ?? null,
             status,
             ...(taskTitle ? { currentTaskTitle: taskTitle } : {}),
+            ...(busy.length > 0 ? { busy } : {}),
           }
         }),
         tasks: store.listTasksByEpoch(teamId, epochId),
         findings: store.listFindingsByEpoch(teamId, epochId),
+        pendingEscalations,
       }
     }
 
@@ -465,6 +522,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         roster: board.roster,
         tasks: board.tasks,
         findings: board.findings,
+        pendingEscalations,
       }
     }
 
@@ -472,16 +530,22 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       team,
       members,
       edges,
-      roster: members.map((m) => ({
-        appId: m.appId,
-        memberName: m.memberName,
-        role: m.role,
-        isLead: m.isLead,
-        spaceId: appManager.getApp(m.appId)?.spaceId ?? null,
-        status: 'idle' as const,
-      })),
+      roster: members.map((m) => {
+        // With no open board, a member is idle unless it still owes the user a
+        // decision from a sealed run (P0-5) — then it stays lit as waiting_user.
+        const waiting = pendingEscalations.some((e) => e.appId === m.appId)
+        return {
+          appId: m.appId,
+          memberName: m.memberName,
+          role: m.role,
+          isLead: m.isLead,
+          spaceId: appManager.getApp(m.appId)?.spaceId ?? null,
+          status: (waiting ? 'waiting_user' : 'idle') as RosterMember['status'],
+        }
+      }),
       tasks: [],
       findings: [],
+      pendingEscalations,
     }
   }
 
@@ -754,6 +818,11 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     requireTeam(teamId)
     return store.listEpochsByTeam(teamId).map((e) => {
       const tasks = store.listTasksByEpoch(teamId, e.id)
+      const findings = store.listFindingsByEpoch(teamId, e.id)
+      // Deliverables = distinct produced files (task resultRefs + finding refs).
+      const artifactRefs = new Set<string>()
+      for (const tk of tasks) if (tk.resultRef) artifactRefs.add(tk.resultRef)
+      for (const f of findings) if (f.ref) artifactRefs.add(f.ref)
       return {
         id: e.id,
         startedAt: e.startedAt,
@@ -762,6 +831,13 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         summary: e.summary,
         taskCount: tasks.length,
         doneCount: tasks.filter((tk) => tk.status === 'done').length,
+        lifecycle: e.lifecycle,
+        label: e.lifecycle === 'conversation'
+          ? deriveConversationLabel(store, e, deps.describeChatKey)
+          : null,
+        outcome: e.outcome ?? null,
+        triggerType: e.triggerType ?? 'manual',
+        artifactCount: artifactRefs.size,
       }
     })
   }
@@ -870,6 +946,103 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     return { ok: true, finalMessage: result.message }
   }
 
+  // ── Conversations (office-shared session objects) ──
+
+  /** The decisions waiting on the user for THIS team's members (survives seal). */
+  function pendingEscalationsForTeam(teamId: string): TeamPendingEscalation[] {
+    const all = deps.getPendingEscalations?.() ?? []
+    if (all.length === 0) return []
+    const members = store.listMembersByTeam(teamId)
+    const nameByApp = new Map(members.map((m) => [m.appId, m.memberName]))
+    const out: TeamPendingEscalation[] = []
+    for (const e of all) {
+      // A pending escalation belongs to this team when it is tagged with the
+      // team (team turn) OR its app is a member here (defensive for legacy rows).
+      const belongs = e.teamId ? e.teamId === teamId : nameByApp.has(e.appId)
+      if (!belongs || !nameByApp.has(e.appId)) continue
+      out.push({
+        appId: e.appId,
+        memberName: nameByApp.get(e.appId)!,
+        entryId: e.entryId,
+        question: e.question,
+        ...(e.epochId ? { epochId: e.epochId } : {}),
+        ...(e.taskId ? { taskId: e.taskId } : {}),
+      })
+    }
+    return out
+  }
+
+  function listPendingEscalations(teamId: string): TeamPendingEscalation[] {
+    requireTeam(teamId)
+    return pendingEscalationsForTeam(teamId)
+  }
+
+  function listConversations(teamId: string): TeamConversation[] {
+    const team = requireTeam(teamId)
+    const openEpochs = store.listOpenConversationEpochs(teamId)
+    if (openEpochs.length === 0) return []
+
+    const members = store.listMembersByTeam(teamId)
+    // An epoch is "active" when some member is serving it right now. On the
+    // AUTHORITY that reads local live sessions; on a JOINED (shadow) office the
+    // work runs on the host, so this node has no local sessions — it reads the
+    // live busy projection the host stamped into the roster snapshot instead
+    // (`getJoinedMemberBusy`). Without this branch a joiner sees every
+    // conversation as idle and its "busy now" list is always empty.
+    const isJoined = team.hostNodeId != null
+    const rt = getRuntime()
+    const activeEpochIds = new Set<string>()
+    for (const m of members) {
+      const busy = isJoined ? store.getJoinedMemberBusy(teamId, m.appId) : rt?.getMemberBusy(m.appId, teamId) ?? []
+      for (const b of busy) activeEpochIds.add(b.epochId)
+    }
+    const waitingEpochIds = new Set(
+      pendingEscalationsForTeam(teamId)
+        .map((e) => e.epochId)
+        .filter((id): id is string => !!id)
+    )
+
+    return openEpochs.map((epoch) => {
+      const chatKey = epoch.chatKey ?? ''
+      const kind = conversationKindOf(chatKey)
+      const memberAppId = parseMemberChatKey(chatKey) ?? undefined
+      return {
+        epochId: epoch.id,
+        teamId,
+        kind,
+        label: deriveConversationLabel(store, epoch, deps.describeChatKey),
+        // IM chats are answered in the IM app; native + member chats are writable here.
+        readonly: kind === 'im',
+        ...(memberAppId ? { memberAppId } : {}),
+        ...(kind === 'im' ? { channel: 'im' } : {}),
+        startedAt: epoch.startedAt,
+        active: activeEpochIds.has(epoch.id),
+        waitingUser: waitingEpochIds.has(epoch.id),
+      }
+    })
+  }
+
+  function openConversation(teamId: string, title?: string): { epochId: string } {
+    requireTeam(teamId)
+    const rt = requireRuntime()
+    // A fresh, independent native session. The uuid makes each "New session" its
+    // own context (never collapses into a prior one). The lead is the front desk.
+    const epoch = rt.ensureConversationEpoch(teamId, nativeConversationChatKey(randomUUID()), title)
+    console.log(`${LOG_TAG} openConversation: team=${teamId} epoch=${epoch.id}`)
+    return { epochId: epoch.id }
+  }
+
+  function renameConversation(teamId: string, epochId: string, title: string | null): void {
+    requireTeam(teamId)
+    requireRuntime().renameConversationEpoch(teamId, epochId, title)
+  }
+
+  async function archiveConversation(teamId: string, epochId: string): Promise<void> {
+    requireTeam(teamId)
+    await requireRuntime().sealConversationEpoch(teamId, epochId, 'stopped')
+    console.log(`${LOG_TAG} archiveConversation: team=${teamId} epoch=${epochId}`)
+  }
+
   return {
     createTeam,
     getTeam,
@@ -891,6 +1064,11 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     listEpochs,
     getEpochBoard,
     sendToMember,
+    listConversations,
+    openConversation,
+    renameConversation,
+    archiveConversation,
+    listPendingEscalations,
   }
 }
 

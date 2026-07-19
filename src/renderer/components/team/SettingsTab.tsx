@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   GitBranch, RefreshCw, Bot, UserCircle,
-  ExternalLink, Trash2, Plus, Info, Crown, LogOut,
+  ExternalLink, Trash2, Plus, Info, Crown, LogOut, ChevronRight, Settings2,
 } from 'lucide-react'
 import type { TeamDetail, TeamTrigger, TeamScheduleConfig, TeamTriggerInput } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
@@ -48,18 +48,24 @@ export function SettingsTab({ detail }: SettingsTabProps) {
             {t('This office is managed by its owner. You are watching it — settings are read-only.')}
           </p>
         )}
+        {/* Everyday settings up top (§6.6): name / goal, schedule, members. */}
         <GoalSection team={detail.team} first readOnly={readOnly} />
         {!readOnly && <ScheduleSection teamId={detail.team.id} />}
-        <CollaborationSection team={detail.team} readOnly={readOnly} />
         <MembersSection detail={detail} readOnly={readOnly} />
-        {!readOnly && (
-          <div className="border-t border-border pt-6">
-            <HttpTriggerCard kind="team" id={detail.team.id} />
-          </div>
-        )}
-        {readOnly
-          ? <LeaveSection teamId={detail.team.id} />
-          : <DangerSection teamId={detail.team.id} />}
+
+        {/* Advanced, folded away (§6.6): collaboration structure, escalation
+            routing, HTTP trigger, and disband — rarely touched, out of the way. */}
+        <AdvancedSection>
+          <CollaborationSection team={detail.team} readOnly={readOnly} />
+          {!readOnly && (
+            <div className="border-t border-border pt-6">
+              <HttpTriggerCard kind="team" id={detail.team.id} />
+            </div>
+          )}
+          {readOnly
+            ? <LeaveSection teamId={detail.team.id} />
+            : <DangerSection teamId={detail.team.id} />}
+        </AdvancedSection>
       </div>
     </div>
   )
@@ -472,6 +478,26 @@ function LeaveSection({ teamId }: { teamId: string }) {
         />
       )}
     </>
+  )
+}
+
+// ── Advanced (folded) ──
+
+function AdvancedSection({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="border-t border-border pt-6">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="flex w-full items-center gap-2 text-left"
+      >
+        <Settings2 className="h-4 w-4 text-muted-foreground" />
+        <span className="flex-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('Advanced')}</span>
+        <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`} />
+      </button>
+      {open && <div className="mt-4 space-y-6">{children}</div>}
+    </div>
   )
 }
 

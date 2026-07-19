@@ -27,6 +27,8 @@ export interface MemberNodeData {
   teamId: string
   /** Highlight while a message flow is active across this member. */
   active: boolean
+  /** The event the floor is focused on, so the node can flag "busy elsewhere". */
+  focusedEpochId?: string | null
   [key: string]: unknown
 }
 
@@ -43,16 +45,29 @@ function statusDotClass(status: TeamMemberRuntimeStatus): string {
 
 function MemberNodeImpl({ id, data, selected }: NodeProps<MemberFlowNode>) {
   const { t } = useTranslation()
-  const { member, editable, active, teamId } = data
+  const { member, editable, active, teamId, focusedEpochId } = data
   const presence = useMemberPresence(teamId, member.appId)
   const isLead = member.isLead
   const isUnreachable = presence.reachability !== 'online'
   const isWorking = member.status === 'working' && !isUnreachable
   const isAlert = (member.status === 'error' || member.status === 'waiting_user') && !isUnreachable
 
+  // "Busy elsewhere" (§6.3/§8.3): the member is working, but on an event OTHER
+  // than the one the floor is focused on — name what it IS (a conversation by its
+  // label, or the team run) instead of a blank/stale title.
+  const busy = member.busy ?? []
+  const onFocused = focusedEpochId ? busy.some(b => b.epochId === focusedEpochId) : busy.length > 0
+  const elsewhereEntry = isWorking && !onFocused ? busy.find(b => b.epochId !== focusedEpochId) : undefined
+  const elsewhereLabel = elsewhereEntry
+    ? elsewhereEntry.kind === 'conversation'
+      ? (elsewhereEntry.label
+          ? t('Busy with "{{name}}"', { name: elsewhereEntry.label })
+          : t('Busy with another conversation'))
+      : t('Busy with the team run')
+    : ''
   const summary =
     member.status === 'working'
-      ? member.currentTaskTitle || ''
+      ? elsewhereLabel || member.currentTaskTitle || ''
       : member.status === 'error'
         ? member.currentTaskTitle || ''
         : member.role || ''

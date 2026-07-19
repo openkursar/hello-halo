@@ -30,6 +30,28 @@ export function memberChatKey(appId: string): string {
   return `direct:${appId}`
 }
 
+/** Parse a member direct-chat key back to its appId (null when not one). */
+export function parseMemberChatKey(chatKey: string): string | null {
+  return chatKey.startsWith('direct:') ? chatKey.slice('direct:'.length) : null
+}
+
+/**
+ * Build the chatKey for a user-created native team conversation ("New session"
+ * in the Conversations tab). The uuid makes each session an independent
+ * context; the `native:` namespace distinguishes it from member direct chats
+ * (`direct:`) and IM chats (`{instanceId}:{chatType}:{chatId}`).
+ *
+ * Format: "native:{uuid}"
+ */
+export function nativeConversationChatKey(uuid: string): string {
+  return `native:${uuid}`
+}
+
+/** Whether a conversation chatKey is a user-created native team session. */
+export function isNativeConversationChatKey(chatKey: string): boolean {
+  return chatKey.startsWith('native:')
+}
+
 /**
  * Build a fully-qualified session key for IM channel conversations.
  *

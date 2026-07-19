@@ -372,6 +372,10 @@ export async function sendAppChatMessage(
   // to the lead. No-op when the epoch is already open.
   if (teamContext) {
     getActiveTeamRuntime()?.reactivateEpoch(teamContext.teamId, teamContext.epochId)
+    // Auto-name a native "New session" from the user's first message (parity with
+    // the space chat). No-op unless this is the lead's turn on a still-untitled
+    // native conversation, so a member's woken turn never names it.
+    getActiveTeamRuntime()?.maybeAutoNameConversation(teamContext.teamId, teamContext.epochId, appId, message)
   }
   const teamPromptCtx = teamContext
     ? getActiveTeamRuntime()?.buildPromptContext(teamContext, appId) ?? null

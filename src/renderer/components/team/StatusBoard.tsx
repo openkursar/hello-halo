@@ -11,8 +11,8 @@
  */
 
 import { useMemo } from 'react'
-import { Play, CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File, Coffee } from 'lucide-react'
-import type { TeamDetail, RosterMember, BlackboardTask, BlackboardFinding, TaskStatus } from '../../../shared/apps/team-types'
+import { Play, CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File, Coffee, History } from 'lucide-react'
+import type { TeamDetail, RosterMember, BlackboardTask, BlackboardFinding, TaskStatus, TeamEdge, TeamStatus, EpochOutcome, TeamRunTriggerType } from '../../../shared/apps/team-types'
 import type { Thought } from '../../types'
 import { useTeamStore } from '../../stores/team.store'
 import type { ActiveFlow } from '../../stores/team.store'
@@ -22,10 +22,31 @@ import { useTeamArtifacts } from './TeamArtifacts'
 import { useChatStore } from '../../stores/chat.store'
 import { buildTeamSessionKey } from '../../../shared/apps/im-keys'
 import { getThoughtIcon, getToolFriendlyFormat, truncateText } from '../chat/thought-utils'
+import { outcomeMeta, triggerLabel, formatRunTime } from './run-history'
 import { useTranslation } from '../../i18n'
+
+/**
+ * The one unit of work the floor renders — computed by the parent (LiveTab) from the
+ * focused event. A LIVE event streams (topology pulses + live activity); a
+ * REPLAY of a past run shows a static topology + that run's recorded activity
+ * and products. StatusBoard is a pure renderer of this view.
+ */
+export interface BoardView {
+  epochId: string | null
+  mode: 'live' | 'replay'
+  roster: RosterMember[]
+  edges: TeamEdge[]
+  tasks: BlackboardTask[]
+  findings: BlackboardFinding[]
+  /** Present in 'live' mode — drives the live run-state banner. */
+  live?: { status: TeamStatus }
+  /** Present in 'replay' mode — drives the "past run" banner (time · trigger · outcome). */
+  replay?: { startedAt: number; triggerType?: TeamRunTriggerType; outcome?: EpochOutcome | null; summary?: string | null }
+}
 
 interface StatusBoardProps {
   detail: TeamDetail
+  board: BoardView
   activeFlows: ActiveFlow[]
   onSelectMember: (member: RosterMember) => void
   /** When true, the topology canvas becomes an in-place structure editor. */
@@ -33,14 +54,15 @@ interface StatusBoardProps {
   onExitEditing?: () => void
 }
 
-export function StatusBoard({ detail, activeFlows, onSelectMember, editingStructure = false, onExitEditing }: StatusBoardProps) {
+export function StatusBoard({ detail, board, activeFlows, onSelectMember, editingStructure = false, onExitEditing }: StatusBoardProps) {
   const { t } = useTranslation()
 
-  const members = useMemo(() => detail.roster.filter(m => !m.isLead), [detail.roster])
+  const members = useMemo(() => board.roster.filter(m => !m.isLead), [board.roster])
   const isPaused = useTeamStore(s => s.officeLiveness.get(detail.team.id) === 'paused')
   // A joined office is run by someone else: this node only watches it, so the
   // "Press Run" idle hint would point at a button it does not have.
   const isJoined = detail.team.hostNodeId != null
+  const isLive = board.mode === 'live'
 
   // Editing the collaboration structure takes over the whole board area with the
   // dedicated full-canvas editor (auto-layout + draggable nodes + floating list).
@@ -48,7 +70,7 @@ export function StatusBoard({ detail, activeFlows, onSelectMember, editingStruct
     return <StructureEditor detail={detail} onDone={() => onExitEditing?.()} />
   }
 
-  if (detail.roster.length === 0) {
+  if (board.roster.length === 0) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
         {t('This team has no members yet. Add members from the manage menu.')}
@@ -58,39 +80,44 @@ export function StatusBoard({ detail, activeFlows, onSelectMember, editingStruct
 
   return (
     <div className="flex flex-col gap-5 p-3 sm:gap-6 sm:p-6">
-      <RunBanner status={detail.team.status} members={members.length} paused={isPaused} isJoined={isJoined} />
+      <RunBanner board={board} members={members.length} paused={isPaused} isJoined={isJoined} />
 
       {/* Escalations awaiting the user — prominent and actionable (click a member
           to open its chat, where the decision panel is shown inline). */}
-      <EscalationCallout roster={detail.roster} onSelectMember={onSelectMember} />
+      <EscalationCallout roster={board.roster} onSelectMember={onSelectMember} />
 
-      {/* ── Office topology: read-only auto-laid-out canvas (React Flow + dagre) ── */}
+      {/* ── Office topology: read-only auto-laid-out canvas (React Flow + dagre).
+          A replayed run shows the final org shape (no live message flows). ── */}
       <div className="h-[300px] overflow-hidden rounded-2xl border border-border bg-gradient-to-b from-secondary/20 to-transparent sm:h-[360px]">
         <TeamFlowCanvas
-          roster={detail.roster}
-          edges={detail.edges}
+          roster={board.roster}
+          edges={board.edges}
           teamId={detail.team.id}
-          activeFlows={activeFlows}
+          activeFlows={isLive ? activeFlows : []}
           onSelectMember={onSelectMember}
+          focusedEpochId={board.epochId}
         />
       </div>
 
-      {/* Live work — what each member is doing right now (isolated so token
-          updates don't re-render the topology). */}
-      <LiveActivityFeed
-        roster={detail.roster}
-        teamId={detail.team.id}
-        epochId={detail.team.currentEpochId}
-        onSelectMember={onSelectMember}
-      />
+      {/* Live work — real-time streaming per member. Only meaningful for a live
+          event; a replay's "activity" is the recorded task/finding stream below. */}
+      {isLive && (
+        <LiveActivityFeed
+          roster={board.roster}
+          teamId={detail.team.id}
+          epochId={board.epochId}
+          onSelectMember={onSelectMember}
+        />
+      )}
 
       <RecentActivity
-        tasks={detail.tasks}
-        findings={detail.findings}
-        roster={detail.roster}
+        tasks={board.tasks}
+        findings={board.findings}
+        roster={board.roster}
         teamId={detail.team.id}
-        epochId={detail.team.currentEpochId}
+        epochId={board.epochId}
         onSelectMember={onSelectMember}
+        title={isLive ? undefined : t('What happened')}
       />
     </div>
   )
@@ -233,13 +260,39 @@ function EscalationCallout({ roster, onSelectMember }: { roster: RosterMember[];
 // Run-state banner
 // ──────────────────────────────────────────────
 
-function RunBanner({ status, members, paused, isJoined }: {
-  status: TeamDetail['team']['status']
+function RunBanner({ board, members, paused, isJoined }: {
+  board: BoardView
   members: number
   paused: boolean
   isJoined: boolean
 }) {
   const { t } = useTranslation()
+
+  // Replay of a PAST run: identify it by time · trigger · outcome (a run is an
+  // event, not a named thing), with the recorded summary as the sub-line.
+  if (board.mode === 'replay' && board.replay) {
+    const { startedAt, triggerType, outcome, summary } = board.replay
+    const { Icon, cls, label } = outcomeMeta(outcome ?? 'no_action', null, t)
+    return (
+      <div className="flex items-start gap-3 rounded-xl border border-border bg-secondary/20 px-3 py-2.5 sm:px-4">
+        <Icon className={`mt-0.5 h-4 w-4 flex-shrink-0 ${cls}`} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="text-sm font-medium text-foreground">{formatRunTime(startedAt)}</span>
+            <span className="text-xs text-muted-foreground">· {triggerLabel(triggerType, t)}</span>
+            <span className={`text-xs font-medium ${cls}`}>· {label}</span>
+          </div>
+          {summary && <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground/80">{summary}</p>}
+        </div>
+        <span className="hidden flex-shrink-0 items-center gap-1 text-[11px] text-muted-foreground sm:flex">
+          <History className="h-3 w-3" />
+          {t('Past run')}
+        </span>
+      </div>
+    )
+  }
+
+  const status: TeamStatus = board.live?.status ?? 'idle'
 
   // Paused takes precedence over run status: nothing is wrong, it just picks
   // back up on reconnect, so this avoids the red/amber "needs you" styling.
@@ -316,6 +369,8 @@ interface RecentActivityProps {
   teamId: string
   epochId: string | null
   onSelectMember: (member: RosterMember) => void
+  /** Section heading override (a replay says "What happened", live says "Recent activity"). */
+  title?: string
 }
 
 /** A task transition or a posted finding, unified for the activity feed. */
@@ -353,7 +408,7 @@ function ActorName({ appId, name, onSelect }: { appId: string | null; name: stri
   )
 }
 
-function RecentActivity({ tasks, findings, roster, teamId, epochId, onSelectMember }: RecentActivityProps) {
+function RecentActivity({ tasks, findings, roster, teamId, epochId, onSelectMember, title }: RecentActivityProps) {
   const { t } = useTranslation()
 
   // doneCount in the refetch key re-resolves artifacts as tasks complete.
@@ -391,7 +446,7 @@ function RecentActivity({ tasks, findings, roster, teamId, epochId, onSelectMemb
   return (
     <div>
       <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        {t('Recent activity')}
+        {title ?? t('Recent activity')}
       </h3>
       {recent.length === 0 ? (
         <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground/70">

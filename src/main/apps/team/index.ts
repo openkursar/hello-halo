@@ -94,6 +94,8 @@ interface InitTeamServiceDeps {
   onRunStateChanged?: TeamServiceDeps['onRunStateChanged']
   onMemberRemoved?: TeamServiceDeps['onMemberRemoved']
   onOfficeDissolved?: TeamServiceDeps['onOfficeDissolved']
+  getPendingEscalations?: TeamServiceDeps['getPendingEscalations']
+  describeChatKey?: TeamServiceDeps['describeChatKey']
 }
 
 export function initTeamService(deps: InitTeamServiceDeps): TeamService {
@@ -112,6 +114,8 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
     onRunStateChanged: deps.onRunStateChanged,
     onMemberRemoved: deps.onMemberRemoved,
     onOfficeDissolved: deps.onOfficeDissolved,
+    getPendingEscalations: deps.getPendingEscalations,
+    describeChatKey: deps.describeChatKey,
   })
   serviceInstance = service
 

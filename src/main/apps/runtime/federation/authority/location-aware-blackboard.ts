@@ -137,7 +137,7 @@ export function handleShadowWriteReject(fid: string, retryable: boolean): void {
 /** A blackboard write routed to an office's host (member → authority). */
 export interface OutboundBlackboardWrite {
   teamId: string
-  op: Extract<ReplicationOp, 'post_task' | 'update_task' | 'post_finding'>
+  op: Extract<ReplicationOp, 'post_task' | 'update_task' | 'post_finding' | 'epoch_upsert'>
   payload: Record<string, unknown>
   taskId?: string
   /** Cross-restart globally-unique idempotency key (matches host's log fid usage). */

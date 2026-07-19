@@ -22,6 +22,7 @@ import type {
   TeamOfficeStatusEvent,
   TeamEpochSummary,
   EpochBoard,
+  TeamConversation,
 } from '../../shared/apps/team-types'
 import { isRemoteMember } from '../../shared/apps/team-types'
 
@@ -101,12 +102,25 @@ interface TeamState {
   epochs: TeamEpochSummary[]
   isLoadingEpochs: boolean
 
+  // ── Conversations (office-shared sessions) ─
+  conversations: TeamConversation[]
+  isLoadingConversations: boolean
+  /** Selected conversation in the Conversation tab (null = none open yet). */
+  selectedConversationId: string | null
+
   // ── List / selection ─────────────────────
   loadTeams: (spaceId?: string) => Promise<void>
   selectTeam: (teamId: string | null) => void
   loadDetail: (teamId: string) => Promise<void>
   loadEpochs: (teamId: string) => Promise<void>
   loadEpochBoard: (teamId: string, epochId: string) => Promise<EpochBoard | null>
+
+  // ── Conversations ────────────────────────
+  loadConversations: (teamId: string) => Promise<void>
+  openConversation: (teamId: string, title?: string) => Promise<string | null>
+  renameConversation: (teamId: string, epochId: string, title: string | null) => Promise<boolean>
+  archiveConversation: (teamId: string, epochId: string) => Promise<boolean>
+  selectConversation: (epochId: string | null) => void
 
   // ── Create ───────────────────────────────
   proposeMembers: (goal: string, owningSpaceId: string) => Promise<ProposedMember[] | null>
@@ -204,6 +218,9 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   pendingInviteLink: null,
   epochs: [],
   isLoadingEpochs: false,
+  conversations: [],
+  isLoadingConversations: false,
+  selectedConversationId: null,
 
   isLoadingList: false,
   isLoadingDetail: false,
@@ -232,10 +249,18 @@ export const useTeamStore = create<TeamState>((set, get) => ({
 
   selectTeam: (teamId) => {
     if (teamId === get().currentTeamId) return
-    set({ currentTeamId: teamId, detail: null, activeFlows: [], epochs: [] })
+    set({
+      currentTeamId: teamId,
+      detail: null,
+      activeFlows: [],
+      epochs: [],
+      conversations: [],
+      selectedConversationId: null,
+    })
     if (teamId) {
       void get().loadDetail(teamId)
       void get().loadEpochs(teamId)
+      void get().loadConversations(teamId)
     }
   },
 
@@ -293,6 +318,93 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       return null
     }
   },
+
+  // ── Conversations ────────────────────────
+
+  loadConversations: async (teamId) => {
+    set({ isLoadingConversations: true })
+    try {
+      const res = await api.teamListConversations(teamId)
+      if (get().currentTeamId !== teamId) return
+      if (res.success && Array.isArray(res.data)) {
+        const conversations = res.data as TeamConversation[]
+        // Keep the current selection if it still exists; else fall back to the
+        // first writable conversation (never auto-select a read-only IM chat).
+        const sel = get().selectedConversationId
+        const stillThere = sel && conversations.some(c => c.epochId === sel)
+        set({
+          conversations,
+          selectedConversationId: stillThere
+            ? sel
+            : conversations.find(c => !c.readonly)?.epochId ?? conversations[0]?.epochId ?? null,
+        })
+      }
+    } catch (err) {
+      console.error('[TeamStore] loadConversations error:', err)
+    } finally {
+      if (get().currentTeamId === teamId) set({ isLoadingConversations: false })
+    }
+  },
+
+  openConversation: async (teamId, title) => {
+    try {
+      const res = await api.teamOpenConversation(teamId, title)
+      if (res.success && res.data) {
+        const epochId = (res.data as { epochId: string }).epochId
+        await get().loadConversations(teamId)
+        set({ selectedConversationId: epochId })
+        return epochId
+      }
+      notifyError(i18n.t('Couldn\u2019t start a new session'), (res.error as string) || undefined)
+      return null
+    } catch (err) {
+      console.error('[TeamStore] openConversation error:', err)
+      return null
+    }
+  },
+
+  renameConversation: async (teamId, epochId, title) => {
+    // Optimistic: reflect the new label immediately, then confirm with the server.
+    set(s => ({
+      conversations: s.conversations.map(c => c.epochId === epochId ? { ...c, label: title ?? c.label } : c),
+    }))
+    try {
+      const res = await api.teamRenameConversation(teamId, epochId, title)
+      if (res.success) {
+        void get().loadConversations(teamId)
+        return true
+      }
+      return false
+    } catch (err) {
+      console.error('[TeamStore] renameConversation error:', err)
+      return false
+    }
+  },
+
+  archiveConversation: async (teamId, epochId) => {
+    try {
+      const res = await api.teamArchiveConversation(teamId, epochId)
+      if (res.success) {
+        set(s => {
+          const conversations = s.conversations.filter(c => c.epochId !== epochId)
+          return {
+            conversations,
+            selectedConversationId: s.selectedConversationId === epochId
+              ? conversations.find(c => !c.readonly)?.epochId ?? null
+              : s.selectedConversationId,
+          }
+        })
+        void get().loadEpochs(teamId)
+        return true
+      }
+      return false
+    } catch (err) {
+      console.error('[TeamStore] archiveConversation error:', err)
+      return false
+    }
+  },
+
+  selectConversation: (epochId) => set({ selectedConversationId: epochId }),
 
   // ── Create ───────────────────────────────
 
@@ -577,6 +689,9 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     if (get().currentTeamId === teamId) {
       void get().loadDetail(teamId)
       void get().loadEpochs(teamId)
+      // The session list is office-shared: an epoch opened/renamed/sealed on any
+      // node arrives as team:updated, so keep the Conversation tab in sync.
+      void get().loadConversations(teamId)
     }
   },
 

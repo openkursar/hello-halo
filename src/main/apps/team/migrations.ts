@@ -195,5 +195,16 @@ export const migrations: Migration[] = [
       // "brought by Alice" from its own store (joiners keep no peer node rows).
       db.exec(`ALTER TABLE team_members ADD COLUMN owner_display_name TEXT`)
     }
+  },
+  {
+    version: 9,
+    description: 'Add team_epochs.title (conversation label) + outcome (run result classification)',
+    up(db) {
+      // title: user-facing conversation name (renameable; null → derived label).
+      // outcome: run result class stamped at seal ('output' | 'no_action' |
+      // 'escalation' | 'failed'); null for conversations and legacy rows.
+      db.exec(`ALTER TABLE team_epochs ADD COLUMN title TEXT`)
+      db.exec(`ALTER TABLE team_epochs ADD COLUMN outcome TEXT`)
+    }
   }
 ]

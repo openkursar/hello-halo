@@ -1,26 +1,33 @@
 /**
- * TeamView — right pane of the team tab.
+ * TeamView — the right pane of the team tab (spec §6.1 framework).
  *
- * Header: team name (read-only) + goal preview (click → Settings) + Run/Pause
- * + settings gear. Body: Status / History / Settings tab switch.
+ * Header: name + goal preview + Invite/Run/settings. A cross-tab attention
+ * banner (C2) sits above the tab bar so a waiting decision follows the user
+ * everywhere. Tabs: Conversation (default) / Live / Settings.
  *
- * All configuration (goal, schedule, collaboration, members, dissolve) lives in
- * the Settings tab — no overflow "..." menu.  The member detail panel renders as
- * a right-side overlay (full-screen sheet on mobile, side panel on desktop).
+ * The Live tab is the team's canonical view — one unit of work at a time (a live run, a
+ * conversation, or a past-run replay), picked from its event sidebar. It absorbs
+ * what used to be a separate History tab: selecting + viewing happen in one place.
+ *
+ * Behaviors:
+ *  - D1: pressing Run auto-switches to Live to watch the launch.
+ *  - C2: any pending decision surfaces the banner regardless of tab.
+ * The member detail panel renders as a right-side overlay.
  */
 
 import { useEffect, useState } from 'react'
-import { Play, Pause, Cog, LayoutGrid, History, Network, UserPlus, Eye } from 'lucide-react'
+import { Play, Pause, Cog, MessagesSquare, Radar, Network, UserPlus, Eye } from 'lucide-react'
 import type { TeamDetail, RosterMember } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
 import { useTranslation } from '../../i18n'
-import { StatusBoard } from './StatusBoard'
+import { LiveTab } from './LiveTab'
+import { ConversationTab } from './ConversationTab'
+import { AttentionBanner } from './AttentionBanner'
 import { TeamMemberChatView } from './TeamMemberChatView'
-import { HistoryTab } from './HistoryTab'
 import { SettingsTab } from './SettingsTab'
 import { TeamInviteDialog } from './TeamInviteDialog'
 
-type BoardTab = 'status' | 'history' | 'settings'
+type BoardTab = 'conversation' | 'live' | 'settings'
 
 interface TeamViewProps {
   detail: TeamDetail
@@ -30,24 +37,27 @@ export function TeamView({ detail }: TeamViewProps) {
   const { t } = useTranslation()
   const team = detail.team
 
-  const activeFlows = useTeamStore(s => s.activeFlows)
   const loadDetail = useTeamStore(s => s.loadDetail)
   const epochs = useTeamStore(s => s.epochs)
   const runTeam = useTeamStore(s => s.runTeam)
   const pauseTeam = useTeamStore(s => s.pauseTeam)
 
-  const [tab, setTab] = useState<BoardTab>('status')
+  const [tab, setTab] = useState<BoardTab>('conversation')
   const [selectedMember, setSelectedMember] = useState<RosterMember | null>(null)
   const [chatEpochId, setChatEpochId] = useState<string | null>(null)
   const [editingStructure, setEditingStructure] = useState(false)
   const [showInvite, setShowInvite] = useState(false)
+  // The unit of work the Live tab is focused on (a live run, a conversation, or a
+  // past run). null = default (live run, else the most recent run).
+  const [focusedEpochId, setFocusedEpochId] = useState<string | null>(null)
 
   const liveEpochId = team.currentEpochId ?? epochs[0]?.id ?? null
 
-  const openMemberLive = (m: RosterMember) => { setChatEpochId(liveEpochId); setSelectedMember(m) }
-  const openMemberForEpoch = (m: RosterMember, epochId: string) => { setChatEpochId(epochId); setSelectedMember(m) }
+  // A member opened from the Live board binds to whatever item is focused there
+  // (so a past-run member opens that run's transcript, not the live one).
+  const openMemberLive = (m: RosterMember) => { setChatEpochId(focusedEpochId ?? liveEpochId); setSelectedMember(m) }
 
-  // Poll detail while running so the status board feels alive.
+  // Poll detail while running so the floor feels alive.
   useEffect(() => {
     if (team.status !== 'running') return
     const id = setInterval(() => { void loadDetail(team.id) }, 3000)
@@ -63,13 +73,36 @@ export function TeamView({ detail }: TeamViewProps) {
 
   const isRunning = team.status === 'running'
   const overlayOpen = !!selectedMember
-
   // Gates every authority-only control (run/edit/invite) — a joined office is watch-only.
   const isJoined = team.hostNodeId != null
+  const pending = detail.pendingEscalations ?? []
+
+  // D1: pressing Run jumps to Live to watch the launch (a scheduled run does not
+  // steal focus — that path never calls this).
+  const handleRun = async () => {
+    const ok = await runTeam(team.id)
+    if (ok) {
+      setFocusedEpochId(null)
+      setTab('live')
+    }
+  }
+
+  // The attention banner opens the member's chat wherever the user is (C2).
+  const goToDecision = (appId: string) => {
+    const m = detail.roster.find(r => r.appId === appId)
+    if (m) openMemberLive(m)
+  }
+
+  // Jump to Live focused on a specific item (from the conversation active-door
+  // card, or the "Live" entry). An empty id means "no specific event" → Live
+  // falls back to its default focus (the live run, else the most recent run).
+  const openLiveFocused = (epochId: string) => {
+    setFocusedEpochId(epochId || null)
+    setTab('live')
+  }
 
   return (
     <div className="relative flex h-full overflow-hidden">
-      {/* Main column */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {/* ── Header ──────────────────────────────────── */}
         <div className="flex items-start gap-2 border-b border-border px-3 py-3 sm:px-4">
@@ -94,8 +127,7 @@ export function TeamView({ detail }: TeamViewProps) {
 
           {!isJoined && (
             <>
-              {/* Edit collaboration structure — contextual to the Status board it edits. */}
-              {tab === 'status' && (
+              {tab === 'live' && (
                 <button
                   onClick={() => setEditingStructure(v => !v)}
                   className={`flex-shrink-0 rounded-lg border p-1.5 transition-colors ${
@@ -119,7 +151,7 @@ export function TeamView({ detail }: TeamViewProps) {
               </button>
 
               <button
-                onClick={() => isRunning ? pauseTeam(team.id) : runTeam(team.id)}
+                onClick={() => isRunning ? void pauseTeam(team.id) : void handleRun()}
                 className="flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary"
                 title={isRunning ? t('Pause') : t('Run')}
               >
@@ -128,29 +160,38 @@ export function TeamView({ detail }: TeamViewProps) {
               </button>
             </>
           )}
-
         </div>
 
-        {/* ── Tab bar (matches the digital-human header: icon + underline) ── */}
+        {/* ── Attention chain banner (C2): rides above the tabs on every tab ── */}
+        <AttentionBanner pending={pending} onGoTo={goToDecision} />
+
+        {/* ── Tab bar ──────────────────────────────────── */}
         <div className="flex items-center gap-0.5 border-b border-border px-3 sm:px-4">
-          <TabButton active={tab === 'status'} icon={LayoutGrid} label={t('Status')} onClick={() => setTab('status')} />
-          <TabButton active={tab === 'history'} icon={History} label={t('History')} onClick={() => setTab('history')} />
+          <TabButton active={tab === 'conversation'} icon={MessagesSquare} label={t('Conversation')} onClick={() => setTab('conversation')} />
+          <TabButton active={tab === 'live'} icon={Radar} label={t('Live')} onClick={() => setTab('live')} />
           <TabButton active={tab === 'settings'} icon={Cog} label={t('Settings')} onClick={() => setTab('settings')} />
         </div>
 
         {/* ── Tab content ─────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto">
-          {tab === 'status' && (
-            <StatusBoard
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {tab === 'conversation' && (
+            <ConversationTab detail={detail} onOpenLive={openLiveFocused} />
+          )}
+          {tab === 'live' && (
+            <LiveTab
               detail={detail}
-              activeFlows={activeFlows}
               onSelectMember={openMemberLive}
               editingStructure={editingStructure && !isJoined}
               onExitEditing={() => setEditingStructure(false)}
+              focusedEpochId={focusedEpochId}
+              onFocus={setFocusedEpochId}
             />
           )}
-          {tab === 'history' && <HistoryTab detail={detail} onOpenMember={openMemberForEpoch} />}
-          {tab === 'settings' && <SettingsTab detail={detail} />}
+          {tab === 'settings' && (
+            <div className="flex-1 overflow-y-auto">
+              <SettingsTab detail={detail} />
+            </div>
+          )}
         </div>
       </div>
 
@@ -168,6 +209,7 @@ export function TeamView({ detail }: TeamViewProps) {
               epochId={chatEpochId}
               isCurrentEpoch={!!chatEpochId && chatEpochId === team.currentEpochId}
               onClose={() => setSelectedMember(null)}
+              onSwitchContext={setChatEpochId}
             />
           </div>
         </div>
@@ -178,13 +220,9 @@ export function TeamView({ detail }: TeamViewProps) {
   )
 }
 
-// ──────────────────────────────────────────────
-// Sub-components
-// ──────────────────────────────────────────────
-
 function TabButton({ active, icon: Icon, label, onClick }: {
   active: boolean
-  icon: typeof LayoutGrid
+  icon: typeof Radar
   label: string
   onClick: () => void
 }) {

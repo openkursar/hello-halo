@@ -394,6 +394,59 @@ export function registerTeamRoutes(app: Express): void {
     }
   })
 
+  // ── Conversations (office-shared session objects) ──
+  // GET /api/teams/:teamId/conversations — every open conversation, newest first.
+  app.get('/api/teams/:teamId/conversations', async (req: Request, res: Response) => {
+    try {
+      if (!officeGateOk(req, res, req.params.teamId)) return
+      const service = getServiceOrFail(res)
+      if (!service) return
+      res.json({ success: true, data: service.listConversations(req.params.teamId) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/teams/:teamId/conversations — open a new native team conversation.
+  app.post('/api/teams/:teamId/conversations', async (req: Request, res: Response) => {
+    try {
+      if (!officeGateOk(req, res, req.params.teamId)) return
+      const service = getServiceOrFail(res)
+      if (!service) return
+      const title = typeof req.body?.title === 'string' ? req.body.title : undefined
+      res.json({ success: true, data: service.openConversation(req.params.teamId, title) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // PATCH /api/teams/:teamId/conversations/:epochId — rename.
+  app.patch('/api/teams/:teamId/conversations/:epochId', async (req: Request, res: Response) => {
+    try {
+      if (!officeGateOk(req, res, req.params.teamId)) return
+      const service = getServiceOrFail(res)
+      if (!service) return
+      const title = typeof req.body?.title === 'string' ? req.body.title : null
+      service.renameConversation(req.params.teamId, req.params.epochId, title)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // DELETE /api/teams/:teamId/conversations/:epochId — archive (seal).
+  app.delete('/api/teams/:teamId/conversations/:epochId', async (req: Request, res: Response) => {
+    try {
+      if (!officeGateOk(req, res, req.params.teamId)) return
+      const service = getServiceOrFail(res)
+      if (!service) return
+      await service.archiveConversation(req.params.teamId, req.params.epochId)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // GET /api/teams/:teamId/epochs — run history (newest first). Mirrors IPC
   // team:list-epochs so the History tab works over remote access too.
   app.get('/api/teams/:teamId/epochs', async (req: Request, res: Response) => {

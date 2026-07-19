@@ -24,6 +24,7 @@ import type {
   TeamStatus,
   TaskStatus,
   EpochEndReason,
+  EpochOutcome,
   TeamRow,
   TeamMemberRow,
   TeamEdgeRow,
@@ -40,6 +41,7 @@ import type {
   TeamRunTriggerType,
   JoinedOfficeSnapshot,
   TeamMemberRuntimeStatus,
+  RosterBusyEntry,
 } from '../../../shared/apps/team-types'
 import { SELF_NODE_ID } from '../../../shared/apps/team-types'
 
@@ -128,6 +130,9 @@ function rowToEpoch(row: TeamEpochRow): TeamEpoch {
     summary: row.summary,
     lifecycle: (row.lifecycle as TeamEpoch['lifecycle'] | undefined) ?? 'run',
     chatKey: row.chat_key ?? null,
+    title: row.title ?? null,
+    outcome: (row.outcome as TeamEpoch['outcome'] | undefined) ?? null,
+    triggerType: (row.trigger_type as TeamEpoch['triggerType'] | undefined) ?? 'manual',
   }
 }
 
@@ -195,6 +200,9 @@ export class TeamStore implements ITeamStore {
   private readonly stmtListEpochsByTeam: Database.Statement
   private readonly stmtGetCurrentEpochForTeam: Database.Statement
   private readonly stmtGetOpenConversationEpoch: Database.Statement
+  private readonly stmtListOpenConversationEpochs: Database.Statement
+  private readonly stmtListOpenEpochs: Database.Statement
+  private readonly stmtRenameEpoch: Database.Statement
   // team_triggers
   private readonly stmtInsertTrigger: Database.Statement
   private readonly stmtDeleteTrigger: Database.Statement
@@ -211,7 +219,7 @@ export class TeamStore implements ITeamStore {
    */
   private readonly joinedMemberRuntime = new Map<
     string,
-    Map<string, { status: TeamMemberRuntimeStatus; taskTitle?: string }>
+    Map<string, { status: TeamMemberRuntimeStatus; taskTitle?: string; busy?: RosterBusyEntry[] }>
   >()
 
   constructor(private readonly db: Database.Database) {
@@ -320,15 +328,16 @@ export class TeamStore implements ITeamStore {
     // ── team_epochs ───────────────────────────────
     this.stmtInsertEpoch = db.prepare(`
       INSERT INTO team_epochs (
-        id, team_id, started_at, ended_at, end_reason, summary, trigger_type, lifecycle, chat_key
+        id, team_id, started_at, ended_at, end_reason, summary, trigger_type, lifecycle, chat_key, title, outcome
       ) VALUES (
-        @id, @team_id, @started_at, @ended_at, @end_reason, @summary, @trigger_type, @lifecycle, @chat_key
+        @id, @team_id, @started_at, @ended_at, @end_reason, @summary, @trigger_type, @lifecycle, @chat_key, @title, @outcome
       )
     `)
     this.stmtGetEpochById = db.prepare(`SELECT * FROM team_epochs WHERE id = ?`)
     this.stmtEndEpoch = db.prepare(`
       UPDATE team_epochs
-      SET ended_at = @ended_at, end_reason = @end_reason, summary = @summary
+      SET ended_at = @ended_at, end_reason = @end_reason, summary = @summary,
+          outcome = COALESCE(@outcome, outcome)
       WHERE id = @id
     `)
     // Reversible seal: reopen a hibernated epoch (keep summary as last snapshot).
@@ -349,12 +358,26 @@ export class TeamStore implements ITeamStore {
       ORDER BY started_at DESC
       LIMIT 1
     `)
+    // Deterministic tie-break by id: concurrent creation on two nodes can leave
+    // two open epochs for one chatKey; every node must pick the SAME canonical
+    // one ("later write wins", no conflict dialog).
     this.stmtGetOpenConversationEpoch = db.prepare(`
       SELECT * FROM team_epochs
       WHERE team_id = ? AND chat_key = ? AND ended_at IS NULL AND lifecycle = 'conversation'
-      ORDER BY started_at DESC
+      ORDER BY started_at DESC, id DESC
       LIMIT 1
     `)
+    this.stmtListOpenConversationEpochs = db.prepare(`
+      SELECT * FROM team_epochs
+      WHERE team_id = ? AND ended_at IS NULL AND lifecycle = 'conversation'
+      ORDER BY started_at DESC, id DESC
+    `)
+    this.stmtListOpenEpochs = db.prepare(`
+      SELECT * FROM team_epochs
+      WHERE team_id = ? AND ended_at IS NULL
+      ORDER BY started_at DESC, id DESC
+    `)
+    this.stmtRenameEpoch = db.prepare(`UPDATE team_epochs SET title = @title WHERE id = @id`)
 
     // ── team_triggers ─────────────────────────────
     this.stmtInsertTrigger = db.prepare(`
@@ -549,7 +572,10 @@ export class TeamStore implements ITeamStore {
     // The transient runtime-status overlay for this office, rebuilt from the
     // snapshot and published after the row apply succeeds (so a failed apply does
     // not leave a stale-but-confident overlay).
-    const runtime = new Map<string, { status: TeamMemberRuntimeStatus; taskTitle?: string }>()
+    const runtime = new Map<
+      string,
+      { status: TeamMemberRuntimeStatus; taskTitle?: string; busy?: RosterBusyEntry[] }
+    >()
 
     const apply = this.db.transaction(() => {
       const existing = this.stmtGetTeamById.get(officeId) as TeamRow | undefined
@@ -619,6 +645,8 @@ export class TeamStore implements ITeamStore {
             trigger_type: 'manual',
             lifecycle: 'run',
             chat_key: null,
+            title: null,
+            outcome: null,
           })
         }
       }
@@ -626,10 +654,11 @@ export class TeamStore implements ITeamStore {
       this.db.prepare(`DELETE FROM team_members WHERE team_id = ?`).run(officeId)
       for (const m of snapshot.members) {
         const ownedHere = m.ownerNodeId === selfNodeId
-        if (m.status && m.status !== 'idle') {
+        if ((m.status && m.status !== 'idle') || (m.busy && m.busy.length > 0)) {
           runtime.set(m.appId, {
-            status: m.status,
+            status: m.status ?? 'idle',
             ...(m.currentTaskTitle ? { taskTitle: m.currentTaskTitle } : {}),
+            ...(m.busy && m.busy.length > 0 ? { busy: m.busy } : {}),
           })
         }
         this.stmtAddMember.run({
@@ -671,6 +700,11 @@ export class TeamStore implements ITeamStore {
 
   getJoinedMemberTaskTitle(teamId: string, appId: string): string | undefined {
     return this.joinedMemberRuntime.get(teamId)?.get(appId)?.taskTitle
+  }
+
+  /** Live busy assignments from the last snapshot of a joined office. */
+  getJoinedMemberBusy(teamId: string, appId: string): RosterBusyEntry[] {
+    return this.joinedMemberRuntime.get(teamId)?.get(appId)?.busy ?? []
   }
 
   // ── team_edges ──────────────────────────────────
@@ -826,6 +860,8 @@ export class TeamStore implements ITeamStore {
       trigger_type: triggerType,
       lifecycle: epoch.lifecycle ?? 'run',
       chat_key: epoch.chatKey ?? null,
+      title: epoch.title ?? null,
+      outcome: epoch.outcome ?? null,
     })
   }
 
@@ -834,9 +870,57 @@ export class TeamStore implements ITeamStore {
     return row ? rowToEpoch(row) : null
   }
 
-  /** Seal an epoch: stamp its end time, reason, and archival summary. */
-  endEpoch(epochId: string, endedAt: number, endReason: EpochEndReason, summary: string | null): void {
-    this.stmtEndEpoch.run({ id: epochId, ended_at: endedAt, end_reason: endReason, summary })
+  /** Seal an epoch: stamp its end time, reason, archival summary, and outcome. */
+  endEpoch(
+    epochId: string,
+    endedAt: number,
+    endReason: EpochEndReason,
+    summary: string | null,
+    outcome?: EpochOutcome | null
+  ): void {
+    this.stmtEndEpoch.run({
+      id: epochId,
+      ended_at: endedAt,
+      end_reason: endReason,
+      summary,
+      outcome: outcome ?? null,
+    })
+  }
+
+  /** Rename a conversation epoch (null clears the title back to a derived label). */
+  renameEpoch(epochId: string, title: string | null): void {
+    this.stmtRenameEpoch.run({ id: epochId, title })
+  }
+
+  /**
+   * Idempotent whole-row apply of a replicated epoch. Insert when absent;
+   * otherwise overwrite the mutable fields so a re-delivered or later write
+   * converges (single writer = the office authority; later write wins).
+   */
+  upsertEpoch(epoch: TeamEpoch, triggerType?: TeamRunTriggerType): void {
+    const existing = this.stmtGetEpochById.get(epoch.id) as TeamEpochRow | undefined
+    if (!existing) {
+      this.insertEpoch(epoch, triggerType ?? epoch.triggerType ?? 'manual')
+      return
+    }
+    this.db
+      .prepare(
+        `UPDATE team_epochs
+           SET ended_at = @ended_at, end_reason = @end_reason, summary = @summary,
+               title = @title, outcome = @outcome, chat_key = @chat_key,
+               lifecycle = @lifecycle
+         WHERE id = @id`
+      )
+      .run({
+        id: epoch.id,
+        ended_at: epoch.endedAt,
+        end_reason: epoch.endReason,
+        summary: epoch.summary,
+        title: epoch.title ?? null,
+        outcome: epoch.outcome ?? null,
+        chat_key: epoch.chatKey ?? null,
+        lifecycle: epoch.lifecycle ?? 'run',
+      })
   }
 
   /** Reopen a sealed epoch (reversible-seal wake): clear ended_at/end_reason, keep summary. */
@@ -858,6 +942,16 @@ export class TeamStore implements ITeamStore {
   getOpenConversationEpoch(teamId: string, chatKey: string): TeamEpoch | null {
     const row = this.stmtGetOpenConversationEpoch.get(teamId, chatKey) as TeamEpochRow | undefined
     return row ? rowToEpoch(row) : null
+  }
+
+  /** All open 'conversation' epochs of a team, newest first. */
+  listOpenConversationEpochs(teamId: string): TeamEpoch[] {
+    return (this.stmtListOpenConversationEpochs.all(teamId) as TeamEpochRow[]).map(rowToEpoch)
+  }
+
+  /** All open epochs (run + conversation) of a team, newest first. */
+  listOpenEpochs(teamId: string): TeamEpoch[] {
+    return (this.stmtListOpenEpochs.all(teamId) as TeamEpochRow[]).map(rowToEpoch)
   }
 
   // ── team_triggers ───────────────────────────────

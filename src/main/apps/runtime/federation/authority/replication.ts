@@ -56,6 +56,7 @@ import type {
   BlackboardTask,
   BlackboardFinding,
   TaskStatus,
+  TeamEpoch,
 } from '../../../../../shared/apps/team-types'
 import { SELF_NODE_ID } from '../../../../../shared/apps/team-types'
 
@@ -110,7 +111,7 @@ export type CatchupResult =
 export interface MemberWriteRecord {
   teamId: string
   epochId: string
-  op: 'post_task' | 'update_task' | 'post_finding'
+  op: 'post_task' | 'update_task' | 'post_finding' | 'epoch_upsert'
   payload: Record<string, unknown>
   taskId?: string
 }
@@ -486,6 +487,12 @@ export function createReplication(deps: ReplicationDeps): Replication {
         // post_task) — a duplicate is a no-op, any other failure still propagates.
         insertFindingIdempotent(frame.payload as unknown as BlackboardFinding)
         return true
+      case 'epoch_upsert':
+        // Epochs (runs + conversations) are office-shared: idempotent whole-row
+        // apply so every node's session list / history converge with the
+        // authority. A redelivered or optimistically-pre-applied row is a no-op.
+        replicaStore.upsertEpoch(frame.payload as unknown as TeamEpoch)
+        return true
       case 'roster_join':
       case 'roster_leave':
         // Roster replication mutates the federation membership ledger, not the
@@ -616,7 +623,13 @@ export function createReplication(deps: ReplicationDeps): Replication {
     if (!deps.applyMemberWrite) return
     const payload = frame.payload
     const teamId = typeof payload.teamId === 'string' ? payload.teamId : officeId
-    const epochId = typeof payload.epochId === 'string' ? payload.epochId : ''
+    // For epoch_upsert the payload IS the epoch row, whose own id is the epoch id.
+    const epochId =
+      typeof payload.epochId === 'string'
+        ? payload.epochId
+        : frame.op === 'epoch_upsert' && typeof payload.id === 'string'
+          ? payload.id
+          : ''
     // Carry the member's stable fid into the next captureLocalWrite so the
     // durable log entry keys idempotency on it (for the cross-restart dedup path).
     pendingMemberFid = frame.fid

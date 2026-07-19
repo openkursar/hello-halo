@@ -171,6 +171,13 @@ export interface FederationManagerDeps {
    */
   getMemberRuntimeStatus?: (appId: string) => TeamMemberRuntimeStatus
   /**
+   * Everything a member is serving right now (run + conversations), each with a
+   * human label the authority generated (P0-2), stamped into the roster snapshot
+   * so a joiner can say "busy with another conversation". Bootstrap passes the
+   * team runtime's getMemberBusy. Absent → no busy list projected.
+   */
+  getMemberBusy?: (appId: string, teamId: string) => import('../../../../shared/apps/team-types').RosterBusyEntry[]
+  /**
    * Owner role: run a brought member's turn locally when a wake arrives over a
    * joined office. Bootstrap injects the local createDefaultSessionDeps adapter.
    * Absent → a wake on a joined office logs+drops (node owns no runnable member).
@@ -398,6 +405,12 @@ export interface FederationManager {
    * host as a `blackboard-write` frame over the joined office's link.
    */
   sendMemberWrite(write: OutboundBlackboardWrite & { hostNodeId: NodeId }): void
+  /**
+   * Replicate an epoch lifecycle write (open/seal/reopen/rename/outcome) office-
+   * wide so conversations + run history stay consistent on every node (P0-1).
+   * Authority → single-writer log; joiner → routed to the host as a member write.
+   */
+  routeEpochWrite(epoch: { id: string; teamId: string }): void
   /** The per-office authority module (M2), or null when absent. */
   getOfficeAuthority(officeId: string): OfficeAuthority | null
   /**
@@ -1202,6 +1215,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       // passes the runtime's status (which already folds in this manager's
       // remote-busy overlay via isMemberRemoteBusy).
       getMemberRuntimeStatus: deps.getMemberRuntimeStatus,
+      // Run-context: stamp each member's live busy assignments (run + conversations)
+      // with authority-generated labels so a joiner's board can say "busy with
+      // another conversation" truthfully (P0-2).
+      ...(deps.getMemberBusy ? { getMemberBusy: (appId: string) => deps.getMemberBusy!(appId, officeId) } : {}),
     })
     entry.federation = federation
     entry.authority = authority
@@ -2297,6 +2314,41 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     scheduleRosterRefresh(record.teamId)
   }
 
+  /**
+   * Replicate an epoch lifecycle write (open/seal/reopen/rename/outcome) so
+   * conversations + run history stay office-shared (P0-1). On the AUTHORITY this
+   * captures into the single-writer log and fans out to standbys; on a JOINER it
+   * rides the same member→authority `blackboard-write` path as a shadow board
+   * write, so the authority applies + re-replicates it to every node. No-op when
+   * the office is neither hosted nor joined here (single-machine team).
+   */
+  function routeEpochWrite(epoch: { id: string; teamId: string }): void {
+    const host = hosted.get(epoch.teamId)
+    if (host) {
+      host.authority?.captureLocalWrite({
+        teamId: epoch.teamId,
+        epochId: epoch.id,
+        op: 'epoch_upsert',
+        payload: epoch as unknown as Record<string, unknown>,
+      })
+      scheduleRosterRefresh(epoch.teamId)
+      return
+    }
+    const join = joined.get(epoch.teamId)
+    if (!join) return // single-machine team (not federated) → local write is enough
+    const frame: BlackboardWriteFrame = {
+      kind: 'blackboard-write',
+      officeId: epoch.teamId,
+      fromNode: deps.getLocalNodeId(),
+      term: join.authority?.getTerm() ?? 0,
+      op: 'epoch_upsert',
+      payload: epoch as unknown as Record<string, unknown>,
+      fid: randomUUID(),
+    }
+    const hostNode = deps.teamStore.getTeamById(epoch.teamId)?.hostNodeId
+    if (hostNode) join.federation.link.send(hostNode, frame)
+  }
+
   /** The host (authority) applies + replicates this write on receipt. */
   function sendMemberWrite(write: OutboundBlackboardWrite & { hostNodeId: NodeId }): void {
     const join = joined.get(write.teamId)
@@ -2650,6 +2702,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     relaySink,
     routeAuthorityWrite,
     sendMemberWrite,
+    routeEpochWrite,
     getOfficeAuthority,
     getOfficePresence,
     broadcastRosterFor,

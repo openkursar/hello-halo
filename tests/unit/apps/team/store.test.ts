@@ -76,6 +76,9 @@ function makeEpoch(overrides?: Partial<TeamEpoch>): TeamEpoch {
     summary: null,
     lifecycle: 'run',
     chatKey: null,
+    title: null,
+    outcome: null,
+    triggerType: 'manual',
     ...overrides,
   }
 }

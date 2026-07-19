@@ -19,9 +19,13 @@ import type {
   TeamRunTrigger,
   TeamEnvelope,
   EpochEndReason,
+  EpochOutcome,
   TeamMemberRuntimeStatus,
+  RosterBusyEntry,
 } from '../../../../shared/apps/team-types'
 import type { TeamStore } from '../../team'
+import { deriveConversationLabel, deriveConversationTitle } from '../../team/epoch-label'
+import { isNativeConversationChatKey } from '../../../../shared/apps/im-keys'
 import type { MessageBus, TurnCompletion, CircuitBreachEvent } from './message-bus'
 import type { TeamPromptContext } from './team-prompt'
 
@@ -79,7 +83,17 @@ export interface Orchestration {
    * fresh run. Does NOT wake the lead — the caller supplies the turn input, and
    * conversation epochs do not occupy team.currentEpochId.
    */
-  ensureConversationEpoch(teamId: string, chatKey: string): TeamEpoch
+  ensureConversationEpoch(teamId: string, chatKey: string, title?: string): TeamEpoch
+  /** Rename a conversation epoch (office-shared: the change is captured + replicated). */
+  renameConversationEpoch(teamId: string, epochId: string, title: string | null): void
+  /**
+   * Auto-name a native conversation from its first user message (parity with the
+   * space chat's first-message title). No-op unless the epoch is a still-untitled
+   * NATIVE conversation and the turn is the lead's (the front desk the user talks
+   * to). The derived title is captured + replicated like any rename, so every
+   * node's session list stops showing "New session".
+   */
+  maybeAutoNameConversation(teamId: string, epochId: string, appId: string, message: string): void
   /**
    * Reversible seal: wake a hibernated (sealed) epoch when someone engages it
    * again (user/IM/teammate). Clears the end stamp and, for run epochs, restores
@@ -97,6 +111,11 @@ export interface Orchestration {
   captureReport(correlationId: string, outcome: TurnCompletion): void
   buildPromptContext(trigger: TeamTriggerContext, selfAppId: string): TeamPromptContext | null
   getMemberStatus(appId: string): TeamMemberRuntimeStatus
+  /**
+   * Everything a member is serving right now for one team (open run and/or
+   * conversations), each with a human label resolved on this side (P0-2).
+   */
+  getMemberBusy(appId: string, teamId: string): RosterBusyEntry[]
   /**
    * Resume a team turn after the user answered a member's escalation. Returns
    * false when the team/epoch is gone (caller must NOT fall back to a solo run).
@@ -133,6 +152,27 @@ export interface OrchestrationDeps {
    * the subscriber's job. Never thrown into the turn path.
    */
   onMemberStatusChanged?: (teamId: string) => void
+  /**
+   * Replication capture for epoch lifecycle writes (open / seal / reopen /
+   * rename / outcome). Fired AFTER the authoritative local store write with the
+   * fresh full row, so the federation layer can sequence + replicate it exactly
+   * like a blackboard write — this is what makes conversations office-shared
+   * (P0-1). Absent → no replication (single-machine team). Never thrown into
+   * the lifecycle path.
+   */
+  onEpochMutation?: (epoch: TeamEpoch) => void
+  /**
+   * Whether a member has a PERSISTED unanswered escalation in this team (the
+   * activity-store truth that survives a seal and a restart, P0-5). In-memory
+   * waiters cover the live window; this covers everything else. Absent → only
+   * the in-memory waiters are consulted.
+   */
+  hasPendingEscalation?: (appId: string, teamId: string) => boolean
+  /**
+   * Human name of an IM chatKey (IM session registry lookup), used when
+   * labeling a conversation a member is busy with. Absent → raw chat id.
+   */
+  describeChatKey?: (teamId: string, chatKey: string) => string | null
 }
 
 const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000
@@ -147,6 +187,22 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       deps.onMemberStatusChanged?.(teamId)
     } catch (err) {
       console.error(`${LOG_TAG} onMemberStatusChanged observer failed:`, err)
+    }
+  }
+
+  /**
+   * Capture an epoch lifecycle write for replication: re-read the fresh row and
+   * hand it to the observer (P0-1). Observer-only — a replication fault never
+   * corrupts the authoritative local write.
+   */
+  function publishEpoch(epochId: string): void {
+    if (!deps.onEpochMutation) return
+    const epoch = store.getEpochById(epochId)
+    if (!epoch) return
+    try {
+      deps.onEpochMutation(epoch)
+    } catch (err) {
+      console.error(`${LOG_TAG} onEpochMutation observer failed:`, err)
     }
   }
 
@@ -469,7 +525,13 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
     // Clear the awaiting marker and bring a run epoch's team status back to
     // running (reactivateEpoch only restores status when the epoch was sealed).
-    escalationWaiters.get(epochId)?.delete(appId)
+    // Drop the epoch key once its last waiter is gone so resolved escalations
+    // don't accumulate empty sets that getMemberStatus would keep scanning.
+    const waiters = escalationWaiters.get(epochId)
+    if (waiters) {
+      waiters.delete(appId)
+      if (waiters.size === 0) escalationWaiters.delete(epochId)
+    }
     if (epoch.lifecycle === 'run' && team.status === 'waiting_user') {
       store.updateTeamStatus(teamId, 'running')
     }
@@ -568,6 +630,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     store.insertEpoch(epoch, runTrigger.type)
     store.updateTeamCurrentEpoch(teamId, epoch.id)
     store.updateTeamStatus(teamId, 'running')
+    publishEpoch(epoch.id)
     emitTeamUpdated(teamId)
 
     console.log(`${LOG_TAG} startEpoch: team=${teamId} epoch=${epoch.id} lead=${team.leadAppId}`)
@@ -608,7 +671,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     return epoch
   }
 
-  function ensureConversationEpoch(teamId: string, chatKey: string): TeamEpoch {
+  function ensureConversationEpoch(teamId: string, chatKey: string, title?: string): TeamEpoch {
     const team = store.getTeamById(teamId)
     if (!team) throw new Error(`Team not found: ${teamId}`)
     if (!team.leadAppId) throw new Error(`Team has no lead provisioned: ${teamId}`)
@@ -627,14 +690,51 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       summary: null,
       lifecycle: 'conversation',
       chatKey,
+      title: title?.trim() || null,
     }
     store.insertEpoch(epoch, 'event')
     // Conversation epochs intentionally do NOT set team.currentEpochId or
     // status='running'. currentEpochId is the single-RUN reentrancy/UI pointer;
     // conversation epochs are per-chat (many open at once) and must not occupy it
     // — otherwise chats would collide and scheduled runs would be blocked.
+    publishEpoch(epoch.id)
+    emitTeamUpdated(teamId)
     console.log(`${LOG_TAG} ensureConversationEpoch: team=${teamId} chat=${chatKey} epoch=${epoch.id} (new)`)
     return epoch
+  }
+
+  function renameConversationEpoch(teamId: string, epochId: string, title: string | null): void {
+    const epoch = store.getEpochById(epochId)
+    if (!epoch || epoch.teamId !== teamId) return
+    store.renameEpoch(epochId, title?.trim() || null)
+    publishEpoch(epochId)
+    emitTeamUpdated(teamId)
+    console.log(`${LOG_TAG} renameConversationEpoch: team=${teamId} epoch=${epochId}`)
+  }
+
+  function maybeAutoNameConversation(teamId: string, epochId: string, appId: string, message: string): void {
+    const epoch = store.getEpochById(epochId)
+    // Only a still-untitled NATIVE conversation gets auto-named. Member/IM chats
+    // already derive their label (member name / chat name); runs use a summary.
+    if (
+      !epoch ||
+      epoch.teamId !== teamId ||
+      epoch.lifecycle !== 'conversation' ||
+      epoch.title ||
+      !epoch.chatKey ||
+      !isNativeConversationChatKey(epoch.chatKey)
+    ) {
+      return
+    }
+    // The lead is the front desk the user talks to; a member's woken turn on this
+    // epoch must not name it (its input is a relayed envelope, not the user's words).
+    if (store.getTeamById(teamId)?.leadAppId !== appId) return
+    const title = deriveConversationTitle(message)
+    if (!title) return
+    store.renameEpoch(epochId, title)
+    publishEpoch(epochId)
+    emitTeamUpdated(teamId)
+    console.log(`${LOG_TAG} auto-named conversation: team=${teamId} epoch=${epochId} title="${title}"`)
   }
 
   /**
@@ -642,13 +742,33 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
    * JSONL/sessionId for history), reset the bus, and clear quiescence timers.
    * Does NOT touch team.currentEpochId/status — callers decide that.
    */
+  /**
+   * Business outcome of a sealed run (P0-4): failure beats everything, a still-
+   * waiting decision beats deliverables, deliverables beat "nothing to do".
+   */
+  function classifyRunOutcome(teamId: string, epochId: string, endReason: EpochEndReason): EpochOutcome {
+    if (endReason === 'error' || endReason === 'timeout') return 'failed'
+    const waiting =
+      (escalationWaiters.get(epochId)?.size ?? 0) > 0 ||
+      store.listMembersByTeam(teamId).some((m) => deps.hasPendingEscalation?.(m.appId, teamId))
+    if (waiting) return 'escalation'
+    const produced =
+      store.listTasksByEpoch(teamId, epochId).some((t) => t.resultRef) ||
+      store.listFindingsByEpoch(teamId, epochId).some((f) => f.ref)
+    return produced ? 'output' : 'no_action'
+  }
+
   async function archiveEpoch(
     teamId: string,
     epochId: string,
     endReason: EpochEndReason,
     summary: string | null
   ): Promise<void> {
-    store.endEpoch(epochId, Date.now(), endReason, summary)
+    const epoch = store.getEpochById(epochId)
+    const outcome =
+      epoch?.lifecycle === 'run' ? classifyRunOutcome(teamId, epochId, endReason) : null
+    store.endEpoch(epochId, Date.now(), endReason, summary, outcome)
+    publishEpoch(epochId)
 
     for (const member of store.listMembersByTeam(teamId)) {
       try {
@@ -661,7 +781,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     bus.resetEpoch(epochId)
 
     quiescenceNudgeCount.delete(epochId)
-    escalationWaiters.delete(epochId)
+    // Escalation waiters deliberately SURVIVE the seal (P0-5): a decision the
+    // user has not made yet keeps the member marked waiting_user (and the
+    // attention chain alive) until it is answered — resumeFromEscalation clears
+    // the marker and reactivates the epoch. The persisted activity entry is the
+    // cross-restart truth; this set is only the live-window mirror.
     const qTimer = quiescenceTimers.get(epochId)
     if (qTimer) {
       clearTimeout(qTimer)
@@ -679,6 +803,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       store.updateTeamCurrentEpoch(teamId, epochId)
       store.updateTeamStatus(teamId, 'running')
     }
+    publishEpoch(epochId)
     emitTeamUpdated(teamId)
     console.log(`${LOG_TAG} reactivateEpoch: team=${teamId} epoch=${epochId} lifecycle=${epoch.lifecycle}`)
   }
@@ -801,14 +926,44 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   function getMemberStatus(appId: string): TeamMemberRuntimeStatus {
     const memberships = store.listMembersByAppId(appId)
     for (const m of memberships) {
-      const epochId = store.getTeamById(m.teamId)?.currentEpochId
-      if (!epochId) continue
-      // Awaiting a user decision takes precedence over working/idle.
-      if (escalationWaiters.get(epochId)?.has(appId)) return 'waiting_user'
-      const key = buildTeamSessionKey(appId, m.teamId, epochId)
-      if (session.isSessionActive(key)) return 'working'
+      // Awaiting a user decision takes precedence over working/idle — and it
+      // SURVIVES a run seal (P0-5): the persisted activity entry is the truth,
+      // the in-memory waiter set the live-window mirror (covers sealed epochs).
+      if (deps.hasPendingEscalation?.(appId, m.teamId)) return 'waiting_user'
+      for (const [epochId, waiters] of escalationWaiters) {
+        if (waiters.has(appId) && store.getEpochById(epochId)?.teamId === m.teamId) {
+          return 'waiting_user'
+        }
+      }
+      // A member working ANY open epoch — a run OR a conversation — is lit
+      // (P0-2). Previously only the run epoch counted, so a member serving an
+      // IM chat looked idle on the board.
+      for (const epoch of store.listOpenEpochs(m.teamId)) {
+        if (session.isSessionActive(buildTeamSessionKey(appId, m.teamId, epoch.id))) {
+          return 'working'
+        }
+      }
     }
     return 'idle'
+  }
+
+  /** Every open epoch this member is actively serving, with a human label (P0-2). */
+  function getMemberBusy(appId: string, teamId: string): RosterBusyEntry[] {
+    const out: RosterBusyEntry[] = []
+    for (const epoch of store.listOpenEpochs(teamId)) {
+      if (!session.isSessionActive(buildTeamSessionKey(appId, teamId, epoch.id))) continue
+      out.push({
+        epochId: epoch.id,
+        kind: epoch.lifecycle,
+        // Proper-noun labels only; category fallbacks (e.g. "Run") stay in the
+        // renderer where translation lives.
+        label:
+          epoch.lifecycle === 'conversation'
+            ? deriveConversationLabel(store, epoch, deps.describeChatKey)
+            : '',
+      })
+    }
+    return out
   }
 
   // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -843,6 +998,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     isBusy,
     startEpoch,
     ensureConversationEpoch,
+    renameConversationEpoch,
+    maybeAutoNameConversation,
     reactivateEpoch,
     sealEpoch,
     sealConversationEpoch,
@@ -850,6 +1007,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     captureReport,
     buildPromptContext,
     getMemberStatus,
+    getMemberBusy,
     resumeFromEscalation,
   }
 }

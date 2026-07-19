@@ -34,7 +34,7 @@ import {
   type M2Frame,
 } from './protocol-m2'
 import { isFeedSyncFrame, type FeedSyncFrame } from './log/types'
-import { SELF_NODE_ID, type TeamMemberRuntimeStatus } from '../../../../shared/apps/team-types'
+import { SELF_NODE_ID, type TeamMemberRuntimeStatus, type RosterBusyEntry } from '../../../../shared/apps/team-types'
 import {
   PRESENCE_CONFIRMED_OFFLINE_MS,
   PRESENCE_HEARTBEAT_INTERVAL_MS,
@@ -180,6 +180,13 @@ export interface FederationCoordinatorDeps {
    */
   getMemberRuntimeStatus?: (appId: string) => TeamMemberRuntimeStatus
   /**
+   * Everything a member is serving right now (run + conversations), each with an
+   * authority-generated human label, stamped into the roster snapshot so a joiner
+   * can say "busy with another conversation" truthfully (P0-2). Read-only
+   * pass-through from the kernel; absent → derived from status alone.
+   */
+  getMemberBusy?: (appId: string) => RosterBusyEntry[]
+  /**
    * M2 authority-presence seam: invoked from the presence FSM when a peer node's
    * reachability transitions. Unlike onMemberConfirmedOffline (member-keyed, for
    * that unblock), this is NODE-keyed and lets the handover layer notice the
@@ -271,6 +278,7 @@ export function createFederationCoordinator(
     getJoinGrantExtras,
     getCurrentRunEpoch,
     getMemberRuntimeStatus,
+    getMemberBusy,
     onNodePresence,
     onNodeAdmitted,
   } = deps
@@ -433,6 +441,7 @@ export function createFederationCoordinator(
       const absoluteOwner = m.ownerNodeId === SELF_NODE_ID ? context.selfNodeId : m.ownerNodeId ?? context.selfNodeId
       const status = getMemberRuntimeStatus?.(m.appId) ?? 'idle'
       const currentTaskTitle = status === 'working' ? inProgressByAppId.get(m.appId) : undefined
+      const busy = getMemberBusy?.(m.appId) ?? []
       return {
         appId: m.appId,
         memberName: m.memberName,
@@ -445,6 +454,7 @@ export function createFederationCoordinator(
         ownerDisplayName: federationStore.getNode(officeId, absoluteOwner)?.displayName ?? m.ownerDisplayName ?? null,
         status,
         ...(currentTaskTitle ? { currentTaskTitle } : {}),
+        ...(busy.length > 0 ? { busy } : {}),
       }
     })
     return {
