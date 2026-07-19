@@ -82,21 +82,22 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
 
   return (
     <div className="p-3 sm:p-4 space-y-4">
-      {/* Drop zone */}
-      <div
-        onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
-        onDragLeave={() => setIsDragging(false)}
-        onDrop={handleDrop}
-        className={`rounded-xl border-2 border-dashed p-5 sm:p-6 text-center transition-colors ${
-          isDragging ? 'border-primary bg-primary/5' : 'border-border'
-        }`}
-      >
-        <Upload className="w-6 h-6 mx-auto text-muted-foreground" />
-        <p className="mt-2 text-sm font-medium">{t('Drop files or folders here')}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {t('PDF, Office docs, images (OCR), Markdown, text, CSV, HTML. Folders import recursively — source code and system files are skipped.')}
-        </p>
-        {isElectron && (
+      {/* Drop zone — dropped browser File objects carry no filesystem path, so
+          adding files is desktop-only */}
+      {isElectron ? (
+        <div
+          onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={handleDrop}
+          className={`rounded-xl border-2 border-dashed p-5 sm:p-6 text-center transition-colors ${
+            isDragging ? 'border-primary bg-primary/5' : 'border-border'
+          }`}
+        >
+          <Upload className="w-6 h-6 mx-auto text-muted-foreground" />
+          <p className="mt-2 text-sm font-medium">{t('Drop files or folders here')}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {t('PDF, Office docs, images (OCR), Markdown, text, CSV, HTML. Folders import recursively — source code and system files are skipped.')}
+          </p>
           <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
             <button
               onClick={() => pickAndAddFiles(kb.id)}
@@ -113,13 +114,13 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
               {t('Browse folder')}
             </button>
           </div>
-        )}
-        {!isElectron && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            {t('Browsing files requires the desktop app.')}
-          </p>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="rounded-xl border-2 border-dashed border-border p-5 sm:p-6 text-center">
+          <Upload className="w-6 h-6 mx-auto text-muted-foreground" />
+          <p className="mt-2 text-sm font-medium">{t('Adding files requires the desktop app.')}</p>
+        </div>
+      )}
 
       {/* Progress */}
       <IngestProgress progress={progress} />
