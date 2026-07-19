@@ -17,6 +17,7 @@ import type { LinkedDirectory } from '../../../shared/types/tlon'
 import { getKBRawDir } from './paths'
 import { listKBs, getKB, collectIngestCandidates } from './service'
 import { enqueueFiles, processQueue, rebuildIndexMd } from './ingest'
+import { shutdownOcr } from './ocr'
 
 interface WatchHandle {
   key: string
@@ -143,5 +144,6 @@ export async function shutdownTlon(): Promise<void> {
     clearTimeout(timer)
   }
   debounceTimers.clear()
+  await shutdownOcr()
   console.log('[Tlon] Watchers shut down')
 }

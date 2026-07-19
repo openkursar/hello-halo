@@ -66,6 +66,22 @@ function collapseCjkSpaces(text: string): string {
   return text.replace(new RegExp(`([${cjk}])\\s+(?=[${cjk}])`, 'g'), '$1')
 }
 
+/**
+ * Terminate the cached worker (a real worker thread holding the WASM engine).
+ * Called on app shutdown; a later ocrImage lazily re-creates the worker.
+ */
+export async function shutdownOcr(): Promise<void> {
+  const pending = workerPromise
+  workerPromise = null
+  if (!pending) return
+  try {
+    const worker = await pending
+    await worker?.terminate()
+  } catch (err) {
+    console.error('[Tlon] OCR worker termination failed:', err)
+  }
+}
+
 /** OCR an image buffer to plaintext. Returns '' when no text is found or the engine is unavailable. */
 export async function ocrImage(buf: Buffer): Promise<string> {
   const worker = await getWorker()

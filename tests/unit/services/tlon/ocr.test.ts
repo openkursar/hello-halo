@@ -13,7 +13,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 type RecognizeResult = { data: { text: string } }
 
-let createWorkerImpl: () => Promise<{ recognize: (buf: Buffer) => Promise<RecognizeResult> }>
+let createWorkerImpl: () => Promise<{
+  recognize: (buf: Buffer) => Promise<RecognizeResult>
+  terminate?: () => Promise<void>
+}>
 
 vi.mock('tesseract.js', () => ({
   createWorker: (...args: unknown[]) => {
@@ -82,6 +85,32 @@ describe('Tlon OCR', () => {
     // Failed init clears the cached promise so a later image retries.
     expect(await ocrImage(Buffer.from('img'))).toBe('')
     expect(factory).toHaveBeenCalledTimes(2)
+  })
+
+  it('shutdownOcr terminates the cached worker and a later image re-creates it', async () => {
+    const terminate = vi.fn(async () => {})
+    const factory = vi.fn(async () => ({
+      recognize: async () => ({ data: { text: 'text' } }),
+      terminate,
+    }))
+    createWorkerImpl = factory
+    const { ocrImage, shutdownOcr } = await importOcr()
+    await ocrImage(Buffer.from('a'))
+    await shutdownOcr()
+    expect(terminate).toHaveBeenCalledTimes(1)
+
+    await ocrImage(Buffer.from('b'))
+    expect(factory).toHaveBeenCalledTimes(2)
+  })
+
+  it('shutdownOcr is a no-op when no worker was ever created', async () => {
+    const factory = vi.fn(async () => ({
+      recognize: async () => ({ data: { text: '' } }),
+    }))
+    createWorkerImpl = factory
+    const { shutdownOcr } = await importOcr()
+    await expect(shutdownOcr()).resolves.toBeUndefined()
+    expect(factory).not.toHaveBeenCalled()
   })
 
   it('returns empty string when recognition throws', async () => {
