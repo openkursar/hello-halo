@@ -76,7 +76,7 @@ export function registerArtifactRoutes(app: Express): void {
   // Download single file
   app.get('/api/artifacts/download', async (req: Request, res: Response) => {
     try {
-      const validatedPath = validateFilePath(res, req.query.path as string)
+      const validatedPath = validateFilePath(res, req.query.path as string, 'read')
       if (!validatedPath) {
         return
       }
@@ -187,7 +187,7 @@ export function registerArtifactRoutes(app: Express): void {
   // Read artifact content (Content Canvas fallback for remote mode)
   app.get('/api/artifacts/content', async (req: Request, res: Response) => {
     try {
-      const validatedPath = validateFilePath(res, req.query.path as string)
+      const validatedPath = validateFilePath(res, req.query.path as string, 'read')
       if (!validatedPath) {
         return
       }
@@ -226,7 +226,7 @@ export function registerArtifactRoutes(app: Express): void {
   // Detect file type (remote mode Canvas fallback)
   app.get('/api/artifacts/detect-type', async (req: Request, res: Response) => {
     try {
-      const validatedPath = validateFilePath(res, req.query.path as string)
+      const validatedPath = validateFilePath(res, req.query.path as string, 'read')
       if (!validatedPath) return
 
       if (!existsSync(validatedPath)) {

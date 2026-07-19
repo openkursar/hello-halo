@@ -65,3 +65,7 @@ export {
 } from './ingest'
 
 export { initTlonWatchers, shutdownTlon } from './watcher'
+
+// Root of the KB tree — used by the HTTP layer to grant read access for
+// remote citation clicks (writes remain space-scoped).
+export { getTlonRoot } from './paths'

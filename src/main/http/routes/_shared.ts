@@ -34,6 +34,7 @@ import {
 } from '../../services/artifact.service'
 import { getTempSpacePath, getSpacesDir, getConfig as getServiceConfig, saveConfig } from '../../foundation/config.service'
 import { getSpace, getAllSpacePaths } from '../../services/space.service'
+import { getTlonRoot } from '../../services/tlon'
 import { getAppManager } from '../../apps/manager'
 import { AppAlreadyInstalledError, McpCommandBlockedError } from '../../apps/manager/errors'
 import { getAppRuntime, getImChannelManager, sendAppChatMessage, stopAppChat, isAppChatGenerating, loadAppChatMessages, loadImChatMessages, getAppChatSessionState, getAppChatConversationId, clearAppChat, clearImSession, restartAppChat, dispatchInboundMessage } from '../../apps/runtime'
@@ -148,10 +149,10 @@ export function isPathInside(target: string, base: string): boolean {
 }
 
 /**
- * Check if target path is allowed (inside any space directory).
+ * Check whether the target lies inside any of the base directories.
  * Resolves symlinks to prevent directory traversal via symlinks.
  */
-export function isPathAllowed(target: string): boolean {
+function isWithinAnyBase(target: string, bases: string[]): boolean {
   // First check if path exists
   if (!existsSync(target)) {
     return false
@@ -159,7 +160,7 @@ export function isPathAllowed(target: string): boolean {
 
   try {
     const realTarget = realpathSync(target)
-    const allowedBases = getAllSpacePaths().filter(p => existsSync(p))
+    const allowedBases = bases.filter(p => existsSync(p))
     return allowedBases.some(base => {
       try {
         const realBase = realpathSync(base)
@@ -174,13 +175,31 @@ export function isPathAllowed(target: string): boolean {
   }
 }
 
-export function validateFilePath(res: Response, filePath?: string): string | null {
+/** Check if target path is allowed for writes (inside any space directory). */
+export function isPathAllowed(target: string): boolean {
+  return isWithinAnyBase(target, getAllSpacePaths())
+}
+
+/**
+ * Read access additionally covers the knowledge-base tree so remote citation
+ * clicks can open source documents. Writes stay space-only (isPathAllowed).
+ */
+export function isReadPathAllowed(target: string): boolean {
+  return isWithinAnyBase(target, [...getAllSpacePaths(), getTlonRoot()])
+}
+
+export function validateFilePath(
+  res: Response,
+  filePath?: string,
+  access: 'read' | 'write' = 'write'
+): string | null {
   if (!filePath) {
     res.status(400).json({ success: false, error: 'Missing file path' })
     return null
   }
 
-  if (!isPathAllowed(filePath)) {
+  const allowed = access === 'read' ? isReadPathAllowed(filePath) : isPathAllowed(filePath)
+  if (!allowed) {
     res.status(403).json({ success: false, error: 'Access denied' })
     return null
   }

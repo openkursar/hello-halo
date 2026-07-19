@@ -33,7 +33,7 @@ import { truncateText, getToolFriendlyFormat } from './thought-utils'
 import type { Message, Thought, ThoughtsSummary } from '../../types'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
-import { useCanvasStore } from '../../stores/canvas.store'
+import { SourceChips } from './SourceChips'
 
 interface MessageItemProps {
   message: Message
@@ -242,7 +242,6 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
   const isStreaming = (message as any).isStreaming
   const [copied, setCopied] = useState(false)
   const { t } = useTranslation()
-  const openFile = useCanvasStore(s => s.openFile)
   const { loadMessageThoughts, currentSpaceId, currentConversationId } = useChatStore(s => ({
     loadMessageThoughts: s.loadMessageThoughts,
     currentSpaceId: s.currentSpaceId,
@@ -351,20 +350,7 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
 
       {/* Knowledge-base citations — documents the agent Read this turn, click to open in the canvas */}
       {!isUser && message.sources && message.sources.length > 0 && (
-        <div className="mt-2 pt-2 border-t border-border/60 flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] text-muted-foreground">{t('Sources')}</span>
-          {message.sources.map((s, i) => (
-            <button
-              key={i}
-              onClick={() => void openFile(s.path, s.name)}
-              className="inline-flex items-center gap-1 max-w-[200px] px-2 py-0.5 rounded-md bg-secondary hover:bg-secondary/80 text-[11px] text-foreground transition-colors"
-              title={t('Open {{name}}', { name: s.name })}
-            >
-              <FileText className="w-3 h-3 flex-shrink-0 text-muted-foreground" />
-              <span className="truncate">{s.name}</span>
-            </button>
-          ))}
-        </div>
+        <SourceChips sources={message.sources} />
       )}
 
       {/* Persisted error - shown for assistant messages that failed (e.g., 429 rate limit) */}

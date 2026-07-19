@@ -2,7 +2,7 @@
  * ChatTab — ephemeral "ask this knowledge base" conversation.
  *
  * Runs through the normal agent engine (sendMessage with tlonKbId) so the
- * agent's working dir is the KB's wiki/ and it can Read/Glob/Grep the pages.
+ * agent's working dir is the KB's text/ corpus and it can Read/Glob/Grep it.
  * The transcript is not saved as history: a live status line reflects the
  * agent's activity, and the final answer is pulled from the conversation on
  * completion (see tlon.store).
@@ -11,9 +11,9 @@
 import { useEffect, useRef, useState, KeyboardEvent } from 'react'
 import { useTranslation } from '../../i18n'
 import { useTlonStore } from '../../stores/tlon.store'
-import { Sparkles, Send, Trash2, Loader2, BookOpen, FileText } from 'lucide-react'
+import { Sparkles, Send, Trash2, Loader2, BookOpen } from 'lucide-react'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
-import { useCanvasStore } from '../../stores/canvas.store'
+import { SourceChips } from '../chat/SourceChips'
 import type { KnowledgeBaseEntry } from '../../../shared/types/tlon'
 
 interface ChatTabProps {
@@ -26,7 +26,6 @@ export function ChatTab({ kb }: ChatTabProps) {
   const sendChatMessage = useTlonStore(s => s.sendChatMessage)
   const clearChat = useTlonStore(s => s.clearChat)
   const subscribeChatEvents = useTlonStore(s => s.subscribeChatEvents)
-  const openFile = useCanvasStore(s => s.openFile)
 
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -94,20 +93,7 @@ export function ChatTab({ kb }: ChatTabProps) {
                     ? <MarkdownRenderer content={msg.content} />
                     : msg.content}
                   {msg.sources && msg.sources.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-border/60 flex flex-wrap items-center gap-1.5">
-                      <span className="text-[11px] text-muted-foreground">{t('Sources')}</span>
-                      {msg.sources.map((s, i) => (
-                        <button
-                          key={i}
-                          onClick={() => void openFile(s.path, s.name)}
-                          className="inline-flex items-center gap-1 max-w-[200px] px-2 py-0.5 rounded-md bg-secondary hover:bg-secondary/80 text-[11px] text-foreground transition-colors"
-                          title={t('Open {{name}}', { name: s.name })}
-                        >
-                          <FileText className="w-3 h-3 flex-shrink-0 text-muted-foreground" />
-                          <span className="truncate">{s.name}</span>
-                        </button>
-                      ))}
-                    </div>
+                    <SourceChips sources={msg.sources} />
                   )}
                 </div>
               </div>
