@@ -103,12 +103,16 @@ export interface KBReference {
  */
 export interface RawFileStatus {
   name: string
-  /** Raw-relative path */
+  /** Raw-relative path for `raw` sources; absolute path for `linked` sources. */
   path: string
   size: number
   learned: boolean
   state: 'learned' | 'pending' | 'no-text' | 'failed'
   error?: string
+  /** 'raw' = added directly (copied into raw/); 'linked' = from a watched folder. */
+  source: 'raw' | 'linked'
+  /** Watched-folder label, set only for `linked` sources (for grouping). */
+  dirLabel?: string
 }
 
 /**

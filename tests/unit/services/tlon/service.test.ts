@@ -520,6 +520,43 @@ describe('Tlon Service', () => {
       expect(byPath['stale-fail.md'].error).toBeUndefined()
       expect(byPath['fresh.md']).toMatchObject({ state: 'pending', learned: false })
     })
+
+    it('lists watched-folder files (keyed by absolute path) tagged source=linked', () => {
+      const kb = createKB({ name: 'Watched' })
+      const rawScratch = makeScratchDir()
+      addRawFiles(kb.id, [writeScratchFile(rawScratch, 'own.md', 'own')])
+
+      const watched = makeScratchDir()
+      const linkedDoc = writeScratchFile(watched, 'memo.md', 'watched content')
+      writeScratchFile(watched, 'ignore.ts', 'const x = 1') // non-document → excluded
+      addLinkedDir(kb.id, { path: watched, label: 'Onboarding' })
+
+      // Mark the watched doc learned (linked sources are keyed by absolute path).
+      fs.writeFileSync(path.join(getKBTextDir(kb.id), 'w.txt'), 'watched content', 'utf-8')
+      writeHashes(kb.id, {
+        version: 1,
+        files: {
+          'own.md': { hash: sha256('own'), ingestedAt: 't', textPath: 'own.txt' },
+          [linkedDoc]: { hash: sha256('watched content'), ingestedAt: 't', textPath: 'w.txt' },
+        },
+      })
+      fs.writeFileSync(path.join(getKBTextDir(kb.id), 'own.txt'), 'own', 'utf-8')
+
+      const statuses = getRawFileLearnedStatus(kb.id)
+      const byPath = Object.fromEntries(statuses.map(s => [s.path, s]))
+
+      // The raw file stays source=raw with its relative path.
+      expect(byPath['own.md']).toMatchObject({ source: 'raw', state: 'learned' })
+      // The watched file appears, keyed by its absolute path, tagged linked.
+      expect(byPath[linkedDoc]).toMatchObject({
+        source: 'linked',
+        dirLabel: 'Onboarding',
+        state: 'learned',
+        name: 'memo.md',
+      })
+      // The non-document watched file is not listed.
+      expect(statuses.some(s => s.name === 'ignore.ts')).toBe(false)
+    })
   })
 
   describe('hashes persistence', () => {
@@ -633,6 +670,21 @@ describe('Tlon Service', () => {
       expect(stats.rawFileCount).toBe(2)
       expect(stats.rawSizeBytes).toBe(7)
       expect(stats.indexedCount).toBe(1)
+    })
+
+    it('counts watched-folder documents toward the total (accepted files only)', () => {
+      const kb = createKB({ name: 'StatsWatched' })
+      const rawScratch = makeScratchDir()
+      addRawFiles(kb.id, [writeScratchFile(rawScratch, 'a.md', '12')])
+
+      const watched = makeScratchDir()
+      writeScratchFile(watched, 'doc.md', '345')       // accepted → counted
+      writeScratchFile(watched, 'code.ts', 'ignored')  // rejected → not counted
+      addLinkedDir(kb.id, { path: watched, label: 'Docs' })
+
+      const stats = refreshStats(kb.id)
+      expect(stats.rawFileCount).toBe(2)          // 1 raw + 1 accepted watched
+      expect(stats.rawSizeBytes).toBe(2 + 3)      // "12" + "345"
     })
   })
 

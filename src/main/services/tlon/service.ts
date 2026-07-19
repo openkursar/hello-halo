@@ -835,6 +835,19 @@ export function refreshStats(kbId: string): KBStats {
       rawFileCount++
     } catch { /* ignore */ }
   }
+  // Watched-folder sources are ingested like raw files, so they count toward the
+  // total too — otherwise indexedCount (which includes them) could exceed it.
+  for (const linked of entry?.linkedDirs ?? []) {
+    if (!existsSync(linked.path)) continue
+    for (const rel of walkFiles(linked.path)) {
+      const abs = join(linked.path, rel)
+      if (!isAcceptedSourceFile(abs)) continue
+      try {
+        rawSizeBytes += statSync(abs).size
+        rawFileCount++
+      } catch { /* ignore */ }
+    }
+  }
   const indexedCount = walkFiles(textDir).filter(r => r.toLowerCase().endsWith('.txt')).length
 
   const stats: KBStats = {
@@ -888,19 +901,23 @@ export function clearWikiAndHashes(kbId: string): boolean {
  * come from the same hashes.json entry, valid only while the hash matches).
  */
 export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
+  const entry = getRegistry().get(kbId)
   const rawDir = getKBRawDir(kbId)
   const textDir = getKBTextDir(kbId)
   const hashes = readHashes(kbId)
   const result: RawFileStatus[] = []
 
-  for (const rel of walkFiles(rawDir)) {
-    const abs = join(rawDir, rel)
+  // A source is learned IFF hashes.json records the current content hash with an
+  // existing textPath; the same entry (valid only while the hash matches) also
+  // carries the 'no-text'/'failed' refinements. `recordedKey` matches how ingest
+  // keys a source: raw-relative for raw/, absolute for watched (linked) folders.
+  const derive = (recordedKey: string, abs: string): { size: number; state: RawFileStatus['state']; error?: string } => {
     let size = 0
     let state: RawFileStatus['state'] = 'pending'
     let error: string | undefined
     try {
       size = statSync(abs).size
-      const recorded = hashes.files[rel.split(sep).join('/')]
+      const recorded = hashes.files[recordedKey]
       if (recorded && recorded.hash === hashFileCached(abs).hash) {
         if (recorded.textPath && existsSync(join(textDir, recorded.textPath))) state = 'learned'
         else if (recorded.empty) state = 'no-text'
@@ -910,15 +927,44 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
         }
       }
     } catch { /* ignore */ }
+    return { size, state, error }
+  }
+
+  for (const rel of walkFiles(rawDir)) {
+    const recordedKey = rel.split(sep).join('/')
+    const { size, state, error } = derive(recordedKey, join(rawDir, rel))
     result.push({
       name: rel.split(sep).pop() || rel,
-      path: rel.split(sep).join('/'),
+      path: recordedKey,
       size,
       learned: state === 'learned',
       state,
+      source: 'raw',
       ...(error !== undefined ? { error } : {}),
     })
   }
+
+  // Watched folders: files are ingested in place (keyed by absolute path), so
+  // list them too — otherwise a folder's files learn invisibly.
+  for (const linked of entry?.linkedDirs ?? []) {
+    if (!existsSync(linked.path)) continue
+    for (const rel of walkFiles(linked.path)) {
+      const abs = join(linked.path, rel)
+      if (!isAcceptedSourceFile(abs)) continue
+      const { size, state, error } = derive(abs, abs)
+      result.push({
+        name: rel.split(sep).pop() || rel,
+        path: abs,
+        size,
+        learned: state === 'learned',
+        state,
+        source: 'linked',
+        dirLabel: linked.label,
+        ...(error !== undefined ? { error } : {}),
+      })
+    }
+  }
+
   result.sort((a, b) => a.path.localeCompare(b.path))
   return result
 }

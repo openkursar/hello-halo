@@ -844,6 +844,8 @@
   "No digital humans yet": "デジタルヒューマンはまだありません",
   "No documents indexed yet. Add files first, then ask questions here.": "インデックス済みのドキュメントはまだありません。まずファイルを追加して、それからここで質問してください。",
   "No extractable text (e.g. a scanned PDF) — the original is kept as a source": "抽出可能なテキストがありません（例：スキャンされたPDF）— 元のファイルはソースとして保持されます",
+  "Watched folder": "監視フォルダ",
+  "From a watched folder — manage it in Settings": "監視フォルダ内のファイル — 設定で管理します",
   "No files": "ファイルがありません",
   "No files found": "ファイルが見つかりません",
   "No files open": "開いているファイルがありません",

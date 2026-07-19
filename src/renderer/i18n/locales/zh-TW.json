@@ -844,6 +844,8 @@
   "No digital humans yet": "尚未建立任何數位人",
   "No documents indexed yet. Add files first, then ask questions here.": "還沒有已索引的文件。先新增檔案,然後在這裡提問。",
   "No extractable text (e.g. a scanned PDF) — the original is kept as a source": "沒有可擷取的文字（例如掃描版 PDF）——原始檔案仍保留為來源",
+  "Watched folder": "監視資料夾",
+  "From a watched folder — manage it in Settings": "來自監視資料夾——在設定中管理",
   "No files": "無檔案",
   "No files found": "找不到檔案",
   "No files open": "未開啟檔案",
