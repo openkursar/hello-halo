@@ -17,6 +17,7 @@ import { registerImRoutes } from './im.routes'
 import { registerSystemRoutes } from './system.routes'
 import { registerAppsRoutes } from './apps.routes'
 import { registerStoreRoutes } from './store.routes'
+import { registerTlonRoutes } from './tlon.routes'
 
 /**
  * Register all API routes.
@@ -32,6 +33,7 @@ export function registerApiRoutes(app: Express): void {
   registerSystemRoutes(app)
   registerAppsRoutes(app)
   registerStoreRoutes(app)
+  registerTlonRoutes(app)
 
   console.log('[HTTP] API routes registered')
 }

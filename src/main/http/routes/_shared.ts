@@ -14,6 +14,7 @@ import * as agentController from '../../controllers/agent.controller'
 import * as spaceController from '../../controllers/space.controller'
 import * as conversationController from '../../controllers/conversation.controller'
 import * as configController from '../../controllers/config.controller'
+import * as tlonController from '../../controllers/tlon.controller'
 import { getEnabledAuthProviderConfigs, getAISourceManager } from '../../services/ai-sources'
 import { testChannel, clearAllTokenCaches } from '../../services/notify-channels'
 import type { NotificationChannelType } from '../../../shared/types/notification-channels'
@@ -264,6 +265,7 @@ export {
   stopAppChat,
   storeController,
   testChannel,
+  tlonController,
   trashArtifact,
   wecomGenerateScode,
   wecomPollResult,
