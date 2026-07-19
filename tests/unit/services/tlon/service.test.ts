@@ -29,6 +29,8 @@ vi.mock('@parcel/watcher', () => ({
 
 import {
   _resetTlonRegistry,
+  _resetTlonHashCache,
+  hashFileCached,
   createKB,
   getKB,
   updateKB,
@@ -92,6 +94,7 @@ function writeScratchFile(dir: string, name: string, content = 'hello'): string 
 describe('Tlon Service', () => {
   beforeEach(async () => {
     _resetTlonRegistry()
+    _resetTlonHashCache()
     await initializeApp()
   })
 
@@ -357,6 +360,68 @@ describe('Tlon Service', () => {
 
     it('returns empty result for a missing KB', () => {
       expect(addRawFiles('missing', ['/tmp/x.md'])).toEqual({ added: [], rejected: [] })
+    })
+
+    it('uniquifies a basename collision with different content instead of overwriting', () => {
+      const kb = createKB({ name: 'Collide' })
+      const a = makeScratchDir()
+      const b = makeScratchDir()
+      const c = makeScratchDir()
+      addRawFiles(kb.id, [writeScratchFile(a, 'notes.md', 'from a')])
+      const second = addRawFiles(kb.id, [writeScratchFile(b, 'notes.md', 'from b')])
+      const third = addRawFiles(kb.id, [writeScratchFile(c, 'notes.md', 'from c')])
+
+      expect(second.added).toEqual(['notes-2.md'])
+      expect(third.added).toEqual(['notes-3.md'])
+      const rawDir = getKBRawDir(kb.id)
+      expect(fs.readFileSync(path.join(rawDir, 'notes.md'), 'utf-8')).toBe('from a')
+      expect(fs.readFileSync(path.join(rawDir, 'notes-2.md'), 'utf-8')).toBe('from b')
+      expect(fs.readFileSync(path.join(rawDir, 'notes-3.md'), 'utf-8')).toBe('from c')
+    })
+
+    it('re-adding identical content keeps the existing copy and reports it added', () => {
+      const kb = createKB({ name: 'SameBytes' })
+      const scratch = makeScratchDir()
+      const src = writeScratchFile(scratch, 'same.md', 'identical')
+      addRawFiles(kb.id, [src])
+      const again = addRawFiles(kb.id, [src])
+
+      expect(again.added).toEqual(['same.md'])
+      expect(fs.readdirSync(getKBRawDir(kb.id))).toEqual(['same.md'])
+    })
+  })
+
+  describe('hashFileCached', () => {
+    it('memoizes by mtime+size and re-hashes after reset or size change', () => {
+      const scratch = makeScratchDir()
+      const p = writeScratchFile(scratch, 'memo.txt', 'aaaa')
+      // Whole-second mtime so utimesSync can restore it exactly below.
+      const mtime = new Date('2026-01-01T00:00:00Z')
+      fs.utimesSync(p, mtime, mtime)
+      const first = hashFileCached(p)
+      expect(first.hash).toBe(sha256('aaaa'))
+      expect(first.binary).toBe(false)
+
+      // Same size + same mtime: the (stale) memo is served without a read.
+      fs.writeFileSync(p, 'bbbb', 'utf-8')
+      fs.utimesSync(p, mtime, mtime)
+      expect(hashFileCached(p).hash).toBe(sha256('aaaa'))
+
+      // Reset drops the memo and the new bytes are hashed.
+      _resetTlonHashCache()
+      expect(hashFileCached(p).hash).toBe(sha256('bbbb'))
+
+      // A size change invalidates without any reset.
+      fs.writeFileSync(p, 'cc', 'utf-8')
+      expect(hashFileCached(p).hash).toBe(sha256('cc'))
+    })
+
+    it('reports binary content and throws on missing files', () => {
+      const scratch = makeScratchDir()
+      const p = path.join(scratch, 'bin.dat')
+      fs.writeFileSync(p, Buffer.from([1, 0, 2, 3]))
+      expect(hashFileCached(p).binary).toBe(true)
+      expect(() => hashFileCached(path.join(scratch, 'missing'))).toThrow()
     })
   })
 

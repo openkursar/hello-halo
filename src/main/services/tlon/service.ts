@@ -114,6 +114,37 @@ export function sha256(buf: Buffer | string): string {
   return createHash('sha256').update(buf).digest('hex')
 }
 
+/**
+ * Content-hash memo keyed by absolute path. Learned-status pulls and ingest
+ * scans re-hash every source repeatedly (per progress pull, per boot); an
+ * unchanged mtime+size reuses the digest instead of re-reading the bytes.
+ * Bounded, FIFO eviction.
+ */
+const HASH_CACHE_MAX = 4096
+const hashCache = new Map<string, { mtimeMs: number; size: number; hash: string; binary: boolean }>()
+
+/** For testing only — drop memoized digests so rewritten files re-hash. */
+export function _resetTlonHashCache(): void {
+  hashCache.clear()
+}
+
+/** Hash a file's content, reusing the cached digest when mtime+size match. Throws on IO errors. */
+export function hashFileCached(absolutePath: string): { hash: string; size: number; binary: boolean } {
+  const st = statSync(absolutePath)
+  const cached = hashCache.get(absolutePath)
+  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached
+
+  const buf = readFileSync(absolutePath)
+  const entry = { mtimeMs: st.mtimeMs, size: st.size, hash: sha256(buf), binary: looksBinary(buf) }
+  hashCache.delete(absolutePath)
+  hashCache.set(absolutePath, entry)
+  if (hashCache.size > HASH_CACHE_MAX) {
+    const oldest = hashCache.keys().next().value
+    if (oldest !== undefined) hashCache.delete(oldest)
+  }
+  return entry
+}
+
 // ============================================================================
 // Registry
 // ============================================================================
@@ -322,6 +353,10 @@ export async function deleteKB(kbId: string): Promise<boolean> {
     const { stopWatchersForKB } = await import('./watcher')
     await stopWatchersForKB(kbId)
 
+    // Same lazy-import pattern (ingest.ts imports service.ts).
+    const { evictIngestState } = await import('./ingest')
+    evictIngestState(kbId)
+
     const dir = getKBDir(kbId)
     if (existsSync(dir)) {
       rmSync(dir, { recursive: true, force: true })
@@ -474,7 +509,11 @@ export function addRawFiles(kbId: string, inputPaths: string[]): AddRawFilesResu
   return result
 }
 
-/** Copy one source file to raw/<destRel>, rejecting non-text by extension. */
+/**
+ * Copy one source file to raw/<destRel>, rejecting non-text by extension.
+ * A name collision with different content is uniquified (`name-2.ext`, …)
+ * instead of silently overwriting; identical content is kept as-is.
+ */
 function copyRawFile(
   rawDir: string,
   src: string,
@@ -485,15 +524,38 @@ function copyRawFile(
     result.rejected.push(destRel)
     return
   }
-  const dest = resolveWithinDir(rawDir, destRel)
-  if (!dest) {
-    result.rejected.push(destRel)
-    return
-  }
   try {
+    let finalRel = destRel
+    let dest = resolveWithinDir(rawDir, finalRel)
+    if (!dest) {
+      result.rejected.push(destRel)
+      return
+    }
+    if (existsSync(dest)) {
+      const srcHash = sha256(readFileSync(src))
+      const relDir = dirname(destRel)
+      const base = destRel.split(/[\\/]/).pop() as string
+      const dot = base.lastIndexOf('.')
+      const stem = dot > 0 ? base.slice(0, dot) : base
+      const ext = dot > 0 ? base.slice(dot) : ''
+      for (let n = 2; existsSync(dest); n++) {
+        if (sha256(readFileSync(dest)) === srcHash) {
+          // Same bytes already present under this name — nothing to copy.
+          result.added.push(finalRel)
+          return
+        }
+        finalRel = join(relDir === '.' ? '' : relDir, `${stem}-${n}${ext}`)
+        const next = resolveWithinDir(rawDir, finalRel)
+        if (!next) {
+          result.rejected.push(destRel)
+          return
+        }
+        dest = next
+      }
+    }
     mkdirSync(dirname(dest), { recursive: true })
     copyFileSync(src, dest)
-    result.added.push(destRel)
+    result.added.push(finalRel)
   } catch (error) {
     console.error(`[Tlon] Failed to copy ${src}:`, error)
     result.rejected.push(destRel)
@@ -574,7 +636,7 @@ function resolveWithinDir(baseDir: string, rel: string): string | null {
 }
 
 // ============================================================================
-// Wiki reads (read-only)
+// Index reads (read-only)
 // ============================================================================
 
 /** Strip a leading/trailing fenced ```markdown / ``` wrapper if present. */
@@ -835,8 +897,8 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
       size = statSync(abs).size
       const recorded = hashes.files[rel.split(sep).join('/')]
       if (recorded && recorded.textPath) {
-        const current = sha256(readFileSync(abs))
-        learned = recorded.hash === current && existsSync(join(textDir, recorded.textPath))
+        const { hash } = hashFileCached(abs)
+        learned = recorded.hash === hash && existsSync(join(textDir, recorded.textPath))
       }
     } catch { /* ignore */ }
     result.push({
@@ -884,10 +946,10 @@ export function collectIngestCandidates(kbId: string): Array<{
     if (!isAcceptedSourceFile(absolutePath)) return
     let current: string
     try {
-      const buf = readFileSync(absolutePath)
+      const info = hashFileCached(absolutePath)
       // PDF/Office are binary by nature — only text files get the NUL-byte guard.
-      if (!isExtractable(absolutePath) && looksBinary(buf)) return
-      current = sha256(buf)
+      if (!isExtractable(absolutePath) && info.binary) return
+      current = info.hash
     } catch { return }
     const recorded = hashes.files[sourcePath]
     // Skip when the bytes are unchanged and we've already handled them: either
