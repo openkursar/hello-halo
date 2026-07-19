@@ -5,8 +5,11 @@
  *   ~/.halo/
  *     knowledge-bases-index.json          (registry, KBIndexV1)
  *     knowledge-bases/<uuid>/
- *       meta.json schema.md index.md log.md
- *       raw/  wiki/  .ingest/hashes.json
+ *       meta.json index.md log.md
+ *       raw/   original source files
+ *       text/  extracted plaintext, one per source (what queries grep/read)
+ *       wiki/  legacy LLM-compiled pages — no longer written; cleared on re-index
+ *       .ingest/hashes.json
  */
 
 import { join } from 'path'
@@ -31,10 +34,6 @@ export function getKBMetaPath(id: KnowledgeBaseId): string {
   return join(getKBDir(id), 'meta.json')
 }
 
-export function getKBSchemaPath(id: KnowledgeBaseId): string {
-  return join(getKBDir(id), 'schema.md')
-}
-
 export function getKBIndexMdPath(id: KnowledgeBaseId): string {
   return join(getKBDir(id), 'index.md')
 }
@@ -49,6 +48,11 @@ export function getKBRawDir(id: KnowledgeBaseId): string {
 
 export function getKBWikiDir(id: KnowledgeBaseId): string {
   return join(getKBDir(id), 'wiki')
+}
+
+/** Extracted-plaintext directory — the corpus queries grep/read (agentic search). */
+export function getKBTextDir(id: KnowledgeBaseId): string {
+  return join(getKBDir(id), 'text')
 }
 
 export function getKBIngestDir(id: KnowledgeBaseId): string {

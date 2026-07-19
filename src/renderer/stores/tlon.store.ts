@@ -23,11 +23,11 @@ import i18n from '../i18n'
 import type {
   KnowledgeBaseEntry,
   RawFileStatus,
-  WikiPageMeta,
   IngestProgressEvent,
   CreateKBInput,
   UpdateKBInput,
   AddRawFilesResult,
+  KBSource,
 } from '../../shared/types/tlon'
 import type { Conversation, Message, Thought } from '../types'
 
@@ -37,6 +37,8 @@ export interface TlonChatMessage {
   role: 'user' | 'assistant'
   content: string
   error?: boolean
+  /** Source documents this answer drew from (clickable citations). */
+  sources?: KBSource[]
 }
 
 interface TlonChatSession {
@@ -46,6 +48,8 @@ interface TlonChatSession {
   generating: boolean
   /** Live activity label shown while the agent works (from thought events). */
   status?: string
+  /** Text-corpus files the agent Read this turn, resolved to sources on finish. */
+  readPaths?: string[]
 }
 
 /** KB chats run as ephemeral conversations under the Halo temp space. */
@@ -57,10 +61,6 @@ interface TlonState {
   selectedKBId: string | null
   /** Raw files per KB (with learned status). Keyed by kbId. */
   rawFiles: Record<string, RawFileStatus[]>
-  /** Wiki pages per KB. Keyed by kbId. */
-  wikiPages: Record<string, WikiPageMeta[]>
-  /** index.md content per KB. Keyed by kbId. */
-  indexContent: Record<string, string>
   /** Live ingest progress per KB (animation only). Keyed by kbId. */
   ingestProgress: Record<string, IngestProgressEvent>
   /** Ephemeral chat session per KB. Keyed by kbId. */
@@ -93,10 +93,6 @@ interface TlonState {
   removeRawFile: (kbId: string, relativePath: string) => Promise<boolean>
   pickAndAddFiles: (kbId: string) => Promise<void>
   pickAndImportFolder: (kbId: string) => Promise<void>
-
-  // ── Wiki ──────────────────────────────────
-  loadWiki: (kbId: string) => Promise<void>
-  readWikiPage: (kbId: string, pagePath: string) => Promise<string | null>
 
   // ── Ingest ────────────────────────────────
   triggerIngest: (kbId: string) => Promise<void>
@@ -133,8 +129,6 @@ export const useTlonStore = create<TlonState>((set, get) => ({
   kbs: [],
   selectedKBId: null,
   rawFiles: {},
-  wikiPages: {},
-  indexContent: {},
   ingestProgress: {},
   chatSessions: {},
   isLoading: false,
@@ -163,7 +157,6 @@ export const useTlonStore = create<TlonState>((set, get) => ({
     set({ selectedKBId: kbId })
     if (kbId) {
       void get().loadRawFiles(kbId)
-      void get().loadWiki(kbId)
       void get().loadIngestStatus(kbId)
     }
   },
@@ -376,36 +369,6 @@ export const useTlonStore = create<TlonState>((set, get) => ({
     }
   },
 
-  // ── Wiki ──────────────────────────────────
-
-  loadWiki: async (kbId) => {
-    try {
-      const [wikiRes, indexRes] = await Promise.all([
-        api.tlon.listWiki(kbId),
-        api.tlon.readIndex(kbId),
-      ])
-      if (wikiRes.success && wikiRes.data) {
-        set(state => ({ wikiPages: { ...state.wikiPages, [kbId]: wikiRes.data as WikiPageMeta[] } }))
-      }
-      if (indexRes.success) {
-        set(state => ({ indexContent: { ...state.indexContent, [kbId]: (indexRes.data as string) ?? '' } }))
-      }
-    } catch (err) {
-      console.error('[TlonStore] loadWiki error:', err)
-    }
-  },
-
-  readWikiPage: async (kbId, pagePath) => {
-    try {
-      const res = await api.tlon.readWiki(kbId, pagePath)
-      if (res.success) return (res.data as string) ?? null
-      return null
-    } catch (err) {
-      console.error('[TlonStore] readWikiPage error:', err)
-      return null
-    }
-  },
-
   // ── Ingest ────────────────────────────────
 
   triggerIngest: async (kbId) => {
@@ -428,9 +391,8 @@ export const useTlonStore = create<TlonState>((set, get) => ({
         })
         return false
       }
-      // Wiki is wiped immediately; re-ingest progress arrives via events.
+      // Text index is wiped immediately; re-ingest progress arrives via events.
       await get().loadRawFiles(kbId)
-      await get().loadWiki(kbId)
       return true
     } catch (err) {
       console.error('[TlonStore] clearAndRelearn error:', err)
@@ -496,6 +458,7 @@ export const useTlonStore = create<TlonState>((set, get) => ({
           messages: [...(state.chatSessions[kbId]?.messages ?? []), userMsg],
           generating: true,
           status: i18n.t('Thinking…'),
+          readPaths: [],
         },
       },
     }))
@@ -557,6 +520,27 @@ export const useTlonStore = create<TlonState>((set, get) => ({
       else if (thought.type === 'text') setStatus(kbId, i18n.t('Writing the answer…'))
     })
 
+    // Track the source files the agent Reads this turn (for citations). The
+    // tool-call event carries the tool name AND its fully-parsed input together,
+    // unlike the initial tool_use thought whose input is still empty.
+    const unsubToolCall = api.onAgentToolCall((data) => {
+      const kbId = matchKb(data)
+      if (!kbId) return
+      const tc = data as { name?: string; input?: Record<string, unknown> }
+      const fp = tc.name === 'Read' ? tc.input?.file_path : undefined
+      if (typeof fp !== 'string') return
+      set(state => {
+        const session = state.chatSessions[kbId]
+        if (!session?.generating) return {}
+        return {
+          chatSessions: {
+            ...state.chatSessions,
+            [kbId]: { ...session, readPaths: [...(session.readPaths ?? []), fp] },
+          },
+        }
+      })
+    })
+
     const unsubComplete = api.onAgentComplete((data) => {
       const kbId = matchKb(data)
       if (!kbId) return
@@ -572,6 +556,7 @@ export const useTlonStore = create<TlonState>((set, get) => ({
 
     return () => {
       unsubThought()
+      unsubToolCall()
       unsubComplete()
       unsubError()
     }
@@ -601,14 +586,30 @@ export const useTlonStore = create<TlonState>((set, get) => ({
       get().pushAssistantError(kbId, i18n.t('No answer was produced.'))
       return
     }
+    // Resolve the source documents the agent read this turn into clickable citations.
+    let sources: KBSource[] = []
+    const readPaths = get().chatSessions[kbId]?.readPaths
+    if (readPaths?.length) {
+      try {
+        const res = await api.tlon.resolveSources(kbId, readPaths)
+        if (res.success && Array.isArray(res.data)) sources = res.data as KBSource[]
+      } catch (err) {
+        console.error('[TlonStore] resolveSources error:', err)
+      }
+    }
     set(state => {
       const session = state.chatSessions[kbId]
       if (!session) return {}
-      const assistantMsg: TlonChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: answer }
+      const assistantMsg: TlonChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: answer,
+        sources: sources.length ? sources : undefined,
+      }
       return {
         chatSessions: {
           ...state.chatSessions,
-          [kbId]: { ...session, messages: [...session.messages, assistantMsg], generating: false, status: undefined },
+          [kbId]: { ...session, messages: [...session.messages, assistantMsg], generating: false, status: undefined, readPaths: undefined },
         },
       }
     })
@@ -636,7 +637,6 @@ export const useTlonStore = create<TlonState>((set, get) => ({
     // per-file status icons reflect reality, never the event stream.
     void get().loadRawFiles(event.kbId)
     if (event.phase === 'done' || event.phase === 'error') {
-      void get().loadWiki(event.kbId)
       void get().refreshKB(event.kbId)
     }
   },

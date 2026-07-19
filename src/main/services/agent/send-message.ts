@@ -77,8 +77,9 @@ export async function sendMessage(
 
   const config = getConfig()
   // "Chat with this KB" turns (tlonKbId set) target one KB directly: the
-  // working dir becomes that KB's wiki dir so Read/Glob/Grep navigate its pages.
-  // Resolved up front so the working dir is correct for MCP setup below too.
+  // working dir becomes that KB's text/ dir so Read/Glob/Grep search its
+  // extracted documents. Resolved up front so the working dir is correct for
+  // MCP setup below too.
   const kbChatCtx = request.tlonKbId ? getKBChatContext(request.tlonKbId) : null
   if (request.tlonKbId && !kbChatCtx) {
     console.warn(`[Agent] tlonKbId ${request.tlonKbId} has no chat context; falling back to space context`)
@@ -131,10 +132,10 @@ export async function sendMessage(
     }
     mcpServers['web-search'] = createWebSearchMcpServer()
 
-    // Knowledge bases injected into the system prompt so the agent can Read the
-    // listed wiki pages. For a KB-chat turn it's just the targeted KB; otherwise
-    // it's the union of KBs bound to this space and KBs loaded into THIS
-    // conversation (deduped by id).
+    // Knowledge bases injected into the system prompt so the agent can Grep/Read
+    // the listed document corpus. For a KB-chat turn it's just the targeted KB;
+    // otherwise it's the union of KBs bound to this space and KBs loaded into
+    // THIS conversation (deduped by id).
     let knowledgeBases = kbChatCtx ? [kbChatCtx.reference] : getKBReferencesForSpace(spaceId)
     if (!kbChatCtx && conversation?.knowledgeBaseIds?.length) {
       const byId = new Map(knowledgeBases.map(ref => [ref.id, ref]))

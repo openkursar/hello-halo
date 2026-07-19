@@ -1,6 +1,7 @@
 /**
  * Tlon Service — knowledge base registry, CRUD, binding, file ops,
- * wiki reads, conversation-integration references, and learned-status.
+ * source-citation resolution, conversation-integration references, and
+ * learned-status.
  *
  * Registry pattern mirrors space.service.ts:
  * - module-level Map is the in-memory working copy of knowledge-bases-index.json
@@ -12,7 +13,7 @@
  */
 
 import { createHash } from 'crypto'
-import { join, sep, isAbsolute, normalize, dirname } from 'path'
+import { join, sep, isAbsolute, normalize, dirname, relative } from 'path'
 import {
   existsSync,
   mkdirSync,
@@ -30,10 +31,9 @@ import type {
   KnowledgeBaseEntry,
   KBIndexV1,
   KBStats,
-  KBStatus,
   LinkedDirectory,
-  WikiPageMeta,
   KBReference,
+  KBSource,
   RawFileStatus,
   IngestHashesV1,
   CreateKBInput,
@@ -45,16 +45,15 @@ import {
   getKBIndexPath,
   getKBDir,
   getKBMetaPath,
-  getKBSchemaPath,
   getKBIndexMdPath,
   getKBLogPath,
   getKBRawDir,
   getKBWikiDir,
+  getKBTextDir,
   getKBIngestDir,
   getKBHashesPath,
 } from './paths'
 import {
-  DEFAULT_SCHEMA_MD,
   DEFAULT_INDEX_MD,
   DEFAULT_LOG_MD,
 } from './defaults'
@@ -157,7 +156,7 @@ function loadIndex(): Map<KnowledgeBaseId, KnowledgeBaseEntry> {
         entry.linkedDirs = Array.isArray(entry.linkedDirs) ? entry.linkedDirs : []
         entry.spaceIds = Array.isArray(entry.spaceIds) ? entry.spaceIds : []
         entry.appIds = Array.isArray(entry.appIds) ? entry.appIds : []
-        entry.stats = entry.stats || { rawFileCount: 0, wikiPageCount: 0, rawSizeBytes: 0 }
+        entry.stats = entry.stats || { rawFileCount: 0, indexedCount: 0, rawSizeBytes: 0 }
         map.set(id, entry)
       }
     }
@@ -197,10 +196,9 @@ export function createKB(input: CreateKBInput): KnowledgeBaseEntry {
   const dir = getKBDir(id)
 
   mkdirSync(getKBRawDir(id), { recursive: true })
-  mkdirSync(getKBWikiDir(id), { recursive: true })
+  mkdirSync(getKBTextDir(id), { recursive: true })
   mkdirSync(getKBIngestDir(id), { recursive: true })
 
-  writeFileSync(getKBSchemaPath(id), DEFAULT_SCHEMA_MD, 'utf-8')
   writeFileSync(getKBIndexMdPath(id), DEFAULT_INDEX_MD, 'utf-8')
   writeFileSync(getKBLogPath(id), DEFAULT_LOG_MD, 'utf-8')
   writeFileSync(
@@ -228,7 +226,7 @@ export function createKB(input: CreateKBInput): KnowledgeBaseEntry {
     linkedDirs,
     spaceIds: [],
     appIds: [],
-    stats: { rawFileCount: 0, wikiPageCount: 0, rawSizeBytes: 0 },
+    stats: { rawFileCount: 0, indexedCount: 0, rawSizeBytes: 0 },
   }
 
   writeFileSync(getKBMetaPath(id), JSON.stringify(entry, null, 2), 'utf-8')
@@ -589,60 +587,6 @@ function stripMarkdownFence(content: string): string {
   return content
 }
 
-export function listWikiPages(kbId: string): WikiPageMeta[] {
-  const wikiDir = getKBWikiDir(kbId)
-  const hashes = readHashes(kbId)
-  const sourcesByPage = new Map<string, string[]>()
-  for (const [src, info] of Object.entries(hashes.files)) {
-    for (const page of info.wikiPages) {
-      const arr = sourcesByPage.get(page) || []
-      arr.push(src)
-      sourcesByPage.set(page, arr)
-    }
-  }
-
-  const pages: WikiPageMeta[] = []
-  for (const rel of walkFiles(wikiDir)) {
-    if (!rel.toLowerCase().endsWith('.md')) continue
-    const abs = join(wikiDir, rel)
-    let content = ''
-    let generatedAt = ''
-    try {
-      content = readFileSync(abs, 'utf-8')
-      generatedAt = statSync(abs).mtime.toISOString()
-    } catch { continue }
-    const normalizedRel = rel.split(sep).join('/')
-    pages.push({
-      path: normalizedRel,
-      title: extractTitle(content) || normalizedRel,
-      sources: sourcesByPage.get(normalizedRel) || [],
-      generatedAt,
-      sourceHash: sha256(content),
-    })
-  }
-  pages.sort((a, b) => a.path.localeCompare(b.path))
-  return pages
-}
-
-function extractTitle(content: string): string | null {
-  for (const line of content.split('\n')) {
-    const m = line.match(/^#\s+(.+)$/)
-    if (m) return m[1].trim()
-  }
-  return null
-}
-
-export function readWikiPage(kbId: string, pagePath: string): string | null {
-  const wikiDir = getKBWikiDir(kbId)
-  const abs = resolveWithinDir(wikiDir, pagePath)
-  if (!abs || !existsSync(abs)) return null
-  try {
-    return stripMarkdownFence(readFileSync(abs, 'utf-8'))
-  } catch {
-    return null
-  }
-}
-
 export function readIndexMd(kbId: string): string | null {
   const path = getKBIndexMdPath(kbId)
   if (!existsSync(path)) return null
@@ -651,6 +595,64 @@ export function readIndexMd(kbId: string): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * Resolve the text-corpus files an agent Read during a KB chat turn back to the
+ * original source documents (name + absolute path) for clickable citations.
+ * Reads are keyed by the extracted-text filename; map it back via hashes.json.
+ * Filters to sources that map to a real, existing file; dedupes by source.
+ */
+export function resolveSources(kbId: string, readPaths: string[]): KBSource[] {
+  const hashes = readHashes(kbId)
+  const rawDir = getKBRawDir(kbId)
+  const bySource = new Map<string, string>()
+  for (const [sourcePath, info] of Object.entries(hashes.files)) {
+    if (info.textPath) bySource.set(info.textPath, sourcePath)
+  }
+  const out: KBSource[] = []
+  const seen = new Set<string>()
+  for (const p of readPaths) {
+    const base = p.split(/[\\/]/).pop() || p
+    const sourcePath = bySource.get(base)
+    if (!sourcePath || seen.has(sourcePath)) continue
+    // Raw sources are raw-relative; linked sources are stored as absolute paths.
+    const openPath = isAbsolute(sourcePath) ? sourcePath : join(rawDir, sourcePath)
+    if (!existsSync(openPath)) continue
+    seen.add(sourcePath)
+    out.push({ name: sourcePath.split(/[\\/]/).pop() || sourcePath, path: openPath })
+  }
+  return out
+}
+
+/**
+ * Resolve read text-corpus paths to their source documents without knowing the
+ * KB up front: each path's KB is inferred from its location under the tlon root
+ * (`<root>/<kbId>/text/…`), so a single main-chat turn that Read across several
+ * loaded KBs resolves in one call. Paths outside any KB text dir are ignored.
+ */
+export function resolveSourcesForReadPaths(readPaths: string[]): KBSource[] {
+  const root = getTlonRoot()
+  const byKb = new Map<string, string[]>()
+  for (const p of readPaths) {
+    const rel = relative(root, p)
+    if (rel.startsWith('..') || isAbsolute(rel)) continue
+    const kbId = rel.split(/[\\/]/)[0]
+    if (!kbId) continue
+    const arr = byKb.get(kbId) || []
+    arr.push(p)
+    byKb.set(kbId, arr)
+  }
+  const out: KBSource[] = []
+  const seen = new Set<string>()
+  for (const [kbId, paths] of byKb) {
+    for (const s of resolveSources(kbId, paths)) {
+      if (seen.has(s.path)) continue
+      seen.add(s.path)
+      out.push(s)
+    }
+  }
+  return out
 }
 
 // ============================================================================
@@ -670,8 +672,9 @@ export function getKBReferencesForSpace(spaceId: string): KBReference[] {
 }
 
 /**
- * Context for a direct "chat with this knowledge base" turn: the wiki/ dir to
- * use as the agent's working directory and the KB reference to inject into the
+ * Context for a direct "chat with this knowledge base" turn: the text/ dir to
+ * use as the agent's working directory (so Read/Glob/Grep search the extracted
+ * document corpus — agentic search) and the KB reference to inject into the
  * system prompt. Unlike the space/app paths this targets one KB by id and does
  * not require a space binding (the user opened the KB explicitly). Returns null
  * if the KB or its index is missing.
@@ -683,8 +686,12 @@ export function getKBChatContext(
   if (!kb) return null
   const indexContent = readIndexMd(kb.id)
   if (indexContent === null) return null
+  // A wiki-era KB may not have a text/ dir yet (migration runs async on launch);
+  // ensure it exists so the agent's working dir is never a nonexistent path.
+  const workDir = getKBTextDir(kb.id)
+  if (!existsSync(workDir)) mkdirSync(workDir, { recursive: true })
   return {
-    workDir: getKBWikiDir(kb.id),
+    workDir,
     reference: { id: kb.id, name: kb.name, indexContent },
   }
 }
@@ -754,7 +761,7 @@ export function writeHashes(kbId: string, hashes: IngestHashesV1): void {
 export function refreshStats(kbId: string): KBStats {
   const entry = getRegistry().get(kbId)
   const rawDir = getKBRawDir(kbId)
-  const wikiDir = getKBWikiDir(kbId)
+  const textDir = getKBTextDir(kbId)
 
   let rawFileCount = 0
   let rawSizeBytes = 0
@@ -764,11 +771,11 @@ export function refreshStats(kbId: string): KBStats {
       rawFileCount++
     } catch { /* ignore */ }
   }
-  const wikiPageCount = walkFiles(wikiDir).filter(r => r.toLowerCase().endsWith('.md')).length
+  const indexedCount = walkFiles(textDir).filter(r => r.toLowerCase().endsWith('.txt')).length
 
   const stats: KBStats = {
     rawFileCount,
-    wikiPageCount,
+    indexedCount,
     rawSizeBytes,
     lastIngestAt: entry?.stats.lastIngestAt,
   }
@@ -785,21 +792,23 @@ export function refreshStats(kbId: string): KBStats {
 }
 
 /**
- * Wipe the generated wiki + learned-status so the KB can be relearned from
- * scratch (raw/ and watched folders are the sources and are left untouched).
- * Used by the "clear & relearn" flow to rebuild older KBs with the current
- * compounding curator.
+ * Wipe the extracted text (and any offline wiki) + learned-status so the KB can
+ * be re-indexed from scratch (raw/ and watched folders are the sources and are
+ * left untouched). Used by the "clear & relearn" flow.
  */
 export function clearWikiAndHashes(kbId: string): boolean {
   const entry = getRegistry().get(kbId)
   if (!entry) return false
+  const textDir = getKBTextDir(kbId)
   const wikiDir = getKBWikiDir(kbId)
-  try {
-    rmSync(wikiDir, { recursive: true, force: true })
-  } catch (error) {
-    console.error(`[Tlon] Failed to clear wiki for ${kbId}:`, error)
+  for (const dir of [textDir, wikiDir]) {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch (error) {
+      console.error(`[Tlon] Failed to clear ${dir}:`, error)
+    }
   }
-  mkdirSync(wikiDir, { recursive: true })
+  mkdirSync(textDir, { recursive: true })
   writeHashes(kbId, { version: 1, files: {} })
   try {
     writeFileSync(getKBIndexMdPath(kbId), DEFAULT_INDEX_MD, 'utf-8')
@@ -814,6 +823,7 @@ export function clearWikiAndHashes(kbId: string): boolean {
  */
 export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
   const rawDir = getKBRawDir(kbId)
+  const textDir = getKBTextDir(kbId)
   const hashes = readHashes(kbId)
   const result: RawFileStatus[] = []
 
@@ -824,9 +834,9 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
     try {
       size = statSync(abs).size
       const recorded = hashes.files[rel.split(sep).join('/')]
-      if (recorded) {
+      if (recorded && recorded.textPath) {
         const current = sha256(readFileSync(abs))
-        learned = recorded.hash === current
+        learned = recorded.hash === current && existsSync(join(textDir, recorded.textPath))
       }
     } catch { /* ignore */ }
     result.push({
@@ -848,19 +858,14 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
 export function markIngestCompleted(kbId: string): void {
   const entry = getRegistry().get(kbId)
   if (!entry) return
+  // 'error' is a legacy status from older builds (nothing sets it now); a
+  // completed batch heals it, while leaving a user-set 'paused' KB paused.
+  if (entry.status === 'error') entry.status = 'active'
   entry.stats.lastIngestAt = new Date().toISOString()
   try {
     writeFileSync(getKBMetaPath(kbId), JSON.stringify(entry, null, 2), 'utf-8')
   } catch { /* ignore */ }
   persistIndex(getRegistry())
-}
-
-/** Set status (e.g. 'error') and persist. */
-export function setKBStatus(kbId: string, status: KBStatus): void {
-  const entry = getRegistry().get(kbId)
-  if (!entry || entry.status === status) return
-  entry.status = status
-  saveEntry(entry)
 }
 
 /** Compute the full list of changed raw + linked source files for a KB. */
@@ -872,6 +877,7 @@ export function collectIngestCandidates(kbId: string): Array<{
   const entry = getRegistry().get(kbId)
   if (!entry) return []
   const hashes = readHashes(kbId)
+  const textDir = getKBTextDir(kbId)
   const candidates: Array<{ sourcePath: string; absolutePath: string; sourceType: 'raw' | 'linked' }> = []
 
   const consider = (sourcePath: string, absolutePath: string, sourceType: 'raw' | 'linked') => {
@@ -884,7 +890,11 @@ export function collectIngestCandidates(kbId: string): Array<{
       current = sha256(buf)
     } catch { return }
     const recorded = hashes.files[sourcePath]
-    if (recorded && recorded.hash === current) return // already learned
+    // Skip when the bytes are unchanged and we've already handled them: either
+    // the extracted text still exists, or extraction was attempted and yielded
+    // nothing (`empty`). A legacy entry (neither field) still re-extracts.
+    if (recorded && recorded.hash === current
+        && ((recorded.textPath && existsSync(join(textDir, recorded.textPath))) || recorded.empty)) return
     candidates.push({ sourcePath, absolutePath, sourceType })
   }
 

@@ -66,7 +66,7 @@ import { registerCliConfigHandlers } from '../ipc/cli-config'
 import { registerModelCapabilitiesHandlers } from '../ipc/model-capabilities'
 import { registerWeixinIlinkHandlers } from '../ipc/weixin-ilink'
 import { registerTlonHandlers } from '../ipc/tlon'
-import { initTlonWatchers, shutdownTlon } from '../services/tlon'
+import { initTlonWatchers, shutdownTlon, migrateKBsToTextIndex } from '../services/tlon'
 import { initRegistryService, shutdownRegistryService } from '../store'
 import { cleanupImChannelTempFiles } from '../apps/runtime/im-channels'
 import { registerIdleTask, startIdleDrain } from './idle-queue'
@@ -150,6 +150,11 @@ async function initPlatformAndApps(): Promise<void> {
   // re-trigger ingest. Non-fatal: a watcher failure must not block bootstrap.
   await initTlonWatchers().catch(err =>
     console.error('[Bootstrap] Tlon watcher init failed:', err)
+  )
+  // Migrate any not-yet-indexed sources (incl. wiki-era KBs) onto the text
+  // index. Fire-and-forget: extraction is cheap and must not block bootstrap.
+  void migrateKBsToTextIndex().catch(err =>
+    console.error('[Bootstrap] Tlon text-index migration failed:', err)
   )
 
   // ── Phase 4: Registry Service (App Store) ─────────────────────────────

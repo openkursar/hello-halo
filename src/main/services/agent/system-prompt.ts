@@ -511,19 +511,19 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
   if (ctx.knowledgeBases?.length) {
     prompt += '\n\n# Knowledge\n\n'
-      + 'You have studied the material below and know it as your own. Act as a colleague who '
-      + 'has read all of it AND a research assistant thinking one step ahead:\n'
-      + '- Speak from it fluently and in your own words — never announce that you are "looking '
-      + 'something up", and never refer to internal wiki paths.\n'
-      + '- Be proactive: connect what the user is asking to what you know, surface relevant '
-      + 'context they did not explicitly ask for, draw cross-topic links, and flag tensions or '
-      + 'non-obvious implications they should be aware of.\n'
-      + '- Each entry below is a topic you know, with a one-line synopsis — usually enough to '
-      + 'answer directly. Read a topic\'s file only when you need exact figures, quotes, or '
-      + 'detail beyond the synopsis.\n'
-      + '- Attribute what you use to the original source document by name (e.g. "your PCB '
-      + 'survey"), never to a wiki file path. If the knowledge does not actually cover the '
-      + 'question, say so plainly rather than forcing a connection.\n\n'
+      + 'You have knowledge bases of source documents. Search them on demand to '
+      + 'answer, like a colleague who knows where everything is:\n'
+      + '- To answer from a knowledge base, Grep/Glob the listed document files for '
+      + 'relevant passages and Read the matching ones — refine your search and look '
+      + 'again until you have what you need. Do not answer from memory when a document '
+      + 'can be checked.\n'
+      + '- Answer in your own words and attribute what you use to the source document '
+      + 'by name (e.g. "your PCB survey"), never to a file path. Be proactive: surface '
+      + 'relevant context, draw cross-document links, and flag tensions worth knowing.\n'
+      + '- If the documents do not actually cover the question, say so plainly rather '
+      + 'than forcing a connection.\n'
+      + '- Each entry below is a document with a one-line synopsis and the path of its '
+      + 'extracted text to Grep/Read.\n\n'
     for (const kb of ctx.knowledgeBases) {
       prompt += `## ${kb.name}\n\n${kb.indexContent}\n\n`
     }

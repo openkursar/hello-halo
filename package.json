@@ -116,6 +116,7 @@
     "ignore": "^7.0.5",
     "imapflow": "^1.3.1",
     "jsonrepair": "^3.13.3",
+    "jszip": "^3.10.1",
     "katex": "^0.16.47",
     "lucide-react": "^0.555.0",
     "mailparser": "^3.9.8",
@@ -139,6 +140,8 @@
     "sm-crypto": "^0.4.0",
     "streamdown": "^2.2.0",
     "tailwind-merge": "^2.2.0",
+    "tesseract.js": "^5.1.1",
+    "unpdf": "^1.6.2",
     "uuid": "^13.0.0",
     "ws": "^8.18.3",
     "yaml": "^2.8.2",
@@ -191,8 +194,15 @@
     "files": [
       "out/**/*",
       "resources/**/*",
+      "!resources/ocr/**/*",
       "product.json",
       "!node_modules/better-sqlite3/prebuilds"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/ocr",
+        "to": "ocr"
+      }
     ],
     "asarUnpack": [
       "node_modules/@openai/codex/bin/**/*",
@@ -202,7 +212,9 @@
       "node_modules/cloudflared/**/*",
       "node_modules/@parcel/watcher-*/**/*",
       "node_modules/better-sqlite3/build/Release/*.node",
-      "node_modules/node-pty/prebuilds/**"
+      "node_modules/node-pty/prebuilds/**",
+      "node_modules/tesseract.js/**",
+      "node_modules/tesseract.js-core/**"
     ],
     "publish": {
       "provider": "github",

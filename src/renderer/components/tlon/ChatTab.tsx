@@ -11,7 +11,9 @@
 import { useEffect, useRef, useState, KeyboardEvent } from 'react'
 import { useTranslation } from '../../i18n'
 import { useTlonStore } from '../../stores/tlon.store'
-import { Sparkles, Send, Trash2, Loader2, BookOpen } from 'lucide-react'
+import { Sparkles, Send, Trash2, Loader2, BookOpen, FileText } from 'lucide-react'
+import { MarkdownRenderer } from '../chat/MarkdownRenderer'
+import { useCanvasStore } from '../../stores/canvas.store'
 import type { KnowledgeBaseEntry } from '../../../shared/types/tlon'
 
 interface ChatTabProps {
@@ -24,13 +26,14 @@ export function ChatTab({ kb }: ChatTabProps) {
   const sendChatMessage = useTlonStore(s => s.sendChatMessage)
   const clearChat = useTlonStore(s => s.clearChat)
   const subscribeChatEvents = useTlonStore(s => s.subscribeChatEvents)
+  const openFile = useCanvasStore(s => s.openFile)
 
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const messages = session?.messages ?? []
   const generating = session?.generating ?? false
-  const hasWiki = kb.stats.wikiPageCount > 0
+  const hasSources = kb.stats.rawFileCount > 0
 
   useEffect(() => subscribeChatEvents(), [subscribeChatEvents])
 
@@ -64,30 +67,52 @@ export function ChatTab({ kb }: ChatTabProps) {
             <BookOpen className="w-8 h-8 text-muted-foreground mb-3" />
             <p className="text-sm font-medium">{t('Ask this knowledge base')}</p>
             <p className="mt-1 text-xs text-muted-foreground max-w-sm">
-              {hasWiki
-                ? t('Questions are answered from the AI notes in this knowledge base, with sources cited.')
-                : t('No AI notes yet. Add files and run learning first, then ask questions here.')}
+              {hasSources
+                ? t('Questions are answered from the documents in this knowledge base, with sources cited.')
+                : t('No documents indexed yet. Add files first, then ask questions here.')}
             </p>
           </div>
         ) : (
-          messages.map(msg => (
-            <div
-              key={msg.id}
-              className={msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'}
-            >
+          messages.map(msg => {
+            const isUser = msg.role === 'user'
+            const asMarkdown = !isUser && !msg.error
+            return (
               <div
-                className={`max-w-[85%] rounded-xl px-3 py-2 text-sm whitespace-pre-wrap break-words ${
-                  msg.role === 'user'
-                    ? 'bg-primary text-primary-foreground'
-                    : msg.error
-                      ? 'bg-destructive/10 text-destructive border border-destructive/30'
-                      : 'bg-card border border-border'
-                }`}
+                key={msg.id}
+                className={isUser ? 'flex justify-end' : 'flex justify-start'}
               >
-                {msg.content}
+                <div
+                  className={`max-w-[85%] rounded-xl px-3 py-2 text-sm break-words ${
+                    isUser
+                      ? 'bg-primary text-primary-foreground whitespace-pre-wrap'
+                      : msg.error
+                        ? 'bg-destructive/10 text-destructive border border-destructive/30 whitespace-pre-wrap'
+                        : 'bg-card border border-border'
+                  }`}
+                >
+                  {asMarkdown
+                    ? <MarkdownRenderer content={msg.content} />
+                    : msg.content}
+                  {msg.sources && msg.sources.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-border/60 flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] text-muted-foreground">{t('Sources')}</span>
+                      {msg.sources.map((s, i) => (
+                        <button
+                          key={i}
+                          onClick={() => void openFile(s.path, s.name)}
+                          className="inline-flex items-center gap-1 max-w-[200px] px-2 py-0.5 rounded-md bg-secondary hover:bg-secondary/80 text-[11px] text-foreground transition-colors"
+                          title={t('Open {{name}}', { name: s.name })}
+                        >
+                          <FileText className="w-3 h-3 flex-shrink-0 text-muted-foreground" />
+                          <span className="truncate">{s.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))
+            )
+          })
         )}
 
         {generating && (

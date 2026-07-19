@@ -67,3 +67,7 @@ RELEASE_NOTES.md
 # Halo Agent SDK (managed in separate private repo)
 src/sdk/
 /temp/
+# Stray KB wiki artifacts (real wikis live under ~/.halo, never in-repo)
+/wiki/
+# Personal marketing/intro drafts (not product code)
+/intro-doc/

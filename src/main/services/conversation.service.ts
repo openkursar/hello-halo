@@ -19,6 +19,7 @@ import { getSpace, touchSpaceActivity } from './space.service'
 import { getConfig } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
 import type { FileChangesSummary } from '../../shared/file-changes'
+import type { KBSource } from '../../shared/types/tlon'
 
 // Re-export for existing consumers
 export type { FileChangesSummary } from '../../shared/file-changes'
@@ -88,6 +89,7 @@ interface Message {
   }
   error?: string  // Error message when assistant response failed (e.g., 429 rate limit)
   source?: string  // How the message entered the conversation (e.g., 'injection')
+  sources?: KBSource[]  // Knowledge-base documents the agent Read this turn (clickable citations)
 }
 
 interface ToolCall {

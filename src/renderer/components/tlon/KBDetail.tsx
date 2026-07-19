@@ -1,8 +1,8 @@
 /**
  * KBDetail — the detail pane for a selected knowledge base.
  *
- * Header (icon + name + file/note counts) over four tabs:
- *   Chat (ChatTab) · Files (RawFilesTab) · AI Notes (WikiTab) · Settings (SettingsTab)
+ * Header (icon + name + document count) over three tabs:
+ *   Chat (ChatTab) · Files (RawFilesTab) · Settings (SettingsTab)
  */
 
 import { useState } from 'react'
@@ -10,11 +10,10 @@ import { useTranslation } from '../../i18n'
 import type { KnowledgeBaseEntry } from '../../../shared/types/tlon'
 import { BookOpen } from 'lucide-react'
 import { ChatTab } from './ChatTab'
-import { WikiTab } from './WikiTab'
 import { RawFilesTab } from './RawFilesTab'
 import { SettingsTab } from './SettingsTab'
 
-type KBTab = 'chat' | 'notes' | 'files' | 'settings'
+type KBTab = 'chat' | 'files' | 'settings'
 
 interface KBDetailProps {
   kb: KnowledgeBaseEntry
@@ -28,7 +27,6 @@ export function KBDetail({ kb, onDeleted }: KBDetailProps) {
   const tabs: Array<{ id: KBTab; label: string }> = [
     { id: 'chat', label: t('Chat') },
     { id: 'files', label: t('Files') },
-    { id: 'notes', label: t('AI Notes') },
     { id: 'settings', label: t('Settings') },
   ]
 
@@ -40,10 +38,7 @@ export function KBDetail({ kb, onDeleted }: KBDetailProps) {
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold truncate">{kb.name}</h2>
           <p className="text-[11px] text-muted-foreground truncate">
-            {t('{{files}} files · {{notes}} notes', {
-              files: kb.stats.rawFileCount,
-              notes: kb.stats.wikiPageCount,
-            })}
+            {t('{{count}} documents', { count: kb.stats.rawFileCount })}
           </p>
         </div>
       </div>
@@ -72,7 +67,6 @@ export function KBDetail({ kb, onDeleted }: KBDetailProps) {
         ) : (
           <div className="h-full overflow-y-auto">
             {tab === 'files' && <RawFilesTab kb={kb} />}
-            {tab === 'notes' && <WikiTab kb={kb} />}
             {tab === 'settings' && <SettingsTab kb={kb} onDeleted={onDeleted} />}
           </div>
         )}

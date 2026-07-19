@@ -7,7 +7,7 @@
  * Storage model (see src/main/services/tlon/paths.ts):
  *   ~/.halo/knowledge-bases-index.json   — registry (KBIndexV1)
  *   ~/.halo/knowledge-bases/<uuid>/       — per-KB directory
- *     meta.json schema.md index.md log.md raw/ wiki/ .ingest/hashes.json
+ *     meta.json schema.md index.md log.md raw/ text/ wiki/ .ingest/hashes.json
  */
 
 export type KnowledgeBaseId = string
@@ -27,7 +27,8 @@ export interface LinkedDirectory {
 
 export interface KBStats {
   rawFileCount: number
-  wikiPageCount: number
+  /** Source documents extracted into text/ and thus queryable. */
+  indexedCount: number
   rawSizeBytes: number
   lastIngestAt?: string
 }
@@ -56,22 +57,18 @@ export interface KBIndexV1 {
   knowledgeBases: Record<KnowledgeBaseId, KnowledgeBaseEntry>
 }
 
-export interface WikiPageMeta {
-  /** Wiki-relative path, e.g. "topics/foo.md" */
-  path: string
-  title: string
-  sources: string[]
-  generatedAt: string
-  sourceHash: string
-}
-
 /**
  * Persisted learned-status facts (the source of truth for "learned").
  * Keyed by raw-relative path (for raw/) or absolute path (for linked dirs).
+ *
+ * `textPath` is the text/-relative path of the extracted plaintext (agentic
+ * search). `empty` marks a source whose extraction yielded no text, so it is
+ * not retried on every launch (distinct from a legacy entry that predates
+ * text extraction and has neither field).
  */
 export interface IngestHashesV1 {
   version: 1
-  files: Record<string, { hash: string; ingestedAt: string; wikiPages: string[] }>
+  files: Record<string, { hash: string; ingestedAt: string; textPath?: string; empty?: boolean }>
 }
 
 export interface IngestJob {
@@ -87,7 +84,6 @@ export interface IngestJob {
   startedAt?: string
   completedAt?: string
   error?: string
-  wikiPagesAffected?: string[]
 }
 
 /** Lightweight reference injected into agent/app system prompts. */
@@ -108,6 +104,16 @@ export interface RawFileStatus {
   path: string
   size: number
   learned: boolean
+}
+
+/**
+ * A source document a KB chat answer actually drew from, for clickable
+ * citations. `path` is the absolute path of the original file, openable in the
+ * Content Canvas.
+ */
+export interface KBSource {
+  name: string
+  path: string
 }
 
 export interface IngestProgressEvent {

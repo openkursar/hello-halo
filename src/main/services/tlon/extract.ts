@@ -3,18 +3,23 @@
  *
  * Plain-text files are read as UTF-8; PDFs are parsed with unpdf (pdf.js); the
  * OOXML formats (pptx / docx / xlsx) are unzipped and their text runs scraped
- * from the slide/document/sharedStrings XML.
+ * from the slide/document/sharedStrings XML; images are OCR'd locally (see ocr.ts).
  *
  * The EXTRACTED text is what the model ingests. The file's RAW bytes are still
  * what gets hashed for learned-status (callers pass the buffer for both), so a
  * re-export of the same document re-ingests only when the bytes change.
  *
- * Heavy parsers (unpdf, jszip) are loaded via dynamic import so they stay out
- * of the startup graph and only load when a non-text source is actually seen.
+ * Heavy parsers (unpdf, jszip, the OCR engine) are loaded via dynamic import so
+ * they stay out of the startup graph and only load when such a source is seen.
  */
 
-/** Formats that need a parser/unzip before they yield text. */
+/** Document formats that need a parser/unzip before they yield text. */
 export const EXTRACTABLE_EXTENSIONS = new Set(['.pdf', '.pptx', '.docx', '.xlsx'])
+
+/** Image formats whose text is recovered by OCR at ingest. */
+export const IMAGE_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tif', '.tiff', '.gif',
+])
 
 /** Lowercased extension (including the dot), or '' when there is none. */
 export function fileExtension(filePath: string): string {
@@ -23,8 +28,14 @@ export function fileExtension(filePath: string): string {
   return dot < 0 ? '' : lower.slice(dot)
 }
 
+export function isImage(filePath: string): boolean {
+  return IMAGE_EXTENSIONS.has(fileExtension(filePath))
+}
+
+/** True when the file needs a parser or OCR (i.e. is not plain text). */
 export function isExtractable(filePath: string): boolean {
-  return EXTRACTABLE_EXTENSIONS.has(fileExtension(filePath))
+  const ext = fileExtension(filePath)
+  return EXTRACTABLE_EXTENSIONS.has(ext) || IMAGE_EXTENSIONS.has(ext)
 }
 
 /**
@@ -32,7 +43,12 @@ export function isExtractable(filePath: string): boolean {
  * Throws if a parser fails; returns '' when the document has no text.
  */
 export async function extractText(absPath: string, buf: Buffer): Promise<string> {
-  switch (fileExtension(absPath)) {
+  const ext = fileExtension(absPath)
+  if (IMAGE_EXTENSIONS.has(ext)) {
+    const { ocrImage } = await import('./ocr')
+    return ocrImage(buf)
+  }
+  switch (ext) {
     case '.pdf': return extractPdf(buf)
     case '.pptx': return extractOoxml(buf, 'pptx')
     case '.docx': return extractOoxml(buf, 'docx')

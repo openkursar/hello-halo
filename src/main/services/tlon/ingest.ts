@@ -1,58 +1,50 @@
 /**
- * Tlon ingest orchestration — compounding curator.
+ * Tlon ingest orchestration — cheap text extraction (no LLM).
  *
- * Each source file is folded into the wiki by a headless agent (the Halo agent
- * engine via `query`) whose working directory IS the KB's wiki/ dir. The agent
- * searches existing pages (Glob/Grep), reads the relevant ones, and merges the
- * new source in (Write/Edit) — so the wiki compounds across sources instead of
- * accumulating per-document summaries.
+ * Each source file is extracted to plaintext under text/ so the knowledge base
+ * is queryable immediately via agentic search (the chat agent greps/reads the
+ * text/ corpus at query time — see service.getKBChatContext). Ingest does NO
+ * model work: it is IO/CPU only, so dozens of files finish in seconds.
  *
- * Files are processed STRICTLY SEQUENTIALLY: each agent run must see the wiki
- * state left by the previous file, and concurrent runs would race writes to the
- * same pages.
- *
- * Learned status is persisted only on success (hashes.json), and index.md is
- * always rebuilt programmatically from the wiki directory — the agent never
- * touches it.
+ * index.md is rebuilt programmatically as a document map (name → absolute text
+ * path) injected into agent prompts. Learned status is persisted only on
+ * success (hashes.json: textPath per source).
  */
 
 import { join, sep } from 'path'
-import { readFileSync, writeFileSync, existsSync, appendFileSync, readdirSync, statSync } from 'fs'
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  appendFileSync,
+  mkdirSync,
+} from 'fs'
 import { v4 as uuidv4 } from 'uuid'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
-import { getConfig } from '../../foundation/config.service'
-import { getApiCredentials, getHeadlessElectronPath } from '../agent/helpers'
-import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../agent/sdk-config'
-import { query } from '../agent/resolved-sdk'
 import type {
   IngestJob,
   IngestProgressEvent,
   IngestHashesV1,
 } from '../../../shared/types/tlon'
 import {
-  getKBSchemaPath,
   getKBLogPath,
-  getKBWikiDir,
+  getKBIndexMdPath,
+  getKBTextDir,
 } from './paths'
 import {
   getKB,
+  listKBs,
   readHashes,
   writeHashes,
-  listWikiPages,
   refreshStats,
   markIngestCompleted,
-  setKBStatus,
   collectIngestCandidates,
   clearWikiAndHashes,
   sha256,
 } from './service'
 import { extractText } from './extract'
-import {
-  buildCuratorSystemPrompt,
-  buildCuratorUserMessage,
-  DEFAULT_INDEX_MD,
-} from './defaults'
+import { DEFAULT_INDEX_MD } from './defaults'
 
 // ============================================================================
 // State
@@ -100,7 +92,6 @@ export function enqueueFiles(
 ): void {
   const queue = queues.get(kbId) || []
   for (const e of entries) {
-    // De-dup against pending jobs for the same source path.
     if (queue.some(j => j.sourcePath === e.sourcePath)) continue
     queue.push({
       id: uuidv4(),
@@ -147,8 +138,8 @@ export function isIngesting(kbId: string): boolean {
 }
 
 /**
- * Wipe the generated wiki + learned-status, then re-ingest every source from
- * scratch with the current compounding curator. Used to rebuild older KBs.
+ * Wipe the extracted text + learned-status, then re-extract every source from
+ * scratch. Used to rebuild older KBs onto the current text index.
  */
 export async function clearAndRelearn(kbId: string): Promise<void> {
   if (processing.has(kbId)) throw new Error('Ingest already in progress')
@@ -158,9 +149,26 @@ export async function clearAndRelearn(kbId: string): Promise<void> {
 }
 
 /**
- * Process the queue: fold each pending file into the wiki one at a time via the
- * curator agent. Strictly sequential — each run must see the previous file's
- * merges, and concurrent runs would race writes to the same pages.
+ * Extract any not-yet-indexed sources of every KB into text/. Idempotent (a
+ * source with a valid textPath is skipped), so this migrates wiki-era KBs onto
+ * the text index on startup without re-doing work. Fire-and-forget.
+ */
+export async function migrateKBsToTextIndex(): Promise<void> {
+  for (const kb of listKBs()) {
+    try {
+      if (collectIngestCandidates(kb.id).length > 0) {
+        await triggerFullIngest(kb.id)
+      }
+    } catch (error) {
+      console.error(`[Tlon] Text-index migration failed for ${kb.id}:`, error)
+    }
+  }
+}
+
+/**
+ * Process the queue: extract each pending file to text/ one at a time. Kept
+ * sequential so progress is monotonic and writes stay simple; each step is
+ * cheap (no model call).
  */
 export async function processQueue(kbId: string): Promise<void> {
   if (processing.has(kbId)) return
@@ -187,11 +195,12 @@ export async function processQueue(kbId: string): Promise<void> {
         phase: 'running',
       })
       try {
-        await runCuratorIngest(kbId, job)
+        await extractSource(kbId, job)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        console.error(`[Tlon] Ingest failed for ${job.sourcePath}:`, message)
-        setKBStatus(kbId, 'error')
+        console.error(`[Tlon] Extract failed for ${job.sourcePath}:`, message)
+        // One bad file is reported to the UI but must not error the whole KB —
+        // otherwise it drops out of agent injection (status must stay 'active').
         emitProgress({ kbId, total, completed, phase: 'error', error: message })
       }
       completed++
@@ -202,21 +211,28 @@ export async function processQueue(kbId: string): Promise<void> {
     queues.delete(kbId)
   }
 
+  // Rebuild the document map once per batch (not per file) — O(n), not O(n^2).
+  rebuildIndexMd(kbId)
   markIngestCompleted(kbId)
   emitProgress({ kbId, total, completed, phase: 'done' })
   emitStatsUpdated(kbId)
 }
 
 // ============================================================================
-// Curator agent (compounding ingest)
+// Extraction (the ingest unit of work)
 // ============================================================================
 
+/** text/-relative filename holding a source's extracted plaintext. */
+function textFileName(sourcePath: string): string {
+  return sha256(sourcePath).slice(0, 16) + '.txt'
+}
+
 /**
- * Fold one source file into the wiki via the curator agent, then record its
- * learned status and rebuild the index. Throws on agent failure so the caller
- * marks the KB errored and the file stays "not learned".
+ * Extract one source to text/, then record its learned status and rebuild the
+ * index. The original bytes are hashed for learned-status; the extracted text
+ * (prefixed with a source marker for citation) is what queries grep/read.
  */
-async function runCuratorIngest(kbId: string, job: IngestJob): Promise<void> {
+async function extractSource(kbId: string, job: IngestJob): Promise<void> {
   job.status = 'running'
   job.startedAt = new Date().toISOString()
 
@@ -240,187 +256,97 @@ async function runCuratorIngest(kbId: string, job: IngestJob): Promise<void> {
   }
   if (!fileContent.trim()) {
     console.warn(`[Tlon] No text extracted from ${job.sourcePath}, skipping`)
+    // Record the attempt so a text-less source (e.g. an image with no text) is
+    // not re-extracted on every launch; it retries only when its bytes change.
+    const hashes: IngestHashesV1 = readHashes(kbId)
+    hashes.files[job.sourcePath] = { hash: contentHash, ingestedAt: new Date().toISOString(), empty: true }
+    writeHashes(kbId, hashes)
     job.status = 'skipped'
     return
   }
 
-  const wikiDir = getKBWikiDir(kbId)
-  const before = snapshotWikiMtimes(wikiDir)
+  const textDir = getKBTextDir(kbId)
+  if (!existsSync(textDir)) mkdirSync(textDir, { recursive: true })
+  const textPath = textFileName(job.sourcePath)
+  writeFileSync(
+    join(textDir, textPath),
+    `<!-- source: ${job.sourcePath} -->\n\n${fileContent}`,
+    'utf-8'
+  )
 
-  await runCuratorAgent(kbId, job.sourcePath, fileContent, wikiDir)
-
-  // Pages whose files changed during this run are this source's wiki pages.
-  const affected = changedPages(before, snapshotWikiMtimes(wikiDir))
-
-  rebuildIndexMd(kbId)
-  appendLog(job, affected)
+  appendLog(job, textPath)
 
   const hashes: IngestHashesV1 = readHashes(kbId)
   hashes.files[job.sourcePath] = {
     hash: contentHash,
     ingestedAt: new Date().toISOString(),
-    wikiPages: affected,
+    textPath,
   }
   writeHashes(kbId, hashes)
 
   job.status = 'completed'
   job.completedAt = new Date().toISOString()
   job.contentHash = contentHash
-  job.wikiPagesAffected = affected
 }
+
+// ============================================================================
+// Document map (index.md) — injected into agent prompts
+// ============================================================================
 
 /**
- * Run the headless curator agent over the KB's wiki dir for one source. cwd is
- * the wiki, so the agent's Read/Glob/Grep/Write/Edit tools operate directly on
- * existing pages. Restricted toolset (no Bash/Skill/web), bypass permissions
- * (headless, no UI), no MCP/digital-humans/browser.
- */
-async function runCuratorAgent(
-  kbId: string,
-  sourcePath: string,
-  fileContent: string,
-  wikiDir: string
-): Promise<void> {
-  const config = getConfig()
-  const credentials = await getApiCredentials(config)
-  const resolved = await resolveCredentialsForSdk(credentials)
-  const electronPath = getHeadlessElectronPath()
-  const schema = existsSync(getKBSchemaPath(kbId))
-    ? readFileSync(getKBSchemaPath(kbId), 'utf-8')
-    : ''
-
-  const sdkOptions = buildBaseSdkOptions({
-    credentials: resolved,
-    workDir: wikiDir,
-    electronPath,
-    spaceId: `tlon-ingest:${kbId}`,
-    conversationId: `tlon-ingest-${uuidv4()}`,
-    mcpServers: null,
-    maxTurns: 60,
-    promptProfile: config.agent?.promptProfile,
-    configDirMode: config.agent?.configDirMode,
-    customConfigDir: config.agent?.customConfigDir,
-    aiBrowserEnabled: false,
-    digitalHumansEnabled: false,
-  })
-  sdkOptions.systemPrompt = buildCuratorSystemPrompt(schema)
-  sdkOptions.allowedTools = ['Read', 'Write', 'Edit', 'Grep', 'Glob']
-  sdkOptions.disallowedTools = ['Bash', 'Skill', 'Task', 'WebSearch', 'WebFetch', 'TodoWrite']
-  sdkOptions.maxThinkingTokens = 0
-
-  const userMessage = buildCuratorUserMessage(sourcePath, fileContent)
-
-  let resultError: string | null = null
-  for await (const msg of query({ prompt: userMessage, options: sdkOptions })) {
-    const m = msg as { type?: string; subtype?: string; is_error?: boolean }
-    if (m?.type === 'result') {
-      if (m.is_error) resultError = m.subtype || 'agent error'
-      break
-    }
-  }
-  if (resultError) {
-    throw new Error(`Curator agent failed: ${resultError}`)
-  }
-}
-
-/** Map of wiki-relative .md path -> mtime (ms), to detect changed pages. */
-function snapshotWikiMtimes(wikiDir: string): Map<string, number> {
-  const out = new Map<string, number>()
-  if (!existsSync(wikiDir)) return out
-  const stack = ['']
-  while (stack.length > 0) {
-    const rel = stack.pop() as string
-    let entries: string[]
-    try { entries = readdirSync(join(wikiDir, rel)) } catch { continue }
-    for (const name of entries) {
-      const childRel = rel ? join(rel, name) : name
-      let st
-      try { st = statSync(join(wikiDir, childRel)) } catch { continue }
-      if (st.isDirectory()) stack.push(childRel)
-      else if (st.isFile() && childRel.toLowerCase().endsWith('.md')) {
-        out.set(childRel.split(sep).join('/'), st.mtimeMs)
-      }
-    }
-  }
-  return out
-}
-
-/** Pages added or modified between two mtime snapshots. */
-function changedPages(before: Map<string, number>, after: Map<string, number>): string[] {
-  const changed: string[] = []
-  after.forEach((mtime, path) => {
-    const prev = before.get(path)
-    if (prev === undefined || mtime > prev) changed.push(path)
-  })
-  return changed.sort()
-}
-
-/**
- * Rebuild index.md from the wiki directory. Each line carries the topic title,
- * a one-line synopsis (so the agent has ambient awareness without reading), the
- * original source document, and the absolute path to Read for detail.
+ * Rebuild index.md as a document map: each source document with a one-line
+ * synopsis and the ABSOLUTE path of its extracted text, so the agent can
+ * Grep/Read it regardless of its working directory. Programmatic — cheap.
  *
- * Exported so the bootstrap can refresh existing KBs into this richer format
- * without re-ingesting.
+ * Exported so a bootstrap refresh can regenerate the map without re-extracting.
  */
 export function rebuildIndexMd(kbId: string): void {
   const kb = getKB(kbId)
   if (!kb) return
-  const pages = listWikiPages(kbId)
-  const wikiDir = getKBWikiDir(kbId)
+  const textDir = getKBTextDir(kbId)
+  const hashes = readHashes(kbId)
 
-  if (pages.length === 0) {
-    writeFileSync(join(kb.path, 'index.md'), DEFAULT_INDEX_MD, 'utf-8')
+  const docs = Object.entries(hashes.files)
+    .filter(([, info]) => info.textPath && existsSync(join(textDir, info.textPath)))
+    .map(([sourcePath, info]) => ({
+      name: sourcePath.split(/[\\/]/).pop() || sourcePath,
+      absPath: join(textDir, info.textPath as string),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+
+  if (docs.length === 0) {
+    writeFileSync(getKBIndexMdPath(kbId), DEFAULT_INDEX_MD, 'utf-8')
     return
   }
 
   let md = `# ${kb.name}\n\n`
-  md += `Topics you know — each has a one-line synopsis and its source. `
-  md += `Read a topic's file only for exact detail.\n\n`
-  for (const page of pages) {
-    const absPath = join(wikiDir, ...page.path.split('/'))
+  md += `The source documents in this knowledge base. To answer, Grep/Glob and `
+  md += `Read the document files below for exact passages, then cite the document by name.\n\n`
+  for (const doc of docs) {
     let synopsis = ''
     try {
-      synopsis = pageSynopsis(readFileSync(absPath, 'utf-8'))
+      synopsis = firstProseLine(readFileSync(doc.absPath, 'utf-8'))
     } catch { /* ignore */ }
-    const sources = page.sources.map(s => s.split(/[\\/]/).pop() || s)
-    const from = sources.length ? ` _(from ${sources.join(', ')})_` : ''
-    md += `- **${page.title}**${synopsis ? ` — ${synopsis}` : ''}${from} — \`${absPath}\`\n`
+    md += `- **${doc.name}**${synopsis ? ` — ${synopsis}` : ''} — \`${doc.absPath}\`\n`
   }
   md += '\n'
-  writeFileSync(join(kb.path, 'index.md'), md, 'utf-8')
+  writeFileSync(getKBIndexMdPath(kbId), md, 'utf-8')
 }
 
-/**
- * First prose line of a wiki page (preferring its Summary section), stripped of
- * markdown and capped — used as the index synopsis. Skips headings, source
- * blockquotes, lists, tables, and markers so model chatter does not leak in.
- */
-function pageSynopsis(content: string): string {
-  const lines = content.split('\n')
-  const summaryIdx = lines.findIndex(l => /^#{1,6}\s+summary\b/i.test(l.trim()))
-  const scan = summaryIdx >= 0 ? lines.slice(summaryIdx + 1) : lines
-  for (const raw of scan) {
+/** First non-empty prose line of extracted text (skips the source marker), capped. */
+function firstProseLine(content: string): string {
+  for (const raw of content.split('\n')) {
     const line = raw.trim()
     if (!line) continue
-    if (/^#{1,6}\s/.test(line)) continue
-    if (line.startsWith('>') || line.startsWith('<!--') || line.startsWith('```') || line.startsWith('|')) continue
-    if (/^[-*+]\s/.test(line)) continue
-    const s = line
-      .replace(/`/g, '')
-      .replace(/\*\*?/g, '')
-      .replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, '$1')
-      .trim()
-    if (!s) continue
-    return s.length > 160 ? s.slice(0, 157).trimEnd() + '…' : s
+    if (line.startsWith('<!--')) continue
+    return line.length > 160 ? line.slice(0, 157).trimEnd() + '…' : line
   }
   return ''
 }
 
-function appendLog(job: IngestJob, wikiPages: string[]): void {
+function appendLog(job: IngestJob, textPath: string): void {
   const date = new Date().toISOString().slice(0, 10)
-  const summary = wikiPages.length > 0 ? wikiPages.join(', ') : '(no pages)'
-  const line = `## [${date}] ingest | ${job.sourcePath} — ${summary}\n`
+  const line = `## [${date}] extract | ${job.sourcePath} — text/${textPath}\n`
   try {
     appendFileSync(getKBLogPath(job.kbId), line, 'utf-8')
   } catch (error) {
