@@ -10,7 +10,7 @@ import {
 export function registerAgentRoutes(app: Express): void {
   // ===== Agent Routes =====
   app.post('/api/agent/message', async (req: Request, res: Response) => {
-    const { spaceId, conversationId, message, resumeSessionId, images, thinkingEnabled, aiBrowserEnabled } = req.body
+    const { spaceId, conversationId, message, resumeSessionId, images, thinkingEnabled, aiBrowserEnabled, tlonKbId } = req.body
     const result = await agentController.sendMessage({
       spaceId,
       conversationId,
@@ -18,7 +18,8 @@ export function registerAgentRoutes(app: Express): void {
       resumeSessionId,
       images,  // Pass images for multi-modal messages (remote access)
       thinkingEnabled,  // Pass thinking mode for extended thinking (remote access)
-      aiBrowserEnabled  // Pass AI Browser toggle for remote access
+      aiBrowserEnabled,  // Pass AI Browser toggle for remote access
+      tlonKbId  // Chat-with-knowledge-base turn (remote access)
     })
     res.json(result)
   })
