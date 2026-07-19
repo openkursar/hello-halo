@@ -103,6 +103,8 @@ export function isAcceptedSourceFile(filePath: string): boolean {
 
 /** True if the first 8KB of a buffer contains a NUL byte (binary guard). */
 export function looksBinary(buf: Buffer): boolean {
+  // A UTF-16 BOM marks NUL-heavy but valid text.
+  if (buf.length >= 2 && ((buf[0] === 0xff && buf[1] === 0xfe) || (buf[0] === 0xfe && buf[1] === 0xff))) return false
   const limit = Math.min(buf.length, 8192)
   for (let i = 0; i < limit; i++) {
     if (buf[i] === 0) return true
@@ -881,7 +883,9 @@ export function clearWikiAndHashes(kbId: string): boolean {
 
 /**
  * Live learned-status for all raw files. A file is `learned` IFF hashes.json
- * has an entry whose stored hash equals the current content hash.
+ * has an entry whose stored hash equals the current content hash. The refined
+ * `state` distinguishes text-less sources and failed extractions (both facts
+ * come from the same hashes.json entry, valid only while the hash matches).
  */
 export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
   const rawDir = getKBRawDir(kbId)
@@ -892,20 +896,27 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
   for (const rel of walkFiles(rawDir)) {
     const abs = join(rawDir, rel)
     let size = 0
-    let learned = false
+    let state: RawFileStatus['state'] = 'pending'
+    let error: string | undefined
     try {
       size = statSync(abs).size
       const recorded = hashes.files[rel.split(sep).join('/')]
-      if (recorded && recorded.textPath) {
-        const { hash } = hashFileCached(abs)
-        learned = recorded.hash === hash && existsSync(join(textDir, recorded.textPath))
+      if (recorded && recorded.hash === hashFileCached(abs).hash) {
+        if (recorded.textPath && existsSync(join(textDir, recorded.textPath))) state = 'learned'
+        else if (recorded.empty) state = 'no-text'
+        else if (recorded.lastError) {
+          state = 'failed'
+          error = recorded.lastError
+        }
       }
     } catch { /* ignore */ }
     result.push({
       name: rel.split(sep).pop() || rel,
       path: rel.split(sep).join('/'),
       size,
-      learned,
+      learned: state === 'learned',
+      state,
+      ...(error !== undefined ? { error } : {}),
     })
   }
   result.sort((a, b) => a.path.localeCompare(b.path))

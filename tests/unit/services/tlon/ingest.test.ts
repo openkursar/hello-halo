@@ -200,8 +200,13 @@ describe('Tlon Ingest', () => {
       const hashes = readHashes(kb.id)
       expect(hashes.files['good.md']?.textPath).toBeTruthy()
       expect(hashes.files['also-good.txt']?.textPath).toBeTruthy()
-      // The failed file records nothing (it will retry next scan)…
-      expect(hashes.files['broken.docx']).toBeUndefined()
+      // The failed file persists why it failed, has no textPath/empty (so it
+      // retries next scan)…
+      const failed = hashes.files['broken.docx']
+      expect(failed?.lastError).toBeTruthy()
+      expect(failed?.textPath).toBeUndefined()
+      expect(failed?.empty).toBeUndefined()
+      expect(collectIngestCandidates(kb.id).map(c => c.sourcePath)).toEqual(['broken.docx'])
       // …and the KB is not poisoned.
       expect(getKB(kb.id)?.status).toBe('active')
 
@@ -216,6 +221,25 @@ describe('Tlon Ingest', () => {
         'tlon:ingest-progress',
         expect.objectContaining({ phase: 'done', errors: [expect.objectContaining({ file: 'broken.docx' })] })
       )
+    })
+
+    it('clears lastError when a later attempt succeeds', async () => {
+      const kb = createKB({ name: 'Recover' })
+      const scratch = makeScratchDir()
+      addRawFiles(kb.id, [writeScratchFile(scratch, 'flaky.md', 'now readable')])
+      // A previous attempt failed; the entry has lastError and no textPath, so
+      // the unchanged file is still a candidate (retry semantics).
+      writeHashes(kb.id, {
+        version: 1,
+        files: { 'flaky.md': { hash: sha256('now readable'), ingestedAt: 't', lastError: 'boom' } },
+      })
+      expect(collectIngestCandidates(kb.id).map(c => c.sourcePath)).toEqual(['flaky.md'])
+
+      await triggerFullIngest(kb.id)
+
+      const rec = readHashes(kb.id).files['flaky.md']
+      expect(rec?.textPath).toBeTruthy()
+      expect(rec?.lastError).toBeUndefined()
     })
 
     it('a clean batch reports no errors field', async () => {

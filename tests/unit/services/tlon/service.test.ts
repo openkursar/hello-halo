@@ -135,6 +135,13 @@ describe('Tlon Service', () => {
       expect(looksBinary(big)).toBe(false)
     })
 
+    it('treats UTF-16 BOM buffers as text despite their NUL bytes', () => {
+      expect(looksBinary(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('hi', 'utf16le')]))).toBe(false)
+      const be = Buffer.from('hi', 'utf16le')
+      be.swap16()
+      expect(looksBinary(Buffer.concat([Buffer.from([0xfe, 0xff]), be]))).toBe(false)
+    })
+
     it('hashes buffers and strings identically for the same bytes', () => {
       expect(sha256('abc')).toBe(sha256(Buffer.from('abc')))
       expect(sha256('abc')).toMatch(/^[0-9a-f]{64}$/)
@@ -482,6 +489,37 @@ describe('Tlon Service', () => {
       // Sorted by path
       expect(statuses.map(s => s.path)).toEqual([...statuses.map(s => s.path)].sort())
     })
+
+    it('derives the refined state (learned / no-text / failed / pending)', () => {
+      const kb = createKB({ name: 'States' })
+      const scratch = makeScratchDir()
+      addRawFiles(kb.id, [
+        writeScratchFile(scratch, 'ok.md', 'aaa'),
+        writeScratchFile(scratch, 'scan.md', 'bbb'),
+        writeScratchFile(scratch, 'broken.md', 'ccc'),
+        writeScratchFile(scratch, 'stale-fail.md', 'ddd'),
+        writeScratchFile(scratch, 'fresh.md', 'eee'),
+      ])
+      fs.writeFileSync(path.join(getKBTextDir(kb.id), 'ok.txt'), 'aaa', 'utf-8')
+      writeHashes(kb.id, {
+        version: 1,
+        files: {
+          'ok.md': { hash: sha256('aaa'), ingestedAt: 't', textPath: 'ok.txt' },
+          'scan.md': { hash: sha256('bbb'), ingestedAt: 't', empty: true },
+          'broken.md': { hash: sha256('ccc'), ingestedAt: 't', lastError: 'parser exploded' },
+          // Error from a previous version of the bytes: hash mismatch → pending.
+          'stale-fail.md': { hash: sha256('OLD'), ingestedAt: 't', lastError: 'old failure' },
+        },
+      })
+
+      const byPath = Object.fromEntries(getRawFileLearnedStatus(kb.id).map(s => [s.path, s]))
+      expect(byPath['ok.md']).toMatchObject({ state: 'learned', learned: true })
+      expect(byPath['scan.md']).toMatchObject({ state: 'no-text', learned: false })
+      expect(byPath['broken.md']).toMatchObject({ state: 'failed', learned: false, error: 'parser exploded' })
+      expect(byPath['stale-fail.md']).toMatchObject({ state: 'pending', learned: false })
+      expect(byPath['stale-fail.md'].error).toBeUndefined()
+      expect(byPath['fresh.md']).toMatchObject({ state: 'pending', learned: false })
+    })
   })
 
   describe('hashes persistence', () => {
@@ -626,6 +664,11 @@ describe('Tlon Service', () => {
       ])
       // A raw .md whose bytes are binary must be skipped by the NUL guard.
       fs.writeFileSync(path.join(getKBRawDir(kb.id), 'binary.md'), Buffer.from([0x61, 0x00, 0x62]))
+      // A UTF-16 BOM file is NUL-heavy but valid text — must remain a candidate.
+      fs.writeFileSync(
+        path.join(getKBRawDir(kb.id), 'utf16.txt'),
+        Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('wide', 'utf16le')]),
+      )
       fs.writeFileSync(path.join(getKBTextDir(kb.id), 'done.txt'), 'x', 'utf-8')
       writeHashes(kb.id, {
         version: 1,
@@ -639,7 +682,7 @@ describe('Tlon Service', () => {
       })
 
       const candidates = collectIngestCandidates(kb.id).map(c => c.sourcePath).sort()
-      expect(candidates).toEqual(['changed.md', 'legacy.md', 'new.md'])
+      expect(candidates).toEqual(['changed.md', 'legacy.md', 'new.md', 'utf16.txt'])
     })
 
     it('includes accepted files from linked dirs keyed by absolute path', () => {

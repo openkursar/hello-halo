@@ -13,6 +13,7 @@ import {
   isImage,
   isExtractable,
   extractText,
+  decodeTextBuffer,
   EXTRACTABLE_EXTENSIONS,
   IMAGE_EXTENSIONS,
 } from '../../../../src/main/services/tlon/extract'
@@ -67,6 +68,50 @@ describe('Tlon Extract', () => {
     it('treats unknown extensions as plain text passthrough', async () => {
       const text = await extractText('/tmp/a.md', Buffer.from('# md'))
       expect(text).toBe('# md')
+    })
+  })
+
+  describe('decodeTextBuffer (encoding detection)', () => {
+    it('decodes GBK Chinese', () => {
+      // 中文 in GBK
+      expect(decodeTextBuffer(Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))).toBe('中文')
+    })
+
+    it('decodes Big5 Chinese', () => {
+      // 中文 in Big5
+      expect(decodeTextBuffer(Buffer.from([0xa4, 0xa4, 0xa4, 0xe5]))).toBe('中文')
+    })
+
+    it('decodes Shift_JIS Japanese', () => {
+      // 日本語 in Shift_JIS
+      expect(decodeTextBuffer(Buffer.from([0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea]))).toBe('日本語')
+    })
+
+    it('decodes UTF-16LE with BOM', () => {
+      const buf = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('héllo 世界', 'utf16le')])
+      expect(decodeTextBuffer(buf)).toBe('héllo 世界')
+    })
+
+    it('decodes UTF-16BE with BOM', () => {
+      const le = Buffer.from('héllo 世界', 'utf16le')
+      const be = Buffer.from(le)
+      be.swap16()
+      expect(decodeTextBuffer(Buffer.concat([Buffer.from([0xfe, 0xff]), be]))).toBe('héllo 世界')
+    })
+
+    it('falls back to windows-1252 for lone high bytes', () => {
+      // "café" in windows-1252: lone 0xE9 at end rejects UTF-8 and the CJK codepages
+      expect(decodeTextBuffer(Buffer.from([0x63, 0x61, 0x66, 0xe9]))).toBe('café')
+    })
+
+    it('prefers UTF-8 when the bytes are valid UTF-8', () => {
+      const content = 'mixed 中文 café ✓'
+      expect(decodeTextBuffer(Buffer.from(content, 'utf-8'))).toBe(content)
+    })
+
+    it('extractText routes plain text through detection', async () => {
+      const text = await extractText('/tmp/gbk.txt', Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))
+      expect(text).toBe('中文')
     })
   })
 

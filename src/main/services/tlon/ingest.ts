@@ -277,8 +277,19 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
   const contentHash = sha256(buf)
 
   // Extraction failures propagate to processQueue, which records them on the
-  // batch's error list (the file stays unlearned and retries on the next scan).
-  const fileContent = await extractText(job.absolutePath, buf)
+  // batch's error list; lastError is persisted so the UI can show why the file
+  // is unlearned. The hash entry has neither textPath nor empty, so the file
+  // retries on the next scan.
+  let fileContent: string
+  try {
+    fileContent = await extractText(job.absolutePath, buf)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const hashes: IngestHashesV1 = readHashes(kbId)
+    hashes.files[job.sourcePath] = { hash: contentHash, ingestedAt: new Date().toISOString(), lastError: message }
+    writeHashes(kbId, hashes)
+    throw error
+  }
   if (!fileContent.trim()) {
     console.warn(`[Tlon] No text extracted from ${job.sourcePath}, skipping`)
     // Record the attempt so a text-less source (e.g. an image with no text) is

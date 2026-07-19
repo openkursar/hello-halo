@@ -64,11 +64,12 @@ export interface KBIndexV1 {
  * `textPath` is the text/-relative path of the extracted plaintext (agentic
  * search). `empty` marks a source whose extraction yielded no text, so it is
  * not retried on every launch (distinct from a legacy entry that predates
- * text extraction and has neither field).
+ * text extraction and has neither field). `lastError` records why the latest
+ * extraction attempt failed; such entries retry on the next scan.
  */
 export interface IngestHashesV1 {
   version: 1
-  files: Record<string, { hash: string; ingestedAt: string; textPath?: string; empty?: boolean }>
+  files: Record<string, { hash: string; ingestedAt: string; textPath?: string; empty?: boolean; lastError?: string }>
 }
 
 export interface IngestJob {
@@ -96,7 +97,9 @@ export interface KBReference {
 /**
  * Learned status the UI pulls (NOT derived from events).
  * `learned` is true IFF hashes.json has an entry whose hash matches the
- * current file content.
+ * current file content. `state` refines it: 'no-text' = extraction found
+ * nothing (e.g. scanned PDF), 'failed' = last extraction threw (`error`
+ * carries the message), 'pending' = not yet learned.
  */
 export interface RawFileStatus {
   name: string
@@ -104,6 +107,8 @@ export interface RawFileStatus {
   path: string
   size: number
   learned: boolean
+  state: 'learned' | 'pending' | 'no-text' | 'failed'
+  error?: string
 }
 
 /**

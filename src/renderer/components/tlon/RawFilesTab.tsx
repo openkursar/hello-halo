@@ -19,6 +19,8 @@ import {
   FileText,
   CheckCircle2,
   Circle,
+  CircleOff,
+  AlertCircle,
   Trash2,
   Upload,
   FolderOpen,
@@ -55,6 +57,9 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
 
   const notLearned = rawFiles.filter(f => !f.learned)
   const learned = rawFiles.filter(f => f.learned)
+  // 'no-text' sources cannot learn until their bytes change — exclude them
+  // from the Learn button count.
+  const learnable = rawFiles.filter(f => f.state === 'pending' || f.state === 'failed')
 
   const handleDrop = async (e: DragEvent) => {
     e.preventDefault()
@@ -126,7 +131,7 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
       <IngestProgress progress={progress} />
 
       {/* Learn button */}
-      {notLearned.length > 0 && (
+      {learnable.length > 0 && (
         <button
           onClick={() => triggerIngest(kb.id)}
           disabled={isIngesting}
@@ -135,7 +140,7 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
           {isIngesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
           {isIngesting
             ? t('Learning…')
-            : t('Learn {{count}} new file(s)', { count: notLearned.length })}
+            : t('Learn {{count}} new file(s)', { count: learnable.length })}
         </button>
       )}
 
@@ -150,7 +155,6 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
             <FileGroup
               title={t('Not yet learned')}
               files={notLearned}
-              learned={false}
               onRemove={handleRemove}
               formatSize={formatSize}
             />
@@ -159,7 +163,6 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
             <FileGroup
               title={t('Learned')}
               files={learned}
-              learned={true}
               onRemove={handleRemove}
               formatSize={formatSize}
             />
@@ -175,12 +178,34 @@ export function RawFilesTab({ kb }: RawFilesTabProps) {
 interface FileGroupProps {
   title: string
   files: RawFileStatus[]
-  learned: boolean
   onRemove: (file: RawFileStatus) => void
   formatSize: (bytes: number) => string
 }
 
-function FileGroup({ title, files, learned, onRemove, formatSize }: FileGroupProps) {
+/** Per-state status icon with an explanatory tooltip for the odd states. */
+function StatusIcon({ file }: { file: RawFileStatus }) {
+  const { t } = useTranslation()
+  switch (file.state) {
+    case 'learned':
+      return <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+    case 'no-text':
+      return (
+        <span title={t('No extractable text (e.g. a scanned PDF) — the original is kept as a source')}>
+          <CircleOff className="w-4 h-4 text-amber-500 flex-shrink-0" />
+        </span>
+      )
+    case 'failed':
+      return (
+        <span title={file.error ? t('Could not learn: {{message}}', { message: file.error }) : t('Could not learn this file')}>
+          <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0" />
+        </span>
+      )
+    default:
+      return <Circle className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+  }
+}
+
+function FileGroup({ title, files, onRemove, formatSize }: FileGroupProps) {
   const { t } = useTranslation()
   return (
     <div>
@@ -194,9 +219,7 @@ function FileGroup({ title, files, learned, onRemove, formatSize }: FileGroupPro
             key={file.path}
             className="group flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card"
           >
-            {learned
-              ? <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-              : <Circle className="w-4 h-4 text-muted-foreground flex-shrink-0" />}
+            <StatusIcon file={file} />
             <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
             <div className="min-w-0 flex-1">
               <p className="text-sm truncate">{file.name}</p>
