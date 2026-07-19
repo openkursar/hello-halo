@@ -647,6 +647,22 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     const { teamId, kind } = event
     if (!teamId || !kind) return
 
+    // Membership refused on re-entry: unlike paused/resumed, waiting cannot fix
+    // it — the user must rejoin with a fresh invite, so this is never silent.
+    // Liveness is left untouched (presence already shows the office as away).
+    if (kind === 'access-lost') {
+      const name = get().teams.find(tm => tm.id === teamId)?.name
+      useNotificationStore.getState().show({
+        title: name
+          ? i18n.t('Lost access to {{office}}', { office: name })
+          : i18n.t('Lost access to the office'),
+        body: i18n.t('This machine could not rejoin automatically. Ask for a new invite to reconnect.'),
+        variant: 'warning',
+        duration: 8000,
+      })
+      return
+    }
+
     const wasPaused = get().officeLiveness.get(teamId) === 'paused'
 
     set(s => {

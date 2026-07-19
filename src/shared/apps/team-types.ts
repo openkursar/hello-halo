@@ -590,10 +590,12 @@ export interface TeamPresenceEvent {
  *   'resumed'  — the office reconnected and is live again.
  *   'authority-changed' — coordination quietly moved between machines; surfaced
  *                the same calm way as a reconnect (no user action needed).
+ *   'access-lost' — this machine's membership was refused on re-entry;
+ *                reconnecting alone cannot fix it, the user needs a fresh invite.
  * The renderer maps each kind to humanized, location-free copy; the wire kind
  * itself is code-only and never shown to a user.
  */
-export type TeamOfficeStatusKind = 'paused' | 'resumed' | 'authority-changed'
+export type TeamOfficeStatusKind = 'paused' | 'resumed' | 'authority-changed' | 'access-lost'
 
 export interface TeamOfficeStatusEvent {
   teamId: string

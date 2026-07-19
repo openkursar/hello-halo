@@ -18,7 +18,7 @@
  */
 
 import type { NodeId, FederationMessage } from '../types'
-import type { M2Frame } from '../protocol-m2'
+import type { M2Frame, ReplicationOp } from '../protocol-m2'
 import { DEFAULT_P2P_CAPS } from '../protocol-m2'
 import type { AuthorityStore, FederationStore } from '../../../federation'
 import type { TeamStore, BlackboardTask } from '../../../team'
@@ -101,6 +101,22 @@ export interface OfficeAuthority {
   captureLocalWrite: (record: BlackboardWriteRecord) => void
   /** join-grant enrichment (current tenure + effective caps). */
   getJoinGrantExtras: () => { term: number; caps: number }
+  /**
+   * AUTHORITY: replicate a node admission through the committed blackboard log
+   * (single-writer), so every replica's office_nodes ledger — the election
+   * roster and quorum denominator — is the COMMITTED roster, not a local view.
+   * Fire-and-forget: a quorum miss leaves the write pending in the log (it
+   * commits when standbys ack); the local ledger row is already in place.
+   */
+  replicateNodeAdmitted: (node: {
+    nodeId: NodeId
+    identity: string
+    displayName: string | null
+    joinedAt: number
+    advertisedUrl: string | null
+  }) => void
+  /** AUTHORITY: replicate a node departure (see replicateNodeAdmitted). */
+  replicateNodeLeft: (nodeId: NodeId) => void
   /** Scope gate (shared with the tool-layer enforcement the manager wires). */
   scopeGate: ScopeGate
   termState: TermState
@@ -196,7 +212,14 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
       if (!subjectAppId) return false
       return scopeGate.canCoordinationWrite(teamId, subjectAppId)
     },
-    bumpRosterEpoch: () => termState.setRosterEpoch(termState.getRosterEpoch() + 1),
+    // Commit adopts the ABSOLUTE epoch stamped in the write's payload — the
+    // same value replicas apply — so authority and replicas converge through
+    // one path (a relative bump drifts under concurrent roster writes).
+    onRosterCommitted: (epoch) =>
+      termState.setRosterEpoch(epoch ?? termState.getRosterEpoch() + 1),
+    // Standby-side apply of a replicated roster op: converge the local
+    // office_nodes ledger (membership + contact card) and align rosterEpoch.
+    applyRosterChange: (op, payload) => applyRosterChange(op, payload),
     onReplicaApplied: deps.onReplicaApplied
       ? (info) => deps.onReplicaApplied!({ officeId, op: info.op, taskId: info.taskId })
       : undefined,
@@ -215,6 +238,7 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     send: (to, frame) => deps.send(to, frame),
     broadcast: (frame) => deps.broadcast(frame),
     getCurrentRunEpoch: deps.getCurrentRunEpoch,
+    requestCatchup: (from) => replication.requestCatchupFrom(from),
     onBecomeAuthority: deps.onBecomeAuthority,
     onAuthorityChange: deps.onAuthorityChange,
     onStepdown: deps.onStepdown,
@@ -287,6 +311,66 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     return ownedByNode.length === 1 ? ownedByNode[0].appId : null
   }
 
+  /**
+   * Standby-side apply of a replicated roster op. Node rows converge to the
+   * authority's committed view: an admission upserts the contact card
+   * (preserving locally-observed status for existing rows), a departure drops
+   * the row so the quorum denominator no longer counts a node that left. The
+   * epoch stamped by the authority aligns rosterEpoch across replicas.
+   */
+  function applyRosterChange(op: ReplicationOp, payload: Record<string, unknown>): void {
+    const nodeId = typeof payload.nodeId === 'string' ? payload.nodeId : null
+    if (!nodeId) return
+    if (op === 'roster_join' && nodeId !== selfNodeId) {
+      const existing = federationStore.getNode(officeId, nodeId)
+      federationStore.upsertNode({
+        nodeId,
+        officeId,
+        identity: typeof payload.identity === 'string' ? payload.identity : nodeId,
+        displayName:
+          typeof payload.displayName === 'string' ? payload.displayName : existing?.displayName ?? null,
+        joinedAt: typeof payload.joinedAt === 'number' ? payload.joinedAt : existing?.joinedAt ?? now(),
+        lastSeen: existing?.lastSeen ?? now(),
+        status: existing?.status ?? 'online',
+        advertisedUrl:
+          typeof payload.advertisedUrl === 'string' ? payload.advertisedUrl : existing?.advertisedUrl ?? null,
+      })
+    } else if (op === 'roster_leave' && nodeId !== selfNodeId) {
+      federationStore.removeNode(officeId, nodeId)
+    }
+    if (typeof payload.rosterEpoch === 'number') {
+      termState.setRosterEpoch(payload.rosterEpoch)
+    }
+  }
+
+  function replicateNodeAdmitted(node: {
+    nodeId: NodeId
+    identity: string
+    displayName: string | null
+    joinedAt: number
+    advertisedUrl: string | null
+  }): void {
+    if (termState.getAuthorityNodeId() !== selfNodeId) return // single-writer guard
+    void replication
+      .replicateRoster('roster_join', { ...node, rosterEpoch: termState.getRosterEpoch() + 1 })
+      .then((committed) => {
+        if (!committed) {
+          console.warn(`${LOG_TAG} roster_join not committed yet office=${officeId} node=${node.nodeId}`)
+        }
+      })
+  }
+
+  function replicateNodeLeft(nodeId: NodeId): void {
+    if (termState.getAuthorityNodeId() !== selfNodeId) return
+    void replication
+      .replicateRoster('roster_leave', { nodeId, rosterEpoch: termState.getRosterEpoch() + 1 })
+      .then((committed) => {
+        if (!committed) {
+          console.warn(`${LOG_TAG} roster_leave not committed yet office=${officeId} node=${nodeId}`)
+        }
+      })
+  }
+
   function handle(from: NodeId, frame: M2Frame): void {
     switch (frame.kind) {
       case 'authority-claim':
@@ -298,6 +382,11 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
         break
       case 'authority-confirm':
         handover.handleConfirm(from, frame)
+        break
+      case 'authority-announce':
+        // An election concluded elsewhere: the same established-authority path
+        // as replicate frames — realign / step down; stale terms are ignored.
+        handover.observeFrameTerm(from, frame.term)
         break
       case 'blackboard-replicate':
       case 'blackboard-write':
@@ -328,6 +417,8 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
         // A reject is observed (e.g. EPOCH_STALE → step down / re-align). The
         // term-observe above already handled the common case; log for diagnostics.
         console.debug(`${LOG_TAG} reject office=${officeId} reason=${frame.reason} from=${from}`)
+        // A freshness veto on this node's own claim → catch up, then re-claim.
+        handover.handleReject(from, frame)
         // Consume a shadow-write reject: EPOCH_STALE (retryable) resends the
         // member's optimistic write to the re-resolved authority so a write made
         // mid-handover is not silently lost (the local row would otherwise fork).
@@ -341,6 +432,8 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     onNodePresence: (nodeId, status) => handover.onNodePresence(nodeId, status),
     captureLocalWrite: (record) => replication.captureLocalWrite(record),
     getJoinGrantExtras: () => ({ term: termState.getTerm(), caps: DEFAULT_P2P_CAPS }),
+    replicateNodeAdmitted,
+    replicateNodeLeft,
     scopeGate,
     termState,
     handover,

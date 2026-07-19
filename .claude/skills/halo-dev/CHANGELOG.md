@@ -2,6 +2,44 @@
 
 > Focus: architectural and module-level milestones relevant to engineering decisions.
 
+## 2026-07-18 - P2P Office Resilience: transferable authority, survivable host loss
+
+The office authority is no longer welded to the creator node; any surviving
+majority self-heals after the host dies (LAN and relay alike):
+
+- `runtime/federation/coordinator.ts`: presence-tracking split — "address
+  known" (office_nodes row) vs "silence measured" (direct transport) via the
+  `isPresenceTracked` seam; untracked peer rows adopt the authority's presence
+  projection into the ledger. `onNodeAdmitted` seam feeds the committed roster.
+- `runtime/federation/manager.ts`: joiner persists PEER contact cards from the
+  roster projection (address book + candidate order survive restart); joined
+  offices route through an upstream/peer-session/dial-leg router; election-
+  window direct legs (`openElectionLegs`) carry claims/votes when the authority
+  dies; an elected survivor serves the re-formed star through inbound peer
+  sessions; `deliverInbound` attributes dialed-leg frames to the dialed peer.
+- `authority/*`: freshness-vetoed candidates (STALE_LOG/STALE_ROSTER) catch up
+  from the vetoing voter then re-claim (bounded → honest pause);
+  `authority-announce` frame accelerates loser convergence; roster
+  admissions/departures ride the replicated log (`replicateNodeAdmitted`/
+  `replicateNodeLeft`) so the quorum denominator is the COMMITTED roster;
+  catch-up responses carry committedSeq.
+- `gateway/` (v2-gw, negotiated on auth with explicit incompatibility reject):
+  term-locked host pin (higher term takes over immediately, stale term
+  refused) + hostless member↔member relay of the election vocabulary
+  (rate-limited, admitted-only); TS side claims a relay room on election win.
+- Regression tiers: `survivor-election.test.ts` (real managers, full
+  self-heal chain incl. post-handover SECOND failure), `_rig/resilience-
+  upgrade.rig.test.ts` (veto→catch-up→win, committed roster + concurrent-write
+  epoch convergence, 2-node honest pause), `presence-tracking.test.ts`,
+  gateway `resilience_v2_test.go` (term lock, v1/v2 mixed takeover, hostless
+  relay incl. addressed frames + rate limit).
+- Review hardening (three-reviewer pass): elected authority adopts full host-
+  semantics presence tracking + a win-time grace window; roster commits adopt
+  the ABSOLUTE payload epoch (no authority/replica drift under concurrent
+  writes); a v1 gateway takeover resets the pin's term; hostless election
+  relay honors addressed envelopes (`to` threaded through the member client);
+  election-budget cleanup on member departure.
+
 ## 2026-02-21 - AI Workstation Foundation (Phase 0-3)
 
 Major milestone delivering foundational Apps/Platform layers:

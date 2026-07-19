@@ -271,6 +271,13 @@ export interface FederationManagerDeps {
   /** Office paused/resumed (partition minority) → neutral UI signal. */
   onOfficePaused?: (officeId: string, paused: boolean) => void
   /**
+   * Joiner role: a recovery re-join was rejected AFTER the initial join had
+   * settled — this node lost office membership (e.g. the authority no longer
+   * recognizes it). Fired once per loss (re-armed by a later grant) so
+   * bootstrap can tell the user instead of failing silently.
+   */
+  onOfficeAccessLost?: (officeId: string, reason: string) => void
+  /**
    * Transport-only re-form seam: resolve a sender to a newly-elected authority
    * after a host loss. See {@link PeerDialer}. Absent → {@link NO_PEER_DIALER}.
    */
@@ -478,9 +485,10 @@ export interface FederationManager {
   getNodeAddress(officeId: string, nodeId: NodeId): string | null
   /**
    * Inbound entry for frames arriving over a DIALED peer connection (production
-   * PeerDialer). Delivers into the office's link; drops when the office is gone.
+   * PeerDialer). `fromNode` is the dialed peer's identity, used to attribute
+   * frames that carry no payload source (feed-sync). Drops when the office is gone.
    */
-  deliverInbound(officeId: string, frame: FederationMessage): void
+  deliverInbound(officeId: string, frame: FederationMessage, fromNode?: NodeId): void
   /**
    * OS resume: grant every hosted and joined office a presence grace window so a
    * machine waking from sleep re-baselines its peers instead of mass-confirming
@@ -525,6 +533,28 @@ interface JoinedOffice {
   client: WsFederationClient
   /** The office's outbound link, kept so its sender can be repointed (transport seam). */
   link: LanMeshLink
+  /**
+   * The office's UPSTREAM outbound sender — initially the join client aimed at
+   * the host, replaced by repointLink after an authority change. The link's
+   * router falls back to it for any target without a more direct path, so the
+   * ctrl shim and per-peer routing survive a repoint (a bare link.repoint would
+   * discard both). Held as a mutable ref so the router closure follows swaps.
+   */
+  upstream: { send: WsSender }
+  /**
+   * nodeId ↔ clientId for PEERS whose frames arrive on this node's own WS
+   * server (peer-dialed sessions during/after a host loss; the re-formed star
+   * when this node is elected authority). Replies ride the same socket back.
+   */
+  peerClients: Map<NodeId, string>
+  /**
+   * Election-window direct dial legs to survivors, opened when the believed
+   * authority is confirmed-offline so claims/votes ride reachable transports
+   * instead of the dead upstream. A leg is torn down as soon as a better path
+   * exists: the peer's own inbound session (peerClients) or the re-formed star
+   * (followers close all legs after redialing the new authority).
+   */
+  electionLegs: Map<NodeId, DialedPeer>
   /** M2 per-office authority module (this node may be elected to host on handover). */
   authority?: OfficeAuthority
   /** Reliable ctrl-plane transport (wake/turn-complete over the feed outbox); undefined only if the feed store is unavailable. */
@@ -534,6 +564,16 @@ interface JoinedOffice {
   /** The join-request sent at join, kept so a redial/reconnect can re-drive it to a
    *  newly-elected authority (roster re-entry after a host loss). */
   joinRequest?: JoinRequest
+  /**
+   * Set when the upstream session proved to be a RELAY (the gateway sent
+   * gw:host-lost): the gateway base URL this office rides. An election win
+   * then claims the room over it (term-locked gw:host-attach) instead of
+   * dialing WAN peers directly; an authority change re-enrolls over the same
+   * relay session.
+   */
+  gatewayServerUrl?: string
+  /** The room claim opened when THIS node wins an election on a relay office. */
+  gateway?: GatewayAttachClient
 }
 
 export function createFederationManager(deps: FederationManagerDeps): FederationManager {
@@ -553,9 +593,9 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   // reconnecting to a peer we no longer target.
   const dialedPeers = new Map<string, () => void>()
   // In-memory node address book per JOINED office, learned from the host's
-  // roster projection. Deliberately NOT persisted into office_nodes: the presence
-  // FSM assumes a direct transport to every row it sweeps, and a joiner has none
-  // to its peers. The host side reads addresses from its own office_nodes rows.
+  // roster projection — the fast lookup layer over the persisted office_nodes
+  // rows (peer cards are persisted too, presence-untracked, so the book and the
+  // election roster survive a restart; see isPresenceTracked on the coordinator).
   const officeAddressBooks = new Map<string, Map<NodeId, string>>()
 
   // Per-office coalescing timers for throttled roster refresh: a busy run flips
@@ -642,20 +682,44 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       reassignTask: (task) => deps.reassignTask?.(officeId, task),
       applyMemberWrite: (record) => deps.applyMemberWrite?.(record),
       onBecomeAuthority: (term) => {
-        // The successor records itself as authority (term-state already did). Mark
-        // its own node row online so its replication views include it. Full P2P
-        // transport re-formation after a host loss is a LAN-discovery item; the
-        // committed state is preserved here regardless (no lost write).
+        // The successor records itself as authority (term-state already did).
+        // Mark its own node row online so its replication views include it,
+        // then project the roster to the survivors over the direct legs — the
+        // star re-forms around this node as peers redial + re-enroll (their
+        // inbound sessions replace the legs one by one).
         ensureSelfNode(officeId)
+        // Relay office: claim the room with the new term (the gateway's term
+        // lock admits a higher tenure immediately and refuses a stale one).
+        ensureJoinedGatewayTakeover(officeId)
+        const successor = joined.get(officeId) ?? hosted.get(officeId)
+        // Winning flips this node to full host-semantics presence tracking
+        // (every ledger row). Peer rows may carry stale lastSeen from before
+        // the handover — grant one fresh grace window so survivors get the
+        // full re-enroll budget before any of them can be confirmed offline.
+        successor?.federation.coordinator.notifyResume()
+        successor?.federation.coordinator.broadcastRoster()
         console.log(`${LOG_TAG} became office authority office=${officeId} term=${term}`)
       },
       onAuthorityChange: (nodeId, term) => {
         // Transport re-form: when the authority moved to a PEER, point this
         // office's outbound leg at it (best-effort — an unreachable peer leaves
-        // the office paused, honestly). A move to SELF needs no dial; the
+        // the office paused, honestly). A successful redial re-forms the star,
+        // so the election-window dial legs are torn down (one route per peer,
+        // no steady-state ambiguity). A move to SELF needs no dial; the
         // initial believed-authority alignment never fires this callback.
         if (nodeId !== deps.getLocalNodeId()) {
-          redialToAuthority(officeId, nodeId)
+          const join = joined.get(officeId)
+          if (join?.gatewayServerUrl) {
+            // Relay office: the upstream gateway session routes member frames
+            // to whichever host holds the room — the new authority claims it
+            // with its term — so re-enroll over the relay; no WAN dial.
+            join.gateway?.close()
+            join.gateway = undefined
+            reenrollWithAuthority(officeId)
+            closeElectionLegs(officeId)
+          } else if (redialToAuthority(officeId, nodeId)) {
+            closeElectionLegs(officeId)
+          }
         }
         deps.onAuthorityChange?.(officeId, nodeId, term)
       },
@@ -776,6 +840,50 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   }
 
   /**
+   * Relay-office election win: claim the office's gateway room as its new host
+   * with a term-locked gw:host-attach. Members keep their existing relay
+   * sessions; the gateway routes their frames to this node once attached.
+   * No-op for LAN offices (no gatewayServerUrl) or when already claimed.
+   */
+  function ensureJoinedGatewayTakeover(officeId: string): void {
+    const join = joined.get(officeId)
+    if (!join?.gatewayServerUrl || join.gateway) return
+    if (!deps.makeAuthProof) {
+      console.warn(`${LOG_TAG} relay takeover needs an auth proof factory office=${officeId}`)
+      return
+    }
+    join.gateway = new GatewayAttachClient({
+      gatewayUrl: join.gatewayServerUrl,
+      officeId,
+      makeAuthProof: deps.makeAuthProof,
+      getTerm: () => join.authority?.getTerm() ?? 0,
+      onFrame: (frame, from) => {
+        const live = joined.get(officeId)
+        if (!live) return
+        if ((frame as { officeId?: unknown }).officeId !== officeId) return
+        const src = resolveFromNode(frame) ?? from ?? deps.getLocalNodeId()
+        ;(live.federation.link as LanMeshLink).deliver(src, frame)
+      },
+      onStateChange: (state) => {
+        if (state !== 'attached') return
+        console.log(`${LOG_TAG} relay room claimed office=${officeId} term=${join.authority?.getTerm() ?? 0}`)
+        const live = joined.get(officeId)
+        // Re-baseline presence (the takeover gap is not peer silence), then
+        // project the roster so survivors converge on the new center.
+        live?.federation.coordinator.notifyResume()
+        live?.federation.coordinator.broadcastRoster()
+      },
+      signAnnounce: deps.signGatewayAnnounce,
+      getIdentityId: () => deps.getLocalNodeId(),
+      getEndpoints: () => {
+        const url = deps.getLocalAdvertisedUrl?.() ?? null
+        return url ? [url] : []
+      },
+      getDisplayName: () => deps.getLocalDisplayName?.() ?? undefined,
+    })
+  }
+
+  /**
    * Idempotently open the host's gateway attachment for an office. Split out of
    * office creation so an office hosted BEFORE the gateway URL was configured
    * picks the gateway up on the next hostOffice() call (invite minting goes
@@ -796,6 +904,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       gatewayUrl,
       officeId,
       makeAuthProof: deps.makeAuthProof,
+      getTerm: () => entry.authority?.getTerm() ?? 0,
       onFrame: (frame, from) => handleGatewayInbound(officeId, frame, from),
       // A relay outage silences every relayed peer at once; when the room is
       // re-claimed, grant presence grace so the outage is not mass-confirmed as
@@ -1082,6 +1191,9 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       },
       // M2: stamp the join-grant with the current tenure + effective caps.
       getJoinGrantExtras: authority ? () => authority!.getJoinGrantExtras() : undefined,
+      // Committed roster: a node admission rides the replicated blackboard log,
+      // so every replica's quorum denominator converges to the committed set.
+      onNodeAdmitted: authority ? (node) => authority!.replicateNodeAdmitted(node) : undefined,
       // Run-context: stamp the roster snapshot with the open run epoch so a joiner
       // derives the live session key and renders an in-progress run's history.
       getCurrentRunEpoch: () => deps.getCurrentRunEpoch?.(officeId)?.epochId ?? null,
@@ -1293,7 +1405,23 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       )
       return
     }
-    ;(entry.federation.link as LanMeshLink).deliver(fromNode ?? deps.getLocalNodeId(), frame)
+    // Learn the peer's return path: its own inbound session supersedes any
+    // election dial leg to it (one route per peer — no routing ambiguity), and
+    // is how an elected survivor answers the star that re-forms around it.
+    const peer = sessionIdentity ?? fromNode
+    if (peer && peer !== deps.getLocalNodeId()) {
+      entry.peerClients.set(peer, ctx.clientId)
+      const leg = entry.electionLegs.get(peer)
+      if (leg) {
+        leg.dispose?.()
+        entry.electionLegs.delete(peer)
+      }
+      // Reliable ctrl-plane from this peer (mirrors the hosted inbound path).
+      entry.ctrlFeed?.subscribePeer(peer)
+    }
+    // Frames without a payload source (feed-sync et al) are attributed to the
+    // proven session identity, so feed cursors key on the real peer node.
+    ;(entry.federation.link as LanMeshLink).deliver(fromNode ?? peer ?? deps.getLocalNodeId(), frame)
   }
 
   /**
@@ -1383,7 +1511,24 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // joiner→joiner message).
     const join = joined.get(params.officeId)
     if (join) {
-      const relayNode = believedAuthorityNode(params.officeId) ?? params.ownerNodeId
+      const believedAuthority = believedAuthorityNode(params.officeId)
+      if (believedAuthority === selfNode) {
+        // ELECTED-AUTHORITY role on a joined office: this node IS the star
+        // center now, so a wake goes straight to the member's owner over the
+        // router (peer session / dial leg) — addressing it to "the authority"
+        // would loop it back to ourselves. Mirrors the hosted branch, including
+        // the remote-busy overlay + the turn-complete origin assertion it feeds.
+        join.federation.link.send(params.ownerNodeId, {
+          kind: 'wake',
+          officeId: params.officeId,
+          correlationId: params.correlationId,
+          request: params.request,
+          fromNode: selfNode,
+        })
+        remoteBusy.mark(params.correlationId, params.officeId, params.request.appId, params.ownerNodeId)
+        return true
+      }
+      const relayNode = believedAuthority ?? params.ownerNodeId
       // Symmetric with the host branch: the offline gate applies only on the
       // raw-transport fallback; with the outbox the wake is held + delivered on
       // recovery, bounded by the give-up backstop.
@@ -1422,6 +1567,15 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // Relay cleanup: the departed node's gateway session serves nothing now.
     const host = hosted.get(officeId)
     if (host?.nodeToGateway.delete(from)) host.gateway?.evict(from)
+    // Committed roster: a node that took ALL its members out has left the
+    // office — replicate the departure and drop its ledger row, so the quorum
+    // denominator stops counting it (a stale row would inflate the majority a
+    // future election needs and could wedge an otherwise-healthy office).
+    const ownedTotal = members.filter((m) => m.ownerNodeId === from)
+    if (ownedTotal.every((m) => owned.includes(m.appId))) {
+      getOfficeAuthority(officeId)?.replicateNodeLeft(from)
+      deps.federationStore.removeNode(officeId, from)
+    }
   }
 
   /**
@@ -1539,6 +1693,9 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     return await new Promise<{ ok: boolean; reason?: string }>((resolve) => {
       let settled = false
       let authedOnce = false
+      // One access-lost notice per loss: re-armed by a later grant, so a flap
+      // that recovers stays quiet while a real loss is never silent.
+      let accessLostNotified = false
       const finish = (result: { ok: boolean; reason?: string }) => {
         if (settled) return
         settled = true
@@ -1555,11 +1712,75 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       // Set after createFederation; referenced by the link's ctrl shim + onFeedFrame.
       let ctrlFeed: CtrlFeed | undefined
       let sessionFeed: SessionFeed | undefined
+      // Per-peer return paths (see the JoinedOffice fields for semantics). Bound
+      // into the router closure below, then stored on the office entry.
+      const peerClients = new Map<NodeId, string>()
+      const electionLegs = new Map<NodeId, DialedPeer>()
+      // The upstream leg starts at the join client; repointLink replaces it in
+      // place after an authority change (the router keeps working unchanged).
+      // The target rides the envelope so a HOSTLESS gateway room can deliver
+      // addressed election frames to exactly one member (LAN hosts ignore it).
+      const upstreamRef: { send: WsSender } = { send: (to, frame) => client.send(frame, to) }
+      /**
+       * Directed-send path resolution, best first:
+       *   1. a live inbound session FROM that peer (peerClients — the re-formed
+       *      star when this node is the authority, or a dialing candidate);
+       *   2. an election-window dial leg to it;
+       *   3. the upstream leg (steady-state star: everything rides the authority).
+       * A dead inbound session falls through (and is forgotten) instead of
+       * black-holing the frame.
+       */
+      const sendDirected = (to: NodeId, frame: FederationMessage): void => {
+        const clientId = peerClients.get(to)
+        if (clientId !== undefined) {
+          if (deps.hostSend(clientId, frame)) return
+          peerClients.delete(to)
+        }
+        const leg = electionLegs.get(to)
+        if (leg) {
+          leg.sender(to, frame)
+          return
+        }
+        // Relay office, elected here: members reach us through the claimed
+        // room, so addressed replies ride the same relay back.
+        const roomClaim = joined.get(officeId)?.gateway
+        if (roomClaim?.isAttached()) {
+          roomClaim.send(to, frame)
+          return
+        }
+        upstreamRef.send(to, frame)
+      }
       const link: LanMeshLink = new LanMeshLink((to, frame) => {
         // Reliable ctrl-plane: a directed wake / turn-complete rides the feed outbox
-        // (durable, effectively-once); feed-sync frames go raw to the upstream host.
+        // (durable, effectively-once); feed-sync frames go raw over the router.
         if (ctrlShimSend(ctrlFeed, to, frame)) return
-        client.send(frame)
+        if (to !== null) {
+          sendDirected(to, frame)
+          return
+        }
+        // Broadcast: upstream + every direct peer path, one copy per node
+        // (an inbound session wins over a dial leg to the same peer). In the
+        // steady state both maps are empty and this is exactly the old
+        // single-upstream behaviour.
+        const sent = new Set<NodeId>()
+        for (const [node, clientId] of peerClients) {
+          if (deps.hostSend(clientId, frame)) sent.add(node)
+          else peerClients.delete(node)
+        }
+        for (const [node, leg] of electionLegs) {
+          if (sent.has(node)) continue
+          leg.sender(node, frame)
+          sent.add(node)
+        }
+        const roomClaim = joined.get(officeId)?.gateway
+        if (roomClaim?.isAttached()) {
+          // The gateway fans out to every admitted room member. The upstream
+          // member session is skipped: as the room's host, a frame sent over
+          // it would be routed straight back to this node (a self-loop).
+          roomClaim.send(null, frame)
+          return
+        }
+        upstreamRef.send(null, frame)
       })
       // M2 authority module for this JOINED office: as a hot-standby it applies
       // replicated entries + acks, and tracks the host's presence so it can stand
@@ -1582,6 +1803,16 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
           // waiting out the join timeout.
           if (state === 'closed' && !authedOnce) {
             finish({ ok: false, reason: 'AUTH_REJECTED' })
+          }
+        },
+        // The relay reported the room's host lost: remember this office rides a
+        // gateway, so an election win claims the room (term-locked attach) and
+        // an authority change re-enrolls over the relay instead of WAN-dialing.
+        onGatewayHostLost: () => {
+          const live = joined.get(officeId)
+          if (live && !live.gatewayServerUrl) {
+            live.gatewayServerUrl = serverUrl
+            console.log(`${LOG_TAG} office=${officeId} marked relay-backed url=${serverUrl}`)
           }
         },
         // Reconnect re-auth (never the first auth): the host may have dropped this
@@ -1608,12 +1839,32 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         // Suspend-safe silence clock so a host sleep does not mass-confirm peers.
         monotonicNow: () => performance.now(),
         listMembersForNode: (nodeId) => membersForNode(officeId, nodeId),
+        // A joiner's only direct transport is its upstream (the believed
+        // authority — which MOVES after an election). Persisted PEER rows have
+        // no transport here: the FSM must not silence-sweep them, or every
+        // peer would be false-confirmed offline ~13s after its row lands.
+        //
+        // ELECTED-AUTHORITY role: once this node IS the authority it becomes
+        // the star center and the office's only presence source — nobody
+        // projects presence to it anymore, so it adopts FULL host semantics
+        // and silence-tracks every ledger row (peers heartbeat to it over
+        // their re-enrolled sessions). A peer that dies a SECOND time is then
+        // confirmed offline here, keeping member unblock / reconcile /
+        // reachability gates working after a handover. Deliberately NOT keyed
+        // on a live return session: a dead peer's session entry is pruned on
+        // its first failed send, which would un-track it right before the FSM
+        // could confirm it. Followers still track only their upstream.
+        isPresenceTracked: (nodeId) => {
+          const believedAuthority = believedAuthorityNode(officeId)
+          return nodeId === believedAuthority || believedAuthority === deps.getLocalNodeId()
+        },
         onMemberConfirmedOffline: deps.onMemberConfirmedOffline,
         onPresenceChange: deps.onPresenceChange
           ? (snap) => deps.onPresenceChange!(officeId, snap)
           : undefined,
         onJoinGrant: (assignedNodeId) => {
           console.log(`${LOG_TAG} joined office=${officeId}`)
+          accessLostNotified = false
           // M2: record self in the node ledger so election views include it.
           if (authority) {
             deps.federationStore.upsertNode({
@@ -1638,6 +1889,13 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         },
         onJoinReject: (reason) => {
           console.warn(`${LOG_TAG} join rejected office=${officeId} reason=${reason}`)
+          // A reject after the join settled is a lost membership (the authority
+          // no longer recognizes this node) — surface it instead of leaving the
+          // user with a silently wrong presence view.
+          if (settled && !accessLostNotified) {
+            accessLostNotified = true
+            deps.onOfficeAccessLost?.(officeId, reason)
+          }
           finish({ ok: false, reason })
         },
         onWake: deps.runLocalTurn
@@ -1673,8 +1931,9 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
             // authority mirrors them (and serves them onward to other joiners).
             sessionFeed?.advertiseAllTo(snapshot.team.hostNodeId)
           }
-          // Learn the office's node address book (in memory only — see the map's
-          // declaration for why these never become office_nodes rows).
+          // Learn the office's node address book. The fast path stays in memory;
+          // the rows are ALSO persisted below so the book survives a restart and
+          // the election roster/quorum denominator is complete on every node.
           if (snapshot.nodes) {
             const book = officeAddressBooks.get(officeId) ?? new Map<NodeId, string>()
             for (const n of snapshot.nodes) {
@@ -1682,22 +1941,49 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
             }
             officeAddressBooks.set(officeId, book)
           }
-          // M2: the host is the believed authority; record its node row (so the
-          // joiner's presence FSM tracks it and can detect it going offline) and
-          // align the believed authority + tenure baseline.
+          // M2: persist the FULL node roster from the authority's projection —
+          // the authority row plus every PEER card. Peer rows carry the address
+          // book + the authoritative joined_at (candidate order) so a survivor
+          // can elect and dial after the authority is gone. Peer rows are
+          // presence-UNTRACKED on this node (see isPresenceTracked): their
+          // status is adopted from presence-update projections, never
+          // silence-swept, so a row's existence no longer implies a transport.
           if (authority) {
             const host = snapshot.team.hostNodeId
-            const existing = deps.federationStore.getNode(officeId, host)
-            deps.federationStore.upsertNode({
-              nodeId: host,
-              officeId,
-              identity: host,
-              displayName: snapshot.members.find((m) => m.ownerNodeId === host)?.ownerDisplayName ?? null,
-              joinedAt: existing?.joinedAt ?? 0, // host/creator sorts earliest
-              lastSeen: Date.now(),
-              status: 'online',
-              advertisedUrl: snapshot.nodes?.find((n) => n.nodeId === host)?.advertisedUrl ?? null,
-            })
+            const ts = Date.now()
+            for (const n of snapshot.nodes ?? []) {
+              if (n.nodeId === selfContext.selfNodeId) continue
+              const existing = deps.federationStore.getNode(officeId, n.nodeId)
+              deps.federationStore.upsertNode({
+                nodeId: n.nodeId,
+                officeId,
+                identity: n.nodeId,
+                displayName: n.displayName ?? existing?.displayName ?? null,
+                joinedAt: n.joinedAt ?? existing?.joinedAt ?? ts,
+                lastSeen: existing?.lastSeen ?? ts,
+                // A roster projection proves the node is KNOWN to the live
+                // authority, not that it is reachable now — keep the adopted /
+                // FSM-owned status on existing rows.
+                status: n.nodeId === host ? 'online' : existing?.status ?? 'online',
+                advertisedUrl: n.advertisedUrl ?? existing?.advertisedUrl ?? null,
+              })
+            }
+            // Compatibility: an authority that projects no node cards (pre-
+            // node-roster wire shape) still yields the authority row the
+            // joiner's presence FSM must track.
+            if (!snapshot.nodes?.some((n) => n.nodeId === host)) {
+              const existing = deps.federationStore.getNode(officeId, host)
+              deps.federationStore.upsertNode({
+                nodeId: host,
+                officeId,
+                identity: host,
+                displayName: snapshot.members.find((m) => m.ownerNodeId === host)?.ownerDisplayName ?? null,
+                joinedAt: existing?.joinedAt ?? 0, // host/creator sorts earliest
+                lastSeen: Date.now(),
+                status: 'online',
+                advertisedUrl: existing?.advertisedUrl ?? null,
+              })
+            }
             authority.termState.setAuthority(host, authority.termState.getTerm())
           }
           deps.onRosterChanged?.(officeId)
@@ -1716,9 +2002,27 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         // Queued wakes for a confirmed-offline node stay PENDING in the outbox
         // (give-up is the sole undeliverable arbiter — see the hosted mirror of
         // this hook); forward the transition for M2 handover.
+        // ELECTED-AUTHORITY role: survivors re-enroll with join-requests after
+        // a handover; admissions + departures then ride the committed roster
+        // the same way they do on a first-generation host.
+        onNodeAdmitted: authority ? (node) => authority!.replicateNodeAdmitted(node) : undefined,
+        onMemberLeave: (from, appIds) => {
+          if (joined.get(officeId)?.authority?.isAuthoritySelf()) {
+            handleMemberLeaveOnHost(officeId, from, appIds)
+          } else {
+            console.warn(`${LOG_TAG} member-leave ignored (not authority) office=${officeId} from=${from}`)
+          }
+        },
         onNodePresence: (nodeId, status) => {
           if (status === 'offline') sessionFeed?.dropPeer(nodeId)
           if (status === 'online') sessionFeed?.advertiseAllTo(nodeId)
+          // Losing the AUTHORITY means losing the office's whole transport
+          // (star center). Open direct dial legs to the survivors BEFORE the
+          // handover layer reacts, so the election it starts sends its claims
+          // and collects its votes over transports that still exist.
+          if (status === 'offline' && nodeId === believedAuthorityNode(officeId)) {
+            openElectionLegs(officeId)
+          }
           authority?.onNodePresence(nodeId, status)
         },
         getJoinGrantExtras: authority ? () => authority!.getJoinGrantExtras() : undefined,
@@ -1728,7 +2032,17 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       // A joiner replicates for itself; it serves mirrors onward only if it is
       // later elected the office authority (read live via the authority module).
       sessionFeed = buildSessionFeed(officeId, link, () => authority?.isAuthoritySelf() ?? false)
-      joined.set(officeId, { federation, client, link, authority, ctrlFeed, sessionFeed })
+      joined.set(officeId, {
+        federation,
+        client,
+        link,
+        upstream: upstreamRef,
+        peerClients,
+        electionLegs,
+        authority,
+        ctrlFeed,
+        sessionFeed,
+      })
       federation.coordinator.start()
 
       const request: JoinRequest = {
@@ -1787,6 +2101,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       join.authority?.stop()
       join.federation.coordinator.stop()
       join.client.close()
+      join.gateway?.close()
+      for (const leg of join.electionLegs.values()) leg.dispose?.()
+      join.electionLegs.clear()
+      join.peerClients.clear()
       joined.delete(officeId)
       console.log(`${LOG_TAG} left office=${officeId}`)
     }
@@ -1836,7 +2154,15 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   }
 
   function repointLink(officeId: string, newSendTarget: WsSender): boolean {
-    const link = hosted.get(officeId)?.link ?? joined.get(officeId)?.link
+    // JOINED office: swap only the UPSTREAM leg inside the router, so the ctrl
+    // shim and the per-peer return paths keep working across the repoint.
+    const join = joined.get(officeId)
+    if (join) {
+      join.upstream.send = newSendTarget
+      console.log(`${LOG_TAG} repointed upstream office=${officeId}`)
+      return true
+    }
+    const link = hosted.get(officeId)?.link
     if (!link) {
       console.warn(`${LOG_TAG} repointLink: office not hosted or joined office=${officeId}`)
       return false
@@ -1844,6 +2170,44 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     link.repoint(newSendTarget)
     console.log(`${LOG_TAG} repointed link office=${officeId}`)
     return true
+  }
+
+  /**
+   * Failure-window transport re-form, leg 1 of "one election, two kinds of
+   * legs": when the believed authority is confirmed-offline, dial every known
+   * survivor's advertised URL so election claims/votes ride reachable direct
+   * transports instead of the dead upstream. Idempotent; peers already
+   * reachable (an inbound session, or a live leg) are not re-dialed. The legs
+   * are temporary — see closeElectionLegs and the peer-session takeover in
+   * handleJoinedInbound.
+   */
+  function openElectionLegs(officeId: string): void {
+    const join = joined.get(officeId)
+    if (!join) return
+    const self = deps.getLocalNodeId()
+    let opened = 0
+    for (const node of deps.federationStore.listNodesByOffice(officeId)) {
+      if (node.nodeId === self) continue
+      if (node.status === 'offline') continue // the dead authority / confirmed peers
+      if (join.peerClients.has(node.nodeId) || join.electionLegs.has(node.nodeId)) continue
+      const dialed = peerDialer(officeId, node.nodeId)
+      if (!dialed) continue
+      const leg: DialedPeer = typeof dialed === 'function' ? { sender: dialed } : dialed
+      join.electionLegs.set(node.nodeId, leg)
+      opened++
+    }
+    if (opened > 0) {
+      console.log(`${LOG_TAG} opened ${opened} election leg(s) office=${officeId}`)
+    }
+  }
+
+  /** Tear down every election-window dial leg for an office (star re-formed). */
+  function closeElectionLegs(officeId: string): void {
+    const join = joined.get(officeId)
+    if (!join || join.electionLegs.size === 0) return
+    for (const leg of join.electionLegs.values()) leg.dispose?.()
+    join.electionLegs.clear()
+    console.log(`${LOG_TAG} closed election legs office=${officeId}`)
   }
 
   function redialToAuthority(officeId: string, authorityNodeId: NodeId): boolean {
@@ -1904,17 +2268,23 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
 
   /**
    * Inbound entry for frames arriving over a DIALED peer connection (the
-   * production PeerDialer's WsFederationClient). Mirrors the joiner client's
-   * onFrame wiring: deliver into the office's link with the self label; the
-   * handlers resolve the true origin from the frame itself.
+   * production PeerDialer's WsFederationClient). Source attribution, best
+   * first: the frame's own fromNode, then the DIALED PEER's identity supplied
+   * by the caller (the dialer knows which node it connected to), then the
+   * legacy self label (normalized to the believed authority downstream).
+   * Passing the peer matters for source-labelled frames without a payload
+   * fromNode (feed-sync): during an election window the believed authority is
+   * still the DEAD node, so the legacy label mis-attributed a live peer's
+   * subscribe/ack to it and its feeds were never served.
    */
-  function deliverInbound(officeId: string, frame: FederationMessage): void {
+  function deliverInbound(officeId: string, frame: FederationMessage, fromNode?: NodeId): void {
     const office = hosted.get(officeId) ?? joined.get(officeId)
     if (!office) {
       console.warn(`${LOG_TAG} deliverInbound: office not present office=${officeId}; dropping ${frame.kind}`)
       return
     }
-    ;(office.federation.link as LanMeshLink).deliver(deps.getLocalNodeId(), frame)
+    const label = resolveFromNode(frame) ?? fromNode ?? deps.getLocalNodeId()
+    ;(office.federation.link as LanMeshLink).deliver(label, frame)
   }
 
   /** M2: route to the replication layer (assign seq, append log, fan-out to standbys). */
@@ -2234,10 +2604,20 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       if (!directPath && !gatewayPath) return false
       return deps.federationStore.getNode(officeId, ownerNode)?.status !== 'offline'
     }
-    if (joined.has(officeId)) {
-      const hostNode = deps.teamStore.getTeamById(officeId)?.hostNodeId
-      if (!hostNode) return false
-      return deps.federationStore.getNode(officeId, hostNode)?.status !== 'offline'
+    const join = joined.get(officeId)
+    if (join) {
+      // The star center MOVES after an election: judge reachability against the
+      // believed AUTHORITY (not the original team.hostNodeId, which may be the
+      // dead creator). When this node is the authority itself, the owner must be
+      // directly reachable (peer session / dial leg) and not confirmed offline.
+      const believedAuthority = believedAuthorityNode(officeId)
+      if (believedAuthority === deps.getLocalNodeId()) {
+        if (!join.peerClients.has(ownerNode) && !join.electionLegs.has(ownerNode)) return false
+        return deps.federationStore.getNode(officeId, ownerNode)?.status !== 'offline'
+      }
+      const relayNode = believedAuthority ?? deps.teamStore.getTeamById(officeId)?.hostNodeId
+      if (!relayNode) return false
+      return deps.federationStore.getNode(officeId, relayNode)?.status !== 'offline'
     }
     return false
   }
@@ -2309,6 +2689,9 @@ function resolveFromNode(frame: FederationMessage): NodeId | null {
     // M2 control/artifact frames all carry their own fromNode.
     case 'authority-claim':
     case 'authority-confirm':
+    case 'authority-announce':
+    case 'catchup-request':
+    case 'catchup-response':
     case 'blackboard-write':
     case 'blackboard-replicate':
     case 'ack':

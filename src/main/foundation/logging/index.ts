@@ -23,6 +23,9 @@
 // Controller (side-effect: self-registers config subscription at import time)
 export { isDeveloperMode } from './controller'
 
+// Early-bootstrap log path isolation (per-variant / per-cluster-node)
+export { isolateLogPath } from './log-isolation'
+
 // HTTP transport
 export {
   setHttpLogging,

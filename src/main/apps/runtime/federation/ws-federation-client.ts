@@ -18,7 +18,7 @@
 
 import WebSocket from 'ws'
 
-import { framePlane, type FederationMessage, type FramePlane } from './types'
+import { framePlane, type FederationMessage, type FramePlane, type NodeId } from './types'
 
 const LOG_TAG = '[FedClient]'
 
@@ -77,6 +77,14 @@ export interface WsFederationClientDeps {
   /** Connection lifecycle, surfaced for the manager's logging/diagnostics. */
   onStateChange?: (state: WsFederationClientState) => void
   /**
+   * GATEWAY sessions only: the relay reported the room's host is gone
+   * (gw:host-lost). Receiving it also proves this joined office rides a
+   * gateway — the manager marks the office relay-backed so a later election
+   * win claims the room (gw:host-attach with the new term) instead of trying
+   * to dial WAN peers directly. LAN sessions never see this envelope.
+   */
+  onGatewayHostLost?: () => void
+  /**
    * Fired when the link re-authenticates AFTER a prior drop — i.e. a reconnect,
    * never the initial auth. The socket reconnect + re-auth restores transport,
    * but federation membership stays whatever the host last decided (e.g.
@@ -106,7 +114,7 @@ export class WsFederationClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   // Outbound frames held until the link is authed, segmented by plane so they
   // drain in priority and overflow is shed per-plane.
-  private readonly outbound: Record<FramePlane, FederationMessage[]> = {
+  private readonly outbound: Record<FramePlane, Array<{ frame: FederationMessage; to: NodeId | null }>> = {
     control: [],
     stream: [],
     artifact: [],
@@ -119,10 +127,17 @@ export class WsFederationClient {
     this.connect()
   }
 
-  /** Send a federation frame, queueing (bounded, per-plane) until the link is authed. */
-  send(frame: FederationMessage): void {
+  /**
+   * Send a federation frame, queueing (bounded, per-plane) until the link is
+   * authed. `to` is the intended target node, stamped on the envelope: a LAN
+   * host and a hosted gateway room ignore it (member frames route to the
+   * host), but a HOSTLESS gateway room uses it to deliver addressed election
+   * traffic (votes, catch-up replies) to exactly one member instead of
+   * fanning it out roomwide.
+   */
+  send(frame: FederationMessage, to?: NodeId | null): void {
     if (this.authed && this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify({ type: 'federation', payload: frame }))
+      this.socket.send(JSON.stringify({ type: 'federation', ...(to ? { to } : {}), payload: frame }))
       return
     }
     const plane = framePlane(frame)
@@ -133,7 +148,7 @@ export class WsFederationClient {
       queue.shift()
       console.warn(`${LOG_TAG} ${plane} queue full; dropped oldest ${plane} frame url=${this.wsUrl}`)
     }
-    queue.push(frame)
+    queue.push({ frame, to: to ?? null })
   }
 
   /** Stop reconnecting and close the socket. Idempotent. */
@@ -268,6 +283,10 @@ export class WsFederationClient {
       case 'federation':
         this.deps.onFrame(message.payload as FederationMessage)
         break
+      case 'gw:host-lost':
+        console.warn(`${LOG_TAG} gateway reports host lost url=${this.wsUrl}`)
+        this.deps.onGatewayHostLost?.()
+        break
       // 'event'/'pong'/others are not consumed by the federation joiner leg.
     }
   }
@@ -279,8 +298,8 @@ export class WsFederationClient {
     for (const plane of PLANE_DRAIN_ORDER) {
       const queue = this.outbound[plane]
       const pending = queue.splice(0, queue.length)
-      for (const frame of pending) {
-        this.socket.send(JSON.stringify({ type: 'federation', payload: frame }))
+      for (const { frame, to } of pending) {
+        this.socket.send(JSON.stringify({ type: 'federation', ...(to ? { to } : {}), payload: frame }))
       }
     }
   }

@@ -42,6 +42,15 @@ import type { NodeId } from './types'
 export const PROTOCOL_VERSION_CURRENT = 3
 export const PROTOCOL_VERSION_MIN_SUPPORTED = 3
 
+/**
+ * Gateway WIRE protocol version (v2-gw), a separate namespace from `pv` above:
+ * it versions the node ↔ relay envelope vocabulary (term-locked host attach,
+ * hostless election relay), not the node ↔ node federation protocol. Declared
+ * on gateway auth; a gateway rejects a declared-and-incompatible client
+ * explicitly instead of running a silent mixed-version session.
+ */
+export const GATEWAY_WIRE_PV = 2
+
 // ── Capability bits ──
 //
 // 64-bit space conceptually; we only allocate the low bits M1/M2 use, which stay
@@ -207,6 +216,23 @@ export interface AuthorityConfirmFrame {
   fid: Fid
 }
 
+/**
+ * Winner → peers: an election concluded at `term`, `fromNode` is the new
+ * authority. A pure convergence accelerator: receivers run the SAME
+ * observe-frame-term path that any established-authority frame drives (realign
+ * believed authority, redial, step a resurrected old authority down), so a
+ * loser/late voter re-forms its transport immediately instead of waiting for
+ * the next replicate frame. A stale term is ignored there — a resurrected old
+ * authority cannot use this to reclaim the office.
+ */
+export interface AuthorityAnnounceFrame {
+  kind: 'authority-announce'
+  officeId: string
+  fromNode: NodeId
+  term: AuthorityTerm
+  fid: Fid
+}
+
 /** Member node → authority: a blackboard write to be sequenced + persisted. */
 export interface BlackboardWriteFrame {
   kind: 'blackboard-write'
@@ -289,6 +315,12 @@ export interface CatchupResponseFrame {
   mode: 'incremental' | 'snapshot'
   /** Present when mode='incremental'. */
   entries?: CatchupEntry[]
+  /**
+   * The responder's committed water mark. The consumer adopts it (capped at its
+   * own applied seq) after replay, so a freshness-vetoed election candidate can
+   * re-claim with a baseSeq that passes the voters' STALE_LOG check.
+   */
+  committedSeq?: number
   /** Present when mode='snapshot' (opaque board state the standby replace-applies). */
   snapshot?: {
     tasks: unknown[]
@@ -471,6 +503,7 @@ export interface HistoryResponseFrame {
 export type M2Frame =
   | AuthorityClaimFrame
   | AuthorityConfirmFrame
+  | AuthorityAnnounceFrame
   | BlackboardWriteFrame
   | BlackboardReplicateFrame
   | AckFrame
@@ -488,6 +521,7 @@ export type M2Frame =
 export const M2_FRAME_KINDS: ReadonlySet<string> = new Set<M2Frame['kind']>([
   'authority-claim',
   'authority-confirm',
+  'authority-announce',
   'blackboard-write',
   'blackboard-replicate',
   'ack',

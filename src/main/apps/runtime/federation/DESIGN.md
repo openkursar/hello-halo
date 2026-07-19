@@ -64,6 +64,13 @@ office it joined; both wrap a `Federation` (coordinator + link).
 - `coordinator.ts` — all join + presence logic. Transport-agnostic; persists
   through `FederationStore` (office_nodes) + `TeamStore` (remote members). Owns
   the suspect/confirmed-offline presence FSM (monotonic silence clock, suspend-safe).
+  Join admission mirrors the WS auth layer's **roster re-entry** rule: an
+  unverifiable credential from an ALREADY-ADMITTED node (an office_nodes row
+  exists; fromNode is session-proven upstream) is admitted as a rejoin — never a
+  first admission, and never new members. A rejected join **latches** on both
+  sides (every JoinReject reason is terminal for the request as sent), so the
+  confirmed-offline recovery paths (heartbeat re-drive / rejoin nudge) stop
+  instead of looping; an explicit `requestJoin` or an admitted join re-arms them.
 - `protocol-m2.ts` — SSOT for M2 frame shapes, capability bits, reject reasons,
   and version negotiation. **`pv` is the protocol major version; current = min
   supported = 3** (device-key node-identity handshake). Pre-3 nodes cannot prove
@@ -100,10 +107,16 @@ office it joined; both wrap a `Federation` (coordinator + link).
 **M2 authority — `authority/`**
 - `office-authority.ts` — the per-office integration root composing the pieces
   below behind one `handle(from, frame)` dispatcher the manager routes `onM2Frame`
-  to. Derives election/replication "views" from the office_nodes ledger.
+  to. Derives election/replication "views" from the office_nodes ledger; applies
+  replicated roster ops to it (committed roster) and owns the roster-replication
+  API the manager calls on admissions/departures.
 - `term-state.ts` (tenure), `election.ts` + `handover.ts` (authority election &
-  post-handover reconcile), `reconcile.ts` (owner reachability / orphan re-drive),
-  `replication.ts` (blackboard write log + acks to hot-standbys),
+  post-handover reconcile — a freshness-vetoed candidate (STALE_LOG/STALE_ROSTER)
+  now catches up from the vetoing voter then re-claims, bounded by the attempt
+  cap; the winner broadcasts `authority-announce` so losers realign + re-form
+  transport immediately), `reconcile.ts` (owner reachability / orphan re-drive),
+  `replication.ts` (blackboard write log + acks to hot-standbys; catch-up
+  responses carry the responder's committedSeq),
   `scope-gate.ts` (invite-scope enforcement), `governance.ts`,
   `escalation-routing.ts`, `location-aware-blackboard.ts`,
   `artifact-fetch.ts` (lazy artifact bytes), `history-fetch.ts` (transcript pull).
@@ -129,20 +142,50 @@ Shared per-node state (all keyed by officeId): `hosted`, `joined`,
 - **Roster egress** — `broadcastRosterFor` (immediate) / `scheduleRosterRefresh`
   (coalesced during a run) / `projectMemberRemoved` / `projectOfficeDissolved`.
 - **Transport re-form seam** — after a host loss the authority moves to a peer;
-  `repointLink` swaps a link's outbound sender in place (coordinator/authority
-  untouched), `redialToAuthority` resolves a sender via the injected `PeerDialer`
-  (dialing a peer's **advertised URL** from the address book) and repoints to it.
-  This is why nodes advertise a URL at join/host time (`advertisedUrl`,
-  migration v5 on office_nodes).
+  `repointLink` swaps a link's outbound sender in place (a JOINED office swaps
+  only the **upstream** leg inside its router, so the ctrl shim and per-peer
+  return paths survive), `redialToAuthority` resolves a sender via the injected
+  `PeerDialer` (dialing a peer's **advertised URL** from the address book) and
+  repoints to it. This is why nodes advertise a URL at join/host time
+  (`advertisedUrl`, migration v5 on office_nodes).
+- **Failure-window legs** — when a joined office's believed authority is
+  confirmed-offline, `openElectionLegs` dials every known survivor so the
+  untouched election module's claims/votes ride reachable transports ("one
+  election, two kinds of legs"). A leg is torn down as soon as a better path
+  exists: the peer's own inbound session (learned into `JoinedOffice.peerClients`
+  by `handleJoinedInbound`) or, for followers, the redial to the new authority.
+  The elected survivor answers the star that re-forms around it through those
+  inbound sessions; a relay-backed office instead claims its gateway room with
+  a term-locked `gw:host-attach` (see Gateway relay below).
+
+> Refactor commitment: `manager.ts` has outgrown its facade role (the joined-
+> office transport router — upstream/peer-session/dial-leg/relay resolution —
+> now lives inline in `joinOffice`). The router is a self-contained concern and
+> is to be extracted into its own module under `runtime/federation/` in the
+> next structural pass; new routing behaviour should keep its seams (ctrl shim
+> first, per-target resolution, single route per peer) so the extraction stays
+> mechanical.
 
 ## Node address book
 
 - **Hosted** office: peer addresses are the persisted `office_nodes.advertised_url`
   rows (this node's own ledger).
-- **Joined** office: peer addresses are learned **in memory** from the host's
-  roster projection (`officeAddressBooks`) and deliberately NOT persisted — a
-  joiner has no direct transport to its peers, so persisting them would mislead
-  the presence FSM (which assumes a direct transport to every row it sweeps).
+- **Joined** office: PEER contact cards from the authority's roster projection
+  are **persisted** into office_nodes too (address book + the authoritative
+  joined_at candidate order survive a restart), but they are presence-UNTRACKED:
+  the coordinator's `isPresenceTracked` seam separates "I know your address"
+  from "I measure your silence", so only the direct upstream (the believed
+  authority, which moves after an election) is silence-swept. Untracked rows
+  adopt the authority's presence-update projection into the ledger instead.
+  A joined office whose node WINS an election flips to full host semantics —
+  every ledger row is tracked (the winner is now the office's only presence
+  source), with one fresh grace window granted at the win so survivors get the
+  full re-enroll budget before any silence can confirm them offline.
+- **Committed roster** — node admissions/departures additionally ride the
+  replicated blackboard log (`roster_join`/`roster_leave` via
+  `replicateNodeAdmitted`/`replicateNodeLeft`), so the election's quorum
+  denominator every node derives from its ledger is the committed set, not a
+  local view; `rosterEpoch` aligns across replicas from the same entries.
 
 ## Gateway relay (optional, off by default)
 
@@ -151,6 +194,17 @@ When `getGatewayUrl()` returns a URL, `hostOffice` additionally opens a
 WS) or `nodeToGateway` (via relay), kept **mutually exclusive** per node —
 whichever path a node's frames last arrived on is its return path. Absent gateway
 config → pure-LAN behaviour, unchanged.
+
+v2-gw resilience (wire version negotiated on auth, explicit reject on
+incompatibility): `gw:host-attach` carries the authority **term** — the gateway
+compares it monotonically only, admitting a higher tenure immediately (election
+takeover) and refusing a stale one (`STALE_TERM`), with the retention-window
+rule kept for term-less v1 attaches. While a room has NO host, the gateway
+relays the ELECTION control vocabulary member↔member (rate-limited, admitted
+members only), so a relayed office can elect through it; the winner claims the
+room via `ensureJoinedGatewayTakeover` (a joined office learns it is
+relay-backed from `gw:host-lost`). The gateway still holds no roster and never
+interprets payloads beyond `kind`.
 
 ## Where to make a change
 

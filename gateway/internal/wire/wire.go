@@ -1,7 +1,13 @@
 // Package wire defines the JSON envelope and gateway message vocabulary of the
-// federation wire protocol (v1-gw). The gateway is a relay: it reads only the
+// federation wire protocol (v2-gw). The gateway is a relay: it reads only the
 // envelope routing fields (type/to and kind/officeId/fromNode of federation
 // payloads) and never interprets business payloads.
+//
+// v2-gw adds (all guarded by explicit version negotiation on auth):
+//   - a monotonic, opaque TERM on gw:host-attach — a higher term takes a room
+//     over immediately (authority handover), a stale term is rejected;
+//   - member-to-member relay of the ELECTION control frames while the room has
+//     no host, so an office can elect a successor through the relay.
 package wire
 
 import "encoding/json"
@@ -22,6 +28,15 @@ type Envelope struct {
 	Error   string          `json:"error,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
+
+// Wire protocol version negotiation. A client MAY declare wirePv on auth;
+// declared-and-incompatible is rejected explicitly (auth:failed), never a
+// silent mixed-version session. An absent wirePv is a v1 client: admitted, and
+// simply never exercises the v2 vocabulary.
+const (
+	WirePvCurrent = 2
+	WirePvMin     = 1
+)
 
 // Envelope types handled by the gateway.
 const (
@@ -52,6 +67,11 @@ const (
 	CodeBadSignature     = "BAD_SIGNATURE"
 	CodeClockSkew        = "CLOCK_SKEW"
 	CodeMalformed        = "MALFORMED"
+	// A gw:host-attach carrying a term lower than (or equal to) the room's
+	// pinned term — a resurrected old host cannot reclaim an elected-over room.
+	CodeStaleTerm = "STALE_TERM"
+	// Auth declared a wire protocol version outside the supported range.
+	CodeVersionIncompatible = "VERSION_INCOMPATIBLE"
 )
 
 // GwError is the payload of a gw:error envelope.
@@ -66,6 +86,8 @@ type AuthPayload struct {
 	Federation bool            `json:"federation"`
 	OfficeID   string          `json:"officeId"`
 	Proof      json.RawMessage `json:"proof"`
+	// Declared wire protocol version; 0 (absent) = v1 client.
+	WirePv int `json:"wirePv,omitempty"`
 }
 
 // Proof is the device-key identity proof (§3.3).
@@ -88,6 +110,9 @@ type FederationHeader struct {
 // HostAttachPayload is the payload of gw:host-attach.
 type HostAttachPayload struct {
 	OfficeID string `json:"officeId"`
+	// Opaque monotonic authority tenure (v2-gw); 0 (absent) = v1 attach. See
+	// Hub.pinHost for takeover semantics.
+	Term int64 `json:"term,omitempty"`
 }
 
 // EvictPayload is the payload of gw:evict.
@@ -114,6 +139,26 @@ type DirectoryEntry struct {
 // DirectoryPayload is the payload of gw:directory.
 type DirectoryPayload struct {
 	Entries []DirectoryEntry `json:"entries"`
+}
+
+// electionKinds is the closed set of federation frame kinds the gateway will
+// relay member-to-member while a room has NO host (v2-gw): exactly the
+// authority-election control vocabulary, nothing else — business planes stay
+// host-routed, and the gateway still never interprets payloads beyond `kind`.
+var electionKinds = map[string]struct{}{
+	"authority-claim":    {},
+	"authority-confirm":  {},
+	"authority-announce": {},
+	"reject":             {},
+	"catchup-request":    {},
+	"catchup-response":   {},
+}
+
+// IsElectionKind reports whether a federation frame kind belongs to the
+// election vocabulary eligible for hostless member-to-member relay.
+func IsElectionKind(kind string) bool {
+	_, ok := electionKinds[kind]
+	return ok
 }
 
 // Plane is one of the three outbound priority planes (§5.3).

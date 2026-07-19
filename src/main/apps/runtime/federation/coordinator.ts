@@ -187,6 +187,32 @@ export interface FederationCoordinatorDeps {
    * every transition (online/suspect/offline). Absent → no election driver.
    */
   onNodePresence?: (nodeId: NodeId, status: 'online' | 'suspect' | 'offline') => void
+  /**
+   * Presence-tracking predicate: whether THIS node runs the silence FSM over a
+   * ledger row. "I know this node's address" (an office_nodes row exists) and
+   * "I have a direct transport to it" (its silence is measurable here) are two
+   * separate facts: a joiner persists peer rows for the election roster + the
+   * address book, but only its direct upstream (the believed authority)
+   * exchanges frames with it — sweeping a no-transport row would false-confirm
+   * a healthy peer offline. Untracked rows take their status from the
+   * authority's presence-update projection instead. Default: every row is
+   * tracked (host behaviour, and full-mesh test links).
+   */
+  isPresenceTracked?: (nodeId: NodeId) => boolean
+  /**
+   * Host/authority role: a node was newly admitted into the office ledger by a
+   * join-request (first admission or a rejoin that refreshed its contact card).
+   * The manager wires this to the authority's roster replication so membership
+   * changes ride the committed blackboard log — the quorum denominator every
+   * node then derives from its ledger is the COMMITTED roster, not a local view.
+   */
+  onNodeAdmitted?: (node: {
+    nodeId: NodeId
+    identity: string
+    displayName: string | null
+    joinedAt: number
+    advertisedUrl: string | null
+  }) => void
 }
 
 export interface FederationCoordinator {
@@ -246,6 +272,7 @@ export function createFederationCoordinator(
     getCurrentRunEpoch,
     getMemberRuntimeStatus,
     onNodePresence,
+    onNodeAdmitted,
   } = deps
   const now = deps.now ?? (() => Date.now())
   // Silence clock: monotonic in production; falls back to now() so tests that
@@ -255,6 +282,7 @@ export function createFederationCoordinator(
   const confirmedOfflineMs = deps.presence?.confirmedOfflineMs ?? PRESENCE_CONFIRMED_OFFLINE_MS
   const heartbeatIntervalMs = deps.presence?.heartbeatIntervalMs ?? PRESENCE_HEARTBEAT_INTERVAL_MS
   const listMembersForNode = deps.listMembersForNode ?? (() => [])
+  const isPresenceTracked = deps.isPresenceTracked ?? (() => true)
   const { officeId } = context
 
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null
@@ -286,6 +314,20 @@ export function createFederationCoordinator(
   // host `rejoin-request` (or any future self-driven rejoin) without the manager
   // re-supplying it. Set by requestJoin; null on a pure host coordinator.
   let lastJoinRequest: JoinRequest | null = null
+
+  // Joiner-side latch: every JoinReject reason is non-retryable, so once a
+  // re-driven join is rejected, repeating the identical request on each
+  // heartbeat/nudge is a livelock (reject → heartbeat → re-drive → reject,
+  // forever). Recovery re-drives are suppressed until an explicit requestJoin
+  // (reconnect re-auth, redial to a new authority, or a user re-join — each a
+  // genuinely new context) or a grant clears the latch.
+  let joinRejectedTerminally = false
+
+  // Host-side mirror of the same latch: nodes whose latest join-request this
+  // coordinator rejected. Nudging such a node to re-handshake would only make
+  // it repeat the request that just failed, so the rejoin nudge is suppressed
+  // until a join-request from it is admitted (it presents something new).
+  const rejectedJoinNodes = new Set<NodeId>()
 
   function markSeen(nodeId: NodeId): void {
     monotonicLastSeen.set(nodeId, monotonicNow())
@@ -337,6 +379,7 @@ export function createFederationCoordinator(
 
   function rejectJoin(to: NodeId, reason: JoinReject['reason']): void {
     console.warn(`${LOG_TAG} join rejected node=${to} reason=${reason} ts=${now()}`)
+    rejectedJoinNodes.add(to)
     link.send(to, { kind: 'join-reject', officeId, reason })
   }
 
@@ -459,14 +502,34 @@ export function createFederationCoordinator(
   }
 
   function handleJoinRequest(req: JoinRequest): void {
-    const cred = verifyCredential(req.credentialToken)
-    if (!cred) {
-      rejectJoin(req.fromNode, 'CREDENTIAL_INVALID')
-      return
-    }
-    if (cred.officeId !== officeId || req.officeId !== officeId) {
+    if (req.officeId !== officeId) {
       rejectJoin(req.fromNode, 'OFFICE_MISMATCH')
       return
+    }
+    const cred = verifyCredential(req.credentialToken)
+    if (cred && cred.officeId !== officeId) {
+      rejectJoin(req.fromNode, 'OFFICE_MISMATCH')
+      return
+    }
+    if (!cred) {
+      // Roster re-entry: an unverifiable token from an ALREADY-ADMITTED node is
+      // not a forgery but the normal shape of recovery — the invite was signed
+      // by a creator key this authority does not hold (rejoining a survivor-
+      // elected authority) or its ledger record is gone (the issuer restarted
+      // without it). The WS auth layer grants such sessions by device-key proof
+      // + admitted-node check; mirroring that rule here keeps the join-request
+      // level from vetoing a session the transport already trusts (the veto was
+      // a livelock: reject → heartbeat → re-drive → reject). Fail-closed: no
+      // office_nodes row → never a first admission. fromNode is trustworthy
+      // because the manager's inbound routing asserts it against the session's
+      // device-key-proven identity before frames reach this coordinator.
+      if (!federationStore.getNode(officeId, req.fromNode)) {
+        rejectJoin(req.fromNode, 'CREDENTIAL_INVALID')
+        return
+      }
+      console.log(
+        `${LOG_TAG} credential unverifiable for admitted node=${req.fromNode}; admitting via roster re-entry`
+      )
     }
     // Version negotiation: only a PRESENT-and-incompatible protocol version is
     // rejected. An absent pv is a pre-negotiation peer — it is not trusted on
@@ -495,23 +558,38 @@ export function createFederationCoordinator(
 
     // Preserve original join order on rejoin: only the first join stamps joinedAt.
     const existing = federationStore.getNode(officeId, req.fromNode)
+    const admittedJoinedAt = existing?.joinedAt ?? ts
+    const admittedUrl = req.advertisedUrl ?? existing?.advertisedUrl ?? null
     federationStore.upsertNode({
       nodeId: req.fromNode,
       officeId,
       identity: nodeIdentity,
       displayName: req.displayName ?? null,
-      joinedAt: existing?.joinedAt ?? ts,
+      joinedAt: admittedJoinedAt,
       lastSeen: ts,
       status: 'online',
       // Address book: how peers dial this node after a transport loss. A rejoin
       // without a URL keeps the previously-learned one (store COALESCEs too).
-      advertisedUrl: req.advertisedUrl ?? existing?.advertisedUrl ?? null,
+      advertisedUrl: admittedUrl,
     })
+    // Route the membership change into the committed roster (replicated
+    // blackboard log) — first admission or a contact-card refresh; a plain
+    // rejoin with an unchanged card is not a membership change.
+    if (!existing || existing.advertisedUrl !== admittedUrl || existing.displayName !== (req.displayName ?? null)) {
+      onNodeAdmitted?.({
+        nodeId: req.fromNode,
+        identity: nodeIdentity,
+        displayName: req.displayName ?? null,
+        joinedAt: admittedJoinedAt,
+        advertisedUrl: admittedUrl,
+      })
+    }
     // Rejoin is the ONLY exit from confirmed-offline. Clearing the flag here
     // re-arms the node so a later confirmed transition can fire again. Reset its
     // monotonic last-seen so the fresh tenure starts with a full grace window.
     confirmedNodes.delete(req.fromNode)
     lastRejoinNudge.delete(req.fromNode)
+    rejectedJoinNodes.delete(req.fromNode)
     markSeen(req.fromNode)
 
     // Persist brought members as remote team_members. An appId already present
@@ -525,6 +603,15 @@ export function createFederationCoordinator(
         // Rejoin: the row (and any disambiguated name) is already persisted.
         if (m.spaceId) onRemoteMemberSpaceId?.(m.appId, m.spaceId)
         joinedAppIds.push(m.appId)
+        continue
+      }
+      if (!cred) {
+        // Roster re-entry admits the node and its already-present members only;
+        // a NEW member needs a verifiable invite (its scope overlay is signed
+        // into the credential and there is nothing to persist without it).
+        console.warn(
+          `${LOG_TAG} skipping new member on credential-less re-entry team=${officeId} app=${m.appId} node=${req.fromNode}`
+        )
         continue
       }
       const memberName = disambiguateMemberName(m.memberName, req.displayName)
@@ -622,6 +709,12 @@ export function createFederationCoordinator(
     // no-silent-revive invariant while guaranteeing liveness on a live socket.
     // Rate-limited so a stuck peer is not spammed.
     if (confirmedNodes.has(fromNode)) {
+      // Don't nudge a node whose join was already terminally rejected (see
+      // joinRejectedTerminally / rejectedJoinNodes above).
+      const rejoinSuppressed = lastJoinRequest
+        ? joinRejectedTerminally
+        : rejectedJoinNodes.has(fromNode)
+      if (rejoinSuppressed) return
       const mono = monotonicNow()
       const last = lastRejoinNudge.get(fromNode) ?? -Infinity
       if (mono - last >= REJOIN_NUDGE_INTERVAL_MS) {
@@ -786,6 +879,7 @@ export function createFederationCoordinator(
         // asymmetric half of the no-silent-revive invariant).
         confirmedNodes.clear()
         lastRejoinNudge.clear()
+        joinRejectedTerminally = false
         let revived = false
         for (const node of federationStore.listNodesByOffice(officeId)) {
           if (node.nodeId === context.selfNodeId) continue
@@ -800,6 +894,9 @@ export function createFederationCoordinator(
         break
       }
       case 'join-reject':
+        // Latch (see joinRejectedTerminally above); every reject reason is
+        // terminal for the request as sent.
+        joinRejectedTerminally = true
         onJoinReject?.(msg.reason)
         break
       case 'heartbeat':
@@ -809,10 +906,10 @@ export function createFederationCoordinator(
         // Joiner role: host confirmed us offline while our socket stayed up;
         // re-send the last join-request to re-admit and re-arm the FSM. A host
         // coordinator never sends itself a rejoin-request.
-        if (lastJoinRequest) {
+        if (lastJoinRequest && !joinRejectedTerminally) {
           console.log(`${LOG_TAG} rejoin-request received office=${officeId}; re-sending join-request`)
           link.send(lastJoinRequest.fromNode, lastJoinRequest)
-        } else {
+        } else if (!lastJoinRequest) {
           console.warn(`${LOG_TAG} rejoin-request received office=${officeId} but no prior join-request to re-send`)
         }
         break
@@ -833,6 +930,23 @@ export function createFederationCoordinator(
             status: msg.status,
             lastSeen: msg.since,
           })
+          // A persisted-but-untracked peer row (a joiner's ledger copy of a
+          // peer it has no transport to) adopts the projection into the ledger
+          // itself: the election views (candidate order, online set) read row
+          // status, so without this a dead peer would count as an online
+          // candidate forever. Tracked rows stay FSM-owned — the local silence
+          // measurement wins over a remote projection there.
+          if (!isPresenceTracked(msg.nodeId)) {
+            const row = federationStore.getNode(officeId, msg.nodeId)
+            if (row && row.status !== msg.status) {
+              federationStore.setNodeStatus(officeId, msg.nodeId, msg.status, msg.since)
+            }
+            // For projection-owned rows the authority's 'online' IS the rejoin
+            // signal: re-arm the confirmed latch so a later offline projection
+            // fires the member unblock again (tracked rows re-arm on a real
+            // join handshake instead).
+            if (msg.status === 'online') confirmedNodes.delete(msg.nodeId)
+          }
           notifyPresence()
         }
         if (msg.status === 'offline') applyRemoteOffline(msg)
@@ -1007,6 +1121,10 @@ export function createFederationCoordinator(
       // the host's confirmedNodes guard — when the node later dies for real,
       // applyRemoteOffline short-circuits and no unblock/busy-clear ever fires.
       if (node.nodeId === context.selfNodeId) continue
+      // Rows without a direct transport (a joiner's persisted PEER rows) are
+      // never silence-swept — no frames flow here, so their silence measures
+      // nothing. Their status is adopted from the authority's presence frames.
+      if (!isPresenceTracked(node.nodeId)) continue
       if (confirmedNodes.has(node.nodeId)) continue
       const silence = mono - monotonicLastSeenOf(node)
       if (node.status === 'online') {
@@ -1059,6 +1177,10 @@ export function createFederationCoordinator(
     // Remember it so an inbound rejoin-request can re-send it without the manager
     // re-supplying the payload (the host-driven recovery from confirmed-offline).
     lastJoinRequest = req
+    // An explicit (re-)join is a new context — reconnect re-auth, redial to a
+    // newly-elected authority, or a user-supplied credential — so a previous
+    // terminal reject no longer binds the recovery paths.
+    joinRejectedTerminally = false
     link.send(req.fromNode, req) // peers resolve the host; in M1a the link routes it.
   }
 

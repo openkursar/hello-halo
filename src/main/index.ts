@@ -107,6 +107,7 @@ app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
 import { getDataFolderName, DEFAULT_DATA_FOLDER_NAME } from './foundation/product-config'
 import { isHostnameTrustedForCertificates } from './services/browser-policy.service'
 import { join as joinPath } from 'path'
+import { isolateLogPath } from './foundation/logging'
 const dataFolderName = getDataFolderName()
 if (dataFolderName !== DEFAULT_DATA_FOLDER_NAME) {
   const appDataPath = app.getPath('appData')
@@ -114,20 +115,9 @@ if (dataFolderName !== DEFAULT_DATA_FOLDER_NAME) {
   console.log(`[Main] userData isolated to: ${joinPath(appDataPath, dataFolderName)}`)
 }
 
-// Log isolation mirrors the data-dir rule (config.service getHaloDir): a dev
-// run and per-variant builds must not interleave their logs with the packaged
-// default's ~/Library/Logs/halo — electron-log keys its path on the app name,
-// which is identical across instances.
-{
-  const logFolderName = !app.isPackaged ? `${dataFolderName}-dev` : dataFolderName
-  if (logFolderName !== DEFAULT_DATA_FOLDER_NAME) {
-    const logsPath = joinPath(app.getPath('logs'), '..', logFolderName)
-    app.setPath('logs', logsPath)
-    log.transports.file.resolvePathFn = (variables) =>
-      joinPath(logsPath, variables.fileName ?? 'main.log')
-    console.log(`[Main] logs isolated to: ${logsPath}`)
-  }
-}
+// Log path isolation (per-variant / per-cluster-node) — see
+// foundation/logging/log-isolation.ts for the rules. Must run pre-ready.
+isolateLogPath(app)
 
 // Single instance lock: Prevent multiple instances of the application
 // Must be called before app.whenReady()

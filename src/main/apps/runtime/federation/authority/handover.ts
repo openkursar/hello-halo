@@ -20,8 +20,14 @@
  * clock + in-memory stores.
  */
 
+import { randomUUID } from 'crypto'
 import type { NodeId, FederationMessage } from '../types'
-import type { AuthorityClaimFrame, AuthorityConfirmFrame } from '../protocol-m2'
+import type {
+  AuthorityAnnounceFrame,
+  AuthorityClaimFrame,
+  AuthorityConfirmFrame,
+  RejectFrame,
+} from '../protocol-m2'
 import { createElection, type Election } from './election'
 import type { TermState } from './term-state'
 import type { Reconciler } from './reconcile'
@@ -29,6 +35,14 @@ import type { Reconciler } from './reconcile'
 const LOG_TAG = '[Handover]'
 
 export const OLD_AUTHORITY_STEPDOWN_GRACE_MS = 2000
+
+/**
+ * How long a freshness-vetoed candidate waits for the catch-up it requested to
+ * apply before re-claiming. Short: the catch-up is a single request/response
+ * over a live link; a candidate that is still behind after it is vetoed again
+ * (bounded by the election's attempt cap → honest pause, never a stale winner).
+ */
+export const CATCHUP_RECLAIM_DELAY_MS = 1500
 
 export interface HandoverDeps {
   officeId: string
@@ -51,6 +65,14 @@ export interface HandoverDeps {
   onStepdown?: () => void
   /** Pause/resume the office (read-only) on partition minority. */
   onPausedChange?: (paused: boolean) => void
+  /**
+   * Pull the replication tail from a peer that vetoed this candidate's claim
+   * for log freshness (STALE_LOG / STALE_ROSTER — the peer holds committed
+   * state this node lacks). Wired to replication's catch-up request; after the
+   * pull applies the candidate re-claims, turning "safe but paused" into
+   * "safe and available".
+   */
+  requestCatchup?: (from: NodeId) => void
   now?: () => number
   schedule?: (ms: number, fn: () => void) => () => void
   jitter?: (ms: number) => number
@@ -65,6 +87,8 @@ export interface Handover {
   /** Election frames routed by the manager (onM2Frame). */
   handleClaim: (from: NodeId, frame: AuthorityClaimFrame) => void
   handleConfirm: (from: NodeId, frame: AuthorityConfirmFrame) => void
+  /** A reject referencing this node's own claim (freshness veto → catch-up). */
+  handleReject: (from: NodeId, frame: RejectFrame) => void
   getBelievedAuthority: () => NodeId | null
   isAuthoritySelf: () => boolean
   isPaused: () => boolean
@@ -99,6 +123,18 @@ export function createHandover(deps: HandoverDeps): Handover {
     termState.setAuthority(selfNodeId, term)
     setPaused(false)
     console.log(`${LOG_TAG} became authority office=${officeId} term=${term}`)
+    // Convergence accelerator: tell every reachable peer the election concluded
+    // so losers/late voters realign + re-form transport NOW (observeFrameTerm),
+    // instead of on the next replicate frame. Best-effort — the replication
+    // stream remains the guaranteed carrier of the new tenure.
+    const announce: AuthorityAnnounceFrame = {
+      kind: 'authority-announce',
+      officeId,
+      fromNode: selfNodeId,
+      term,
+      fid: randomUUID(),
+    }
+    deps.broadcast(announce)
     deps.onBecomeAuthority(term)
     deps.onAuthorityChange(selfNodeId, term)
     // Reconcile in_progress tasks against owner presence. Async; does NOT block
@@ -124,6 +160,15 @@ export function createHandover(deps: HandoverDeps): Handover {
     broadcast: deps.broadcast,
     onElected: becomeAuthority,
     onQuorumUnreachable: () => setPaused(true),
+    // Freshness veto (STALE_LOG / STALE_ROSTER): the voter holds committed
+    // state this candidate lacks. Pull its tail, then re-claim once the pull
+    // had a chance to apply — the loop is bounded by the election attempt cap,
+    // so a candidate that cannot catch up still degrades to the honest pause.
+    onFreshnessReject: (from) => {
+      console.log(`${LOG_TAG} claim vetoed for freshness office=${officeId}; catching up from=${from}`)
+      deps.requestCatchup?.(from)
+      schedule(CATCHUP_RECLAIM_DELAY_MS, () => election.retryClaim())
+    },
     now,
     schedule,
     jitter: deps.jitter,
@@ -181,6 +226,7 @@ export function createHandover(deps: HandoverDeps): Handover {
     observeFrameTerm,
     handleClaim: (from, frame) => election.handleClaim(from, frame),
     handleConfirm: (from, frame) => election.handleConfirm(from, frame),
+    handleReject: (from, frame) => election.handleReject(from, frame),
     getBelievedAuthority: () => termState.getAuthorityNodeId(),
     isAuthoritySelf,
     isPaused: () => paused,

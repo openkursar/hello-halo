@@ -103,36 +103,64 @@ type hostPin struct {
 	sess      *session.Session
 	connected bool
 	lostAt    time.Time
+	// Highest authority term this pin has seen (v2-gw). 0 = pinned by a v1
+	// attach that carried no term.
+	term int64
 }
 
-// pinHost enforces room pinning (§9.2): the first gw:host-attach pins the
-// office to that identity; the same identity may always replace its own
-// connection; a different identity may take over only after the previous host
-// has been disconnected for the full retention window (authority handover).
-func (h *Hub) pinHost(officeID string, s *session.Session) bool {
+// pinHost enforces room pinning (§9.2) with the v2-gw term lock: the first
+// gw:host-attach pins the office to that identity; the same identity may
+// always replace its own connection; a DIFFERENT identity takes over either
+// immediately with a strictly HIGHER term (an election concluded — the term is
+// opaque and only compared monotonically) or, term-less (v1), after the
+// previous host has been disconnected for the full retention window. A stale
+// term can never reclaim an elected-over room, connected or not.
+func (h *Hub) pinHost(officeID string, s *session.Session, term int64) (ok bool, reason string) {
 	identity := s.IdentityID()
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	pin, ok := h.pins[officeID]
-	if !ok {
-		h.pins[officeID] = &hostPin{identity: identity, sess: s, connected: true}
-		return true
+	pin, present := h.pins[officeID]
+	if !present {
+		h.pins[officeID] = &hostPin{identity: identity, sess: s, connected: true, term: term}
+		return true, ""
 	}
 	if pin.identity == identity {
 		pin.sess = s
 		pin.connected = true
-		return true
+		if term > pin.term {
+			pin.term = term
+		}
+		return true, ""
 	}
-	if pin.connected || time.Since(pin.lostAt) < h.cfg.HostRetention {
-		return false
+	takeover := false
+	switch {
+	case term > pin.term:
+		// A higher tenure won an election; the room follows the new authority
+		// immediately — waiting out retention would strand the survivors.
+		takeover = true
+	case term != 0 && term <= pin.term:
+		// A termed attach that LOST the tenure race (e.g. a resurrected old
+		// authority): explicit stale-term rejection, even after retention.
+		return false, wire.CodeStaleTerm
+	case !pin.connected && time.Since(pin.lostAt) >= h.cfg.HostRetention:
+		// v1 path: term-less takeover after the retention window.
+		takeover = true
+	}
+	if !takeover {
+		return false, wire.CodeHostConflict
 	}
 	h.log.Warn("host takeover: office re-pinned to a new identity",
-		"office", officeID, "previous", pin.identity, "new", identity)
+		"office", officeID, "previous", pin.identity, "new", identity, "term", term)
 	h.metrics.HostTakeoversTotal.Add(1)
 	pin.identity = identity
 	pin.sess = s
 	pin.connected = true
-	return true
+	// The pin's term always follows the taker: a v2 taker proved `term`, and a
+	// term-less v1 taker resets it to 0 — it never proved the previous holder's
+	// tenure, and inheriting it would STALE_TERM-lock out a legitimate current
+	// authority reattaching at that same term.
+	pin.term = term
+	return true, ""
 }
 
 // releasePin marks the pin disconnected when its holding session goes away
@@ -208,8 +236,8 @@ func (h *Hub) handleHostAttach(s *session.Session, env *wire.Envelope) {
 		s.SendGwError(wire.CodeMalformed, "officeId does not match session office")
 		return
 	}
-	if !h.pinHost(s.OfficeID(), s) {
-		s.SendGwError(wire.CodeHostConflict, "office is pinned to another host identity")
+	if ok, reason := h.pinHost(s.OfficeID(), s, p.Term); !ok {
+		s.SendGwError(reason, "office is pinned to another host identity")
 		return
 	}
 	if !h.roomFor(s.OfficeID()).attachHost(s) {

@@ -31,6 +31,8 @@ type Room struct {
 	members      map[string]*member
 	retainTimer  *time.Timer
 	disbanded    bool
+	// Per-identity election-relay budgets for the hostless window (v2-gw).
+	electionBudget map[string]*relayBudget
 
 	cfg     Config
 	log     *slog.Logger
@@ -42,6 +44,17 @@ type Room struct {
 type Config struct {
 	AdmissionTimeout time.Duration
 	HostRetention    time.Duration
+	// Max election frames relayed per member per second while the room has no
+	// host (v2-gw hostless relay). The election vocabulary is tiny — claims,
+	// votes, a bounded catch-up — so the ceiling is generous yet starves a
+	// misbehaving member before it can amplify through the broadcast.
+	ElectionRelayPerSec int
+}
+
+// relayBudget is a fixed one-second window counter for the election relay.
+type relayBudget struct {
+	windowStart time.Time
+	count       int
 }
 
 func (c *Config) fillDefaults() {
@@ -51,16 +64,20 @@ func (c *Config) fillDefaults() {
 	if c.HostRetention == 0 {
 		c.HostRetention = 5 * time.Minute
 	}
+	if c.ElectionRelayPerSec == 0 {
+		c.ElectionRelayPerSec = 30
+	}
 }
 
 func newRoom(officeID string, cfg Config, log *slog.Logger, m *metrics.Metrics, onEmpty func(string)) *Room {
 	return &Room{
-		officeID: officeID,
-		members:  make(map[string]*member),
-		cfg:      cfg,
-		log:      log.With("office", officeID),
-		metrics:  m,
-		onEmpty:  onEmpty,
+		officeID:       officeID,
+		members:        make(map[string]*member),
+		electionBudget: make(map[string]*relayBudget),
+		cfg:            cfg,
+		log:            log.With("office", officeID),
+		metrics:        m,
+		onEmpty:        onEmpty,
 	}
 }
 
@@ -102,6 +119,7 @@ func (r *Room) expireAdmission(nodeID string, s *session.Session) {
 		return
 	}
 	delete(r.members, nodeID)
+	delete(r.electionBudget, nodeID)
 	r.mu.Unlock()
 	r.log.Info("member admission timed out", "node", nodeID)
 	s.CloseWithGwError(wire.CodeAdmissionTimeout, "not admitted within timeout")
@@ -147,12 +165,19 @@ func (r *Room) attachHost(s *session.Session) bool {
 }
 
 // routeFromMember forwards a member's federation frame to the host (§9.2:
-// member frames are always routed to the host; "to" is ignored).
+// member frames are always routed to the host; "to" is ignored). v2-gw: while
+// the room has NO host, the election control vocabulary is relayed
+// member-to-member instead, so the office can elect a successor through the
+// relay; every other kind still answers HOST_UNREACHABLE.
 func (r *Room) routeFromMember(s *session.Session, hdr *wire.FederationHeader, env *wire.Envelope) {
 	r.mu.Lock()
 	host := r.host
 	r.mu.Unlock()
 	if host == nil {
+		if wire.IsElectionKind(hdr.Kind) {
+			r.relayElectionFrame(s, env)
+			return
+		}
 		s.SendGwError(wire.CodeHostUnreachable, "host is not online")
 		return
 	}
@@ -228,6 +253,70 @@ func (r *Room) routeFromHost(s *session.Session, hdr *wire.FederationHeader, env
 	}
 }
 
+// relayElectionFrame broadcasts one election frame from an ADMITTED member to
+// every other admitted member (hostless window only). The sender identity is
+// stamped as the envelope From (same proven-origin contract as host forwards);
+// pending members neither send nor receive — admission still requires a host.
+func (r *Room) relayElectionFrame(s *session.Session, env *wire.Envelope) {
+	nodeID := s.IdentityID()
+	r.mu.Lock()
+	m, ok := r.members[nodeID]
+	if !ok || !m.admitted {
+		r.mu.Unlock()
+		r.metrics.FramesRejectedTotal.Add(1)
+		return
+	}
+	if !r.allowElectionRelayLocked(nodeID) {
+		r.mu.Unlock()
+		r.metrics.RateLimitedTotal.Add(1)
+		s.SendGwError(wire.CodeRateLimited, "election relay budget exceeded")
+		return
+	}
+	// Addressed election traffic (votes, catch-up replies — the latter can
+	// carry full snapshots) goes ONLY to its target; a broadcast would amplify
+	// it to the whole room. Un-addressed claims/announces fan out.
+	targets := make([]*session.Session, 0, len(r.members))
+	if env.To != nil && *env.To != "" {
+		if peer, ok := r.members[*env.To]; ok && peer.admitted {
+			targets = append(targets, peer.sess)
+		}
+	} else {
+		for id, peer := range r.members {
+			if id == nodeID || !peer.admitted {
+				continue
+			}
+			targets = append(targets, peer.sess)
+		}
+	}
+	r.mu.Unlock()
+	data := marshalForward(env, nodeID)
+	if data == nil {
+		s.SendGwError(wire.CodeMalformed, "unencodable frame")
+		return
+	}
+	for _, t := range targets {
+		if t.SendData(wire.PlaneControl, data) {
+			r.metrics.FramesForwardedTotal[wire.PlaneControl].Add(1)
+		}
+	}
+}
+
+// allowElectionRelayLocked charges one frame against the member's fixed
+// one-second relay window. Caller holds r.mu.
+func (r *Room) allowElectionRelayLocked(nodeID string) bool {
+	now := time.Now()
+	b := r.electionBudget[nodeID]
+	if b == nil || now.Sub(b.windowStart) >= time.Second {
+		r.electionBudget[nodeID] = &relayBudget{windowStart: now, count: 1}
+		return true
+	}
+	if b.count >= r.cfg.ElectionRelayPerSec {
+		return false
+	}
+	b.count++
+	return true
+}
+
 // evict force-closes a member session on the host's request.
 func (r *Room) evict(nodeID string) {
 	r.mu.Lock()
@@ -235,6 +324,7 @@ func (r *Room) evict(nodeID string) {
 	if ok {
 		m.stopTimer()
 		delete(r.members, nodeID)
+		delete(r.electionBudget, nodeID)
 	}
 	r.mu.Unlock()
 	if ok {
@@ -268,6 +358,7 @@ func (r *Room) onSessionClose(s *session.Session) {
 	if m, ok := r.members[nodeID]; ok && m.sess == s {
 		m.stopTimer()
 		delete(r.members, nodeID)
+		delete(r.electionBudget, nodeID)
 	}
 	empty := r.host == nil && len(r.members) == 0 && r.retainTimer == nil
 	r.mu.Unlock()
@@ -293,6 +384,7 @@ func (r *Room) disband() {
 		sessions = append(sessions, m.sess)
 	}
 	r.members = make(map[string]*member)
+	r.electionBudget = make(map[string]*relayBudget)
 	r.mu.Unlock()
 	r.log.Info("room disbanded after host retention timeout")
 	for _, s := range sessions {

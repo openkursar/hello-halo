@@ -24,6 +24,7 @@
 import WebSocket from 'ws'
 
 import { framePlane, type FederationMessage, type FramePlane, type NodeId } from './types'
+import { GATEWAY_WIRE_PV } from './protocol-m2'
 
 const LOG_TAG = '[GwAttach]'
 
@@ -97,6 +98,13 @@ export interface GatewayAttachDeps {
   getEndpoints?: () => string[]
   /** Optional human label for the directory. */
   getDisplayName?: () => string | undefined
+  /**
+   * The office's current authority tenure, stamped on gw:host-attach (v2-gw
+   * term lock): a freshly-elected authority takes the room over immediately,
+   * a resurrected stale host is refused (STALE_TERM). Absent → term-less v1
+   * attach (retention-window takeover semantics).
+   */
+  getTerm?: () => number
   /** Test seam; production uses the 60s default. */
   announceIntervalMs?: number
 }
@@ -203,6 +211,7 @@ export class GatewayAttachClient {
             token: this.deps.credentialToken ?? '',
             federation: true,
             officeId: this.deps.officeId,
+            wirePv: GATEWAY_WIRE_PV,
           },
         })
       )
@@ -254,18 +263,34 @@ export class GatewayAttachClient {
               federation: true,
               officeId: this.deps.officeId,
               proof,
+              wirePv: GATEWAY_WIRE_PV,
             },
           })
         )
         break
       }
-      case 'auth:success':
+      case 'auth:success': {
+        // v2-gw negotiation: a v1 gateway echoes no wirePv — it still relays,
+        // but the term lock + hostless election relay are unavailable there
+        // (takeover falls back to the retention window). Logged explicitly so
+        // a degraded deployment is visible, never silent.
+        const gwPv = (message.payload as { wirePv?: unknown } | undefined)?.wirePv
+        if (typeof gwPv !== 'number' || gwPv < GATEWAY_WIRE_PV) {
+          console.warn(
+            `${LOG_TAG} gateway wire v${typeof gwPv === 'number' ? gwPv : 1} < v${GATEWAY_WIRE_PV}: term lock + hostless election relay unavailable url=${this.wsUrl}`
+          )
+        }
         console.log(`${LOG_TAG} authenticated url=${this.wsUrl}; attaching office=${this.deps.officeId}`)
         this.setState('open')
+        const term = this.deps.getTerm?.() ?? 0
         this.socket?.send(
-          JSON.stringify({ type: 'gw:host-attach', payload: { officeId: this.deps.officeId } })
+          JSON.stringify({
+            type: 'gw:host-attach',
+            payload: { officeId: this.deps.officeId, ...(term > 0 ? { term } : {}) },
+          })
         )
         break
+      }
       case 'auth:failed':
         // Not transient at the auth layer; stop retrying.
         console.warn(`${LOG_TAG} auth failed url=${this.wsUrl} error=${message.error ?? 'unknown'}`)

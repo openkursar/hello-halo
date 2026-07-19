@@ -120,7 +120,8 @@ or triggers via an existing route.
 | C3 | host+1 | joiner keeps WS connected but heartbeat stalls >13s (approximates frontend freeze) | after being marked offline, **host sends rejoin-request → joiner auto-rejoins**, no deadlock loop | [guards: deadlock/rejoin-on-live-socket] |
 | C4 | host+1 | killNode(joiner) then reviveNode | joiner **auto re-joins** on restart (office-recovery), returns to the same office, roster restored | [guards: H-1 re-join] |
 | C5 | host | killNode(host) then reviveNode | host **auto re-hosts** on restart, joiner auto-reconnects, office restored | [guards: H-1 re-host] |
-| C6 | host+1 | killNode(host) (no restart) | office on the joiner side **honestly pauses** (no fake seamlessness); no split-brain, no self-appointed authority | [guards: AC-5.1 Option-B boundary] |
+| C6 | host+1 | killNode(host) (no restart) | office on the joiner side **honestly pauses** (1 survivor of 2 cannot form a majority — consensus boundary); no split-brain, no self-appointed authority | [guards: AC-5.1 quorum boundary] |
+| C6b | host+2 | killNode(host) (no restart) | survivors SELF-HEAL: the front joiner is elected over direct dial legs within the presence+election budget, the loser redials + re-enrolls, survivor↔survivor messaging works, history intact; the revived old host is EPOCH_STALE'd back to a member role | [unit-tier proof: survivor-election.test.ts + resilience-upgrade.rig.test.ts] |
 | C7 | host+1 | joiner rejoins after being offline >24h (approximated by changing system clock) | enters the current office/run, visible state correctly rebuilt, no errors, no half-torn context (AC-11.5) | |
 
 ### D. Roster consistency / real-time propagation (AC-1.2 / AC-3.1 / D-1)

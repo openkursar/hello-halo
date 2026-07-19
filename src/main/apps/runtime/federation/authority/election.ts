@@ -52,6 +52,14 @@ export interface ElectionDeps {
   onElected: (term: number) => void
   /** Exhausted retries without a majority → minority side pauses (read-only). */
   onQuorumUnreachable?: () => void
+  /**
+   * This candidate's claim was vetoed by a voter holding FRESHER committed
+   * state (STALE_LOG / STALE_ROSTER). The current claim is abandoned; the
+   * consumer pulls the voter's tail and calls retryClaim() once it applied.
+   * Vetoes count against the attempt cap, so a candidate that can never catch
+   * up still degrades to the honest QUORUM_UNREACHABLE pause.
+   */
+  onFreshnessReject?: (from: NodeId, reason: RejectFrame['reason']) => void
   now?: () => number
   /** Injected timer (defaults to setTimeout, unref'd). */
   schedule?: (ms: number, fn: () => void) => () => void
@@ -64,6 +72,10 @@ export interface Election {
   startElection(): void
   handleClaim(from: NodeId, frame: AuthorityClaimFrame): void
   handleConfirm(from: NodeId, frame: AuthorityConfirmFrame): void
+  /** A reject frame referencing this candidate's own claim (freshness veto). */
+  handleReject(from: NodeId, frame: RejectFrame): void
+  /** Re-claim after a freshness-veto catch-up applied (still front → new claim). */
+  retryClaim(): void
   /** Re-arm after a node comes back (exit a QUORUM_UNREACHABLE pause). */
   retrigger(): void
   /** Abandon any in-flight candidacy + clear timers (stop / stepdown). */
@@ -103,6 +115,9 @@ export function createElection(deps: ElectionDeps): Election {
   let confirms = new Set<NodeId>()
   let attempt = 0
   let cancelTimer: (() => void) | null = null
+  // The fid of this candidate's live claim, so an inbound reject can be matched
+  // to it (rejects for anything else — replication, other claims — are ignored).
+  let lastClaimFid: string | null = null
 
   function clearTimer(): void {
     if (cancelTimer) {
@@ -154,6 +169,7 @@ export function createElection(deps: ElectionDeps): Election {
       rosterNodes: getLastKnownRoster(),
       fid: randomUUID(),
     }
+    lastClaimFid = claim.fid
     console.log(`${LOG_TAG} claim office=${officeId} term=${proposed} attempt=${attempt} quorum=${quorumSize()}`)
     broadcast(claim)
     // A single-node roster elects itself immediately (degenerate but valid).
@@ -177,6 +193,7 @@ export function createElection(deps: ElectionDeps): Election {
     paused = false
     const t = term
     myTerm = null
+    lastClaimFid = null
     confirms = new Set()
     attempt = 0
     console.log(`${LOG_TAG} WON office=${officeId} term=${t}`)
@@ -305,6 +322,42 @@ export function createElection(deps: ElectionDeps): Election {
     maybeWin()
   }
 
+  function handleReject(from: NodeId, frame: RejectFrame): void {
+    // Only a freshness veto aimed at THIS candidate's live claim is consumed;
+    // every other reject (replication, someone else's claim, EPOCH_STALE /
+    // NOT_A_CANDIDATE — both already resolved by the yield/timeout rules) is not.
+    if (!electing || myTerm === null) return
+    if (lastClaimFid === null || frame.reFid !== lastClaimFid) return
+    if (frame.reason !== 'STALE_LOG' && frame.reason !== 'STALE_ROSTER') return
+    console.log(
+      `${LOG_TAG} claim vetoed office=${officeId} reason=${frame.reason} by=${from} attempt=${attempt}`
+    )
+    // Abandon this claim (stay electing as a ready voter) and hand the veto to
+    // the consumer, which catches up from the vetoing voter then retryClaim()s.
+    clearTimer()
+    myTerm = null
+    lastClaimFid = null
+    confirms = new Set()
+    attempt += 1
+    if (attempt >= ELECTION_MAX_ATTEMPTS) {
+      console.warn(`${LOG_TAG} freshness vetoes exhausted office=${officeId}; pausing`)
+      electing = false
+      paused = true
+      onQuorumUnreachable?.()
+      return
+    }
+    deps.onFreshnessReject?.(from, frame.reason)
+  }
+
+  function retryClaim(): void {
+    // Valid only inside an election with no live claim (the veto abandoned it),
+    // and only for the current front candidate (a returning earlier node wins
+    // the spot; this node stays a voter).
+    if (!electing || myTerm !== null) return
+    if (frontCandidate() !== selfNodeId) return
+    beginClaim()
+  }
+
   function retrigger(): void {
     if (electing) return
     if (paused) {
@@ -318,6 +371,7 @@ export function createElection(deps: ElectionDeps): Election {
     electing = false
     paused = false
     myTerm = null
+    lastClaimFid = null
     confirms = new Set()
     attempt = 0
   }
@@ -326,6 +380,8 @@ export function createElection(deps: ElectionDeps): Election {
     startElection,
     handleClaim,
     handleConfirm,
+    handleReject,
+    retryClaim,
     retrigger,
     cancel,
     isElecting: () => electing,

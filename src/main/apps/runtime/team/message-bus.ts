@@ -151,6 +151,16 @@ export interface MessageBus {
   resetEpoch(epochId: string): void
   onBreach(listener: (event: CircuitBreachEvent) => void): () => void
   hasBufferedMessages(epochId: string): boolean
+  /**
+   * Liveness nudge: attempt one buffered delivery for a session that (may
+   * have) just gone idle. `completeTurn` drains after every BUS-driven turn,
+   * but a team session also runs turns the bus never sees — a human 1:1 chat
+   * with a member occupies the same session key — and their completions must
+   * drain the mailbox too, or mail buffered behind them strands forever. The
+   * session layer calls this from its turn-end path; a busy/reserved session
+   * is a no-op (the eventual completeTurn picks the mail up).
+   */
+  drainMailbox(sessionKey: string): void
 }
 
 export interface MessageBusDeps {
@@ -191,6 +201,9 @@ const DEFAULT_SYNC_WAIT_TIMEOUT_MS = TEAM_CIRCUIT_DEFAULTS.maxDurationMs
  */
 const MAILBOX_BUFFER_CAP = 128
 
+/** Backstop recheck after buffering (see mailboxRechecks). */
+const MAILBOX_RECHECK_MS = 3000
+
 export function createMessageBus(deps: MessageBusDeps): MessageBus {
   const { store, hooks } = deps
   const limits: CircuitLimits = {
@@ -204,6 +217,21 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
   const mailboxBuffers = new Map<string, BufferedDelivery[]>()
   const epochStats = new Map<string, EpochStats>()
   const breachListeners = new Set<(event: CircuitBreachEvent) => void>()
+  // Session keys with a wake dispatched but the turn not yet completed. The
+  // busy probe (hooks.isBusy) only turns true once the session layer REGISTERS
+  // the turn, which happens asynchronously after wakeTarget is invoked — two
+  // deliveries inside that window both read "idle" and race two concurrent
+  // turns onto one session. Reserving the key SYNCHRONOUSLY before dispatch
+  // closes the window: the second delivery buffers instead. Released by
+  // completeTurn (every bus turn ends there, success or error) or on a wake
+  // dispatch failure.
+  const wakesInFlight = new Set<string>()
+  // One pending mailbox recheck per session: a delivery buffered against a
+  // busy probe can race the target going idle between the probe and the push
+  // (no turn-end will fire for it). The recheck is a cheap backstop; the
+  // turn-end drains (completeTurn + the session layer's drainMailbox) remain
+  // the primary liveness path.
+  const mailboxRechecks = new Map<string, NodeJS.Timeout>()
 
   function statsFor(epochId: string): EpochStats {
     let s = epochStats.get(epochId)
@@ -302,30 +330,54 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     sendToRenderer(TEAM_EVENTS.message, payload)
   }
 
-  /** Buffer if the target is mid-turn; otherwise wake immediately. */
+  function bufferDelivery(sessionKey: string, entry: BufferedDelivery): void {
+    const buffer = mailboxBuffers.get(sessionKey) ?? []
+    if (buffer.length >= MAILBOX_BUFFER_CAP) {
+      const shed = buffer.shift()
+      console.warn(
+        `${LOG_TAG} Mailbox full (${MAILBOX_BUFFER_CAP}); shed oldest: session=${sessionKey} messageId=${shed?.envelope.id}`
+      )
+    }
+    buffer.push(entry)
+    mailboxBuffers.set(sessionKey, buffer)
+    console.log(`${LOG_TAG} Target busy, buffered: session=${sessionKey} bufferSize=${buffer.length}`)
+    scheduleMailboxRecheck(sessionKey)
+  }
+
+  function scheduleMailboxRecheck(sessionKey: string): void {
+    if (mailboxRechecks.has(sessionKey)) return
+    const timer = setTimeout(() => {
+      mailboxRechecks.delete(sessionKey)
+      drainMailbox(sessionKey)
+    }, MAILBOX_RECHECK_MS)
+    if (typeof timer.unref === 'function') timer.unref()
+    mailboxRechecks.set(sessionKey, timer)
+  }
+
+  /** Buffer if the target is mid-turn (or a wake is in flight); otherwise wake now. */
   async function deliver(env: TeamEnvelope, trigger: TeamTriggerContext): Promise<void> {
     const sessionKey = buildTeamSessionKey(env.toAppId, env.teamId, env.epochId)
-    if (hooks.isBusy(sessionKey)) {
-      const buffer = mailboxBuffers.get(sessionKey) ?? []
-      if (buffer.length >= MAILBOX_BUFFER_CAP) {
-        const shed = buffer.shift()
-        console.warn(
-          `${LOG_TAG} Mailbox full (${MAILBOX_BUFFER_CAP}); shed oldest: session=${sessionKey} messageId=${shed?.envelope.id}`
-        )
-      }
-      buffer.push({ envelope: env, trigger, appId: env.toAppId })
-      mailboxBuffers.set(sessionKey, buffer)
-      console.log(`${LOG_TAG} Target busy, buffered: session=${sessionKey} bufferSize=${buffer.length}`)
+    if (hooks.isBusy(sessionKey) || wakesInFlight.has(sessionKey)) {
+      bufferDelivery(sessionKey, { envelope: env, trigger, appId: env.toAppId })
       return
     }
-    await hooks.wakeTarget({
-      sessionKey,
-      appId: env.toAppId,
-      teamId: env.teamId,
-      epochId: env.epochId,
-      envelope: env,
-      trigger,
-    })
+    wakesInFlight.add(sessionKey)
+    try {
+      await hooks.wakeTarget({
+        sessionKey,
+        appId: env.toAppId,
+        teamId: env.teamId,
+        epochId: env.epochId,
+        envelope: env,
+        trigger,
+      })
+    } catch (err) {
+      // The dispatch itself failed — no turn is running and no completeTurn
+      // will come. Release the reservation or the session key stays fake-busy
+      // and every later delivery strands in the mailbox.
+      wakesInFlight.delete(sessionKey)
+      throw err
+    }
   }
 
   async function send(input: SendInput): Promise<TeamSendAsyncResult | TeamSendSyncResult> {
@@ -511,6 +563,9 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     outcome: TurnCompletion
   }): void {
     const { trigger, outcome, sessionKey } = params
+    // The turn this wake reserved is over — release the key so the drain below
+    // (and any new delivery) can dispatch the next turn.
+    wakesInFlight.delete(sessionKey)
     console.log(
       `${LOG_TAG} completeTurn: session=${sessionKey} corr=${trigger.correlationId} ` +
         `wait=${trigger.wait} outcome=${outcome.kind}`
@@ -571,11 +626,12 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
   function drainMailbox(sessionKey: string): void {
     const buffer = mailboxBuffers.get(sessionKey)
     if (!buffer || buffer.length === 0) return
-    if (hooks.isBusy(sessionKey)) return
+    if (hooks.isBusy(sessionKey) || wakesInFlight.has(sessionKey)) return
 
     const next = buffer.shift()!
     if (buffer.length === 0) mailboxBuffers.delete(sessionKey)
     console.log(`${LOG_TAG} Draining buffered envelope: session=${sessionKey} remaining=${buffer.length}`)
+    wakesInFlight.add(sessionKey)
     void hooks
       .wakeTarget({
         sessionKey,
@@ -586,7 +642,10 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
         trigger: next.trigger,
       })
       .catch((err) => {
+        wakesInFlight.delete(sessionKey)
         console.error(`${LOG_TAG} Failed to deliver buffered envelope:`, err)
+        // The rest of the buffer must not strand behind a failed dispatch.
+        scheduleMailboxRecheck(sessionKey)
       })
   }
 
@@ -611,6 +670,15 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
         droppedEnvelopes += mailboxBuffers.get(key)?.length ?? 0
         mailboxBuffers.delete(key)
       }
+    }
+    for (const [key, timer] of [...mailboxRechecks]) {
+      if (key.endsWith(`:${epochId}`)) {
+        clearTimeout(timer)
+        mailboxRechecks.delete(key)
+      }
+    }
+    for (const key of [...wakesInFlight]) {
+      if (key.endsWith(`:${epochId}`)) wakesInFlight.delete(key)
     }
     if (droppedEnvelopes > 0) {
       console.warn(
@@ -644,5 +712,6 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     resetEpoch,
     onBreach,
     hasBufferedMessages,
+    drainMailbox,
   }
 }

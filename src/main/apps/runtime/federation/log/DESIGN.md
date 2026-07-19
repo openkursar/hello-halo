@@ -34,7 +34,7 @@ entry  = { seq, hlc, fid, type, payload, ts }
 |---|---|
 | `hlc.ts` | Hybrid Logical Clock. One comparable value that tracks physical time but advances monotonically to respect causality: `a after b ⇒ hlc(a) > hlc(b)`, while `hlc.pt` stays within bounded drift of wall time. Fixed-width hex encoding ⇒ string compare == numeric compare. Replaces the broken "wall-primary + logical-secondary" ordering. |
 | `durable-log.ts` | `DurableFeedLog` — the write end of a node's own feeds: allocate the next seq (anchored to the retention floor so a fully-pruned feed never reuses seq 1), stamp HLC + fid, persist. Seeds/merges the office clock so a restart never regresses it. |
-| `sync-engine.ts` | `FeedProducer` (author side: windowed, ack-driven delivery + nack/retransmit resend) and `FeedConsumer` (reader side: in-order apply with fid dedup, gap buffering, cumulative ack). Transport-agnostic — both take a `send` closure. |
+| `sync-engine.ts` | `FeedProducer` (author side: windowed, ack-driven delivery + nack/retransmit resend) and `FeedConsumer` (reader side: strictly seq-ordered apply — the monotonic cursor is the dedup — gap buffering, cumulative ack). Transport-agnostic — both take a `send` closure. |
 | `feed-service.ts` | `FeedService` — per-office assembly facade composing the log + producer + consumer + `FeedStore` cursors, owning the retransmit-backstop timer and resolving that a consumer's control frames route to the feed's **author**. The seam domain handlers (message/activity/history) plug into. |
 | `types.ts` | `FeedId`/`FeedEntry` and the four sync frames (`feed-subscribe` / `feed-entries` / `feed-ack` / `feed-nack`) — one mechanism serving Live push, reconnect gap-fill, history load, and late-join backfill alike. |
 
@@ -46,8 +46,10 @@ Persistence lives one tier down in `apps/federation` (`FeedStore` +
 
 - **Effectively-once**: append is durable *before* send; a peer's cumulative ack
   advances the delivery watermark; anything above the ack is resent on nack or
-  on the retransmit backstop; the consumer dedups by fid and by seq. A dropped
-  frame is redelivered, never lost.
+  on the retransmit backstop; the consumer dedups by seq (its monotonic applied
+  cursor — deliberately NOT a fid table at admission, which would poison the
+  redelivery of an entry evicted from the gap buffer and stall the feed at the
+  hole). A dropped frame is redelivered, never lost.
 - **Flow control**: only a *forward* ack releases the next window — a stalled
   peer (e.g. a deferring apply) does not live-lock the producer; the rate-limited
   backstop owns resends for a stuck-but-behind peer.
@@ -75,7 +77,7 @@ Persistence lives one tier down in `apps/federation` (`FeedStore` +
 
 ```
 runtime/federation/log
-  ├── may import: apps/federation (FeedStore), ../protocol-m2 (fid dedup), ../types (NodeId)
+  ├── may import: apps/federation (FeedStore), ../types (NodeId)
   └── MUST NOT import: http/*, bootstrap, services/*, the team kernel
 ```
 

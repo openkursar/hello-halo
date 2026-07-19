@@ -150,8 +150,23 @@ export interface ReplicationDeps {
   applyMemberWrite?: (record: MemberWriteRecord) => void
   /** Scope admission gate for a member write. Default: allow. */
   admitMemberWrite?: (frame: BlackboardWriteFrame) => boolean
-  /** Bumped + persisted when a roster write commits. Default: no-op. */
-  bumpRosterEpoch?: () => void
+  /**
+   * A roster write committed. `epoch` is the ABSOLUTE roster version the
+   * authority stamped into the write's payload at append time — the same value
+   * every replica adopts on apply — so the authority converges through the
+   * IDENTICAL path instead of a local relative bump (a relative bump under two
+   * in-flight roster writes drifts the authority one ahead of its replicas,
+   * permanently under the monotonic guard). Undefined only for a legacy write
+   * whose payload carried no epoch. Default: no-op.
+   */
+  onRosterCommitted?: (epoch: number | undefined) => void
+  /**
+   * HOT-STANDBY: apply a replicated roster op to the local membership ledger
+   * (office_nodes), so the election roster / quorum denominator every node
+   * derives is the COMMITTED roster. Default: no-op (log-only, pre-committed-
+   * roster behaviour).
+   */
+  applyRosterChange?: (op: 'roster_join' | 'roster_leave', payload: Record<string, unknown>) => void
   /**
    * Fired after a hot-standby applies a replicated task/finding to its replica
    * store, so the renderer refreshes live. NOT fired for roster ops (they
@@ -190,6 +205,13 @@ export interface Replication {
 
   // ── CATCH-UP ──
   buildCatchup(lastAckedSeq: number): CatchupResult
+  /**
+   * STANDBY/CANDIDATE: ask `peer` to replay the log above our applied water
+   * mark. The handover layer drives this after a freshness-vetoed claim — the
+   * vetoing voter holds committed writes this node lacks, and any node serves
+   * catch-up from its durable log (not only the authority).
+   */
+  requestCatchupFrom(peer: NodeId): void
 
   /** Dispatch any M2 frame this layer owns, by frame.kind (Lead routes onM2Frame here). */
   handleM2Frame(from: NodeId, frame: M2Frame): void
@@ -214,7 +236,7 @@ export function createReplication(deps: ReplicationDeps): Replication {
   } = deps
   const now = deps.now ?? (() => Date.now())
   const admitMemberWrite = deps.admitMemberWrite ?? (() => true)
-  const bumpRosterEpoch = deps.bumpRosterEpoch ?? (() => {})
+  const onRosterCommitted = deps.onRosterCommitted ?? (() => {})
   const onReplicaApplied = deps.onReplicaApplied ?? (() => {})
   const onReplicatedFid = deps.onReplicatedFid ?? (() => {})
 
@@ -259,8 +281,12 @@ export function createReplication(deps: ReplicationDeps): Replication {
   const ackedSeqByNode = new Map<NodeId, number>()
 
   // Pending roster-write resolvers keyed by seq: resolved true on commit, false on
-  // timeout (partition / insufficient quorum).
-  const pendingRoster = new Map<number, { resolve: (ok: boolean) => void; timer: ReturnType<typeof setTimeout> }>()
+  // timeout (partition / insufficient quorum). `epoch` is the absolute roster
+  // version stamped into the write's payload, adopted on commit.
+  const pendingRoster = new Map<
+    number,
+    { resolve: (ok: boolean) => void; timer: ReturnType<typeof setTimeout>; epoch: number | undefined }
+  >()
 
   function getAppliedSeq(): number {
     return Math.max(replicaAppliedSeq, authorityStore.getMaxSeq(officeId))
@@ -321,7 +347,7 @@ export function createReplication(deps: ReplicationDeps): Replication {
       if (seq <= committed) {
         clearTimeout(pending.timer)
         pendingRoster.delete(seq)
-        bumpRosterEpoch()
+        onRosterCommitted(pending.epoch)
         pending.resolve(true)
       }
     })
@@ -385,7 +411,8 @@ export function createReplication(deps: ReplicationDeps): Replication {
   ): Promise<boolean> {
     const fid = randomUUID()
     const seq = appendAndBroadcast(op, payload, undefined, fid)
-    console.log(`${LOG_TAG} replicateRoster office=${officeId} seq=${seq} op=${op}`)
+    const epoch = typeof payload.rosterEpoch === 'number' ? payload.rosterEpoch : undefined
+    console.log(`${LOG_TAG} replicateRoster office=${officeId} seq=${seq} op=${op} epoch=${epoch ?? 'n/a'}`)
     return new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => {
         // Partition / insufficient quorum: the write stays pending (NOT committed),
@@ -397,7 +424,17 @@ export function createReplication(deps: ReplicationDeps): Replication {
           resolve(false)
         }
       }, REPLICATION_ACK_TIMEOUT_MS)
-      pendingRoster.set(seq, { resolve, timer })
+      pendingRoster.set(seq, { resolve, timer, epoch })
+      if (getCommittedSeq() >= seq) {
+        // Acks can race ahead of this registration (a fast/synchronous link
+        // delivers them inside appendAndBroadcast) — the commit already
+        // happened, so resolve here or the epoch adoption would silently be lost.
+        clearTimeout(timer)
+        pendingRoster.delete(seq)
+        onRosterCommitted(epoch)
+        resolve(true)
+        return
+      }
       // It may already be committable (e.g. single-node office).
       tryAdvanceCommit()
     })
@@ -451,9 +488,9 @@ export function createReplication(deps: ReplicationDeps): Replication {
         return true
       case 'roster_join':
       case 'roster_leave':
-        // Roster replication mutates federation membership state, not the team
-        // blackboard tables; the replica records it via the durable log only (the
-        // authoritative roster projection is rebuilt on catch-up / handover).
+        // Roster replication mutates the federation membership ledger, not the
+        // team blackboard tables — no blackboard row changes (return false).
+        deps.applyRosterChange?.(frame.op, frame.payload)
         return false
     }
   }
@@ -680,6 +717,10 @@ export function createReplication(deps: ReplicationDeps): Replication {
               ...(e.taskId !== null ? { taskId: e.taskId } : {}),
               fid: e.fid,
             })),
+            // The responder's committed water mark: a freshness-vetoed
+            // candidate must raise its COMMITTED seq (the claim's baseSeq), not
+            // just its applied seq, or the re-claim is vetoed again.
+            committedSeq: getCommittedSeq(),
             fid: randomUUID(),
           }
         : {
@@ -690,6 +731,7 @@ export function createReplication(deps: ReplicationDeps): Replication {
             reFid: frame.fid,
             mode: 'snapshot',
             snapshot: result.snapshot,
+            committedSeq: getCommittedSeq(),
             fid: randomUUID(),
           }
     send(from, response)
@@ -707,22 +749,28 @@ export function createReplication(deps: ReplicationDeps): Replication {
 
     if (frame.mode === 'snapshot' && frame.snapshot) {
       applySnapshot(frame.snapshot)
-      return
+    } else {
+      // Incremental: feed each entry through the normal apply path (dedup + ack +
+      // gap guard). Entries are contiguous above lastAckedSeq, so they fill the hole.
+      for (const e of frame.entries ?? []) {
+        handleReplicate(from, {
+          kind: 'blackboard-replicate',
+          officeId,
+          fromNode: from,
+          term: e.term,
+          seq: e.seq,
+          op: e.op,
+          payload: e.payload,
+          ...(e.taskId !== undefined ? { taskId: e.taskId } : {}),
+          fid: e.fid,
+        })
+      }
     }
-    // Incremental: feed each entry through the normal apply path (dedup + ack +
-    // gap guard). Entries are contiguous above lastAckedSeq, so they fill the hole.
-    for (const e of frame.entries ?? []) {
-      handleReplicate(from, {
-        kind: 'blackboard-replicate',
-        officeId,
-        fromNode: from,
-        term: e.term,
-        seq: e.seq,
-        op: e.op,
-        payload: e.payload,
-        ...(e.taskId !== undefined ? { taskId: e.taskId } : {}),
-        fid: e.fid,
-      })
+    // Adopt the responder's committed water mark, capped at what we actually
+    // applied. This is what lets a freshness-vetoed candidate re-claim with a
+    // baseSeq that passes the voter's STALE_LOG check.
+    if (frame.committedSeq !== undefined) {
+      setCommittedSeq(Math.min(frame.committedSeq, getAppliedSeq()))
     }
   }
 
@@ -823,6 +871,7 @@ export function createReplication(deps: ReplicationDeps): Replication {
     handleAck,
     handleBlackboardWrite,
     buildCatchup,
+    requestCatchupFrom: (peer) => requestCatchup(peer),
     handleM2Frame,
     getAppliedSeq,
   }

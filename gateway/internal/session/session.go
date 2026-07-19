@@ -280,6 +280,14 @@ func (s *Session) handleAuth(env *wire.Envelope) bool {
 		s.CloseWithAuthFailed("Gateway requires a federation session with officeId")
 		return false
 	}
+	// Reject only a DECLARED-and-incompatible version; absent (0, v1) is admitted.
+	if p.WirePv != 0 && (p.WirePv < wire.WirePvMin || p.WirePv > wire.WirePvCurrent) {
+		// The auth:failed error field deliberately carries the machine-readable
+		// code (not prose): clients match on it to distinguish "incompatible,
+		// stop retrying" from transient auth failures.
+		s.CloseWithAuthFailed(wire.CodeVersionIncompatible)
+		return false
+	}
 
 	if len(p.Proof) == 0 || string(p.Proof) == "null" {
 		nonce := make([]byte, 32)
@@ -330,7 +338,9 @@ func (s *Session) handleAuth(env *wire.Envelope) bool {
 	s.officeID = p.OfficeID
 	s.mu.Unlock()
 
-	s.SendEnvelope(&wire.Envelope{Type: wire.TypeAuthSuccess})
+	// Echo the negotiated wire version so the client knows which vocabulary
+	// (term lock, hostless election relay) this gateway actually supports.
+	s.SendEnvelope(wire.NewEnvelope(wire.TypeAuthSuccess, map[string]int{"wirePv": wire.WirePvCurrent}))
 	s.opts.Logger.Info("session authenticated",
 		"identity", proof.IdentityID, "office", p.OfficeID, "remote", s.remote)
 	s.handler.OnAuthenticated(s)

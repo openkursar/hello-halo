@@ -8,15 +8,15 @@
  *   Producer (author side): streams a feed's tail to subscribed peers, windowed
  *     by their ack, and resends everything above a peer's ack on nack or on the
  *     retransmit backstop. A dropped frame is redelivered, never lost.
- *   Consumer (reader side): applies a remote feed strictly in seq order with fid
- *     dedup, buffers gaps, nacks holes, and cumulatively acks its watermark.
+ *   Consumer (reader side): applies a remote feed strictly in seq order (the
+ *     monotonic cursor is the dedup), buffers gaps, nacks holes, and
+ *     cumulatively acks its watermark.
  *
  * Both receive a `send` closure (the caller routes by feed author) and persist
  * their cursor through injected getters/setters — no link, store, or timer is
  * imported here, so each half is unit-testable in isolation.
  */
 
-import { createFidDedup, type FidDedup } from '../protocol-m2'
 import type {
   FeedAckFrame,
   FeedEntriesFrame,
@@ -213,8 +213,6 @@ export interface FeedConsumerDeps {
   setLocalCursor: (feedKey: string, appliedSeq: number) => void
   /** Merge a received HLC into the local office clock (called before apply). */
   observeHlc?: (hlc: string) => void
-  /** fid dedup table capacity (default 4096). */
-  dedupMax?: number
   /** Max out-of-order entries buffered above the gap per feed (default 8192). */
   pendingMax?: number
 }
@@ -227,7 +225,6 @@ export interface FeedConsumer {
 }
 
 export function createFeedConsumer(deps: FeedConsumerDeps): FeedConsumer {
-  const dedup: FidDedup = createFidDedup(deps.dedupMax ?? 4096)
   const pendingMax = deps.pendingMax ?? 8192
   // feedKey -> out-of-order buffer (seq -> entry) awaiting a contiguous run.
   const pending = new Map<string, Map<number, FeedEntry>>()
@@ -268,9 +265,16 @@ export function createFeedConsumer(deps: FeedConsumerDeps): FeedConsumer {
     const buf = bufferFor(feedKey)
     let cursor = deps.getLocalCursor(feedKey)
 
+    // Admission is seq-guarded ONLY. The monotonic cursor already makes apply
+    // effectively-once (an entry at or below it never re-applies; a single-writer
+    // feed never issues one fid at two seqs), so an entry above the cursor must
+    // ALWAYS be (re-)admitted — the producer's resend is the only way a gap ever
+    // fills. A fid table recorded at admission would poison exactly that path:
+    // an entry evicted by the overflow bound below came back "already seen" and
+    // was dropped forever, stalling the feed at the hole (same invariant as the
+    // replication layer's apply-path-only dedup rule).
     for (const entry of frame.entries) {
       if (entry.seq <= cursor) continue // already applied (retransmit)
-      if (dedup.seen(feedKey, entry.fid)) continue
       deps.observeHlc?.(entry.hlc)
       buf.set(entry.seq, entry)
     }

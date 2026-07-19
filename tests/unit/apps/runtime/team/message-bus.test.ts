@@ -539,4 +539,110 @@ describe('MessageBus', () => {
       expect(bus.getEpochStats(EPOCH_ID).messageCount).toBe(0)
     })
   })
+
+  // ============================================
+  // Mailbox liveness + wake atomicity
+  // ============================================
+
+  describe('mailbox liveness and wake atomicity', () => {
+    const LEAD_KEY = buildTeamSessionKey(LEAD_APP, TEAM_ID, EPOCH_ID)
+
+    it('drainMailbox delivers mail stranded behind a NON-bus turn (human 1:1 chat)', async () => {
+      // The stranding scenario: the lead is busy with a HUMAN 1:1 chat on its
+      // team session (a turn the bus never sees), teammates' completions
+      // buffer against it, and the human turn's end never passes through
+      // completeTurn. The session layer's turn-end hook calls drainMailbox —
+      // that is the sole liveness path for this mail.
+      seedTeam(store, 'free')
+      const { hooks, wakes, busy } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+
+      busy.add(LEAD_KEY) // human turn occupies the lead's team session
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP, to: 'lead', message: 'done 1', wait: false })
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: TESTER_APP, to: 'lead', message: 'done 2', wait: false })
+      expect(wakes).toHaveLength(0)
+      expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(true)
+
+      // The human turn ends: no completeTurn fires (it never went through the
+      // bus) — only the session layer's drain nudge.
+      busy.delete(LEAD_KEY)
+      bus.drainMailbox(LEAD_KEY)
+      expect(wakes).toHaveLength(1)
+      expect(wakes[0].envelope.body).toBe('done 1')
+
+      // One envelope per turn: the second drains when the first turn completes.
+      // (completeTurn also re-wakes the original SENDER with a completion — an
+      // unrelated, pre-existing behaviour — so assert on the lead's wakes only.)
+      bus.completeTurn({ sessionKey: LEAD_KEY, trigger: wakes[0].trigger, outcome: { kind: 'result', content: 'ok' } })
+      const leadWakes = wakes.filter((w) => w.sessionKey === LEAD_KEY)
+      expect(leadWakes).toHaveLength(2)
+      expect(leadWakes[1].envelope.body).toBe('done 2')
+    })
+
+    it('two deliveries inside the wake-dispatch window run ONE turn (second buffers)', async () => {
+      // The busy probe only turns true once the session layer registers the
+      // turn — asynchronously after wakeTarget. Two sends in that window used
+      // to race two concurrent turns onto one session key.
+      seedTeam(store, 'free')
+      const { hooks, wakes, busy } = makeHooks()
+      // wakeTarget resolves immediately (dispatch accepted) but the session
+      // never registers as busy — the exact race window, held open.
+      void busy
+      const bus = createMessageBus({ store, hooks })
+
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP, to: 'lead', message: 'first', wait: false })
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: TESTER_APP, to: 'lead', message: 'second', wait: false })
+
+      // Exactly one turn dispatched; the second delivery buffered behind the
+      // in-flight reservation instead of double-waking the session.
+      expect(wakes).toHaveLength(1)
+      expect(wakes[0].envelope.body).toBe('first')
+      expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(true)
+
+      // The reserved turn completes → the buffered one dispatches (sender
+      // completion wakes are filtered out; see the stranded-mail test).
+      bus.completeTurn({ sessionKey: LEAD_KEY, trigger: wakes[0].trigger, outcome: { kind: 'result', content: 'ok' } })
+      const leadWakes = wakes.filter((w) => w.sessionKey === LEAD_KEY)
+      expect(leadWakes).toHaveLength(2)
+      expect(leadWakes[1].envelope.body).toBe('second')
+    })
+
+    it('a failed wake dispatch releases the reservation (no fake-busy deadlock)', async () => {
+      seedTeam(store, 'free')
+      const { hooks, wakes } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+      ;(hooks.wakeTarget as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn failed'))
+
+      await expect(
+        bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP, to: 'lead', message: 'lost', wait: false })
+      ).rejects.toThrow('spawn failed')
+
+      // The key must not stay reserved: the next delivery dispatches normally.
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP, to: 'lead', message: 'retry', wait: false })
+      expect(wakes).toHaveLength(1)
+      expect(wakes[0].envelope.body).toBe('retry')
+    })
+
+    it('the buffered-mail recheck backstop drains without any turn-end signal', async () => {
+      // Covers the race where the target goes idle between the busy probe and
+      // the buffer push: no turn end will ever fire for that mail.
+      vi.useFakeTimers()
+      try {
+        seedTeam(store, 'free')
+        const { hooks, wakes, busy } = makeHooks()
+        const bus = createMessageBus({ store, hooks })
+
+        busy.add(LEAD_KEY)
+        await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP, to: 'lead', message: 'raced', wait: false })
+        expect(wakes).toHaveLength(0)
+
+        busy.delete(LEAD_KEY) // went idle with no drain signal
+        await vi.advanceTimersByTimeAsync(3100)
+        expect(wakes).toHaveLength(1)
+        expect(wakes[0].envelope.body).toBe('raced')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
 })

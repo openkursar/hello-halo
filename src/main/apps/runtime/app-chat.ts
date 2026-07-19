@@ -78,7 +78,7 @@ import { getAppMemoryService, getActivityStore } from './index'
 import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
 // Key builders live in shared/ so the renderer can import them without
 // depending on main-process modules.
-import { getAppChatConversationId, buildImSessionKey, buildTeamSessionKey } from '../../../shared/apps/im-keys'
+import { getAppChatConversationId, buildImSessionKey, buildTeamSessionKey, parseTeamSessionKey } from '../../../shared/apps/im-keys'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../services/agent/types'
 import { ProgressEventParser } from './progress-formatter'
@@ -739,6 +739,22 @@ export async function sendAppChatMessage(
     }
 
     console.log(`[AppChat][${appId}] Active session cleaned up`)
+
+    // A TEAM-session turn ended — bus-driven, human 1:1, or IM alike. Nudge the
+    // bus mailbox: only bus-driven turns pass through completeTurn's drain, so
+    // without this a lead kept busy by human 1:1 chat on the same session key
+    // strands its teammates' buffered completions forever (they buffered
+    // against THIS turn's busy window and nothing else ever picks them up).
+    // Deferred so the busy probe reads idle when the drain runs.
+    if (parseTeamSessionKey(conversationId)) {
+      setImmediate(() => {
+        try {
+          getActiveTeamRuntime()?.bus.drainMailbox(conversationId)
+        } catch (err) {
+          console.error(`[AppChat][${appId}] team mailbox drain failed:`, err)
+        }
+      })
+    }
 
     // Flush buffered IM supplements (deferred so busy lock is released first)
     if (conversationId !== defaultConvId) {

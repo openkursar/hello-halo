@@ -367,6 +367,125 @@ describe('FederationCoordinator', () => {
       expect(federationStore.getNode(OFFICE, BOB)).toBeNull()
     })
 
+    it('re-admits a known node whose credential can no longer be verified (roster re-entry)', () => {
+      const { coordinator } = makeHost()
+      const bob = recordingPeer(hub, BOB)
+
+      // First admission rides a valid invite; then Bob goes confirmed-offline.
+      bob.link.send(HOST, makeJoinRequest())
+      clock += CONFIRMED_MS + 1
+      coordinator.sweepPresence()
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('offline')
+      bob.received.length = 0
+
+      // The re-driven join presents a token this authority cannot verify (e.g.
+      // the issuer's ledger is gone) — the existing office_nodes row admits it.
+      bob.link.send(HOST, makeJoinRequest({ credentialToken: 'stale' }))
+
+      expect(bob.received.some((r) => r.msg.kind === 'join-reject')).toBe(false)
+      expect(bob.received.some((r) => r.msg.kind === 'join-grant')).toBe(true)
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
+    })
+
+    it('roster re-entry keeps existing members but never admits NEW ones without a credential', () => {
+      makeHost()
+      const bob = recordingPeer(hub, BOB)
+      bob.link.send(HOST, makeJoinRequest())
+      bob.received.length = 0
+
+      bob.link.send(
+        HOST,
+        makeJoinRequest({
+          credentialToken: 'stale',
+          bringMembers: [
+            { appId: 'app-bob-1', memberName: 'bob-writer', role: 'Writer' }, // rejoin
+            { appId: 'app-bob-new', memberName: 'bob-extra', role: 'Extra' }, // new → refused
+          ],
+        })
+      )
+
+      expect(bob.received.some((r) => r.msg.kind === 'join-grant')).toBe(true)
+      const members = teamStore.listMembersByTeam(OFFICE)
+      expect(members.map((m) => m.appId)).toEqual(['app-bob-1'])
+    })
+
+    it('stops nudging a confirmed-offline node whose re-join was terminally rejected (no 6s storm)', () => {
+      const { coordinator } = makeHost()
+      const bob = recordingPeer(hub, BOB)
+      bob.link.send(HOST, makeJoinRequest())
+      clock += CONFIRMED_MS + 1
+      coordinator.sweepPresence()
+      bob.received.length = 0
+
+      // Baseline: a heartbeat on the live session nudges the node to re-handshake.
+      hub.deliver(BOB, HOST, { kind: 'heartbeat', officeId: OFFICE, fromNode: BOB, ts: clock })
+      expect(bob.received.filter((r) => r.msg.kind === 'rejoin-request')).toHaveLength(1)
+
+      // The answered join is terminally rejected (incompatible version).
+      bob.link.send(HOST, makeJoinRequest({ pv: 1, minSupported: 1 }))
+      expect(bob.received.some((r) => r.msg.kind === 'join-reject')).toBe(true)
+
+      // Later heartbeats (past the nudge window) must NOT re-nudge — the node
+      // would only repeat the request that just failed.
+      clock += 10_000
+      hub.deliver(BOB, HOST, { kind: 'heartbeat', officeId: OFFICE, fromNode: BOB, ts: clock })
+      expect(bob.received.filter((r) => r.msg.kind === 'rejoin-request')).toHaveLength(1)
+
+      // An admitted join clears the suppression (the node presented something new).
+      bob.link.send(HOST, makeJoinRequest())
+      expect(federationStore.getNode(OFFICE, BOB)!.status).toBe('online')
+    })
+
+    it('joiner stops re-driving its join after a terminal reject; an explicit requestJoin re-arms it', () => {
+      // Joiner-side coordinator over a stub upstream link (production semantics:
+      // every send rides the upstream leg — no self-delivery like the hub).
+      const sent: FederationMessage[] = []
+      let inbound: (from: string, msg: FederationMessage) => void = () => {}
+      const joiner = createFederationCoordinator({
+        context: { officeId: OFFICE, selfNodeId: BOB },
+        link: {
+          send: (_to, msg) => sent.push(msg),
+          broadcast: (msg) => sent.push(msg),
+          onMessage: (h) => { inbound = h },
+          close: () => {},
+        },
+        federationStore,
+        teamStore,
+        verifyCredential: () => null,
+        now,
+        presence: { suspectAfterMs: SUSPECT_MS, confirmedOfflineMs: CONFIRMED_MS },
+      })
+      joiner.start()
+      // The joiner knows its host and has confirmed it offline after silence.
+      federationStore.upsertNode({
+        nodeId: HOST, officeId: OFFICE, identity: 'identity-host', displayName: 'Host',
+        joinedAt: clock, lastSeen: clock, status: 'online', advertisedUrl: null,
+      })
+      joiner.requestJoin(makeJoinRequest())
+      clock += CONFIRMED_MS + 1
+      joiner.sweepPresence()
+      const joinsSent = () => sent.filter((m) => m.kind === 'join-request').length
+      const before = joinsSent()
+
+      // Baseline: a heartbeat from the confirmed-offline host re-drives the join.
+      inbound(HOST, { kind: 'heartbeat', officeId: OFFICE, fromNode: HOST, ts: clock })
+      expect(joinsSent()).toBe(before + 1)
+
+      // Terminal reject → the re-drive latches off for heartbeats AND nudges.
+      inbound(HOST, { kind: 'join-reject', officeId: OFFICE, reason: 'CREDENTIAL_INVALID' })
+      clock += 10_000
+      inbound(HOST, { kind: 'heartbeat', officeId: OFFICE, fromNode: HOST, ts: clock })
+      inbound(HOST, { kind: 'rejoin-request', officeId: OFFICE })
+      expect(joinsSent()).toBe(before + 1)
+
+      // An explicit requestJoin (new socket/authority/credential) re-arms recovery.
+      joiner.requestJoin(makeJoinRequest())
+      clock += 10_000
+      inbound(HOST, { kind: 'heartbeat', officeId: OFFICE, fromNode: HOST, ts: clock })
+      expect(joinsSent()).toBe(before + 3) // the explicit send + the re-armed re-drive
+      joiner.stop()
+    })
+
     it('does not crash the handshake on duplicate bringMembers; a name clash is admitted renamed', () => {
       makeHost()
       const bob = recordingPeer(hub, BOB)

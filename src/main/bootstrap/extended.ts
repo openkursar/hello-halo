@@ -359,14 +359,14 @@ async function initPlatformAndApps(): Promise<void> {
             credentialToken: savedToken ?? '',
             officeId,
             makeAuthProof,
-            onFrame: (frame) => getFederationManager()?.deliverInbound(officeId, frame),
+            onFrame: (frame) => getFederationManager()?.deliverInbound(officeId, frame, authorityNodeId),
             // Reconnect of the dialed leg: re-drive the join-request so the newly
             // elected authority re-enrolls this survivor (first-dial enrollment is
             // done by redialToAuthority; this covers a later drop+reconnect).
             onReauth: () => getFederationManager()?.reenrollWithAuthority(officeId),
           })
           return {
-            sender: (_to, frame) => client.send(frame),
+            sender: (to, frame) => client.send(frame, to),
             dispose: () => client.close(),
           }
         },
@@ -453,6 +453,15 @@ async function initPlatformAndApps(): Promise<void> {
         onOfficePaused: (officeId, paused) => {
           broadcastToAll('team:office-status', { teamId: officeId, kind: paused ? 'paused' : 'resumed' })
           sendToRenderer('team:office-status', { teamId: officeId, kind: paused ? 'paused' : 'resumed' })
+        },
+        // Membership refused on re-entry: reconnecting alone cannot fix it, so
+        // the renderer tells the user to rejoin with a fresh invite. The wire
+        // reason stays in the log only — the kind is code-only, per the event's
+        // no-technical-words contract.
+        onOfficeAccessLost: (officeId, reason) => {
+          console.warn(`[Bootstrap] office access lost office=${officeId} reason=${reason}`)
+          broadcastToAll('team:office-status', { teamId: officeId, kind: 'access-lost' })
+          sendToRenderer('team:office-status', { teamId: officeId, kind: 'access-lost' })
         },
         // Owner-side transcript reader: serve a member's team-channel history to a
         // viewer over the office link. Reuses the same read as the IPC/HTTP chat

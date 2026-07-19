@@ -4,7 +4,7 @@
  * Turns the fire-and-forget wake / turn-complete path into an effectively-once
  * channel by routing those control messages through the unified feed substrate
  * (runtime/federation/log): a persistent per-author outbox with ack-windowed
- * delivery, nack/backstop retransmit, and fid + seq dedup. A dropped frame is
+ * delivery, nack/backstop retransmit, and seq-ordered apply. A dropped frame is
  * redelivered, never lost; a duplicate (retransmit / gateway double-path) is
  * applied at most once — so a lost turn-complete no longer strands the sender on
  * the completion backstop (MB-2) and the reliable completion closes the reassign

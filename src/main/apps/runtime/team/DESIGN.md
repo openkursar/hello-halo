@@ -77,8 +77,21 @@ the four §5.6 exits). This keeps the lead non-blocking: it fires `wait=false`
 sends and is re-woken later, exactly mirroring §5.6 "fire-and-get-woken".
 
 `isBusy` lets the bus decide buffer-vs-deliver: if the target session is
-mid-turn, the envelope is enqueued in its mailbox and drained when the current
-turn completes (mirrors `dispatch-inbound` supplement-buffering).
+mid-turn — or a wake is already IN FLIGHT for it (the busy probe only turns
+true once the session layer registers the turn, so the bus reserves the key
+synchronously at dispatch to keep two racing deliveries from running two
+concurrent turns on one session) — the envelope is enqueued in its mailbox and
+drained when the current turn completes (mirrors `dispatch-inbound`
+supplement-buffering).
+
+Mailbox liveness has three drains, because a team session also runs turns the
+bus never sees (a human 1:1 chat with a member uses the same session key):
+1. `completeTurn` — after every BUS-driven turn (the primary path);
+2. the session layer's turn-end nudge — app-chat calls `bus.drainMailbox` when
+   ANY team-session turn ends, so mail buffered behind a human turn is not
+   stranded until the next bus turn (which may never come);
+3. a per-session recheck timer armed at buffering — covers the race where the
+   target went idle between the busy probe and the buffer push.
 
 ## Bus public API
 
@@ -97,7 +110,10 @@ turn completes (mirrors `dispatch-inbound` supplement-buffering).
   - `trigger.wait=true` → resolve the pending send promise (`ok` / `timeout`).
   - `trigger.wait=false` → build a completion envelope and wake the ORIGINAL
     sender (a fresh turn) so it can reconcile against the board.
-  Then drains any buffered mailbox envelopes for that `sessionKey`.
+  Then releases the session's wake reservation and drains any buffered mailbox
+  envelopes for that `sessionKey`.
+- `drainMailbox(sessionKey)` — the session layer's liveness nudge (drain #2
+  above). Idempotent; a busy or reserved session is a no-op.
 - `assertCanContact(teamId, fromAppId, toAppId, collabMode)` — topology check;
   `free` allows all, `structured` uses `store.isEdgeAllowed`.
 - `getEpochStats(epochId)` / `resetEpoch(epochId)` — circuit-breaker observability

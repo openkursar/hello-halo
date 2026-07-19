@@ -414,7 +414,7 @@ describe('replication — roster quorum gating (O-R5-4/5)', () => {
       getOnlineStandbys: () => online,
       getHeir: () => heir,
       getKnownStandbyCount: () => online.length,
-      bumpRosterEpoch: () => (rosterEpoch += 1),
+      onRosterCommitted: (epoch) => (rosterEpoch = epoch ?? rosterEpoch + 1),
     }
     repl = createReplication(deps)
   })

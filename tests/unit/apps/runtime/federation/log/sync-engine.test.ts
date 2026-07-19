@@ -36,7 +36,7 @@ interface Harness {
   failApplyForSeq: (seq: number | null) => void
 }
 
-function makeHarness(batchMax = 64): Harness {
+function makeHarness(batchMax = 64, pendingMax?: number): Harness {
   const feed: FeedEntry[] = []
   const peerCursors = new Map<string, number>()
   const localCursor = new Map<string, number>()
@@ -65,6 +65,7 @@ function makeHarness(batchMax = 64): Harness {
 
   const consumer: FeedConsumer = createFeedConsumer({
     officeId: OFFICE,
+    ...(pendingMax !== undefined ? { pendingMax } : {}),
     getLocalCursor: (feedKey) => localCursor.get(feedKey) ?? 0,
     setLocalCursor: (feedKey, seq) => localCursor.set(feedKey, seq),
     apply: (_feedKey, entry) => {
@@ -215,6 +216,31 @@ describe('feed sync — idempotency & ordering', () => {
       more: false,
     })
     expect(h.applied.map((e) => e.seq)).toEqual([1, 2, 3])
+  })
+
+  it('re-applies an entry evicted from the gap buffer when the producer resends it', () => {
+    // Regression: a fid table recorded at ADMISSION poisoned this path — the
+    // evicted entry's resend came back "already seen" and was dropped forever,
+    // stalling the feed at the hole (and, on the ctrl plane, stranding every
+    // later turn-complete behind it). Only the seq cursor may dedup.
+    const h = makeHarness(64, 2) // gap buffer bound = 2
+    // Author holds 1..5; the reader has applied 1. Seqs 3,4,5 arrive while 2 is
+    // still missing → the overflow bound evicts the furthest-ahead entry (5).
+    for (let i = 1; i <= 5; i++) h.seedFeedOnly({ n: i })
+    h.presetLocalCursor(FEED, 1)
+    h.consumer.onEntries({
+      kind: 'feed-entries',
+      officeId: OFFICE,
+      feedKey: FEED,
+      entries: [3, 4, 5].map((n) => ({
+        seq: n, hlc: String(n).padStart(16, '0'), fid: `fid-${n}`, type: 'msg', payload: { n }, ts: n,
+      })),
+      upToSeq: 5,
+      more: false,
+    })
+    // The consumer's own nacks drive recovery through the producer: the gap fill
+    // (2) unlocks 2..4, and the resend of the EVICTED 5 must apply too.
+    expect(h.applied.map((e) => e.seq)).toEqual([2, 3, 4, 5])
   })
 })
 
