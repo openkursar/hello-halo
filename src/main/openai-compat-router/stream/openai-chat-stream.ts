@@ -139,11 +139,13 @@ export class OpenAIChatStreamHandler extends BaseStreamHandler {
       this.processToolCalls(delta.tool_calls)
     }
 
-    // Process finish reason
+    // Record stop reason but do not terminate the loop here: providers such as
+    // LiteLLM emit the terminal usage frame in a separate chunk AFTER the
+    // finish_reason chunk. Stream termination is driven by SSE `[DONE]` or
+    // upstream EOF instead.
     if (choice.finish_reason) {
       const stopReason = OPENAI_CHAT_STOP_REASON_MAP[choice.finish_reason] || 'end_turn'
       this.setStopReason(stopReason)
-      this.markFinished()
     }
   }
 

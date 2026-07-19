@@ -159,9 +159,11 @@ export interface ImChannelInstanceConfig {
 export interface ImChannelConfigFieldDef {
   key: string
   label: string
-  type: 'text' | 'password' | 'number'
+  type: 'text' | 'password' | 'number' | 'toggle'
   placeholder?: string
   required?: boolean
+  /** For toggle fields: the default value when creating a new instance. */
+  default?: boolean
 }
 
 /**

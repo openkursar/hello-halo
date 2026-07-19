@@ -12,7 +12,8 @@ import {
   openSpaceFolder,
   updateSpace,
   updateSpacePreferences,
-  getSpacePreferences
+  getSpacePreferences,
+  reorderSpaces
 } from '../services/space.service'
 import { getSpacesDir } from '../foundation/config.service'
 import { spaceRpc } from '../../shared/rpc/contracts/space.contract'
@@ -160,6 +161,19 @@ export function registerSpaceHandlers(): void {
         return { success: true, data: preferences }
       } catch (error: unknown) {
         const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
+
+    // Reorder spaces (persist user-defined display order)
+    reorderSpaces: async (spaceIds: string[]) => {
+      try {
+        const spaces = reorderSpaces(spaceIds)
+        console.log('[SpaceIPC] space:reorder response: count=%d', spaces.length)
+        return { success: true, data: spaces }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[SpaceIPC] space:reorder error:', err.message)
         return { success: false, error: err.message }
       }
     },

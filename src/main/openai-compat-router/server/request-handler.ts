@@ -489,9 +489,10 @@ async function handleOpenAIConversion(
 
       // Convert request
       const requestToSend = { ...anthropicRequest, stream: wantStream }
+      const visionOverride = { supportsVision: config.supportsVision }
       const openaiRequest = apiType === 'responses'
-        ? convertAnthropicToOpenAIResponses(requestToSend).request
-        : convertAnthropicToOpenAIChat(requestToSend).request
+        ? convertAnthropicToOpenAIResponses(requestToSend, visionOverride).request
+        : convertAnthropicToOpenAIChat(requestToSend, visionOverride).request
 
       const toolCount = (openaiRequest as any).tools?.length ?? 0
       console.log(`[RequestHandler] wire=${apiType} tools=${toolCount}`)
@@ -537,8 +538,8 @@ async function handleOpenAIConversion(
           // Retry with stream enabled
           wantStream = true
           const retryRequest = apiType === 'responses'
-            ? convertAnthropicToOpenAIResponses({ ...anthropicRequest, stream: true }).request
-            : convertAnthropicToOpenAIChat({ ...anthropicRequest, stream: true }).request
+            ? convertAnthropicToOpenAIResponses({ ...anthropicRequest, stream: true }, visionOverride).request
+            : convertAnthropicToOpenAIChat({ ...anthropicRequest, stream: true }, visionOverride).request
 
           // Re-apply provider adapter to retry request (reuse same headers and context)
           applyProviderAdapter(backendUrl, retryRequest as Record<string, unknown>, requestHeaders, adapterId, adapterContext)

@@ -431,6 +431,29 @@ export function onAgentConfigChange(handler: AgentConfigChangeHandler): () => vo
   }
 }
 
+// ============================================================================
+// Browser config change subscribers
+// Notified synchronously when browser config is saved, so BrowserViewManager
+// can apply a new User-Agent to active views without a restart.
+// ============================================================================
+
+type BrowserConfigChangeHandler = (browser: HaloConfig['browser']) => void
+const browserConfigChangeHandlers: BrowserConfigChangeHandler[] = []
+
+/**
+ * Register a callback to be notified when browser config changes.
+ * Called synchronously inside saveConfig so views update immediately.
+ *
+ * @returns Unsubscribe function
+ */
+export function onBrowserConfigChange(handler: BrowserConfigChangeHandler): () => void {
+  browserConfigChangeHandlers.push(handler)
+  return () => {
+    const idx = browserConfigChangeHandlers.indexOf(handler)
+    if (idx >= 0) browserConfigChangeHandlers.splice(idx, 1)
+  }
+}
+
 // Types (shared with renderer)
 interface HaloConfig {
   api: {
@@ -520,6 +543,8 @@ interface HaloConfig {
   // MCP servers configuration (compatible with Cursor / Claude Desktop format)
   mcpServers: Record<string, McpServerConfig>
   isFirstLaunch: boolean
+  // True when the user deferred model configuration in the first-run wizard.
+  modelConfigSkipped?: boolean
   // External notification channels (email, WeCom, DingTalk, Feishu, webhook)
   notificationChannels?: import('../../shared/types/notification-channels').NotificationChannelsConfig
   /**
@@ -601,6 +626,13 @@ interface HaloConfig {
      * browserPolicy.userExtensible — see browser-policy.service.ts.
      */
     customAllowlist?: string[]
+    /**
+     * Custom User-Agent string for the embedded AI Browser. When set and
+     * non-empty, overrides the built-in desktop/mobile UAs on all browser
+     * views (user-visible tabs, AI automation views, and login windows).
+     * Issue #124.
+     */
+    userAgent?: string
   }
 }
 
@@ -728,7 +760,8 @@ const DEFAULT_CONFIG: HaloConfig = {
     completed: false
   },
   mcpServers: {},  // Empty by default
-  isFirstLaunch: true
+  isFirstLaunch: true,
+  modelConfigSkipped: false
 }
 
 // ============================================================================
@@ -1141,9 +1174,14 @@ export function saveConfig(config: Partial<HaloConfig>): HaloConfig {
   if (config.copilot !== undefined) {
     newConfig.copilot = { ...currentConfig.copilot, ...config.copilot }
   }
-  // browser: shallow merge (customAllowlist replaced as a whole when provided)
+  // browser: shallow merge
   if (config.browser !== undefined) {
     newConfig.browser = { ...currentConfig.browser, ...config.browser }
+    if (browserConfigChangeHandlers.length > 0) {
+      browserConfigChangeHandlers.forEach(handler => {
+        try { handler(newConfig.browser!) } catch (e) { console.error('[Config] Error in browser config change handler:', e) }
+      })
+    }
   }
   // network: shallow merge (proxy, future fields)
   if (config.network !== undefined) {

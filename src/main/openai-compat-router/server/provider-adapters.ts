@@ -109,6 +109,36 @@ const openRouterAdapter: ProviderAdapter = {
 }
 
 // ============================================================================
+// Requesty Adapter
+// ============================================================================
+
+/**
+ * Requesty recommends app attribution headers
+ *
+ * Requesty is OpenAI-compatible and, like OpenRouter, supports optional
+ * app attribution headers:
+ * - App appears in Requesty analytics / leaderboard
+ * - Request analytics show app name instead of "Unknown"
+ *
+ * @see https://requesty.ai/
+ */
+const requestyAdapter: ProviderAdapter = {
+  id: 'requesty',
+  name: 'Requesty',
+
+  match(url: string): boolean {
+    return url.includes('router.requesty.ai')
+  },
+
+  getExtraHeaders(): Record<string, string> {
+    return {
+      'HTTP-Referer': 'https://hello-halo.cc/',
+      'X-Title': 'Halo'
+    }
+  }
+}
+
+// ============================================================================
 // DeepSeek Adapter
 // ============================================================================
 
@@ -230,6 +260,7 @@ const tencentAdapter: ProviderAdapter = {
 const adapters: readonly ProviderAdapter[] = [
   groqAdapter,
   openRouterAdapter,
+  requestyAdapter,
   deepSeekAdapter,
   moonshotAdapter,
   zhipuAdapter,

@@ -30,6 +30,9 @@ interface SpaceState {
   // Preferences actions
   updateSpacePreferences: (spaceId: string, preferences: Partial<SpacePreferences>) => Promise<void>
   getSpacePreferences: (spaceId: string) => SpacePreferences | undefined
+
+  // Reorder actions
+  reorderSpaces: (spaceIds: string[]) => Promise<void>
 }
 
 export const useSpaceStore = create<SpaceState>((set, get) => ({
@@ -91,9 +94,11 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
       if (response.success && response.data) {
         const newSpace = response.data as Space
 
-        // Add to spaces list
+        // Add to spaces list. New spaces have the highest sortOrder (server
+        // assigns max+1), so append to match the persisted order and avoid a
+        // flicker when loadSpaces re-syncs.
         set((state) => ({
-          spaces: [newSpace, ...state.spaces]
+          spaces: [...state.spaces, newSpace]
         }))
 
         return newSpace
@@ -256,5 +261,36 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     // Search in spaces list
     const space = spaces.find(s => s.id === spaceId)
     return space?.preferences
+  },
+
+  // Reorder spaces (optimistic update; rollback via reload on failure)
+  reorderSpaces: async (spaceIds) => {
+    const prevSpaces = get().spaces
+    // Optimistic reorder: arrange local spaces to match the new id order
+    const byId = new Map(prevSpaces.map(s => [s.id, s]))
+    const reordered: Space[] = []
+    for (const id of spaceIds) {
+      const s = byId.get(id)
+      if (s) reordered.push(s)
+    }
+    // Append any spaces not in spaceIds (defensive; shouldn't happen in practice)
+    for (const s of prevSpaces) {
+      if (!spaceIds.includes(s.id)) reordered.push(s)
+    }
+    set({ spaces: reordered })
+
+    try {
+      const response = await api.reorderSpaces(spaceIds)
+      if (response.success && Array.isArray(response.data)) {
+        set({ spaces: response.data as Space[] })
+      } else {
+        // Persist failed — roll back to server truth
+        console.error('[SpaceStore] reorderSpaces failed:', response.error)
+        set({ spaces: prevSpaces, error: response.error || 'Failed to reorder spaces' })
+      }
+    } catch (error) {
+      console.error('[SpaceStore] reorderSpaces error:', error)
+      set({ spaces: prevSpaces, error: 'Failed to reorder spaces' })
+    }
   }
 }))

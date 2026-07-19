@@ -28,6 +28,7 @@ import {
   isAnthropicProvider
 } from '../../types'
 import { resolveLocalizedText } from '../../../shared/types'
+import { formatModelFetchError } from '../../utils/model-fetch-error'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
 import { ModelConfigPanel } from './ModelConfigPanel'
@@ -265,7 +266,11 @@ export function ProviderSelector({
       const response = await api.fetchModels(apiKey, apiUrl)
 
       if (!response.success || !response.data) {
-        throw new Error(response.error || 'Failed to fetch models')
+        setValidationResult({
+          valid: false,
+          message: formatModelFetchError(t, response.code, response.error)
+        })
+        return
       }
 
       const { models } = response.data as { models: ModelOption[] }
@@ -277,9 +282,12 @@ export function ProviderSelector({
       }
 
       setValidationResult({ valid: true, message: t('Found ${count} models').replace('${count}', String(models.length)) })
-    } catch (error) {
-      console.error('[ProviderSelector] Failed to fetch models:', error)
-      setValidationResult({ valid: false, message: t('Failed to fetch models') })
+    } catch {
+      console.error('[ProviderSelector] Failed to fetch models')
+      setValidationResult({
+        valid: false,
+        message: formatModelFetchError(t, 'MODEL_FETCH_NETWORK')
+      })
     } finally {
       setIsFetchingModels(false)
     }
@@ -640,7 +648,7 @@ export function ProviderSelector({
                 : 'bg-red-500/10 text-red-600'
             }`}>
               {validationResult.valid ? <Check size={16} /> : <X size={16} />}
-              <span className="text-sm">{validationResult.message}</span>
+              <span className="text-sm min-w-0 break-words">{validationResult.message}</span>
             </div>
           )}
 
@@ -976,7 +984,7 @@ export function ProviderSelector({
                 : 'bg-red-500/10 text-red-600'
             }`}>
               {validationResult.valid ? <Check size={16} /> : <X size={16} />}
-              <span className="text-sm">{validationResult.message}</span>
+              <span className="text-sm min-w-0 break-words">{validationResult.message}</span>
             </div>
           )}
 

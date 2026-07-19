@@ -9,11 +9,13 @@ import {
 } from '../foundation/config.service'
 import { maskConfigFields, unmaskSentinels } from '../foundation/config-encryption'
 import { validateApiConnection, fetchModelsFromApi } from '../services/api-validator.service'
+import { ModelFetchError } from '../../shared/model-fetch-error'
 
 export interface ControllerResponse<T = unknown> {
   success: boolean
   data?: T
   error?: string
+  code?: string
 }
 
 /**
@@ -88,7 +90,17 @@ export async function fetchModels(
     const result = await fetchModelsFromApi({ apiKey, apiUrl })
     return { success: true, data: result }
   } catch (error: unknown) {
-    const err = error as Error
-    return { success: false, error: err.message }
+    if (error instanceof ModelFetchError) {
+      return {
+        success: false,
+        code: error.code,
+        ...(error.detail ? { error: error.detail } : {})
+      }
+    }
+
+    return {
+      success: false,
+      code: 'MODEL_FETCH_FAILED'
+    }
   }
 }

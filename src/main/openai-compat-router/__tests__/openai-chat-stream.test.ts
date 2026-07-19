@@ -150,6 +150,27 @@ describe('OpenAIChatStreamHandler empty-response repair', () => {
     expect(textDeltas[0].data.delta.text).toBe('hello')
   })
 
+  it('captures usage frame that arrives after finish_reason (LiteLLM shape)', async () => {
+    // LiteLLM/DeepSeek-flavored upstream emits usage in a chunk AFTER the
+    // finish_reason chunk. The client must not short-circuit on finish_reason
+    // or the terminal usage frame is dropped and message_delta reports zeros.
+    const { res, chunks } = createMockRes()
+    const stream = chatSSE([
+      { id: 'c1', model: 'deepseek-v4-flash', choices: [{ index: 0, delta: { role: 'assistant', content: 'hi' }, finish_reason: null }] },
+      { id: 'c1', model: 'deepseek-v4-flash', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+      { id: 'c1', model: 'deepseek-v4-flash', choices: [{ index: 0, delta: {}, finish_reason: null }] },
+      { id: 'c1', model: 'deepseek-v4-flash', choices: [{ index: 0, delta: {}, finish_reason: null }], usage: { prompt_tokens: 5, completion_tokens: 10, total_tokens: 15 } }
+    ])
+
+    await streamOpenAIChatToAnthropic(stream, res, 'deepseek-v4-flash')
+
+    const events = parseSSEEvents(chunks)
+    const msgDelta = events.find(e => e.event === 'message_delta')
+    expect(msgDelta?.data.usage.input_tokens).toBe(5)
+    expect(msgDelta?.data.usage.output_tokens).toBe(10)
+    expect(msgDelta?.data.delta.stop_reason).toBe('end_turn')
+  })
+
   it('does not inject placeholder when the response is tool calls', async () => {
     const { res, chunks } = createMockRes()
     const stream = chatSSE([
