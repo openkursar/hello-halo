@@ -38,7 +38,12 @@ export function KBDetail({ kb, onDeleted }: KBDetailProps) {
         <div className="min-w-0 flex-1">
           <h2 className="text-sm font-semibold truncate">{kb.name}</h2>
           <p className="text-[11px] text-muted-foreground truncate">
-            {t('{{count}} documents', { count: kb.stats.rawFileCount })}
+            {kb.stats.rawFileCount > 0
+              ? t('{{indexed}} of {{count}} documents indexed', {
+                  indexed: kb.stats.indexedCount,
+                  count: kb.stats.rawFileCount,
+                })
+              : t('{{count}} documents', { count: kb.stats.rawFileCount })}
           </p>
         </div>
       </div>

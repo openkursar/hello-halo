@@ -19,6 +19,7 @@
   "{{count}} devices_one": "{{count}}台のデバイス",
   "{{count}} devices_other": "{{count}}台のデバイス",
   "{{count}} documents_other": "{{count}} 件のドキュメント",
+  "{{indexed}} of {{count}} documents indexed": "{{count}} 件中 {{indexed}} 件をインデックス済み",
   "{{count}} edits_one": "{{count}}件の編集",
   "{{count}} edits_other": "{{count}}件の編集",
   "{{count}} file(s) could not be learned_one": "{{count}} 件のファイルを学習できませんでした",

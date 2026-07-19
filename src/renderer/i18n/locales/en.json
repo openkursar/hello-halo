@@ -20,6 +20,7 @@
   "{{count}} devices_other": "{{count}} devices",
   "{{count}} documents_one": "{{count}} documents",
   "{{count}} documents_other": "{{count}} documents",
+  "{{indexed}} of {{count}} documents indexed": "{{indexed}} of {{count}} documents indexed",
   "{{count}} edits_one": "{{count}} edits",
   "{{count}} edits_other": "{{count}} edits",
   "{{count}} file(s) could not be learned_one": "{{count}} file could not be learned",

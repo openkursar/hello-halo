@@ -19,6 +19,7 @@
   "{{count}} devices_one": "{{count}} 個裝置",
   "{{count}} devices_other": "{{count}} 個裝置",
   "{{count}} documents_other": "{{count}} 個文件",
+  "{{indexed}} of {{count}} documents indexed": "已索引 {{indexed}}/{{count}} 個文件",
   "{{count}} edits_one": "{{count}} 次編輯",
   "{{count}} edits_other": "{{count}} 次編輯",
   "{{count}} file(s) could not be learned_one": "{{count}} 個檔案學習失敗",

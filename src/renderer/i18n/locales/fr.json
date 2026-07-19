@@ -28,6 +28,7 @@
   "{{count}} documents_one": "{{count}} document",
   "{{count}} documents_many": "{{count}} documents",
   "{{count}} documents_other": "{{count}} documents",
+  "{{indexed}} of {{count}} documents indexed": "{{indexed}} sur {{count}} documents indexés",
   "{{count}} edits_one": "{{count}} modification",
   "{{count}} edits_many": "{{count}} modifications",
   "{{count}} edits_other": "{{count}} modifications",
