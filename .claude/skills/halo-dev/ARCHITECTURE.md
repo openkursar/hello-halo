@@ -116,7 +116,8 @@ src/
 │                                      #   window, overlay, onboarding, updater, notification,
 │                                      #   protocol, api-validator, model-capabilities,
 │                                      #   secure-storage, git-bash, git-bash-installer,
-│                                      #   mock-bash, browser-view, watcher-host
+│                                      #   mock-bash, browser-view, browser-policy,
+│                                      #   watcher-host
 │                                      #   (+ utilities: browser-login-pages, proxy-fetch)
 │
 ├── worker/                            # Utility processes (file-watcher)
@@ -217,7 +218,7 @@ All channels follow `module:action` format. Modules are organized by functional 
 | Auth & config | `auth`, `config`, `cli-config`, `model-capabilities` |
 | Conversation & agent | `conversation`, `agent` |
 | Space & artifact | `space`, `artifact`, `search` |
-| Browser | `browser`, `ai-browser`, `overlay` |
+| Browser | `browser`, `browser-policy`, `ai-browser`, `overlay` |
 | Apps & store | `app`, `store`, `onboarding` |
 | IM channels | `im-channels`, `im-sessions`, `wecom-bot`, `weixin-ilink` |
 | Transport & remote | `remote`, `notification-channels` |
@@ -505,6 +506,14 @@ Location: `src/main/openai-compat-router/`
                 ├── <id>.json           # Conversation data (lightweight, no thoughts)
                 └── <id>.thoughts.json  # Separated thoughts data (lazy-loaded)
 ```
+
+**Credential master key (enterprise builds only):** when `security.credentialAtRestSafe`
+is enabled, a random 32-byte key is persisted at `<userData>/cred.key` (Electron
+`app.getPath('userData')`, e.g. `~/Library/Application Support/<App>/cred.key` on
+macOS — separate from `~/.halo`). It is the KEK for at-rest credential encryption
+(`src/main/http/auth/envelope.ts`). Generated once on first run, never rotated
+automatically, and never regenerated if present (regenerating would orphan all
+stored ciphertext). Absent/no-op on open-source builds.
 
 ### Space Path Architecture
 

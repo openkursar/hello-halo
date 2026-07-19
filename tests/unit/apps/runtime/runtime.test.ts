@@ -111,11 +111,53 @@ vi.mock('../../../../src/main/services/email-mcp', () => ({
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
   getOrCreateV2Session: vi.fn(),
   migrateSessionIfNeeded: vi.fn(),
+  createSessionState: vi.fn(() => ({ thoughts: [], abortController: new AbortController(), spaceId: '', conversationId: '' })),
+}))
+
+// Mock the shared stream processor — used by app-chat.ts (digital-human
+// interactive chat), not by automation runs (execute.ts has its own headless
+// processStream). The real module imports electron-using deps (mcp-manager,
+// window.service) that break under vitest's ESM electron shim, so stub it here.
+vi.mock('../../../../src/main/services/agent/stream-processor', () => ({
+  processStream: vi.fn(async () => ({
+    finalContent: '',
+    hasMeaningfulContent: false,
+    thoughts: [],
+    tokenUsage: null,
+    capturedSessionId: undefined,
+    isInterrupted: false,
+    wasAborted: false,
+    hasErrorThought: false,
+    reachedMaxTurns: false,
+    firstEventReceived: true,
+    drainTimedOut: false,
+  })),
+}))
+
+// Mock the agent event emitter — used by app-chat.ts for interactive chat
+// streaming. Automation runs are headless and emit no agent:* events.
+vi.mock('../../../../src/main/services/agent/events', () => ({
+  emitAgentEvent: vi.fn(),
 }))
 
 // Mock resolved-sdk
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSession: vi.fn(),
+}))
+
+// Mock executeRun so service tests can assert the trigger it receives without
+// spawning the full run machinery (SDK session, memory snapshot, stream processor).
+// Echo the caller's ids back so any post-run activity-entry emit keeps a valid FK.
+vi.mock('../../../../src/main/apps/runtime/execute', () => ({
+  executeRun: vi.fn(async (opts: any) => ({
+    appId: opts.app?.id ?? '',
+    runId: opts.existingRunId ?? 'run-mock',
+    sessionKey: opts.existingSessionKey ?? 'sk-mock',
+    outcome: 'useful',
+    startedAt: 0,
+    finishedAt: 1,
+    durationMs: 1,
+  })),
 }))
 
 import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
@@ -139,6 +181,7 @@ import {
   RunExecutionError,
 } from '../../../../src/main/apps/runtime/errors'
 import { createAppRuntimeService } from '../../../../src/main/apps/runtime/service'
+import { executeRun } from '../../../../src/main/apps/runtime/execute'
 import { createReportToolServer } from '../../../../src/main/apps/runtime/report-tool'
 import type {
   AutomationRun,
@@ -1955,6 +1998,82 @@ describe('AppRuntimeService', () => {
       // instead of creating a new run
       const run = store.getRun('run-001')
       expect(run!.status).toBe('running')
+    })
+  })
+
+  // Bug fix: a free-text follow-up to a finished run must distinguish
+  // "chatting with a completed run" (interactive, no report_to_user enforcement)
+  // from "recovering a prematurely-ended run" (must still drive to completion).
+  describe('injectIntoRun (finished-run follow-up)', () => {
+    const runId = 'run-inject-001'
+    let testAppId: string
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      testAppId = randomUUID()
+      // automation_runs has a FK to installed_apps — seed the app row first.
+      const db = dbManager.getAppDatabase()
+      db.prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(testAppId, 'test-app', 'space-001', JSON.stringify(createTestSpec()), 'active', '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+      mockAppManager.getApp.mockReturnValue({
+        id: testAppId,
+        status: 'active',
+        spec: createTestSpec(),
+        userConfig: {},
+        userOverrides: {},
+        spaceId: 'space-001',
+      })
+      store.insertRun({
+        runId,
+        appId: testAppId,
+        sessionKey: 'sess-inject',
+        status: 'running',
+        triggerType: 'schedule',
+        startedAt: Date.now(),
+      })
+      store.updateRunSessionId(runId, 'cc-sess-123')
+    })
+
+    it('marks a follow-up to a completed (ok) run as interactive', async () => {
+      store.completeRun(runId, { status: 'ok', finishedAt: Date.now(), durationMs: 10 })
+      const service = createService()
+
+      await service.injectIntoRun(testAppId, runId, 'thank you')
+      await new Promise((r) => setTimeout(r, 0)) // let the fire-and-forget run dispatch
+
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      const trigger = vi.mocked(executeRun).mock.calls[0][0].trigger
+      expect(trigger.type).toBe('continue_followup')
+      expect(trigger.continue?.interactive).toBe(true)
+      expect(trigger.continue?.userMessage).toBe('thank you')
+    })
+
+    it('does NOT mark a follow-up to a prematurely-failed (error) run as interactive', async () => {
+      store.completeRun(runId, { status: 'error', finishedAt: Date.now(), durationMs: 10 })
+      const service = createService()
+
+      await service.injectIntoRun(testAppId, runId, 'please continue the task')
+      await new Promise((r) => setTimeout(r, 0))
+
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      const trigger = vi.mocked(executeRun).mock.calls[0][0].trigger
+      expect(trigger.type).toBe('continue_followup')
+      expect(trigger.continue?.interactive).toBeFalsy()
+    })
+
+    it('Continue-button recovery (continueFailedRun) is never interactive', async () => {
+      store.completeRun(runId, { status: 'error', finishedAt: Date.now(), durationMs: 10 })
+      const service = createService()
+
+      await service.continueFailedRun(testAppId, runId)
+      await new Promise((r) => setTimeout(r, 0))
+
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      const trigger = vi.mocked(executeRun).mock.calls[0][0].trigger
+      expect(trigger.type).toBe('continue_followup')
+      expect(trigger.continue?.interactive).toBeFalsy()
     })
   })
 

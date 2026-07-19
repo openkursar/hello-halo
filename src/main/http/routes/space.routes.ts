@@ -37,6 +37,13 @@ export function registerSpaceRoutes(app: Express): void {
     res.json(result)
   })
 
+  // Reorder spaces — must be before :spaceId route to avoid matching "reorder" as an id
+  app.put('/api/spaces/reorder', async (req: Request, res: Response) => {
+    const { spaceIds } = req.body
+    const result = spaceController.reorderSpaces(Array.isArray(spaceIds) ? spaceIds : [])
+    res.json(result)
+  })
+
   app.get('/api/spaces/:spaceId', async (req: Request, res: Response) => {
     const result = spaceController.getSpace(req.params.spaceId)
     res.json(result)

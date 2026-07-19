@@ -868,7 +868,8 @@ export default function App() {
       const loadedConfig = response.data as HaloConfig
       setConfig(loadedConfig)  // Sync config to store (was missing, causing empty apiKey in settings)
       // Show setup if first launch or no AI source configured
-      if (loadedConfig.isFirstLaunch || !hasAnyAISource(loadedConfig.aiSources)) {
+      // (modelConfigSkipped honors an explicit deferral from the first-run wizard)
+      if (loadedConfig.isFirstLaunch || (!hasAnyAISource(loadedConfig.aiSources) && !loadedConfig.modelConfigSkipped)) {
         setView('setup')
       } else {
         setView('home')

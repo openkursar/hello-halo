@@ -87,8 +87,8 @@ function ensureProductJson(projectRoot: string): void {
     if (product.authProviders) {
       for (const provider of product.authProviders) {
         if (provider.path && provider.path.startsWith('./')) {
-          // Original path is relative to project root, e.g. "./halo-local/dist/..."
-          // We need it relative to out/main/, e.g. "../../halo-local/dist/..."
+          // Original path is relative to project root, e.g. "./halo-webank/build/dist/..."
+          // We need it relative to out/main/, e.g. "../../halo-webank/build/dist/..."
           const absolutePath = path.resolve(projectRoot, provider.path)
           provider.path = path.relative(destDir, absolutePath)
         }

@@ -11,7 +11,7 @@
 
 import type Database from 'better-sqlite3'
 import type { AppSpec } from '../spec'
-import type { InstalledApp, AppStatus, RunOutcome, AppListFilter } from './types'
+import type { InstalledApp, AppStatus, RunOutcome, AppListFilter, UpgradeStrategy } from './types'
 
 // ============================================
 // SQLite Row Type (flat DB representation)
@@ -33,6 +33,7 @@ interface AppRow {
   last_run_outcome: string | null
   error_message: string | null
   uninstalled_at: number | null
+  upgrade_strategy: string
 }
 
 // ============================================
@@ -58,6 +59,7 @@ function rowToInstalledApp(row: AppRow): InstalledApp {
     lastRunOutcome: (row.last_run_outcome as RunOutcome) ?? undefined,
     errorMessage: row.error_message ?? undefined,
     uninstalledAt: row.uninstalled_at ?? undefined,
+    upgradeStrategy: (row.upgrade_strategy as UpgradeStrategy) ?? 'auto',
   }
 }
 
@@ -87,6 +89,7 @@ export class AppManagerStore {
   private readonly stmtGetBySpecAndSpace: Database.Statement
   private readonly stmtGetBySpecGlobal: Database.Statement
   private readonly stmtUpdateUninstalledAt: Database.Statement
+  private readonly stmtUpdateUpgradeStrategy: Database.Statement
 
   constructor(private readonly db: Database.Database) {
     // ── INSERT ────────────────────────────────────
@@ -94,11 +97,13 @@ export class AppManagerStore {
       INSERT INTO installed_apps (
         id, spec_id, space_id, spec_json, status,
         pending_escalation_id, user_config_json, user_overrides_json,
-        permissions_json, installed_at, last_run_at, last_run_outcome, error_message
+        permissions_json, installed_at, last_run_at, last_run_outcome, error_message,
+        upgrade_strategy
       ) VALUES (
         @id, @spec_id, @space_id, @spec_json, @status,
         @pending_escalation_id, @user_config_json, @user_overrides_json,
-        @permissions_json, @installed_at, @last_run_at, @last_run_outcome, @error_message
+        @permissions_json, @installed_at, @last_run_at, @last_run_outcome, @error_message,
+        @upgrade_strategy
       )
     `)
 
@@ -177,6 +182,12 @@ export class AppManagerStore {
       SET uninstalled_at = @uninstalled_at
       WHERE id = @id
     `)
+
+    this.stmtUpdateUpgradeStrategy = db.prepare(`
+      UPDATE installed_apps
+      SET upgrade_strategy = @upgrade_strategy
+      WHERE id = @id
+    `)
   }
 
   // ── Create ─────────────────────────────────────
@@ -201,6 +212,18 @@ export class AppManagerStore {
       last_run_at: app.lastRunAt ?? null,
       last_run_outcome: app.lastRunOutcome ?? null,
       error_message: app.errorMessage ?? null,
+      upgrade_strategy: app.upgradeStrategy ?? 'auto',
+    })
+  }
+
+  /**
+   * Update the upgrade strategy column for an App.
+   * Caller is responsible for validating the strategy value.
+   */
+  updateUpgradeStrategy(appId: string, strategy: UpgradeStrategy): void {
+    this.stmtUpdateUpgradeStrategy.run({
+      id: appId,
+      upgrade_strategy: strategy,
     })
   }
 

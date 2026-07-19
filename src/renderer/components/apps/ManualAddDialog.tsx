@@ -1,20 +1,25 @@
 /**
  * ManualAddDialog
  *
- * Dialog for manually adding an MCP server or Skill (without going through the App Store).
+ * Dialog for manually adding an MCP server, Skill, or installing an app from
+ * a local file (without going through the App Store).
  * Accessible from the "Manual Add" button in the My Apps sidebar.
  *
- * Step 1: Choose type (MCP or Skill)
+ * Step 1: Choose type (MCP / Skill / Install from File)
  * Step 2: Fill in details
  *   - MCP: name, command, args, env, transport
- *   - Skill: name, content (markdown)
+ *   - Skill: delegated to SkillInstallDialog via onSkillAdd
+ *   - File: opens native file picker via api.storeImportDhpkg for .dhpkg installs.
+ *           For .zip / folder / .yaml / .md sources, point users at the rich
+ *           Import tabs inside SkillInstallDialog / AppInstallDialog.
  */
 
 import { useState, useCallback, useEffect, useMemo } from 'react'
-import { X, Server, BookOpen, ChevronLeft, Plus, Settings2, Code, AlertCircle } from 'lucide-react'
+import { X, Server, BookOpen, ChevronLeft, Plus, Settings2, Code, AlertCircle, Package, Loader2 } from 'lucide-react'
 import { useAppsStore } from '../../stores/apps.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
+import { api } from '../../api'
 import type { McpServerConfig } from '../../../shared/apps/spec-types'
 import {
   internalMcpServerToJsonConfig,
@@ -25,7 +30,7 @@ import {
 
 const GLOBAL_SCOPE = '__global__'
 
-type AddType = 'mcp' | 'skill'
+type AddType = 'mcp' | 'skill' | 'file'
 
 interface ManualAddDialogProps {
   onClose: () => void
@@ -59,11 +64,44 @@ export function ManualAddDialog({ onClose, onSkillAdd, initialType }: ManualAddD
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // File-install flow state. Lives at the dialog level so the spinner shows
+  // immediately when the native picker opens.
+  const [fileInstalling, setFileInstalling] = useState(false)
+  const [fileError, setFileError] = useState<string | null>(null)
+
+  const handleInstallFromFile = useCallback(async () => {
+    setFileError(null)
+    setFileInstalling(true)
+    try {
+      // Install into the currently-active space; null = global scope.
+      const activeSpaceId = useSpaceStore.getState().currentSpace?.id ?? null
+      const res = await api.storeImportDhpkg({ spaceId: activeSpaceId })
+      if (res.success && res.data?.appId) {
+        await loadApps()
+        onClose()
+        return
+      }
+      // User-cancelled picker — silently no-op.
+      if (res.error && res.error !== 'User cancelled') {
+        setFileError(res.error)
+      }
+    } catch (err) {
+      setFileError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setFileInstalling(false)
+    }
+  }, [loadApps, onClose])
+
   const handleChoose = (type: AddType) => {
     if (type === 'skill' && onSkillAdd) {
       // Delegate skill creation to the dedicated SkillInstallDialog
       onClose()
       onSkillAdd()
+      return
+    }
+    if (type === 'file') {
+      // No form — fire native file picker immediately.
+      void handleInstallFromFile()
       return
     }
     setAddType(type)
@@ -106,7 +144,15 @@ export function ManualAddDialog({ onClose, onSkillAdd, initialType }: ManualAddD
         {/* Content */}
         <div className="px-6 py-4">
           {step === 'choose' ? (
-            <TypeChooser onChoose={handleChoose} />
+            <>
+              <TypeChooser onChoose={handleChoose} fileBusy={fileInstalling} />
+              {fileError && (
+                <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400">
+                  <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  <span className="whitespace-pre-wrap break-words">{fileError}</span>
+                </div>
+              )}
+            </>
           ) : addType === 'mcp' ? (
             <McpForm onClose={onClose} installApp={installApp} loadApps={loadApps} />
           ) : (
@@ -120,15 +166,20 @@ export function ManualAddDialog({ onClose, onSkillAdd, initialType }: ManualAddD
 
 // ── Type Chooser ──────────────────────────────────
 
-function TypeChooser({ onChoose }: { onChoose: (type: AddType) => void }) {
+interface TypeChooserProps {
+  onChoose: (type: AddType) => void
+  fileBusy: boolean
+}
+
+function TypeChooser({ onChoose, fileBusy }: TypeChooserProps) {
   const { t } = useTranslation()
   return (
-    <div className="grid grid-cols-2 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
       <button
         onClick={() => onChoose('mcp')}
-        className="flex flex-col items-center gap-3 p-6 border border-border rounded-lg hover:border-primary hover:bg-secondary/30 transition-colors"
+        className="flex flex-col items-center gap-3 p-5 border border-border rounded-lg hover:border-primary hover:bg-secondary/30 transition-colors"
       >
-        <Server className="w-8 h-8 text-primary" />
+        <Server className="w-7 h-7 text-primary" />
         <div className="text-center">
           <p className="font-medium">{t('MCP Server')}</p>
           <p className="text-xs text-muted-foreground mt-1">
@@ -138,13 +189,26 @@ function TypeChooser({ onChoose }: { onChoose: (type: AddType) => void }) {
       </button>
       <button
         onClick={() => onChoose('skill')}
-        className="flex flex-col items-center gap-3 p-6 border border-border rounded-lg hover:border-primary hover:bg-secondary/30 transition-colors"
+        className="flex flex-col items-center gap-3 p-5 border border-border rounded-lg hover:border-primary hover:bg-secondary/30 transition-colors"
       >
-        <BookOpen className="w-8 h-8 text-primary" />
+        <BookOpen className="w-7 h-7 text-primary" />
         <div className="text-center">
           <p className="font-medium">{t('Skill')}</p>
           <p className="text-xs text-muted-foreground mt-1">
             {t('Add custom instructions for the AI')}
+          </p>
+        </div>
+      </button>
+      <button
+        onClick={() => onChoose('file')}
+        disabled={fileBusy}
+        className="flex flex-col items-center gap-3 p-5 border border-border rounded-lg hover:border-primary hover:bg-secondary/30 transition-colors disabled:opacity-60 disabled:cursor-wait"
+      >
+        {fileBusy ? <Loader2 className="w-7 h-7 text-primary animate-spin" /> : <Package className="w-7 h-7 text-primary" />}
+        <div className="text-center">
+          <p className="font-medium">{t('Install from File')}</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {t('Install a .dhpkg you received or downloaded')}
           </p>
         </div>
       </button>

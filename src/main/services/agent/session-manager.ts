@@ -438,6 +438,7 @@ function closeV2SessionForRebuild(conversationId: string): void {
  * @param config - Session configuration for rebuild detection
  * @param workDir - Working directory (required for session migration when sessionId is provided)
  * @param displayModel - Display model name for thought parsing (when provided, starts persistent consumer)
+ * @param contextWindow - Source-resolved context window for token-usage display
  */
 export async function getOrCreateV2Session(
   spaceId: string,
@@ -446,7 +447,8 @@ export async function getOrCreateV2Session(
   sessionId?: string,
   config?: SessionConfig,
   workDir?: string,
-  displayModel?: string
+  displayModel?: string,
+  contextWindow?: number
 ): Promise<V2SessionInfo['session']> {
   // Check if we have an existing session for this conversation
   const existing = v2Sessions.get(conversationId)
@@ -604,7 +606,7 @@ export async function getOrCreateV2Session(
   // Automation apps (app-chat.ts, execute.ts) don't pass displayModel and handle
   // their own processStream() calls, so they don't get a consumer.
   if (displayModel) {
-    const consumer = startConsumer(session, spaceId, conversationId, displayModel)
+    const consumer = startConsumer(session, spaceId, conversationId, displayModel, contextWindow)
     consumers.set(conversationId, consumer)
     console.log(`[Agent][${conversationId}] Persistent consumer started`)
   }
@@ -680,10 +682,15 @@ export async function ensureSessionWarm(
   })
 
   try {
-    const session = await getOrCreateV2Session(spaceId, conversationId, sdkOptions, sessionId, undefined, workDir, resolvedCredentials.displayModel)
+    const session = await getOrCreateV2Session(
+      spaceId, conversationId, sdkOptions, sessionId, undefined, workDir,
+      resolvedCredentials.displayModel, resolvedCredentials.capabilities?.contextWindow
+    )
 
     // Ensure consumer's displayModel is up-to-date (same as sendMessage)
-    updateConsumerDisplayModel(conversationId, resolvedCredentials.displayModel)
+    updateConsumerDisplayModel(
+      conversationId, resolvedCredentials.displayModel, resolvedCredentials.capabilities?.contextWindow
+    )
 
     // Fetch supported commands from SDK and send to renderer
     // This provides slash commands immediately without needing to send a message
@@ -747,10 +754,14 @@ export function getConsumerHandle(conversationId: string): ConsumerHandle | null
  * Called by sendMessage/ensureSessionWarm to keep displayModel in sync after
  * model switches without requiring a full session rebuild.
  */
-export function updateConsumerDisplayModel(conversationId: string, displayModel: string): void {
+export function updateConsumerDisplayModel(
+  conversationId: string,
+  displayModel: string,
+  contextWindow?: number
+): void {
   const consumer = consumers.get(conversationId)
   if (consumer) {
-    consumer.updateDisplayModel(displayModel)
+    consumer.updateDisplayModel(displayModel, contextWindow)
   }
 }
 

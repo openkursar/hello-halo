@@ -22,6 +22,8 @@ interface LoginSelectorProps {
   onSelectCustom: () => void
   /** Invoked when the user selects a preset-API provider entry */
   onSelectPreset: (provider: AuthProviderConfig) => void
+  /** Invoked when the user defers model configuration and enters Home directly */
+  onSkip?: () => void
 }
 
 /**
@@ -54,7 +56,7 @@ function hexToRgba(hex: string, alpha: number = 0.15): string {
   return `rgba(${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}, ${alpha})`
 }
 
-export function LoginSelector({ onSelectProvider, onSelectCustom, onSelectPreset }: LoginSelectorProps) {
+export function LoginSelector({ onSelectProvider, onSelectCustom, onSelectPreset, onSkip }: LoginSelectorProps) {
   const { t } = useTranslation()
 
   // Language selector state
@@ -274,6 +276,20 @@ export function LoginSelector({ onSelectProvider, onSelectCustom, onSelectPreset
             })
           )}
         </div>
+
+        {onSkip && !isLoading && (
+          <div className="mt-6 text-center">
+            <button
+              onClick={onSkip}
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors underline-offset-4 hover:underline"
+            >
+              {t('Skip for now')}
+            </button>
+            <p className="mt-1 text-xs text-muted-foreground/70">
+              {t('Configure your AI later in Settings')}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   )

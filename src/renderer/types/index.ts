@@ -256,6 +256,12 @@ export interface NetworkConfig {
   browserUseProxy?: boolean;  // When true, AI Browser also uses the Settings proxy. Default false = system proxy.
 }
 
+// Browser configuration
+export interface BrowserConfig {
+  customAllowlist?: string[];  // User-added allowlist patterns; only honored when the build sets browserPolicy.userExtensible
+  userAgent?: string;  // Custom User-Agent for the embedded AI Browser; overrides built-in desktop/mobile UAs (issue #124)
+}
+
 export interface HaloConfig {
   api: ApiConfig;  // Legacy, kept for backward compatibility
   aiSources: AISourcesConfig;  // v2 format: { version: 2, currentId, sources: [] }
@@ -273,7 +279,11 @@ export interface HaloConfig {
   layout?: LayoutConfig;  // Global layout preferences (panel sizes and visibility)
   chat?: ChatConfig;  // Chat behavior preferences
   network?: NetworkConfig;  // Network settings (proxy, etc.)
+  browser?: BrowserConfig;  // Browser settings (user custom allowlist)
   isFirstLaunch: boolean;
+  // True when the user deferred model configuration in the first-run wizard.
+  // Suppresses the setup re-entry guard so they can reach Home and configure later.
+  modelConfigSkipped?: boolean;
 }
 
 // ============================================
@@ -303,6 +313,7 @@ export interface Space {
   preferences?: SpacePreferences;  // User preferences for this space
   workingDir?: string;  // Project directory for custom spaces (agent cwd, artifacts, file explorer)
   isMissing?: boolean;  // True when the space data path is currently unavailable
+  sortOrder?: number;  // User-defined display order (lower = earlier); absent on legacy spaces
 }
 
 export interface CreateSpaceInput {
@@ -789,7 +800,8 @@ export const DEFAULT_CONFIG: HaloConfig = {
   },
   mcpServers: {},  // Empty by default
   agent: { maxTurns: 999 },  // Agent defaults
-  isFirstLaunch: true
+  isFirstLaunch: true,
+  modelConfigSkipped: false
 };
 
 // Helper functions hasAnyAISource and getCurrentModelName are now imported from shared module

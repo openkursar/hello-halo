@@ -8,30 +8,37 @@
 import type { SearchEngine } from './base'
 import { bingEngine } from './bing'
 import { baiduEngine } from './baidu'
+import { googleEngine } from './google'
 
 // ============================================
 // Types
 // ============================================
 
-export type EngineName = 'bing' | 'baidu'
+export type EngineName = 'bing' | 'baidu' | 'google'
 
 // ============================================
 // Engine Registry
 // ============================================
 
 /**
- * All available search engines
+ * All available search engines.
+ *
+ * Note: an engine being registered here does not mean it participates in
+ * automatic selection. Engines with `autoSelectable = false` (e.g. Google) are
+ * only used when requested by name — see {@link resolveEngines}.
  */
 const engines: Record<EngineName, SearchEngine> = {
   bing: bingEngine,
   baidu: baiduEngine,
+  google: googleEngine,
 }
 
 /**
- * Default fallback order when auto-selecting
- * Bing first (better international coverage), Baidu second
+ * Engines eligible for automatic selection and fallback, in registry order.
  */
-const DEFAULT_FALLBACK_ORDER: EngineName[] = ['bing', 'baidu']
+function getAutoSelectableEngines(): SearchEngine[] {
+  return Object.values(engines).filter(engine => engine.autoSelectable)
+}
 
 // ============================================
 // Public API
@@ -83,7 +90,7 @@ export function selectBestEngine(query: string): SearchEngine {
   let bestEngine: SearchEngine = bingEngine
   let bestScore = -1
 
-  for (const engine of Object.values(engines)) {
+  for (const engine of getAutoSelectableEngines()) {
     const score = engine.getPriorityScore(query)
     if (score > bestScore) {
       bestScore = score
@@ -104,7 +111,7 @@ export function selectBestEngine(query: string): SearchEngine {
  * @returns Engines sorted by priority
  */
 export function getEnginesInFallbackOrder(query: string): SearchEngine[] {
-  const enginesWithScores = Object.values(engines).map(engine => ({
+  const enginesWithScores = getAutoSelectableEngines().map(engine => ({
     engine,
     score: engine.getPriorityScore(query),
   }))
@@ -127,7 +134,8 @@ export function resolveEngines(
   query: string
 ): SearchEngine[] {
   if (!engineOption || engineOption === 'auto') {
-    // Auto mode: return all engines sorted by priority
+    // Auto mode: only auto-selectable engines, sorted by priority.
+    // Engines like Google (autoSelectable = false) are intentionally excluded.
     return getEnginesInFallbackOrder(query)
   }
 
@@ -143,3 +151,4 @@ export function resolveEngines(
 export { SearchEngine } from './base'
 export { bingEngine } from './bing'
 export { baiduEngine } from './baidu'
+export { googleEngine } from './google'

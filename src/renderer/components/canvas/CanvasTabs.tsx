@@ -24,7 +24,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect, forwardRef } from 'react'
-import { X, Loader2, AlertCircle, Plus, XCircle, Maximize2, Minimize2 } from 'lucide-react'
+import { X, Loader2, AlertCircle, Plus, XCircle, Maximize2, Minimize2, RefreshCw } from 'lucide-react'
 import { type TabState } from '../../services/canvas-lifecycle'
 import { useCanvasLifecycle } from '../../hooks/useCanvasLifecycle'
 import { useCanvasStore } from '../../stores/canvas.store'
@@ -55,7 +55,7 @@ export function CanvasTabs({
   onNewTab,
   onCloseAll,
   isMaximized = false,
-  onToggleMaximize
+  onToggleMaximize,
 }: CanvasTabsProps) {
   const { t } = useTranslation()
   const { reorderTabs } = useCanvasLifecycle()
@@ -161,6 +161,13 @@ export function CanvasTabs({
       }, i * 50)
     })
   }, [handleTabClose])
+
+  // Refresh active tab handler
+  const handleRefreshActive = useCallback(() => {
+    if (activeTabId && onRefresh) {
+      onRefresh(activeTabId)
+    }
+  }, [activeTabId, onRefresh])
 
   // Copy path handler
   const handleCopyPath = useCallback(async (path: string) => {
@@ -299,6 +306,17 @@ export function CanvasTabs({
 
       {/* Right-side action buttons */}
       <div className="canvas-tab-bar-actions">
+        {/* Refresh active tab button */}
+        {onRefresh && activeTabId && (
+          <button
+            onClick={handleRefreshActive}
+            className="canvas-tab-bar-action"
+            title={t('Refresh')}
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        )}
+
         {/* Maximize/Minimize toggle button */}
         {onToggleMaximize && (
           <button

@@ -118,7 +118,12 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
         setError(t('Installation failed. Please try again.'))
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('Installation failed'))
+      const msg = err instanceof Error ? err.message : ''
+      if (msg.includes('already installed')) {
+        setError(t('This app is already installed in the selected scope.'))
+      } else {
+        setError(msg || t('Installation failed'))
+      }
     } finally {
       setLoading(false)
       setProgress(null)

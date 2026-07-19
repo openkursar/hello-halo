@@ -9,6 +9,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import fs from 'fs'
 import path from 'path'
 
+vi.mock('../../../src/main/foundation/credential-safety', () => ({
+  isCredentialAtRestSafe: vi.fn(() => false),
+}))
+
 // Import after mocks are set up
 import {
   getConfig,
@@ -16,8 +20,21 @@ import {
   getHaloDir,
   getConfigPath,
   initializeApp,
-  getCredentialsGeneration
+  getCredentialsGeneration,
+  migrateCredentialEncryption
 } from '../../../src/main/foundation/config.service'
+import { isCredentialAtRestSafe } from '../../../src/main/foundation/credential-safety'
+import {
+  encodeForStorage,
+  decodeFromStorage,
+  needsKeyMigration,
+  __resetKeyCacheForTests,
+} from '../../../src/main/foundation/crypto-envelope'
+
+type MockFn = ReturnType<typeof vi.fn>
+function setCredentialAtRestSafe(on: boolean): void {
+  ;(isCredentialAtRestSafe as unknown as MockFn).mockReturnValue(on)
+}
 
 describe('Config Service', () => {
   describe('getHaloDir', () => {
@@ -260,5 +277,75 @@ describe('Config Service', () => {
       saveConfig({ isFirstLaunch: false })
       expect(getCredentialsGeneration()).toBe(before)
     })
+  })
+})
+
+describe('migrateCredentialEncryption', () => {
+  beforeEach(() => {
+    setCredentialAtRestSafe(false)
+    __resetKeyCacheForTests()
+  })
+
+  it('is a no-op when at-rest encryption is off', () => {
+    setCredentialAtRestSafe(false)
+    fs.writeFileSync(getConfigPath(), JSON.stringify({ isFirstLaunch: false }))
+    const before = fs.readFileSync(getConfigPath(), 'utf-8')
+    migrateCredentialEncryption()
+    expect(fs.readFileSync(getConfigPath(), 'utf-8')).toBe(before)
+  })
+
+  it('re-encrypts a legacy-seed remote PIN under the master key, preserving other fields', () => {
+    setCredentialAtRestSafe(true)
+    const credKey = path.join(getHaloDir(), 'cred.key')
+
+    // Produce a PIN encoded under the legacy machine seed (master unavailable).
+    fs.writeFileSync(credKey, 'malformed-not-hex')
+    __resetKeyCacheForTests()
+    const legacyPin = encodeForStorage('842913')
+    expect(legacyPin.startsWith('gmcred:v1:')).toBe(true)
+
+    fs.writeFileSync(
+      getConfigPath(),
+      JSON.stringify({ remoteAccess: { enabled: true, port: 3847, password: legacyPin } }),
+    )
+
+    // New build establishes a real master key.
+    fs.rmSync(credKey)
+    __resetKeyCacheForTests()
+
+    migrateCredentialEncryption()
+
+    const after = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'))
+    expect(after.remoteAccess.password).not.toBe(legacyPin) // re-encoded
+    expect(after.remoteAccess.enabled).toBe(true) // preserved
+    expect(after.remoteAccess.port).toBe(3847) // preserved
+    expect(needsKeyMigration(after.remoteAccess.password)).toBe(false) // now under master
+    expect(decodeFromStorage(after.remoteAccess.password)).toBe('842913')
+  })
+
+  it('migrates AI source keys and is idempotent on a second run', () => {
+    setCredentialAtRestSafe(true)
+    __resetKeyCacheForTests()
+
+    // Plaintext key on disk under at-rest mode → needs migration.
+    fs.writeFileSync(
+      getConfigPath(),
+      JSON.stringify({
+        aiSources: {
+          version: 2,
+          currentId: 's1',
+          sources: [{ id: 's1', name: 'X', provider: 'openai', authType: 'api-key', apiKey: 'sk-plain' }],
+        },
+      }),
+    )
+
+    migrateCredentialEncryption()
+    const first = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'))
+    expect(first.aiSources.sources[0].apiKey).toMatch(/^gmcred:v1:/)
+
+    // Second run: nothing left to migrate → no rewrite.
+    const snapshot = fs.readFileSync(getConfigPath(), 'utf-8')
+    migrateCredentialEncryption()
+    expect(fs.readFileSync(getConfigPath(), 'utf-8')).toBe(snapshot)
   })
 })

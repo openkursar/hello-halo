@@ -27,8 +27,9 @@ import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
 import { registerSecurityHandlers } from '../ipc/security'
 import { enableRemoteAccess } from '../services/remote.service'
-import { getConfig } from '../foundation/config.service'
+import { getConfig, migrateCredentialEncryption } from '../foundation/config.service'
 import { registerBrowserHandlers } from '../ipc/browser'
+import { registerBrowserPolicyHandlers } from '../ipc/browser-policy'
 import { cleanupAIBrowser } from '../services/ai-browser'
 import { registerOverlayHandlers, cleanupOverlayHandlers } from '../ipc/overlay'
 import { initializeSearchHandlers, cleanupSearchHandlers } from '../ipc/search'
@@ -68,6 +69,7 @@ import { registerWeixinIlinkHandlers } from '../ipc/weixin-ilink'
 import { registerTlonHandlers } from '../ipc/tlon'
 import { initTlonWatchers, shutdownTlon, migrateKBsToTextIndex } from '../services/tlon'
 import { initRegistryService, shutdownRegistryService } from '../store'
+import { startUpgradeScheduler, stopUpgradeScheduler } from '../store/upgrade.service'
 import { cleanupImChannelTempFiles } from '../apps/runtime/im-channels'
 import { registerIdleTask, startIdleDrain } from './idle-queue'
 import { seedDefaultAppIfNeeded } from '../apps/manager/seed'
@@ -125,7 +127,7 @@ async function initPlatformAndApps(): Promise<void> {
   // ── Phase 2: App Manager ─────────────────────────────────────────────────
   const appManager = await initAppManager({ db })
 
-  // ── Phase 2.5: Migrate legacy config.mcpServers → DB ────────────────────
+  // ── Migrate legacy config.mcpServers → DB ───────────────────────────────
   // One-time migration: config.json mcpServers (dead storage from Issue #74)
   // are imported into the App Manager DB where getDbMcpServers() can read them.
   try {
@@ -140,7 +142,7 @@ async function initPlatformAndApps(): Promise<void> {
   // (FileWatcherSource, WebhookSource), activates Apps, and starts the router.
   const runtime = await initAppRuntime({ db, appManager, scheduler, memory, background })
 
-  // ── Phase 3.5: Analytics subscribers ────────────────────────────────────
+  // ── Analytics subscribers ───────────────────────────────────────────────
   // Wire lifecycle events (install/uninstall/run) into the analytics pipeline.
   // Must come after both appManager and runtime are ready.
   installAppsSubscribers(appManager, runtime)
@@ -159,6 +161,11 @@ async function initPlatformAndApps(): Promise<void> {
 
   // ── Phase 4: Registry Service (App Store) ─────────────────────────────
   initRegistryService({ db })
+
+  // ── Upgrade Scheduler ─────────────────────────────────────────────────
+  // 6h periodic check + auto-apply for patch/minor on 'auto' strategy.
+  // Surfaces 'store:upgrade-available' events for major/notify/manual.
+  startUpgradeScheduler()
 
   // ── Start timer loops AFTER all wiring is complete ──────────────────────
   // This ensures no events fire before subscriptions are registered.
@@ -214,6 +221,19 @@ export function initializeExtendedServices(): void {
   // gate features (e.g. Tunnel section visibility under tunnelSafe).
   registerSecurityHandlers()
 
+  // Move credentials still under the legacy machine key (or plaintext) onto the
+  // persisted master key. No-op on open-source and already-migrated installs.
+  registerIdleTask('migrate-credential-encryption', async () => {
+    try {
+      migrateCredentialEncryption()
+    } catch (err) {
+      console.warn(
+        '[Bootstrap] Credential encryption migration failed:',
+        (err as Error).message,
+      )
+    }
+  })
+
   // Auto-restore so paired devices keep working without manual re-enable.
   // CF tunnel is intentionally not restored — its Quick Tunnel URL changes per
   // run, which would break any previously shared link.
@@ -239,6 +259,9 @@ export function initializeExtendedServices(): void {
   // Browser: Embedded BrowserView for Content Canvas
   // Note: BrowserView is created lazily when Canvas is opened
   registerBrowserHandlers(mainWindow)
+
+  // Browser Policy: user-extensible allowlist (Settings + blocked-page action)
+  registerBrowserPolicyHandlers()
 
   // AI Browser: No startup registration needed.
   // Initialization is self-contained in createAIBrowserMcpServer() (called on
@@ -359,6 +382,9 @@ export function initializeExtendedServices(): void {
 export async function cleanupExtendedServices(): Promise<void> {
   // Space: Flush any throttled activity timestamps to disk before teardown
   flushSpaceActivity()
+
+  // Store: Stop upgrade scheduler before tearing down registry / app manager
+  stopUpgradeScheduler()
 
   // Store: Shutdown registry service (before app manager)
   shutdownRegistryService()

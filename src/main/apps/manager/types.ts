@@ -97,7 +97,25 @@ export interface InstalledApp {
 
   /** Unix timestamp (ms) when the App was soft-deleted (uninstalled). Undefined if active. */
   uninstalledAt?: number
+
+  /**
+   * User-controlled upgrade strategy for this App.
+   *
+   * - 'auto'    (default): patch/minor versions install silently; majors notify
+   * - 'notify':  never silent — surface every available update as a notification
+   * - 'manual':  no automatic checks; user must trigger upgrade explicitly
+   *
+   * See `src/main/store/upgrade.service.ts` for the dispatch logic.
+   */
+  upgradeStrategy: UpgradeStrategy
 }
+
+/**
+ * User-controlled upgrade strategy. Persisted per installed App.
+ *
+ * See `src/main/store/upgrade.service.ts` for how strategies are applied.
+ */
+export type UpgradeStrategy = 'auto' | 'notify' | 'manual'
 
 // ============================================
 // Service Interface
@@ -309,6 +327,16 @@ export interface AppManagerService {
    * Merges the provided partial overrides into the existing overrides object.
    */
   updateOverrides(appId: string, overrides: Partial<InstalledApp['userOverrides']>): void
+
+  /**
+   * Update the upgrade strategy for an installed App.
+   *
+   * Persisted to the `installed_apps.upgrade_strategy` column.
+   * Read by `upgrade.service.ts` on every check tick.
+   *
+   * @throws AppNotFoundError if the App does not exist
+   */
+  setUpgradeStrategy(appId: string, strategy: UpgradeStrategy): void
 
   /**
    * Update the App spec (JSON Merge Patch semantics).

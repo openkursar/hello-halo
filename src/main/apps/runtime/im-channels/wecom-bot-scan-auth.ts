@@ -161,6 +161,15 @@ function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
       return
     }
 
+    // The abort listener must be removed on every terminal path: this helper is
+    // called once per polling tick against a single long-lived signal, so a
+    // listener that survives normal completion would accumulate across the
+    // whole auth window.
+    let onAbort: (() => void) | undefined
+    const cleanup = (): void => {
+      if (onAbort && signal) signal.removeEventListener('abort', onAbort)
+    }
+
     const req = httpsRequest(
       {
         host: WECOM_QC_HOST,
@@ -178,6 +187,7 @@ function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
         const chunks: Buffer[] = []
         res.on('data', (c: Buffer) => chunks.push(c))
         res.on('end', () => {
+          cleanup()
           const raw = Buffer.concat(chunks).toString('utf-8')
           const status = res.statusCode ?? 0
           if (status < 200 || status >= 300) {
@@ -206,6 +216,7 @@ function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
     })
 
     req.on('error', (err) => {
+      cleanup()
       if (signal?.aborted) {
         reject(new ScanAuthError('cancelled', 'Aborted during request'))
       } else {
@@ -214,13 +225,13 @@ function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
     })
 
     if (signal) {
-      const onAbort = () => {
+      onAbort = () => {
         req.destroy(new Error('Aborted'))
       }
       if (signal.aborted) {
         onAbort()
       } else {
-        signal.addEventListener('abort', onAbort, { once: true })
+        signal.addEventListener('abort', onAbort)
       }
     }
 

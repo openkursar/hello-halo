@@ -126,5 +126,18 @@ export const migrations: Migration[] = [
           ON installed_apps(status)
       `)
     }
+  },
+  {
+    version: 4,
+    description: 'Add upgrade_strategy column for per-app upgrade policy',
+    up(db) {
+      // Default 'auto': patch/minor silent install, major notify.
+      // Backfills existing rows. SQLite ALTER ADD COLUMN with DEFAULT is safe here
+      // because the column is NOT NULL but every existing row receives the default.
+      db.exec(`
+        ALTER TABLE installed_apps
+        ADD COLUMN upgrade_strategy TEXT NOT NULL DEFAULT 'auto'
+      `)
+    }
   }
 ]

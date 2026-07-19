@@ -229,6 +229,12 @@ export interface StoreInstallProgress {
 // Update Information
 // ============================================
 
+/** Severity of a version diff for upgrade dispatching */
+export type UpdateSeverity = 'patch' | 'minor' | 'major'
+
+/** User-controlled upgrade strategy mirrored from apps/manager */
+export type UpgradeStrategy = 'auto' | 'notify' | 'manual'
+
 /** Information about an available update for an installed app */
 export interface UpdateInfo {
   /** Installed app ID */
@@ -239,6 +245,19 @@ export interface UpdateInfo {
   latestVersion: string
   /** Registry entry for the latest version */
   entry: RegistryEntry
+  /** User-selected upgrade strategy for this app */
+  strategy: UpgradeStrategy
+  /** Semver diff severity between currentVersion and latestVersion */
+  severity: UpdateSeverity
+}
+
+/** Payload pushed to the renderer when an update is available but not auto-applied. */
+export interface UpgradeAvailableEvent {
+  appId: string
+  currentVersion: string
+  latestVersion: string
+  strategy: UpgradeStrategy
+  severity: UpdateSeverity
 }
 
 // ============================================

@@ -55,6 +55,8 @@ export interface BrowserState {
   deviceMode?: 'pc' | 'h5'
   error?: string
   blockedByPolicy?: boolean
+  /** Exact URL that was blocked by browser policy — target of "allow and retry". */
+  blockedUrl?: string
 }
 
 export interface TabState {
@@ -322,6 +324,7 @@ class CanvasLifecycle {
 
   // IPC listener cleanup
   private browserStateUnsubscribe: (() => void) | null = null
+  private artifactChangedUnsubscribe: (() => void) | null = null
 
   // Callback subscriptions
   private tabsChangeCallbacks: Set<TabsChangeCallback> = new Set()
@@ -366,6 +369,7 @@ class CanvasLifecycle {
             deviceMode: event.state.deviceMode,
             error: event.state.error,
             blockedByPolicy: event.state.blockedByPolicy,
+            blockedUrl: event.state.blockedUrl,
           }
 
           // Update URL and title if changed
@@ -392,6 +396,17 @@ class CanvasLifecycle {
       }
     })
 
+    // Listen for file changes via existing artifact watcher, auto-refresh open tabs
+    this.artifactChangedUnsubscribe = api.onArtifactChanged((event) => {
+      if (event.type !== 'change') return
+      for (const [tabId, tab] of this.tabs) {
+        if (tab.path === event.path && !tab.isDirty) {
+          this.refreshTab(tabId)
+          break
+        }
+      }
+    })
+
     console.log('[CanvasLifecycle] Initialized successfully')
   }
 
@@ -404,6 +419,11 @@ class CanvasLifecycle {
     if (this.browserStateUnsubscribe) {
       this.browserStateUnsubscribe()
       this.browserStateUnsubscribe = null
+    }
+
+    if (this.artifactChangedUnsubscribe) {
+      this.artifactChangedUnsubscribe()
+      this.artifactChangedUnsubscribe = null
     }
 
     // Destroy all browser views
@@ -890,6 +910,23 @@ class CanvasLifecycle {
 
         // Show the view
         await this.showBrowserView(viewId)
+      } else if ((result as { code?: string }).code === 'BROWSER_POLICY_BLOCKED') {
+        // Initial URL blocked by browser policy — no BrowserView exists yet.
+        // Surface the same blocked state as navigation blocks so the policy
+        // overlay (and its "allow and retry" action) covers this entry too.
+        console.warn(`[CanvasLifecycle] BrowserView creation blocked by policy: ${url}`)
+        tab.error = result.error
+        tab.isLoading = false
+        tab.browserState = {
+          isLoading: false,
+          canGoBack: false,
+          canGoForward: false,
+          error: result.error,
+          blockedByPolicy: true,
+          blockedUrl: url,
+        }
+        this.notifyTabsChange()
+        this.notifyBrowserStateChange(tabId, tab.browserState)
       } else {
         console.error(`[CanvasLifecycle] Failed to create BrowserView: ${result.error}`)
         tab.error = result.error || 'Failed to create browser view'
@@ -905,6 +942,24 @@ class CanvasLifecycle {
         this.notifyTabsChange()
       }
     }
+  }
+
+  /**
+   * Retry a tab whose BrowserView creation was blocked by browser policy
+   * (no view exists yet, so browser:navigate cannot be used). Called by the
+   * policy-block overlay after the user allowlisted the blocked host.
+   */
+  async retryBlockedBrowserView(tabId: string): Promise<void> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.browserViewId) return
+    const url = tab.browserState?.blockedUrl
+    if (!url) return
+
+    tab.error = undefined
+    tab.browserState = undefined
+    tab.isLoading = true
+    this.notifyTabsChange()
+    await this.createBrowserView(tabId, url)
   }
 
   /**

@@ -5,7 +5,7 @@
 import { app } from 'electron'
 import { dirname, join } from 'path'
 import { homedir } from 'os'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
 import { getDataFolderName } from './product-config'
 
@@ -21,7 +21,9 @@ import type {
 } from '../../shared/types'
 import { BUILTIN_PROVIDERS, getBuiltinProvider } from '../../shared/constants'
 import { decryptString } from './secure-storage.service'
-import { encryptConfigFields, decryptConfigFields } from './config-encryption'
+import { encryptConfigFields, decryptConfigFields, configHasUnmigratedCredentials } from './config-encryption'
+import { encodeForStorage, decodeFromStorage, needsKeyMigration } from './crypto-envelope'
+import { isCredentialAtRestSafe } from './credential-safety'
 
 // ============================================================================
 // ENCRYPTED DATA MIGRATION
@@ -428,6 +430,29 @@ export function onAgentConfigChange(handler: AgentConfigChangeHandler): () => vo
   }
 }
 
+// ============================================================================
+// Browser config change subscribers
+// Notified synchronously when browser config is saved, so BrowserViewManager
+// can apply a new User-Agent to active views without a restart.
+// ============================================================================
+
+type BrowserConfigChangeHandler = (browser: HaloConfig['browser']) => void
+const browserConfigChangeHandlers: BrowserConfigChangeHandler[] = []
+
+/**
+ * Register a callback to be notified when browser config changes.
+ * Called synchronously inside saveConfig so views update immediately.
+ *
+ * @returns Unsubscribe function
+ */
+export function onBrowserConfigChange(handler: BrowserConfigChangeHandler): () => void {
+  browserConfigChangeHandlers.push(handler)
+  return () => {
+    const idx = browserConfigChangeHandlers.indexOf(handler)
+    if (idx >= 0) browserConfigChangeHandlers.splice(idx, 1)
+  }
+}
+
 // Types (shared with renderer)
 interface HaloConfig {
   api: {
@@ -481,6 +506,8 @@ interface HaloConfig {
   // MCP servers configuration (compatible with Cursor / Claude Desktop format)
   mcpServers: Record<string, McpServerConfig>
   isFirstLaunch: boolean
+  // True when the user deferred model configuration in the first-run wizard.
+  modelConfigSkipped?: boolean
   // External notification channels (email, WeCom, DingTalk, Feishu, webhook)
   notificationChannels?: import('../../shared/types/notification-channels').NotificationChannelsConfig
   /**
@@ -553,6 +580,22 @@ interface HaloConfig {
   network?: {
     proxy?: string  // Manual proxy URL. Empty string or undefined = use system proxy.
     browserUseProxy?: boolean  // When true, AI Browser also uses the Settings proxy. Default false = system proxy.
+  }
+  // Browser configuration
+  browser?: {
+    /**
+     * User-added allowlist patterns merged on top of product.json
+     * browserPolicy.allowlist. Only honored when the build sets
+     * browserPolicy.userExtensible — see browser-policy.service.ts.
+     */
+    customAllowlist?: string[]
+    /**
+     * Custom User-Agent string for the embedded AI Browser. When set and
+     * non-empty, overrides the built-in desktop/mobile UAs on all browser
+     * views (user-visible tabs, AI automation views, and login windows).
+     * Issue #124.
+     */
+    userAgent?: string
   }
 }
 
@@ -683,7 +726,8 @@ const DEFAULT_CONFIG: HaloConfig = {
     completed: false
   },
   mcpServers: {},  // Empty by default
-  isFirstLaunch: true
+  isFirstLaunch: true,
+  modelConfigSkipped: false
 }
 
 // ============================================================================
@@ -1096,6 +1140,15 @@ export function saveConfig(config: Partial<HaloConfig>): HaloConfig {
   if (config.copilot !== undefined) {
     newConfig.copilot = { ...currentConfig.copilot, ...config.copilot }
   }
+  // browser: shallow merge
+  if (config.browser !== undefined) {
+    newConfig.browser = { ...currentConfig.browser, ...config.browser }
+    if (browserConfigChangeHandlers.length > 0) {
+      browserConfigChangeHandlers.forEach(handler => {
+        try { handler(newConfig.browser!) } catch (e) { console.error('[Config] Error in browser config change handler:', e) }
+      })
+    }
+  }
   // network: shallow merge (proxy, future fields)
   if (config.network !== undefined) {
     newConfig.network = { ...currentConfig.network, ...config.network }
@@ -1123,7 +1176,11 @@ export function saveConfig(config: Partial<HaloConfig>): HaloConfig {
   // and for the return value that callers read.
   const toWrite = JSON.parse(JSON.stringify(newConfig))
   encryptConfigFields(toWrite)
-  writeFileSync(configPath, JSON.stringify(toWrite, null, 2))
+  // rename(2) is atomic on POSIX and Windows: a crash mid-write can never
+  // leave a truncated/half-encrypted config that would corrupt credentials.
+  const tmpPath = `${configPath}.tmp`
+  writeFileSync(tmpPath, JSON.stringify(toWrite, null, 2))
+  renameSync(tmpPath, configPath)
 
   // Detect API config changes and notify subscribers
   // This allows agent.service to invalidate sessions when API config changes
@@ -1160,6 +1217,61 @@ export function saveConfig(config: Partial<HaloConfig>): HaloConfig {
   }
 
   return newConfig
+}
+
+/**
+ * One-time, idempotent migration: re-encrypt every stored credential under the
+ * persisted master key. getConfig() falls back to the legacy seed on read, and
+ * this rewrites the config under the stable key before further drift can make
+ * a value undecryptable. No-op (single file read) once fully migrated.
+ */
+export function migrateCredentialEncryption(): void {
+  if (!isCredentialAtRestSafe()) return
+
+  const configPath = getConfigPath()
+  if (!existsSync(configPath)) return
+
+  let parsed: Record<string, unknown>
+  try {
+    parsed = JSON.parse(readFileSync(configPath, 'utf-8'))
+  } catch (err) {
+    console.warn('[Config] Credential migration skipped (unreadable config):', (err as Error).message)
+    return
+  }
+
+  const fieldsNeedMigration = configHasUnmigratedCredentials(parsed)
+
+  // The remote-access PIN is envelope-encoded by remote.service, so it sits
+  // outside visitSensitiveFields and needs a dedicated check + re-encode here.
+  const remoteAccess = parsed.remoteAccess as Record<string, unknown> | undefined
+  const storedPin = typeof remoteAccess?.password === 'string' ? remoteAccess.password : ''
+  const pinNeedsMigration = !!storedPin && needsKeyMigration(storedPin)
+
+  if (!fieldsNeedMigration && !pinNeedsMigration) return
+
+  if (pinNeedsMigration) {
+    const plainPin = decodeFromStorage(storedPin)
+    if (plainPin) {
+      // Pass the full remoteAccess object: saveConfig replaces it wholesale,
+      // not deep-merged. The same saveConfig also re-encrypts the field set.
+      const current = getConfig()
+      saveConfig({
+        remoteAccess: { ...current.remoteAccess, password: encodeForStorage(plainPin) },
+      })
+      console.log('[Config] Re-encrypted stored credentials (incl. remote PIN) under persisted master key')
+      return
+    }
+    // PIN already orphaned by pre-fix drift: leave it for remote.service to
+    // regenerate on next enable; still migrate the remaining fields below.
+    console.warn('[Config] Remote PIN could not be decoded for migration; it will be regenerated on next remote-access enable')
+  }
+
+  // saveConfig re-encrypts all sensitive fields under the master key: its
+  // getConfig() baseline decrypts via master-or-legacy fallback to plaintext,
+  // then the write path encrypts under the master key. An empty patch touches
+  // no API/agent/network fields, so no change handlers fire.
+  saveConfig({})
+  console.log('[Config] Re-encrypted stored credentials under persisted master key')
 }
 
 /**

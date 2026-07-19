@@ -84,7 +84,7 @@ export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
         console.error('[OpenAIResponsesStream] Error:', error)
       }
     } finally {
-      this.finishMessage()
+      await this.finishMessage()
     }
   }
 
@@ -335,8 +335,9 @@ export async function streamOpenAIResponsesToAnthropic(
   stream: unknown,
   res: ExpressResponse,
   model?: string,
-  debug = false
+  debug = false,
+  estimateInputTokens?: () => Promise<number>
 ): Promise<void> {
-  const handler = new OpenAIResponsesStreamHandler(res, { model, debug })
+  const handler = new OpenAIResponsesStreamHandler(res, { model, debug, estimateInputTokens })
   await handler.processStream(stream)
 }

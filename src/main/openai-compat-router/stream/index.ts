@@ -29,10 +29,13 @@ export {
   streamOpenAIResponsesToAnthropic
 } from './openai-responses-stream'
 
-// Anthropic passthrough stream handler (re-serializes with repair pipeline)
+// Anthropic passthrough stream handlers:
+// - streamAnthropicPassthrough: re-serializes through the repair pipeline (third-party providers)
+// - pipeAnthropicPassthrough: raw byte-for-byte forwarding (genuine first-party Anthropic)
 export {
   AnthropicStreamHandler,
-  streamAnthropicPassthrough
+  streamAnthropicPassthrough,
+  pipeAnthropicPassthrough
 } from './anthropic-stream'
 
 // ============================================================================

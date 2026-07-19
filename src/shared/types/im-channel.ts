@@ -131,7 +131,9 @@ export interface ImChannelInstanceConfig {
    * Owners have unrestricted access to all tools and paths.
    * Only effective when `permissionEnabled` is true.
    *
-   * undefined or [] = everyone is treated as owner (no restriction).
+   * undefined or [] = everyone is a deny-all guest. In this state the
+   *                   runtime auto-claims: the first direct-message sender
+   *                   is bound as the sole owner (see owner-claim.ts).
    * Non-empty array  = only listed IDs are owners; others are guests.
    *
    * IDs are platform-specific: WeCom userid, Feishu open_id, DingTalk staffId, etc.
@@ -144,28 +146,6 @@ export interface ImChannelInstanceConfig {
    * When undefined, guests have no tool or path access (deny-all default).
    */
   guestPolicy?: GuestPolicy
-
-  /**
-   * One-shot owner auto-claim marker.
-   *
-   * Scoped to the WeCom Intelligent Bot scan-auth (QR-code) onboarding flow,
-   * which is anomalous in that its protocol returns only bot credentials
-   * (botid/secret) and never the scanner's user identity. Without this flag
-   * the user would have to manually look up and paste their own WeCom userid
-   * into `owners` — a UX dead-end for non-technical users.
-   *
-   * Semantics:
-   *   - Set to `true` only by the scan-auth completion path with
-   *     `permissionEnabled: true` and `owners` left empty.
-   *   - The wecom-bot provider intercepts the next inbound message, writes
-   *     its `from` into `owners`, and clears this flag (one-shot).
-   *   - Other providers MUST NOT read this field. OAuth-based IM platforms
-   *     return user identity at authorization time and have no need for it.
-   *
-   * Lives at the top level (not inside `config`) so it is auto-excluded from
-   * `ImChannelManager.configEqual`, avoiding a WS reconnect on claim write.
-   */
-  pendingOwnerClaim?: boolean
 }
 
 // ============================================
@@ -179,9 +159,11 @@ export interface ImChannelInstanceConfig {
 export interface ImChannelConfigFieldDef {
   key: string
   label: string
-  type: 'text' | 'password' | 'number'
+  type: 'text' | 'password' | 'number' | 'toggle'
   placeholder?: string
   required?: boolean
+  /** For toggle fields: the default value when creating a new instance. */
+  default?: boolean
 }
 
 /**

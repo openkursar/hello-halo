@@ -94,6 +94,19 @@ export function AppsPage() {
     loadApps()
   }, [loadApps])
 
+  // Fetch available updates on mount and stay subscribed to push events so
+  // the "Update" badge in AppListItem stays fresh without polling.
+  const checkUpdatesAction = useAppsPageStore(s => s.checkUpdates)
+  useEffect(() => {
+    void checkUpdatesAction()
+    const unsubscribe = api.onStoreUpgradeAvailable(() => {
+      void checkUpdatesAction()
+    })
+    return () => {
+      unsubscribe()
+    }
+  }, [checkUpdatesAction])
+
   // Build spaceId -> space name map for display
   // Always populate from both haloSpace and dedicated spaces
   const spaceMap = useMemo(() => {
@@ -333,7 +346,7 @@ export function AppsPage() {
             )}
 
             {/* Detail content — app-chat manages its own scroll + flex layout */}
-            <div className={`flex-1 ${isAppChat ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+            <div className={`flex-1 ${isAppChat || isSessionDetail ? 'overflow-hidden' : 'overflow-y-auto'}`}>
               {renderDetail()}
             </div>
           </div>
@@ -384,7 +397,7 @@ export function AppsPage() {
               )}
 
               {/* Detail content */}
-              <div className={`flex-1 ${isAppChat ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+              <div className={`flex-1 ${isAppChat || isSessionDetail ? 'overflow-hidden' : 'overflow-y-auto'}`}>
                 {renderDetail()}
               </div>
             </>

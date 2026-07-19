@@ -51,10 +51,7 @@ const activeSessions = new Map<string, { abort: AbortController; startedAt: numb
 /** Default space ID used when installing the auto-created assistant. */
 const DEFAULT_SCAN_AUTH_SPACE_ID = 'halo-temp'
 
-// ============================================
-// Helper: surface ScanAuthError shape to renderer
-// ============================================
-
+/** Normalize a thrown value into the renderer-facing ScanAuthError payload. */
 function errorPayload(err: unknown): { success: false; error: string; kind?: ScanAuthErrorKind } {
   if (err instanceof ScanAuthError) {
     return { success: false, error: err.message, kind: err.kind }

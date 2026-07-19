@@ -131,6 +131,23 @@ export class ImChannelManager {
   }
 
   /**
+   * Replace the stored config snapshot for one instance without any lifecycle
+   * action (no stop/start/reconnect, no onInbound rewiring).
+   *
+   * Only safe for fields that configEqual ignores (owners, streaming,
+   * replyScope, ...) — lifecycle-relevant changes must go through applyConfig.
+   * Returns false when the instance is not in the current snapshot.
+   */
+  updateInstanceConfigSnapshot(cfg: ImChannelInstanceConfig): boolean {
+    const idx = this.currentConfigs.findIndex(c => c.id === cfg.id)
+    if (idx === -1) {
+      return false
+    }
+    this.currentConfigs[idx] = { ...cfg, config: { ...cfg.config } }
+    return true
+  }
+
+  /**
    * Reconnect a specific instance with its current config.
    */
   reconnectInstance(instanceId: string): boolean {

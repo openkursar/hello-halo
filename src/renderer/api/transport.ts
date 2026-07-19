@@ -448,7 +448,9 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
       'im-channels:instance-updated': 'onImChannelInstanceUpdated',
       'notification:toast': 'onNotificationToast',
       'tlon:stats-updated': 'onTlonStatsUpdated',
-      'tlon:ingest-progress': 'onTlonIngestProgress'
+      'tlon:ingest-progress': 'onTlonIngestProgress',
+      'store:sync-status-changed': 'onStoreSyncStatusChanged',
+      'store:upgrade-available': 'onStoreUpgradeAvailable',
     }
 
     const method = methodMap[channel]

@@ -30,10 +30,21 @@ export interface TriggerContext {
     /** V2 session ID from the escalation run, used to restore conversation context */
     sessionId?: string
   }
-  /** Continue context (for user-initiated continue after premature LLM termination) */
+  /** Continue context (for user-initiated continue / free-text follow-up on a run) */
   continue?: {
-    /** V2 session ID from the failed run, used to restore full conversation context */
+    /** V2 session ID from the prior run, used to restore full conversation context */
     sessionId?: string
+    /** Free-text follow-up to send as the resumed turn. Falls back to "Continue." */
+    userMessage?: string
+    /**
+     * True when this is a free-text follow-up to a run that already completed
+     * successfully (report_to_user was called). Such a turn is conversational,
+     * not task execution, so executeRun skips the report_to_user auto-continue
+     * enforcement and does not treat a missing report as an error. Unset for the
+     * premature-error "Continue" recovery, which must still drive the task to a
+     * report_to_user.
+     */
+    interactive?: boolean
   }
 }
 
@@ -331,6 +342,17 @@ export interface AppRuntimeService {
    * @throws Error if the run is not found or not in error state
    */
   continueFailedRun(appId: string, runId: string): Promise<void>
+
+  /**
+   * Send a user message to a run from the run-detail view.
+   *
+   * - Live run: injected into the current turn (absorbed at the next tool boundary).
+   * - Finished run: reopens the run and resumes its session so the user can keep
+   *   talking to it with full context (e.g. "this part is wrong, fix it").
+   *
+   * @throws Error if the run/app is not found, or the app is busy with another run.
+   */
+  injectIntoRun(appId: string, runId: string, text: string): Promise<void>
 
   // ── Activity Queries ────────────────────────
 

@@ -5,6 +5,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { writeFileSync, rmSync } from 'fs'
+import { join } from 'path'
+import { randomBytes } from 'crypto'
 
 vi.mock('../../../../src/main/foundation/credential-safety', () => ({
   isCredentialAtRestSafe: vi.fn(() => false),
@@ -14,7 +17,14 @@ import { isCredentialAtRestSafe } from '../../../../src/main/foundation/credenti
 import {
   encodeForStorage,
   decodeFromStorage,
+  needsKeyMigration,
+  __resetKeyCacheForTests,
 } from '../../../../src/main/foundation/crypto-envelope'
+
+// Mirrors the electron mock in tests/unit/setup.ts: userData = <testDir>/.halo
+function credKeyPath(): string {
+  return join(globalThis.__HALO_TEST_DIR__, '.halo', 'cred.key')
+}
 
 type MockFn = ReturnType<typeof vi.fn>
 
@@ -84,6 +94,67 @@ describe('envelope', () => {
 
     it('decodes a legacy plain value (silent migration on next save)', () => {
       expect(decodeFromStorage('123456')).toBe('123456')
+    })
+  })
+
+  describe('persisted master key (credentialAtRestSafe = true)', () => {
+    beforeEach(() => {
+      setProfile(true)
+      __resetKeyCacheForTests()
+    })
+
+    it('keeps the master key stable across a simulated restart', () => {
+      const encoded = encodeForStorage('stable-secret')
+      // Simulate a process restart: drop the in-memory cache so the next
+      // call re-reads the persisted cred.key from disk.
+      __resetKeyCacheForTests()
+      expect(decodeFromStorage(encoded)).toBe('stable-secret')
+    })
+
+    it('cannot decrypt after the master key changes (why regeneration is forbidden)', () => {
+      const encoded = encodeForStorage('secret')
+      // Replace the persisted key — the exact failure the old machine-seed
+      // scheme produced on every network change. The fix is to NEVER do this.
+      writeFileSync(credKeyPath(), randomBytes(32).toString('hex'))
+      __resetKeyCacheForTests()
+      expect(decodeFromStorage(encoded)).toBe('')
+    })
+
+    it('falls back to the legacy seed for values written before the master key', () => {
+      // Simulate an old install: a malformed key file makes the master key
+      // unavailable, so encode uses the legacy machine seed.
+      writeFileSync(credKeyPath(), 'not-a-valid-key')
+      __resetKeyCacheForTests()
+      const legacyEncoded = encodeForStorage('legacy-secret')
+      expect(legacyEncoded.startsWith('gmcred:v1:')).toBe(true)
+
+      // New build, first proper run: establish a real master key.
+      rmSync(credKeyPath())
+      __resetKeyCacheForTests()
+
+      // Decode still recovers via the legacy fallback...
+      expect(decodeFromStorage(legacyEncoded)).toBe('legacy-secret')
+      // ...and the value is flagged so the startup migration re-encrypts it.
+      expect(needsKeyMigration(legacyEncoded)).toBe(true)
+    })
+  })
+
+  describe('needsKeyMigration (credentialAtRestSafe = true)', () => {
+    beforeEach(() => {
+      setProfile(true)
+      __resetKeyCacheForTests()
+    })
+
+    it('is false for a value already stored under the master key', () => {
+      expect(needsKeyMigration(encodeForStorage('secret'))).toBe(false)
+    })
+
+    it('is true for plaintext (needs encrypting at rest)', () => {
+      expect(needsKeyMigration('plain-secret')).toBe(true)
+    })
+
+    it('is false for an empty value', () => {
+      expect(needsKeyMigration('')).toBe(false)
     })
   })
 

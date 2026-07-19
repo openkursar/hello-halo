@@ -128,6 +128,13 @@ export const appsApi = {
     return httpRequest('POST', `/api/apps/${appId}/runs/${runId}/continue`)
   },
 
+  appInjectRun: async (appId: string, runId: string, text: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appInjectRun({ appId, runId, text })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/runs/${runId}/inject`, { text })
+  },
+
   appUpdateConfig: async (appId: string, config: Record<string, unknown>): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.appUpdateConfig({ appId, config })
@@ -174,6 +181,16 @@ export const appsApi = {
       return window.halo.appRevokePermission({ appId, permission })
     }
     return httpRequest('POST', `/api/apps/${appId}/permissions/revoke`, { permission })
+  },
+
+  appSetUpgradeStrategy: async (
+    appId: string,
+    strategy: 'auto' | 'notify' | 'manual',
+  ): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appSetUpgradeStrategy({ appId, strategy })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/upgrade-strategy`, { strategy })
   },
 
   // App Import / Export

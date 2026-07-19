@@ -16,7 +16,6 @@ import {
   X,
   Loader2,
   Sparkles,
-  Upload,
   Archive,
   FolderOpen,
   Bot,
@@ -46,6 +45,8 @@ import {
   type ZipParseResult,
   type ZipValidationError,
 } from './zip-import-utils'
+import { readFileText, readDirectoryEntryToMap, readFileListToMap } from './file-read-utils'
+import { FileImportZone } from './FileImportZone'
 
 // Lazy-load CodeMirrorEditor to keep initial bundle small
 const CodeMirrorEditor = lazy(() =>
@@ -236,75 +237,6 @@ function extractFormFromParsed(parsed: Record<string, unknown>): {
   }
 }
 
-// ============================================
-// Helpers — Import mode (folder reading)
-// ============================================
-
-function readFileText(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = e => resolve(e.target!.result as string)
-    reader.onerror = () => reject(new Error(`Failed to read file: ${file.name}`))
-    reader.readAsText(file)
-  })
-}
-
-async function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> {
-  const all: FileSystemEntry[] = []
-  while (true) {
-    const batch = await new Promise<FileSystemEntry[]>((resolve, reject) =>
-      reader.readEntries(resolve, reject)
-    )
-    if (batch.length === 0) break
-    all.push(...batch)
-  }
-  return all
-}
-
-async function readDirectoryEntry(
-  entry: FileSystemDirectoryEntry,
-  prefix = ''
-): Promise<Record<string, string>> {
-  const result: Record<string, string> = {}
-  const entries = await readAllEntries(entry.createReader())
-  for (const child of entries) {
-    if (child.isFile) {
-      const fileEntry = child as FileSystemFileEntry
-      const file = await new Promise<File>((resolve, reject) =>
-        fileEntry.file(resolve, reject)
-      )
-      const content = await readFileText(file)
-      result[prefix + child.name] = content
-    } else if (child.isDirectory) {
-      const sub = await readDirectoryEntry(child as FileSystemDirectoryEntry, prefix + child.name + '/')
-      Object.assign(result, sub)
-    }
-  }
-  return result
-}
-
-async function readFileListAsFolder(
-  fileList: FileList
-): Promise<{ files: Record<string, string>; folderName: string }> {
-  const files: Record<string, string> = {}
-  let folderName = ''
-  for (let i = 0; i < fileList.length; i++) {
-    const file = fileList[i]
-    const relPath = (file as { webkitRelativePath?: string }).webkitRelativePath || file.name
-    if (!folderName) {
-      const slash = relPath.indexOf('/')
-      folderName = slash > 0 ? relPath.slice(0, slash) : file.name
-    }
-    const slash = relPath.indexOf('/')
-    const cleanPath = slash > 0 ? relPath.slice(slash + 1) : relPath
-    if (cleanPath) {
-      const content = await readFileText(file)
-      files[cleanPath] = content
-    }
-  }
-  return { files, folderName }
-}
-
 function parseSkillFrontmatter(content: string): { name: string; description: string } {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
   if (!match) return { name: '', description: '' }
@@ -401,9 +333,6 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
 
   // Import tab state machine
   const [importState, setImportState] = useState<ImportState>({ phase: 'idle' })
-  const [isDragOver, setIsDragOver] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const folderInputRef = useRef<HTMLInputElement>(null)
   const bodyScrollRef = useRef<HTMLDivElement>(null)
 
   // ── Form field updater ──
@@ -480,7 +409,7 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
   const processDirectoryEntry = useCallback(async (entry: FileSystemDirectoryEntry) => {
     setImportState({ phase: 'loading' })
     try {
-      const files = await readDirectoryEntry(entry)
+      const files = await readDirectoryEntryToMap(entry)
       const outcome = await parseDigitalHumanFolder(files, entry.name)
       if (!outcome.ok) {
         setImportState({ phase: 'error', errors: outcome.errors })
@@ -504,7 +433,7 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
   const processFileList = useCallback(async (fileList: FileList) => {
     setImportState({ phase: 'loading' })
     try {
-      const { files, folderName } = await readFileListAsFolder(fileList)
+      const { files, folderName } = await readFileListToMap(fileList)
       const outcome = await parseDigitalHumanFolder(files, folderName)
       if (!outcome.ok) {
         setImportState({ phase: 'error', errors: outcome.errors })
@@ -524,35 +453,8 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
     }
   }, [])
 
-  // ── Import: drop handler ──
-  const handleImportDrop = useCallback(async (e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragOver(false)
-
-    const items = e.dataTransfer.items
-    if (items && items.length > 0) {
-      const entry = items[0].webkitGetAsEntry?.()
-      if (entry?.isDirectory) {
-        await processDirectoryEntry(entry as FileSystemDirectoryEntry)
-        return
-      }
-    }
-
-    const file = e.dataTransfer.files[0]
-    if (!file) return
-    const name = file.name.toLowerCase()
-    if (name.endsWith('.zip')) {
-      await processZipFile(file)
-    } else {
-      await processYamlFile(file)
-    }
-  }, [processYamlFile, processZipFile, processDirectoryEntry])
-
-  // ── Import: file input handler ──
-  const handleFileInput = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    e.target.value = ''
+  // ── Import: file handler (routes by extension) ──
+  const handleImportFile = useCallback(async (file: File) => {
     const name = file.name.toLowerCase()
     if (name.endsWith('.zip')) {
       await processZipFile(file)
@@ -561,18 +463,8 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
     }
   }, [processYamlFile, processZipFile])
 
-  // ── Import: folder input handler ──
-  const handleFolderInput = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileList = e.target.files
-    if (fileList && fileList.length > 0) {
-      await processFileList(fileList)
-    }
-    e.target.value = ''
-  }, [processFileList])
-
   const handleImportReset = useCallback(() => {
     setImportState({ phase: 'idle' })
-    setIsDragOver(false)
   }, [])
 
   // ── Install: simple yaml import ──
@@ -888,17 +780,12 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
             /* ── Import mode ── */
             <ImportTab
               importState={importState}
-              isDragOver={isDragOver}
-              fileInputRef={fileInputRef}
-              folderInputRef={folderInputRef}
               allSpaces={dedicatedSpaces}
               selectedSpaceId={selectedSpaceId}
               onSelectedSpaceChange={setSelectedSpaceId}
-              onDrop={handleImportDrop}
-              onDragOver={e => { e.preventDefault(); setIsDragOver(true) }}
-              onDragLeave={() => setIsDragOver(false)}
-              onFileInput={handleFileInput}
-              onFolderInput={handleFolderInput}
+              onFile={handleImportFile}
+              onDirectoryEntry={processDirectoryEntry}
+              onFolderFileList={processFileList}
               onReset={handleImportReset}
               onYamlInstall={handleYamlInstall}
               onBundleInstall={handleBundleInstall}
@@ -1028,34 +915,24 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
 
 function ImportTab({
   importState,
-  isDragOver,
-  fileInputRef,
-  folderInputRef,
   allSpaces,
   selectedSpaceId,
   onSelectedSpaceChange,
-  onDrop,
-  onDragOver,
-  onDragLeave,
-  onFileInput,
-  onFolderInput,
+  onFile,
+  onDirectoryEntry,
+  onFolderFileList,
   onReset,
   onYamlInstall,
   onBundleInstall,
   loading,
 }: {
   importState: ImportState
-  isDragOver: boolean
-  fileInputRef: React.RefObject<HTMLInputElement>
-  folderInputRef: React.RefObject<HTMLInputElement>
   allSpaces: Array<{ id: string; name: string; icon: string }>
   selectedSpaceId: string
   onSelectedSpaceChange: (id: string) => void
-  onDrop: (e: React.DragEvent) => void
-  onDragOver: (e: React.DragEvent) => void
-  onDragLeave: () => void
-  onFileInput: (e: React.ChangeEvent<HTMLInputElement>) => void
-  onFolderInput: (e: React.ChangeEvent<HTMLInputElement>) => void
+  onFile: (file: File) => void
+  onDirectoryEntry: (entry: FileSystemDirectoryEntry) => void
+  onFolderFileList: (files: FileList) => void
   onReset: () => void
   onYamlInstall: (yaml: string) => void
   onBundleInstall: (result: ZipParseResult) => void
@@ -1152,45 +1029,15 @@ function ImportTab({
       </p>
 
       {phase === 'idle' && (
-        <>
-          {/* Drop zone */}
-          <div
-            onDragOver={onDragOver}
-            onDragLeave={onDragLeave}
-            onDrop={onDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className={`flex flex-col items-center justify-center gap-3 h-40 border-2 border-dashed rounded-lg cursor-pointer select-none transition-colors ${
-              isDragOver
-                ? 'border-primary bg-primary/5'
-                : 'border-border hover:border-muted-foreground/50'
-            }`}
-          >
-            <Upload className={`w-7 h-7 ${isDragOver ? 'text-primary' : 'text-muted-foreground'}`} />
-            <div className="text-center px-4">
-              <p className="text-sm text-foreground">{t('Drop .yaml, .zip, or folder here')}</p>
-              <p className="text-xs text-muted-foreground mt-1">{t('or click to browse a file')}</p>
-            </div>
-            <input ref={fileInputRef} type="file" accept=".yaml,.yml,.zip" onChange={onFileInput} className="hidden" />
-          </div>
-
-          {/* Browse folder button */}
-          <button
-            type="button"
-            onClick={() => folderInputRef.current?.click()}
-            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground border border-border hover:border-muted-foreground/50 rounded-lg transition-colors"
-          >
-            <FolderOpen className="w-4 h-4" />
-            {t('Browse folder...')}
-          </button>
-          <input
-            ref={folderInputRef}
-            type="file"
-            // @ts-expect-error webkitdirectory is non-standard but widely supported
-            webkitdirectory=""
-            onChange={onFolderInput}
-            className="hidden"
-          />
-
+        <FileImportZone
+          onFile={onFile}
+          onDirectoryEntry={onDirectoryEntry}
+          onFolderFileList={onFolderFileList}
+          fileAccept=".yaml,.yml,.zip"
+          dropLabel={t('Drop .yaml, .zip, or folder here')}
+          dropHint={t('or click to browse a file')}
+          folderLabel={t('Browse folder...')}
+        >
           {/* Format hint */}
           <div className="p-3 bg-secondary/50 rounded-lg border border-border space-y-1.5">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -1203,7 +1050,7 @@ function ImportTab({
         └── SKILL.md`}
             </pre>
           </div>
-        </>
+        </FileImportZone>
       )}
 
       {phase === 'loading' && (

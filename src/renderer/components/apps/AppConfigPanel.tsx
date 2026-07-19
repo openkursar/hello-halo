@@ -197,6 +197,123 @@ function InfoTip({ text }: { text: string }) {
 }
 
 // ============================================
+// Upgrade Section
+//
+// Upgrade strategy dropdown + on-demand upgrade check. Publish/export live
+// in ShareCurrentAppDialog behind the detail-page Share icon.
+// ============================================
+
+interface UpgradeSectionProps {
+  app: InstalledApp
+  appId: string
+  t: (s: string, opts?: Record<string, unknown>) => string
+}
+
+function UpgradeSection({ app, appId, t }: UpgradeSectionProps) {
+  type Strategy = 'auto' | 'notify' | 'manual'
+  const currentStrategy = (app.upgradeStrategy ?? 'auto') as Strategy
+  const [strategy, setStrategy] = useState<Strategy>(currentStrategy)
+  const [savingStrategy, setSavingStrategy] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [feedback, setFeedback] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
+
+  useEffect(() => {
+    setStrategy(currentStrategy)
+  }, [currentStrategy])
+
+  async function handleStrategyChange(next: Strategy) {
+    setStrategy(next)
+    setSavingStrategy(true)
+    try {
+      const res = await api.appSetUpgradeStrategy(appId, next)
+      if (!res.success) {
+        setFeedback({ kind: 'error', text: t('Failed to update upgrade strategy: {{error}}', { error: res.error ?? '' }) })
+      } else {
+        // Refresh the app in the store so the new strategy is visible
+        await useAppsStore.getState().loadApps()
+      }
+    } catch (err) {
+      setFeedback({ kind: 'error', text: t('Failed to update upgrade strategy: {{error}}', { error: (err as Error).message }) })
+    } finally {
+      setSavingStrategy(false)
+    }
+  }
+
+  async function handleCheckUpgrades() {
+    setChecking(true)
+    setFeedback(null)
+    try {
+      const res = await api.storeCheckUpdatesNow()
+      if (res.success) {
+        setFeedback({ kind: 'success', text: t('Upgrade check complete.') })
+      } else {
+        setFeedback({ kind: 'error', text: res.error ?? t('Check failed.') })
+      }
+    } catch (err) {
+      setFeedback({ kind: 'error', text: (err as Error).message })
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+        <RefreshCw className="w-3.5 h-3.5" />
+        {t('Upgrades')}
+      </h3>
+      <div className="bg-secondary rounded-lg p-3 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+          <label htmlFor="upgrade-strategy" className="text-sm text-foreground sm:w-40 flex-shrink-0">
+            {t('Upgrade strategy')}
+          </label>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <select
+              id="upgrade-strategy"
+              value={strategy}
+              disabled={savingStrategy}
+              onChange={(e) => handleStrategyChange(e.target.value as Strategy)}
+              className="w-full sm:w-auto px-2 py-1.5 text-sm bg-background text-foreground border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              <option value="auto">{t('Auto (silent patch/minor)')}</option>
+              <option value="notify">{t('Notify only')}</option>
+              <option value="manual">{t('Manual')}</option>
+            </select>
+            {savingStrategy && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {strategy === 'auto'
+            ? t('Patch and minor versions install automatically. Major upgrades will ask first.')
+            : strategy === 'notify'
+              ? t('You will be notified for every available upgrade — nothing installs silently.')
+              : t('No automatic upgrade checks. Use Check for upgrades to update on demand.')}
+        </p>
+
+        <div className="flex flex-col sm:flex-row gap-2 pt-1 border-t border-border">
+          <button
+            type="button"
+            onClick={handleCheckUpgrades}
+            disabled={checking}
+            className="flex items-center justify-center gap-1.5 w-full sm:w-auto px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground border border-border rounded-lg transition-colors disabled:opacity-40"
+            title={t('Run an immediate upgrade check')}
+          >
+            {checking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            {t('Check for upgrades')}
+          </button>
+        </div>
+
+        {feedback && (
+          <p className={`text-xs ${feedback.kind === 'success' ? 'text-green-500' : 'text-red-400'}`}>
+            {feedback.text}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ============================================
 // Settings Tab Content
 // ============================================
 
@@ -778,6 +895,8 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
             )}
           </div>
         </div>
+
+        <UpgradeSection app={app} appId={appId} t={t} />
 
         {/* ── Spec Info (read-only summary + data directory) ── */}
         <div className="space-y-2">

@@ -5,12 +5,13 @@
  * Provides real-time filtering as user types or selects categories.
  */
 
-import { useCallback, useEffect, useRef } from 'react'
-import { Search, RefreshCw } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Search, RefreshCw, Share2 } from 'lucide-react'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { STORE_CATEGORY_META } from '../../../shared/store/store-types'
 import { useTranslation } from '../../i18n'
 import type { AppType } from '../../../shared/apps/spec-types'
+import { ShareToStoreDialog } from './ShareToStoreDialog'
 
 const TYPE_FILTERS: Array<{ id: AppType | null; labelKey: string }> = [
   { id: null, labelKey: 'All' },
@@ -18,6 +19,27 @@ const TYPE_FILTERS: Array<{ id: AppType | null; labelKey: string }> = [
   { id: 'skill', labelKey: 'Skill' },
   { id: 'mcp', labelKey: 'MCP' },
 ]
+
+/**
+ * Open the unified Share-to-Store dialog.
+ * This replaces the previous "import .dhpkg" entry on the store header — local
+ * import has moved to AppsPage → Manual Add → Install from File, where the
+ * semantics ("add to my library") fit better.
+ */
+function ShareButton({ onClick }: { onClick: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 px-2 sm:px-2.5 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-lg transition-colors"
+      title={t('Share your Digital Human or Skill to the store')}
+      aria-label={t('Share to Store')}
+    >
+      <Share2 className="w-4 h-4" />
+      <span className="hidden sm:inline">{t('Share')}</span>
+    </button>
+  )
+}
 
 export function StoreHeader() {
   const { t } = useTranslation()
@@ -30,6 +52,8 @@ export function StoreHeader() {
   const setStoreTypeFilter = useAppsPageStore(state => state.setStoreTypeFilter)
   const loadStoreApps = useAppsPageStore(state => state.loadStoreApps)
   const refreshStore = useAppsPageStore(state => state.refreshStore)
+
+  const [showShareDialog, setShowShareDialog] = useState(false)
 
   // Debounce timer ref for search
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -99,6 +123,7 @@ export function StoreHeader() {
         >
           <RefreshCw className={`w-4 h-4 ${storeLoading ? 'animate-spin' : ''}`} />
         </button>
+        <ShareButton onClick={() => setShowShareDialog(true)} />
       </div>
 
       {/* Type filter tabs */}
@@ -144,6 +169,10 @@ export function StoreHeader() {
           </button>
         ))}
       </div>
+
+      {showShareDialog && (
+        <ShareToStoreDialog onClose={() => setShowShareDialog(false)} />
+      )}
     </div>
   )
 }

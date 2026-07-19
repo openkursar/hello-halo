@@ -1,17 +1,9 @@
 {
   "version": 2,
-  "updatedAt": "2026-05-17",
+  "updatedAt": "2026-06-10",
   "patterns": {
-    "claude-opus-": {
-      "displayName": "Claude Opus",
-      "provider": "anthropic",
-      "contextWindow": 200000,
-      "maxOutputTokens": 64000,
-      "vision": true,
-      "thinking": true
-    },
-    "claude-sonnet-": {
-      "displayName": "Claude Sonnet",
+    "claude-": {
+      "displayName": "Claude",
       "provider": "anthropic",
       "contextWindow": 200000,
       "maxOutputTokens": 64000,
@@ -23,6 +15,38 @@
       "provider": "anthropic",
       "contextWindow": 200000,
       "maxOutputTokens": 64000,
+      "vision": true,
+      "thinking": false
+    },
+    "claude-3-7-": {
+      "displayName": "Claude 3.7",
+      "provider": "anthropic",
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "vision": true,
+      "thinking": true
+    },
+    "claude-3-5-haiku": {
+      "displayName": "Claude 3.5 Haiku",
+      "provider": "anthropic",
+      "contextWindow": 200000,
+      "maxOutputTokens": 8192,
+      "vision": false,
+      "thinking": false
+    },
+    "claude-3-5-": {
+      "displayName": "Claude 3.5",
+      "provider": "anthropic",
+      "contextWindow": 200000,
+      "maxOutputTokens": 8192,
+      "vision": true,
+      "thinking": false
+    },
+    "claude-3-": {
+      "displayName": "Claude 3",
+      "provider": "anthropic",
+      "contextWindow": 200000,
+      "maxOutputTokens": 4096,
       "vision": true,
       "thinking": false
     },
@@ -418,6 +442,22 @@
       "contextWindow": 131072,
       "maxOutputTokens": 32768,
       "vision": false,
+      "thinking": true
+    },
+    "claude-fable-5": {
+      "displayName": "Claude Fable 5",
+      "provider": "anthropic",
+      "contextWindow": 200000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true
+    },
+    "claude-fable-5[1m]": {
+      "displayName": "Claude Fable 5 (1M)",
+      "provider": "anthropic",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "vision": true,
       "thinking": true
     },
     "claude-opus-4-8": {

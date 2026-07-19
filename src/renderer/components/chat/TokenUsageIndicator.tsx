@@ -35,13 +35,11 @@ export function TokenUsageIndicator({ tokenUsage, previousCost = 0, className = 
   const { t } = useTranslation()
   const [showTooltip, setShowTooltip] = useState(false)
 
-  // Current context size = all input tokens (consistent with CC's /context formula)
-  // inputTokens: new input tokens (not cached)
-  // cacheReadTokens: historical context read from cache
-  // cacheCreationTokens: tokens for newly created cache
-  // outputTokens: output tokens (also count towards context)
+  // Current context size, matching CC's /context formula:
+  //   input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+  // output_tokens is excluded — it is the generated reply, not part of the prompt the model saw.
   const contextUsed = tokenUsage.inputTokens + tokenUsage.cacheReadTokens +
-                      tokenUsage.cacheCreationTokens + tokenUsage.outputTokens
+                      tokenUsage.cacheCreationTokens
 
   // Defensive: avoid NaN when contextWindow is 0
   const contextWindow = tokenUsage.contextWindow > 0 ? tokenUsage.contextWindow : 200000

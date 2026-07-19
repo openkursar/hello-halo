@@ -36,11 +36,16 @@ import { api } from '../api'
  */
 export interface PublicSecurityPolicy {
   tunnelSafe: boolean
+  /** True when the build allows users to extend the browser allowlist.
+   *  Gates the Settings allowlist editor and the blocked-page
+   *  "allow and retry" action. */
+  browserAllowlistEditable: boolean
 }
 
 /** Permissive defaults applied while the policy is loading or on error. */
 const PERMISSIVE_DEFAULT: PublicSecurityPolicy = {
   tunnelSafe: false,
+  browserAllowlistEditable: false,
 }
 
 let cached: Promise<PublicSecurityPolicy> | null = null
@@ -52,6 +57,7 @@ async function fetchPolicy(): Promise<PublicSecurityPolicy> {
       const data = res.data as Partial<PublicSecurityPolicy>
       return {
         tunnelSafe: data.tunnelSafe === true,
+        browserAllowlistEditable: data.browserAllowlistEditable === true,
       }
     }
     console.warn('[useSecurityPolicy] Empty/invalid response, using permissive default')

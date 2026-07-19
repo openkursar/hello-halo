@@ -22,8 +22,10 @@ import {
 import {
   streamOpenAIChatToAnthropic,
   streamOpenAIResponsesToAnthropic,
-  streamAnthropicPassthrough
+  streamAnthropicPassthrough,
+  pipeAnthropicPassthrough
 } from '../stream'
+import { isNativeAnthropicHost } from '../utils'
 import { proxyFetch } from '../../services/proxy-fetch'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { withRequestQueue, generateQueueKey } from './request-queue'
@@ -31,6 +33,7 @@ import { runInterceptors } from '../interceptors'
 import { applyProviderAdapter, type AdapterContext } from './provider-adapters'
 import { handleKiroRequest } from '../adapters/kiro.adapter'
 import { countTokens } from '../utils/token-counter'
+import { deferInputTokensEstimate, fillResponseUsageFallback } from '../utils/usage-estimator'
 
 export interface RequestHandlerOptions {
   debug?: boolean
@@ -299,8 +302,15 @@ function forwardResponseHeaders(upstreamResp: globalThis.Response, res: ExpressR
  * Handle Anthropic passthrough request — zero format conversion.
  *
  * Proxies the Anthropic request directly to the upstream Anthropic API.
- * For streaming responses, pipes the upstream SSE body directly to the client
- * without parsing or transforming any events.
+ *
+ * Streaming responses take one of two paths, decided by the upstream host:
+ *  - Genuine first-party Anthropic (api.anthropic.com — covers both API key and
+ *    OAuth "Claude auth"): the upstream SSE is piped to the client byte-for-byte.
+ *    Its events are already well-formed, and re-serializing would drop interleaved
+ *    `thinking` text (see isNativeAnthropicHost).
+ *  - Third-party Anthropic-compatible providers (e.g. GLM): the stream is
+ *    re-serialized through BaseStreamHandler to apply repairs (empty text block,
+ *    malformed tool JSON, etc.).
  *
  * Response headers and status codes are forwarded transparently from upstream.
  */
@@ -387,21 +397,32 @@ async function handleAnthropicPassthrough(
       return
     }
 
-    // Streaming: re-serialize through BaseStreamHandler repair pipeline.
-    // This enables all stream-level fixes (empty text block repair, tool JSON
-    // repair, etc.) for third-party Anthropic-compatible providers that may
-    // produce non-standard responses.
+    // Streaming response.
     if (anthropicRequest.stream && upstreamResp.body) {
       forwardResponseHeaders(upstreamResp, res)
       res.setHeader('Content-Type', 'text/event-stream')
       res.setHeader('Cache-Control', 'no-cache')
       res.setHeader('Connection', 'keep-alive')
 
+      if (isNativeAnthropicHost(backendUrl)) {
+        // Genuine first-party Anthropic: forward SSE verbatim. The repair
+        // pipeline (below) would drop interleaved thinking text, so it must be
+        // bypassed for well-formed native streams.
+        console.log('[RequestHandler] Anthropic passthrough (raw pipe)')
+        await pipeAnthropicPassthrough(upstreamResp.body, res)
+        return
+      }
+
+      // Third-party Anthropic-compatible providers: re-serialize through the
+      // BaseStreamHandler repair pipeline (empty text block, tool JSON, etc.).
+      // The deferred estimate backs the usage fallback for providers that
+      // omit usage; it computes in the background while the model generates.
       await streamAnthropicPassthrough(
         upstreamResp.body,
         res,
         anthropicRequest.model,
-        debug
+        debug,
+        deferInputTokensEstimate(anthropicRequest)
       )
       return
     }
@@ -468,9 +489,10 @@ async function handleOpenAIConversion(
 
       // Convert request
       const requestToSend = { ...anthropicRequest, stream: wantStream }
+      const visionOverride = { supportsVision: config.supportsVision }
       const openaiRequest = apiType === 'responses'
-        ? convertAnthropicToOpenAIResponses(requestToSend).request
-        : convertAnthropicToOpenAIChat(requestToSend).request
+        ? convertAnthropicToOpenAIResponses(requestToSend, visionOverride).request
+        : convertAnthropicToOpenAIChat(requestToSend, visionOverride).request
 
       const toolCount = (openaiRequest as any).tools?.length ?? 0
       console.log(`[RequestHandler] wire=${apiType} tools=${toolCount}`)
@@ -516,8 +538,8 @@ async function handleOpenAIConversion(
           // Retry with stream enabled
           wantStream = true
           const retryRequest = apiType === 'responses'
-            ? convertAnthropicToOpenAIResponses({ ...anthropicRequest, stream: true }).request
-            : convertAnthropicToOpenAIChat({ ...anthropicRequest, stream: true }).request
+            ? convertAnthropicToOpenAIResponses({ ...anthropicRequest, stream: true }, visionOverride).request
+            : convertAnthropicToOpenAIChat({ ...anthropicRequest, stream: true }, visionOverride).request
 
           // Re-apply provider adapter to retry request (reuse same headers and context)
           applyProviderAdapter(backendUrl, retryRequest as Record<string, unknown>, requestHeaders, adapterId, adapterContext)
@@ -544,10 +566,14 @@ async function handleOpenAIConversion(
         res.setHeader('Cache-Control', 'no-cache')
         res.setHeader('Connection', 'keep-alive')
 
+        // Background input-token estimate backing the usage fallback for
+        // providers that omit usage from the stream; computes while the
+        // model generates, so stream finish never waits on it.
+        const estimateInputTokens = deferInputTokensEstimate(anthropicRequest)
         if (apiType === 'responses') {
-          await streamOpenAIResponsesToAnthropic(upstreamResp.body, res, anthropicRequest.model, debug)
+          await streamOpenAIResponsesToAnthropic(upstreamResp.body, res, anthropicRequest.model, debug, estimateInputTokens)
         } else {
-          await streamOpenAIChatToAnthropic(upstreamResp.body, res, anthropicRequest.model, debug)
+          await streamOpenAIChatToAnthropic(upstreamResp.body, res, anthropicRequest.model, debug, estimateInputTokens)
         }
         return
       }
@@ -561,6 +587,7 @@ async function handleOpenAIConversion(
         ? convertOpenAIResponsesToAnthropic(openaiResponse)
         : convertOpenAIChatToAnthropic(openaiResponse, anthropicRequest.model)
 
+      fillResponseUsageFallback(anthropicResponse, anthropicRequest)
       res.json(anthropicResponse)
     } catch (error: any) {
       // Handle abort/timeout

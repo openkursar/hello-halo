@@ -98,6 +98,13 @@ function ftsEscape(raw: string): string {
   return tokens.map(t => `"${t.replace(/"/g, '""')}"*`).join(' ')
 }
 
+// FTS5's default tokenizer doesn't segment CJK, so Chinese queries miss almost
+// everything via MATCH. Escape the term for a LIKE substring fallback (also
+// reaches the i18n JSON column, which the FTS index doesn't cover).
+function escapeLike(raw: string): string {
+  return raw.trim().replace(/[\\%_]/g, c => `\\${c}`)
+}
+
 function supportsType(source: RegistrySource, type?: AppType): boolean {
   if (!type) return true
 
@@ -172,8 +179,23 @@ export class QueryService {
   /**
    * Look up a single entry by slug across all mirror data + proxy caches.
    * Returns the entry and its registryId, or null.
+   *
+   * When `registryId` is given, that registry's entry is preferred — slugs can
+   * collide across registries and callers with provenance (e.g. update checks)
+   * must resolve against the registry the app was installed from.
    */
-  findEntry(slug: string): { entry: RegistryEntry; registryId: string } | null {
+  findEntry(slug: string, registryId?: string): { entry: RegistryEntry; registryId: string } | null {
+    if (registryId) {
+      const scoped = this.db.prepare(
+        `SELECT * FROM registry_items WHERE slug = ? AND registry_id = ? LIMIT 1`
+      ).get(slug, registryId) as ItemRow | undefined
+      if (scoped) {
+        const mapped = rowToEntry(scoped)
+        const { _registryId, ...entry } = mapped
+        return { entry: entry as RegistryEntry, registryId: _registryId }
+      }
+    }
+
     // 1. Search mirror data (registry_items)
     const row = this.db.prepare(
       `SELECT * FROM registry_items WHERE slug = ? LIMIT 1`
@@ -265,8 +287,16 @@ export class QueryService {
       bindings.push(category)
     }
     if (ftsQuery) {
-      conditions.push('ri.rowid IN (SELECT rowid FROM registry_items_fts WHERE registry_items_fts MATCH ?)')
-      bindings.push(ftsQuery)
+      const like = `%${escapeLike(search!)}%`
+      conditions.push(
+        "(ri.rowid IN (SELECT rowid FROM registry_items_fts WHERE registry_items_fts MATCH ?)" +
+        " OR ri.name LIKE ? ESCAPE '\\'" +
+        " OR ri.description LIKE ? ESCAPE '\\'" +
+        " OR ri.author LIKE ? ESCAPE '\\'" +
+        " OR ri.tags LIKE ? ESCAPE '\\'" +
+        " OR ri.i18n LIKE ? ESCAPE '\\')"
+      )
+      bindings.push(ftsQuery, like, like, like, like, like)
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
@@ -279,7 +309,7 @@ export class QueryService {
 
     // Fetch page
     const rows = this.db.prepare(
-      `SELECT ri.* FROM registry_items ri ${where} ORDER BY ri.rank ASC NULLS LAST, ri.rowid ASC LIMIT ? OFFSET ?`
+      `SELECT ri.* FROM registry_items ri ${where} ORDER BY ri.rank ASC NULLS LAST, ri.updated_at DESC, ri.rowid ASC LIMIT ? OFFSET ?`
     ).all(...bindings, pageSize, offset) as ItemRow[]
 
     const items = rows.map(r => {

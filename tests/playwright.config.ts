@@ -111,6 +111,14 @@ export default defineConfig({
       }
     },
     {
+      name: 'automation-run',
+      testMatch: '**/automation-run.spec.ts',
+      use: {
+        // Live trigger + mid-run injection may wait on a real automation run
+        actionTimeout: 30000
+      }
+    },
+    {
       name: 'chat',
       testMatch: '**/chat.spec.ts',
       use: {

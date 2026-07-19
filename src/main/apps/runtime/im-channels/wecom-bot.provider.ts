@@ -72,7 +72,6 @@ import {
   type StreamLogLevel,
 } from './wecom-stream-session'
 import { ensureUtf8 } from './wecom-content-utf8'
-import { maybeClaimOwner } from './wecom-bot-owner-claim'
 
 // ============================================
 // Constants
@@ -181,6 +180,18 @@ interface WecomBotProviderConfig {
   botId: string
   secret: string
   wsUrl?: string
+  /**
+   * Whether GROUP replies should carry WeCom's quote-reply bubble.
+   *
+   * WeCom renders a quote bubble whenever a reply is sent via aibot_respond_msg
+   * (passive reply carrying the inbound req_id) or aibot_reply_stream. Setting
+   * this to false routes GROUP replies through aibot_send_msg (proactive push)
+   * which carries no req_id and therefore renders as plain text. Direct
+   * messages always keep the quote bubble regardless of this setting.
+   *
+   * Default: true (preserves the legacy quote-bubble behavior).
+   */
+  quoteReply?: boolean
 }
 
 export class WecomBotProvider implements ImChannelProvider {
@@ -193,12 +204,14 @@ export class WecomBotProvider implements ImChannelProvider {
     { key: 'botId', label: 'Bot ID', type: 'text', placeholder: 'aib-xxx', required: true },
     { key: 'secret', label: 'Secret', type: 'password', required: true },
     { key: 'wsUrl', label: 'WebSocket URL', type: 'text', placeholder: 'wss://openws.work.weixin.qq.com' },
+    { key: 'quoteReply', label: 'Quote Reply', type: 'toggle', default: true },
   ]
 
   readonly defaultConfig: Record<string, unknown> = {
     botId: '',
     secret: '',
     wsUrl: '',
+    quoteReply: true,
   }
 
   createInstance(instanceId: string, config: Record<string, unknown>): ImChannelInstance {
@@ -644,48 +657,6 @@ class WecomBotInstance implements ImChannelInstance {
       hasStream: this.authenticated,
     })
 
-    // One-shot owner auto-claim for scan-auth bots. No-op for instances that
-    // were not provisioned via the QR-code flow (pendingOwnerClaim is unset).
-    // Awaited so the subsequent dispatch reads the updated owners list. See
-    // wecom-bot-owner-claim.ts for the protocol rationale.
-    //
-    // When a claim is performed, we proactively push a one-time welcome
-    // notice to the chat. The WeCom Intelligent Bot protocol does not let
-    // us greet the user before they speak first — we have no chatId until
-    // their first inbound arrives — so this is the earliest possible moment
-    // to confirm the binding to the user.
-    let claimed = false
-    try {
-      claimed = await maybeClaimOwner(this.instanceId, senderId)
-    } catch (err) {
-      // Claim failure is non-fatal — log and proceed; the user can retry by
-      // sending another message, which will hit the same code path.
-      logEvent(this.instanceId, 'warn', 'owner_claim_error', {
-        trace,
-        err: err instanceof Error ? err.message : String(err),
-      })
-    }
-    if (claimed) {
-      // Fire-and-forget — pushToChat is async-internal but exposed as boolean.
-      // We do not block AI dispatch on the welcome reaching WeCom.
-      try {
-        this.pushToChat(
-          chatId,
-          '✅ 已绑定你为本机器人的主人，权限控制已自动开启。',
-          chatType,
-        )
-        logEvent(this.instanceId, 'info', 'owner_claim_welcome_pushed', {
-          trace,
-          chatId,
-        })
-      } catch (err) {
-        logEvent(this.instanceId, 'warn', 'owner_claim_welcome_push_failed', {
-          trace,
-          err: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
-
     try {
       this.inboundHandler(inbound, reply)
       logEvent(this.instanceId, 'info', 'inbound_dispatch_handed_off', {
@@ -717,6 +688,11 @@ class WecomBotInstance implements ImChannelInstance {
     headers: WsFrame['headers'],
   ): ReplyHandle {
     const frame: WsFrameHeaders = { headers }
+    // quoteReply only suppresses the quote bubble in GROUP chats. Direct
+    // messages always use the passive reply path (aibot_respond_msg, which
+    // carries req_id → quote bubble) regardless of the toggle, matching the
+    // issue scope ("群回复可关闭引用气泡").
+    const useQuoteReply = chatType === 'direct' || this.config.quoteReply !== false
     let streamSession: WecomStreamSession | null = null
     const ensureStream = (): WecomStreamSession | null => {
       if (!this.authenticated) return null
@@ -726,50 +702,65 @@ class WecomBotInstance implements ImChannelInstance {
       return streamSession
     }
 
-    const streaming: StreamingHandle = {
-      update: async (event: ProgressEvent) => {
-        const s = ensureStream()
-        if (s) await s.update(event)
-        // No session yet and WS not authenticated: progress events are not
-        // critical to deliver. Silent skip is acceptable here — finish() owns
-        // the must-deliver guarantee.
-      },
-      finish: async (finalText: string) => {
-        const s = ensureStream()
-        if (s) {
-          await s.finish(finalText)
-          return
+    // When quoteReply is disabled for a group chat, replyStream* would still
+    // carry the inbound req_id and render a quote bubble. Strip the streaming
+    // capability so dispatch-inbound falls back to the one-shot send() path,
+    // which routes through pushToChat (no req_id, no quote bubble). Direct
+    // chats always keep streaming since they never suppress the quote.
+    const streaming: StreamingHandle | undefined = useQuoteReply
+      ? {
+          update: async (event: ProgressEvent) => {
+            const s = ensureStream()
+            if (s) await s.update(event)
+            // No session yet and WS not authenticated: progress events are not
+            // critical to deliver. Silent skip is acceptable here — finish()
+            // owns the must-deliver guarantee.
+          },
+          finish: async (finalText: string) => {
+            const s = ensureStream()
+            if (s) {
+              await s.finish(finalText)
+              return
+            }
+            // No session could be acquired (WS unauthenticated at first call to
+            // streaming.update AND at finish time, so no session was ever lazily
+            // created). The final answer must not be silently dropped — mirror
+            // the `send()` fallback path: try the 24h reply window, then push.
+            await this.deliverFinalWithoutSession(chatId, chatType, trace, frame, finalText)
+          },
+          dispose: () => {
+            if (streamSession) {
+              streamSession.dispose()
+              streamSession = null
+            }
+          },
         }
-        // No session could be acquired (WS unauthenticated at first call to
-        // streaming.update AND at finish time, so no session was ever lazily
-        // created). The final answer must not be silently dropped — mirror
-        // the `send()` fallback path: try the 24h reply window, then push.
-        await this.deliverFinalWithoutSession(chatId, chatType, trace, frame, finalText)
-      },
-      dispose: () => {
-        if (streamSession) {
-          streamSession.dispose()
-          streamSession = null
-        }
-      },
-    }
+      : undefined
 
     return {
       channel: 'wecom-bot',
       chatId,
       replyTtlMs: REPLY_WINDOW_MS,
       send: async (text: string): Promise<void> => {
-        // Single-shot reply: prefer aibot_respond_msg if we still have a
-        // valid frame; fall back to aibot_send_msg push otherwise.
+        // Single-shot reply: prefer aibot_respond_msg when useQuoteReply is on
+        // (passive reply carrying req_id → quote bubble). When off (group chat
+        // with quoteReply disabled), skip it entirely and go straight to
+        // aibot_send_msg (proactive push, no req_id → plain text). Fall back to
+        // push in both cases when the preferred path is unavailable.
         const sanitized = ensureUtf8(text)
-        const replied = await this.replyMarkdown(chatId, sanitized, frame, trace)
+        const replied = useQuoteReply
+          ? await this.replyMarkdown(chatId, sanitized, frame, trace)
+          : false
         if (replied) return
-        logEvent(this.instanceId, 'info', 'reply_fallback_to_push', {
+        const sourceTag = useQuoteReply ? `reply:${trace}` : `reply-noquote:${trace}`
+        logEvent(this.instanceId, 'info', useQuoteReply ? 'reply_fallback_to_push' : 'reply_skip_quote', {
           trace,
           chatId,
+          chatType,
+          quoteReply: useQuoteReply,
         })
         const pushed = await this.queuePush(
-          chatId, sanitized, chatType, `reply:${trace}`, trace,
+          chatId, sanitized, chatType, sourceTag, trace,
         )
         if (!pushed) {
           this.counters.totalError++
@@ -778,7 +769,7 @@ class WecomBotInstance implements ImChannelInstance {
           )
         }
       },
-      streaming,
+      ...(streaming ? { streaming } : {}),
     }
   }
 

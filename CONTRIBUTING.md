@@ -20,6 +20,18 @@ npm install
 npm run dev
 ```
 
+## Troubleshooting
+
+**App Manager stuck on "not yet initialized" / `NODE_MODULE_VERSION` mismatch in logs**
+
+The `better-sqlite3` native module was compiled for system Node instead of Electron. Rebuild it:
+
+```bash
+npx electron-rebuild -f -w better-sqlite3
+```
+
+This happens after `npm rebuild`, an interrupted `npm install`, or any `node-gyp` build run under system Node. A full `npm install` fixes it automatically via `postinstall`.
+
 ## Project Structure
 
 ```

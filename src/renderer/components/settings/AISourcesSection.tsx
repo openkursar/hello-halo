@@ -209,11 +209,13 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
     // Switch to saved source as current, get latest data from disk
     const switchResult = await api.aiSourcesSwitchSource(source.id)
     if (switchResult.success && switchResult.data) {
-      setConfig({ ...config, aiSources: switchResult.data as AISourcesConfig, isFirstLaunch: false })
+      setConfig({ ...config, aiSources: switchResult.data as AISourcesConfig, isFirstLaunch: false, modelConfigSkipped: false })
     }
 
-    // Persist isFirstLaunch flag (no aiSources in payload, safe)
-    await api.setConfig({ isFirstLaunch: false })
+    // Persist flags (no aiSources in payload, safe). Clearing modelConfigSkipped
+    // ensures a user who once deferred, then configured a source, is no longer
+    // suppressed from the setup re-entry guard if they later delete all sources.
+    await api.setConfig({ isFirstLaunch: false, modelConfigSkipped: false })
 
     setShowAddForm(false)
     setEditingSourceId(null)

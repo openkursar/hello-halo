@@ -40,6 +40,7 @@ import type {
 import { AppNotRunnableError, EscalationNotFoundError, ConcurrencyLimitError } from './errors'
 import { Semaphore } from './concurrency'
 import { executeRun } from './execute'
+import { injectIntoActiveRun, isRunActive } from './active-runs'
 import { readSessionMessages } from './session-store'
 import { getSpace } from '../../services/space.service'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
@@ -314,7 +315,9 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
   function buildContinueTriggerContext(
     app: InstalledApp,
-    sessionId?: string
+    sessionId?: string,
+    userMessage?: string,
+    interactive?: boolean
   ): TriggerContext {
     return {
       type: 'continue_followup',
@@ -322,6 +325,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         `Time: ${new Date().toISOString()}`,
       continue: {
         sessionId,
+        userMessage,
+        interactive,
       },
     }
   }
@@ -1261,6 +1266,55 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       }).catch((err) => {
         console.error(`[Runtime] Continue run failed: app=${appId}, run=${runId}:`, err)
       })
+    },
+
+    async injectIntoRun(appId: string, runId: string, text: string): Promise<void> {
+      const app = appManager.getApp(appId)
+      if (!app) {
+        throw new Error(`App not found: ${appId}`)
+      }
+      const trimmed = text.trim()
+      if (!trimmed) {
+        throw new Error('Cannot send an empty message')
+      }
+
+      // Live run → inject into the current turn; the AI absorbs it at the next
+      // tool boundary (steer an in-progress run).
+      if (isRunActive(runId)) {
+        injectIntoActiveRun(appId, runId, trimmed)
+        console.log(`[Runtime] Injected into live run: app=${appId}, run=${runId.slice(0, 8)}`)
+        return
+      }
+
+      // Finished run → reopen it and resume its session so the user can keep
+      // talking to that run with full context (the subprocess was closed to free
+      // resources, but the CC session id was persisted for resume).
+      const run = store.getRun(runId)
+      if (!run) {
+        throw new Error(`Run not found: ${runId}`)
+      }
+      const appIsRunning = Array.from(runningAbortControllers.keys()).some(k => k.startsWith(`${appId}:`))
+      if (appIsRunning) {
+        throw new Error(`App ${appId} is busy with another run — try again once it finishes`)
+      }
+
+      store.reopenRun(runId)
+      broadcastAppStatus(appId)
+
+      // A follow-up to a run that already completed successfully (status 'ok' ⇒
+      // report_to_user was called) is a conversation, not task execution: mark it
+      // interactive so executeRun replies without the report_to_user enforcement.
+      // A follow-up to a prematurely-ended run (status 'error', report never
+      // called) is left non-interactive so it still drives the task to completion.
+      const interactive = run.status === 'ok'
+      const trigger = buildContinueTriggerContext(app, run.sessionId, trimmed, interactive)
+      executeWithConcurrency(app, trigger, {
+        existingRunId: run.runId,
+        existingSessionKey: run.sessionKey,
+      }).catch((err) => {
+        console.error(`[Runtime] Resume run failed: app=${appId}, run=${runId}:`, err)
+      })
+      console.log(`[Runtime] Resumed finished run with follow-up: app=${appId}, run=${runId.slice(0, 8)}`)
     },
 
     // ── Activity Queries ────────────────────────────

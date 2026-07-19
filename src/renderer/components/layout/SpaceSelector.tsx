@@ -10,6 +10,7 @@ import { ChevronDown, Settings2, Unplug } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { SpaceIcon } from '../icons/ToolIcons'
+import { SortableSpaceList } from '../space/SortableSpaceList'
 import { useTranslation } from '../../i18n'
 import type { Space } from '../../types'
 
@@ -19,7 +20,7 @@ const LOAD_THROTTLE_MS = 5_000
 export function SpaceSelector() {
   const { t } = useTranslation()
   const { setView } = useAppStore()
-  const { haloSpace, spaces, currentSpace, setCurrentSpace, refreshCurrentSpace, loadSpaces, isLoading } = useSpaceStore()
+  const { haloSpace, spaces, currentSpace, setCurrentSpace, refreshCurrentSpace, loadSpaces, isLoading, reorderSpaces } = useSpaceStore()
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const lastLoadRef = useRef(0)
@@ -129,31 +130,31 @@ export function SpaceSelector() {
           {isLoading && allSpaces.length === 0 && (
             <div className="px-3 py-2 text-xs text-muted-foreground">{t('Loading...')}</div>
           )}
-          {allSpaces.map(space => {
-            const isActive = space.id === currentSpace?.id
-            const name = space.isTemp ? t('Halo Space') : space.name
 
-            return (
-              <button
-                key={space.id}
-                onClick={() => handleSelectSpace(space)}
-                className={`w-full px-3 py-2.5 text-left text-sm transition-colors flex items-center gap-2.5 ${
-                  space.isMissing
-                    ? 'text-muted-foreground cursor-not-allowed opacity-70'
-                    : `hover:bg-secondary/80 ${isActive ? 'text-primary bg-primary/5' : 'text-foreground'}`
-                }`}
-              >
-                <SpaceIcon iconId={space.icon || (space.isTemp ? 'sparkles' : 'folder')} size={16} className="flex-shrink-0" />
-                <span className="truncate flex-1 min-w-0">{name}</span>
-                {space.isMissing && (
-                  <Unplug className="w-3.5 h-3.5 flex-shrink-0" aria-label={t('Unavailable')} />
-                )}
-                {isActive && !space.isMissing && (
-                  <span className="ml-auto w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
-                )}
-              </button>
-            )
-          })}
+          {/* Halo temp space — fixed at top, not draggable */}
+          {haloSpace && (
+            <SpaceDropdownRow
+              space={haloSpace}
+              isActive={haloSpace.id === currentSpace?.id}
+              onSelect={handleSelectSpace}
+            />
+          )}
+
+          {/* Dedicated spaces — draggable to reorder */}
+          {spaces.length > 0 && (
+            <SortableSpaceList
+              items={spaces}
+              onReorder={(ids) => { void reorderSpaces(ids) }}
+              className="flex flex-col"
+              renderItem={(space) => (
+                <SpaceDropdownRow
+                  space={space}
+                  isActive={space.id === currentSpace?.id}
+                  onSelect={handleSelectSpace}
+                />
+              )}
+            />
+          )}
 
           {/* Manage Spaces link */}
           <div className="border-t border-border/50 mt-1 pt-1">
@@ -168,5 +169,39 @@ export function SpaceSelector() {
         </div>
       )}
     </div>
+  )
+}
+
+/** A single space row inside the SpaceSelector dropdown. */
+function SpaceDropdownRow({
+  space,
+  isActive,
+  onSelect,
+}: {
+  space: Space
+  isActive: boolean
+  onSelect: (space: Space) => void
+}) {
+  const { t } = useTranslation()
+  const name = space.isTemp ? t('Halo Space') : space.name
+
+  return (
+    <button
+      onClick={() => onSelect(space)}
+      className={`w-full px-3 py-2.5 text-left text-sm transition-colors flex items-center gap-2.5 ${
+        space.isMissing
+          ? 'text-muted-foreground cursor-not-allowed opacity-70'
+          : `hover:bg-secondary/80 ${isActive ? 'text-primary bg-primary/5' : 'text-foreground'}`
+      }`}
+    >
+      <SpaceIcon iconId={space.icon || (space.isTemp ? 'sparkles' : 'folder')} size={16} className="flex-shrink-0" />
+      <span className="truncate flex-1 min-w-0">{name}</span>
+      {space.isMissing && (
+        <Unplug className="w-3.5 h-3.5 flex-shrink-0" aria-label={t('Unavailable')} />
+      )}
+      {isActive && !space.isMissing && (
+        <span className="ml-auto w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
+      )}
+    </button>
   )
 }

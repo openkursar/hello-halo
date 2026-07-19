@@ -432,12 +432,15 @@ export const useAppsPageStore = create<AppsPageState>()(
         set({ storeError: null })
         return (res.data as { appId: string }).appId
       }
-      set({ storeError: (res.error as string) || 'Installation failed' })
-      return null
+      const errorMsg = (res.error as string) || 'Installation failed'
+      set({ storeError: errorMsg })
+      throw new Error(errorMsg)
     } catch (err) {
+      if (err instanceof Error && get().storeError) throw err
       console.error('[AppsPageStore] installFromStore error:', err)
-      set({ storeError: 'Installation failed' })
-      return null
+      const msg = err instanceof Error ? err.message : 'Installation failed'
+      set({ storeError: msg })
+      throw new Error(msg)
     }
   },
 

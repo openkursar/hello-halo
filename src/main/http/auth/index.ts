@@ -28,4 +28,4 @@ export { logAuthEvent } from './audit'
 
 export { authMiddleware, handleLogin, authenticateWebSocket } from './middleware'
 
-export { encodeForStorage, decodeFromStorage } from '../../foundation/crypto-envelope'
+export { encodeForStorage, decodeFromStorage, needsKeyMigration } from '../../foundation/crypto-envelope'

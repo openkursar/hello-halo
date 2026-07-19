@@ -29,6 +29,9 @@ import type {
   StoreQueryParams,
   StoreQueryResponse,
   UpdateInfo,
+  UpdateSeverity,
+  UpgradeAvailableEvent,
+  UpgradeStrategy,
 } from '../../shared/store/store-types'
 import type { RegistryServiceConfig } from './registry.types'
 import type { DatabaseManager } from '../platform/store/types'
@@ -129,6 +132,22 @@ let queryService: QueryService | null = null
 /** Listener for sync status changes (set by IPC layer) */
 let syncStatusListener: ((event: { registryId: string; status: string; appCount: number; error?: string }) => void) | null = null
 
+/** Listener for upgrade-available events (set by IPC layer) */
+let upgradeAvailableListener: ((event: UpgradeAvailableEvent) => void) | null = null
+
+/**
+ * Register a listener for upgrade-available events.
+ * Called by the IPC layer to push events to the renderer.
+ */
+export function onUpgradeAvailable(listener: typeof upgradeAvailableListener): void {
+  upgradeAvailableListener = listener
+}
+
+/** Internal emitter used by upgrade.service.ts and applyUpgrade dispatch logic. */
+export function emitUpgradeAvailable(event: UpgradeAvailableEvent): void {
+  upgradeAvailableListener?.(event)
+}
+
 // ============================================
 // Initialization / Shutdown
 // ============================================
@@ -160,7 +179,7 @@ export function initRegistryService(opts?: { db?: DatabaseManager; overrides?: P
     cacheTtlMs: normalizeCacheTtl(opts?.overrides?.cacheTtlMs ?? persisted.cacheTtlMs),
   }
 
-  const defaultChanged = ensureBuiltinRegistries()
+  const { changed: defaultChanged, purgeRegistryIds } = ensureBuiltinRegistries()
   if (defaultChanged) {
     saveConfigToFile()
   }
@@ -172,6 +191,13 @@ export function initRegistryService(opts?: { db?: DatabaseManager; overrides?: P
 
     syncService = new SyncService(opts.db)
     queryService = new QueryService(opts.db)
+
+    // Purge stale data for registries that were hidden or had their URL changed.
+    // This runs after syncService creation to avoid the timing issue where
+    // ensureBuiltinRegistries() executes before syncService exists.
+    for (const id of purgeRegistryIds) {
+      syncService.clearRegistryData(id)
+    }
 
     // Wire sync status listener
     syncService.onSyncStatusChanged((event) => {
@@ -295,6 +321,17 @@ export async function listApps(query?: StoreQuery): Promise<RegistryEntry[]> {
 }
 
 /**
+ * Lightweight entry lookup by slug from the synced index — no spec fetch,
+ * no network. Returns null when the slug is unknown (e.g. first publish)
+ * or when the query layer is unavailable.
+ */
+export function findStoreEntry(slug: string): { entry: RegistryEntry; registryId: string } | null {
+  ensureInitialized()
+  if (!queryService) return null
+  return queryService.findEntry(slug) ?? null
+}
+
+/**
  * Get detailed information about a store app by slug.
  *
  * Looks up the entry in SQLite (Mirror) first, then falls back to
@@ -333,6 +370,72 @@ export async function getAppDetail(slug: string): Promise<StoreAppDetail> {
   const specWithStore = withInstallStoreMetadata(spec, entry.slug, registryId)
 
   return { entry, spec: specWithStore, registryId }
+}
+
+// ============================================
+// Detail Document (SKILL.md / README)
+// ============================================
+
+/** In-memory document cache: detail pages re-entered in one session never refetch. */
+const documentCache = new Map<string, string | null>()
+const DOCUMENT_CACHE_MAX = 50
+
+/** Cap stored document size — protects memory and IPC payloads from pathological files. */
+const DOCUMENT_MAX_BYTES = 1_000_000
+
+/**
+ * Fetch the display document (SKILL.md) for a store entry.
+ *
+ * Returns null when the source has no document for this entry — callers
+ * hide the docs section. Misses (null) are cached too, so entries without
+ * docs don't trigger a network probe on every detail visit.
+ */
+export async function getAppDocument(slug: string): Promise<{ content: string | null }> {
+  ensureInitialized()
+
+  if (!queryService) {
+    throw new Error('QueryService not available (db not provided)')
+  }
+
+  const found = queryService.findEntry(slug)
+  if (!found) {
+    throw new Error(`App not found in store: ${slug}`)
+  }
+
+  const { entry, registryId } = found
+  const cacheKey = `${registryId}:${slug}@${entry.version}`
+
+  if (documentCache.has(cacheKey)) {
+    return { content: documentCache.get(cacheKey) ?? null }
+  }
+
+  const registry = config.registries.find(r => r.id === registryId)
+  if (!registry) {
+    throw new Error(`Registry not found: ${registryId}`)
+  }
+
+  const adapter = getAdapter(registry)
+  let content: string | null = null
+  if (adapter.fetchDocument) {
+    const t0 = performance.now()
+    content = await adapter.fetchDocument(registry, entry)
+    if (content && content.length > DOCUMENT_MAX_BYTES) {
+      content = content.slice(0, DOCUMENT_MAX_BYTES)
+    }
+    console.log(
+      `[RegistryService] getAppDocument: ${slug} -> ${content ? `${content.length} chars` : 'none'} ` +
+      `(${(performance.now() - t0).toFixed(0)}ms)`
+    )
+  }
+
+  // FIFO eviction keeps the cache bounded; entries are tiny relative to specs
+  if (documentCache.size >= DOCUMENT_CACHE_MAX) {
+    const oldest = documentCache.keys().next().value
+    if (oldest !== undefined) documentCache.delete(oldest)
+  }
+  documentCache.set(cacheKey, content)
+
+  return { content }
 }
 
 // ============================================
@@ -405,25 +508,41 @@ export async function installFromStore(
     }
   }
 
-  // Fetch bundled skill specs if the adapter supports it (e.g. HaloAdapter)
-  let bundledSkillSpecs: Map<string, SkillSpec> | undefined
-  if (specWithStore.type !== 'skill' && typeof adapter.fetchBundledSkills === 'function') {
-    const bundledDeps = (specWithStore.requires?.skills ?? [])
-      .filter((dep): dep is { id: string; bundled: true; files?: string[] } => typeof dep !== 'string' && dep.bundled === true)
-      .map(dep => ({ id: dep.id, files: dep.files }))
-
-    if (bundledDeps.length > 0) {
-      try {
-        bundledSkillSpecs = await adapter.fetchBundledSkills(registry, entry, bundledDeps)
-      } catch (err) {
-        console.warn(`[RegistryService] fetchBundledSkills failed (non-fatal): ${(err as Error).message}`)
-      }
-    }
-  }
-
-  // Auto-install required skills (non-fatal, skip for skill-type to prevent recursion)
+  // Install declared skill dependencies. Any failure rolls back the app we
+  // just installed — shipping an app without its skills is a broken install
+  // that previously surfaced only at runtime (skip for skill-type: no recursion).
   if (specWithStore.type !== 'skill') {
-    await installRequiredSkills(specWithStore, spaceId, bundledSkillSpecs)
+    try {
+      let bundledSkillSpecs: Map<string, SkillSpec> | undefined
+      if (typeof adapter.fetchBundledSkills === 'function') {
+        const bundledDeps = (specWithStore.requires?.skills ?? [])
+          .filter((dep): dep is { id: string; bundled: true; files?: string[] } => typeof dep !== 'string' && dep.bundled === true)
+          .map(dep => ({ id: dep.id, files: dep.files }))
+
+        if (bundledDeps.length > 0) {
+          bundledSkillSpecs = await adapter.fetchBundledSkills(registry, entry, bundledDeps)
+        }
+      }
+
+      await installRequiredSkills(specWithStore, spaceId, bundledSkillSpecs)
+    } catch (err) {
+      // deleteApp() only accepts 'uninstalled' apps, and the app may already
+      // be runtime-active — deactivate and soft-delete before hard-deleting.
+      try {
+        if (runtime) {
+          try {
+            await runtime.deactivate(appId)
+          } catch { /* activation above may have failed — proceed with deletion */ }
+        }
+        await manager.uninstall(appId)
+        await manager.deleteApp(appId)
+      } catch (rollbackErr) {
+        console.error(
+          `[RegistryService] Rollback of "${slug}" (${appId}) failed after dependency error: ${(rollbackErr as Error).message}`
+        )
+      }
+      throw new Error(`Installation of "${entry.name}" failed: ${(err as Error).message}`)
+    }
   }
 
   console.log(`[RegistryService] Installed "${entry.name}" (${slug}) as ${appId} in space ${spaceId}`)
@@ -446,7 +565,10 @@ export async function installFromStore(
  *
  * Design decisions:
  *   - Sequential install: avoids DB contention and keeps logs readable.
- *   - Non-fatal: a missing or already-installed skill never fails the parent install.
+ *   - Already-installed skills are skipped/re-synced, never an error. Any other
+ *     failure is collected and thrown at the end — an app without its declared
+ *     skills is broken at runtime, so partial installs must surface to the UI
+ *     (callers roll back the parent app).
  *   - No recursion: `installFromStore()` guards with `type !== 'skill'`, so skills
  *     that themselves declare `requires.skills` won't trigger another round.
  */
@@ -459,6 +581,7 @@ export async function installRequiredSkills(
   if (!skills || skills.length === 0) return
 
   const manager = getAppManager()
+  const failures: string[] = []
 
   for (const dep of skills) {
     const skillId = typeof dep === 'string' ? dep : dep.id
@@ -468,14 +591,11 @@ export async function installRequiredSkills(
       // Bundled skill: must come from the pre-fetched spec — never fall back to store
       const bundledSpec = bundledSkillSpecs?.get(skillId)
       if (!bundledSpec) {
-        console.warn(
-          `[RegistryService] Bundled skill "${skillId}" has no fetched spec — ` +
-          `ensure the registry adapter implements fetchBundledSkills()`
-        )
+        failures.push(`bundled skill "${skillId}" has no fetched content`)
         continue
       }
       if (!manager) {
-        console.warn(`[RegistryService] App Manager not available, cannot install bundled skill "${skillId}"`)
+        failures.push(`App Manager not available for bundled skill "${skillId}"`)
         continue
       }
       try {
@@ -508,7 +628,7 @@ export async function installRequiredSkills(
           }
           continue
         }
-        console.warn(`[RegistryService] Failed to install bundled skill "${skillId}": ${(err as Error).message}`)
+        failures.push(`bundled skill "${skillId}": ${(err as Error).message}`)
       }
       continue
     }
@@ -546,8 +666,12 @@ export async function installRequiredSkills(
         }
         continue
       }
-      console.warn(`[RegistryService] Failed to auto-install required skill "${skillId}": ${(err as Error).message}`)
+      failures.push(`required skill "${skillId}": ${(err as Error).message}`)
     }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(`Failed to install required skills — ${failures.join('; ')}`)
   }
 }
 
@@ -621,6 +745,7 @@ function buildPreviewSpec(entry: RegistryEntry, registryId: string): AppSpec {
 export async function checkUpdates(
   installedApps: Array<{
     id: string
+    upgradeStrategy?: UpgradeStrategy
     spec: { name: string; version: string; store?: { slug?: string; registry_id?: string } }
   }>
 ): Promise<UpdateInfo[]> {
@@ -634,7 +759,7 @@ export async function checkUpdates(
     const slug = app.spec.store?.slug
     if (!slug) continue
 
-    const found = queryService.findEntry(slug)
+    const found = queryService.findEntry(slug, app.spec.store?.registry_id)
     if (!found) continue
 
     const { entry } = found
@@ -645,11 +770,101 @@ export async function checkUpdates(
         currentVersion: app.spec.version,
         latestVersion: entry.version,
         entry,
+        strategy: app.upgradeStrategy ?? 'auto',
+        severity: computeSeverity(app.spec.version, entry.version),
       })
     }
   }
 
   return updates
+}
+
+/**
+ * Compare two semver versions to classify the diff as patch / minor / major.
+ *
+ * Falls back to 'major' if either version is unparseable — safer to surface
+ * an alert than to silently auto-upgrade through an unknown change.
+ */
+function computeSeverity(current: string, latest: string): UpdateSeverity {
+  const c = parseSemver(current)
+  const l = parseSemver(latest)
+  if (!c || !l) return 'major'
+  if (l[0] > c[0]) return 'major'
+  if (l[1] > c[1]) return 'minor'
+  if (l[2] > c[2]) return 'patch'
+  return 'patch'
+}
+
+/**
+ * Apply an upgrade to an installed App.
+ *
+ * Fetches the latest spec from the registry, validates it against the
+ * mode-permitted severity, then delegates to AppManager.updateSpec()
+ * which preserves userConfig/userOverrides/permissions.
+ *
+ * Modes:
+ *   - 'patch_minor': only allowed when severity is patch or minor
+ *   - 'major':       allowed for any severity (used after user confirms a major)
+ *   - 'force':       allowed for any severity, skips strategy checks
+ */
+export async function applyUpgrade(
+  appId: string,
+  mode: 'patch_minor' | 'major' | 'force' = 'force',
+): Promise<{ appId: string; from: string; to: string; severity: UpdateSeverity }> {
+  ensureInitialized()
+
+  if (!queryService) {
+    throw new Error('QueryService not available (db not provided)')
+  }
+
+  const manager = getAppManager()
+  if (!manager) {
+    throw new Error('App Manager is not yet initialized')
+  }
+
+  const app = manager.getApp(appId)
+  if (!app) throw new Error(`Installed app not found: ${appId}`)
+
+  const slug = app.spec.store?.slug
+  if (!slug) throw new Error(`App ${appId} has no store.slug — cannot upgrade`)
+
+  const found = queryService.findEntry(slug, app.spec.store?.registry_id)
+  if (!found) throw new Error(`App ${slug} not found in any registry (cannot upgrade)`)
+
+  const fromVersion = app.spec.version
+  const toVersion = found.entry.version
+  if (!isNewerVersion(toVersion, fromVersion)) {
+    throw new Error(`App ${slug} is already at the latest version (${fromVersion})`)
+  }
+
+  const severity = computeSeverity(fromVersion, toVersion)
+  if (mode === 'patch_minor' && severity === 'major') {
+    throw new Error(`Cannot auto-apply major upgrade for ${slug} (use mode='major' after user confirm)`)
+  }
+
+  // Fetch the full latest spec from the source registry
+  const registry = config.registries.find(r => r.id === found.registryId)
+  if (!registry) throw new Error(`Registry not found: ${found.registryId}`)
+
+  const adapter = getAdapter(registry)
+  const newSpec = await adapter.fetchSpec(registry, found.entry)
+  const newSpecWithStore = withInstallStoreMetadata(newSpec, found.entry.slug, found.registryId)
+
+  // updateSpec preserves userConfig / userOverrides / permissions automatically
+  manager.updateSpec(appId, newSpecWithStore as unknown as Record<string, unknown>)
+
+  console.log(
+    `[RegistryService] applyUpgrade: ${slug} ${fromVersion} -> ${toVersion} ` +
+    `(severity=${severity}, mode=${mode})`
+  )
+
+  // Refresh runtime activation for automation apps so subscriptions reflect any spec changes
+  const runtime = getAppRuntime()
+  if (runtime && newSpecWithStore.type === 'automation') {
+    runtime.syncAppSubscriptions(appId)
+  }
+
+  return { appId, from: fromVersion, to: toVersion, severity }
 }
 
 // ============================================
@@ -676,6 +891,9 @@ export function addRegistry(registry: Omit<RegistrySource, 'id'>): RegistrySourc
   const normalizedUrl = normalizeRegistryUrl(registry.url)
   if (!isHttpUrl(normalizedUrl)) {
     throw new Error('Registry URL must use http:// or https://')
+  }
+  if (isBlockedRegistryHost(new URL(normalizedUrl).hostname)) {
+    throw new Error('Registry URL must point to a public host (loopback, private, and link-local addresses are not allowed)')
   }
 
   const duplicate = config.registries.find(
@@ -717,9 +935,8 @@ export function removeRegistry(registryId: string): void {
   }
 
   config.registries = config.registries.filter(r => r.id !== registryId)
-  // Clear SQLite cache for this registry
   if (syncService) {
-    syncService.clearProxyCache(registryId)
+    syncService.clearRegistryData(registryId)
   }
   saveConfigToFile()
 
@@ -968,6 +1185,45 @@ function isHttpUrl(url: string): boolean {
   }
 }
 
+function isBlockedV4(a: number, b: number): boolean {
+  return (
+    a === 0 ||                            // unspecified
+    a === 127 ||                          // loopback
+    a === 10 ||                           // RFC1918
+    (a === 172 && b >= 16 && b <= 31) ||  // RFC1918
+    (a === 192 && b === 168) ||           // RFC1918
+    (a === 169 && b === 254)              // link-local / cloud metadata (169.254.169.254)
+  )
+}
+
+/**
+ * True when a hostname names the local machine or a private/internal network.
+ * Gates the user-driven "add registry" action so an operator cannot turn the
+ * store fetcher into an SSRF probe against loopback, RFC1918, or the cloud
+ * metadata endpoint. Only literal IPs are inspected (no DNS resolution): a
+ * hostname that resolves to a private address is out of scope here, and
+ * trusted built-in / enterprise registries never pass through this gate.
+ */
+function isBlockedRegistryHost(rawHost: string): boolean {
+  const host = rawHost.toLowerCase().replace(/^\[/, '').replace(/\]$/, '')
+  if (!host) return true
+  if (host === 'localhost' || host.endsWith('.localhost')) return true
+
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/)
+  if (v4) return isBlockedV4(Number(v4[1]), Number(v4[2]))
+
+  if (host.includes(':')) {
+    if (host === '::1' || host === '::') return true        // loopback / unspecified
+    if (host.startsWith('fe80:')) return true               // link-local
+    if (host.startsWith('fc') || host.startsWith('fd')) return true // unique-local fc00::/7
+    if (host.startsWith('::ffff:')) {
+      const mapped = host.slice('::ffff:'.length).match(/^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/)
+      if (mapped) return isBlockedV4(Number(mapped[1]), Number(mapped[2]))
+    }
+  }
+  return false
+}
+
 function isDefaultRegistry(registry: RegistrySource): boolean {
   return registry.id === DEFAULT_REGISTRY.id || registry.isDefault === true
 }
@@ -990,10 +1246,12 @@ function isBuiltinRegistry(registry: RegistrySource): boolean {
  *
  * The official registry is always first.
  *
- * @returns true if any change was made (triggers a config save)
+ * @returns Object with `changed` (triggers config save) and `purgeRegistryIds`
+ *          (registry IDs whose cached data must be cleared after SyncService creation).
  */
-function ensureBuiltinRegistries(): boolean {
+function ensureBuiltinRegistries(): { changed: boolean; purgeRegistryIds: string[] } {
   let changed = false
+  const purgeRegistryIds: string[] = []
 
   // Read product.json overrides once (loadProductConfig is singleton-cached).
   // Enterprise builds use this to redirect the official registry
@@ -1011,9 +1269,7 @@ function ensureBuiltinRegistries(): boolean {
       const before = config.registries.length
       config.registries = config.registries.filter(r => r.id !== builtin.id)
       if (config.registries.length !== before) {
-        if (syncService) {
-          syncService.clearProxyCache(builtin.id)
-        }
+        purgeRegistryIds.push(builtin.id)
         console.log(`[RegistryService] Removed hidden built-in registry "${builtin.id}" per product.json`)
         changed = true
       }
@@ -1034,9 +1290,10 @@ function ensureBuiltinRegistries(): boolean {
       // Immutable fields (name, url, sourceType, isDefault, enabled when
       // product.json declares an override) are enforced on every startup.
       // User-controlled fields (adapterConfig) are always preserved.
+      const urlChanged = existing.url !== effective.url
       if (
         existing.name       !== effective.name       ||
-        existing.url        !== effective.url        ||
+        urlChanged                                   ||
         existing.sourceType !== effective.sourceType ||
         existing.isDefault  !== effective.isDefault  ||
         // Only enforce `enabled` when product.json explicitly declares it;
@@ -1049,6 +1306,9 @@ function ensureBuiltinRegistries(): boolean {
         existing.isDefault  = effective.isDefault
         if (override.enabled !== undefined) {
           existing.enabled = effective.enabled
+        }
+        if (urlChanged) {
+          purgeRegistryIds.push(builtin.id)
         }
         changed = true
       }
@@ -1077,7 +1337,7 @@ function ensureBuiltinRegistries(): boolean {
     }
   }
 
-  return changed
+  return { changed, purgeRegistryIds }
 }
 
 function withInstallStoreMetadata(spec: AppSpec, slug: string, registryId: string): AppSpec {

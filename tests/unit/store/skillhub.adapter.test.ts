@@ -368,7 +368,7 @@ describe('SkillHubAdapter', () => {
         .mockResolvedValueOnce(new Response('Forbidden', { status: 403, statusText: 'Forbidden' }))
 
       await expect(adapter.fetchSpec(MOCK_SOURCE, MOCK_ENTRY)).rejects.toThrow(
-        /failed to download SKILL\.md/i
+        /failed to download "SKILL\.md"/i
       )
     })
   })

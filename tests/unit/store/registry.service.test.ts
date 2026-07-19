@@ -17,6 +17,10 @@ vi.mock("../../../src/main/apps/runtime", () => ({
   getAppRuntime: getAppRuntimeMock,
 }))
 
+vi.mock("../../../src/main/services/proxy-fetch", () => ({
+  proxyFetch: (url: string | URL, init?: RequestInit) => fetch(String(url), init),
+}))
+
 vi.mock("../../../src/main/foundation/product-config", () => ({
   loadProductConfig: loadProductConfigMock,
   // config.service indirectly imports getDataFolderName via the same
@@ -35,7 +39,10 @@ import {
   listApps,
   installFromStore,
   getRegistries,
+  onSyncStatusChanged,
 } from "../../../src/main/store/registry.service"
+import { createDatabaseManager } from "../../../src/main/platform/store/database-manager"
+import type { DatabaseManager } from "../../../src/main/platform/store/types"
 import type { RegistryIndex } from "../../../src/shared/store/store-types"
 
 function jsonResponse(data: unknown): Response {
@@ -52,13 +59,33 @@ function textResponse(body: string): Response {
   })
 }
 
+// Unmocked URLs (split index shards, other registries) must 404 rather than
+// throw: a 404 makes the HaloAdapter fall back to legacy index.json without
+// retry delays, keeping the init-time background sync fast and deterministic.
+function notFoundResponse(): Response {
+  return new Response("not found", { status: 404 })
+}
+
+// initRegistryService kicks off a non-blocking syncAll; refreshIndex skips
+// registries that are still mid-flight. Record terminal sync statuses so
+// tests can await the background sync instead of racing it.
+function trackSyncSettled(): string[] {
+  const settled: string[] = []
+  onSyncStatusChanged((event) => {
+    if (event.status !== "syncing") settled.push(event.registryId)
+  })
+  return settled
+}
+
 describe("registry.service", () => {
   const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>()
+  let db: DatabaseManager
 
   beforeEach(() => {
     fetchMock.mockReset()
     vi.stubGlobal("fetch", fetchMock)
     mkdirSync(join(homedir(), ".halo-dev"), { recursive: true })
+    db = createDatabaseManager(":memory:")
     getAppManagerMock.mockReset()
     getAppRuntimeMock.mockReset()
     getAppManagerMock.mockReturnValue(null)
@@ -69,40 +96,19 @@ describe("registry.service", () => {
 
   afterEach(() => {
     shutdownRegistryService()
+    db.closeAll()
     vi.unstubAllGlobals()
   })
 
-  it("lazily initializes when called before explicit init", async () => {
-    const emptyIndex: RegistryIndex = {
-      version: 1,
-      generated_at: "2026-02-24T00:00:00.000Z",
-      source: "https://openkursar.github.io/digital-human-protocol",
-      apps: [],
-    }
-
-    fetchMock.mockImplementation(async (input) => {
-      const url = String(input)
-      if (url.endsWith("/index.json")) return jsonResponse(emptyIndex)
-      throw new Error(`Unexpected URL: ${url}`)
-    })
-
+  it("lazily initializes and degrades to empty results without a db", async () => {
+    // No explicit init: ensureInitialized() runs without a DatabaseManager,
+    // so queries must return empty without throwing or touching the network.
     const apps = await listApps()
     expect(apps).toEqual([])
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://openkursar.github.io/digital-human-protocol/index.json",
-      expect.any(Object)
-    )
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it("checks updates against the installed app registry when slugs collide", async () => {
-    initRegistryService()
-
-    const custom = addRegistry({
-      name: "Custom Registry",
-      url: "https://example.com/registry",
-      enabled: true,
-    })
-
     const officialIndex: RegistryIndex = {
       version: 1,
       generated_at: "2026-02-24T00:00:00.000Z",
@@ -151,9 +157,19 @@ describe("registry.service", () => {
       if (url === "https://example.com/registry/index.json") {
         return jsonResponse(customIndex)
       }
-      throw new Error(`Unexpected URL: ${url}`)
+      return notFoundResponse()
     })
 
+    const settled = trackSyncSettled()
+    initRegistryService({ db })
+
+    const custom = addRegistry({
+      name: "Custom Registry",
+      url: "https://example.com/registry",
+      enabled: true,
+    })
+
+    await vi.waitFor(() => expect(settled).toContain("official"))
     await refreshIndex()
 
     const updates = await checkUpdates([
@@ -176,8 +192,6 @@ describe("registry.service", () => {
   })
 
   it("re-fetches spec when cached version does not match latest index", async () => {
-    initRegistryService()
-
     const indexV1: RegistryIndex = {
       version: 1,
       generated_at: "2026-02-24T00:00:00.000Z",
@@ -237,9 +251,13 @@ store:
       if (url === "https://openkursar.github.io/digital-human-protocol/packages/digital-humans/cache-app/spec.yaml") {
         return textResponse(currentSpec)
       }
-      throw new Error(`Unexpected URL: ${url}`)
+      return notFoundResponse()
     })
 
+    const settled = trackSyncSettled()
+    initRegistryService({ db })
+
+    await vi.waitFor(() => expect(settled).toContain("official"))
     await refreshIndex()
     const first = await getAppDetail("cache-app")
     expect(first.spec.version).toBe("1.0.0")
@@ -258,8 +276,6 @@ store:
   })
 
   it("installs bundle app and persists store provenance metadata", async () => {
-    initRegistryService()
-
     const index: RegistryIndex = {
       version: 1,
       generated_at: "2026-02-24T00:00:00.000Z",
@@ -305,8 +321,14 @@ store:
       if (url === "https://openkursar.github.io/digital-human-protocol/packages/digital-humans/install-app/spec.yaml") {
         return textResponse(specYaml)
       }
-      throw new Error(`Unexpected URL: ${url}`)
+      return notFoundResponse()
     })
+
+    const settled = trackSyncSettled()
+    initRegistryService({ db })
+
+    await vi.waitFor(() => expect(settled).toContain("official"))
+    await refreshIndex()
 
     const appId = await installFromStore("install-app", "space-1", { threshold: 10 })
     expect(appId).toBe("app-installed-1")
@@ -321,9 +343,90 @@ store:
     })
   })
 
-  it("filters out legacy yaml entries from the merged index", async () => {
-    initRegistryService()
+  it("rolls back the installed app (deactivate → uninstall → deleteApp) when a required skill fails", async () => {
+    const index: RegistryIndex = {
+      version: 1,
+      generated_at: "2026-02-24T00:00:00.000Z",
+      source: "https://openkursar.github.io/digital-human-protocol",
+      apps: [
+        {
+          slug: "rollback-app",
+          name: "Rollback App",
+          version: "1.0.0",
+          author: "tester",
+          description: "Rollback test",
+          type: "automation",
+          format: "bundle",
+          path: "packages/digital-humans/rollback-app",
+          category: "other",
+          tags: [],
+        },
+      ],
+    }
 
+    // Declares a required skill that does not exist in any registry,
+    // forcing installRequiredSkills to fail after the app is installed.
+    const specYaml = `
+name: "Rollback App"
+version: "1.0.0"
+author: "tester"
+description: "Rollback test"
+type: automation
+system_prompt: "run"
+requires:
+  skills:
+    - missing-skill
+store:
+  slug: "rollback-app"
+  category: "other"
+`
+
+    const installSpy = vi.fn().mockResolvedValue("app-rollback-1")
+    const uninstallSpy = vi.fn().mockResolvedValue(undefined)
+    const deleteAppSpy = vi.fn().mockResolvedValue(undefined)
+    getAppManagerMock.mockReturnValue({
+      install: installSpy,
+      uninstall: uninstallSpy,
+      deleteApp: deleteAppSpy,
+    })
+
+    const activateSpy = vi.fn().mockResolvedValue(undefined)
+    const deactivateSpy = vi.fn().mockResolvedValue(undefined)
+    getAppRuntimeMock.mockReturnValue({
+      activate: activateSpy,
+      deactivate: deactivateSpy,
+    })
+
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input)
+      if (url === "https://openkursar.github.io/digital-human-protocol/index.json") {
+        return jsonResponse(index)
+      }
+      if (url === "https://openkursar.github.io/digital-human-protocol/packages/digital-humans/rollback-app/spec.yaml") {
+        return textResponse(specYaml)
+      }
+      return notFoundResponse()
+    })
+
+    const settled = trackSyncSettled()
+    initRegistryService({ db })
+
+    await vi.waitFor(() => expect(settled).toContain("official"))
+    await refreshIndex()
+
+    await expect(installFromStore("rollback-app", "space-1")).rejects.toThrow(
+      /Installation of "Rollback App" failed.*missing-skill/
+    )
+
+    // Rollback must observe deleteApp's precondition (status === 'uninstalled')
+    expect(deactivateSpy).toHaveBeenCalledWith("app-rollback-1")
+    expect(uninstallSpy).toHaveBeenCalledWith("app-rollback-1")
+    expect(deleteAppSpy).toHaveBeenCalledWith("app-rollback-1")
+    expect(Math.min(...uninstallSpy.mock.invocationCallOrder))
+      .toBeLessThan(Math.min(...deleteAppSpy.mock.invocationCallOrder))
+  })
+
+  it("filters out legacy yaml entries from the merged index", async () => {
     // Deliberately inject legacy format data to verify runtime filtering.
     const index = {
       version: 1,
@@ -350,8 +453,16 @@ store:
       if (url === "https://openkursar.github.io/digital-human-protocol/index.json") {
         return jsonResponse(index)
       }
-      throw new Error(`Unexpected URL: ${url}`)
+      return notFoundResponse()
     })
+
+    const settled = trackSyncSettled()
+    initRegistryService({ db })
+
+    // The empty-list assertion is only meaningful after the official sync has
+    // actually ingested (and filtered) the legacy index — wait for it.
+    await vi.waitFor(() => expect(settled).toContain("official"))
+    await refreshIndex()
 
     const apps = await listApps()
     expect(apps).toEqual([])
@@ -479,6 +590,27 @@ store:
       initRegistryService()
 
       expect(getRegistries().find(r => r.id === "smithery")).toBeUndefined()
+    })
+  })
+
+  describe("addRegistry host policy", () => {
+    it("accepts a public https registry URL", () => {
+      initRegistryService()
+      const reg = addRegistry({ name: "Public", url: "https://registry.example.com", enabled: true })
+      expect(reg.url).toBe("https://registry.example.com")
+    })
+
+    it.each([
+      "http://127.0.0.1:8080",
+      "http://localhost/registry",
+      "http://10.1.2.3",
+      "http://192.168.0.5",
+      "http://172.16.9.9",
+      "http://169.254.169.254/latest/meta-data",
+      "http://[::1]/registry",
+    ])("rejects loopback/private/link-local host %s", (url) => {
+      initRegistryService()
+      expect(() => addRegistry({ name: "Bad", url, enabled: true })).toThrow(/public host/i)
     })
   })
 })

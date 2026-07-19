@@ -76,6 +76,31 @@ const CLAUDE_API_BASE = 'https://api.anthropic.com'
 const TOKEN_REFRESH_THRESHOLD_MS = 5 * 60 * 1000
 
 // ============================================================================
+// Model Catalog
+// ============================================================================
+
+/**
+ * Claude OAuth model catalog (same models as regular Anthropic API).
+ * [1m] suffix indicates 1M context window variant (stripped before API call).
+ */
+const CLAUDE_MODELS: Record<string, string> = {
+  'claude-mythos-preview': 'Claude Mythos (Preview)',
+  'claude-fable-5': 'Claude Fable 5',
+  'claude-fable-5[1m]': 'Claude Fable 5 (1M context)',
+  'claude-opus-4-8': 'Claude Opus 4.8',
+  'claude-opus-4-8[1m]': 'Claude Opus 4.8 (1M context)',
+  'claude-opus-4-7': 'Claude Opus 4.7',
+  'claude-opus-4-7[1m]': 'Claude Opus 4.7 (1M context)',
+  'claude-opus-4-6': 'Claude Opus 4.6',
+  'claude-opus-4-6[1m]': 'Claude Opus 4.6 (1M context)',
+  'claude-opus-4-5-20251101': 'Claude Opus 4.5',
+  'claude-sonnet-4-6': 'Claude Sonnet 4.6',
+  'claude-sonnet-4-6[1m]': 'Claude Sonnet 4.6 (1M context)',
+  'claude-sonnet-4-5-20250929': 'Claude Sonnet 4.5',
+  'claude-haiku-4-5-20251001': 'Claude Haiku 4.5'
+}
+
+// ============================================================================
 // Beta Header Builder
 // ============================================================================
 
@@ -234,22 +259,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
   // ── Available Models ────────────────────────────────────────────────────────
 
   async getAvailableModels(_config: AISourcesConfig): Promise<string[]> {
-    // Claude OAuth uses the same models as regular Anthropic API
-    // [1m] suffix indicates 1M context window variant (stripped before API call)
-    return [
-      'claude-mythos-preview',
-      'claude-opus-4-8',
-      'claude-opus-4-8[1m]',
-      'claude-opus-4-7',
-      'claude-opus-4-7[1m]',
-      'claude-opus-4-6',
-      'claude-opus-4-6[1m]',
-      'claude-opus-4-5-20251101',
-      'claude-sonnet-4-6',
-      'claude-sonnet-4-6[1m]',
-      'claude-sonnet-4-5-20250929',
-      'claude-haiku-4-5-20251001'
-    ]
+    return Object.keys(CLAUDE_MODELS)
   }
 
   getUserInfo(config: AISourcesConfig): AISourceUserInfo | null {
@@ -386,20 +396,7 @@ class ClaudeProvider implements OAuthAISourceProvider {
 
       // Get available models
       const models = await this.getAvailableModels({} as AISourcesConfig)
-      const modelNames: Record<string, string> = {
-        'claude-mythos-preview': 'Claude Mythos (Preview)',
-        'claude-opus-4-8': 'Claude Opus 4.8',
-        'claude-opus-4-8[1m]': 'Claude Opus 4.8 (1M context)',
-        'claude-opus-4-7': 'Claude Opus 4.7',
-        'claude-opus-4-7[1m]': 'Claude Opus 4.7 (1M context)',
-        'claude-opus-4-6': 'Claude Opus 4.6',
-        'claude-opus-4-6[1m]': 'Claude Opus 4.6 (1M context)',
-        'claude-opus-4-5-20251101': 'Claude Opus 4.5',
-        'claude-sonnet-4-6': 'Claude Sonnet 4.6',
-        'claude-sonnet-4-6[1m]': 'Claude Sonnet 4.6 (1M context)',
-        'claude-sonnet-4-5-20250929': 'Claude Sonnet 4.5',
-        'claude-haiku-4-5-20251001': 'Claude Haiku 4.5'
-      }
+      const modelNames = CLAUDE_MODELS
       const defaultModel = 'claude-sonnet-4-6'
 
       const result: OAuthCompleteResult & {
@@ -548,27 +545,13 @@ class ClaudeProvider implements OAuthAISourceProvider {
 
     try {
       const models = await this.getAvailableModels(config)
-      const modelNames: Record<string, string> = {
-        'claude-mythos-preview': 'Claude Mythos (Preview)',
-        'claude-opus-4-8': 'Claude Opus 4.8',
-        'claude-opus-4-8[1m]': 'Claude Opus 4.8 (1M context)',
-        'claude-opus-4-7': 'Claude Opus 4.7',
-        'claude-opus-4-7[1m]': 'Claude Opus 4.7 (1M context)',
-        'claude-opus-4-6': 'Claude Opus 4.6',
-        'claude-opus-4-6[1m]': 'Claude Opus 4.6 (1M context)',
-        'claude-opus-4-5-20251101': 'Claude Opus 4.5',
-        'claude-sonnet-4-6': 'Claude Sonnet 4.6',
-        'claude-sonnet-4-6[1m]': 'Claude Sonnet 4.6 (1M context)',
-        'claude-sonnet-4-5-20250929': 'Claude Sonnet 4.5',
-        'claude-haiku-4-5-20251001': 'Claude Haiku 4.5'
-      }
       return {
         success: true,
         data: {
           'claude': {
             ...c,
             availableModels: models,
-            modelNames
+            modelNames: CLAUDE_MODELS
           }
         }
       }

@@ -26,7 +26,7 @@ export class Win32ProcessOps implements PlatformProcessOps {
       // Get-WmiObject provides access to full command line
       const psCommand = `powershell -NoProfile -Command "Get-WmiObject Win32_Process | Where-Object { $_.CommandLine -like '*${pattern}*' } | Select-Object ProcessId, Name, CommandLine | ConvertTo-Json -Compress"`
 
-      const { stdout } = await execAsync(psCommand, { timeout: 10000 })
+      const { stdout } = await execAsync(psCommand, { timeout: 10000, windowsHide: true })
 
       if (!stdout.trim()) {
         return []
@@ -68,7 +68,7 @@ export class Win32ProcessOps implements PlatformProcessOps {
       // /F forces termination (equivalent to SIGKILL)
       // /T terminates child processes
       const forceFlag = signal === 'SIGKILL' ? '/F ' : ''
-      await execAsync(`taskkill ${forceFlag}/PID ${pid} /T`, { timeout: 5000 })
+      await execAsync(`taskkill ${forceFlag}/PID ${pid} /T`, { timeout: 5000, windowsHide: true })
       console.log(`[Health][Win32] Killed process ${pid}`)
     } catch {
       // Goal-based validation: verify the process is gone regardless of error message
@@ -107,7 +107,7 @@ export class Win32ProcessOps implements PlatformProcessOps {
       // Use PowerShell to find processes with matching ParentProcessId
       const psCommand = `powershell -NoProfile -Command "Get-WmiObject Win32_Process | Where-Object { $_.ParentProcessId -eq ${ppid} } | Select-Object ProcessId, ParentProcessId, Name | ConvertTo-Json -Compress"`
 
-      const { stdout } = await execAsync(psCommand, { timeout: 10000 })
+      const { stdout } = await execAsync(psCommand, { timeout: 10000, windowsHide: true })
 
       if (!stdout.trim()) {
         return []

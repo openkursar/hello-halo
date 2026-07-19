@@ -52,6 +52,13 @@ export interface ApiCredentials {
    * defaults when this is missing.
    */
   capabilities?: ResolvedModelCapabilities
+  /**
+   * Provider-declared vision capability for the chosen model. Propagated into
+   * the encoded BackendConfig so the OpenAI-compat router strips image content
+   * for non-vision models instead of letting the upstream provider reject them
+   * with HTTP 400. undefined = router falls back to supportsVisionById. (#139)
+   */
+  supportsVision?: boolean
 }
 
 // ============================================

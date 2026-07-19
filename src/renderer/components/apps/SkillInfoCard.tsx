@@ -29,6 +29,7 @@ import {
   Check,
   ChevronDown,
   AlertCircle,
+  Share2,
 } from 'lucide-react'
 import { useAppsStore } from '../../stores/apps.store'
 import { useSpaceStore } from '../../stores/space.store'
@@ -38,6 +39,7 @@ import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import { CodeMirrorEditor } from '../canvas/viewers/CodeMirrorEditor'
 import { api } from '../../api'
+import { ShareCurrentAppDialog } from '../store/ShareCurrentAppDialog'
 import type { AppStatus } from '../../../shared/apps/app-types'
 import type { SkillSpec } from '../../../shared/apps/spec-types'
 
@@ -106,6 +108,7 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
   const [moving, setMoving]             = useState(false)
   const [moveError, setMoveError]       = useState<string | null>(null)
   const [dropdownOpen, setDropdownOpen] = useState(false)
+  const [showShareDialog, setShowShareDialog] = useState(false)
   const dropdownRef                     = useRef<HTMLDivElement>(null)
 
   // Close the space dropdown when the user clicks outside it
@@ -318,11 +321,20 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
 
         {/* Status indicator + inline toggle */}
         <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <AppStatusDot status={status} size="sm" />
               <span>{statusLabel(status, t)}</span>
             </div>
+            <button
+              type="button"
+              onClick={() => setShowShareDialog(true)}
+              title={t('Share')}
+              aria-label={t('Share')}
+              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+            </button>
             <button
               type="button"
               role="switch"
@@ -483,6 +495,13 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
           {t('Uninstall')}
         </button>
       </div>
+
+      {showShareDialog && (
+        <ShareCurrentAppDialog
+          appId={appId}
+          onClose={() => setShowShareDialog(false)}
+        />
+      )}
 
     </div>
   )

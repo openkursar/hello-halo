@@ -16,4 +16,5 @@ export const spaceRpc = {
   selectFolder: rawRpcMethod('dialog:select-folder'),
   updateSpacePreferences: rawRpcMethod('space:update-preferences'),
   getSpacePreferences: rawRpcMethod('space:get-preferences'),
+  reorderSpaces: rawRpcMethod('space:reorder'),
 }

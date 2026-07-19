@@ -34,7 +34,13 @@ describe('Tlon OCR', () => {
   beforeEach(() => {
     // The setup mock reports app.isPackaged=true, so tessdataDir resolves via
     // process.resourcesPath — undefined outside Electron. Point it at a dummy.
-    ;(process as { resourcesPath?: string }).resourcesPath = '/tmp/halo-test-resources'
+    // defineProperty (not plain assignment) so it survives environments where a
+    // dependency has already installed resourcesPath as a read-only property.
+    Object.defineProperty(process, 'resourcesPath', {
+      value: '/tmp/halo-test-resources',
+      configurable: true,
+      writable: true,
+    })
     createWorkerImpl = async () => ({
       recognize: async () => ({ data: { text: '' } }),
     })

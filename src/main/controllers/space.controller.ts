@@ -10,7 +10,8 @@ import {
   deleteSpace as serviceDeleteSpace,
   getSpaceWithPreferences as serviceGetSpaceWithPreferences,
   openSpaceFolder as serviceOpenSpaceFolder,
-  updateSpace as serviceUpdateSpace
+  updateSpace as serviceUpdateSpace,
+  reorderSpaces as serviceReorderSpaces
 } from '../services/space.service'
 
 export interface ControllerResponse<T = unknown> {
@@ -117,6 +118,19 @@ export function updateSpace(
       return { success: true, data: space }
     }
     return { success: false, error: 'Failed to update space' }
+  } catch (error: unknown) {
+    const err = error as Error
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Persist a user-defined space ordering.
+ */
+export function reorderSpaces(spaceIds: string[]): ControllerResponse {
+  try {
+    const spaces = serviceReorderSpaces(spaceIds)
+    return { success: true, data: spaces }
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }

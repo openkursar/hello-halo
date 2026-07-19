@@ -13,7 +13,27 @@
 
 import { browserViewManager } from '../browser-view.service'
 import { resolveEngines, type SearchEngine, type EngineName } from './engines'
-import type { SearchResult, SearchResponse, SearchOptions, RawExtractionResult } from './types'
+import type {
+  SearchResult,
+  SearchResponse,
+  SearchOptions,
+  RawExtractionResult,
+  SearchBlockReason,
+} from './types'
+
+// ============================================
+// Engine Execution Outcome
+// ============================================
+
+/**
+ * Result of attempting a search with a single engine.
+ *
+ * Separates a successful extraction from the distinct failure modes so the
+ * orchestrator can decide whether to fall back and what guidance to surface.
+ */
+type EngineOutcome =
+  | { ok: true; results: SearchResult[] }
+  | { ok: false; reason: SearchBlockReason }
 
 // ============================================
 // Constants
@@ -106,61 +126,74 @@ export class WebSearchContext {
     console.log(`[WebSearch] Starting search: "${query.slice(0, 50)}${query.length > 50 ? '...' : ''}"`)
     console.log(`[WebSearch] Engines to try: ${engines.map(e => e.name).join(', ')}`)
 
-    let lastError: Error | null = null
+    let lastReason: SearchBlockReason = 'no_results'
+    let lastEngine: SearchEngine = engines[0]
 
     // Try each engine in order
     for (const engine of engines) {
+      lastEngine = engine
       try {
         console.log(`[WebSearch] Trying engine: ${engine.displayName}`)
 
-        const results = await this.executeSearch(engine, query, maxResults, timeout)
+        const outcome = await this.executeSearch(engine, query, maxResults, timeout)
 
-        if (results.length > 0) {
+        if (outcome.ok) {
           const searchTime = Date.now() - startTime
-          console.log(`[WebSearch] Success: ${results.length} results from ${engine.displayName} in ${searchTime}ms`)
+          console.log(`[WebSearch] Success: ${outcome.results.length} results from ${engine.displayName} in ${searchTime}ms`)
 
           return {
             query,
             engine: engine.name,
-            results,
+            results: outcome.results,
             searchTime,
           }
         }
 
-        console.log(`[WebSearch] ${engine.displayName} returned no results, trying next engine`)
+        lastReason = outcome.reason
+        console.log(`[WebSearch] ${engine.displayName} failed (${outcome.reason}), trying next engine`)
       } catch (error) {
-        lastError = error as Error
-        console.warn(`[WebSearch] ${engine.displayName} failed:`, (error as Error).message)
+        // Unexpected error (not a handled outcome): treat as unreachable.
+        lastReason = 'unreachable'
+        console.warn(`[WebSearch] ${engine.displayName} threw:`, (error as Error).message)
         // Continue to next engine
       }
     }
 
-    // All engines failed
+    // All engines failed: surface a structured, actionable failure.
     const searchTime = Date.now() - startTime
-    const errorMessage = lastError?.message || 'No results found'
+    const guidance = lastEngine.buildBlockGuidance(lastReason, query)
 
-    console.error(`[WebSearch] All engines failed after ${searchTime}ms: ${errorMessage}`)
+    console.error(`[WebSearch] All engines failed after ${searchTime}ms (${lastReason})`)
 
-    // Return empty results with warning instead of throwing
-    // This provides a better UX - the AI can still respond
+    // Return empty results with structured guidance instead of throwing, so the
+    // AI can reason about the next step (retry another engine, ask the user).
     return {
       query,
-      engine: engines[0]?.name || 'unknown',
+      engine: lastEngine.name,
       results: [],
       searchTime,
-      warning: `Search failed: ${errorMessage}`,
+      blocked: {
+        reason: lastReason,
+        engine: lastEngine.name,
+        guidance,
+      },
+      warning: guidance,
     }
   }
 
   /**
-   * Execute search with a specific engine
+   * Execute search with a specific engine.
+   *
+   * Returns a structured {@link EngineOutcome} rather than throwing, so the
+   * orchestrator can distinguish success from each failure mode (unreachable,
+   * captcha/consent, layout change, no results).
    */
   private async executeSearch(
     engine: SearchEngine,
     query: string,
     maxResults: number,
     timeout: number
-  ): Promise<SearchResult[]> {
+  ): Promise<EngineOutcome> {
     const viewId = generateViewId()
     this.activeViews.add(viewId)
 
@@ -179,9 +212,26 @@ export class WebSearchContext {
         throw new Error('Failed to get webContents for search view')
       }
 
-      // Navigate to search URL
+      // Seed engine cookies (consent/region) on this session before navigating.
+      await this.applyCookieSeeds(webContents.session, engine)
+
+      // Navigate to search URL. A navigation failure means the engine host is
+      // unreachable (network/proxy) — a distinct, actionable outcome.
       console.log(`[WebSearch] Navigating to search page...`)
-      await this.navigateWithTimeout(webContents, searchUrl, PAGE_LOAD_TIMEOUT)
+      try {
+        await this.navigateWithTimeout(webContents, searchUrl, PAGE_LOAD_TIMEOUT)
+      } catch (navError) {
+        console.warn(`[WebSearch] ${engine.displayName} navigation failed:`, (navError as Error).message)
+        return { ok: false, reason: 'unreachable' }
+      }
+
+      // Early block detection: a verification/consent page never renders
+      // results, so fail fast before waiting on the results selector.
+      const earlyReason = await this.detectBlock(webContents, engine)
+      if (earlyReason === 'captcha') {
+        console.warn(`[WebSearch] ${engine.displayName} served a verification/consent page`)
+        return { ok: false, reason: 'captcha' }
+      }
 
       // Wait for results to appear
       console.log(`[WebSearch] Waiting for results selector: ${engine.waitForSelector}`)
@@ -210,10 +260,73 @@ export class WebSearchContext {
       const results = engine.postProcess(rawResults)
       console.log(`[WebSearch] Extracted ${rawResults.length} raw, ${results.length} after processing`)
 
-      return results
+      if (results.length > 0) {
+        return { ok: true, results }
+      }
+
+      // No results: re-check for a block to distinguish a layout change (page
+      // present but unparseable) from a genuine empty result set.
+      const lateReason = await this.detectBlock(webContents, engine)
+      return { ok: false, reason: lateReason ?? 'no_results' }
     } finally {
       // Always clean up the view
       await this.cleanupView(viewId)
+    }
+  }
+
+  /**
+   * Seed an engine's cookies (consent/region) into the session before loading.
+   *
+   * Best-effort: a failed seed is logged and ignored so it never aborts the
+   * search. Engines that need no cookies (the default) skip this entirely.
+   */
+  private async applyCookieSeeds(
+    ses: Electron.Session,
+    engine: SearchEngine
+  ): Promise<void> {
+    const seeds = engine.cookieSeeds()
+    if (seeds.length === 0) return
+
+    const defaultExpiry = Math.floor(Date.now() / 1000) + 365 * 24 * 3600
+    await Promise.all(
+      seeds.map(seed =>
+        ses.cookies
+          .set({
+            url: seed.url,
+            name: seed.name,
+            value: seed.value,
+            domain: seed.domain,
+            path: seed.path ?? '/',
+            secure: seed.url.startsWith('https'),
+            expirationDate: seed.expirationDate ?? defaultExpiry,
+          })
+          .catch(error =>
+            console.warn(`[WebSearch] Cookie seed failed (${seed.name}):`, (error as Error).message)
+          )
+      )
+    )
+  }
+
+  /**
+   * Run an engine's block-detection script against the loaded page.
+   *
+   * @returns A {@link SearchBlockReason} when the page is blocked/unparseable,
+   *   or null when it looks healthy or the engine has no detection script.
+   */
+  private async detectBlock(
+    webContents: Electron.WebContents,
+    engine: SearchEngine
+  ): Promise<SearchBlockReason | null> {
+    const script = engine.buildBlockDetectionScript()
+    if (!script) return null
+    try {
+      const reason = await webContents.executeJavaScript(script)
+      if (reason === 'captcha' || reason === 'layout_changed' || reason === 'unreachable' || reason === 'no_results') {
+        return reason
+      }
+      return null
+    } catch {
+      return null
     }
   }
 

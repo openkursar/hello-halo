@@ -439,6 +439,25 @@ export function registerAppsRoutes(app: Express): void {
     }
   })
 
+  // POST /api/apps/:appId/runs/:runId/inject — inject user text into an active run
+  app.post('/api/apps/:appId/runs/:runId/inject', async (req: Request, res: Response) => {
+    try {
+      const { appId, runId } = req.params
+      const { text } = req.body as { text?: string }
+      if (!appId || !runId || !text) {
+        res.status(400).json({ success: false, error: 'Missing appId, runId, or text' })
+        return
+      }
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      await runtime.injectIntoRun(appId, runId, text)
+      console.log('[HTTP] POST /api/apps/%s/runs/%s/inject', appId, runId)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // GET /api/apps/:appId/runs/:runId/session — get session messages for "View process"
   app.get('/api/apps/:appId/runs/:runId/session', async (req: Request, res: Response) => {
     try {
@@ -535,6 +554,67 @@ export function registerAppsRoutes(app: Express): void {
         runtime.syncAppSubscriptions(appId)
       }
 
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/permissions/grant — grant an app permission
+  app.post('/api/apps/:appId/permissions/grant', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      const { permission } = req.body as { permission?: string }
+      if (!appId || !permission) {
+        res.status(400).json({ success: false, error: 'Missing appId or permission' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      manager.grantPermission(appId, permission)
+      console.log('[HTTP] POST /api/apps/%s/permissions/grant: permission=%s', appId, permission)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/upgrade-strategy — update store upgrade strategy
+  app.post('/api/apps/:appId/upgrade-strategy', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      const { strategy } = req.body as { strategy?: 'auto' | 'notify' | 'manual' }
+      if (!strategy) {
+        res.status(400).json({ success: false, error: 'Missing strategy' })
+        return
+      }
+      manager.setUpgradeStrategy(appId, strategy)
+      console.log('[HTTP] POST /api/apps/%s/upgrade-strategy: strategy=%s', appId, strategy)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/permissions/revoke — revoke an app permission
+  app.post('/api/apps/:appId/permissions/revoke', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      const { permission } = req.body as { permission?: string }
+      if (!appId || !permission) {
+        res.status(400).json({ success: false, error: 'Missing appId or permission' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      manager.revokePermission(appId, permission)
+      console.log('[HTTP] POST /api/apps/%s/permissions/revoke: permission=%s', appId, permission)
       res.json({ success: true })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
