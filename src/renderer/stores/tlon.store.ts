@@ -63,6 +63,33 @@ const TLON_CHAT_SPACE = 'halo-temp'
 const RAW_FILES_PULL_INTERVAL_MS = 1000
 const rawFilesPullTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+/**
+ * Failsafe for a KB chat turn: the turn is settled by the agent:complete/error
+ * event, but a dropped or unobserved terminal event would otherwise spin the
+ * "Searching…" indicator forever. A watchdog, rearmed on every activity event,
+ * recovers only when the stream has gone completely silent — a live turn streams
+ * thoughts continuously, so this never cuts a legitimately long turn short.
+ */
+const CHAT_STALL_TIMEOUT_MS = 120_000
+const chatWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function clearChatWatchdog(kbId: string): void {
+  const timer = chatWatchdogTimers.get(kbId)
+  if (timer) {
+    clearTimeout(timer)
+    chatWatchdogTimers.delete(kbId)
+  }
+}
+
+function armChatWatchdog(kbId: string, onStall: () => void): void {
+  clearChatWatchdog(kbId)
+  const timer = setTimeout(() => {
+    chatWatchdogTimers.delete(kbId)
+    onStall()
+  }, CHAT_STALL_TIMEOUT_MS)
+  chatWatchdogTimers.set(kbId, timer)
+}
+
 interface TlonState {
   // ── Data ─────────────────────────────────
   kbs: KnowledgeBaseEntry[]
@@ -470,6 +497,8 @@ export const useTlonStore = create<TlonState>((set, get) => ({
         },
       },
     }))
+    // Recover if the terminal event is never observed (see CHAT_STALL_TIMEOUT_MS).
+    armChatWatchdog(kbId, () => void get().finalizeChatTurn(kbId))
 
     try {
       const res = await api.sendMessage({
@@ -488,6 +517,7 @@ export const useTlonStore = create<TlonState>((set, get) => ({
   },
 
   clearChat: async (kbId) => {
+    clearChatWatchdog(kbId)
     const conversationId = get().chatSessions[kbId]?.conversationId
     set(state => ({
       chatSessions: { ...state.chatSessions, [kbId]: { messages: [], generating: false } },
@@ -514,6 +544,8 @@ export const useTlonStore = create<TlonState>((set, get) => ({
       set(state => {
         const session = state.chatSessions[kbId]
         if (!session?.generating) return {}
+        // Live activity — push the stall watchdog back.
+        armChatWatchdog(kbId, () => void get().finalizeChatTurn(kbId))
         return { chatSessions: { ...state.chatSessions, [kbId]: { ...session, status } } }
       })
     }
@@ -575,6 +607,7 @@ export const useTlonStore = create<TlonState>((set, get) => ({
     // Skip if the turn already settled (e.g. agent:error fired before this
     // agent:complete) so we don't append a duplicate bubble.
     if (!session?.generating) return
+    clearChatWatchdog(kbId)
     const conversationId = session.conversationId
     if (!conversationId) return
     let answer = ''
@@ -624,6 +657,7 @@ export const useTlonStore = create<TlonState>((set, get) => ({
   },
 
   pushAssistantError: (kbId, message) => {
+    clearChatWatchdog(kbId)
     set(state => {
       const session = state.chatSessions[kbId]
       if (!session) return {}

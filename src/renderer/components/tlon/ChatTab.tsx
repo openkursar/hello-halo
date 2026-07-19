@@ -25,7 +25,6 @@ export function ChatTab({ kb }: ChatTabProps) {
   const session = useTlonStore(s => s.chatSessions[kb.id])
   const sendChatMessage = useTlonStore(s => s.sendChatMessage)
   const clearChat = useTlonStore(s => s.clearChat)
-  const subscribeChatEvents = useTlonStore(s => s.subscribeChatEvents)
 
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -34,7 +33,8 @@ export function ChatTab({ kb }: ChatTabProps) {
   const generating = session?.generating ?? false
   const hasSources = kb.stats.rawFileCount > 0
 
-  useEffect(() => subscribeChatEvents(), [subscribeChatEvents])
+  // Agent events are subscribed globally in App.tsx (not here) so a turn that
+  // completes while this tab is unmounted still settles.
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })

@@ -665,9 +665,14 @@ export default function App() {
       const { kbId } = data as { kbId: string }
       if (kbId) useTlonStore.getState().handleStatsUpdated(kbId)
     })
+    // KB chat turns settle on agent:complete/error. Subscribe globally (like the
+    // main chat, not per-tab) so completion is never missed when the user leaves
+    // the chat tab mid-turn — otherwise the "Searching…" indicator hangs forever.
+    const unsubChat = useTlonStore.getState().subscribeChatEvents()
     return () => {
       unsubProgress()
       unsubStats()
+      unsubChat()
     }
   }, [])
 
