@@ -18,6 +18,9 @@ import {
   existsSync,
   appendFileSync,
   mkdirSync,
+  openSync,
+  readSync,
+  closeSync,
 } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
 import { sendToRenderer } from '../../foundation/window.service'
@@ -83,8 +86,8 @@ export function getIngestProgress(kbId: string): IngestProgressEvent {
 // ============================================================================
 
 /**
- * Append jobs to a KB's queue. Does NOT start processing — callers that want
- * a correct batch total must enqueue everything first, then call processQueue.
+ * Append jobs to a KB's queue. Does NOT start processing. Safe to call while a
+ * batch is running: processQueue drains the live array and recomputes totals.
  */
 export function enqueueFiles(
   kbId: string,
@@ -106,8 +109,8 @@ export function enqueueFiles(
 }
 
 /**
- * Enqueue ALL changed raw + linked files for a KB, set the batch total once,
- * then start processing. This is the user-triggered "Learn everything" path.
+ * Enqueue ALL changed raw + linked files for a KB, then start processing.
+ * This is the user-triggered "Learn everything" path.
  */
 export async function triggerFullIngest(kbId: string): Promise<void> {
   const kb = getKB(kbId)
@@ -170,41 +173,52 @@ export async function migrateKBsToTextIndex(): Promise<void> {
  * sequential so progress is monotonic and writes stay simple; each step is
  * cheap (no model call).
  */
+function fileName(sourcePath: string): string {
+  return sourcePath.split(sep).pop() || sourcePath
+}
+
 export async function processQueue(kbId: string): Promise<void> {
   if (processing.has(kbId)) return
   const queue = queues.get(kbId)
   if (!queue || queue.length === 0) return
 
   processing.add(kbId)
-  const total = queue.length
   let completed = 0
+  const errors: Array<{ file: string; message: string }> = []
 
-  const existing = progress.get(kbId)
-  if (!existing || existing.phase !== 'running' || existing.total < total) {
-    emitProgress({ kbId, total, completed: 0, phase: 'running' })
-  }
+  emitProgress({
+    kbId,
+    // Recomputed on every emit: the watcher may enqueue into this live queue
+    // mid-batch, so a total captured once would go stale (e.g. "7/5").
+    total: completed + queue.length,
+    completed,
+    current: fileName(queue[0].sourcePath),
+    phase: 'running',
+  })
 
   try {
     while (queue.length > 0) {
       const job = queue.shift() as IngestJob
-      emitProgress({
-        kbId,
-        total,
-        completed,
-        current: job.sourcePath.split(sep).pop() || job.sourcePath,
-        phase: 'running',
-      })
       try {
         await extractSource(kbId, job)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         console.error(`[Tlon] Extract failed for ${job.sourcePath}:`, message)
-        // One bad file is reported to the UI but must not error the whole KB —
-        // otherwise it drops out of agent injection (status must stay 'active').
-        emitProgress({ kbId, total, completed, phase: 'error', error: message })
+        // One bad file must not error the whole KB (status stays 'active', so
+        // it keeps being injected). Failures accumulate and ride every emit.
+        job.status = 'error'
+        job.error = message
+        errors.push({ file: fileName(job.sourcePath), message })
       }
       completed++
-      emitProgress({ kbId, total, completed, phase: 'running' })
+      emitProgress({
+        kbId,
+        total: completed + queue.length,
+        completed,
+        current: queue[0] ? fileName(queue[0].sourcePath) : undefined,
+        phase: 'running',
+        errors: errors.length > 0 ? [...errors] : undefined,
+      })
     }
   } finally {
     processing.delete(kbId)
@@ -214,7 +228,13 @@ export async function processQueue(kbId: string): Promise<void> {
   // Rebuild the document map once per batch (not per file) — O(n), not O(n^2).
   rebuildIndexMd(kbId)
   markIngestCompleted(kbId)
-  emitProgress({ kbId, total, completed, phase: 'done' })
+  emitProgress({
+    kbId,
+    total: completed,
+    completed,
+    phase: 'done',
+    errors: errors.length > 0 ? errors : undefined,
+  })
   emitStatsUpdated(kbId)
 }
 
@@ -246,14 +266,9 @@ async function extractSource(kbId: string, job: IngestJob): Promise<void> {
   }
   const contentHash = sha256(buf)
 
-  let fileContent: string
-  try {
-    fileContent = await extractText(job.absolutePath, buf)
-  } catch (error) {
-    console.warn(`[Tlon] Failed to extract ${job.sourcePath}: ${error instanceof Error ? error.message : String(error)}`)
-    job.status = 'skipped'
-    return
-  }
+  // Extraction failures propagate to processQueue, which records them on the
+  // batch's error list (the file stays unlearned and retries on the next scan).
+  const fileContent = await extractText(job.absolutePath, buf)
   if (!fileContent.trim()) {
     console.warn(`[Tlon] No text extracted from ${job.sourcePath}, skipping`)
     // Record the attempt so a text-less source (e.g. an image with no text) is
@@ -322,15 +337,34 @@ export function rebuildIndexMd(kbId: string): void {
   let md = `# ${kb.name}\n\n`
   md += `The source documents in this knowledge base. To answer, Grep/Glob and `
   md += `Read the document files below for exact passages, then cite the document by name.\n\n`
-  for (const doc of docs) {
+  for (const doc of docs.slice(0, INDEX_MAX_DOCS)) {
     let synopsis = ''
     try {
-      synopsis = firstProseLine(readFileSync(doc.absPath, 'utf-8'))
+      synopsis = firstProseLine(readFileHead(doc.absPath))
     } catch { /* ignore */ }
     md += `- **${doc.name}**${synopsis ? ` — ${synopsis}` : ''} — \`${doc.absPath}\`\n`
   }
+  if (docs.length > INDEX_MAX_DOCS) {
+    md += `\n…and ${docs.length - INDEX_MAX_DOCS} more documents — Glob \`${textDir}\` to list all.\n`
+  }
   md += '\n'
   writeFileSync(getKBIndexMdPath(kbId), md, 'utf-8')
+}
+
+/** Keeps the injected document map bounded for large KBs. */
+const INDEX_MAX_DOCS = 200
+const SYNOPSIS_READ_BYTES = 4096
+
+/** Read only the first bytes of a text file — synopses never need the whole document. */
+function readFileHead(path: string): string {
+  const fd = openSync(path, 'r')
+  try {
+    const buf = Buffer.alloc(SYNOPSIS_READ_BYTES)
+    const bytesRead = readSync(fd, buf, 0, SYNOPSIS_READ_BYTES, 0)
+    return buf.toString('utf-8', 0, bytesRead)
+  } finally {
+    closeSync(fd)
+  }
 }
 
 /** First non-empty prose line of extracted text (skips the source marker), capped. */

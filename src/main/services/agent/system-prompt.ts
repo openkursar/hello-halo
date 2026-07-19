@@ -525,11 +525,23 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
       + '- Each entry below is a document with a one-line synopsis and the path of its '
       + 'extracted text to Grep/Read.\n\n'
     for (const kb of ctx.knowledgeBases) {
-      prompt += `## ${kb.name}\n\n${kb.indexContent}\n\n`
+      prompt += `## ${kb.name}\n\n${truncateIndexContent(kb.indexContent)}\n\n`
     }
   }
 
   return prompt
+}
+
+// Last-resort guard against a pathologically large document map blowing up the
+// prompt; rebuildIndexMd already caps the doc count at the source.
+const KB_INDEX_MAX_CHARS = 24_000
+
+function truncateIndexContent(indexContent: string): string {
+  if (indexContent.length <= KB_INDEX_MAX_CHARS) return indexContent
+  // Cut on a line boundary so no half-written entry misleads the agent.
+  const cut = indexContent.lastIndexOf('\n', KB_INDEX_MAX_CHARS)
+  return indexContent.slice(0, cut > 0 ? cut : KB_INDEX_MAX_CHARS)
+    + '\n\n(Document list truncated — Glob the text directory above to list all documents.)'
 }
 
 /**
