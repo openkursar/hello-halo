@@ -71,6 +71,17 @@ export function registerAgentRoutes(app: Express): void {
     res.json(result)
   })
 
+  // Probe a single installed MCP app (native handshake, no agent session)
+  app.post('/api/agent/probe-mcp', async (req: Request, res: Response) => {
+    const { appId } = req.body ?? {}
+    if (typeof appId !== 'string' || !appId) {
+      res.status(400).json({ success: false, error: 'appId is required' })
+      return
+    }
+    const result = await agentController.probeMcpApp(appId)
+    res.json(result)
+  })
+
   // Engine capabilities — used by remote / Capacitor clients to mirror
   // the IPC surface added in `ipc/agent.ts`. The controller is left for
   // a future commit; we read the SDK directly to avoid drag-along

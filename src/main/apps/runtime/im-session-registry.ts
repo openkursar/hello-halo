@@ -17,6 +17,8 @@
 import { readFileSync, writeFile, mkdirSync } from 'fs'
 import { dirname } from 'path'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
+import { truncateUtf16Safe } from './text-truncate'
 
 // ============================================
 // Types
@@ -24,6 +26,32 @@ import type { ImSessionRecord } from '../../../shared/types/im-channel'
 
 /** Composite key for session lookup */
 type SessionKey = string
+
+// ============================================
+// Bounds (HTTP sessions only)
+// ============================================
+//
+// IM sessions are human-bounded and carry user intent, so they are never capped.
+// HTTP sessions use a caller-supplied conversationId, so a high-volume backend
+// can mint unbounded distinct sessions; these bounds apply to HTTP sessions ONLY.
+//
+// Eviction is safe: the registry holds only UI/notify metadata. The JSONL
+// transcript is keyed by conversationId independently, so an evicted HTTP
+// session still reads/writes via the API and re-registers on its next message.
+
+/** Max retained HTTP sessions per app (most-recently-active are kept). */
+const MAX_HTTP_SESSIONS_PER_APP = 500
+
+/** HTTP sessions idle longer than this are pruned. */
+const HTTP_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
+
+/**
+ * Throttle window for activity-only updates (lastActiveAt / lastMessage). These
+ * high-frequency writes are coalesced onto a timer rather than rewriting the
+ * whole file per message; losing a few seconds of them on an abrupt exit is
+ * harmless. Structural changes persist promptly via the microtask path instead.
+ */
+const SOFT_PERSIST_THROTTLE_MS = 5000
 
 // ============================================
 // Registry Implementation
@@ -36,8 +64,14 @@ export class ImSessionRegistry {
   /** File path for JSON persistence */
   private filePath: string
 
-  /** Whether a write is currently pending (coalesce rapid mutations) */
-  private writePending = false
+  /** There are in-memory changes not yet written to disk. */
+  private dirty = false
+
+  /** An immediate (microtask) flush is already queued. */
+  private microtaskScheduled = false
+
+  /** A throttled (soft) flush timer is pending, if any. */
+  private flushTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(filePath: string) {
     this.filePath = filePath
@@ -70,11 +104,15 @@ export class ImSessionRegistry {
       existing.lastActiveAt = Date.now()
       existing.instanceId = instanceId // Always update to latest instance
       if (opts?.lastSender !== undefined) existing.lastSender = opts.lastSender
-      if (opts?.lastMessage !== undefined) existing.lastMessage = opts.lastMessage.slice(0, 50)
+      if (opts?.lastMessage !== undefined) existing.lastMessage = truncateUtf16Safe(opts.lastMessage, 50)
+      // Activity-only update → throttled persist (high-frequency, low-value).
+      this.requestPersist(false)
     } else {
+      const source = classifySessionSource(channel)
       this.sessions.set(key, {
         appId,
         channel,
+        source,
         instanceId,
         chatId,
         chatType,
@@ -82,11 +120,79 @@ export class ImSessionRegistry {
         proactive: false,
         lastActiveAt: Date.now(),
         lastSender: opts?.lastSender,
-        lastMessage: opts?.lastMessage?.slice(0, 50),
+        lastMessage: opts?.lastMessage !== undefined ? truncateUtf16Safe(opts.lastMessage, 50) : undefined,
       })
+      // Bound HTTP-source growth before the new record is durably persisted.
+      if (source === 'http') {
+        this.enforceHttpLimits(appId)
+      }
+      // New session is a structural change → persist promptly.
+      this.requestPersist(true)
     }
+  }
 
-    this.schedulePersist()
+  // ── Native local sessions (source === 'local') ───────
+
+  /**
+   * Create a native client-side chat session record.
+   *
+   * These are the desktop user's extra chat windows for a digital human,
+   * addressed by "app-chat:{appId}:local:direct:{sessionUuid}". Idempotent:
+   * returns the existing record if the uuid is already registered.
+   *
+   * `displayName` is left empty by default so the renderer can localize the
+   * fallback label (first-message preview / "New chat") without a backend
+   * English string leaking into the UI.
+   */
+  createLocalSession(
+    appId: string,
+    sessionUuid: string,
+    opts?: { displayName?: string; forkOrigin?: string; pendingResumeSessionId?: string }
+  ): ImSessionRecord {
+    const key = this.buildKey(appId, LOCAL_SESSION_CHANNEL, sessionUuid)
+    const existing = this.sessions.get(key)
+    if (existing) return { ...existing }
+
+    const record: ImSessionRecord = {
+      appId,
+      channel: LOCAL_SESSION_CHANNEL,
+      source: 'local',
+      instanceId: '',
+      chatId: sessionUuid,
+      chatType: 'direct',
+      displayName: opts?.displayName ?? '',
+      proactive: false,
+      lastActiveAt: Date.now(),
+      forkOrigin: opts?.forkOrigin,
+      pendingResumeSessionId: opts?.pendingResumeSessionId,
+    }
+    this.sessions.set(key, record)
+    this.requestPersist(true)
+    return { ...record }
+  }
+
+  /**
+   * Peek the pending resume-and-fork source SDK session id for a session, if
+   * any. Consumed on the session's first message to branch a new SDK session
+   * from the source context. Peek (not consume) so a failed first attempt can
+   * retry; cleared via {@link clearPendingResume} only after the new forked
+   * session id is captured.
+   */
+  getPendingResume(appId: string, channel: string, chatId: string): string | undefined {
+    const session = this.sessions.get(this.buildKey(appId, channel, chatId))
+    return session?.pendingResumeSessionId
+  }
+
+  /**
+   * Clear a session's pending resume-and-fork marker once the fork has been
+   * established (new forked session id captured).
+   */
+  clearPendingResume(appId: string, channel: string, chatId: string): void {
+    const session = this.sessions.get(this.buildKey(appId, channel, chatId))
+    if (session?.pendingResumeSessionId) {
+      delete session.pendingResumeSessionId
+      this.requestPersist(true)
+    }
   }
 
   /**
@@ -101,7 +207,7 @@ export class ImSessionRegistry {
     if (!session) return false
 
     session.customName = name || undefined // empty string clears it
-    this.schedulePersist()
+    this.requestPersist(true)
     return true
   }
 
@@ -120,7 +226,7 @@ export class ImSessionRegistry {
     if (!session) return false
 
     session.proactive = proactive
-    this.schedulePersist()
+    this.requestPersist(true)
     return true
   }
 
@@ -134,10 +240,29 @@ export class ImSessionRegistry {
   getProactiveSessions(appId: string): ImSessionRecord[] {
     const result: ImSessionRecord[] = []
     for (const session of this.sessions.values()) {
-      if (session.appId === appId && session.proactive) {
+      // Only IM sessions have a channel adapter to push through.
+      if (session.appId === appId && session.proactive && session.source === 'im') {
         result.push({ ...session })
       }
     }
+    return result
+  }
+
+  /**
+   * Get all pushable IM sessions for a given app (source==='im').
+   *
+   * Used to build the notify_bot contact directory: the AI can only push to
+   * sessions backed by a live channel adapter. HTTP/API sessions are excluded
+   * here so they never appear as push targets.
+   */
+  getPushableSessions(appId: string): ImSessionRecord[] {
+    const result: ImSessionRecord[] = []
+    for (const session of this.sessions.values()) {
+      if (session.appId === appId && session.source === 'im') {
+        result.push({ ...session })
+      }
+    }
+    result.sort((a, b) => b.lastActiveAt - a.lastActiveAt)
     return result
   }
 
@@ -187,7 +312,7 @@ export class ImSessionRegistry {
     const key = this.buildKey(appId, channel, chatId)
     const deleted = this.sessions.delete(key)
     if (deleted) {
-      this.schedulePersist()
+      this.requestPersist(true)
     }
     return deleted
   }
@@ -205,9 +330,62 @@ export class ImSessionRegistry {
       }
     }
     if (count > 0) {
-      this.schedulePersist()
+      this.requestPersist(true)
     }
     return count
+  }
+
+  // ── Bounds enforcement (HTTP sessions) ───────────────
+
+  /**
+   * Prune expired HTTP sessions and enforce the per-app HTTP cap.
+   *
+   * Only HTTP-source sessions are considered; IM sessions are never touched.
+   * User-pinned HTTP sessions (those given a customName) are exempt from
+   * eviction so an explicit user action is never silently undone. Runs only
+   * when a *new* HTTP session is inserted, so the scan cost is bounded by the
+   * cap and is off the per-message activity path.
+   */
+  private enforceHttpLimits(appId: string): void {
+    const now = Date.now()
+    const httpForApp: { key: SessionKey; rec: ImSessionRecord }[] = []
+    for (const [key, rec] of this.sessions) {
+      if (rec.appId === appId && rec.source === 'http') {
+        httpForApp.push({ key, rec })
+      }
+    }
+
+    let evicted = 0
+
+    // 1. TTL prune (non-pinned, idle beyond TTL).
+    const survivors: { key: SessionKey; rec: ImSessionRecord }[] = []
+    for (const entry of httpForApp) {
+      if (!entry.rec.customName && now - entry.rec.lastActiveAt > HTTP_SESSION_TTL_MS) {
+        this.sessions.delete(entry.key)
+        evicted++
+      } else {
+        survivors.push(entry)
+      }
+    }
+
+    // 2. Cap enforce: drop oldest non-pinned survivors beyond the cap.
+    if (survivors.length > MAX_HTTP_SESSIONS_PER_APP) {
+      const overflow = survivors.length - MAX_HTTP_SESSIONS_PER_APP
+      const evictable = survivors
+        .filter(e => !e.rec.customName)
+        .sort((a, b) => a.rec.lastActiveAt - b.rec.lastActiveAt) // oldest first
+      for (let i = 0; i < overflow && i < evictable.length; i++) {
+        this.sessions.delete(evictable[i].key)
+        evicted++
+      }
+    }
+
+    if (evicted > 0) {
+      console.log(
+        `[ImSessionRegistry] Evicted ${evicted} HTTP session(s) for app ${appId} ` +
+        `(cap=${MAX_HTTP_SESSIONS_PER_APP}, ttl=${HTTP_SESSION_TTL_MS}ms)`
+      )
+    }
   }
 
   // ── Persistence ──────────────────────────────────────
@@ -229,6 +407,11 @@ export class ImSessionRegistry {
           if (!r.instanceId) {
             r.instanceId = ''
           }
+          // Backward compat: records persisted before `source` existed were
+          // all IM sessions; derive from the channel value for correctness.
+          if (!r.source) {
+            r.source = classifySessionSource(r.channel)
+          }
           const key = this.buildKey(r.appId, r.channel, r.chatId)
           this.sessions.set(key, r)
         }
@@ -241,17 +424,46 @@ export class ImSessionRegistry {
   }
 
   /**
-   * Schedule an async write to disk.
-   * Coalesces rapid mutations into a single write via microtask.
+   * Request a write to disk, coalescing rapid mutations.
+   *
+   * @param immediate - true for structural changes (new session, rename,
+   *   proactive, removal): flush on the next microtask. false for activity-only
+   *   updates (lastActiveAt / lastMessage): flush on a throttled timer so a
+   *   high-frequency message stream does not rewrite the whole file per
+   *   message. An already-queued immediate flush supersedes the throttled one.
    */
-  private schedulePersist(): void {
-    if (this.writePending) return
-    this.writePending = true
+  private requestPersist(immediate: boolean): void {
+    this.dirty = true
 
-    queueMicrotask(() => {
-      this.writePending = false
-      this.persist()
-    })
+    if (immediate) {
+      if (this.flushTimer) {
+        clearTimeout(this.flushTimer)
+        this.flushTimer = null
+      }
+      if (this.microtaskScheduled) return
+      this.microtaskScheduled = true
+      queueMicrotask(() => {
+        this.microtaskScheduled = false
+        this.flushIfDirty()
+      })
+      return
+    }
+
+    // Throttled (soft) path: skip if any flush is already pending.
+    if (this.microtaskScheduled || this.flushTimer) return
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null
+      this.flushIfDirty()
+    }, SOFT_PERSIST_THROTTLE_MS)
+    // Don't let a pending soft write keep the process alive at exit; losing a
+    // few seconds of activity metadata on shutdown is acceptable.
+    this.flushTimer.unref?.()
+  }
+
+  private flushIfDirty(): void {
+    if (!this.dirty) return
+    this.dirty = false
+    this.persist()
   }
 
   /** Write all sessions to disk (fire-and-forget). */

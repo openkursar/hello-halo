@@ -7,7 +7,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import { IncomingMessage } from 'http'
 import { randomBytes } from 'crypto'
 import { v4 as uuidv4 } from 'uuid'
-import { validateToken, parseCredentialType, verifyOfficeCredential, type CredentialType } from './auth/index'
+import { authenticateWebSocket, parseCredentialType, verifyOfficeCredential, type CredentialType } from './auth/index'
 import { resolveIdentity, type AuthProof } from './identity/index'
 import { getFederationStore, DEFAULT_OFFICE_SCOPE, type OfficeScope } from '../apps/federation/index'
 import { getTeamStore } from '../apps/team'
@@ -51,6 +51,8 @@ interface WebSocketClient {
   id: string
   ws: WebSocket
   authenticated: boolean
+  /** Socket address captured at upgrade time — feeds the auth lockout counters */
+  ip: string
   subscriptions: Set<string> // conversationIds this client is subscribed to
   credential: ClientCredential | null
   /** Outstanding federation-auth challenge, if any (one-shot, TTL-bound). */
@@ -150,6 +152,7 @@ export function initWebSocket(server: any): WebSocketServer {
       id: clientId,
       ws,
       authenticated: false,
+      ip: req.socket.remoteAddress || 'unknown',
       subscriptions: new Set(),
       credential: null,
       pendingChallenge: null,
@@ -329,7 +332,7 @@ function handleClientMessage(
           console.log(`[WS] Client ${client.id} authenticated (office viewer)`)
           break
         }
-      } else if (typeof token === 'string' && validateToken(token)) {
+      } else if (typeof token === 'string' && authenticateWebSocket(token, client.ip)) {
         client.authenticated = true
         client.credential = { type: 'remote-control' }
         sendToClient(client, { type: 'auth:success' })

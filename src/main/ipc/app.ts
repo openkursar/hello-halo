@@ -44,14 +44,20 @@ import {
   getAppRuntime,
   sendAppChatMessage,
   stopAppChat,
+  stopAppChatConversation,
   isAppChatGenerating,
+  isAppChatConversationGenerating,
   loadAppChatMessages,
   loadImChatMessages,
+  loadChatMessagesForConversation,
   getAppChatSessionState,
   getAppChatConversationId,
   clearAppChat,
   clearImSession,
   restartAppChat,
+  createNativeChatSession,
+  forkNativeChatSession,
+  deleteNativeChatSession,
 } from '../apps/runtime'
 import type { AppSpec } from '../apps/spec'
 import type { AppListFilter, UninstallOptions, UpgradeStrategy } from '../apps/manager'
@@ -538,10 +544,14 @@ export function registerAppHandlers(): void {
           const err = error as Error
           console.error(`[AppIPC] app:chat-send background error:`, err.message)
         })
-        console.log(`[AppIPC] app:chat-send: appId=${request.appId}`)
+        // Echo back the session actually addressed: the caller's explicit
+        // conversationId (native local / IM / HTTP session) or the app's
+        // native default when none was supplied.
+        const conversationId = request.conversationId ?? getAppChatConversationId(request.appId)
+        console.log(`[AppIPC] app:chat-send: appId=${request.appId} conversationId=${conversationId}`)
         return {
           success: true,
-          data: { conversationId: getAppChatConversationId(request.appId) }
+          data: { conversationId }
         }
       } catch (error: unknown) {
         const err = error as Error
@@ -552,10 +562,16 @@ export function registerAppHandlers(): void {
     },
 
     // ── app:chat-stop ──────────────────────────────────────────────────────
-    appChatStop: async (appId: string) => {
+    // Optional conversationId stops just that session (so sibling sessions keep
+    // generating); absent, it stops all of the app's chat sessions.
+    appChatStop: async (appId: string, conversationId?: string) => {
       try {
-        await stopAppChat(appId)
-        console.log(`[AppIPC] app:chat-stop: appId=${appId}`)
+        if (conversationId) {
+          await stopAppChatConversation(conversationId)
+        } else {
+          await stopAppChat(appId)
+        }
+        console.log(`[AppIPC] app:chat-stop: appId=${appId} conversationId=${conversationId ?? '(all)'}`)
         return { success: true }
       } catch (error: unknown) {
         const err = error as Error
@@ -565,13 +581,18 @@ export function registerAppHandlers(): void {
     },
 
     // ── app:chat-status ────────────────────────────────────────────────────
-    appChatStatus: async (appId: string) => {
+    // Optional conversationId narrows the check to one native/local/IM session;
+    // absent, it reports whether ANY session for the app is generating.
+    appChatStatus: async (appId: string, conversationId?: string) => {
       try {
+        const isGenerating = conversationId
+          ? isAppChatConversationGenerating(conversationId)
+          : isAppChatGenerating(appId)
         return {
           success: true,
           data: {
-            isGenerating: isAppChatGenerating(appId),
-            conversationId: getAppChatConversationId(appId),
+            isGenerating,
+            conversationId: conversationId ?? getAppChatConversationId(appId),
           }
         }
       } catch (error: unknown) {
@@ -582,13 +603,17 @@ export function registerAppHandlers(): void {
     },
 
     // ── app:chat-messages ──────────────────────────────────────────────────
-    appChatMessages: async (input: { appId: string; spaceId: string }) => {
+    // Optional conversationId loads a specific native/local session's history;
+    // absent, it loads the app's native default session.
+    appChatMessages: async (input: { appId: string; spaceId: string; conversationId?: string }) => {
       try {
         const space = getSpace(input.spaceId)
         if (!space?.path) {
           return { success: true, data: [] }
         }
-        const messages = loadAppChatMessages(space.path, input.appId)
+        const messages = input.conversationId
+          ? loadChatMessagesForConversation(space.path, input.appId, input.conversationId)
+          : loadAppChatMessages(space.path, input.appId)
         return { success: true, data: messages }
       } catch (error: unknown) {
         const err = error as Error
@@ -598,9 +623,9 @@ export function registerAppHandlers(): void {
     },
 
     // ── app:chat-session-state ─────────────────────────────────────────────
-    appChatSessionState: async (appId: string) => {
+    appChatSessionState: async (appId: string, conversationId?: string) => {
       try {
-        const state = getAppChatSessionState(appId)
+        const state = getAppChatSessionState(appId, conversationId)
         return { success: true, data: state }
       } catch (error: unknown) {
         const err = error as Error
@@ -610,10 +635,12 @@ export function registerAppHandlers(): void {
     },
 
     // ── app:chat-clear ────────────────────────────────────────────────────
-    appChatClear: async (input: { appId: string; spaceId: string }) => {
+    // Optional conversationId clears a specific native/local session; absent,
+    // it clears the app's native default session.
+    appChatClear: async (input: { appId: string; spaceId: string; conversationId?: string }) => {
       try {
-        await clearAppChat(input.appId, input.spaceId)
-        console.log(`[AppIPC] app:chat-clear: appId=${input.appId}`)
+        await clearAppChat(input.appId, input.spaceId, input.conversationId)
+        console.log(`[AppIPC] app:chat-clear: appId=${input.appId} conversationId=${input.conversationId ?? '(default)'}`)
         return { success: true }
       } catch (error: unknown) {
         const err = error as Error
@@ -663,6 +690,50 @@ export function registerAppHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:im-chat-clear error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:session-create ───────────────────────────────────────────────
+    // Create a fresh native client-side chat session for a digital human.
+    appSessionCreate: async (input: { appId: string }) => {
+      try {
+        const result = createNativeChatSession(input.appId)
+        console.log(`[AppIPC] app:session-create: appId=${input.appId} conversationId=${result.conversationId}`)
+        return { success: true, data: result }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:session-create error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:session-fork ─────────────────────────────────────────────────
+    // Fork an existing session (IM/http/local) into a new native local session
+    // that continues in the client with full prior context. Callers gate this
+    // on the engine's sessionFork capability.
+    appSessionFork: async (input: { appId: string; spaceId: string; sourceConversationId: string }) => {
+      try {
+        const result = forkNativeChatSession(input.appId, input.spaceId, input.sourceConversationId)
+        console.log(`[AppIPC] app:session-fork: appId=${input.appId} from=${input.sourceConversationId} to=${result.conversationId}`)
+        return { success: true, data: result }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:session-fork error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:session-delete ───────────────────────────────────────────────
+    // Delete a native local session (only 'local'-source keys are accepted).
+    appSessionDelete: async (input: { appId: string; spaceId: string; conversationId: string }) => {
+      try {
+        await deleteNativeChatSession(input.appId, input.spaceId, input.conversationId)
+        console.log(`[AppIPC] app:session-delete: appId=${input.appId} conversationId=${input.conversationId}`)
+        return { success: true }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:session-delete error:', err.message)
         return { success: false, error: err.message }
       }
     },

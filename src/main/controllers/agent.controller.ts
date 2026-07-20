@@ -10,6 +10,7 @@ import {
   getActiveSessions,
   getSessionState as agentGetSessionState,
   testMcpConnections as agentTestMcpConnections,
+  probeMcpApp as agentProbeMcpApp,
   resolveQuestion
 } from '../services/agent'
 
@@ -145,6 +146,18 @@ export async function testMcpConnections(): Promise<ControllerResponse> {
   try {
     const result = await agentTestMcpConnections()
     return result
+  } catch (error: unknown) {
+    const err = error as Error
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Probe a single installed MCP app (native handshake, no agent session)
+ */
+export async function probeMcpApp(appId: string): Promise<ControllerResponse> {
+  try {
+    return await agentProbeMcpApp(appId)
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }

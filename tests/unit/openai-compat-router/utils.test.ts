@@ -18,7 +18,7 @@ import {
   isNonEmptyArray,
   extractTextContent,
   mapValue
-} from '../utils'
+} from '../../../src/main/openai-compat-router/utils'
 
 describe('ID Generation', () => {
   describe('generateId', () => {

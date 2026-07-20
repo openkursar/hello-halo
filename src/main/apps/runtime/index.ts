@@ -58,6 +58,7 @@ import { onMcpAppsChange } from '../manager/service'
 import { createHaloAppsMcpServer } from '../conversation-mcp'
 import { registerAppBridge } from '../../services/app-bridge'
 import { handleMcpAppsChange } from '../../services/agent/session-manager'
+import { handleMcpAppsChangeForStatus } from '../../services/agent/mcp-probe'
 import type { AppRuntimeService } from './types'
 
 // Re-export types for consumers
@@ -93,9 +94,12 @@ export { Semaphore } from './concurrency'
 export {
   sendAppChatMessage,
   stopAppChat,
+  stopAppChatConversation,
   isAppChatGenerating,
+  isAppChatConversationGenerating,
   loadAppChatMessages,
   loadImChatMessages,
+  loadChatMessagesForConversation,
   getAppChatSessionState,
   getAppChatConversationId,
   buildImSessionKey,
@@ -103,8 +107,11 @@ export {
   clearAppChat,
   clearImSession,
   restartAppChat,
+  createNativeChatSession,
+  forkNativeChatSession,
+  deleteNativeChatSession,
 } from './app-chat'
-export type { AppChatRequest } from './app-chat'
+export type { AppChatRequest, NativeSessionResult } from './app-chat'
 
 // Re-export inbound dispatch
 export { dispatchInboundMessage } from './dispatch-inbound'
@@ -134,10 +141,10 @@ export { ImChannelManager } from './im-channels'
 
 let runtimeService: AppRuntimeService | null = null
 let memoryServiceRef: MemoryService | null = null
-let activityStoreRef: ActivityStore | null = null
 let eventRouterInstance: EventRouter | null = null
 let imChannelManagerInstance: ImChannelManager | null = null
 let imSessionRegistryInstance: ImSessionRegistry | null = null
+let activityStoreRef: ActivityStore | null = null
 
 // ============================================
 // Initialization
@@ -201,6 +208,9 @@ export async function initAppRuntime(
   // the MCP-apps-change event from this side.
   registerAppBridge({ getAppManager, createHaloAppsMcpServer, onMcpAppsChange })
   onMcpAppsChange(handleMcpAppsChange)
+  // Keep the shared MCP status cache honest: probe on enable/install/update,
+  // drop stale entries on pause/uninstall.
+  onMcpAppsChange(handleMcpAppsChangeForStatus)
 
   // Get the app-level database
   const appDb = deps.db.getAppDatabase()
@@ -210,6 +220,7 @@ export async function initAppRuntime(
 
   // Create the activity store
   const store = new ActivityStore(appDb)
+  activityStoreRef = store
 
   // ── Create and wire EventRouter ──────────────────────────────────────
   const eventRouter = createEventRouter()
@@ -320,7 +331,6 @@ export async function initAppRuntime(
 
   runtimeService = service
   memoryServiceRef = deps.memory
-  activityStoreRef = store
 
   const duration = performance.now() - start
   console.log(`[Runtime] App Runtime initialized in ${duration.toFixed(1)}ms`)
@@ -345,8 +355,8 @@ export function getAppMemoryService(): MemoryService | null {
 }
 
 /**
- * Get the activity store instance captured during init.
- * Used by app-chat.ts to provide report_to_user in chat mode.
+ * Get the ActivityStore instance captured during init.
+ * Used by app-chat.ts to provide report_to_user in team turns.
  */
 export function getActivityStore(): ActivityStore | null {
   return activityStoreRef
@@ -385,7 +395,6 @@ export async function shutdownAppRuntime(): Promise<void> {
     await runtimeService.deactivateAll()
     runtimeService = null
     memoryServiceRef = null
-    activityStoreRef = null
   }
 
   if (eventRouterInstance) {
@@ -400,6 +409,7 @@ export async function shutdownAppRuntime(): Promise<void> {
   }
 
   imSessionRegistryInstance = null
+  activityStoreRef = null
   setImSessionRegistry(null as any)
 
   // Clear all IM permission contexts (in-memory only, no persistence needed)

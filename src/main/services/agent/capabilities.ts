@@ -108,6 +108,14 @@ export interface EngineCapabilities {
     mcp: boolean
     hooks: boolean
     sessionResume: boolean
+    /**
+     * Whether the engine can branch a resumed session into a NEW session id
+     * (SDK `resume` + `forkSession: true`), so a copy can continue independently
+     * without polluting the source. CC and Halo SDK support this; Codex's
+     * `thread/resume` only continues the original thread, so it is false there.
+     * Gates the "continue in client" fork affordance.
+     */
+    sessionFork: boolean
     interrupt: boolean
     multimodalImage: boolean
     contextCompaction: boolean
@@ -148,6 +156,7 @@ export const ANTHROPIC_CAPABILITIES: EngineCapabilities = {
     mcp: true,
     hooks: true,
     sessionResume: true,
+    sessionFork: true,
     interrupt: true,
     multimodalImage: true,
     contextCompaction: true,

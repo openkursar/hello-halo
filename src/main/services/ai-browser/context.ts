@@ -42,6 +42,8 @@ import type {
 
 // Default timeout for CDP commands (ms)
 const CDP_TIMEOUT = 15_000
+// Timeout for the webContents.capturePage() screenshot fallback (ms)
+const CAPTURE_PAGE_TIMEOUT = 10_000
 // Default timeout for navigation operations (ms)
 const NAVIGATION_TIMEOUT = 30_000
 // Default timeout for element wait operations (ms)
@@ -1105,23 +1107,28 @@ export class BrowserContext implements BrowserContextInterface {
       const box = await getElementBoundingBox(webContents, element.backendNodeId)
 
       if (box) {
-        const response = await this.sendCDPCommand<{ data: string }>('Page.captureScreenshot', {
-          format,
-          quality,
-          clip: {
-            x: box.x,
-            y: box.y,
-            width: box.width,
-            height: box.height,
-            scale: 1
-          }
-        })
+        try {
+          const response = await this.sendCDPCommand<{ data: string }>('Page.captureScreenshot', {
+            format,
+            quality,
+            clip: {
+              x: box.x,
+              y: box.y,
+              width: box.width,
+              height: box.height,
+              scale: 1
+            }
+          })
 
-        return this.compressScreenshot(response.data, format)
+          return this.compressScreenshot(response.data, format)
+        } catch (cdpError) {
+          return this.captureViaFallback(webContents, cdpError, box)
+        }
       }
     }
 
     // Full page or viewport screenshot
+    const webContents = this.getWebContents()
     const params: Record<string, unknown> = { format, quality }
 
     if (options?.fullPage) {
@@ -1140,9 +1147,61 @@ export class BrowserContext implements BrowserContextInterface {
       params.captureBeyondViewport = true
     }
 
-    const response = await this.sendCDPCommand<{ data: string }>('Page.captureScreenshot', params)
+    try {
+      const response = await this.sendCDPCommand<{ data: string }>('Page.captureScreenshot', params)
+      return this.compressScreenshot(response.data, format)
+    } catch (cdpError) {
+      return this.captureViaFallback(webContents, cdpError)
+    }
+  }
 
-    return this.compressScreenshot(response.data, format)
+  /**
+   * Fallback for when CDP Page.captureScreenshot stalls because the view's
+   * compositor produces no frame (hidden / occluded / off-screen — common for
+   * background AI automation, and aggravated on Windows by native occlusion
+   * tracking). webContents.capturePage() issues an active surface-copy request
+   * rather than waiting for a new frame, so it succeeds where CDP hangs.
+   *
+   * Limitations: capturePage cannot reach beyond the visible viewport, so a
+   * fullPage request degrades to the viewport area. If the fallback also fails,
+   * the original CDP error is rethrown so callers report the real cause.
+   */
+  private async captureViaFallback(
+    webContents: Electron.WebContents | null,
+    cdpError: unknown,
+    rect?: { x: number; y: number; width: number; height: number }
+  ): Promise<{ data: string; mimeType: string }> {
+    if (!webContents) throw cdpError
+
+    try {
+      const clip = rect
+        ? {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height)
+          }
+        : undefined
+
+      const image = await withTimeout(
+        clip ? webContents.capturePage(clip) : webContents.capturePage(),
+        CAPTURE_PAGE_TIMEOUT,
+        'webContents.capturePage'
+      )
+
+      if (image.isEmpty()) {
+        throw new Error('capturePage returned an empty image')
+      }
+
+      console.warn(
+        '[AI Browser] CDP screenshot failed, used capturePage fallback:',
+        (cdpError as Error)?.message
+      )
+      return this.finalizeImage(image)
+    } catch (fallbackError) {
+      console.error('[AI Browser] Screenshot fallback (capturePage) also failed:', fallbackError)
+      throw cdpError
+    }
   }
 
   /**
@@ -1165,34 +1224,41 @@ export class BrowserContext implements BrowserContextInterface {
         return { data: base64Data, mimeType: this.getMimeType(requestedFormat) }
       }
 
+      // Already JPEG and within size — return original bytes to avoid re-encode
       const { width, height } = img.getSize()
       const maxDim = BrowserContext.SCREENSHOT_MAX_DIMENSION
-      const needsResize = width > maxDim || height > maxDim
-
-      if (needsResize) {
-        const ratio = Math.min(maxDim / width, maxDim / height)
-        const resized = img.resize({
-          width: Math.round(width * ratio),
-          height: Math.round(height * ratio),
-          quality: 'better'
-        })
-        const jpegBuf = resized.toJPEG(BrowserContext.SCREENSHOT_DEFAULT_QUALITY)
-        return { data: jpegBuf.toString('base64'), mimeType: 'image/jpeg' }
+      if (requestedFormat === 'jpeg' && width <= maxDim && height <= maxDim) {
+        return { data: base64Data, mimeType: 'image/jpeg' }
       }
 
-      // No resize needed — still convert to JPEG if not already
-      if (requestedFormat !== 'jpeg') {
-        const jpegBuf = img.toJPEG(BrowserContext.SCREENSHOT_DEFAULT_QUALITY)
-        return { data: jpegBuf.toString('base64'), mimeType: 'image/jpeg' }
-      }
-
-      // Already JPEG and within size — return as-is
-      return { data: base64Data, mimeType: 'image/jpeg' }
+      return this.finalizeImage(img)
     } catch (error) {
       // Compression failed — return original to avoid breaking the tool
       console.warn('[AI Browser] Screenshot compression failed, using original:', error)
       return { data: base64Data, mimeType: this.getMimeType(requestedFormat) }
     }
+  }
+
+  /**
+   * Normalize a decoded image to JPEG output within the API size bound,
+   * resizing if either dimension exceeds SCREENSHOT_MAX_DIMENSION. Shared by
+   * the CDP compression path and the capturePage fallback.
+   */
+  private finalizeImage(img: Electron.NativeImage): { data: string; mimeType: string } {
+    const { width, height } = img.getSize()
+    const maxDim = BrowserContext.SCREENSHOT_MAX_DIMENSION
+
+    if (width > maxDim || height > maxDim) {
+      const ratio = Math.min(maxDim / width, maxDim / height)
+      img = img.resize({
+        width: Math.round(width * ratio),
+        height: Math.round(height * ratio),
+        quality: 'better'
+      })
+    }
+
+    const jpegBuf = img.toJPEG(BrowserContext.SCREENSHOT_DEFAULT_QUALITY)
+    return { data: jpegBuf.toString('base64'), mimeType: 'image/jpeg' }
   }
 
   private getMimeType(format: string): string {

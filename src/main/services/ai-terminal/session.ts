@@ -70,6 +70,9 @@ const DEFAULT_WRITE_TIMEOUT_MS = 10_000
 const SUBMIT_KEY_DELAY_MS = 20
 /** Raw replay buffer cap (bytes) for late-attaching UI viewers */
 const REPLAY_BUFFER_BYTES = 256_000
+/** terminal_search safety bounds (model-authored regex on the main process) */
+const SEARCH_BUDGET_MS = 1000
+const SEARCH_LINE_CAP = 2000
 
 let seq = 0
 
@@ -207,7 +210,18 @@ export class TerminalSession extends EventEmitter {
     // tears the process down. The xterm buffer is already disposed, so writing
     // to it would throw inside a pty callback (uncaught). Drop late data.
     if (this.disposed) return
-    this.term.write(chunk)
+    // Settle decisions run in the write callback, after xterm has parsed this
+    // chunk: OSC 133;D and the final screen state are only visible then —
+    // checking sawCommandEnd synchronously here raced the async parser and
+    // could settle a wait with the chunk's tail missing from renderAll().
+    this.term.write(chunk, () => {
+      if (this.disposed || !this.waitResolve) return
+      if (this.sawCommandEnd) {
+        this.settleWait('command-complete')
+      } else {
+        this.armIdleTimer()
+      }
+    })
     this.info.lastActivityAt = Date.now()
 
     // Maintain a bounded raw replay buffer so a viewer opened later can
@@ -219,15 +233,6 @@ export class TerminalSession extends EventEmitter {
 
     // Live stream to UI (renderer xterm renders ANSI faithfully)
     this.emit('data', chunk)
-
-    if (this.waitResolve) {
-      // Reset idle timer; if OSC133 end already seen, resolve now.
-      if (this.sawCommandEnd) {
-        this.settleWait('command-complete')
-      } else {
-        this.armIdleTimer()
-      }
-    }
   }
 
   private onExit(exitCode: number): void {
@@ -269,7 +274,9 @@ export class TerminalSession extends EventEmitter {
     // Never let the first AI command race one-time session priming.
     await this.ready
 
-    if (this.info.state === 'exited') {
+    // disposed covers the kill()-to-onExit window where state is still
+    // 'running' but the xterm buffer is gone — renderAll/proc.write would throw.
+    if (this.disposed || this.info.state === 'exited') {
       return {
         output: '', reason: 'exited', running: false,
         exitCode: this.info.exitCode, awaitingInput: false, awaitingContinuation: false, truncated: false
@@ -401,14 +408,21 @@ export class TerminalSession extends EventEmitter {
     const ctx = Math.max(0, context)
     const keep = new Set<number>()
     let totalMatches = 0
-    all.forEach((line, i) => {
+    // The regex is model-authored and runs synchronously on the main process:
+    // bound each line's length (kills polynomial backtracking on huge lines)
+    // and the whole scan's wall time so a pathological pattern degrades to a
+    // partial result instead of freezing the event loop.
+    const deadline = Date.now() + SEARCH_BUDGET_MS
+    for (let i = 0; i < all.length; i++) {
+      if ((i & 63) === 0 && Date.now() > deadline) break
+      const line = all[i].length > SEARCH_LINE_CAP ? all[i].slice(0, SEARCH_LINE_CAP) : all[i]
       if (re.test(line)) {
         totalMatches++
         for (let j = Math.max(0, i - ctx); j <= Math.min(all.length - 1, i + ctx); j++) {
           keep.add(j)
         }
       }
-    })
+    }
     const picked = [...keep].sort((a, b) => a - b).map(i => `${i + 1}: ${all[i]}`)
     const { text, truncated } = capOutput(picked.join('\n'), { pagingHint: false })
     return { content: text, totalMatches, truncated }

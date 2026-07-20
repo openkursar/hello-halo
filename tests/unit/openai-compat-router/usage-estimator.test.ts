@@ -29,10 +29,10 @@ import {
   estimateResponseOutputTokens,
   deferInputTokensEstimate,
   fillResponseUsageFallback
-} from '../utils/usage-estimator'
-import { estimateTokensByChars, countTokens } from '../utils/token-counter'
-import { streamOpenAIChatToAnthropic } from '../stream/openai-chat-stream'
-import type { AnthropicMessageResponse, AnthropicRequest } from '../types'
+} from '../../../src/main/openai-compat-router/utils/usage-estimator'
+import { estimateTokensByChars, countTokens } from '../../../src/main/openai-compat-router/utils/token-counter'
+import { streamOpenAIChatToAnthropic } from '../../../src/main/openai-compat-router/stream/openai-chat-stream'
+import type { AnthropicMessageResponse, AnthropicRequest } from '../../../src/main/openai-compat-router/types'
 
 function makeRequest(overrides: Partial<AnthropicRequest> = {}): AnthropicRequest {
   return {

@@ -293,6 +293,44 @@ const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
 final string. Acceptable: it caps the assembler's blast radius and prevents
 the file from re-acquiring channel knowledge over time.
 
+### 2.13 Native Multi-Sessions (Local Channel + Session Fork)
+
+**Decision**: A digital human's native client chat supports multiple named
+sessions, modeled as a new `'local'` session **source** in the existing
+`ImSessionRegistry` rather than a parallel store. The legacy single native
+session (`app-chat:{appId}`, runId `chat`) is untouched and remains the
+default; extra sessions are keyed `app-chat:{appId}:local:direct:{uuid}`.
+
+**Why reuse the IM session plumbing**:
+- The app-chat send path (`sendAppChatMessage`) already accepts an arbitrary
+  `conversationId`; IM sessions proved the multi-conversation model in
+  production. A `'local'` session is just another conversationId that flows
+  through the same `parseAppChatKey` → `deriveRunId` → JSONL / V2-session path.
+- `classifySessionSource` gains a `'local'` branch so local sessions are
+  **exempt from HTTP eviction bounds** (a user's chat must never be auto-pruned)
+  and are **excluded from pushable/proactive** results (no channel adapter).
+- Listing and renaming reuse the generic `im-sessions` RPC
+  (`getAllSessions` / `setCustomName`); only create / fork / delete need
+  dedicated lifecycle (`createNativeChatSession` / `forkNativeChatSession` /
+  `deleteNativeChatSession` in `app-chat.ts`).
+
+**Session fork ("continue in client")**: forking an IM/other session into a
+local one copies the source JSONL transcript (immediate history) and records
+the source SDK sessionId as `pendingResumeSessionId` on the new record. On the
+new session's **first** message, `sendAppChatMessage` resumes that source
+context with `sdkOptions.forkSession = true`, so the SDK branches to a **new**
+sessionId — the two windows evolve independently and the source is never
+polluted. The pending marker is peeked (not consumed) at send start and cleared
+only after the new forked sessionId is captured, so a failed first attempt can
+retry. Fork requires the engine's `sessionFork` capability (CC / Halo SDK:
+true; Codex `thread/resume` cannot branch: false); the UI gates the affordance
+on it.
+
+**Layer split in the renderer**: local sessions render in the interactive
+`AppChatView` (keyed by conversationId for a clean remount on switch); IM/HTTP
+sessions stay read-only in `ImChatView`. `AppChatContainer` branches on
+`session.source === 'local'`.
+
 ---
 
 ## 3. SQLite Schema

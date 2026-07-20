@@ -210,6 +210,28 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     notes: 'GLM-4.7 is 355B MoE model with strong coding capabilities'
   },
   {
+    id: 'zhipu-coding',
+    name: 'Zhipu GLM (Coding Plan)',
+    authType: 'api-key',
+    apiUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+    modelsUrl: 'https://open.bigmodel.cn/api/coding/paas/v4/models',
+    // Offline fallback only — the live list is fetched from the gateway on save.
+    // Verified against GET /api/coding/paas/v4/models (2026-06).
+    models: [
+      { id: 'glm-5.2', name: 'GLM-5.2' },
+      { id: 'glm-5.1', name: 'GLM-5.1' },
+      { id: 'glm-5', name: 'GLM-5' },
+      { id: 'glm-4.7', name: 'GLM-4.7' },
+      { id: 'glm-4.6', name: 'GLM-4.6' },
+      { id: 'glm-4.5', name: 'GLM-4.5' }
+    ],
+    description: 'Zhipu GLM Coding Plan gateway (OpenAI-compatible)',
+    website: 'https://open.bigmodel.cn/',
+    region: 'cn',
+    icon: 'sparkles',
+    notes: 'Coding Plan endpoint; the live model list is fetched from the gateway'
+  },
+  {
     id: 'minimax',
     name: 'MiniMax (中国)',
     authType: 'api-key',

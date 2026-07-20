@@ -14,7 +14,8 @@
 | System prompt composition | `system-prompt.ts` | Space context, conversation context, tool availability injection. |
 | Subagent orchestration | `subagent-handler.ts` | Nested agent invocations — Halo supports agents spawning agents. |
 | Permission gating | `permission-handler.ts` | AskUserQuestion, tool approval, permission mode resolution. |
-| MCP server routing | `mcp-manager.ts` | Registration, discovery, per-session MCP bindings. |
+| MCP server routing | `mcp-manager.ts` | Registration, discovery, per-session MCP bindings. Owns the shared status cache (`agent:mcp-status` broadcast). |
+| MCP connection probe | `mcp-probe.ts` | Native initialize+tools/list handshake via `@modelcontextprotocol/sdk` — no agent session, no token cost. Classifies failures (401→needs-auth, refused/timeout→failed + `errorDetail`). Triggered by app lifecycle events (install/resume/spec-update, wired in `apps/runtime`), by SDK-reported failures (stream-processor follow-up), and manually via `agent:probe-mcp` IPC. |
 | External message injection | `inject-message.ts` | Entry point for IM inbound / programmatic triggers to push messages into a session. |
 | Session control | `control.ts` | Interrupt / pause / switch-model mid-session. |
 | Outbound message composition | `send-message.ts`, `message-utils.ts` | User message assembly, attachment handling, token counting. |
@@ -98,6 +99,7 @@ Injection rules:
 | Interrupt / pause / switch mid-turn | `control.ts` |
 | Change subagent behavior | `subagent-handler.ts` |
 | Register a new MCP server source | `mcp-manager.ts` |
+| Change MCP connectivity checks / failure classification | `mcp-probe.ts` |
 
 ## 8) Hard Rules
 

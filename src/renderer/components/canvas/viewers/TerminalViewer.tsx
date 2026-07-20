@@ -194,7 +194,7 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
           {missing
             ? t('Session ended (output no longer available)')
             : sessionInfo?.exitCode !== null && sessionInfo?.exitCode !== undefined
-              ? `${t('Session ended')} (exit ${sessionInfo.exitCode})`
+              ? t('Session ended (exit {{code}})', { code: sessionInfo.exitCode })
               : t('Session ended')}
         </div>
       )}

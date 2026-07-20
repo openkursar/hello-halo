@@ -40,7 +40,7 @@ export interface ToolsetDefinition {
   createServer: (scope: ToolsetScope) => unknown
 }
 
-/** Toolset state exposed to the AI (toolsets_list) and the renderer */
+/** Toolset state exposed to the renderer "Tools" menu */
 export interface ToolsetStatus {
   id: string
   displayName: string

@@ -7,6 +7,7 @@
 import type { MemoryService, MemoryCallerScope } from '../../../platform/memory'
 import { buildMemorySnapshot, type MemorySnapshot } from '../../../platform/memory/snapshot'
 import type { TriggerContext, AppRunResult } from '../types'
+import { truncateUtf16Safe } from '../text-truncate'
 
 // ── Prepare (turn start) ──
 
@@ -121,7 +122,7 @@ function buildSummaryContent(ctx: MemoryFinalizeContext): string {
 
   if (ctx.finalText.trim()) {
     const truncated = ctx.finalText.length > MAX_SUMMARY_LENGTH
-      ? ctx.finalText.slice(0, MAX_SUMMARY_LENGTH) + '\n\n*(truncated)*'
+      ? truncateUtf16Safe(ctx.finalText, MAX_SUMMARY_LENGTH) + '\n\n*(truncated)*'
       : ctx.finalText
     lines.push('')
     lines.push('## Output')
@@ -247,7 +248,7 @@ async function generateCompactionSummary(
     const resolved = await credsProvider()
 
     const truncatedContent = content.length > MAX_COMPACTION_INPUT_LENGTH
-      ? content.slice(0, MAX_COMPACTION_INPUT_LENGTH) + '\n\n... (truncated)'
+      ? truncateUtf16Safe(content, MAX_COMPACTION_INPUT_LENGTH) + '\n\n... (truncated)'
       : content
 
     const client = new Anthropic({

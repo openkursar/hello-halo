@@ -123,8 +123,8 @@ vi.mock('../../../../src/main/services/space.service', () => ({
   getSpace: vi.fn().mockReturnValue(null),
 }))
 
-// Apps siblings. app-chat.ts pulls in runtime/index.ts via getAppMemoryService
-// + getActivityStore; that pulls service.ts → analytics → electron-as-CJS.
+// Apps siblings. app-chat.ts pulls in runtime/index.ts via getAppMemoryService;
+// that pulls service.ts → analytics → electron-as-CJS.
 // We stub the index re-exports so the heavy chain never loads.
 vi.mock('../../../../src/main/apps/manager', () => ({
   getAppManager: vi.fn().mockReturnValue(null),
@@ -134,7 +134,6 @@ vi.mock('../../../../src/main/apps/conversation-mcp', () => ({
 }))
 vi.mock('../../../../src/main/apps/runtime/index', () => ({
   getAppMemoryService: vi.fn().mockReturnValue(null),
-  getActivityStore: vi.fn().mockReturnValue(null),
 }))
 
 // dispatch-inbound pulls in analytics → electron-CJS at module load.

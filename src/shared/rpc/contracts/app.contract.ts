@@ -50,4 +50,11 @@ export const appRpc = {
   appChatRestart: rawRpcMethod('app:chat-restart'),
   appImChatMessages: rawRpcMethod('app:im-chat-messages'),
   appImChatClear: rawRpcMethod('app:im-chat-clear'),
+
+  // Native multi-session lifecycle (create / fork / delete). Listing and
+  // renaming reuse the generic im-sessions RPC (imSessionsList /
+  // imSessionsSetCustomName), which already covers 'local'-source sessions.
+  appSessionCreate: rawRpcMethod('app:session-create'),
+  appSessionFork: rawRpcMethod('app:session-fork'),
+  appSessionDelete: rawRpcMethod('app:session-delete'),
 }

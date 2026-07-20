@@ -4,14 +4,26 @@
  */
 
 import { useState, useEffect } from 'react'
+import type React from 'react'
 import { Globe, ChevronDown, ChevronRight, MessageSquare, Wrench, Key, KeyRound, Cloud, Server, Shield, Lock, Zap, LogIn, User, Github, Brain, ExternalLink, type LucideIcon } from 'lucide-react'
 import { useTranslation, setLanguage, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
 import { api } from '../../api'
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
+import { getBrandIcon } from '../icons/BrandIcons'
+import { ByokEntry } from './ByokEntry'
 
 // Re-export so existing renderer imports (`from './LoginSelector'`) continue
 // to work without churn. The canonical definition lives in shared/types.
 export type { AuthProviderConfig }
+
+/**
+ * Whether a login entry renders as the inline BYOK ("bring your own key") form
+ * rather than a navigate-on-click card. Centralised so the `type === 'custom'`
+ * check lives in one place.
+ */
+function isByokEntry(entry: AuthProviderConfig): boolean {
+  return entry.type === 'custom' && !entry.preset
+}
 
 function getLocalizedText(value: LocalizedText): string {
   return resolveLocalizedText(value, getCurrentLanguage())
@@ -19,7 +31,8 @@ function getLocalizedText(value: LocalizedText): string {
 
 interface LoginSelectorProps {
   onSelectProvider: (providerType: string) => void
-  onSelectCustom: () => void
+  /** Advance to the Custom-API config step, optionally carrying a typed key. */
+  onSelectCustom: (apiKey?: string) => void
   /** Invoked when the user selects a preset-API provider entry */
   onSelectPreset: (provider: AuthProviderConfig) => void
   /** Invoked when the user defers model configuration and enters Home directly */
@@ -117,18 +130,10 @@ export function LoginSelector({ onSelectProvider, onSelectCustom, onSelectPreset
     setIsLangDropdownOpen(false)
   }
 
-  // Handle provider selection
-  // Routing priority: preset > custom > OAuth provider module.
-  // Preset takes precedence over both `path` (mutually exclusive per schema)
-  // and the legacy 'custom' shortcut so existing product.json entries keep
-  // working unchanged.
+  // Preset entries open the locked preset form; everything else is an OAuth provider.
   const handleProviderSelect = (provider: AuthProviderConfig) => {
     if (provider.preset) {
       onSelectPreset(provider)
-      return
-    }
-    if (provider.type === 'custom') {
-      onSelectCustom()
       return
     }
     onSelectProvider(provider.type)
@@ -137,6 +142,75 @@ export function LoginSelector({ onSelectProvider, onSelectCustom, onSelectPreset
   // Get icon component for a provider
   const getIcon = (iconName: string): LucideIcon => {
     return iconMap[iconName] || Wrench
+  }
+
+  // Cards keep their order; the BYOK entry renders inline after them.
+  const byokEntry = providers.find(isByokEntry)
+  const cardProviders = providers.filter(p => !isByokEntry(p))
+
+  // Uniform navigate-on-click card for a managed-login entry.
+  const renderCard = (provider: AuthProviderConfig) => {
+    // Brand mark by provider type takes precedence over the lucide icon name.
+    const IconComponent: React.ComponentType<{ className?: string; style?: React.CSSProperties }> =
+      getBrandIcon(provider.type) || getIcon(provider.icon)
+    const bgColor = hexToRgba(provider.iconBgColor, 0.15)
+    const textColor = provider.iconBgColor
+
+    return (
+      <button
+        key={provider.type}
+        onClick={() => handleProviderSelect(provider)}
+        className="w-full p-5 bg-card rounded-xl border border-border hover:border-primary/50 hover:bg-card/80 transition-all duration-200 group text-left"
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div
+              className="w-10 h-10 rounded-lg flex items-center justify-center"
+              style={{ backgroundColor: bgColor }}
+            >
+              <IconComponent className="w-5 h-5" style={{ color: textColor }} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-medium">{getLocalizedText(provider.displayName)}</span>
+                {provider.recommended && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-primary/20 text-primary">
+                    {t('Recommended')}
+                  </span>
+                )}
+              </div>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                {getLocalizedText(provider.description)}
+              </p>
+              {provider.docs && (
+                <span
+                  role="link"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void api.openExternal(provider.docs!.url)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      void api.openExternal(provider.docs!.url)
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1.5"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                  {provider.docs.label
+                    ? getLocalizedText(provider.docs.label)
+                    : t('Learn more')}
+                </span>
+              )}
+            </div>
+          </div>
+          <ChevronRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
+        </div>
+      </button>
+    )
   }
 
   return (
@@ -194,7 +268,7 @@ export function LoginSelector({ onSelectProvider, onSelectCustom, onSelectPreset
           {t('Select AI Login Method')}
         </h2>
 
-        {/* Login options */}
+        {/* Managed-login entries as cards, then the inline BYOK entry. */}
         <div className="space-y-4">
           {isLoading ? (
             // Loading skeleton
@@ -212,68 +286,12 @@ export function LoginSelector({ onSelectProvider, onSelectCustom, onSelectPreset
               ))}
             </div>
           ) : (
-            // Dynamic provider cards
-            providers.map((provider) => {
-              const IconComponent = getIcon(provider.icon)
-              const bgColor = hexToRgba(provider.iconBgColor, 0.15)
-              const textColor = provider.iconBgColor
-
-              return (
-                <button
-                  key={provider.type}
-                  onClick={() => handleProviderSelect(provider)}
-                  className="w-full p-5 bg-card rounded-xl border border-border hover:border-primary/50 hover:bg-card/80 transition-all duration-200 group text-left"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div
-                        className="w-10 h-10 rounded-lg flex items-center justify-center"
-                        style={{ backgroundColor: bgColor }}
-                      >
-                        <IconComponent className="w-5 h-5" style={{ color: textColor }} />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{getLocalizedText(provider.displayName)}</span>
-                          {provider.recommended && (
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-primary/20 text-primary">
-                              {t('Recommended')}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-sm text-muted-foreground mt-0.5">
-                          {getLocalizedText(provider.description)}
-                        </p>
-                        {provider.docs && (
-                          <span
-                            role="link"
-                            tabIndex={0}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              void api.openExternal(provider.docs!.url)
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault()
-                                e.stopPropagation()
-                                void api.openExternal(provider.docs!.url)
-                              }
-                            }}
-                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1.5"
-                          >
-                            <ExternalLink className="w-3 h-3" />
-                            {provider.docs.label
-                              ? getLocalizedText(provider.docs.label)
-                              : t('Learn more')}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <ChevronRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
-                  </div>
-                </button>
-              )
-            })
+            <>
+              {cardProviders.map(renderCard)}
+              {byokEntry && (
+                <ByokEntry entry={byokEntry} onContinue={(key) => onSelectCustom(key)} />
+              )}
+            </>
           )}
         </div>
 

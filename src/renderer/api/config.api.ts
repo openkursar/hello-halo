@@ -9,6 +9,20 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import type { ModelOption } from '../../shared/types'
+
+/** Result payload of `validateApi` (connection test). */
+export interface ValidateApiResult {
+  valid: boolean
+  message?: string
+  /** Server-canonicalized base URL; callers adopt it when it differs. */
+  normalizedUrl?: string
+}
+
+/** Result payload of `fetchModels` (live model-list lookup). */
+export interface FetchModelsResult {
+  models: ModelOption[]
+}
 
 export const configApi = {
   // ===== Config =====
@@ -26,14 +40,22 @@ export const configApi = {
     return httpRequest('POST', '/api/config', updates)
   },
 
+  // Credential fields that could not be decoded at rest (alert banner source).
+  getCredentialFailures: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.getCredentialFailures()
+    }
+    return httpRequest('GET', '/api/config/credential-failures')
+  },
+
   validateApi: async (
     apiKey: string,
     apiUrl: string,
     provider: string,
     model?: string
-  ): Promise<ApiResponse> => {
+  ): Promise<ApiResponse<ValidateApiResult>> => {
     if (isElectron()) {
-      return window.halo.validateApi(apiKey, apiUrl, provider, model)
+      return window.halo.validateApi(apiKey, apiUrl, provider, model) as Promise<ApiResponse<ValidateApiResult>>
     }
     return httpRequest('POST', '/api/config/validate', { apiKey, apiUrl, provider, model })
   },
@@ -41,9 +63,9 @@ export const configApi = {
   fetchModels: async (
     apiKey: string,
     apiUrl: string
-  ): Promise<ApiResponse> => {
+  ): Promise<ApiResponse<FetchModelsResult>> => {
     if (isElectron()) {
-      return window.halo.fetchModels(apiKey, apiUrl)
+      return window.halo.fetchModels(apiKey, apiUrl) as Promise<ApiResponse<FetchModelsResult>>
     }
     return httpRequest('POST', '/api/config/fetch-models', { apiKey, apiUrl })
   },

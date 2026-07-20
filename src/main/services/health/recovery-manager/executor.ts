@@ -5,11 +5,12 @@
  * Some strategies require user consent via dialog.
  */
 
-import { app, BrowserWindow } from 'electron'
+import { BrowserWindow } from 'electron'
 import type { RecoveryResult, RecoveryStrategyId } from '../types'
 import { getStrategy, requiresConsent } from './strategies'
 import { emitRecoverySuccess, resetErrorCounter } from '../health-checker'
-import { cleanupOrphans, clearOrphanEntries, markCleanExit } from '../process-guardian'
+import { cleanupOrphans, clearOrphanEntries } from '../process-guardian'
+import { relaunchApp } from '../../lifecycle'
 import {
   showRecoveryDialog,
   showFactoryResetDialog,
@@ -228,9 +229,6 @@ async function executeS3(): Promise<RecoveryResult> {
   console.log('[Health][Recovery] S3: Restarting application...')
 
   try {
-    // Mark clean exit before restart
-    markCleanExit()
-
     // Close all sessions
     if (closeAllSessionsFn) {
       closeAllSessionsFn()
@@ -243,8 +241,7 @@ async function executeS3(): Promise<RecoveryResult> {
 
     // Relaunch app after a short delay
     setTimeout(() => {
-      app.relaunch()
-      app.exit(0)
+      relaunchApp('health-recovery-S3')
     }, 500)
 
     return {
@@ -292,8 +289,7 @@ async function executeS4(): Promise<RecoveryResult> {
 
     // Restart app
     setTimeout(() => {
-      app.relaunch()
-      app.exit(0)
+      relaunchApp('health-recovery-S4')
     }, 500)
 
     return {

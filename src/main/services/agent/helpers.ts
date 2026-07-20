@@ -13,6 +13,7 @@ import { getSpace } from '../space.service'
 import { getAISourceManager } from '../ai-sources'
 import { getAppManager } from '../app-bridge'
 import type { McpSpec } from '../../apps/spec/schema'
+import type { InstalledApp } from '../../../shared/apps/app-types'
 import { resolveModelId, type BackendRequestConfig, type AISource } from '../../../shared/types/ai-sources'
 import { modelCapabilitiesService } from '../model-capabilities.service'
 import { isMcpCommandBlocked } from '../security-policy'
@@ -278,6 +279,7 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
     forceStream: backendConfig.forceStream,
     filterContent: backendConfig.filterContent,
     adapterId: backendConfig.adapterId,
+    visionOverride: backendConfig.visionOverride,
     capabilities,
     supportsVision: modelOption?.supportsVision,
   }
@@ -352,6 +354,7 @@ export async function getApiCredentialsForSource(
     forceStream: backendConfig.forceStream,
     filterContent: backendConfig.filterContent,
     adapterId: backendConfig.adapterId,
+    visionOverride: backendConfig.visionOverride,
     capabilities,
     supportsVision: modelOption?.supportsVision,
   }
@@ -432,9 +435,70 @@ export function credentialsToBackendConfig(
     forceStream: credentials.forceStream,
     filterContent: credentials.filterContent,
     adapterId: credentials.adapterId,
-    supportsVision: credentials.supportsVision,
+    visionOverride: credentials.visionOverride,
     ...overrides
   }
+}
+
+/**
+ * Convert an installed MCP app to an SDK `mcpServers` entry.
+ *
+ * Single conversion point shared by session config assembly, automation
+ * least-privilege injection, and the connection probe — so all consumers
+ * see the exact same server definition (transport, merged env, headers).
+ *
+ * Returns null when the app has no usable server definition or its stdio
+ * command is blocked by security policy.
+ */
+export function appToSdkServerConfig(app: InstalledApp): Record<string, unknown> | null {
+  if (app.spec.type !== 'mcp') return null
+  const mcpServer = (app.spec as McpSpec).mcp_server
+  if (!mcpServer) return null // defensive: required by schema but guard against old data
+
+  const serverConfig: Record<string, unknown> = {}
+
+  // Map transport type
+  if (mcpServer.transport === 'sse') {
+    serverConfig.type = 'sse'
+    serverConfig.url = mcpServer.command // For SSE, command holds URL
+  } else if (mcpServer.transport === 'streamable-http') {
+    serverConfig.type = 'http'
+    serverConfig.url = mcpServer.command
+  } else {
+    // stdio (default)
+    // Defense in depth: if the blacklist was updated after this MCP was
+    // installed, skip the entry here so the SDK never spawns the child
+    // process. The install-time check in AppManager.install() is the
+    // primary gate; this runtime filter only catches the
+    // "policy tightened post-install" case. No-op on open-source builds.
+    if (isMcpCommandBlocked(mcpServer.command)) {
+      console.warn(
+        `[Security] Skipped MCP '${app.specId}': command '${mcpServer.command}' blocked by policy`
+      )
+      return null
+    }
+    serverConfig.command = mcpServer.command
+    if (mcpServer.args?.length) serverConfig.args = mcpServer.args
+    if (mcpServer.cwd) serverConfig.cwd = mcpServer.cwd
+  }
+  // Merge static spec env with user-provided config values (e.g. API tokens).
+  // userConfig keys map directly to env var names; user values override spec defaults.
+  const mergedEnv: Record<string, string> = {
+    ...(mcpServer.env ?? {}),
+    ...Object.fromEntries(
+      Object.entries(app.userConfig ?? {})
+        .filter(([, v]) => v != null)
+        .map(([k, v]) => [k, String(v)])
+    )
+  }
+  if (Object.keys(mergedEnv).length > 0) {
+    serverConfig.env = mergedEnv
+  }
+  if (mcpServer.headers && Object.keys(mcpServer.headers).length > 0) {
+    serverConfig.headers = mcpServer.headers
+  }
+
+  return serverConfig
 }
 
 /**
@@ -452,53 +516,8 @@ export function getDbMcpServers(spaceId: string): Record<string, unknown> | null
   const servers: Record<string, unknown> = {}
   for (const app of mcpApps) {
     if (app.status === 'paused') continue
-    if (app.spec.type !== 'mcp') continue
-    const mcpServer = (app.spec as McpSpec).mcp_server
-    if (!mcpServer) continue // defensive: required by schema but guard against old data
-
-    const serverConfig: Record<string, unknown> = {}
-
-    // Map transport type
-    if (mcpServer.transport === 'sse') {
-      serverConfig.type = 'sse'
-      serverConfig.url = mcpServer.command // For SSE, command holds URL
-    } else if (mcpServer.transport === 'streamable-http') {
-      serverConfig.type = 'http'
-      serverConfig.url = mcpServer.command
-    } else {
-      // stdio (default)
-      // Defense in depth: if the blacklist was updated after this MCP was
-      // installed, skip the entry here so the SDK never spawns the child
-      // process. The install-time check in AppManager.install() is the
-      // primary gate; this runtime filter only catches the
-      // "policy tightened post-install" case. No-op on open-source builds.
-      if (isMcpCommandBlocked(mcpServer.command)) {
-        console.warn(
-          `[Security] Skipped MCP '${app.specId}': command '${mcpServer.command}' blocked by policy`
-        )
-        continue
-      }
-      serverConfig.command = mcpServer.command
-      if (mcpServer.args?.length) serverConfig.args = mcpServer.args
-      if (mcpServer.cwd) serverConfig.cwd = mcpServer.cwd
-    }
-    // Merge static spec env with user-provided config values (e.g. API tokens).
-    // userConfig keys map directly to env var names; user values override spec defaults.
-    const mergedEnv: Record<string, string> = {
-      ...(mcpServer.env ?? {}),
-      ...Object.fromEntries(
-        Object.entries(app.userConfig ?? {})
-          .filter(([, v]) => v != null)
-          .map(([k, v]) => [k, String(v)])
-      )
-    }
-    if (Object.keys(mergedEnv).length > 0) {
-      serverConfig.env = mergedEnv
-    }
-    if (mcpServer.headers && Object.keys(mcpServer.headers).length > 0) {
-      serverConfig.headers = mcpServer.headers
-    }
-
+    const serverConfig = appToSdkServerConfig(app)
+    if (!serverConfig) continue
     servers[app.specId] = serverConfig
   }
 
@@ -541,49 +560,8 @@ export function getMcpServersForRequires(
       continue
     }
 
-    if (app.spec.type !== 'mcp') continue
-    const mcpServer = (app.spec as McpSpec).mcp_server
-    if (!mcpServer) continue // defensive: required by schema but guard against old data
-
-    const serverConfig: Record<string, unknown> = {}
-
-    // Map transport type — mirrors getDbMcpServers conversion logic
-    if (mcpServer.transport === 'sse') {
-      serverConfig.type = 'sse'
-      serverConfig.url = mcpServer.command // For SSE, command holds URL
-    } else if (mcpServer.transport === 'streamable-http') {
-      serverConfig.type = 'http'
-      serverConfig.url = mcpServer.command
-    } else {
-      // stdio (default)
-      // Defense in depth: skip blacklisted commands so the SDK never spawns
-      // the child process. Mirrors the filter in getDbMcpServers above.
-      if (isMcpCommandBlocked(mcpServer.command)) {
-        console.warn(
-          `[Security] Skipped required MCP '${app.specId}': command '${mcpServer.command}' blocked by policy`
-        )
-        continue
-      }
-      serverConfig.command = mcpServer.command
-      if (mcpServer.args?.length) serverConfig.args = mcpServer.args
-      if (mcpServer.cwd) serverConfig.cwd = mcpServer.cwd
-    }
-    // Merge static spec env with user-provided config values (e.g. API tokens).
-    // userConfig keys map directly to env var names; user values override spec defaults.
-    const mergedEnv: Record<string, string> = {
-      ...(mcpServer.env ?? {}),
-      ...Object.fromEntries(
-        Object.entries(app.userConfig ?? {})
-          .filter(([, v]) => v != null)
-          .map(([k, v]) => [k, String(v)])
-      )
-    }
-    if (Object.keys(mergedEnv).length > 0) {
-      serverConfig.env = mergedEnv
-    }
-    if (mcpServer.headers && Object.keys(mcpServer.headers).length > 0) {
-      serverConfig.headers = mcpServer.headers
-    }
+    const serverConfig = appToSdkServerConfig(app)
+    if (!serverConfig) continue
 
     result[app.specId] = serverConfig
   }

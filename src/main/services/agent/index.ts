@@ -98,6 +98,9 @@ export {
   testMcpConnections
 } from './mcp-manager'
 
+export { probeMcpApp } from './mcp-probe'
+export type { McpProbeResult } from './mcp-probe'
+
 // ============================================
 // Re-exports for Internal Use
 // ============================================

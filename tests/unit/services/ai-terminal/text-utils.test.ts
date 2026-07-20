@@ -81,7 +81,7 @@ describe('endsAtContinuation', () => {
     expect(endsAtContinuation('foo(\ncmdsubst>')).toBe(true)
   })
   it('detects a stacked zsh continuation prompt (multiple && then open quote)', () => {
-    // The real S3 failure: 5x `&&` pending + an unterminated double quote.
+    // Observed in the field: 5x `&&` pending + an unterminated double quote.
     expect(endsAtContinuation('cmdand cmdand cmdand cmdand cmdand dquote>')).toBe(true)
   })
   it('detects a bare bash PS2 continuation', () => {

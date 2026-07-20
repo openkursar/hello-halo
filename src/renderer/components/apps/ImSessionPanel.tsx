@@ -11,14 +11,15 @@
  * Supports clearing individual IM sessions via a confirmation dialog.
  */
 
-import { useEffect, useCallback } from 'react'
-import { MessageSquare, X } from 'lucide-react'
+import { useEffect, useCallback, useMemo } from 'react'
+import { MessageSquare, X, Plus } from 'lucide-react'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { buildImSessionKey } from '../../../shared/apps/im-keys'
+import { buildImSessionKey, buildLocalSessionKey } from '../../../shared/apps/im-keys'
+import { LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
 import { ImSessionItem } from './ImSessionItem'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 
@@ -79,6 +80,55 @@ export function ImSessionPanel({ appId, spaceId, onSessionCleared }: ImSessionPa
     }
   }, [appId, spaceId, resetSession, onSessionCleared])
 
+  // ── Native local sessions: create / rename / delete ──
+  // Local sessions surface in the same list (source==='local'); split them out
+  // so they render as interactive native chats above the IM/HTTP sessions.
+  const localSessions = useMemo(() => imSessions.filter(s => s.source === 'local'), [imSessions])
+  const channelSessions = useMemo(() => imSessions.filter(s => s.source !== 'local'), [imSessions])
+
+  const handleNewChat = useCallback(async () => {
+    try {
+      const res = await api.appSessionCreate(appId)
+      if (res.success && res.data) {
+        const record = (res.data as { record: ImSessionRecord }).record
+        await fetchImSessions(appId)
+        selectImSession(record)
+        if (isMobile) toggleImPanel()
+      }
+    } catch (err) {
+      console.error('[ImSessionPanel] New chat error:', err)
+    }
+  }, [appId, fetchImSessions, selectImSession, isMobile, toggleImPanel])
+
+  const handleRenameConfirm = useCallback(async (session: ImSessionRecord, name: string) => {
+    try {
+      const res = await api.imSessionsSetCustomName({ appId, channel: session.channel, chatId: session.chatId, name })
+      if (res.success) await fetchImSessions(appId)
+    } catch (err) {
+      console.error('[ImSessionPanel] Rename session error:', err)
+    }
+  }, [appId, fetchImSessions])
+
+  const handleDeleteConfirm = useCallback(async (session: ImSessionRecord) => {
+    try {
+      const conversationId = buildLocalSessionKey(appId, session.chatId)
+      const res = await api.appSessionDelete(appId, spaceId, conversationId)
+      if (res.success) {
+        resetSession(conversationId)
+        // Deselect if the deleted session was active, falling back to the default.
+        if (
+          selectedImSession?.channel === LOCAL_SESSION_CHANNEL &&
+          selectedImSession?.chatId === session.chatId
+        ) {
+          selectImSession(null)
+        }
+        await fetchImSessions(appId)
+      }
+    } catch (err) {
+      console.error('[ImSessionPanel] Delete session error:', err)
+    }
+  }, [appId, spaceId, resetSession, selectedImSession, selectImSession, fetchImSessions])
+
   const isHaloChatSelected = selectedImSession === null
 
   return (
@@ -86,17 +136,26 @@ export function ImSessionPanel({ appId, spaceId, onSessionCleared }: ImSessionPa
       {/* Panel header */}
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-border flex-shrink-0">
         <span className="text-sm font-medium">{t('Conversations')}</span>
-        <button
-          onClick={toggleImPanel}
-          className="p-1 rounded hover:bg-secondary transition-colors"
-        >
-          <X className="w-4 h-4 text-muted-foreground" />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={handleNewChat}
+            className="p-1 rounded hover:bg-secondary transition-colors"
+            title={t('New chat')}
+          >
+            <Plus className="w-4 h-4 text-muted-foreground" />
+          </button>
+          <button
+            onClick={toggleImPanel}
+            className="p-1 rounded hover:bg-secondary transition-colors"
+          >
+            <X className="w-4 h-4 text-muted-foreground" />
+          </button>
+        </div>
       </div>
 
       {/* Session list */}
       <div className="flex-1 overflow-y-auto">
-        {/* Fixed: Halo Chat (native conversation) */}
+        {/* Fixed: Halo Chat (native default conversation) */}
         <button
           onClick={handleSelectHaloChat}
           className={`w-full text-left px-3 py-2.5 transition-colors ${
@@ -116,16 +175,32 @@ export function ImSessionPanel({ appId, spaceId, onSessionCleared }: ImSessionPa
           </div>
         </button>
 
-        {/* Divider */}
-        {imSessions.length > 0 && <div className="border-b border-border" />}
+        {/* Native local sessions (interactive) */}
+        {localSessions.map(session => (
+          <ImSessionItem
+            key={`${LOCAL_SESSION_CHANNEL}:${session.chatId}`}
+            session={session}
+            isSelected={
+              selectedImSession?.source === 'local' &&
+              selectedImSession?.chatId === session.chatId
+            }
+            onClick={() => handleSelectImSession(session)}
+            onRenameConfirm={handleRenameConfirm}
+            onDeleteConfirm={handleDeleteConfirm}
+          />
+        ))}
 
-        {/* IM sessions */}
-        {imSessions.map(session => (
+        {/* Divider before IM/HTTP channel sessions */}
+        {channelSessions.length > 0 && <div className="border-b border-border" />}
+
+        {/* IM / HTTP channel sessions (read-only viewers) */}
+        {channelSessions.map(session => (
           <ImSessionItem
             key={`${session.channel}:${session.chatId}`}
             session={session}
             isSelected={
               selectedImSession?.channel === session.channel &&
+              selectedImSession?.source !== 'local' &&
               selectedImSession?.chatId === session.chatId
             }
             onClick={() => handleSelectImSession(session)}
@@ -133,11 +208,11 @@ export function ImSessionPanel({ appId, spaceId, onSessionCleared }: ImSessionPa
           />
         ))}
 
-        {/* Empty state */}
+        {/* Empty state — only when there are no sessions of any kind */}
         {imSessions.length === 0 && (
           <div className="px-3 py-6 text-center">
             <p className="text-xs text-muted-foreground/50">
-              {t('IM conversations will appear here')}
+              {t('Start a new chat or connect an IM channel')}
             </p>
           </div>
         )}

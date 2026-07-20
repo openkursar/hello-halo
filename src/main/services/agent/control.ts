@@ -10,6 +10,7 @@
 
 import { activeSessions, v2Sessions, closeV2Session, getConsumerHandle, getRunningConsumerIds } from './session-manager'
 import { hasActiveTeamTasks } from './subagent-handler'
+import { getActivePendingQuestion, type RecoverablePendingQuestion } from './permission-handler'
 import type { Thought } from './types'
 
 // ============================================
@@ -191,7 +192,13 @@ export function getSessionState(conversationId: string): {
   isActive: boolean
   thoughts: Thought[]
   spaceId?: string
+  pendingQuestion?: RecoverablePendingQuestion
 } {
+  // A pending question lets reconnecting clients rebuild the question card, and
+  // marks the session active on its own: the turn is blocked on the answer even
+  // when the activity trackers below report nothing.
+  const pendingQuestion = getActivePendingQuestion(conversationId) ?? undefined
+
   // Check consumer model first (chat conversations)
   const consumer = getConsumerHandle(conversationId)
   if (consumer && consumer.isRunning) {
@@ -200,7 +207,8 @@ export function getSessionState(conversationId: string): {
       return {
         isActive: true,
         thoughts: [...sessionState.thoughts],
-        spaceId: sessionState.spaceId
+        spaceId: sessionState.spaceId,
+        pendingQuestion
       }
     }
   }
@@ -208,11 +216,14 @@ export function getSessionState(conversationId: string): {
   // Fallback: legacy activeSessions (app-chat.ts, execute.ts)
   const session = activeSessions.get(conversationId)
   if (!session) {
-    return { isActive: false, thoughts: [] }
+    return pendingQuestion
+      ? { isActive: true, thoughts: [], pendingQuestion }
+      : { isActive: false, thoughts: [] }
   }
   return {
     isActive: true,
     thoughts: [...session.thoughts],
-    spaceId: session.spaceId
+    spaceId: session.spaceId,
+    pendingQuestion
   }
 }

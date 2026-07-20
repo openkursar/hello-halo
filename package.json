@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.12-rc.6",
+  "version": "2.1.12-rc.14",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.mjs",
@@ -22,6 +22,7 @@
     "prepare:all": "node scripts/prepare-binaries.mjs --platform all",
     "build:mac-x64": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform mac-x64 && npm run build && electron-builder --mac --x64",
     "build:linux": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform linux && npm run build && electron-builder --linux",
+    "build:server": "bash scripts/build-server-halo.sh",
     "icons": "bash scripts/generate-icons.sh",
     "release": "npm run prepare:all && npm run build && electron-builder --mac --win --publish always",
     "release:mac": "npm run prepare:all && npm run build && electron-builder --mac --publish always",

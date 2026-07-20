@@ -42,24 +42,50 @@ export function ImageViewer({ tab }: ImageViewerProps) {
     return Math.max(0.05, Math.min((c.clientWidth - 48) / w, (c.clientHeight - 48) / h, 1))
   }, [])
 
+  // Cache-buster: bumps to defeat Chromium's <img> URL cache when the same path is
+  // rewritten in place (in-place overwrite keeps tab.path stable, so the URL would
+  // otherwise be identical and serve a stale image).
+  const [reloadToken, setReloadToken] = useState(() => Date.now())
+  const isFirstRender = useRef(true)
+
   // Get image URL
   // Priority: halo-file:// (custom protocol, fast) > remote download > base64 fallback
-  const imageUrl = tab.path
+  const fileUrl = tab.path
     ? (api.isRemoteMode()
         ? api.getArtifactDownloadUrl(tab.path)
         : `halo-file://${tab.path}`)
+    : ''
+  const imageUrl = fileUrl
+    ? `${fileUrl}${fileUrl.includes('?') ? '&' : '?'}v=${reloadToken}`
     : tab.content
       ? `data:${tab.mimeType || 'image/png'};base64,${tab.content}`
       : ''
 
-  // Reset view when tab changes
+  // Reset view when the viewer switches to another file; also force a fresh fetch so
+  // switching back to a file changed while it was hidden never shows a cached image.
   useEffect(() => {
     setScale(1)
     setPosition({ x: 0, y: 0 })
     setImageLoaded(false)
     setImageError(false)
     setIsFitted(true)
+    if (isFirstRender.current) {
+      isFirstRender.current = false
+    } else {
+      setReloadToken(t => t + 1)
+    }
   }, [tab.id])
+
+  // Live-refresh when the file currently shown is rewritten on disk.
+  useEffect(() => {
+    if (!tab.path) return
+    return api.onArtifactChanged((data) => {
+      if (data.path === tab.path && (data.type === 'change' || data.type === 'add')) {
+        setImageError(false)
+        setReloadToken(t => t + 1)
+      }
+    })
+  }, [tab.path])
 
   // Zoom functions — manual zoom exits fitted mode so resizes stop refitting.
   const zoomIn = () => { setIsFitted(false); setScale(s => Math.min(s * 1.25, 5)) }

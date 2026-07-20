@@ -56,6 +56,8 @@ export const eventsApi = {
     onEvent('terminal:lifecycle', callback),
   onRemoteStatusChange: (callback: (data: unknown) => void) =>
     onEvent('remote:status-change', callback),
+  onCredentialDecryptFailed: (callback: (data: unknown) => void) =>
+    onEvent('credential:decrypt-failed', callback),
 
   // ===== Server URL Management (Capacitor) =====
   setServerUrl,
