@@ -18,7 +18,8 @@ import {
 import { Header } from '../components/layout/Header'
 import { SpaceGuide } from '../components/space/SpaceGuide'
 import { CreateSpaceDialog } from '../components/space/CreateSpaceDialog'
-import { Blocks, ArrowRight, AlertCircle, SendHorizontal, Unplug } from 'lucide-react'
+import { SortableSpaceList } from '../components/space/SortableSpaceList'
+import { Blocks, ArrowRight, AlertCircle, SendHorizontal, Unplug, BookOpen } from 'lucide-react'
 import { api } from '../api'
 import { useTranslation } from '../i18n'
 import { useAppsStore } from '../stores/apps.store'
@@ -29,7 +30,7 @@ import type { AppType } from '../../shared/apps/spec-types'
 export function HomePage() {
   const { t } = useTranslation()
   const { setView } = useAppStore()
-  const { haloSpace, spaces, loadSpaces, setCurrentSpace, refreshCurrentSpace, updateSpace, deleteSpace } = useSpaceStore()
+  const { haloSpace, spaces, loadSpaces, setCurrentSpace, refreshCurrentSpace, updateSpace, deleteSpace, reorderSpaces } = useSpaceStore()
   const { apps, loadApps } = useAppsStore()
   const { setInitialAppId, setCurrentTab, setShowInstallDialog, openMarketplaceFilteredBy } = useAppsPageStore()
 
@@ -212,6 +213,23 @@ export function HomePage() {
           />
         </div>
 
+        {/* Knowledge entry — opens the Tlon knowledge-base manager */}
+        <button
+          onClick={() => setView('tlon')}
+          className="w-full mb-8 flex items-center gap-3 p-4 rounded-xl border border-border bg-card hover:bg-secondary transition-colors text-left group"
+        >
+          <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+            <BookOpen className="w-5 h-5 text-primary" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium">{t('Knowledge')}</p>
+            <p className="text-xs text-muted-foreground truncate">
+              {t('Teach Halo from your files and folders')}
+            </p>
+          </div>
+          <ArrowRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+        </button>
+
         {/* Spaces Section */}
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-sm font-medium text-muted-foreground">{t('Dedicated Spaces')}</h3>
@@ -232,16 +250,18 @@ export function HomePage() {
             <p className="text-sm">{t('No dedicated spaces yet')}</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-4">
-            {spaces.map((space, i) => (
+          <SortableSpaceList
+            items={spaces}
+            onReorder={(ids) => { void reorderSpaces(ids) }}
+            className="grid grid-cols-2 gap-4"
+            renderItem={(space) => (
               <div
-                key={`${space.id}-${i}`}
                 onClick={() => handleSpaceClick(space)}
                 className={`space-card p-4 group animate-fade-in ${
                   space.isMissing ? 'opacity-70 cursor-not-allowed border-dashed' : ''
                 }`}
               >
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <SpaceIcon iconId={space.icon} size={20} />
                     <span className="font-medium truncate">{space.name}</span>
@@ -252,17 +272,17 @@ export function HomePage() {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                  <div className="flex items-center gap-2 sm:gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all flex-shrink-0">
                     <button
                       onClick={(e) => handleEditSpace(e, space)}
-                      className="p-1 hover:bg-secondary rounded transition-all"
+                      className="p-2 sm:p-1 hover:bg-secondary rounded transition-all"
                       title={t('Edit Space')}
                     >
                       <Pencil className="w-4 h-4 text-muted-foreground" />
                     </button>
                     <button
                       onClick={(e) => handleDeleteSpace(e, space.id)}
-                      className="p-1 hover:bg-destructive/20 rounded transition-all"
+                      className="p-2 sm:p-1 hover:bg-destructive/20 rounded transition-all"
                       title={t('Delete space')}
                     >
                       <Trash2 className="w-4 h-4 text-destructive" />
@@ -275,8 +295,8 @@ export function HomePage() {
                     : `${formatTimeAgo(space.lastActiveAt || space.updatedAt)}${t('active')}`}
                 </p>
               </div>
-            ))}
-          </div>
+            )}
+          />
         )}
       </main>
 

@@ -28,6 +28,8 @@ import { Header } from '../components/layout/Header'
 import { SidebarToggle } from '../components/layout/SidebarToggle'
 import { SpaceSelector } from '../components/layout/SpaceSelector'
 import { ModelSelector } from '../components/layout/ModelSelector'
+import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
+import { KBIndicator } from '../components/tlon/KBIndicator'
 import { ContentCanvas } from '../components/canvas'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
 import { api } from '../api'
@@ -358,17 +360,29 @@ export function SpacePage() {
               <span className="hidden sm:inline">{t('New conversation')}</span>
             </button>
 
-            {/* Search Icon - hidden on mobile, accessible via shortcut */}
+            {/* Search Icon - hidden on mobile (in overflow menu) */}
             <div className="hidden sm:block">
               <SearchIcon onClick={openSearch} isInSpace={true} />
             </div>
 
-            {/* Model Selector */}
-            <ModelSelector />
+            {/* Connected knowledge bases indicator - desktop only (mobile uses the overflow menu) */}
+            {currentSpace && (
+              <div className="hidden sm:block">
+                <KBIndicator spaceId={currentSpace.id} />
+              </div>
+            )}
+
+            {/* Model Selector - hidden on mobile (in overflow menu) */}
+            <div className="hidden sm:block">
+              <ModelSelector />
+            </div>
+
+            {/* Mobile: overflow menu collapses model/search/settings */}
+            <MobileOverflowMenu onSearch={() => openSearch('space')} />
 
             <button
               onClick={() => setView('settings')}
-              className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
+              className="hidden sm:block p-1.5 hover:bg-secondary rounded-lg transition-colors"
               title={t('Settings')}
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

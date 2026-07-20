@@ -7,6 +7,7 @@ import { useAppStore } from './stores/app.store'
 import { useChatStore } from './stores/chat.store'
 import { useOnboardingStore } from './stores/onboarding.store'
 import { initAIBrowserStoreListeners } from './stores/ai-browser.store'
+import { initTerminalStoreListeners } from './stores/terminal.store'
 import { initPerfStoreListeners } from './stores/perf.store'
 import { useSpaceStore } from './stores/space.store'
 import { useSearchStore } from './stores/search.store'
@@ -14,6 +15,8 @@ import { useAppsStore } from './stores/apps.store'
 import { useTeamStore } from './stores/team.store'
 import type { TeamUpdatedEvent, TeamBlackboardEvent, TeamMessageEvent, TeamPresenceEvent, TeamOfficeStatusEvent } from '../shared/apps/team-types'
 import { useAppsPageStore } from './stores/apps-page.store'
+import { useToolsetsStore, type ToolsetsChangedEvent, type ToolsetsRequestedEvent } from './stores/toolsets.store'
+import { useTlonStore } from './stores/tlon.store'
 import { SplashPage } from './pages/SplashPage'
 import { SetupPage } from './pages/SetupPage'
 import { GitBashSetupPage } from './pages/GitBashSetupPage'
@@ -31,12 +34,13 @@ import { NotificationToast } from './components/notification/NotificationToast'
 import { useNotificationStore } from './stores/notification.store'
 import { api } from './api'
 import { syncStatusBarStyle } from './api/safe-area'
-import { isCapacitor, isElectron } from './api/transport'
+import { isCapacitor, isElectron, onEvent } from './api/transport'
 import { useTelemetry } from './hooks/useTelemetry'
 import type { WsConnectionState } from './api/transport'
 import { useTranslation } from './i18n'
 import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, Question, McpServerStatus } from './types'
 import type { SessionInitInfo } from './types/slash-command'
+import type { IngestProgressEvent } from '../shared/types/tlon'
 import { hasAnyAISource } from './types'
 
 // Lazy load heavy page components for better initial load performance
@@ -45,6 +49,7 @@ const HomePage = lazy(() => import('./pages/HomePage').then(m => ({ default: m.H
 const SpacePage = lazy(() => import('./pages/SpacePage').then(m => ({ default: m.SpacePage })))
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
 const AppsPage = lazy(() => import('./pages/AppsPage').then(m => ({ default: m.AppsPage })))
+const TlonPage = lazy(() => import('./pages/TlonPage').then(m => ({ default: m.TlonPage })))
 
 // Page loading fallback - minimal spinner that matches app style
 function PageLoader() {
@@ -494,8 +499,12 @@ export default function App() {
   useEffect(() => {
     console.log('[App] Initializing AI Browser store listeners')
     initPerfStoreListeners()
-    const cleanup = initAIBrowserStoreListeners()
-    return cleanup
+    const cleanupBrowser = initAIBrowserStoreListeners()
+    const cleanupTerminal = initTerminalStoreListeners()
+    return () => {
+      cleanupBrowser()
+      cleanupTerminal()
+    }
   }, [])
 
   // Register agent event listeners (global - handles events for all conversations)
@@ -583,6 +592,17 @@ export default function App() {
       }
     })
 
+    // Toolset broker changes (user toggle). Keeps the input toolbar menu/pills in
+    // sync with the authoritative main-process open set.
+    const unsubToolsets = api.onToolsetsChanged((data) => {
+      useToolsetsStore.getState().applyChangedEvent(data as ToolsetsChangedEvent)
+    })
+
+    // AI asked the user to enable a toolset — pop the Tools menu + highlight it.
+    const unsubToolsetReq = api.onToolsetsRequested((data) => {
+      useToolsetsStore.getState().applyRequestedEvent(data as ToolsetsRequestedEvent)
+    })
+
     return () => {
       unsubThought()
       unsubThoughtDelta()
@@ -596,6 +616,8 @@ export default function App() {
       unsubSessionInfo()
       unsubTurnStart()
       unsubMcpStatus()
+      unsubToolsets()
+      unsubToolsetReq()
     }
   }, [
     handleAgentMessage,
@@ -699,6 +721,29 @@ export default function App() {
       unsubTeamPresence()
       unsubTeamOfficeStatus()
       unsubTeamInviteLink()
+    }
+  }, [])
+
+  // Register Tlon (knowledge base) real-time event listeners.
+  // Uses the imported onEvent() transport directly (not api.onEvent) so the
+  // channel mapping in transport.ts methodMap is honored. Progress events
+  // drive animation only; the store re-pulls authoritative status from disk.
+  useEffect(() => {
+    const unsubProgress = onEvent('tlon:ingest-progress', (data) => {
+      useTlonStore.getState().handleIngestProgress(data as IngestProgressEvent)
+    })
+    const unsubStats = onEvent('tlon:stats-updated', (data) => {
+      const { kbId } = data as { kbId: string }
+      if (kbId) useTlonStore.getState().handleStatsUpdated(kbId)
+    })
+    // KB chat turns settle on agent:complete/error. Subscribe globally (like the
+    // main chat, not per-tab) so completion is never missed when the user leaves
+    // the chat tab mid-turn — otherwise the "Searching…" indicator hangs forever.
+    const unsubChat = useTlonStore.getState().subscribeChatEvents()
+    return () => {
+      unsubProgress()
+      unsubStats()
+      unsubChat()
     }
   }, [])
 
@@ -894,7 +939,8 @@ export default function App() {
       const loadedConfig = response.data as HaloConfig
       setConfig(loadedConfig)  // Sync config to store (was missing, causing empty apiKey in settings)
       // Show setup if first launch or no AI source configured
-      if (loadedConfig.isFirstLaunch || !hasAnyAISource(loadedConfig.aiSources)) {
+      // (modelConfigSkipped honors an explicit deferral from the first-run wizard)
+      if (loadedConfig.isFirstLaunch || (!hasAnyAISource(loadedConfig.aiSources) && !loadedConfig.modelConfigSkipped)) {
         setView('setup')
       } else {
         setView('home')
@@ -957,6 +1003,12 @@ export default function App() {
         return (
           <Suspense fallback={<PageLoader />}>
             <AppsPage />
+          </Suspense>
+        )
+      case 'tlon':
+        return (
+          <Suspense fallback={<PageLoader />}>
+            <TlonPage />
           </Suspense>
         )
       default:

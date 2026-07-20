@@ -217,6 +217,31 @@ export function SetupPage() {
     setStep('custom')
   }
 
+  // Handle skip — defer model configuration and enter Home directly.
+  // The modelConfigSkipped flag tells the setup-entry guard not to re-show
+  // the wizard on next launch despite the empty aiSources.
+  const handleSkipModelConfig = async () => {
+    setError(null)
+    try {
+      const configResult = await api.getConfig()
+      if (!configResult.success || !configResult.data) {
+        setError(t('Failed to load config'))
+        return
+      }
+      const newConfig = {
+        ...(configResult.data as any),
+        isFirstLaunch: false,
+        modelConfigSkipped: true
+      }
+      await api.setConfig(newConfig)
+      setConfig(newConfig)
+      setView('home')
+    } catch (err) {
+      console.error('[SetupPage] skip error:', err)
+      setError(err instanceof Error ? err.message : t('Skip failed'))
+    }
+  }
+
   // Handle back from Custom API
   const handleBackFromCustom = () => {
     setStep('select')
@@ -255,11 +280,19 @@ export function SetupPage() {
 
   if (effectiveStep === 'select') {
     return (
-      <LoginSelector
-        onSelectProvider={handleSelectProvider}
-        onSelectCustom={handleSelectCustom}
-        onSelectPreset={handleSelectPreset}
-      />
+      <>
+        <LoginSelector
+          onSelectProvider={handleSelectProvider}
+          onSelectCustom={handleSelectCustom}
+          onSelectPreset={handleSelectPreset}
+          onSkip={handleSkipModelConfig}
+        />
+        {error && (
+          <div className="fixed bottom-8 left-1/2 -translate-x-1/2 p-4 bg-destructive/10 border border-destructive/20 rounded-lg z-50">
+            <p className="text-sm text-destructive">{error}</p>
+          </div>
+        )}
+      </>
     )
   }
 

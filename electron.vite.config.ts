@@ -61,7 +61,10 @@ const buildMetaDefine = {
 export default defineConfig({
   main: {
     plugins: [
-      externalizeDepsPlugin()
+      // Bundle @xterm/headless (pure-JS CommonJS) instead of externalizing it —
+      // its named exports are not reachable via ESM interop when left external.
+      // node-pty stays external (native addon).
+      externalizeDepsPlugin({ exclude: ['@xterm/headless'] })
     ],
     define: analyticsDefine,
     build: {

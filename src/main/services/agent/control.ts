@@ -33,7 +33,10 @@ export async function stopGeneration(conversationId?: string): Promise<void> {
       const thoughts = sessionState?.thoughts || []
 
       const v2Session = v2Sessions.get(conversationId)
-      if (v2Session && hasActiveTeamTasks(thoughts)) {
+      // Team detection must include lifecycle thoughts carried across turns:
+      // the team may have been spawned several turns ago, and stopping it via
+      // interrupt() would leave its agents running in the subprocess.
+      if (v2Session && hasActiveTeamTasks([...thoughts, ...consumer.getTeamLifecycleThoughts()])) {
         // Team mode: close() kills the entire CC subprocess (main agent + all team members).
         // interrupt() + drain is insufficient because team agents run independently in the
         // same subprocess — interrupt only stops the current SDK turn, not the agents.

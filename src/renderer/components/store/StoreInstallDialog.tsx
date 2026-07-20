@@ -11,6 +11,7 @@ import { useSpaceStore } from '../../stores/space.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
+import { EntryIcon } from './EntryIcon'
 import type { StoreAppDetail, StoreInstallProgress } from '../../../shared/store/store-types'
 import type { InputDef } from '../../../shared/apps/spec-types'
 
@@ -140,7 +141,7 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
         <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-2 min-w-0">
             {detail.entry.icon && (
-              <span className="text-base">{detail.entry.icon}</span>
+              <EntryIcon icon={detail.entry.icon} textClassName="text-base" imageSize={18} />
             )}
             <h2 className="text-sm font-semibold truncate">
               {t('Install')} {resolveSpecI18n(detail.spec, getCurrentLanguage()).name}

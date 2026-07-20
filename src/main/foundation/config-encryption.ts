@@ -59,6 +59,15 @@ function visitSensitiveFields(config: Record<string, unknown>, fn: Visitor): voi
   // but included in the MASKING roster so GET /api/config never leaks the
   // plaintext PIN. Encryption is skipped (see encryptConfigFields).
 
+  // remoteAccess.namedTunnel.tunnelSecret — named-tunnel credential
+  const remoteAccess = config.remoteAccess as Record<string, unknown> | undefined
+  const namedTunnel = remoteAccess?.namedTunnel as Record<string, unknown> | undefined
+  if (namedTunnel && typeof namedTunnel.tunnelSecret === 'string') fn(namedTunnel, 'tunnelSecret')
+
+  // deviceIdentity.deviceSecret — proves device ownership toward the tunnel issuer
+  const deviceIdentity = config.deviceIdentity as Record<string, unknown> | undefined
+  if (deviceIdentity && typeof deviceIdentity.deviceSecret === 'string') fn(deviceIdentity, 'deviceSecret')
+
   // MCP servers: env values matching the pattern + auth-like headers
   const mcpServers = config.mcpServers as Record<string, Record<string, unknown>> | undefined
   if (mcpServers) {
@@ -216,6 +225,14 @@ export function unmaskSentinels(
 
   // Remote access
   restore(incoming.remoteAccess, existing.remoteAccess, 'password')
+  restore(
+    (incoming.remoteAccess as Record<string, unknown>)?.namedTunnel,
+    (existing.remoteAccess as Record<string, unknown>)?.namedTunnel,
+    'tunnelSecret',
+  )
+
+  // Device identity
+  restore(incoming.deviceIdentity, existing.deviceIdentity, 'deviceSecret')
 
   // MCP servers (keyed by name)
   const iMcp = incoming.mcpServers as Record<string, Record<string, unknown>> | undefined
@@ -243,33 +260,52 @@ export function unmaskSentinels(
   // Legacy wecomBot
   restore(incoming.wecomBot, existing.wecomBot, 'secret')
 
-  // IM channels instances — matched by array index
+  // IM channels instances — matched by instance ID. The frontend
+  // (MessageChannelsSection.saveInstances) always sends the full instances
+  // array, and unchanged instances carry the '***' mask sentinel from
+  // getConfig(). Index-based matching would cross-contaminate or skip secrets
+  // whenever the array is reordered, appended, or partially updated.
   const iIm = (incoming.imChannels as Record<string, unknown>)?.instances as Record<string, unknown>[] | undefined
   const eIm = (existing.imChannels as Record<string, unknown>)?.instances as Record<string, unknown>[] | undefined
   if (iIm && eIm) {
-    for (let i = 0; i < iIm.length; i++) {
-      if (!eIm[i]) continue
-      restoreMap(iIm[i]?.config, eIm[i]?.config)
+    const existingById = new Map<string, Record<string, unknown>>()
+    for (const e of eIm) {
+      if (e && typeof e.id === 'string') existingById.set(e.id, e)
+    }
+    for (const inc of iIm) {
+      const id = inc?.id
+      const ext = typeof id === 'string' ? existingById.get(id) : undefined
+      restoreMap(inc?.config, ext?.config)
     }
   }
 }
 
 function restore(incoming: unknown, existing: unknown, key: string): void {
   const inc = incoming as Record<string, unknown> | undefined
+  if (!inc || inc[key] !== MASK_SENTINEL) return
   const ext = existing as Record<string, unknown> | undefined
-  if (!inc || !ext) return
-  if (inc[key] === MASK_SENTINEL && typeof ext[key] === 'string') {
+  // Persisting the literal '***' is never correct: it means "unchanged" and
+  // the consumer has no real value to use. When the existing value is absent
+  // or itself the corrupted sentinel, fall back to '' so the field carries an
+  // honest empty state (and a previously-corrupted value self-heals on save).
+  if (ext && typeof ext[key] === 'string' && ext[key] !== MASK_SENTINEL) {
     inc[key] = ext[key]
+  } else {
+    inc[key] = ''
   }
 }
 
 function restoreMap(incoming: unknown, existing: unknown): void {
   const inc = incoming as Record<string, unknown> | undefined
-  const ext = existing as Record<string, unknown> | undefined
-  if (!inc || !ext) return
+  if (!inc) return
+  const ext = (existing as Record<string, unknown> | undefined) ?? {}
   for (const k of Object.keys(inc)) {
-    if (inc[k] === MASK_SENTINEL && typeof ext[k] === 'string') {
+    if (inc[k] !== MASK_SENTINEL) continue
+    if (typeof ext[k] === 'string' && ext[k] !== MASK_SENTINEL) {
       inc[k] = ext[k]
+    } else {
+      // No real value to restore — do not persist the sentinel (see restore).
+      inc[k] = ''
     }
   }
 }

@@ -17,4 +17,8 @@ export const agentRpc = {
   getEngineCapabilities: rawRpcMethod('agent:get-engine-capabilities'),
   injectMessage: rawRpcMethod('agent:inject-message'),
   testMcpConnections: rawRpcMethod('agent:test-mcp'),
+  // Toolset broker (on-demand MCP toolsets)
+  listToolsets: rawRpcMethod('agent:toolsets-list'),
+  openToolset: rawRpcMethod('agent:toolsets-open'),
+  closeToolset: rawRpcMethod('agent:toolsets-close'),
 }

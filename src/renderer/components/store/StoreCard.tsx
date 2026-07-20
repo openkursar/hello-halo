@@ -10,6 +10,7 @@ import type { RegistryEntry } from '../../../shared/store/store-types'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveEntryI18n } from '../../utils/spec-i18n'
 import { AppTypeBadge } from './AppTypeBadge'
+import { EntryIcon } from './EntryIcon'
 
 interface StoreCardProps {
   entry: RegistryEntry
@@ -33,9 +34,7 @@ export function StoreCard({ entry, onClick }: StoreCardProps) {
       {/* First line: icon + name + type badge + version */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
-          {entry.icon && (
-            <span className="text-base flex-shrink-0">{entry.icon}</span>
-          )}
+          {entry.icon && <EntryIcon icon={entry.icon} textClassName="text-base" imageSize={18} />}
           <span className="text-sm font-medium text-foreground truncate min-w-0">
             {name}
           </span>

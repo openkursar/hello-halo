@@ -217,13 +217,7 @@ export class ImChannelManager {
    * Get status of all configured instances.
    */
   getAllStatuses(): ImChannelInstanceStatus[] {
-    return this.currentConfigs.map(cfg => ({
-      id: cfg.id,
-      type: cfg.type,
-      enabled: cfg.enabled,
-      connected: this.instances.get(cfg.id)?.isConnected() ?? false,
-      appId: cfg.appId,
-    }))
+    return this.currentConfigs.map(cfg => this.toStatus(cfg))
   }
 
   /**
@@ -232,11 +226,27 @@ export class ImChannelManager {
   getInstanceStatus(instanceId: string): ImChannelInstanceStatus | null {
     const cfg = this.currentConfigs.find(c => c.id === instanceId)
     if (!cfg) return null
+    return this.toStatus(cfg)
+  }
+
+  /**
+   * Build the status DTO for one instance config.
+   *
+   * Prefers the instance's fine-grained getConnectionState() (which can report
+   * 'standby'); falls back to deriving state from isConnected() for providers
+   * that don't implement it. Stays provider-agnostic — no branches on type.
+   */
+  private toStatus(cfg: ImChannelInstanceConfig): ImChannelInstanceStatus {
+    const instance = this.instances.get(cfg.id)
+    const connected = instance?.isConnected() ?? false
+    const state = instance?.getConnectionState?.()
+      ?? (connected ? 'online' : cfg.enabled ? 'offline' : 'offline')
     return {
       id: cfg.id,
       type: cfg.type,
       enabled: cfg.enabled,
-      connected: this.instances.get(cfg.id)?.isConnected() ?? false,
+      connected,
+      state,
       appId: cfg.appId,
     }
   }

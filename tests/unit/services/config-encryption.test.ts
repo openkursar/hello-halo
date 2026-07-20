@@ -267,5 +267,238 @@ describe('config-encryption', () => {
 
       expect((incoming.remoteAccess as any).password).toBe('123456')
     })
+
+    // ── IM channel instances ───────────────────────────────────────
+    // Bug #172: WeCom Bot Secret lost after restart. The frontend
+    // (MessageChannelsSection.saveInstances) sends the full instances
+    // array; unchanged instances carry `config.secret === '***'` from
+    // getConfig(). unmaskSentinels must restore each by instance ID,
+    // never persist the literal '***', and self-heal prior corruption.
+
+    it('restores IM channel instance secrets by instance ID, not array index', () => {
+      const existing = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: 'real-secret-a' } },
+            { id: 'B', type: 'wecom-bot', config: { botId: 'aib-b', secret: 'real-secret-b' } },
+          ],
+        },
+      }
+      // Incoming array reordered [B, A] with both secrets masked.
+      const incoming = {
+        imChannels: {
+          instances: [
+            { id: 'B', type: 'wecom-bot', config: { botId: 'aib-b', secret: MASK_SENTINEL } },
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+
+      unmaskSentinels(incoming as any, existing as any)
+
+      const inc = (incoming.imChannels as any).instances
+      expect(inc[0].config.secret).toBe('real-secret-b')
+      expect(inc[1].config.secret).toBe('real-secret-a')
+    })
+
+    it('preserves a new IM channel instance real secret when prepended before existing masked instance', () => {
+      const existing = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: 'real-secret-a' } },
+          ],
+        },
+      }
+      // Incoming: new B (real secret) prepended before A (masked).
+      const incoming = {
+        imChannels: {
+          instances: [
+            { id: 'B', type: 'wecom-bot', config: { botId: 'aib-b', secret: 'real-secret-b' } },
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+
+      unmaskSentinels(incoming as any, existing as any)
+
+      const inc = (incoming.imChannels as any).instances
+      expect(inc[0].config.secret).toBe('real-secret-b')
+      expect(inc[1].config.secret).toBe('real-secret-a')
+    })
+
+    it('clears IM channel instance *** to empty string when no matching existing instance exists', () => {
+      // Existing has no instance at all; incoming carries a stale '***'.
+      const existing = { imChannels: { instances: [] } }
+      const incoming = {
+        imChannels: {
+          instances: [
+            { id: 'orphan', type: 'wecom-bot', config: { botId: 'aib-x', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+
+      unmaskSentinels(incoming as any, existing as any)
+
+      expect((incoming.imChannels as any).instances[0].config.secret).toBe('')
+    })
+
+    it('self-heals a corrupted existing IM channel *** to empty string', () => {
+      // Simulates prior corruption: '***' was previously written to disk.
+      const existing = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+      const incoming = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+
+      unmaskSentinels(incoming as any, existing as any)
+
+      expect((incoming.imChannels as any).instances[0].config.secret).toBe('')
+    })
+
+    it('restoreMap clears unmatched sentinels when existing config is undefined', () => {
+      // Edge case: existing instance missing entirely (incoming references
+      // an id that does not exist). restoreMap must not leave '***' in place.
+      const existing = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: 'real-secret-a' } },
+          ],
+        },
+      }
+      const incoming = {
+        imChannels: {
+          instances: [
+            // B has no counterpart in existing.
+            { id: 'B', type: 'wecom-bot', config: { botId: 'aib-b', secret: MASK_SENTINEL } },
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+
+      unmaskSentinels(incoming as any, existing as any)
+
+      const inc = (incoming.imChannels as any).instances
+      expect(inc[0].config.secret).toBe('')
+      expect(inc[1].config.secret).toBe('real-secret-a')
+    })
+
+    it('does not mutate existing during self-heal (existing is read-only)', () => {
+      const existing = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+      const incoming = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+      const existingBefore = JSON.parse(JSON.stringify(existing))
+
+      unmaskSentinels(incoming as any, existing as any)
+
+      // The contract states `existing` is read-only.
+      expect(existing).toEqual(existingBefore)
+    })
+
+    it('skips IM channel restore when incoming.imChannels is absent (partial update)', () => {
+      // Partial config update: only api is touched, imChannels not in incoming.
+      const existing = {
+        api: { provider: 'openai', apiKey: 'sk-real', apiUrl: '' },
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: 'real-secret-a' } },
+          ],
+        },
+      }
+      const incoming = { api: { provider: 'openai', apiKey: MASK_SENTINEL, apiUrl: '' } }
+
+      expect(() => unmaskSentinels(incoming as any, existing as any)).not.toThrow()
+      expect((incoming as any).api.apiKey).toBe('sk-real')
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Device identity + named tunnel (permanent remote-access hostname)
+  // --------------------------------------------------------------------------
+
+  describe('deviceIdentity + remoteAccess.namedTunnel', () => {
+    function makeTunnelConfig(): Record<string, unknown> {
+      return makeConfig({
+        deviceIdentity: {
+          deviceId: '74b24652-1dac-4ab4-9a41-6d94d0f8624c',
+          deviceSecret: 'f'.repeat(64),
+        },
+        remoteAccess: {
+          enabled: true,
+          port: 3847,
+          password: '123456',
+          tunnelEnabled: true,
+          namedTunnel: {
+            hostname: 'r-abc123.example.com',
+            tunnelId: 'tid-1',
+            accountTag: 'acc-1',
+            tunnelSecret: 'base64-tunnel-secret',
+            issuerUrl: 'https://issuer.example.com',
+            issuedAt: 1,
+          },
+        },
+      })
+    }
+
+    it('encrypts both secrets at rest when credentialAtRestSafe is on', () => {
+      setProfile(true)
+      const config = makeTunnelConfig()
+
+      encryptConfigFields(config)
+      expect((config.deviceIdentity as any).deviceSecret).toMatch(/^gmcred:v1:/)
+      expect((config.remoteAccess as any).namedTunnel.tunnelSecret).toMatch(/^gmcred:v1:/)
+      // Non-secret grant fields stay readable
+      expect((config.remoteAccess as any).namedTunnel.hostname).toBe('r-abc123.example.com')
+
+      decryptConfigFields(config)
+      expect((config.deviceIdentity as any).deviceSecret).toBe('f'.repeat(64))
+      expect((config.remoteAccess as any).namedTunnel.tunnelSecret).toBe('base64-tunnel-secret')
+    })
+
+    it('masks both secrets on output', () => {
+      setProfile(false)
+      const masked = maskConfigFields(makeTunnelConfig())
+      expect((masked.deviceIdentity as any).deviceSecret).toBe(MASK_SENTINEL)
+      expect((masked.remoteAccess as any).namedTunnel.tunnelSecret).toBe(MASK_SENTINEL)
+      expect((masked.remoteAccess as any).namedTunnel.hostname).toBe('r-abc123.example.com')
+    })
+
+    it('restores masked sentinels on write-back', () => {
+      const existing = makeTunnelConfig()
+      const incoming = makeTunnelConfig()
+      ;(incoming.deviceIdentity as any).deviceSecret = MASK_SENTINEL
+      ;(incoming.remoteAccess as any).namedTunnel.tunnelSecret = MASK_SENTINEL
+
+      unmaskSentinels(incoming, existing)
+
+      expect((incoming.deviceIdentity as any).deviceSecret).toBe('f'.repeat(64))
+      expect((incoming.remoteAccess as any).namedTunnel.tunnelSecret).toBe('base64-tunnel-secret')
+    })
+
+    it('handles configs without deviceIdentity or namedTunnel gracefully', () => {
+      setProfile(true)
+      const config = makeConfig()
+      expect(() => encryptConfigFields(config)).not.toThrow()
+      expect(() => unmaskSentinels(makeConfig(), makeConfig())).not.toThrow()
+    })
   })
 })

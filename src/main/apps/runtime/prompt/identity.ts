@@ -14,12 +14,16 @@
 import type { AppSpec } from '../../spec'
 import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../../services/agent/system-prompt'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../../../services/ai-browser'
+import { AI_TERMINAL_SYSTEM_PROMPT } from '../../../services/ai-terminal'
+import { getKBReferencesForApp } from '../../../services/tlon'
 
 export interface IdentityFragmentsInput {
+  appId: string
   appSpec: AppSpec
   memoryInstructions: string
   userConfig?: Record<string, unknown>
   usesAIBrowser?: boolean
+  usesTerminal?: boolean
   workDir: string
   modelInfo?: string
 }
@@ -31,12 +35,15 @@ export function buildIdentityFragments(input: IdentityFragmentsInput): string[] 
     workDir: input.workDir,
     modelInfo: input.modelInfo,
     aiBrowserEnabled: input.usesAIBrowser,
+    knowledgeBases: getKBReferencesForApp(input.appId),
   }
-  fragments.push(
-    input.usesAIBrowser
-      ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)
-      : buildSystemPrompt(promptCtx)
-  )
+  let base = input.usesAIBrowser
+    ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)
+    : buildSystemPrompt(promptCtx)
+  if (input.usesTerminal) {
+    base += '\n\n' + AI_TERMINAL_SYSTEM_PROMPT.trim()
+  }
+  fragments.push(base)
 
   // App "soul" — the spec's system_prompt defines what this digital human does.
   if (input.appSpec.type === 'automation' && input.appSpec.system_prompt) {

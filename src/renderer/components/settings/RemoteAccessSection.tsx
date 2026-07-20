@@ -77,6 +77,11 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
   const [gatewayError, setGatewayError] = useState<string | null>(null)
   const [gatewaySaved, setGatewaySaved] = useState(false)
 
+  // Change-address flow (revoke + re-issue a new permanent hostname)
+  const [showReset, setShowReset] = useState(false)
+  const [isResetting, setIsResetting] = useState(false)
+  const [resetError, setResetError] = useState<string | null>(null)
+
   // Load remote access status
   useEffect(() => {
     loadRemoteStatus()
@@ -90,14 +95,15 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
     }
   }, [])
 
-  // Load QR code when remote is enabled
+  // Load QR code only when the public tunnel is live — it encodes the
+  // public URL, so without a tunnel there is nothing meaningful to scan.
   useEffect(() => {
-    if (remoteStatus?.enabled) {
+    if (remoteStatus?.enabled && remoteStatus.tunnel.status === 'running') {
       loadQRCode()
     } else {
       setQrCode(null)
     }
-  }, [remoteStatus?.enabled, remoteStatus?.tunnel.url])
+  }, [remoteStatus?.enabled, remoteStatus?.tunnel.status, remoteStatus?.tunnel.url])
 
   const loadRemoteStatus = async () => {
     try {
@@ -193,6 +199,26 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
     } catch (error) {
       console.error('[RemoteAccessSection] Failed to save gateway URL:', error)
       setGatewayError(t('Failed to save'))
+    }
+  }
+
+  const handleResetAddress = async () => {
+    setIsResetting(true)
+    setResetError(null)
+    try {
+      const response = await api.resetTunnelAddress()
+      if (response.success) {
+        setShowReset(false)
+        loadRemoteStatus()
+      } else if (response.code === 'ISSUER_RATE_LIMITED') {
+        setResetError(t("Your network reached today's limit for address changes. Try again after the limit resets (within 24 hours)."))
+      } else {
+        setResetError(response.error || t('Failed to change address'))
+      }
+    } catch {
+      setResetError(t('Failed to change address'))
+    } finally {
+      setIsResetting(false)
     }
   }
 
@@ -391,12 +417,12 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
                   <div>
                     <p className="font-medium">{t('Internet Access')}</p>
                     <p className="text-sm text-muted-foreground">
-                      {t('Get public address via Cloudflare (wait about 10 seconds for DNS resolution after startup)')}
+                      {t('Get a permanent public address for this device — it stays the same across restarts')}
                     </p>
                   </div>
                   <button
                     onClick={handleToggleTunnel}
-                    disabled={isEnablingTunnel}
+                    disabled={isEnablingTunnel || remoteStatus.tunnel.status === 'starting'}
                     className={`px-4 py-2 rounded-lg text-sm transition-colors ${
                       remoteStatus.tunnel.status === 'running'
                         ? 'bg-red-500/20 text-red-500 hover:bg-red-500/30'
@@ -413,22 +439,64 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
                   </button>
                 </div>
 
-                {remoteStatus.tunnel.status === 'running' && remoteStatus.tunnel.url && (
-                  <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-green-500">{t('Public Address')}</span>
-                      <div className="flex items-center gap-2">
-                        <code className="text-sm bg-background px-2 py-1 rounded text-green-500">
+                {(remoteStatus.tunnel.status === 'running' ||
+                  remoteStatus.tunnel.status === 'starting') &&
+                  remoteStatus.tunnel.url && (
+                  <div
+                    className={`rounded-lg p-4 space-y-3 border ${
+                      remoteStatus.tunnel.status === 'running'
+                        ? 'bg-green-500/10 border-green-500/30'
+                        : 'bg-secondary/50 border-border'
+                    }`}
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <span
+                        className={`text-sm ${
+                          remoteStatus.tunnel.status === 'running' ? 'text-green-500' : 'text-muted-foreground'
+                        }`}
+                      >
+                        {remoteStatus.tunnel.mode === 'named'
+                          ? t('Permanent Address')
+                          : t('Public Address')}
+                        {remoteStatus.tunnel.status === 'starting' && (
+                          <span className="ml-2 text-xs text-amber-500 animate-pulse">
+                            {t('Connecting...')}
+                          </span>
+                        )}
+                      </span>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <code
+                          className={`text-sm bg-background px-2 py-1 rounded truncate ${
+                            remoteStatus.tunnel.status === 'running' ? 'text-green-500' : 'text-foreground'
+                          }`}
+                        >
                           {remoteStatus.tunnel.url}
                         </code>
                         <button
                           onClick={() => copyToClipboard(remoteStatus.tunnel.url || '')}
-                          className="text-xs text-green-500/80 hover:text-green-500"
+                          className="text-xs text-muted-foreground hover:text-foreground shrink-0"
                         >
                           {t('Copy')}
                         </button>
                       </div>
                     </div>
+                    {remoteStatus.tunnel.status === 'starting' ? (
+                      <p className="text-xs text-muted-foreground">
+                        {t('Your address is ready — establishing the connection, usually a few seconds.')}
+                      </p>
+                    ) : remoteStatus.tunnel.mode === 'named' ? (
+                      <p className="text-xs text-muted-foreground">
+                        {t('This address is permanently bound to this device and restores automatically after restarts.')}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-amber-500">
+                        {remoteStatus.tunnel.fallbackReason === 'issuer_rate_limited'
+                          ? t("Temporary address — your network reached today's limit for permanent-address requests. This is a product limit, not an error. Your permanent address will be restored automatically after the limit resets (within 24 hours).")
+                          : remoteStatus.tunnel.fallbackReason === 'issuer_rejected'
+                            ? t('Temporary address — this device identity was rejected by the address service.')
+                            : t('Temporary address — the issuing service was unreachable, so this link changes on every restart. It will switch back to your permanent address automatically next time.')}
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -439,6 +507,43 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
                     </p>
                   </div>
                 )}
+
+                {/* Address management */}
+                <div className="mt-4">
+                  <button
+                    onClick={() => {
+                      setShowReset(!showReset)
+                      setResetError(null)
+                    }}
+                    className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                  >
+                    {t('Change address')}
+                  </button>
+
+                  {showReset && (
+                    <div className="mt-3 bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 space-y-3">
+                      <p className="text-sm text-amber-500">
+                        {t('Get a new permanent address for this device. The current address stops working immediately and cannot be reclaimed — update any bookmarks or integrations that use it.')}
+                      </p>
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={handleResetAddress}
+                          disabled={isResetting}
+                          className="text-xs px-3 py-1.5 bg-amber-500/20 text-amber-500 rounded hover:bg-amber-500/30 disabled:opacity-50"
+                        >
+                          {isResetting ? t('Changing...') : t('Confirm and change address')}
+                        </button>
+                        <button
+                          onClick={() => setShowReset(false)}
+                          className="text-xs text-muted-foreground hover:text-foreground"
+                        >
+                          {t('Cancel')}
+                        </button>
+                      </div>
+                      {resetError && <p className="text-xs text-red-500">{resetError}</p>}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -452,7 +557,7 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
                   </div>
                   <div className="text-center text-sm">
                     <p className="text-muted-foreground">
-                      {t('Scan the QR code with your phone to access')}
+                      {t('Scan with your phone to open your address — works on any network')}
                     </p>
                   </div>
                 </div>

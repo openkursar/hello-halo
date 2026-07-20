@@ -395,15 +395,24 @@ module.exports = async function(context) {
   // (e.g. @anthropic-ai/claude-code v2.1.89 ripgrep EACCES bug).
   ensureNativeBinaryPermissions(context);
 
-  // macOS ad-hoc signing (other platforms skip)
+  // macOS signing (other platforms skip)
   if (context.electronPlatformName !== 'darwin') {
+    return;
+  }
+
+  // Developer ID mode: electron-builder performs real Developer ID signing and
+  // notarization in its own later step. Ad-hoc signing here would overwrite that
+  // with an unnotarizable signature, so skip it entirely.
+  if (process.env.HALO_MAC_SIGN_MODE === 'developer-id') {
+    console.log('[afterPack] \u2705 Developer ID signing mode \u2014 skipping ad-hoc; electron-builder will sign & notarize');
     return;
   }
 
   const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
   const entitlementsPath = path.join(__dirname, '..', 'resources', 'entitlements.mac.plist');
 
-  console.log(`[afterPack] Professional ad-hoc signing: ${appPath}`);
+  console.warn('[afterPack] \u26a0\ufe0f AD-HOC signing (NOT notarized \u2014 will be blocked by macOS 26.5+ Gatekeeper/XProtect)');
+  console.log(`[afterPack] Ad-hoc signing: ${appPath}`);
 
   try {
     // 1. Remove quarantine attribute (if exists)

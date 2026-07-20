@@ -20,6 +20,7 @@ export type {
   CustomSourceConfig,
   LegacyAISourcesConfig,
   BackendRequestConfig,
+  DirectCallEndpoint,
   OAuthLoginState,
   OAuthStartResult,
   OAuthCompleteResult,
@@ -34,6 +35,7 @@ export type {
 export {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
+  resolveModelId,
   createEmptyAISourcesConfig,
   getCurrentSource,
   getSourceById,
@@ -64,6 +66,9 @@ export * from './inbound-message'
 
 // IM channel types (proactive push adapter + session records)
 export * from './im-channel'
+
+// Tlon knowledge base types (cross-process)
+export * from './tlon'
 
 // Agent definition types (for custom subagent configurations)
 export type { AgentDefinition, AgentMcpServerSpec, PermissionMode, McpServerConfigForProcessTransport } from './agent-definition'

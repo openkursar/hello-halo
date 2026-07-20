@@ -19,6 +19,7 @@ import type {
   CustomSourceConfig,
   ModelOption
 } from '../../shared/types'
+import { DEFAULT_MODEL } from '../../shared/types'
 import { BUILTIN_PROVIDERS, getBuiltinProvider } from '../../shared/constants'
 import { decryptString } from './secure-storage.service'
 import { encryptConfigFields, decryptConfigFields, configHasUnmigratedCredentials } from './config-encryption'
@@ -430,6 +431,29 @@ export function onAgentConfigChange(handler: AgentConfigChangeHandler): () => vo
   }
 }
 
+// ============================================================================
+// Browser config change subscribers
+// Notified synchronously when browser config is saved, so BrowserViewManager
+// can apply a new User-Agent to active views without a restart.
+// ============================================================================
+
+type BrowserConfigChangeHandler = (browser: HaloConfig['browser']) => void
+const browserConfigChangeHandlers: BrowserConfigChangeHandler[] = []
+
+/**
+ * Register a callback to be notified when browser config changes.
+ * Called synchronously inside saveConfig so views update immediately.
+ *
+ * @returns Unsubscribe function
+ */
+export function onBrowserConfigChange(handler: BrowserConfigChangeHandler): () => void {
+  browserConfigChangeHandlers.push(handler)
+  return () => {
+    const idx = browserConfigChangeHandlers.indexOf(handler)
+    if (idx >= 0) browserConfigChangeHandlers.splice(idx, 1)
+  }
+}
+
 // Types (shared with renderer)
 interface HaloConfig {
   api: {
@@ -440,6 +464,15 @@ interface HaloConfig {
   }
   // Multi-source AI configuration (OAuth + Custom API)
   aiSources?: AISourcesConfig
+  /**
+   * Last-used toolset selection, the toolset analog of the global model
+   * selection in `aiSources`. Updated only on a user toggle (broker.ts,
+   * opener='user') and stamped onto each new conversation's `toolsets` in
+   * `createConversation`, so a new conversation inherits the previous window's
+   * enabled toolsets. Per-conversation state stays authoritative on the
+   * conversation record — this is purely the seed for the next new conversation.
+   */
+  lastToolsets?: string[]
   permissions: {
     fileAccess: 'allow' | 'ask' | 'deny'
     commandExecution: 'allow' | 'ask' | 'deny'
@@ -476,6 +509,33 @@ interface HaloConfig {
      * keep working after a restart. Generated on first enable when absent.
      */
     password?: string
+    /**
+     * User turned the internet tunnel on. Restored on next start together
+     * with the HTTP server so the fixed hostname comes back automatically.
+     */
+    tunnelEnabled?: boolean
+    /**
+     * Named-tunnel grant issued by the tunnel issuer service, bound to
+     * `deviceIdentity`. Same device always receives the same hostname.
+     * `tunnelSecret` is in the sensitive-field roster (encrypted at rest
+     * when credentialAtRestSafe is on, always masked on output).
+     */
+    namedTunnel?: {
+      hostname: string
+      tunnelId: string
+      accountTag: string
+      tunnelSecret: string
+      issuerUrl: string
+      issuedAt: number
+    }
+  }
+  /**
+   * Persistent per-installation identity — see foundation/device-identity.ts.
+   * `deviceSecret` is in the sensitive-field roster.
+   */
+  deviceIdentity?: {
+    deviceId: string
+    deviceSecret: string
   }
   onboarding: {
     completed: boolean
@@ -483,6 +543,8 @@ interface HaloConfig {
   // MCP servers configuration (compatible with Cursor / Claude Desktop format)
   mcpServers: Record<string, McpServerConfig>
   isFirstLaunch: boolean
+  // True when the user deferred model configuration in the first-run wizard.
+  modelConfigSkipped?: boolean
   // External notification channels (email, WeCom, DingTalk, Feishu, webhook)
   notificationChannels?: import('../../shared/types/notification-channels').NotificationChannelsConfig
   /**
@@ -564,6 +626,13 @@ interface HaloConfig {
      * browserPolicy.userExtensible — see browser-policy.service.ts.
      */
     customAllowlist?: string[]
+    /**
+     * Custom User-Agent string for the embedded AI Browser. When set and
+     * non-empty, overrides the built-in desktop/mobile UAs on all browser
+     * views (user-visible tabs, AI automation views, and login windows).
+     * Issue #124.
+     */
+    userAgent?: string
   }
   // Office federation configuration
   federation?: {
@@ -663,9 +732,6 @@ export function resolveClaudeConfigDir(
   }
 }
 
-// Default model (Opus 4.5)
-const DEFAULT_MODEL = 'claude-opus-4-5-20251101'
-
 // Default configuration
 const DEFAULT_CONFIG: HaloConfig = {
   api: {
@@ -703,7 +769,8 @@ const DEFAULT_CONFIG: HaloConfig = {
     completed: false
   },
   mcpServers: {},  // Empty by default
-  isFirstLaunch: true
+  isFirstLaunch: true,
+  modelConfigSkipped: false
 }
 
 // ============================================================================
@@ -1116,9 +1183,14 @@ export function saveConfig(config: Partial<HaloConfig>): HaloConfig {
   if (config.copilot !== undefined) {
     newConfig.copilot = { ...currentConfig.copilot, ...config.copilot }
   }
-  // browser: shallow merge (customAllowlist replaced as a whole when provided)
+  // browser: shallow merge
   if (config.browser !== undefined) {
     newConfig.browser = { ...currentConfig.browser, ...config.browser }
+    if (browserConfigChangeHandlers.length > 0) {
+      browserConfigChangeHandlers.forEach(handler => {
+        try { handler(newConfig.browser!) } catch (e) { console.error('[Config] Error in browser config change handler:', e) }
+      })
+    }
   }
   // network: shallow merge (proxy, future fields)
   if (config.network !== undefined) {

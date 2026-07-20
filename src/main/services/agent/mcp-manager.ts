@@ -18,6 +18,7 @@ import {
 } from './helpers'
 import { emitAgentBroadcast } from './events'
 import { getCleanUserEnv } from './sdk-config'
+import { resolveModelId } from '../../../shared/types/ai-sources'
 
 // ============================================
 // MCP Status Cache
@@ -159,7 +160,7 @@ export async function testMcpConnections(): Promise<{ success: boolean; servers:
     // Route through OpenAI compat router for non-Anthropic providers
     let anthropicBaseUrl = credentials.baseUrl
     let anthropicApiKey = credentials.apiKey
-    let sdkModel = credentials.model || 'claude-sonnet-4-20250514'
+    let sdkModel = resolveModelId(credentials.model)
 
     // For non-Anthropic providers (openai or oauth), use the OpenAI compat router
     if (credentials.provider !== 'anthropic') {

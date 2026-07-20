@@ -75,6 +75,7 @@ export interface TabState {
   browserViewId?: string
   browserState?: BrowserState
   isEditMode?: boolean // For markdown tabs - switches between preview and editor
+  terminalSessionId?: string // For terminal tabs - the pty session id
 }
 
 // Callback types
@@ -324,6 +325,7 @@ class CanvasLifecycle {
 
   // IPC listener cleanup
   private browserStateUnsubscribe: (() => void) | null = null
+  private artifactChangedUnsubscribe: (() => void) | null = null
 
   // Callback subscriptions
   private tabsChangeCallbacks: Set<TabsChangeCallback> = new Set()
@@ -395,6 +397,17 @@ class CanvasLifecycle {
       }
     })
 
+    // Listen for file changes via existing artifact watcher, auto-refresh open tabs
+    this.artifactChangedUnsubscribe = api.onArtifactChanged((event) => {
+      if (event.type !== 'change') return
+      for (const [tabId, tab] of this.tabs) {
+        if (tab.path === event.path && !tab.isDirty) {
+          this.refreshTab(tabId)
+          break
+        }
+      }
+    })
+
     console.log('[CanvasLifecycle] Initialized successfully')
   }
 
@@ -407,6 +420,11 @@ class CanvasLifecycle {
     if (this.browserStateUnsubscribe) {
       this.browserStateUnsubscribe()
       this.browserStateUnsubscribe = null
+    }
+
+    if (this.artifactChangedUnsubscribe) {
+      this.artifactChangedUnsubscribe()
+      this.artifactChangedUnsubscribe = null
     }
 
     // Destroy all browser views
@@ -682,6 +700,47 @@ class CanvasLifecycle {
     await this.switchTab(tabId)
 
     return tabId
+  }
+
+  /**
+   * Open a terminal session in the canvas. Terminal tabs render in React
+   * (TerminalViewer) — no BrowserView. Dedups by session id.
+   */
+  async openTerminal(sessionId: string, title?: string): Promise<string> {
+    for (const [tabId, tab] of this.tabs) {
+      if (tab.type === 'terminal' && tab.terminalSessionId === sessionId) {
+        this.setOpen(true)
+        await this.switchTab(tabId)
+        return tabId
+      }
+    }
+
+    const tabId = generateTabId()
+    const tab: TabState = {
+      id: tabId,
+      type: 'terminal',
+      title: title || 'Terminal',
+      terminalSessionId: sessionId,
+      isDirty: false,
+      isLoading: false,
+    }
+
+    this.tabs.set(tabId, tab)
+    this.setOpen(true)
+    this.notifyTabsChange()
+    await this.switchTab(tabId)
+    return tabId
+  }
+
+  /** Update a terminal tab's title (from lifecycle title events). */
+  setTerminalTitle(sessionId: string, title: string): void {
+    for (const [, tab] of this.tabs) {
+      if (tab.type === 'terminal' && tab.terminalSessionId === sessionId) {
+        tab.title = title
+        this.notifyTabsChange()
+        break
+      }
+    }
   }
 
   /**

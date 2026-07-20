@@ -29,6 +29,18 @@ export function ImageViewer({ tab }: ImageViewerProps) {
   const [imageLoaded, setImageLoaded] = useState(false)
   const [imageError, setImageError] = useState(false)
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 })
+  // True while the image is auto-fitted to the container (never upscaled past
+  // 100%). Manual zoom/pan drops it so resizes stop overriding the user's zoom.
+  const [isFitted, setIsFitted] = useState(true)
+
+  // Scale that fits w×h inside the container, capped at 1 (don't upscale).
+  const fitScaleFor = useCallback((w: number, h: number): number => {
+    const c = containerRef.current
+    if (!c || !w || !h) return 1
+    // Clamp to a positive floor: a container narrower than the padding (or 0
+    // while hidden / mid-resize) would otherwise yield a negative, mirrored scale.
+    return Math.max(0.05, Math.min((c.clientWidth - 48) / w, (c.clientHeight - 48) / h, 1))
+  }, [])
 
   // Get image URL
   // Priority: halo-file:// (custom protocol, fast) > remote download > base64 fallback
@@ -46,32 +58,45 @@ export function ImageViewer({ tab }: ImageViewerProps) {
     setPosition({ x: 0, y: 0 })
     setImageLoaded(false)
     setImageError(false)
+    setIsFitted(true)
   }, [tab.id])
 
-  // Zoom functions
-  const zoomIn = () => setScale(s => Math.min(s * 1.25, 5))
-  const zoomOut = () => setScale(s => Math.max(s / 1.25, 0.1))
+  // Zoom functions — manual zoom exits fitted mode so resizes stop refitting.
+  const zoomIn = () => { setIsFitted(false); setScale(s => Math.min(s * 1.25, 5)) }
+  const zoomOut = () => { setIsFitted(false); setScale(s => Math.max(s / 1.25, 0.1)) }
   const resetZoom = () => {
+    setIsFitted(false)
     setScale(1)
     setPosition({ x: 0, y: 0 })
   }
   const fitToWindow = () => {
-    if (!containerRef.current || !naturalSize.width) return
-    const container = containerRef.current
-    const containerWidth = container.clientWidth - 48
-    const containerHeight = container.clientHeight - 48
-    const scaleX = containerWidth / naturalSize.width
-    const scaleY = containerHeight / naturalSize.height
-    setScale(Math.min(scaleX, scaleY, 1))
+    if (!naturalSize.width) return
+    setScale(fitScaleFor(naturalSize.width, naturalSize.height))
     setPosition({ x: 0, y: 0 })
+    setIsFitted(true)
   }
 
   // Handle wheel zoom
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
+    setIsFitted(false)
     const delta = e.deltaY > 0 ? 0.9 : 1.1
     setScale(s => Math.max(0.1, Math.min(5, s * delta)))
   }, [])
+
+  // Re-fit while in fitted mode when the container resizes (e.g. dragging the
+  // chat/canvas split narrower) so the image never spills out of view.
+  useEffect(() => {
+    const c = containerRef.current
+    if (!c) return
+    const ro = new ResizeObserver(() => {
+      if (!isFitted || !naturalSize.width) return
+      setScale(fitScaleFor(naturalSize.width, naturalSize.height))
+      setPosition({ x: 0, y: 0 })
+    })
+    ro.observe(c)
+    return () => ro.disconnect()
+  }, [isFitted, naturalSize, fitScaleFor])
 
   // Handle drag
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -112,9 +137,14 @@ export function ImageViewer({ tab }: ImageViewerProps) {
   // Image load handlers
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget
-    setNaturalSize({ width: img.naturalWidth, height: img.naturalHeight })
+    const w = img.naturalWidth, h = img.naturalHeight
+    setNaturalSize({ width: w, height: h })
     setImageLoaded(true)
     setImageError(false)
+    // Open fitted to the container so a large image never lands cropped.
+    setScale(fitScaleFor(w, h))
+    setPosition({ x: 0, y: 0 })
+    setIsFitted(true)
   }
 
   const handleImageError = () => {

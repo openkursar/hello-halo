@@ -10,11 +10,13 @@
 import { ThoughtProcess } from './ThoughtProcess'
 import { StreamingBubble } from './StreamingBubble'
 import { BrowserTaskCard } from '../tool/BrowserTaskCard'
+import { TerminalTaskCard } from '../tool/TerminalTaskCard'
 import { AskUserQuestionCard } from './AskUserQuestionCard'
 import { TeamPanel } from './TeamPanel'
 import { QueuedMessagesPanel } from './QueuedMessagesPanel'
 import type { Thought, PendingQuestion } from '../../types'
 import type { BrowserToolCall } from './useBrowserToolCalls'
+import type { TerminalToolCall } from './useTerminalToolCalls'
 
 export interface StreamingSectionProps {
   /** Accumulated streaming text content */
@@ -34,6 +36,9 @@ export interface StreamingSectionProps {
 
   /** Browser tool calls extracted from streaming thoughts */
   browserToolCalls?: BrowserToolCall[]
+
+  /** Terminal tool calls extracted from streaming thoughts */
+  terminalToolCalls?: TerminalToolCall[]
 
   /** Whether to show the "View live feed" button on BrowserTaskCard.
    *  Set false in automation app contexts where Canvas/BrowserView is unavailable. */
@@ -59,6 +64,7 @@ export function StreamingSection({
   isThinking,
   textBlockVersion = 0,
   browserToolCalls = [],
+  terminalToolCalls = [],
   showBrowserViewButton = true,
   pendingQuestion,
   onAnswerQuestion,
@@ -83,6 +89,17 @@ export function StreamingSection({
               browserToolCalls={browserToolCalls}
               isActive={isThinking}
               showViewButton={showBrowserViewButton}
+            />
+          </div>
+        )}
+
+        {/* Real-time terminal task card */}
+        {terminalToolCalls.length > 0 && (
+          <div className="mb-4">
+            <TerminalTaskCard
+              terminalToolCalls={terminalToolCalls}
+              isActive={isThinking}
+              showOpenButton={showBrowserViewButton}
             />
           </div>
         )}

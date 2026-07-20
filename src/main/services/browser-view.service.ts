@@ -17,6 +17,8 @@
 
 import { BrowserView, BrowserWindow } from 'electron'
 import { isUrlAllowedByPolicy } from './browser-policy.service'
+import { resolveUserAgent } from './user-agent-resolver'
+import { getConfig, onBrowserConfigChange } from '../foundation/config.service'
 
 // ============================================
 // Types
@@ -67,14 +69,8 @@ export interface BrowserViewCreateOptions {
 // Constants
 // ============================================
 
-// Desktop Chrome User-Agent to avoid detection as Electron app
-export const CHROME_USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-
-// Mobile (H5) User-Agent — iPhone Safari is the safest default for mobile H5 pages.
-// Most H5 sites are optimized for iOS Safari, making it the best emulation target.
-export const H5_USER_AGENT =
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+// Re-exported for backward compatibility with existing importers.
+export { CHROME_USER_AGENT, H5_USER_AGENT } from './user-agent-resolver'
 
 /**
  * Logical viewport width for H5 mode (iPhone 16 Pro Max points).
@@ -151,6 +147,17 @@ class BrowserViewManager {
   private stateChangeDebounceTimers: Map<string, NodeJS.Timeout> = new Map()
   private static readonly STATE_CHANGE_DEBOUNCE_MS = 50 // 50ms debounce
 
+  // Guards against duplicate registration of the browser-config-change handler
+  // when initialize() is called more than once (defensive — currently the app
+  // lifecycle calls it exactly once, but this prevents a subtle leak if that
+  // assumption changes).
+  private browserConfigChangeRegistered = false
+  // Last applied custom UA — used to detect whether a browser-config change
+  // actually altered the UA before triggering view reloads. Without this,
+  // unrelated browser-config writes (e.g. customAllowlist edits) would force
+  // every open page to reload.
+  private lastAppliedUserAgent: string | undefined
+
   /**
    * Initialize the manager with the main window
    */
@@ -161,6 +168,49 @@ class BrowserViewManager {
     mainWindow.on('closed', () => {
       this.destroyAll()
     })
+
+    // Issue #124: apply a newly-saved custom User-Agent to all active views
+    // immediately, without requiring a page reload or app restart. Only fires
+    // when the UA string actually changes — other browser-config fields
+    // (customAllowlist, etc.) must not trigger view reloads.
+    if (!this.browserConfigChangeRegistered) {
+      onBrowserConfigChange((browser) => {
+        const next = browser?.userAgent
+        if (next === this.lastAppliedUserAgent) return
+        this.lastAppliedUserAgent = next
+        this.applyUserAgentToAll(next)
+      })
+      this.browserConfigChangeRegistered = true
+    }
+  }
+
+  /**
+   * Apply a (possibly new) User-Agent to every active BrowserView. Called by
+   * the browser-config-change subscriber when the user edits the UA in
+   * Settings. Each active page is reloaded so `navigator.userAgent` picks up
+   * the new value — Chromium caches the UA at page-init time, so
+   * `setUserAgent()` alone does not update `navigator.userAgent` for an
+   * already-loaded page until it reloads. This mirrors the behavior of
+   * `setDeviceMode()`, which also reloads after changing the UA.
+   */
+  applyUserAgentToAll(customUserAgent: string | undefined): void {
+    for (const [viewId, view] of this.views) {
+      const state = this.states.get(viewId)
+      if (!state || view.webContents.isDestroyed()) continue
+      try {
+        view.webContents.setUserAgent(
+          resolveUserAgent(customUserAgent, state.deviceMode)
+        )
+        // Reload: setUserAgent() updates HTTP headers but navigator.userAgent
+        // is cached at page-init (see method JSDoc).
+        if (state.url && state.url !== 'about:blank') {
+          view.webContents.reload()
+        }
+        console.log(`[BrowserView] Applied updated User-Agent to view: ${viewId}`)
+      } catch (e) {
+        console.error(`[BrowserView] Failed to apply UA to view ${viewId}:`, e)
+      }
+    }
   }
 
   /**
@@ -241,8 +291,9 @@ class BrowserViewManager {
     })
     console.log(`[BrowserView] BrowserView instance created`)
 
-    // Set User-Agent based on device mode
-    view.webContents.setUserAgent(deviceMode === 'h5' ? H5_USER_AGENT : CHROME_USER_AGENT)
+    // Issue #124: apply custom UA if configured.
+    const customUA = getConfig().browser?.userAgent
+    view.webContents.setUserAgent(resolveUserAgent(customUA, deviceMode))
 
     // Set background color to white (standard web)
     view.setBackgroundColor('#ffffff')
@@ -1021,8 +1072,10 @@ class BrowserViewManager {
 
     try {
       // 1. Switch UA on the webContents object (affects subsequent navigations
-      //    at the Electron level, independent of CDP).
-      view.webContents.setUserAgent(mode === 'h5' ? H5_USER_AGENT : CHROME_USER_AGENT)
+      //    at the Electron level, independent of CDP). Issue #124: honor the
+      //    user-configured custom UA first.
+      const customUA = getConfig().browser?.userAgent
+      view.webContents.setUserAgent(resolveUserAgent(customUA, mode))
 
       // 2. Apply full CDP emulation set
       await this.applyDeviceMode(viewId, mode)

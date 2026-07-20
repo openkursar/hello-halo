@@ -40,6 +40,7 @@ import { createCanUseTool } from '../../services/agent/permission-handler'
 import { getImPermissionContext } from './im-permission-registry'
 import type { GuestPolicy } from '../../../shared/types/im-channel'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
+import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import type { BrowserContext } from '../../services/ai-browser/context'
 import { processStream } from '../../services/agent/stream-processor'
 import { buildMessageContent } from '../../services/agent/message-utils'
@@ -340,6 +341,7 @@ export async function sendAppChatMessage(
   // ── 3. Build system prompt for interactive chat ──────
   const memoryInstructions = memory.getPromptInstructions()
   const usesAIBrowser = resolvePermission(app, 'ai-browser')
+  const usesTerminal = resolvePermission(app, 'ai-terminal', false) && isTerminalAvailable() // default off
   const usesEmail = resolvePermission(app, 'email', false) // default false — higher trust
   const usesImPush = resolvePermission(app, 'im-push') // default true — AI-driven IM push
 
@@ -355,10 +357,12 @@ export async function sendAppChatMessage(
   // IM (group/direct) or native UI. See src/main/apps/runtime/prompt/
   // and src/main/apps/runtime/im-channels/im-prompt.ts.
   const identity = buildIdentityFragments({
+    appId: app.id,
     appSpec: app.spec,
     memoryInstructions,
     userConfig: mergedConfig,
     usesAIBrowser,
+    usesTerminal,
     workDir,
     modelInfo: resolvedCreds.displayModel,
   })
@@ -407,7 +411,7 @@ export async function sendAppChatMessage(
   if (usesAIBrowser) {
     scopedBrowserCtx = scopedContexts.get(conversationId)
     if (!scopedBrowserCtx) {
-      scopedBrowserCtx = createScopedBrowserContext(null)
+      scopedBrowserCtx = createScopedBrowserContext()
       scopedContexts.set(conversationId, scopedBrowserCtx)
       console.log(`[AppChat][${appId}] Created scoped browser context`)
     }
@@ -450,6 +454,9 @@ export async function sendAppChatMessage(
     ...(digitalHumansEnabled ? { 'halo-apps': createHaloAppsMcpServer(spaceId) } : {}),
     'web-search': createWebSearchMcpServer(),
     ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
+    ...(usesTerminal
+      ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId, workDir }) }
+      : {}),
     ...(usesEmail && config.notificationChannels?.email?.enabled
       ? { 'halo-email': createEmailMcpServer(config.notificationChannels.email) }
       : {}),
@@ -558,12 +565,13 @@ export async function sendAppChatMessage(
       ? loadChatSessionId(spacePath, appId, chatRunId)
       : undefined
 
+    // No displayModel: app-chat drives its own processStream(), so it must not
+    // start a persistent session consumer (that would fight over the stream).
     const v2Session = await getOrCreateV2Session(
       spaceId,
       conversationId,
       sdkOptions,
       savedSessionId,
-      { aiBrowserEnabled: usesAIBrowser },
       workDir
     )
 

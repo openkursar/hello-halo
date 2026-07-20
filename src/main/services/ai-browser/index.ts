@@ -19,6 +19,14 @@ import { createAIBrowserMcpServer } from './sdk-mcp-server'
 export { createAIBrowserMcpServer }
 export { createScopedBrowserContext }
 
+// View-lifecycle event bus (consumed by ipc/ai-browser.ts transport layer)
+export {
+  onBrowserActiveView,
+  onBrowserViewGone,
+  type BrowserActiveViewEvent,
+  type BrowserViewGoneEvent,
+} from './events'
+
 // ============================================
 // System Prompt
 // ============================================

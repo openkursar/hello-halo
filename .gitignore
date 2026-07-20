@@ -70,3 +70,8 @@ src/sdk/
 
 # Local multi-node federation test cluster (isolated node data + logs + secrets)
 .cluster/
+
+# Stray KB wiki artifacts (real wikis live under ~/.halo, never in-repo)
+/wiki/
+# Personal marketing/intro drafts (not product code)
+/intro-doc/

@@ -18,6 +18,7 @@ import type { EscalationResponse } from './types'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../services/agent/system-prompt'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../../services/ai-browser'
+import { AI_TERMINAL_SYSTEM_PROMPT } from '../../services/ai-terminal'
 
 // ============================================
 // Automation Context Overlay
@@ -205,6 +206,8 @@ export interface AppPromptOptions {
   userConfig?: Record<string, unknown>
   /** Whether the App uses AI Browser (includes sub-agent instructions) */
   usesAIBrowser?: boolean
+  /** Whether the App uses AI Terminal (appends the terminal usage guide) */
+  usesTerminal?: boolean
   /** Working directory for the agent (passed to base system prompt) */
   workDir: string
   /** Display model name (passed to base system prompt) */
@@ -236,11 +239,14 @@ export function buildAppSystemPrompt(options: AppPromptOptions): string {
   //    100% of the same capabilities as the interactive agent
   //    When AI Browser is enabled, append full browser tool workflow guide
   const promptCtx = { workDir: options.workDir, modelInfo: options.modelInfo, aiBrowserEnabled: options.usesAIBrowser }
-  sections.push(
-    options.usesAIBrowser
-      ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)
-      : buildSystemPrompt(promptCtx)
-  )
+  let basePrompt = options.usesAIBrowser
+    ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)
+    : buildSystemPrompt(promptCtx)
+  // Append the terminal usage guide when the App has the ai-terminal permission.
+  if (options.usesTerminal) {
+    basePrompt += '\n\n' + AI_TERMINAL_SYSTEM_PROMPT.trim()
+  }
+  sections.push(basePrompt)
 
   // 2. Automation context overlay — establishes headless mode,
   //    overrides interaction patterns (escalation vs AskUserQuestion)

@@ -13,7 +13,7 @@ import { getSpace } from '../space.service'
 import { getAISourceManager } from '../ai-sources'
 import { getAppManager } from '../app-bridge'
 import type { McpSpec } from '../../apps/spec/schema'
-import type { BackendRequestConfig, AISource } from '../../../shared/types/ai-sources'
+import { resolveModelId, type BackendRequestConfig, type AISource } from '../../../shared/types/ai-sources'
 import { modelCapabilitiesService } from '../model-capabilities.service'
 import { isMcpCommandBlocked } from '../security-policy'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
@@ -255,7 +255,7 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
     console.log(`[Agent] Using OpenAI-compatible API (${currentSource?.provider || 'unknown'}) via AISourceManager`)
   }
 
-  const modelId = backendConfig.model || 'claude-opus-4-5-20251101'
+  const modelId = resolveModelId(backendConfig.model)
   const modelOption = currentSource?.availableModels?.find(m => m.id === modelId)
   const displayModel = modelOption?.name || modelId
   // Capabilities MUST resolve against the wire model id. Both the preset
@@ -279,6 +279,7 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
     filterContent: backendConfig.filterContent,
     adapterId: backendConfig.adapterId,
     capabilities,
+    supportsVision: modelOption?.supportsVision,
   }
 }
 
@@ -352,7 +353,39 @@ export async function getApiCredentialsForSource(
     filterContent: backendConfig.filterContent,
     adapterId: backendConfig.adapterId,
     capabilities,
+    supportsVision: modelOption?.supportsVision,
   }
+}
+
+/**
+ * Get API credentials for a conversation, honoring its per-conversation model
+ * pin (Cursor-style) and falling back to the global selection.
+ *
+ * Resolution order:
+ *  1. Conversation has a `modelSourceId` that still exists in config → resolve
+ *     from that source + `modelId` (reuses the per-app override path).
+ *  2. Otherwise (legacy conversation with no pin, or a pin whose source was
+ *     deleted) → fall back to the global current source via getApiCredentials.
+ *
+ * Accepts a minimal structural shape rather than the full Conversation type to
+ * avoid coupling the agent module to conversation.service's internal interface.
+ */
+export async function getApiCredentialsForConversation(
+  config: ReturnType<typeof getConfig>,
+  conversation: { modelSourceId?: string; modelId?: string } | null | undefined
+): Promise<ApiCredentials> {
+  const sourceId = conversation?.modelSourceId
+  if (sourceId) {
+    const aiSources = config.aiSources
+    const sourceExists = aiSources?.version === 2 && aiSources.sources.some(s => s.id === sourceId)
+    if (sourceExists) {
+      return getApiCredentialsForSource(config, sourceId, conversation?.modelId)
+    }
+    console.warn(
+      `[AgentService] Conversation model pin source ${sourceId} unavailable, falling back to global selection`
+    )
+  }
+  return getApiCredentials(config)
 }
 
 /**
@@ -399,6 +432,7 @@ export function credentialsToBackendConfig(
     forceStream: credentials.forceStream,
     filterContent: credentials.filterContent,
     adapterId: credentials.adapterId,
+    supportsVision: credentials.supportsVision,
     ...overrides
   }
 }

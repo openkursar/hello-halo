@@ -15,7 +15,7 @@
 
 import * as path from 'path'
 import * as fs from 'fs'
-import { BrowserWindow, nativeImage, app } from 'electron'
+import { nativeImage, app } from 'electron'
 import { browserViewManager } from '../browser-view.service'
 import {
   createAccessibilitySnapshot,
@@ -27,6 +27,7 @@ import {
   registerWebContentsForDownload,
   unregisterWebContentsForDownload
 } from './download-handler'
+import { emitBrowserActiveView, emitBrowserViewGone } from './events'
 import { sanitizeFilename, resolveUniquePath } from '../../foundation/file-naming'
 import type {
   BrowserContextInterface,
@@ -72,7 +73,6 @@ export class BrowserContext implements BrowserContextInterface {
    */
   workDir: string | undefined = undefined
 
-  private mainWindow: BrowserWindow | null = null
   private activeViewId: string | null = null
   private lastSnapshot: AccessibilitySnapshot | null = null
 
@@ -125,14 +125,6 @@ export class BrowserContext implements BrowserContextInterface {
   }
 
   /**
-   * Initialize the context with the main window
-   */
-  initialize(mainWindow: BrowserWindow): void {
-    this.mainWindow = mainWindow
-    console.log('[BrowserContext] Initialized')
-  }
-
-  /**
    * Get the currently active view ID
    */
   getActiveViewId(): string | null {
@@ -160,18 +152,38 @@ export class BrowserContext implements BrowserContextInterface {
   }
 
   /**
-   * Notify renderer process of active view ID change
-   * Used by BrowserTaskCard to show the correct AI-controlled browser
+   * Broadcast the active view change to the global event bus so the transport
+   * layer can reach the renderer and remote clients. Only the interactive
+   * singleton (non-scoped) has a UI; scoped automation contexts stay silent.
    */
   private notifyActiveViewChange(viewId: string): void {
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      const state = browserViewManager.getState(viewId)
-      this.mainWindow.webContents.send('ai-browser:active-view-changed', {
-        viewId,
-        url: state?.url || null,
-        title: state?.title || null,
-      })
-      console.log(`[BrowserContext] Notified renderer of active view: ${viewId}`)
+    if (this._isScoped) return
+    const state = browserViewManager.getState(viewId)
+    emitBrowserActiveView({
+      viewId,
+      url: state?.url || null,
+      title: state?.title || null,
+    })
+    console.log(`[BrowserContext] Broadcast active view: ${viewId}`)
+  }
+
+  /**
+   * Reconcile context state when a view is destroyed elsewhere (user closes the
+   * canvas tab, tray "stop", or AI closes a tab). If the destroyed view was the
+   * AI's active one, clear it — the next tool call will create a fresh page
+   * instead of operating a dead WebContents — and announce it so the renderer
+   * drops the live-session entry and the AI-operating indicator.
+   */
+  handleViewDestroyed(viewId: string): void {
+    this.ownedViewIds.delete(viewId)
+    if (this.activeViewId !== viewId) return
+
+    this.disableMonitoring()
+    this.activeViewId = null
+    this.lastSnapshot = null
+    if (!this._isScoped) {
+      emitBrowserViewGone({ viewId })
+      console.log(`[BrowserContext] Active view gone: ${viewId}`)
     }
   }
 
@@ -1634,7 +1646,6 @@ export class BrowserContext implements BrowserContextInterface {
 
     this.activeViewId = null
     this.lastSnapshot = null
-    this.mainWindow = null
     this.workDir = undefined
   }
 }
@@ -1712,12 +1723,9 @@ function parseKey(key: string): {
  * Lifecycle: create before the run, call `destroy()` after the run.
  * `destroy()` also cleans up any BrowserViews created during the scope.
  */
-export function createScopedBrowserContext(mainWindow: BrowserWindow | null): BrowserContext {
+export function createScopedBrowserContext(): BrowserContext {
   const scoped = new BrowserContext()
   scoped.markAsScoped()
-  if (mainWindow) {
-    scoped.initialize(mainWindow)
-  }
   return scoped
 }
 

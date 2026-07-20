@@ -19,17 +19,19 @@ import { api } from '../api'
 // ============================================
 
 interface AIBrowserState {
-  // Whether AI Browser mode is enabled for current conversation
-  enabled: boolean
-
-  // Persistent preference: default state for new conversations
-  defaultEnabled: boolean
-
-  // Current active browser view ID (if any)
+  // Current active browser view ID (if any) — the view the AI is driving.
+  // This is the identity used to reveal the live view and to light the
+  // "AI is operating this browser" indicator on the matching canvas tab.
   activeViewId: string | null
 
   // Current URL being operated on by AI
   activeUrl: string | null
+
+  // Title of the AI's active view (from the main-process view state)
+  activeTitle: string | null
+
+  // Last time the AI's active view changed (for live-session ordering)
+  lastActivityAt: number
 
   // Loading state for browser operations
   isOperating: boolean
@@ -38,12 +40,14 @@ interface AIBrowserState {
   lastError: string | null
 
   // Actions
-  setEnabled: (enabled: boolean) => void
-  setDefaultEnabled: (enabled: boolean) => void
   setActiveViewId: (viewId: string | null) => void
   setActiveUrl: (url: string | null) => void
   setOperating: (isOperating: boolean) => void
   setError: (error: string | null) => void
+  /** Apply an active-view event from the main process (identity + metadata). */
+  applyActiveView: (data: { viewId: string; url: string | null; title: string | null }) => void
+  /** The AI's view was destroyed elsewhere; clear it if it is the active one. */
+  handleViewGone: (viewId: string) => void
   reset: () => void
 }
 
@@ -55,24 +59,12 @@ export const useAIBrowserStore = create<AIBrowserState>()(
   persist(
     (set) => ({
       // Initial state
-      enabled: true,
-      defaultEnabled: true,
       activeViewId: null,
       activeUrl: null,
+      activeTitle: null,
+      lastActivityAt: 0,
       isOperating: false,
       lastError: null,
-
-      // Toggle AI Browser for current session
-      setEnabled: (enabled: boolean) => {
-        set({ enabled, lastError: null })
-        console.log(`[AI Browser Store] Enabled: ${enabled}`)
-      },
-
-      // Set default preference (persisted)
-      setDefaultEnabled: (defaultEnabled: boolean) => {
-        set({ defaultEnabled })
-        console.log(`[AI Browser Store] Default enabled: ${defaultEnabled}`)
-      },
 
       // Track active browser view
       setActiveViewId: (activeViewId: string | null) => {
@@ -94,23 +86,41 @@ export const useAIBrowserStore = create<AIBrowserState>()(
         set({ lastError })
       },
 
+      // Apply an active-view event from the main process
+      applyActiveView: ({ viewId, url, title }) => {
+        set(state => ({
+          activeViewId: viewId,
+          activeUrl: url ?? state.activeUrl,
+          activeTitle: title ?? null,
+          lastActivityAt: Date.now(),
+        }))
+      },
+
+      // The AI's active view was destroyed elsewhere — clear if it matches
+      handleViewGone: (viewId: string) => {
+        set(state =>
+          state.activeViewId === viewId
+            ? { activeViewId: null, activeUrl: null, activeTitle: null, isOperating: false }
+            : state
+        )
+      },
+
       // Reset state (e.g., on conversation change)
       reset: () => {
-        set((state) => ({
-          enabled: state.defaultEnabled,
+        set({
           activeViewId: null,
           activeUrl: null,
+          activeTitle: null,
+          lastActivityAt: 0,
           isOperating: false,
           lastError: null,
-        }))
+        })
       },
     }),
     {
       name: 'halo-ai-browser',
-      // Only persist the default preference
-      partialize: (state) => ({
-        defaultEnabled: state.defaultEnabled,
-      }),
+      // View-live state is all ephemeral; nothing to persist.
+      partialize: () => ({}),
     }
   )
 )
@@ -118,13 +128,6 @@ export const useAIBrowserStore = create<AIBrowserState>()(
 // ============================================
 // Selectors
 // ============================================
-
-/**
- * Check if AI Browser is enabled
- */
-export function useIsAIBrowserEnabled(): boolean {
-  return useAIBrowserStore((state) => state.enabled)
-}
 
 /**
  * Check if browser is currently operating
@@ -154,6 +157,13 @@ export function useAIBrowserActiveUrl(): string | null {
   return useAIBrowserStore((state) => state.activeUrl)
 }
 
+/**
+ * Get the title of the AI's active view
+ */
+export function useAIBrowserActiveTitle(): string | null {
+  return useAIBrowserStore((state) => state.activeTitle)
+}
+
 // ============================================
 // IPC Event Listeners
 // ============================================
@@ -166,16 +176,21 @@ export function useAIBrowserActiveUrl(): string | null {
  * @returns Cleanup function to unsubscribe from events
  */
 export function initAIBrowserStoreListeners(): () => void {
-  // Listen for active view changes from main process
-  // This is triggered when AI Browser tools create or select a view
-  const unsubscribe = api.onAIBrowserActiveViewChanged((data) => {
-    const store = useAIBrowserStore.getState()
-    store.setActiveViewId(data.viewId)
-    if (data.url) {
-      store.setActiveUrl(data.url)
-    }
+  // Active view changes: the AI created or selected a view. This is the
+  // identity signal that powers "View live feed" and the operating indicator.
+  const unsubActive = api.onAIBrowserActiveViewChanged((data) => {
+    useAIBrowserStore.getState().applyActiveView(data)
     console.log(`[AI Browser Store] Active view updated from main: ${data.viewId}, url: ${data.url}`)
   })
 
-  return unsubscribe
+  // View gone: the AI's active view was destroyed (canvas tab close / tray stop).
+  const unsubGone = api.onAIBrowserViewGone((data) => {
+    useAIBrowserStore.getState().handleViewGone(data.viewId)
+    console.log(`[AI Browser Store] Active view gone from main: ${data.viewId}`)
+  })
+
+  return () => {
+    unsubActive()
+    unsubGone()
+  }
 }

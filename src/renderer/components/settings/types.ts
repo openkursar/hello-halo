@@ -43,6 +43,10 @@ export interface RemoteAccessStatus {
     status: 'stopped' | 'starting' | 'running' | 'error'
     url: string | null
     error: string | null
+    /** 'named' = permanent hostname, 'quick' = random per-run fallback */
+    mode: 'named' | 'quick' | null
+    /** Why quick-fallback is active — distinguishes quota from outage */
+    fallbackReason: 'issuer_unreachable' | 'issuer_rate_limited' | 'issuer_rejected' | null
   }
   clients: number
 }

@@ -1,5 +1,14 @@
 /**
- * Unit Tests for Converters
+ * Unit Tests for Converters (colocated)
+ *
+ * This file is outside the vitest CI include pattern and runs only when
+ * invoked manually. It is retained for local development of legacy converter
+ * behavior.
+ *
+ * Canonical tests for issue #137 (max_tokens routing, reasoning model
+ * detection, output-token normalization) live in
+ * `tests/unit/services/openai-compat-converters.test.ts` — that file is the
+ * mandatory pre-handoff validation source. Do not add new #137 coverage here.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -415,8 +424,9 @@ describe('Request Converters', () => {
       const result = convertAnthropicToOpenAIResponses(request)
 
       expect(result.request.model).toBe('claude-3-opus')
-      // max_output_tokens is deliberately omitted — many providers don't support it
-      expect(result.request.max_output_tokens).toBeUndefined()
+      // The Responses API field `max_output_tokens` is part of the public spec
+      // and is forwarded so the user's "max output tokens" setting is honored.
+      expect(result.request.max_output_tokens).toBe(1024)
       expect(result.request.input).toHaveLength(1)
       expect((result.request.input as any)[0].role).toBe('user')
       expect((result.request.input as any)[0].content[0]).toEqual({
@@ -654,6 +664,100 @@ describe('Request Converters', () => {
       expect(fco).toBeDefined()
       expect(fco.output).not.toContain('"image"')
       expect(fco.output).toContain('ok')
+    })
+
+    // Issue #139: the router receives the provider-declared
+    // ModelOption.supportsVision through the encoded BackendConfig. Models that
+    // are NOT in the built-in blacklist (so supportsVisionById would return
+    // true) must still strip images when the override says the model has no
+    // vision capability. Without this, non-multimodal custom/niche models
+    // receive image payloads and reject them with HTTP 400.
+    it('Chat path honors explicit supportsVision=false override for unknown models', () => {
+      const request: AnthropicRequest = {
+        model: 'some-novel-future-model',
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'What is this?' },
+              { type: 'image', source: PNG_SOURCE }
+            ]
+          }
+        ]
+      }
+
+      const result = convertAnthropicToOpenAIChat(request, { supportsVision: false })
+
+      expect(result.hasImages).toBe(true)
+      const content = result.request.messages[0].content as any[]
+      expect(content).toHaveLength(1)
+      expect(content[0].type).toBe('text')
+      expect(content.some((p: any) => p.type === 'image_url')).toBe(false)
+    })
+
+    it('Chat path honors explicit supportsVision=true override for blacklisted models', () => {
+      // Override wins both ways: a provider can declare a blacklisted model
+      // actually supports vision (e.g. a custom multimodal deepseek variant).
+      const request: AnthropicRequest = {
+        model: 'deepseek-chat',
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'image', source: PNG_SOURCE }]
+          }
+        ]
+      }
+
+      const result = convertAnthropicToOpenAIChat(request, { supportsVision: true })
+
+      const content = result.request.messages[0].content as any[]
+      expect(content[0].type).toBe('image_url')
+    })
+
+    it('Responses path honors explicit supportsVision=false override for unknown models', () => {
+      const request: AnthropicRequest = {
+        model: 'some-novel-future-model',
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'What is this?' },
+              { type: 'image', source: PNG_SOURCE }
+            ]
+          }
+        ]
+      }
+
+      const result = convertAnthropicToOpenAIResponses(request, { supportsVision: false })
+
+      expect(result.hasImages).toBe(true)
+      const userMsg = (result.request.input as any[]).find((i) => i.role === 'user')
+      expect(userMsg).toBeDefined()
+      expect(userMsg.content.some((p: any) => p.type === 'input_image')).toBe(false)
+      expect(userMsg.content.some((p: any) => p.type === 'input_text')).toBe(true)
+    })
+
+    it('converter omits override → falls back to supportsVisionById (preserves default behavior)', () => {
+      // Sanity: when no override is passed, the heuristic still defaults
+      // unknown models to vision-capable.
+      const request: AnthropicRequest = {
+        model: 'some-novel-future-model',
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'image', source: PNG_SOURCE }]
+          }
+        ]
+      }
+
+      const result = convertAnthropicToOpenAIChat(request)
+
+      const content = result.request.messages[0].content as any[]
+      expect(content[0].type).toBe('image_url')
     })
   })
 })

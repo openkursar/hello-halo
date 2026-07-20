@@ -40,6 +40,7 @@ interface Space {
   preferences?: SpacePreferences
   workingDir?: string  // Project directory for custom spaces (agent cwd, artifacts, file explorer)
   isMissing?: boolean  // True when the space data path is currently unavailable (e.g. external drive disconnected)
+  sortOrder?: number  // User-defined display order (lower = earlier). Absent = legacy fallback to activity sort.
 }
 
 interface SpaceLayoutPreferences {
@@ -73,6 +74,7 @@ interface SpaceIndexEntry {
   updatedAt: string
   lastActiveAt?: string  // Last user activity time (cached, derivable from conversation data)
   workingDir?: string
+  sortOrder?: number  // User-defined display order; absent on legacy entries
   isTemp?: boolean  // true only for halo-temp (not persisted to disk)
 }
 
@@ -119,8 +121,53 @@ function metaToEntry(meta: SpaceMeta, spacePath: string): SpaceIndexEntry {
 }
 
 /**
+ * Backfill missing sortOrder on persisted entries using the activity-sort
+ * order. Eliminates the mixed-state window where some entries have sortOrder
+ * and others don't — that window caused createSpace's `max+1` to land at 0
+ * on a fully-legacy index, which then sorted the new space first under the
+ * activity fallback while the store appended it last (visual jump).
+ *
+ * Runs once at load; persisted entries stay stable across restarts. Entries
+ * keep the order they would have had under the legacy activity sort, so users
+ * upgrading see no visual change. After this runs, listSpaces()'s activity
+ * fallback never triggers in practice.
+ */
+function backfillSortOrder(map: Map<string, SpaceIndexEntry>): number {
+  const persistable: SpaceIndexEntry[] = []
+  for (const [, entry] of map) {
+    if (entry.isTemp) continue
+    if (typeof entry.sortOrder !== 'number') persistable.push(entry)
+  }
+  if (persistable.length === 0) return 0
+
+  persistable.sort((a, b) => {
+    const aTime = new Date(a.lastActiveAt || a.updatedAt).getTime()
+    const bTime = new Date(b.lastActiveAt || b.updatedAt).getTime()
+    return bTime - aTime
+  })
+
+  let next = 0
+  // Place backfilled entries after any that already have sortOrder, so a
+  // partial-legacy index (some dragged, some not) keeps dragged order intact.
+  for (const [, entry] of map) {
+    if (entry.isTemp) continue
+    if (typeof entry.sortOrder === 'number' && entry.sortOrder >= next) {
+      next = entry.sortOrder + 1
+    }
+  }
+  for (const entry of persistable) {
+    entry.sortOrder = next++
+  }
+  console.log(`[Space] Backfilled sortOrder for ${persistable.length} entries`)
+  return persistable.length
+}
+
+/**
  * Load space index from disk. Handles v3 (direct), v2 (migration), v1/missing (full scan).
  * Always registers halo-temp into the returned map.
+ *
+ * Single write point: every path only builds the map; sortOrder backfill and
+ * the (at most one) persistIndex happen at the shared exit.
  */
 function loadSpaceIndex(): Map<string, SpaceIndexEntry> {
   const indexPath = getSpaceIndexPath()
@@ -136,8 +183,12 @@ function loadSpaceIndex(): Map<string, SpaceIndexEntry> {
     }
   }
 
-  // v3: direct load
+  // True when the on-disk format was upgraded and must be re-persisted even
+  // if backfillSortOrder finds nothing to do.
+  let migrated = false
+
   if (raw && raw.version === 3 && raw.spaces && typeof raw.spaces === 'object') {
+    // v3: direct load
     const spaces = raw.spaces as Record<string, SpaceIndexEntry>
     for (const [id, entry] of Object.entries(spaces)) {
       if (entry && typeof entry.path === 'string' && typeof entry.name === 'string') {
@@ -145,12 +196,8 @@ function loadSpaceIndex(): Map<string, SpaceIndexEntry> {
       }
     }
     console.log(`[Space] Index v3 loaded: ${map.size} spaces`)
-    registerHaloTemp(map)
-    return map
-  }
-
-  // v2: one-time migration (read each meta.json once)
-  if (raw && raw.version === 2 && raw.spaces && typeof raw.spaces === 'object') {
+  } else if (raw && raw.version === 2 && raw.spaces && typeof raw.spaces === 'object') {
+    // v2: one-time migration (read each meta.json once)
     console.log('[Space] Migrating space index v2 -> v3...')
     const v2Spaces = raw.spaces as Record<string, { path: string }>
     for (const [id, v2Entry] of Object.entries(v2Spaces)) {
@@ -160,50 +207,50 @@ function loadSpaceIndex(): Map<string, SpaceIndexEntry> {
         map.set(id, metaToEntry(meta, v2Entry.path))
       }
     }
-    persistIndex(map)
+    migrated = true
     console.log(`[Space] Index v3 migration complete: ${map.size} spaces`)
-    registerHaloTemp(map)
-    return map
-  }
+  } else {
+    // v1 or missing: one-time migration via full scan
+    console.log('[Space] Migrating space index to v3 (full scan)...')
+    const oldCustomPaths: string[] = Array.isArray((raw as Record<string, unknown>)?.customPaths)
+      ? (raw as { customPaths: string[] }).customPaths
+      : []
 
-  // v1 or missing: one-time migration via full scan
-  console.log('[Space] Migrating space index to v3 (full scan)...')
-  const oldCustomPaths: string[] = Array.isArray((raw as Record<string, unknown>)?.customPaths)
-    ? (raw as { customPaths: string[] }).customPaths
-    : []
+    // Scan default spaces directory
+    const spacesDir = getSpacesDir()
+    if (existsSync(spacesDir)) {
+      try {
+        for (const dir of readdirSync(spacesDir)) {
+          const spacePath = join(spacesDir, dir)
+          try {
+            if (!statSync(spacePath).isDirectory()) continue
+          } catch { continue }
+          const meta = tryReadMeta(spacePath)
+          if (meta) {
+            map.set(meta.id, metaToEntry(meta, spacePath))
+          }
+        }
+      } catch (error) {
+        console.error('[Space] Error scanning spaces directory:', error)
+      }
+    }
 
-  // Scan default spaces directory
-  const spacesDir = getSpacesDir()
-  if (existsSync(spacesDir)) {
-    try {
-      for (const dir of readdirSync(spacesDir)) {
-        const spacePath = join(spacesDir, dir)
-        try {
-          if (!statSync(spacePath).isDirectory()) continue
-        } catch { continue }
-        const meta = tryReadMeta(spacePath)
-        if (meta) {
-          map.set(meta.id, metaToEntry(meta, spacePath))
+    // Scan old custom paths
+    for (const customPath of oldCustomPaths) {
+      if (existsSync(customPath)) {
+        const meta = tryReadMeta(customPath)
+        if (meta && !map.has(meta.id)) {
+          map.set(meta.id, metaToEntry(meta, customPath))
         }
       }
-    } catch (error) {
-      console.error('[Space] Error scanning spaces directory:', error)
     }
+
+    migrated = true
+    console.log(`[Space] Index v3 migration complete: ${map.size} spaces`)
   }
 
-  // Scan old custom paths
-  for (const customPath of oldCustomPaths) {
-    if (existsSync(customPath)) {
-      const meta = tryReadMeta(customPath)
-      if (meta && !map.has(meta.id)) {
-        map.set(meta.id, metaToEntry(meta, customPath))
-      }
-    }
-  }
-
-  // Persist v3 format
-  persistIndex(map)
-  console.log(`[Space] Index v3 migration complete: ${map.size} spaces`)
+  const backfilled = backfillSortOrder(map)
+  if (migrated || backfilled > 0) persistIndex(map)
   registerHaloTemp(map)
   return map
 }
@@ -289,6 +336,7 @@ function entryToSpace(id: string, entry: SpaceIndexEntry): Space {
     updatedAt: entry.updatedAt,
     lastActiveAt: entry.lastActiveAt,
     workingDir: entry.workingDir,
+    sortOrder: entry.sortOrder,
     isMissing: !entry.isTemp && !existsSync(entry.path)
   }
 }
@@ -383,15 +431,21 @@ export function listSpaces(): Space[] {
     spaces.push(space)
   }
 
-  // Sort by most recent activity. lastActiveAt reflects actual user activity
-  // (conversations/messages); fall back to updatedAt (metadata edits) for
-  // spaces that have never been actively used since this field was introduced.
-  spaces.sort((a, b) => {
-    const aTime = new Date(a.lastActiveAt || a.updatedAt).getTime()
-    const bTime = new Date(b.lastActiveAt || b.updatedAt).getTime()
-    return bTime - aTime
-  })
-  console.log('[Space] listSpaces: count=%d missing=%d', spaces.length, missingCount)
+  // Sort: prefer user-defined sortOrder when every space has one; otherwise
+  // fall back to most-recent-activity (legacy behavior). This lets old indexes
+  // work without migration — once reorderSpaces() runs, all entries get
+  // sortOrder and the activity fallback stops applying.
+  const allHaveSortOrder = spaces.every(s => s.sortOrder !== undefined)
+  if (allHaveSortOrder) {
+    spaces.sort((a, b) => (a.sortOrder! - b.sortOrder!))
+  } else {
+    spaces.sort((a, b) => {
+      const aTime = new Date(a.lastActiveAt || a.updatedAt).getTime()
+      const bTime = new Date(b.lastActiveAt || b.updatedAt).getTime()
+      return bTime - aTime
+    })
+  }
+  console.log('[Space] listSpaces: count=%d missing=%d sortedBy=%s', spaces.length, missingCount, allHaveSortOrder ? 'sortOrder' : 'activity')
   return spaces
 }
 
@@ -444,14 +498,22 @@ export function createSpace(input: { name: string; icon: string; customPath?: st
 
   writeFileSync(join(spacePath, '.halo', 'meta.json'), JSON.stringify(meta, null, 2))
 
-  // Register in index (memory + disk)
+  // Register in index (memory + disk). New spaces sort last; compute the
+  // next sortOrder as max(existing) + 1 so ordering stays stable.
+  let nextSortOrder = 0
+  for (const [, existing] of getRegistry()) {
+    if (typeof existing.sortOrder === 'number' && existing.sortOrder >= nextSortOrder) {
+      nextSortOrder = existing.sortOrder + 1
+    }
+  }
   const entry: SpaceIndexEntry = {
     path: spacePath,
     name: input.name,
     icon: input.icon,
     createdAt: now,
     updatedAt: now,
-    workingDir
+    workingDir,
+    sortOrder: nextSortOrder
   }
   getRegistry().set(id, entry)
   persistIndex(getRegistry())
@@ -563,6 +625,39 @@ export function updateSpace(spaceId: string, updates: { name?: string; icon?: st
     console.error('[Space] Failed to update space:', error)
     return null
   }
+}
+
+/**
+ * Persist a user-defined space ordering. Assigns sortOrder = index for each id
+ * in the given order. Callers must pass the full dedicated-space id list in the
+ * desired order; partial lists are rejected to prevent sortOrder collisions
+ * that would corrupt the persisted index.
+ */
+export function reorderSpaces(spaceIds: string[]): Space[] {
+  const registry = getRegistry()
+
+  // Reject partial lists: assigning sortOrder only to a subset leaves the
+  // unlisted spaces with stale values that collide with the new ones.
+  const expectedIds = new Set<string>()
+  for (const [id, entry] of registry) {
+    if (!entry.isTemp) expectedIds.add(id)
+  }
+  if (spaceIds.length !== expectedIds.size || !spaceIds.every(id => expectedIds.has(id))) {
+    const reason = spaceIds.length !== expectedIds.size
+      ? `length ${spaceIds.length} !== expected ${expectedIds.size}`
+      : 'unknown id present'
+    console.warn('[Space] reorderSpaces rejected partial list: %s', reason)
+    return listSpaces()
+  }
+
+  for (let i = 0; i < spaceIds.length; i++) {
+    const entry = registry.get(spaceIds[i])
+    if (!entry || entry.isTemp) continue
+    entry.sortOrder = i
+  }
+  persistIndex(registry)
+  console.log('[Space] reorderSpaces: assigned sortOrder to %d spaces', spaceIds.length)
+  return listSpaces()
 }
 
 /**

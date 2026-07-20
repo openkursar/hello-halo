@@ -37,7 +37,10 @@ import { saveSessionId } from '../conversation.service'
 import { notifyTaskComplete } from '../notification.service'
 import { getConversation } from '../conversation.service'
 import { type FileChangesSummary, extractFileChangesSummaryFromThoughts } from '../../../shared/file-changes'
+import { resolveSourcesForReadPaths } from '../tlon'
+import type { KBSource } from '../../../shared/types/tlon'
 import { createSessionState, consumePendingRebuild } from './session-manager'
+import { hasActiveTeamTasks, isTeamLifecycleThought } from './subagent-handler'
 
 // ============================================
 // Types
@@ -54,9 +57,11 @@ export interface ConsumerHandle {
   readonly isRunning: boolean
   /** Get the current turn's SessionState (for injection, stop, etc.) */
   getActiveSessionState(): SessionState | null
-  /** Get thoughts accumulated in the most recently completed turn.
-   * Used by session-manager to detect active team agents between turns. */
-  getLastTurnThoughts(): Thought[]
+  /** Get team lifecycle thoughts (Agent team spawns / TeamDelete) accumulated
+   * across all completed turns of this session. Used by session-manager and
+   * control to detect active team agents while the consumer idles between
+   * turns — the spawn may be several turns in the past. */
+  getTeamLifecycleThoughts(): Thought[]
   /** Update the display model name used for thought parsing (and the
    * source-resolved context window shown in token usage).
    * Called by sendMessage to keep both in sync after model switches
@@ -81,10 +86,11 @@ interface ConsumerState {
   currentSessionState: SessionState | null
   /** Running flag */
   running: boolean
-  /** Thoughts from the most recently completed turn.
-   * Persists between turns so session-manager can detect active team agents
-   * even while the consumer is idle (waiting for the next turn). */
-  lastTurnThoughts: Thought[]
+  /** Team lifecycle thoughts (Agent team spawns / TeamDelete) accumulated
+   * across completed turns. Persists between turns so session-manager can
+   * detect active team agents while the consumer idles; reset when the team
+   * is disbanded. */
+  teamLifecycleThoughts: Thought[]
 }
 
 // ============================================
@@ -120,7 +126,7 @@ export function startConsumer(
     processingTurn: false,
     currentSessionState: null,
     running: true,
-    lastTurnThoughts: [],
+    teamLifecycleThoughts: [],
   }
 
   // Fire and forget — errors are logged but don't propagate
@@ -151,8 +157,8 @@ export function startConsumer(
     getActiveSessionState() {
       return state.currentSessionState
     },
-    getLastTurnThoughts() {
-      return state.lastTurnThoughts
+    getTeamLifecycleThoughts() {
+      return state.teamLifecycleThoughts
     },
     updateDisplayModel(newDisplayModel: string, newContextWindow?: number) {
       if (state.displayModel !== newDisplayModel) {
@@ -251,12 +257,17 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
 
         persistTurnResult(spaceId, conversationId, result)
 
-        // Retain thoughts from this turn so session-manager can detect active team
-        // agents between turns (consumer idle but CC subprocess still has work).
-        state.lastTurnThoughts = result.thoughts
+        // Accumulate team lifecycle thoughts across turns: a team spawned in an
+        // earlier turn must keep blocking session rebuilds and idle cleanup while
+        // the consumer idles between turns (CC subprocess still has agents working).
+        // Reset once the team is disbanded (TeamDelete succeeded) so a future team
+        // in this session starts from a clean slate.
+        const teamThoughts = [
+          ...state.teamLifecycleThoughts,
+          ...result.thoughts.filter(isTeamLifecycleThought),
+        ]
+        state.teamLifecycleThoughts = hasActiveTeamTasks(teamThoughts) ? teamThoughts : []
 
-        // Emit agent:complete — injection messages are absorbed mid-turn by CC,
-        // they do NOT produce a separate turn, so always complete normally.
         emitAgentEvent('agent:complete', spaceId, conversationId, {
           type: 'complete',
           duration: Date.now() - turnStartTime,
@@ -276,18 +287,17 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
 
         // Drain timeout: the abort-drain failed to receive a result within the
         // safety timeout. The REPL pipe is dirty — continuing would read stale data.
-        // Break the consumer loop; next sendMessage detects the dead consumer (zombie)
-        // and creates a fresh session via getOrCreateV2Session.
+        // Break the consumer loop; next sendMessage detects the dead consumer and
+        // creates a fresh session via getOrCreateV2Session.
         if (result.drainTimedOut) {
           console.warn(`[Consumer][${conversationId}] Drain timed out — REPL pipe is dirty, breaking for session rebuild`)
           break
         }
 
-        // Check if API config changed during this turn (M5 fix).
-        // If so, break the loop — the session will be rebuilt with new credentials
-        // on the next sendMessage via getOrCreateV2Session.
+        // API config or toolset change during this turn → break the loop so the
+        // session is rebuilt with the new set on the next sendMessage.
         if (consumePendingRebuild(conversationId)) {
-          console.log(`[Consumer][${conversationId}] Config changed during turn, breaking for rebuild`)
+          console.log(`[Consumer][${conversationId}] Rebuild pending, breaking for rebuild`)
           break
         }
       } else {
@@ -407,6 +417,7 @@ function persistTurnResult(
   if (contentToStore || hasErrorThought || thoughts.length > 0) {
     // Extract file changes summary
     let metadata: { fileChanges?: FileChangesSummary } | undefined
+    let sources: KBSource[] | undefined
     if (thoughts.length > 0) {
       try {
         const fileChangesSummary = extractFileChangesSummaryFromThoughts(thoughts)
@@ -416,6 +427,16 @@ function persistTurnResult(
       } catch (error) {
         console.error(`[Consumer][${conversationId}] Failed to extract file changes:`, error)
       }
+      // Knowledge-base documents the agent Read this turn → clickable citations.
+      try {
+        const readPaths = thoughts
+          .filter(t => t.type === 'tool_use' && t.toolName === 'Read' && typeof t.toolInput?.file_path === 'string')
+          .map(t => t.toolInput!.file_path as string)
+        const resolved = readPaths.length > 0 ? resolveSourcesForReadPaths(readPaths) : []
+        if (resolved.length > 0) sources = resolved
+      } catch (error) {
+        console.error(`[Consumer][${conversationId}] Failed to resolve KB sources:`, error)
+      }
     }
 
     updateLastMessage(spaceId, conversationId, {
@@ -423,6 +444,7 @@ function persistTurnResult(
       thoughts: thoughts.length > 0 ? [...thoughts] : undefined,
       tokenUsage: tokenUsage || undefined,
       metadata,
+      sources,
       error: errorThought?.content,
     })
   }
