@@ -53,6 +53,9 @@ export const CODEX_CAPABILITIES: EngineCapabilities = {
     mcp: true,
     hooks: false,
     sessionResume: true,
+    // Codex app-server exposes only thread/resume (continue original thread);
+    // there is no branch-to-new-thread primitive, so session forking is off.
+    sessionFork: false,
     interrupt: true,
     multimodalImage: true,
     contextCompaction: true,

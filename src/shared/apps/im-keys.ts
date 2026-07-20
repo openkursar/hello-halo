@@ -8,7 +8,7 @@
  * automatically reflected everywhere.
  */
 
-import { classifySessionSource, HTTP_SESSION_CHANNEL } from '../types/im-channel'
+import { classifySessionSource, HTTP_SESSION_CHANNEL, LOCAL_SESSION_CHANNEL } from '../types/im-channel'
 
 /**
  * Build the virtual conversationId for the native Halo app-chat session.
@@ -37,6 +37,29 @@ export function buildImSessionKey(
   chatId: string
 ): string {
   return `app-chat:${appId}:${channel}:${chatType}:${chatId}`
+}
+
+/**
+ * Build the conversationId for a native client-side multi-session.
+ *
+ * Format: "app-chat:{appId}:local:direct:{sessionUuid}"
+ *
+ * These are the desktop user's own extra chat windows for a digital human,
+ * alongside the legacy default session ("app-chat:{appId}"). The 5-segment
+ * shape reuses the existing IM-session plumbing (parseAppChatKey, deriveRunId,
+ * the session registry, and the app-chat send path) with a dedicated 'local'
+ * channel so these sessions are never mistaken for IM or evicted like HTTP.
+ */
+export function buildLocalSessionKey(appId: string, sessionUuid: string): string {
+  return `app-chat:${appId}:${LOCAL_SESSION_CHANNEL}:direct:${sessionUuid}`
+}
+
+/**
+ * Check whether a conversationId belongs to a native client-side local session.
+ */
+export function isLocalSessionKey(conversationId: string): boolean {
+  const parsed = parseAppChatKey(conversationId)
+  return parsed !== null && parsed.channel === LOCAL_SESSION_CHANNEL
 }
 
 /** Parsed components of a channel-qualified app-chat conversation key. */
@@ -111,11 +134,15 @@ export type HttpConversationIdResult =
  *   - empty / non-string      → the app's native default conversation
  *   - the native default key  → as-is (shared native chat)
  *   - a well-formed HTTP key  → "app-chat:{appId}:http:{direct|group}:{chatId}"
+ *   - a native local key      → "app-chat:{appId}:local:direct:{sessionUuid}"
  *
  * Rejects everything else — in particular IM-channel keys (an HTTP caller must
  * never be able to address or inject into an IM session) and chatIds outside
- * the filename-safe charset. This is the trust boundary for caller-controlled
- * conversation ids.
+ * the filename-safe charset. The 'local' channel is permitted so the remote
+ * web client (an authenticated Halo UI that reaches the same endpoint over
+ * HTTP) can drive the user's native multi-sessions; it is non-pushable and
+ * carries no more capability than an 'http' session. This is the trust boundary
+ * for caller-controlled conversation ids.
  */
 export function resolveHttpConversationId(
   appId: string,
@@ -132,13 +159,13 @@ export function resolveHttpConversationId(
   if (!parsed || parsed.appId !== appId) {
     return {
       ok: false,
-      error: `Invalid conversationId: expected "app-chat:${appId}:http:{direct|group}:{chatId}"`,
+      error: `Invalid conversationId: expected "app-chat:${appId}:{http|local}:{direct|group}:{chatId}"`,
     }
   }
-  if (parsed.channel !== HTTP_SESSION_CHANNEL) {
+  if (parsed.channel !== HTTP_SESSION_CHANNEL && parsed.channel !== LOCAL_SESSION_CHANNEL) {
     return {
       ok: false,
-      error: 'Invalid conversationId: the HTTP API may only address the "http" channel',
+      error: 'Invalid conversationId: the HTTP API may only address the "http" or "local" channel',
     }
   }
   if (!HTTP_CHAT_ID_PATTERN.test(parsed.chatId)) {

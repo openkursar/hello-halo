@@ -17,7 +17,7 @@
 import { readFileSync, writeFile, mkdirSync } from 'fs'
 import { dirname } from 'path'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
-import { classifySessionSource } from '../../../shared/types/im-channel'
+import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
 import { truncateUtf16Safe } from './text-truncate'
 
 // ============================================
@@ -127,6 +127,70 @@ export class ImSessionRegistry {
         this.enforceHttpLimits(appId)
       }
       // New session is a structural change → persist promptly.
+      this.requestPersist(true)
+    }
+  }
+
+  // ── Native local sessions (source === 'local') ───────
+
+  /**
+   * Create a native client-side chat session record.
+   *
+   * These are the desktop user's extra chat windows for a digital human,
+   * addressed by "app-chat:{appId}:local:direct:{sessionUuid}". Idempotent:
+   * returns the existing record if the uuid is already registered.
+   *
+   * `displayName` is left empty by default so the renderer can localize the
+   * fallback label (first-message preview / "New chat") without a backend
+   * English string leaking into the UI.
+   */
+  createLocalSession(
+    appId: string,
+    sessionUuid: string,
+    opts?: { displayName?: string; forkOrigin?: string; pendingResumeSessionId?: string }
+  ): ImSessionRecord {
+    const key = this.buildKey(appId, LOCAL_SESSION_CHANNEL, sessionUuid)
+    const existing = this.sessions.get(key)
+    if (existing) return { ...existing }
+
+    const record: ImSessionRecord = {
+      appId,
+      channel: LOCAL_SESSION_CHANNEL,
+      source: 'local',
+      instanceId: '',
+      chatId: sessionUuid,
+      chatType: 'direct',
+      displayName: opts?.displayName ?? '',
+      proactive: false,
+      lastActiveAt: Date.now(),
+      forkOrigin: opts?.forkOrigin,
+      pendingResumeSessionId: opts?.pendingResumeSessionId,
+    }
+    this.sessions.set(key, record)
+    this.requestPersist(true)
+    return { ...record }
+  }
+
+  /**
+   * Peek the pending resume-and-fork source SDK session id for a session, if
+   * any. Consumed on the session's first message to branch a new SDK session
+   * from the source context. Peek (not consume) so a failed first attempt can
+   * retry; cleared via {@link clearPendingResume} only after the new forked
+   * session id is captured.
+   */
+  getPendingResume(appId: string, channel: string, chatId: string): string | undefined {
+    const session = this.sessions.get(this.buildKey(appId, channel, chatId))
+    return session?.pendingResumeSessionId
+  }
+
+  /**
+   * Clear a session's pending resume-and-fork marker once the fork has been
+   * established (new forked session id captured).
+   */
+  clearPendingResume(appId: string, channel: string, chatId: string): void {
+    const session = this.sessions.get(this.buildKey(appId, channel, chatId))
+    if (session?.pendingResumeSessionId) {
+      delete session.pendingResumeSessionId
       this.requestPersist(true)
     }
   }

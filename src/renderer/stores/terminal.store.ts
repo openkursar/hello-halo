@@ -42,6 +42,8 @@ interface TerminalState {
   refresh: () => Promise<void>
   applyLifecycle: (e: TerminalLifecycleEvent) => void
   openInCanvas: (sessionId: string, title?: string) => void
+  /** User-initiated creation. The 'created' lifecycle event reconciles state (SSOT). */
+  createSession: (spaceId: string) => Promise<TerminalInfo | null>
   /** User-initiated stop. The 'exited' lifecycle event reconciles state (SSOT). */
   killSession: (sessionId: string) => Promise<void>
 
@@ -98,6 +100,18 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   openInCanvas: (sessionId, title) => {
     void canvasLifecycle.openTerminal(sessionId, title)
+  },
+
+  createSession: async (spaceId) => {
+    try {
+      const res = await api.createTerminal({ spaceId })
+      if (res.success && res.data) return res.data as TerminalInfo
+      console.error('[Terminal Store] createSession failed:', res.error)
+      return null
+    } catch (err) {
+      console.error('[Terminal Store] createSession error:', err)
+      return null
+    }
   },
 
   killSession: async (sessionId) => {

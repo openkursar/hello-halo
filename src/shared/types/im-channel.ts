@@ -89,16 +89,20 @@ export type ImChannelType = typeof IM_CHANNEL_TYPES[number]
 /**
  * Origin of a digital-human external session.
  *
- *   'im'   — a bidirectional IM channel session (WeCom, Feishu, ...). Has a
- *            live channel instance, so it can be proactively pushed to
- *            (notify_bot / auto-sync).
- *   'http' — an external session created via the HTTP API. Read/write only
- *            through HTTP; there is no IM adapter, so it is NOT pushable.
+ *   'im'    — a bidirectional IM channel session (WeCom, Feishu, ...). Has a
+ *             live channel instance, so it can be proactively pushed to
+ *             (notify_bot / auto-sync).
+ *   'http'  — an external session created via the HTTP API. Read/write only
+ *             through HTTP; there is no IM adapter, so it is NOT pushable.
+ *   'local' — a native client-side chat session the desktop user created in
+ *             the digital human's own chat window (multiple named sessions per
+ *             app). Fully interactive, but not pushable and never auto-evicted
+ *             (unlike 'http', which a backend can mint unboundedly).
  *
- * Stored explicitly rather than inferred from key shape: HTTP and IM keys share
- * the same 5-segment format, so segment count cannot tell them apart.
+ * Stored explicitly rather than inferred from key shape: HTTP, IM, and local
+ * keys share the same 5-segment format, so segment count cannot tell them apart.
  */
-export type SessionSource = 'im' | 'http'
+export type SessionSource = 'im' | 'http' | 'local'
 
 /**
  * Channel value used for external sessions created via the HTTP API.
@@ -108,14 +112,24 @@ export type SessionSource = 'im' | 'http'
 export const HTTP_SESSION_CHANNEL = 'http'
 
 /**
+ * Channel value used for native client-side multi-sessions. The app-chat
+ * conversation key is "app-chat:{appId}:local:direct:{sessionUuid}". These are
+ * the desktop user's own extra chat windows for a digital human, alongside the
+ * legacy default session keyed "app-chat:{appId}".
+ */
+export const LOCAL_SESSION_CHANNEL = 'local'
+
+/**
  * Classify a session's source from its channel value.
  *
  * Conservative: only channels explicitly registered in {@link IM_CHANNEL_TYPES}
- * are treated as IM (pushable). Everything else — the HTTP channel and any
- * unknown/future channel — is classified as non-pushable, so a non-IM session
- * can never accidentally leak into IM push paths.
+ * are treated as IM (pushable). The native {@link LOCAL_SESSION_CHANNEL} is its
+ * own source so it is exempt from HTTP eviction bounds. Everything else — the
+ * HTTP channel and any unknown/future channel — is classified as 'http', so a
+ * non-IM session can never accidentally leak into IM push paths.
  */
 export function classifySessionSource(channel: string): SessionSource {
+  if (channel === LOCAL_SESSION_CHANNEL) return 'local'
   return (IM_CHANNEL_TYPES as readonly string[]).includes(channel) ? 'im' : 'http'
 }
 
@@ -474,4 +488,22 @@ export interface ImSessionRecord {
   proactive: boolean
   /** Last activity timestamp (epoch ms) */
   lastActiveAt: number
+
+  // ── Native local-session fork metadata (source === 'local' only) ──
+
+  /**
+   * When this local session was forked from another session ("continue in
+   * client"), the source conversationId it was branched from. Purely
+   * informational for the UI; absent for freshly-created local sessions.
+   */
+  forkOrigin?: string
+
+  /**
+   * A source SDK sessionId to resume-and-fork from on this session's FIRST
+   * message. Set when the session is forked from an IM/other session so the
+   * new client session inherits the full model context without sharing the
+   * source's session id (SDK `resume` + `forkSession: true`). Cleared once the
+   * first message captures the new forked session id. Absent thereafter.
+   */
+  pendingResumeSessionId?: string
 }

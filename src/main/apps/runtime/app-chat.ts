@@ -23,6 +23,7 @@
 
 import { writeFile } from 'fs/promises'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 import { getAppManager } from '../manager'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import type { MemoryCallerScope } from '../../platform/memory'
@@ -69,13 +70,14 @@ import { createHaloAppsMcpServer } from '../conversation-mcp'
 import { createWebSearchMcpServer } from '../../services/web-search'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { getSpace, getSpaceDir } from '../../services/space.service'
-import { openSessionWriter, readSessionMessages, saveChatSessionId, loadChatSessionId, deleteChatSessionId } from './session-store'
+import { openSessionWriter, readSessionMessages, saveChatSessionId, loadChatSessionId, deleteChatSessionId, copySessionJsonl } from './session-store'
 import { getAppMemoryService } from './index'
 import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
 // Key builders live in shared/ so the renderer can import them without
 // depending on main-process modules.
-import { getAppChatConversationId, buildImSessionKey, parseAppChatKey } from '../../../shared/apps/im-keys'
-import { classifySessionSource } from '../../../shared/types/im-channel'
+import { getAppChatConversationId, buildImSessionKey, buildLocalSessionKey, parseAppChatKey } from '../../../shared/apps/im-keys'
+import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
+import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
@@ -542,6 +544,16 @@ export async function sendAppChatMessage(
   const spacePath = getSpace(spaceId)?.path ?? ''
   const chatRunId = deriveRunId(conversationId, appId)
 
+  // Peek a pending resume-and-fork marker for native local sessions (set when
+  // this session was forked from an IM/other session via "continue in client").
+  // Peek, not consume: the marker is cleared only after the first message
+  // captures the new forked session id, so a failed first attempt can retry.
+  const forkParsedKey = parseAppChatKey(conversationId)
+  const forkResumeSessionId =
+    forkParsedKey?.channel === LOCAL_SESSION_CHANNEL
+      ? getImSessionRegistry()?.getPendingResume(appId, forkParsedKey.channel, forkParsedKey.chatId)
+      : undefined
+
   try {
     const t0 = Date.now()
 
@@ -552,13 +564,31 @@ export async function sendAppChatMessage(
       ? loadChatSessionId(spacePath, appId, chatRunId)
       : undefined
 
+    // Fork-on-first-message: a local session created via "continue in client"
+    // carries a pending source SDK session id. With no session of its own yet,
+    // resume that source AND branch to a fresh session id (forkSession) so the
+    // two windows evolve independently. The captured new id is persisted in
+    // onComplete and the pending marker is cleared, so later messages take the
+    // normal resume path. Only reachable when the engine advertises sessionFork
+    // (the fork UI is gated on it), so no engine guard is needed here.
+    let resumeSessionId = savedSessionId
+    let forkFromChannel: string | undefined
+    let forkFromChatId: string | undefined
+    if (!resumeSessionId && forkResumeSessionId) {
+      resumeSessionId = forkResumeSessionId
+      sdkOptions.forkSession = true
+      forkFromChannel = forkParsedKey?.channel
+      forkFromChatId = forkParsedKey?.chatId
+      console.log(`[AppChat][${appId}] Forking new local session from source SDK session ${forkResumeSessionId}`)
+    }
+
     // No displayModel: app-chat drives its own processStream(), so it must not
     // start a persistent session consumer (that would fight over the stream).
     const v2Session = await getOrCreateV2Session(
       spaceId,
       conversationId,
       sdkOptions,
-      savedSessionId,
+      resumeSessionId,
       workDir
     )
 
@@ -615,6 +645,13 @@ export async function sendAppChatMessage(
           // this allows the SDK to restore conversation history from disk.
           if (streamResult.capturedSessionId && spacePath) {
             saveChatSessionId(spacePath, appId, chatRunId, streamResult.capturedSessionId)
+
+            // Fork established: the captured id is the NEW forked session
+            // (distinct from the source). Clear the pending marker so later
+            // messages resume this session normally instead of re-forking.
+            if (forkFromChannel && forkFromChatId) {
+              getImSessionRegistry()?.clearPendingResume(appId, forkFromChannel, forkFromChatId)
+            }
           }
 
           // App chat doesn't use conversation.service for storage.
@@ -765,6 +802,18 @@ export async function stopAppChat(appId: string): Promise<void> {
 }
 
 /**
+ * Stop generation for a single app-chat conversation (native default, native
+ * local, or IM session). Used so stopping one session does not interrupt the
+ * app's other concurrently-generating sessions.
+ *
+ * @param conversationId - The specific session to stop
+ */
+export async function stopAppChatConversation(conversationId: string): Promise<void> {
+  await stopGeneration(conversationId)
+  console.log(`[AppChat] Generation stopped for conversation: ${conversationId}`)
+}
+
+/**
  * Check if an app chat session is currently generating.
  *
  * Returns true if the native chat OR any IM session for this app is active.
@@ -825,17 +874,38 @@ export function loadImChatMessages(
 }
 
 /**
+ * Load persisted chat messages for any app-chat conversation by its
+ * conversationId (native default, native local, IM, or HTTP). Derives the JSONL
+ * runId from the key and reads the transcript. Used by the messages IPC/HTTP
+ * path when a specific session is requested.
+ *
+ * @param spacePath - Space directory path
+ * @param appId - App ID
+ * @param conversationId - Full app-chat conversationId
+ */
+export function loadChatMessagesForConversation(
+  spacePath: string,
+  appId: string,
+  conversationId: string
+): any[] {
+  return readSessionMessages(spacePath, appId, deriveRunId(conversationId, appId))
+}
+
+/**
  * Get session state for recovery after page refresh.
  *
  * @param appId - App ID
+ * @param conversationId - Optional specific session; defaults to the app's
+ *   native default session ("app-chat:{appId}"). Native local sessions pass
+ *   their own "app-chat:{appId}:local:direct:{uuid}" key.
  */
-export function getAppChatSessionState(appId: string): {
+export function getAppChatSessionState(appId: string, conversationId?: string): {
   isActive: boolean
   thoughts: any[]
   spaceId?: string
 } {
-  const conversationId = getAppChatConversationId(appId)
-  const session = activeSessions.get(conversationId)
+  const convId = conversationId ?? getAppChatConversationId(appId)
+  const session = activeSessions.get(convId)
   if (!session) {
     return { isActive: false, thoughts: [] }
   }
@@ -922,10 +992,27 @@ async function clearSessionByConversationId(
  * @param appId - App ID
  * @param spaceId - Space ID (for resolving JSONL path)
  */
-export async function clearAppChat(appId: string, spaceId: string): Promise<void> {
-  const conversationId = getAppChatConversationId(appId)
-  await clearSessionByConversationId(conversationId, appId, spaceId)
-  console.log(`[AppChat][${appId}] Chat history cleared`)
+export async function clearAppChat(appId: string, spaceId: string, conversationId?: string): Promise<void> {
+  // Default to the app's native default session. Native local sessions pass
+  // their own key so only that session's history is reset. Guard: the key must
+  // belong to this app's app-chat namespace, so an arbitrary key can't be used
+  // to clear unrelated storage.
+  const convId = conversationId ?? getAppChatConversationId(appId)
+  const defaultConvId = getAppChatConversationId(appId)
+  if (convId !== defaultConvId) {
+    const parsed = parseAppChatKey(convId)
+    if (!parsed || parsed.appId !== appId) {
+      throw new Error(`Invalid conversationId for clear: ${convId}`)
+    }
+    // IM sessions have a dedicated clear path (clearImSession); refuse to reset
+    // their transcript here so a caller on this entry point can only touch the
+    // native default, local, or HTTP sessions of the same app.
+    if (classifySessionSource(parsed.channel) === 'im') {
+      throw new Error(`Cannot clear IM session via clearAppChat: ${convId}`)
+    }
+  }
+  await clearSessionByConversationId(convId, appId, spaceId)
+  console.log(`[AppChat][${appId}] Chat history cleared: ${convId}`)
 }
 
 // ============================================
@@ -1025,4 +1112,125 @@ export async function clearImSession(
   const conversationId = buildImSessionKey(appId, channel, chatType, chatId)
   await clearSessionByConversationId(conversationId, appId, spaceId)
   console.log(`[AppChat][${appId}] IM session cleared: ${conversationId}`)
+}
+
+// ============================================
+// Native Multi-Session Lifecycle
+// ============================================
+//
+// The desktop user can open multiple named chat windows for one digital human,
+// alongside the legacy default session ("app-chat:{appId}"). Each extra window
+// is a 'local'-source session keyed "app-chat:{appId}:local:direct:{uuid}",
+// reusing the same send/JSONL/registry plumbing as IM sessions. Listing and
+// renaming reuse the generic im-sessions APIs (getAllSessions / setCustomName);
+// only create, fork, and delete need dedicated lifecycle here.
+
+/** Result of creating or forking a native local chat session. */
+export interface NativeSessionResult {
+  /** Virtual conversationId for the new session */
+  conversationId: string
+  /** The persisted session record */
+  record: ImSessionRecord
+}
+
+/**
+ * Create a fresh native local chat session for an app.
+ *
+ * No files are written until the first message; only the registry record is
+ * created so the session appears in the list immediately. The renderer
+ * localizes the display label (first-message preview / "New chat").
+ */
+export function createNativeChatSession(appId: string): NativeSessionResult {
+  const registry = getImSessionRegistry()
+  if (!registry) throw new Error('IM session registry not initialized')
+
+  const sessionUuid = randomUUID()
+  const record = registry.createLocalSession(appId, sessionUuid)
+  const conversationId = buildLocalSessionKey(appId, sessionUuid)
+  console.log(`[AppChat][${appId}] Native local session created: ${conversationId}`)
+  return { conversationId, record }
+}
+
+/**
+ * Fork an existing session (IM/http/local) into a new native local session
+ * that continues in the client with the full prior context.
+ *
+ * Copies the source transcript so the new window shows history immediately, and
+ * records the source SDK session id as a pending resume-and-fork marker. On the
+ * new session's first message, sendAppChatMessage resumes that source context
+ * and branches to a fresh SDK session id (see forkResumeSessionId), so the two
+ * windows evolve independently and the source is never polluted.
+ *
+ * Requires the active engine to support session forking; callers gate the UI on
+ * the `sessionFork` capability before invoking this.
+ */
+export function forkNativeChatSession(
+  appId: string,
+  spaceId: string,
+  sourceConversationId: string
+): NativeSessionResult {
+  const registry = getImSessionRegistry()
+  if (!registry) throw new Error('IM session registry not initialized')
+
+  // Trust boundary: the source must belong to this app. Forking legitimately
+  // sources any of the app's own sessions (native default, IM, http, local),
+  // but a key owned by another app must never be readable through this entry
+  // point. The native default key ("app-chat:{appId}") parses to null, so it is
+  // allowed explicitly; every other form must parse and match appId.
+  const defaultKey = getAppChatConversationId(appId)
+  if (sourceConversationId !== defaultKey) {
+    const parsedSource = parseAppChatKey(sourceConversationId)
+    if (!parsedSource || parsedSource.appId !== appId) {
+      throw new Error(`Invalid sourceConversationId for fork: ${sourceConversationId}`)
+    }
+  }
+
+  const spacePath = getSpace(spaceId)?.path ?? ''
+  const sessionUuid = randomUUID()
+  const conversationId = buildLocalSessionKey(appId, sessionUuid)
+
+  const sourceRunId = deriveRunId(sourceConversationId, appId)
+  const newRunId = deriveRunId(conversationId, appId)
+
+  // Copy the source transcript for immediate display, and read the source SDK
+  // session id to seed the resume-and-fork on first message. Both are
+  // best-effort: absent history/session degrade to a fresh window.
+  let copied = false
+  let sourceSdkSessionId: string | undefined
+  if (spacePath) {
+    copied = copySessionJsonl(spacePath, appId, sourceRunId, newRunId)
+    sourceSdkSessionId = loadChatSessionId(spacePath, appId, sourceRunId)
+  }
+
+  const record = registry.createLocalSession(appId, sessionUuid, {
+    forkOrigin: sourceConversationId,
+    pendingResumeSessionId: sourceSdkSessionId,
+  })
+
+  console.log(
+    `[AppChat][${appId}] Forked native local session ${conversationId} from ${sourceConversationId} ` +
+    `(transcript ${copied ? 'copied' : 'absent'}, resume ${sourceSdkSessionId ? 'seeded' : 'none'})`
+  )
+  return { conversationId, record }
+}
+
+/**
+ * Delete a native local chat session: abort any generation, tear down the V2
+ * session and browser context, empty its transcript, and remove the registry
+ * record. Only 'local'-source sessions are deletable this way; other keys are
+ * rejected so the default session and IM sessions can't be removed here.
+ */
+export async function deleteNativeChatSession(
+  appId: string,
+  spaceId: string,
+  conversationId: string
+): Promise<void> {
+  const parsed = parseAppChatKey(conversationId)
+  if (!parsed || parsed.appId !== appId || parsed.channel !== LOCAL_SESSION_CHANNEL) {
+    throw new Error(`Not a deletable native local session: ${conversationId}`)
+  }
+
+  await clearSessionByConversationId(conversationId, appId, spaceId)
+  getImSessionRegistry()?.removeSession(appId, parsed.channel, parsed.chatId)
+  console.log(`[AppChat][${appId}] Native local session deleted: ${conversationId}`)
 }

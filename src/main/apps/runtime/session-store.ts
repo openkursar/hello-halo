@@ -178,6 +178,38 @@ export function sessionExists(spacePath: string, appId: string, runId: string): 
   return existsSync(getSessionFilePath(spacePath, appId, runId))
 }
 
+/**
+ * Copy a run's JSONL transcript to a new runId.
+ *
+ * Used when forking a session into a new native client session so the forked
+ * window shows the full prior history immediately. Copies the raw JSONL bytes
+ * verbatim (no re-serialization) — the display messages are reconstructed on
+ * read via convertEventsToMessages. No-op (returns false) when the source file
+ * is absent or the copy fails; the caller treats an empty transcript as a
+ * fresh window, which is an acceptable degradation.
+ *
+ * @returns true if the transcript was copied, false otherwise
+ */
+export function copySessionJsonl(
+  spacePath: string,
+  appId: string,
+  fromRunId: string,
+  toRunId: string
+): boolean {
+  const fromPath = getSessionFilePath(spacePath, appId, fromRunId)
+  if (!existsSync(fromPath)) return false
+  const toPath = getSessionFilePath(spacePath, appId, toRunId)
+  try {
+    const dir = getRunsDir(spacePath, appId)
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    writeFileSync(toPath, readFileSync(fromPath, 'utf8'), 'utf8')
+    return true
+  } catch (err) {
+    console.error(`[SessionStore] Failed to copy transcript ${fromRunId} → ${toRunId}:`, err)
+    return false
+  }
+}
+
 // ============================================
 // Event → Message Conversion
 // ============================================

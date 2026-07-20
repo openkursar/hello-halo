@@ -411,7 +411,7 @@ export interface EngineCapabilities {
   subAgent: { model: 'declarative' | 'imperative' | 'none'; visibleLifecycle: boolean };
   features: {
     skills: boolean; mcp: boolean; hooks: boolean;
-    sessionResume: boolean; interrupt: boolean;
+    sessionResume: boolean; sessionFork: boolean; interrupt: boolean;
     multimodalImage: boolean; contextCompaction: boolean; askUserQuestion: boolean;
   };
 }

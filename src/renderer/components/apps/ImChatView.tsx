@@ -10,9 +10,11 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Loader2, AlertCircle, Radio, Eraser } from 'lucide-react'
+import { Loader2, AlertCircle, Radio, Eraser, ArrowRightToLine } from 'lucide-react'
 import { api } from '../../api'
 import { useChatStore } from '../../stores/chat.store'
+import { useAppsPageStore } from '../../stores/apps-page.store'
+import { useEngineCapabilities } from '../../stores/engine.store'
 import { MessageList } from '../chat/MessageList'
 import type { MessageListHandle } from '../chat/MessageList'
 import { ScrollToBottomButton } from '../chat/ScrollToBottomButton'
@@ -165,6 +167,28 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
     }
   }, [appId, spaceId, session.channel, session.chatType, session.chatId, conversationId, resetSession])
 
+  // ── Continue in client: fork this session into a native local chat ──
+  // Only offered when the active engine can branch a session to a new id
+  // (sessionFork capability). Forks the full context into a client session and
+  // navigates to it, leaving this IM session untouched.
+  const capabilities = useEngineCapabilities()
+  const canFork = !!capabilities?.features.sessionFork
+  const selectImSession = useAppsPageStore(s => s.selectImSession)
+  const fetchImSessions = useAppsPageStore(s => s.fetchImSessions)
+
+  const handleForkToClient = useCallback(async () => {
+    try {
+      const res = await api.appSessionFork(appId, spaceId, conversationId)
+      if (res.success && res.data) {
+        const record = (res.data as { record: ImSessionRecord }).record
+        await fetchImSessions(appId)
+        selectImSession(record)
+      }
+    } catch (err) {
+      console.error('[ImChatView] Continue in client error:', err)
+    }
+  }, [appId, spaceId, conversationId, fetchImSessions, selectImSession])
+
   const displayName = session.customName || session.displayName || session.chatId
   const channelLabel = CHANNEL_LABELS[session.channel] ?? session.channel
   const chatTypeLabel = session.chatType === 'group' ? t('Group') : t('Direct')
@@ -248,6 +272,21 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
           onClick={() => messageListRef.current?.scrollToBottom('auto')}
         />
       </div>
+
+      {/* Continue in client — primary action for this read-only view, placed where an
+          input area would normally sit so users naturally look here to take over the chat. */}
+      {canFork && (messages.length > 0 || hasStreamingContent) && (
+        <div className="flex-shrink-0 flex justify-center px-4 py-3 border-t border-border bg-muted/30">
+          <button
+            onClick={handleForkToClient}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-primary text-primary-foreground text-sm font-medium shadow-sm hover:bg-primary/90 transition-colors"
+            title={t('Continue this conversation in a client chat')}
+          >
+            <ArrowRightToLine className="w-4 h-4" />
+            <span>{t('Continue in client')}</span>
+          </button>
+        </div>
+      )}
     </div>
   )
 }

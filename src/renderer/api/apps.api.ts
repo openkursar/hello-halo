@@ -247,13 +247,15 @@ export const appsApi = {
   },
 
   // App Chat
-  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean }): Promise<ApiResponse> => {
+  // conversationId addresses a specific native/local session; omit for the app's
+  // native default session.
+  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean; conversationId?: string }): Promise<ApiResponse<{ conversationId: string }>> => {
     // Subscribe to agent events so remote/Capacitor clients receive streaming updates.
     // The view also subscribes on mount (via useRemoteSubscription), but the API-level
     // subscription mirrors sendMessage's pattern and ensures coverage if the API is
     // called before the view mounts (e.g. programmatic triggers).
     if (!isElectron()) {
-      subscribeToConversation(getAppChatConversationId(request.appId))
+      subscribeToConversation(request.conversationId ?? getAppChatConversationId(request.appId))
     }
 
     if (isElectron()) {
@@ -262,39 +264,42 @@ export const appsApi = {
     return httpRequest('POST', `/api/apps/${request.appId}/chat/send`, request as unknown as Record<string, unknown>)
   },
 
-  appChatStop: async (appId: string): Promise<ApiResponse> => {
+  appChatStop: async (appId: string, conversationId?: string): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.appChatStop(appId)
+      return window.halo.appChatStop(appId, conversationId)
     }
-    return httpRequest('POST', `/api/apps/${appId}/chat/stop`)
+    return httpRequest('POST', `/api/apps/${appId}/chat/stop`, { conversationId })
   },
 
-  appChatStatus: async (appId: string): Promise<ApiResponse> => {
+  appChatStatus: async (appId: string, conversationId?: string): Promise<ApiResponse<{ isGenerating: boolean; conversationId: string }>> => {
     if (isElectron()) {
-      return window.halo.appChatStatus(appId)
+      return window.halo.appChatStatus(appId, conversationId)
     }
-    return httpRequest('GET', `/api/apps/${appId}/chat/status`)
+    const qs = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''
+    return httpRequest('GET', `/api/apps/${appId}/chat/status${qs}`)
   },
 
-  appChatMessages: async (appId: string, spaceId: string): Promise<ApiResponse> => {
+  appChatMessages: async (appId: string, spaceId: string, conversationId?: string): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.appChatMessages({ appId, spaceId })
+      return window.halo.appChatMessages({ appId, spaceId, conversationId })
     }
-    return httpRequest('GET', `/api/apps/${appId}/chat/messages?spaceId=${spaceId}`)
+    const convQs = conversationId ? `&conversationId=${encodeURIComponent(conversationId)}` : ''
+    return httpRequest('GET', `/api/apps/${appId}/chat/messages?spaceId=${spaceId}${convQs}`)
   },
 
-  appChatSessionState: async (appId: string): Promise<ApiResponse> => {
+  appChatSessionState: async (appId: string, conversationId?: string): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.appChatSessionState(appId)
+      return window.halo.appChatSessionState(appId, conversationId)
     }
-    return httpRequest('GET', `/api/apps/${appId}/chat/session-state`)
+    const qs = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''
+    return httpRequest('GET', `/api/apps/${appId}/chat/session-state${qs}`)
   },
 
-  appChatClear: async (appId: string, spaceId: string): Promise<ApiResponse> => {
+  appChatClear: async (appId: string, spaceId: string, conversationId?: string): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.appChatClear({ appId, spaceId })
+      return window.halo.appChatClear({ appId, spaceId, conversationId })
     }
-    return httpRequest('POST', `/api/apps/${appId}/chat/clear`, { spaceId })
+    return httpRequest('POST', `/api/apps/${appId}/chat/clear`, { spaceId, conversationId })
   },
 
   appChatRestart: async (appId: string): Promise<ApiResponse<{ sessionsClosed: number }>> => {
@@ -316,6 +321,31 @@ export const appsApi = {
       return window.halo.appImChatClear({ appId, spaceId, channel, chatType, chatId })
     }
     return httpRequest('POST', `/api/apps/${appId}/im-chat/clear`, { spaceId, channel, chatType, chatId })
+  },
+
+  // ── Native multi-session lifecycle ──
+  // Listing and renaming reuse imSessionsList / imSessionsSetCustomName (see
+  // im.api.ts); local sessions surface there with source==='local'.
+
+  appSessionCreate: async (appId: string): Promise<ApiResponse<{ conversationId: string; record: unknown }>> => {
+    if (isElectron()) {
+      return window.halo.appSessionCreate({ appId })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/sessions/create`)
+  },
+
+  appSessionFork: async (appId: string, spaceId: string, sourceConversationId: string): Promise<ApiResponse<{ conversationId: string; record: unknown }>> => {
+    if (isElectron()) {
+      return window.halo.appSessionFork({ appId, spaceId, sourceConversationId })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/sessions/fork`, { spaceId, sourceConversationId })
+  },
+
+  appSessionDelete: async (appId: string, spaceId: string, conversationId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appSessionDelete({ appId, spaceId, conversationId })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/sessions/delete`, { spaceId, conversationId })
   },
 
   // App Event Listeners

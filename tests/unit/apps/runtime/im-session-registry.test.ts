@@ -152,3 +152,77 @@ describe('ImSessionRegistry — HTTP session bounds', () => {
     expect(reg.findSession('app1', 'http', 'vip')).toBeDefined()
   })
 })
+
+describe('ImSessionRegistry — native local sessions', () => {
+  let dir: string
+  let file: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'im-reg-'))
+    file = join(dir, 'sessions.json')
+  })
+
+  afterEach(async () => {
+    await new Promise(resolve => setTimeout(resolve, 20))
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('creates a local session with source=local on the "local" channel', () => {
+    const reg = new ImSessionRegistry(file)
+    const rec = reg.createLocalSession('app1', 'uuid-1')
+    expect(rec.source).toBe('local')
+    expect(rec.channel).toBe('local')
+    expect(rec.chatType).toBe('direct')
+    expect(reg.findSession('app1', 'local', 'uuid-1')?.source).toBe('local')
+  })
+
+  it('createLocalSession is idempotent for the same uuid', () => {
+    const reg = new ImSessionRegistry(file)
+    reg.createLocalSession('app1', 'uuid-1', { displayName: 'first' })
+    reg.createLocalSession('app1', 'uuid-1', { displayName: 'second' })
+    const all = reg.getAllSessions('app1').filter(s => s.source === 'local')
+    expect(all).toHaveLength(1)
+    expect(all[0].displayName).toBe('first')
+  })
+
+  it('never evicts local sessions under HTTP cap pressure', () => {
+    const reg = new ImSessionRegistry(file)
+    reg.createLocalSession('app1', 'keep-me')
+    // Flood HTTP sessions past the cap; local session must survive.
+    for (let i = 0; i <= 501; i++) {
+      reg.register('app1', 'http', `user-${i}`, 'direct', '')
+    }
+    expect(reg.findSession('app1', 'local', 'keep-me')?.source).toBe('local')
+  })
+
+  it('is excluded from pushable and proactive results', () => {
+    const reg = new ImSessionRegistry(file)
+    reg.createLocalSession('app1', 'uuid-1')
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1')
+    expect(reg.getPushableSessions('app1').every(s => s.source === 'im')).toBe(true)
+    expect(reg.getPushableSessions('app1')).toHaveLength(1)
+  })
+
+  it('seeds and clears a pending resume-and-fork marker', () => {
+    const reg = new ImSessionRegistry(file)
+    reg.createLocalSession('app1', 'forked', {
+      forkOrigin: 'app-chat:app1:wecom-bot:direct:u1',
+      pendingResumeSessionId: 'sdk-session-abc',
+    })
+    // Peek does not consume.
+    expect(reg.getPendingResume('app1', 'local', 'forked')).toBe('sdk-session-abc')
+    expect(reg.getPendingResume('app1', 'local', 'forked')).toBe('sdk-session-abc')
+    // Clear removes it.
+    reg.clearPendingResume('app1', 'local', 'forked')
+    expect(reg.getPendingResume('app1', 'local', 'forked')).toBeUndefined()
+  })
+
+  it('renaming (setCustomName) and removeSession work for local sessions', () => {
+    const reg = new ImSessionRegistry(file)
+    reg.createLocalSession('app1', 'uuid-1')
+    expect(reg.setCustomName('app1', 'local', 'uuid-1', 'My chat')).toBe(true)
+    expect(reg.findSession('app1', 'local', 'uuid-1')?.customName).toBe('My chat')
+    expect(reg.removeSession('app1', 'local', 'uuid-1')).toBe(true)
+    expect(reg.findSession('app1', 'local', 'uuid-1')).toBeUndefined()
+  })
+})

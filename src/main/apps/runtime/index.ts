@@ -94,10 +94,12 @@ export { Semaphore } from './concurrency'
 export {
   sendAppChatMessage,
   stopAppChat,
+  stopAppChatConversation,
   isAppChatGenerating,
   isAppChatConversationGenerating,
   loadAppChatMessages,
   loadImChatMessages,
+  loadChatMessagesForConversation,
   getAppChatSessionState,
   getAppChatConversationId,
   buildImSessionKey,
@@ -105,8 +107,11 @@ export {
   clearAppChat,
   clearImSession,
   restartAppChat,
+  createNativeChatSession,
+  forkNativeChatSession,
+  deleteNativeChatSession,
 } from './app-chat'
-export type { AppChatRequest } from './app-chat'
+export type { AppChatRequest, NativeSessionResult } from './app-chat'
 
 // Re-export inbound dispatch
 export { dispatchInboundMessage } from './dispatch-inbound'

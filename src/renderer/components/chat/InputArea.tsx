@@ -25,7 +25,6 @@ import { useAppStore } from '../../stores/app.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { getOnboardingPrompt } from '../onboarding/onboardingData'
 import { ToolsetControls } from './ToolsetControls'
-import { NewTerminalMenuItem } from './NewTerminalMenuItem'
 import { LiveSessionsHeader } from './LiveSessionsHeader'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { ImageAttachmentPreview } from './ImageAttachmentPreview'
@@ -877,7 +876,6 @@ function InputToolbar({
                   </span>
                 )}
               </button>
-              <NewTerminalMenuItem onClose={() => onAttachMenuChange(false)} />
             </PopoverContent>
           </Popover>
         )}

@@ -467,15 +467,23 @@ export interface HaloAPI {
   appMoveSpace: (input: { appId: string; newSpaceId: string | null }) => Promise<IpcResponse>
 
   // App Chat
-  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean }) => Promise<IpcResponse>
-  appChatStop: (appId: string) => Promise<IpcResponse>
-  appChatStatus: (appId: string) => Promise<IpcResponse>
-  appChatMessages: (input: { appId: string; spaceId: string }) => Promise<IpcResponse>
-  appChatSessionState: (appId: string) => Promise<IpcResponse>
-  appChatClear: (input: { appId: string; spaceId: string }) => Promise<IpcResponse>
+  // conversationId addresses a specific native/local session; omit for the app's
+  // native default session.
+  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean; conversationId?: string }) => Promise<IpcResponse<{ conversationId: string }>>
+  appChatStop: (appId: string, conversationId?: string) => Promise<IpcResponse>
+  appChatStatus: (appId: string, conversationId?: string) => Promise<IpcResponse<{ isGenerating: boolean; conversationId: string }>>
+  appChatMessages: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
+  appChatSessionState: (appId: string, conversationId?: string) => Promise<IpcResponse>
+  appChatClear: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
   appChatRestart: (appId: string) => Promise<IpcResponse<{ sessionsClosed: number }>>
   appImChatMessages: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
   appImChatClear: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
+
+  // Native multi-session lifecycle. Listing/renaming reuse imSessionsList /
+  // imSessionsSetCustomName (local sessions surface there with source==='local').
+  appSessionCreate: (input: { appId: string }) => Promise<IpcResponse<{ conversationId: string; record: unknown }>>
+  appSessionFork: (input: { appId: string; spaceId: string; sourceConversationId: string }) => Promise<IpcResponse<{ conversationId: string; record: unknown }>>
+  appSessionDelete: (input: { appId: string; spaceId: string; conversationId: string }) => Promise<IpcResponse>
 
   // App Event Listeners
   onAppStatusChanged: (callback: (data: unknown) => void) => () => void
