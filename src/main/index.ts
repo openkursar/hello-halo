@@ -175,6 +175,7 @@ import {
   cleanupExtendedServices
 } from './bootstrap'
 import { initializeApp } from './foundation/config.service'
+import { applyDisplayScale, nudgeDisplayScale, setDisplayScale, DISPLAY_STEP, registerDisplayHandlers } from './services/display.service'
 import { flushAllPendingIndexWrites } from './services/conversation.service'
 import { shutdownRemoteAccess } from './services/remote.service'
 import { stopOpenAICompatRouter } from './openai-compat-router'
@@ -187,6 +188,7 @@ import { reconcileAllSpaces } from './services/artifact-cache.service'
 import { initSdk } from './services/agent/resolved-sdk'
 
 let mainWindow: BrowserWindow | null = null
+let displayHandlersRegistered = false
 let isAppQuitting = false
 let recentRecoveryWindowStart = 0
 let recoveryAttempts = 0
@@ -294,9 +296,13 @@ function createAppMenu(): void {
         { role: 'forceReload' as const },
         { role: 'toggleDevTools' as const },
         { type: 'separator' as const },
-        { role: 'resetZoom' as const },
-        { role: 'zoomIn' as const },
-        { role: 'zoomOut' as const },
+        // Persistent zoom. The keyboard shortcuts are handled by a webContents
+        // before-input-event (see createWindow) rather than menu accelerators,
+        // because the zoomOut role's Cmd+- is unreliable on macOS; the menu items
+        // stay for discoverability.
+        { label: 'Actual Size', click: () => { setDisplayScale(mainWindow, 1) } },
+        { label: 'Zoom In', click: () => { nudgeDisplayScale(mainWindow, DISPLAY_STEP) } },
+        { label: 'Zoom Out', click: () => { nudgeDisplayScale(mainWindow, -DISPLAY_STEP) } },
         { type: 'separator' as const },
         { role: 'togglefullscreen' as const }
       ]
@@ -337,6 +343,11 @@ function createAppMenu(): void {
 
   const menu = Menu.buildFromTemplate(template)
   Menu.setApplicationMenu(menu)
+
+  if (!displayHandlersRegistered) {
+    registerDisplayHandlers(() => mainWindow)
+    displayHandlersRegistered = true
+  }
 }
 
 function createWindow(): void {
@@ -379,10 +390,27 @@ function createWindow(): void {
 
   // Fix PATH after page loads (avoid blocking startup)
   mainWindow.webContents.on('did-finish-load', async () => {
+    if (mainWindow) applyDisplayScale(mainWindow)
     if (process.platform !== 'win32') {
       // Dynamic import for ESM-only fix-path module
       const { default: fixPath } = await import('fix-path')
       fixPath()
+    }
+  })
+
+  // Reliable keyboard zoom: Cmd/Ctrl + = / - / 0 adjust the persistent display
+  // scale. Handled here at the input layer because the zoomOut menu accelerator
+  // (Cmd+-) is unreliable on macOS.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    const mod = process.platform === 'darwin' ? input.meta : input.control
+    if (!mod || input.alt) return
+    if (input.key === '-' || input.key === '_') {
+      nudgeDisplayScale(mainWindow, -DISPLAY_STEP); event.preventDefault()
+    } else if (input.key === '=' || input.key === '+') {
+      nudgeDisplayScale(mainWindow, DISPLAY_STEP); event.preventDefault()
+    } else if (input.key === '0') {
+      setDisplayScale(mainWindow, 1); event.preventDefault()
     }
   })
 

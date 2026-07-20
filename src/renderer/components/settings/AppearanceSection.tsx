@@ -3,7 +3,7 @@
  * Manages theme and language settings
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import type { HaloConfig, ThemeMode, SendKeyMode } from '../../types'
 import { useTranslation, setLanguage, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
 import { api } from '../../api'
@@ -21,6 +21,22 @@ export function AppearanceSection({ config, setConfig }: AppearanceSectionProps)
 
   // Send key mode state
   const [sendKeyMode, setSendKeyMode] = useState<SendKeyMode>(config?.chat?.sendKeyMode || 'enter')
+
+  // Display scale (persistent UI zoom) — desktop only
+  const isDesktop = !api.isRemoteMode()
+  const [displayScale, setDisplayScale] = useState(1)
+  useEffect(() => {
+    if (!isDesktop) return
+    void window.halo?.getDisplayScale?.().then((r) => {
+      if (r?.success && typeof r.data === 'number') setDisplayScale(r.data)
+    })
+    // Keep in sync when zoom is changed via keyboard/menu while this panel is open
+    return window.halo?.onDisplayScale?.((factor) => setDisplayScale(factor))
+  }, [isDesktop])
+  const handleScaleChange = async (value: number) => {
+    setDisplayScale(value)
+    try { await window.halo?.setDisplayScale?.(value) } catch { /* best-effort */ }
+  }
 
   // Auto-save helper for appearance settings
   const autoSave = useCallback(async (partialConfig: Partial<HaloConfig>) => {
@@ -71,6 +87,31 @@ export function AppearanceSection({ config, setConfig }: AppearanceSectionProps)
             ))}
           </div>
         </div>
+
+        {/* Display Size — desktop only */}
+        {isDesktop && (
+          <div>
+            <label className="block text-sm text-muted-foreground mb-2">{t('Display Size')}</label>
+            <div className="flex gap-4">
+              {([[t('Small'), 0.8], [t('Default'), 1.0], [t('Large'), 1.2]] as [string, number][]).map(([label, val]) => (
+                <button
+                  key={val}
+                  onClick={() => handleScaleChange(val)}
+                  className={`px-4 py-2 rounded-lg transition-colors ${
+                    Math.abs(displayScale - val) < 0.05
+                      ? 'bg-primary/20 text-primary border border-primary'
+                      : 'bg-secondary hover:bg-secondary/80'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {t('Adjust the overall interface size. You can also use ⌘/Ctrl with + / − / 0.')} · {Math.round(displayScale * 100)}%
+            </p>
+          </div>
+        )}
 
         {/* Language */}
         <div>
