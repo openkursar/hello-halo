@@ -15,6 +15,7 @@
     "postinstall": "node scripts/postinstall.mjs",
     "bump-rc": "node scripts/bump-rc-version.mjs",
     "build:mac": "export CSC_IDENTITY_AUTO_DISCOVERY=false && npm run bump-rc && npm run prepare:all && npm run build && electron-builder --mac",
+    "build:mac-signed": "bash scripts/build-mac-signed.sh",
     "build:win": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform win && npm run build && electron-builder --win",
     "build:win-x64": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform win && npm run build && electron-builder --win --x64",
     "prepare": "node scripts/prepare-binaries.mjs",
