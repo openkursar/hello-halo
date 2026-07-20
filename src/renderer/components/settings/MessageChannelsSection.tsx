@@ -438,6 +438,21 @@ function InstanceCard({
     onChange({ ...instance, streaming: instance.streaming === true ? undefined : true })
   }
 
+  const handleQuoteReplyChange = () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    setDraft(null)
+    // quoteReply defaults to on (true). Toggle off → explicit false; toggle on → undefined (legacy default).
+    const nextQuote = (cfg.quoteReply as boolean) === false ? undefined : false
+    const nextConfig = { ...cfg, quoteReply: nextQuote }
+    // Disabling Quote Reply also disables Streaming, since streaming in group
+    // chats relies on the passive reply path that produces the quote bubble.
+    let nextInstance = { ...instance, config: nextConfig }
+    if (nextQuote === false && instance.streaming === true) {
+      nextInstance = { ...nextInstance, streaming: undefined }
+    }
+    onChange(nextInstance)
+  }
+
   const handleReplyScopeChange = (scope: string) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     setDraft(null)
@@ -445,6 +460,7 @@ function InstanceCard({
   }
 
   const isStreamingEnabled = instance.streaming === true
+  const isQuoteReplyEnabled = (cfg.quoteReply as boolean) !== false
   const replyScope = instance.replyScope ?? 'all'
 
   return (
@@ -653,18 +669,51 @@ function InstanceCard({
                   ? t('Shows thinking process in real-time')
                   : t('Only sends the final reply')}
               </p>
+              {!isQuoteReplyEnabled && (
+                <p className="text-xs text-amber-500">
+                  {t('Streaming requires Quote Reply (group chats)')}
+                </p>
+              )}
             </div>
-            <label className="relative inline-flex items-center cursor-pointer">
+            <label className={`relative inline-flex items-center ${!isQuoteReplyEnabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
               <input
                 type="checkbox"
                 checked={isStreamingEnabled}
                 onChange={handleStreamingChange}
+                disabled={!isQuoteReplyEnabled}
                 className="sr-only peer"
               />
               <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
                 <div
                   className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
                     isStreamingEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                  } mt-0.5`}
+                />
+              </div>
+            </label>
+          </div>
+
+          {/* Quote Reply toggle */}
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <p className="text-sm text-muted-foreground">{t('Quote Reply (Group)')}</p>
+              <p className="text-xs text-muted-foreground/70">
+                {isQuoteReplyEnabled
+                  ? t('Group replies quote the original message')
+                  : t('Group replies are sent as plain text without quote bubbles')}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isQuoteReplyEnabled}
+                onChange={handleQuoteReplyChange}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
+                <div
+                  className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
+                    isQuoteReplyEnabled ? 'translate-x-5' : 'translate-x-0.5'
                   } mt-0.5`}
                 />
               </div>

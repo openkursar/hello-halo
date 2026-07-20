@@ -40,6 +40,11 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
   const [browserUseProxy, setBrowserUseProxy] = useState(config?.network?.browserUseProxy ?? false)
   const [proxyError, setProxyError] = useState<string | null>(null)
   const [proxySaved, setProxySaved] = useState(false)
+
+  // Custom User-Agent state (issue #124)
+  const [userAgentInput, setUserAgentInput] = useState(config?.browser?.userAgent || '')
+  const [userAgentSaved, setUserAgentSaved] = useState(false)
+  const [userAgentError, setUserAgentError] = useState<string | null>(null)
   // Health diagnostics state
   const [isRunningDiagnostics, setIsRunningDiagnostics] = useState(false)
   const [diagnosticsExpanded, setDiagnosticsExpanded] = useState(false)
@@ -56,6 +61,12 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
   useEffect(() => {
     loadSystemSettings()
   }, [])
+
+  // Sync local User-Agent input when the config prop changes externally
+  // (e.g. another panel or window saves the config). Issue #124.
+  useEffect(() => {
+    setUserAgentInput(config?.browser?.userAgent || '')
+  }, [config?.browser?.userAgent])
 
   const loadSystemSettings = async () => {
     try {
@@ -218,6 +229,31 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
     } catch (error) {
       console.error('[SystemSection] Failed to update browserUseProxy:', error)
       setBrowserUseProxy(!enabled) // Revert on error
+    }
+  }
+
+  // Issue #124
+  const handleUserAgentSave = async () => {
+    const value = userAgentInput.trim()
+
+    // Reject unreasonably long strings to prevent accidental paste of large
+    // content. 1024 chars comfortably exceeds any legitimate UA string.
+    if (value.length > 1024) {
+      setUserAgentError(t('User-Agent must be 1024 characters or fewer'))
+      return
+    }
+
+    setUserAgentError(null)
+    try {
+      const updatedBrowser = { ...config?.browser, userAgent: value || undefined }
+      const updatedConfig = { ...config, browser: updatedBrowser } as HaloConfig
+      await api.setConfig({ browser: updatedBrowser })
+      setConfig(updatedConfig)
+      setUserAgentSaved(true)
+      setTimeout(() => setUserAgentSaved(false), 2000)
+    } catch (error) {
+      console.error('[SystemSection] Failed to save User-Agent:', error)
+      setUserAgentError(t('Failed to save'))
     }
   }
 
@@ -410,6 +446,46 @@ export function SystemSection({ config, setConfig }: SystemSectionProps) {
                 />
               </div>
             )}
+          </div>
+
+          {/* Custom User-Agent — issue #124 */}
+          <div className="pt-4 border-t border-border">
+            <div className="flex-1 mb-3">
+              <p className="font-medium">{t('Browser User-Agent')}</p>
+              <p className="text-sm text-muted-foreground">
+                {t('Override the User-Agent string sent by the embedded AI Browser. Leave empty to use the built-in default.')}
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                value={userAgentInput}
+                onChange={(e) => {
+                  setUserAgentInput(e.target.value)
+                  setUserAgentError(null)
+                }}
+                onKeyDown={(e) => e.key === 'Enter' && handleUserAgentSave()}
+                placeholder="Mozilla/5.0 (Windows NT 10.0; Win64; x64) ..."
+                className="flex-1 px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 font-mono"
+              />
+              <button
+                onClick={handleUserAgentSave}
+                className="flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm bg-primary/10 text-primary hover:bg-primary/20 rounded-lg transition-colors shrink-0"
+              >
+                {userAgentSaved ? (
+                  <CheckCircle className="w-3.5 h-3.5" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                {userAgentSaved ? t('Saved') : t('Save')}
+              </button>
+            </div>
+            {userAgentError && (
+              <p className="mt-1.5 text-xs text-destructive">{userAgentError}</p>
+            )}
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {t('Applies to all open browser pages immediately.')}
+            </p>
           </div>
 
           {/* Open Log Folder */}

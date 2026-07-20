@@ -23,6 +23,7 @@ import { Eye, EyeOff, Loader2, CheckCircle2, XCircle } from 'lucide-react'
 import { api } from '../../api'
 import { getBuiltinProvider, type AISource, type ModelOption, type ProviderId } from '../../types'
 import { useTranslation } from '../../i18n'
+import { formatModelFetchError } from '../../utils/model-fetch-error'
 import { ProviderCatalogDropdown } from '../ai-config/ProviderCatalogDropdown'
 
 interface CustomApiSetupFormProps {
@@ -60,28 +61,44 @@ export function CustomApiSetupForm({ initialApiKey, onSave }: CustomApiSetupForm
   // Resolve the model list at save time: live fetch for OpenAI-compatible
   // gateways, falling back to the provider's static catalog. Anthropic always
   // uses its static list.
-  const resolveModels = async (): Promise<{ model: string; availableModels: ModelOption[] }> => {
+  //
+  // A genuine fetch failure (bad key, auth, unreachable gateway) is returned as
+  // `fetchError` so the caller can surface why (#249) instead of letting the
+  // user enter the app with a broken credential. A successful-but-empty list
+  // still degrades silently to the static catalog — some gateways expose no
+  // `/models` endpoint, and blocking onboarding on that would be wrong.
+  const resolveModels = async (): Promise<{
+    model: string
+    availableModels: ModelOption[]
+    fetchError?: string
+  }> => {
     const fallback = builtin?.models ?? []
+    const staticList = () => {
+      const model = fallback[0]?.id || ''
+      const availableModels = fallback.length > 0
+        ? fallback
+        : (model ? [{ id: model, name: model }] : [])
+      return { model, availableModels }
+    }
 
     if (!isAnthropic && apiKey.trim() && apiUrl) {
       try {
         const res = await api.fetchModels(apiKey.trim(), apiUrl)
-        if (res.success && res.data) {
+        if (!res.success) {
+          return { ...staticList(), fetchError: formatModelFetchError(t, res.code, res.error) }
+        }
+        if (res.data) {
           const { models } = res.data as { models: ModelOption[] }
           if (models.length > 0) {
             return { model: models[0].id, availableModels: models }
           }
         }
       } catch {
-        // fall through to static catalog
+        return { ...staticList(), fetchError: formatModelFetchError(t, 'MODEL_FETCH_NETWORK') }
       }
     }
 
-    const model = fallback[0]?.id || ''
-    const availableModels = fallback.length > 0
-      ? fallback
-      : (model ? [{ id: model, name: model }] : [])
-    return { model, availableModels }
+    return staticList()
   }
 
   const handleSave = async () => {
@@ -98,7 +115,12 @@ export function CustomApiSetupForm({ initialApiKey, onSave }: CustomApiSetupForm
     setIsSaving(true)
 
     try {
-      const { model, availableModels } = await resolveModels()
+      const { model, availableModels, fetchError } = await resolveModels()
+      if (fetchError) {
+        setError(fetchError)
+        setIsSaving(false)
+        return
+      }
       const now = new Date().toISOString()
 
       const source: AISource = {

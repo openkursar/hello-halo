@@ -326,14 +326,20 @@ export function unmaskSentinels(
   // Legacy wecomBot
   restore(incoming.wecomBot, existing.wecomBot, 'secret')
 
-  // IM channels instances — matched by id
+  // IM channels instances — matched by instance ID. The frontend
+  // (MessageChannelsSection.saveInstances) always sends the full instances
+  // array, and unchanged instances carry the '***' mask sentinel from
+  // getConfig(). Index-based matching would cross-contaminate or skip secrets
+  // whenever the array is reordered, appended, or partially updated.
   const iIm = (incoming.imChannels as Record<string, unknown>)?.instances as Record<string, unknown>[] | undefined
   const eIm = (existing.imChannels as Record<string, unknown>)?.instances as Record<string, unknown>[] | undefined
   if (Array.isArray(iIm) && Array.isArray(eIm)) {
     const byId = indexById(eIm)
     for (const inc of iIm) {
+      // Always restore, even with no id match: an unmatched instance carrying
+      // '***' has no real secret behind it, so restoreMap self-heals it to ''
+      // rather than persisting the literal sentinel (bug #172).
       const ext = matchById(inc, byId)
-      if (!ext) continue
       restoreMap((inc as Record<string, unknown>)?.config, (ext as Record<string, unknown>)?.config)
     }
   }
@@ -358,20 +364,30 @@ function matchById(
 
 function restore(incoming: unknown, existing: unknown, key: string): void {
   const inc = incoming as Record<string, unknown> | undefined
+  if (!inc || inc[key] !== MASK_SENTINEL) return
   const ext = existing as Record<string, unknown> | undefined
-  if (!inc || !ext) return
-  if (inc[key] === MASK_SENTINEL && typeof ext[key] === 'string') {
+  // Persisting the literal '***' is never correct: it means "unchanged" and
+  // the consumer has no real value to use. When the existing value is absent
+  // or itself the corrupted sentinel, fall back to '' so the field carries an
+  // honest empty state (and a previously-corrupted value self-heals on save).
+  if (ext && typeof ext[key] === 'string' && ext[key] !== MASK_SENTINEL) {
     inc[key] = ext[key]
+  } else {
+    inc[key] = ''
   }
 }
 
 function restoreMap(incoming: unknown, existing: unknown): void {
   const inc = incoming as Record<string, unknown> | undefined
-  const ext = existing as Record<string, unknown> | undefined
-  if (!inc || !ext) return
+  if (!inc) return
+  const ext = (existing as Record<string, unknown> | undefined) ?? {}
   for (const k of Object.keys(inc)) {
-    if (inc[k] === MASK_SENTINEL && typeof ext[k] === 'string') {
+    if (inc[k] !== MASK_SENTINEL) continue
+    if (typeof ext[k] === 'string' && ext[k] !== MASK_SENTINEL) {
       inc[k] = ext[k]
+    } else {
+      // No real value to restore — do not persist the sentinel (see restore).
+      inc[k] = ''
     }
   }
 }

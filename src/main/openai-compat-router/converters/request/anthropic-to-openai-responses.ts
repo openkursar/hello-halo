@@ -10,6 +10,8 @@ import {
   convertAnthropicThinkingToResponsesReasoning
 } from '../tools'
 import { supportsVisionById } from '../../../../shared/constants/model-capabilities'
+import { buildStreamOptionsIncludeUsage } from './stream-options'
+import { resolveOutputTokenLimit } from './max-tokens'
 import type { ConvertRequestOptions } from './types'
 
 export type { ConvertRequestOptions } from './types'
@@ -61,11 +63,28 @@ export function convertAnthropicToOpenAIResponses(
   const hasTools = !!tools && tools.length > 0
 
   // Build request - only include essential parameters
-  // Omit max_output_tokens as many providers don't support it
   const request: OpenAIResponsesRequest = {
     model: anthropicRequest.model,
     input: inputItems,
     stream: anthropicRequest.stream
+  }
+
+  // Issue #181 (Responses-specific nuance): the native OpenAI Responses API
+  // returns usage in `response.completed` unconditionally and silently ignores
+  // `stream_options`. However, translation-style gateways (e.g. litellm) map
+  // the Responses API to Chat Completions internally, where usage is gated by
+  // `stream_options.include_usage`. Injecting it is harmless for the native
+  // API and required for such gateways.
+  if (request.stream) {
+    request.stream_options = buildStreamOptionsIncludeUsage()
+  }
+
+  // Mirror the Chat Completions path. `max_output_tokens` is part of the
+  // Responses API public spec — without forwarding, Halo's "max output tokens"
+  // setting is silently dropped for Responses-routed backends.
+  const outputTokens = resolveOutputTokenLimit(anthropicRequest.max_tokens)
+  if (outputTokens !== undefined) {
+    request.max_output_tokens = outputTokens
   }
 
   // Add tools if present

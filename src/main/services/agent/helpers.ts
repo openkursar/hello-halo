@@ -281,6 +281,7 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
     adapterId: backendConfig.adapterId,
     visionOverride: backendConfig.visionOverride,
     capabilities,
+    supportsVision: modelOption?.supportsVision,
   }
 }
 
@@ -355,6 +356,7 @@ export async function getApiCredentialsForSource(
     adapterId: backendConfig.adapterId,
     visionOverride: backendConfig.visionOverride,
     capabilities,
+    supportsVision: modelOption?.supportsVision,
   }
 }
 

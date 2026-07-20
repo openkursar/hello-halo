@@ -93,6 +93,7 @@ export interface HaloAPI {
     }
   }) => Promise<IpcResponse>
   getSpacePreferences: (spaceId: string) => Promise<IpcResponse>
+  reorderSpaces: (spaceIds: string[]) => Promise<IpcResponse>
 
   // Conversation
   listConversations: (spaceId: string) => Promise<IpcResponse>

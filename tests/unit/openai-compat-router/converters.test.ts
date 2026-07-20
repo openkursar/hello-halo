@@ -1,5 +1,14 @@
 /**
- * Unit Tests for Converters
+ * Unit Tests for Converters (colocated)
+ *
+ * This file is outside the vitest CI include pattern and runs only when
+ * invoked manually. It is retained for local development of legacy converter
+ * behavior.
+ *
+ * Canonical tests for issue #137 (max_tokens routing, reasoning model
+ * detection, output-token normalization) live in
+ * `tests/unit/services/openai-compat-converters.test.ts` — that file is the
+ * mandatory pre-handoff validation source. Do not add new #137 coverage here.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -415,8 +424,9 @@ describe('Request Converters', () => {
       const result = convertAnthropicToOpenAIResponses(request)
 
       expect(result.request.model).toBe('claude-3-opus')
-      // max_output_tokens is deliberately omitted — many providers don't support it
-      expect(result.request.max_output_tokens).toBeUndefined()
+      // The Responses API field `max_output_tokens` is part of the public spec
+      // and is forwarded so the user's "max output tokens" setting is honored.
+      expect(result.request.max_output_tokens).toBe(1024)
       expect(result.request.input).toHaveLength(1)
       expect((result.request.input as any)[0].role).toBe('user')
       expect((result.request.input as any)[0].content[0]).toEqual({
@@ -655,6 +665,7 @@ describe('Request Converters', () => {
       expect(fco.output).not.toContain('"image"')
       expect(fco.output).toContain('ok')
     })
+
   })
 
   // The name heuristic blacklists whole families (e.g. minimax-*) as
