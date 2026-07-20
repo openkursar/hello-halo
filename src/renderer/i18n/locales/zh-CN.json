@@ -1396,6 +1396,7 @@
   "{{field}} is required": "{{field}} 为必填项",
   "{{name}} running": "{{name}} 运行中",
   "{{name}} was installed, but some bundled skills failed.": "{{name}} 已安装，但部分捆绑技能安装失败。",
+  "{{time}} active": "{{time}}活跃",
   "← → to switch files": "← → 切换文件",
   "🤖 AI Browser": "🤖 AI 浏览器",
   "Cannot reach server, check network or proxy": "无法连接服务器，请检查网络或代理",

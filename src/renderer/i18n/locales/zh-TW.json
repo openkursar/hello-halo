@@ -1396,6 +1396,7 @@
   "{{field}} is required": "{{field}} 為必填欄位",
   "{{name}} running": "{{name}} 正在執行",
   "{{name}} was installed, but some bundled skills failed.": "{{name}} 已安裝，但部分捆綁技能失敗。",
+  "{{time}} active": "{{time}}使用中",
   "← → to switch files": "← → 切換檔案",
   "🤖 AI Browser": "🤖 AI 瀏覽器",
   "Cannot reach server, check network or proxy": "無法連線至伺服器，請檢查網路或代理伺服器",

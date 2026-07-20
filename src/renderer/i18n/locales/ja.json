@@ -1396,6 +1396,7 @@
   "{{field}} is required": "{{field}}は必須です",
   "{{name}} running": "{{name}} 実行中",
   "{{name}} was installed, but some bundled skills failed.": "{{name}}をインストールしましたが、一部のバンドルスキルに失敗しました。",
+  "{{time}} active": "{{time}} アクティブ",
   "← → to switch files": "← → でファイルを切り替え",
   "🤖 AI Browser": "🤖 AIブラウザ",
   "Cannot reach server, check network or proxy": "サーバーに接続できません。ネットワークまたはプロキシを確認してください",
