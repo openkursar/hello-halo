@@ -122,6 +122,15 @@ function resultEvent(ts = '2026-01-01T00:00:00.000Z'): StoredEvent {
   return { _ts: ts, type: 'result' }
 }
 
+/** Create a Codex-style terminal result event carrying the turn's final text */
+function resultWithText(
+  result: string,
+  isError = false,
+  ts = '2026-01-01T00:00:00.000Z'
+): StoredEvent {
+  return { _ts: ts, type: 'result', subtype: isError ? 'error_during_execution' : 'success', result, is_error: isError }
+}
+
 function streamEvent(event: Record<string, unknown>, ts = '2026-01-01T00:00:00.000Z'): StoredEvent {
   return { _ts: ts, type: 'stream_event', event }
 }
@@ -489,6 +498,106 @@ describe('convertEventsToMessages', () => {
         count: 2,
         types: { thinking: 1, tool_use: 1 },
       })
+    })
+  })
+
+  // ── Codex live-mode: result.result text fallback ──
+
+  describe('Codex result-text fallback', () => {
+    it('recovers the bubble text from result.result when the assistant text aggregate was suppressed', () => {
+      // Codex live mode persists only the user trigger + terminal result for a
+      // pure-text turn (the assistant text aggregate is suppressed and
+      // stream_events are not persisted).
+      const events: StoredEvent[] = [
+        userTrigger('Hi', '2026-01-01T00:00:00.000Z'),
+        resultWithText('Hello! How can I help?', false, '2026-01-01T00:00:01.000Z'),
+      ]
+
+      const messages = convertEventsToMessages(events)
+
+      expect(messages).toHaveLength(2)
+      expect(messages[0]).toMatchObject({ role: 'user', content: 'Hi' })
+      expect(messages[1].role).toBe('assistant')
+      expect(messages[1].content).toBe('Hello! How can I help?')
+      expect(messages[1].timestamp).toBe('2026-01-01T00:00:01.000Z')
+    })
+
+    it('keeps tool thoughts while recovering final text from result.result', () => {
+      // thinking is suppressed too in live mode, but the tool aggregate is
+      // persisted; the final bubble text comes from the result envelope.
+      const events: StoredEvent[] = [
+        userTrigger('Run pwd', '2026-01-01T00:00:00.000Z'),
+        assistantToolUse('Bash', 'c1', { command: 'pwd' }, '2026-01-01T00:00:01.000Z'),
+        userToolResult('c1', '/tmp/project\n', false, '2026-01-01T00:00:02.000Z'),
+        resultWithText('You are in /tmp/project.', false, '2026-01-01T00:00:03.000Z'),
+      ]
+
+      const messages = convertEventsToMessages(events)
+
+      expect(messages).toHaveLength(2)
+      expect(messages[1].content).toBe('You are in /tmp/project.')
+      expect(messages[1].thoughts).toHaveLength(1)
+      expect(messages[1].thoughts![0]).toMatchObject({
+        type: 'tool_use',
+        toolName: 'Bash',
+        toolResult: { output: '/tmp/project\n', isError: false },
+      })
+    })
+
+    it('prefers a reconstructed assistant text block over result.result (no override, no doubling)', () => {
+      const events: StoredEvent[] = [
+        assistantText('Real bubble text', '2026-01-01T00:00:00.000Z'),
+        resultWithText('redundant final text', false, '2026-01-01T00:00:01.000Z'),
+      ]
+
+      const messages = convertEventsToMessages(events)
+
+      expect(messages).toHaveLength(1)
+      expect(messages[0].content).toBe('Real bubble text')
+    })
+
+    it('ignores result.result when the result is an error', () => {
+      const events: StoredEvent[] = [
+        userTrigger('Do x', '2026-01-01T00:00:00.000Z'),
+        resultWithText('fatal error detail', true, '2026-01-01T00:00:01.000Z'),
+      ]
+
+      const messages = convertEventsToMessages(events)
+
+      // No assistant bubble fabricated from an error result.
+      expect(messages).toHaveLength(1)
+      expect(messages[0]).toMatchObject({ role: 'user', content: 'Do x' })
+    })
+
+    it('associates each turn result with its own bubble across multiple turns', () => {
+      const events: StoredEvent[] = [
+        userTrigger('Q1', '2026-01-01T00:00:00.000Z'),
+        resultWithText('A1', false, '2026-01-01T00:00:01.000Z'),
+        userTrigger('Q2', '2026-01-01T00:00:02.000Z'),
+        resultWithText('A2', false, '2026-01-01T00:00:03.000Z'),
+      ]
+
+      const messages = convertEventsToMessages(events)
+
+      expect(messages.map(m => [m.role, m.content])).toEqual([
+        ['user', 'Q1'],
+        ['assistant', 'A1'],
+        ['user', 'Q2'],
+        ['assistant', 'A2'],
+      ])
+    })
+
+    it('leaves a result event without a text payload inert', () => {
+      const events: StoredEvent[] = [
+        userTrigger('Hello'),
+        assistantText('Hi!'),
+        resultEvent(),
+      ]
+
+      const messages = convertEventsToMessages(events)
+
+      expect(messages).toHaveLength(2)
+      expect(messages[1].content).toBe('Hi!')
     })
   })
 

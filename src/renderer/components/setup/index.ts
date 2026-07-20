@@ -7,7 +7,9 @@
 
 export { GitBashWarningBanner } from './GitBashWarningBanner'
 export { LoginSelector } from './LoginSelector'
-export { ApiSetup } from './ApiSetup'
+export { ByokEntry } from './ByokEntry'
+export { CustomApiSetupForm } from './CustomApiSetupForm'
+export { SetupProviderConfig } from './SetupProviderConfig'
 export { PreferencesStep } from './PreferencesStep'
 export { ServerConnect } from './ServerConnect'
 export type { ServerAddedInfo } from './ServerConnect'

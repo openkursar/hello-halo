@@ -19,6 +19,12 @@ import type { TerminalContext } from './context'
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
 const errorText = (value: string) => ({ content: [{ type: 'text' as const, text: value }], isError: true })
 
+// Model-supplied timeouts are clamped (same ceiling as the Bash tool) so a
+// wild value cannot park a tool call for hours.
+const MAX_WAIT_SECONDS = 600
+const clampSeconds = (value: number | undefined, fallback: number): number =>
+  Math.min(Math.max(value ?? fallback, 1), MAX_WAIT_SECONDS)
+
 /** Minimal scope the terminal tools need — the owning space and its working dir. */
 export interface TerminalToolScope {
   spaceId: string
@@ -127,7 +133,7 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
       if (!session) return errorText(`No such terminal session: ${args.session}`)
       ctx.markAiActivity(args.session, true)
       try {
-        const result = await session.write(args.input, (args.timeout ?? 10) * 1000, args.submit ?? true)
+        const result = await session.write(args.input, clampSeconds(args.timeout, 10) * 1000, args.submit ?? true)
         const status =
           result.reason === 'exited' ? 'session exited' :
           result.awaitingContinuation ? 'awaiting continuation (shell wedged mid-statement — send the closing ' +
@@ -215,7 +221,7 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
     async (args: { session: string; text: string; timeout?: number }) => {
       const session = getScoped(args.session)
       if (!session) return errorText(`No such terminal session: ${args.session}`)
-      const outcome = await waitForText(session, args.text, (args.timeout ?? 60) * 1000)
+      const outcome = await waitForText(session, args.text, clampSeconds(args.timeout, 60) * 1000)
       if (outcome === 'found') {
         const screen = session.read('screen')
         return text(`Found "${args.text}".\n${screen.content}`)

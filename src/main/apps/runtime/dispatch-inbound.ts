@@ -32,6 +32,7 @@ import { setImPermissionContext, clearImPermissionContext } from './im-permissio
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
 import { FileExportGate } from './file-export-gate'
+import { truncateUtf16Safe } from './text-truncate'
 import { getSpaceDir } from '../../services/space.service'
 import { maybeClaimOwner } from './im-channels/owner-claim'
 import { getImChannelsPermissionDefaults } from '../../foundation/product-config'
@@ -213,7 +214,7 @@ const supplementBuffers = new Map<string, SupplementEntry[]>()
 function truncatePreview(body: string): string {
   const trimmed = body.trim().replace(/\s+/g, ' ')
   if (trimmed.length <= SUPPLEMENT_PREVIEW_MAX) return trimmed || '(empty)'
-  return trimmed.slice(0, SUPPLEMENT_PREVIEW_MAX) + '...'
+  return truncateUtf16Safe(trimmed, SUPPLEMENT_PREVIEW_MAX) + '...'
 }
 
 function buildSupplementAck(buffer: SupplementEntry[]): string {
@@ -567,7 +568,7 @@ export async function dispatchInboundMessage(
     registry.register(app.id, msg.channel, msg.chatId, msg.chatType, instanceId, {
       displayName,
       lastSender: msg.fromName,
-      lastMessage: msg.body.slice(0, 50),
+      lastMessage: truncateUtf16Safe(msg.body, 50),
     })
 
     // Notify renderer of session update for real-time panel refresh
@@ -577,7 +578,7 @@ export async function dispatchInboundMessage(
       chatId: msg.chatId,
       chatType: msg.chatType,
       instanceId,
-      lastMessage: msg.body.slice(0, 50),
+      lastMessage: truncateUtf16Safe(msg.body, 50),
       lastSender: msg.fromName,
     }
     sendToRenderer('app:im-session-updated', sessionEvent)
@@ -790,7 +791,7 @@ export async function dispatchInboundMessage(
         // we must still finish the streaming session (the only normal-path
         // terminator), but surface a notice rather than a blank message.
         const replyText = finalContent.trim()
-          ? finalContent.slice(0, MAX_REPLY_LENGTH)
+          ? truncateUtf16Safe(finalContent, MAX_REPLY_LENGTH)
           : EMPTY_RESPONSE_NOTICE
         const sendFn = reply.streaming
           ? () => reply.streaming!.finish(replyText)

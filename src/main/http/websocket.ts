@@ -6,12 +6,14 @@
 import { WebSocket, WebSocketServer } from 'ws'
 import { IncomingMessage } from 'http'
 import { v4 as uuidv4 } from 'uuid'
-import { validateToken } from './auth/index'
+import { authenticateWebSocket } from './auth/index'
 
 interface WebSocketClient {
   id: string
   ws: WebSocket
   authenticated: boolean
+  /** Socket address captured at upgrade time — feeds the auth lockout counters */
+  ip: string
   subscriptions: Set<string> // conversationIds this client is subscribed to
 }
 
@@ -33,6 +35,7 @@ export function initWebSocket(server: any): WebSocketServer {
       id: clientId,
       ws,
       authenticated: false,
+      ip: req.socket.remoteAddress || 'unknown',
       subscriptions: new Set()
     }
 
@@ -75,8 +78,9 @@ function handleClientMessage(
 ): void {
   switch (message.type) {
     case 'auth':
-      // Validate the token before marking as authenticated
-      if (message.payload?.token && validateToken(message.payload.token)) {
+      // Validate the token before marking as authenticated. Shares the HTTP
+      // login's lockout counters — see authenticateWebSocket.
+      if (message.payload?.token && authenticateWebSocket(message.payload.token, client.ip)) {
         client.authenticated = true
         sendToClient(client, { type: 'auth:success' })
         console.log(`[WS] Client ${client.id} authenticated successfully`)

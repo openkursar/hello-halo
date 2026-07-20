@@ -18,8 +18,8 @@ import type {
 import type { CachedTreeNode, CachedArtifact } from '../../shared/types/artifact'
 
 // Lazy import to avoid circular dependency (artifact-cache imports from watcher-host)
-let reconcileLoadedDirsLazy: ((spaceId: string) => Promise<void>) | null = null
-async function getReconcileFn(): Promise<(spaceId: string) => Promise<void>> {
+let reconcileLoadedDirsLazy: ((spaceId: string, reason?: string) => Promise<void>) | null = null
+async function getReconcileFn(): Promise<(spaceId: string, reason?: string) => Promise<void>> {
   if (!reconcileLoadedDirsLazy) {
     const mod = await import('./artifact-cache.service')
     reconcileLoadedDirsLazy = mod.reconcileLoadedDirs
@@ -131,7 +131,7 @@ function restartWithActiveSpaces(): void {
   getReconcileFn().then(async (reconcile) => {
     for (const [spaceId] of activeSpaces) {
       try {
-        await reconcile(spaceId)
+        await reconcile(spaceId, 'worker-restart')
       } catch (err) {
         console.error(`[WatcherHost] Post-crash reconciliation failed for ${spaceId}:`, err)
       }
@@ -198,7 +198,7 @@ function handleWorkerMessage(msg: WorkerToMainMessage): void {
     case 'watcher-error':
       console.warn(`[WatcherHost] Watcher error for ${msg.spaceId}: ${msg.error}. Triggering reconciliation.`)
       // Reconcile the affected space to recover from missed events
-      getReconcileFn().then(fn => fn(msg.spaceId)).catch(err => {
+      getReconcileFn().then(fn => fn(msg.spaceId, 'watcher-error')).catch(err => {
         console.error('[WatcherHost] Post-error reconciliation failed:', err)
       })
       break

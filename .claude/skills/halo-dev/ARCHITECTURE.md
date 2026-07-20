@@ -152,7 +152,7 @@ src/
     │   ├── chat/                      #   Chat stream + tool-result/
     │   ├── layout/                    #   Header, ModelSelector, SpaceSelector, etc.
     │   ├── settings/                  #   Settings sections
-    │   ├── setup/                     #   Sub-components: LoginSelector, ApiSetup, ServerConnect
+    │   ├── setup/                     #   Sub-components: LoginSelector, SetupProviderConfig, ServerConnect
     │   ├── store/                     #   App Store UI
     │   ├── ui/                        #   Cross-domain interaction primitives (ConfirmDialog,
     │   │                              #   ContextMenu, ...). Not shadcn-generated, but follows

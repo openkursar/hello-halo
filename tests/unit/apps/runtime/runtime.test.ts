@@ -95,6 +95,7 @@ vi.mock('../../../../src/main/services/ai-browser', () => ({
   createAIBrowserMcpServer: vi.fn().mockReturnValue({ name: 'mock-ai-browser', _isMcpServer: true }),
   createScopedBrowserContext: vi.fn(),
   getAIBrowserSdkToolNames: vi.fn().mockReturnValue([]),
+  AI_BROWSER_SYSTEM_PROMPT: '## AI Browser\n\nMock browser system prompt for tests.',
 }))
 
 // Mock web-search (may import electron transitively)
@@ -140,9 +141,22 @@ vi.mock('../../../../src/main/services/agent/events', () => ({
   emitAgentEvent: vi.fn(),
 }))
 
-// Mock resolved-sdk
+// Mock resolved-sdk — report-tool.ts imports tool + createSdkMcpServer from here
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSession: vi.fn(),
+  tool: vi.fn((name: string, description: string, schema: any, handler: any) => ({
+    name,
+    description,
+    schema,
+    handler,
+    _isTool: true,
+  })),
+  createSdkMcpServer: vi.fn((opts: any) => ({
+    name: opts.name,
+    version: opts.version,
+    tools: opts.tools,
+    _isMcpServer: true,
+  })),
 }))
 
 // Mock executeRun so service tests can assert the trigger it receives without
@@ -175,7 +189,6 @@ import { Semaphore } from '../../../../src/main/apps/runtime/concurrency'
 import { buildAppSystemPrompt, buildInitialMessage } from '../../../../src/main/apps/runtime/prompt'
 import {
   AppNotRunnableError,
-  NoSubscriptionsError,
   ConcurrencyLimitError,
   EscalationNotFoundError,
   RunExecutionError,
@@ -192,6 +205,7 @@ import type {
   TriggerType,
 } from '../../../../src/main/apps/runtime/types'
 import type { AppSpec } from '../../../../src/main/apps/spec/schema'
+import type { MemorySnapshot } from '../../../../src/main/platform/memory/snapshot'
 
 // ============================================
 // Test Fixtures
@@ -222,6 +236,24 @@ function createTestAppId(): string {
 
 function createTestRunId(): string {
   return randomUUID()
+}
+
+function createEmptyMemorySnapshot(): MemorySnapshot {
+  return {
+    exists: false,
+    totalLines: 0,
+    sizeBytes: 0,
+    firstSection: null,
+    headers: [],
+    fullContent: null,
+    archiveFiles: [],
+    archiveTotalCount: 0,
+    compactionArchiveCount: 0,
+    memoryFilePath: '/tmp/test/memory.md',
+    memoryArchiveDir: '/tmp/test/memory/run',
+    lastModified: null,
+    rawContent: null,
+  }
 }
 
 function createTestEntry(overrides?: Partial<ActivityEntry>): ActivityEntry {
@@ -976,6 +1008,15 @@ describe('ActivityStore', () => {
     it('should close all pending entries when no activeEntryId is given', () => {
       const entry1 = randomUUID()
       const entry2 = randomUUID()
+      const runId = createTestRunId()
+      store.insertRun({
+        runId,
+        appId: testAppId,
+        sessionKey: 'sess-1',
+        status: 'running',
+        triggerType: 'schedule',
+        startedAt: 1000,
+      })
 
       store.insertEntry({
         id: entry1,
@@ -1004,10 +1045,22 @@ describe('ActivityStore', () => {
     it('should not affect entries from other apps', () => {
       const otherAppId = randomUUID()
       const otherRunId = createTestRunId()
+      const runId = createTestRunId()
+      store.insertRun({
+        runId,
+        appId: testAppId,
+        sessionKey: 'sess-ours',
+        status: 'running',
+        triggerType: 'schedule',
+        startedAt: 1000,
+      })
 
       // Insert run for other app
       // (Use raw db to insert a minimal installed_apps row for FK)
-      store['db'].exec(`INSERT INTO installed_apps (id, space_id, spec_json, status, created_at) VALUES ('${otherAppId}', 'test-space', '{}', 'active', ${Date.now()})`)
+      store['db'].prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(otherAppId, 'other-app', 'test-space', '{}', 'active', '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
       store.insertRun({
         runId: otherRunId,
         appId: otherAppId,
@@ -1053,6 +1106,15 @@ describe('ActivityStore', () => {
 
     it('should not close already-responded entries', () => {
       const respondedEntry = randomUUID()
+      const runId = createTestRunId()
+      store.insertRun({
+        runId,
+        appId: testAppId,
+        sessionKey: 'sess-resp',
+        status: 'running',
+        triggerType: 'schedule',
+        startedAt: 1000,
+      })
 
       store.insertEntry({
         id: respondedEntry,
@@ -1239,7 +1301,7 @@ describe('Prompt Builder', () => {
       expect(prompt).toContain('escalation')
     })
 
-    it('should include sub-agent instructions when usesAIBrowser=true', () => {
+    it('should include the AI Browser system prompt when usesAIBrowser=true', () => {
       const prompt = buildAppSystemPrompt({
         appSpec: createTestSpec(),
         memoryInstructions: '',
@@ -1248,11 +1310,13 @@ describe('Prompt Builder', () => {
         workDir: '/tmp/test',
       })
 
-      expect(prompt).toContain('Browser Task Delegation')
-      expect(prompt).toContain('Task tool')
+      expect(prompt).toContain('AI Browser')
+      // Base automation context + reporting rules are still present
+      expect(prompt).toContain('automation App')
+      expect(prompt).toContain('Reporting')
     })
 
-    it('should NOT include sub-agent instructions when usesAIBrowser=false', () => {
+    it('should NOT include the AI Browser system prompt when usesAIBrowser=false', () => {
       const prompt = buildAppSystemPrompt({
         appSpec: createTestSpec(),
         memoryInstructions: '',
@@ -1261,7 +1325,7 @@ describe('Prompt Builder', () => {
         workDir: '/tmp/test',
       })
 
-      expect(prompt).not.toContain('Browser Task Delegation')
+      expect(prompt).not.toContain('Mock browser system prompt')
     })
 
     it('should handle AppSpec without system_prompt', () => {
@@ -1284,6 +1348,7 @@ describe('Prompt Builder', () => {
       const msg = buildInitialMessage({
         triggerContext: 'Scheduled run at 14:30',
         appName: 'Price Monitor',
+        memorySnapshot: createEmptyMemorySnapshot(),
       })
 
       expect(msg).toContain('Scheduled run at 14:30')
@@ -1295,6 +1360,7 @@ describe('Prompt Builder', () => {
         triggerContext: 'Manual trigger',
         appName: 'Price Monitor',
         userConfig: { productUrl: 'https://example.com', threshold: 100 },
+        memorySnapshot: createEmptyMemorySnapshot(),
       })
 
       expect(msg).toContain('User Configuration')
@@ -1307,6 +1373,7 @@ describe('Prompt Builder', () => {
         triggerContext: 'Manual trigger',
         appName: 'Price Monitor',
         userConfig: {},
+        memorySnapshot: createEmptyMemorySnapshot(),
       })
 
       expect(msg).not.toContain('User Configuration')
@@ -1316,6 +1383,7 @@ describe('Prompt Builder', () => {
       const msg = buildInitialMessage({
         triggerContext: 'Manual trigger',
         appName: 'Price Monitor',
+        memorySnapshot: createEmptyMemorySnapshot(),
       })
 
       expect(msg).not.toContain('User Configuration')
@@ -1325,6 +1393,7 @@ describe('Prompt Builder', () => {
       const msg = buildInitialMessage({
         triggerContext: 'Manual trigger',
         appName: 'My Automation',
+        memorySnapshot: createEmptyMemorySnapshot(),
       })
 
       expect(msg).toContain('"My Automation"')
@@ -1345,13 +1414,6 @@ describe('Error Types', () => {
     expect(err.status).toBe('paused')
     expect(err.message).toContain('app-123')
     expect(err.message).toContain('paused')
-  })
-
-  it('NoSubscriptionsError should contain appId', () => {
-    const err = new NoSubscriptionsError('app-456')
-    expect(err.name).toBe('NoSubscriptionsError')
-    expect(err.appId).toBe('app-456')
-    expect(err.message).toContain('app-456')
   })
 
   it('ConcurrencyLimitError should contain maxConcurrent', () => {
@@ -1378,7 +1440,6 @@ describe('Error Types', () => {
 
   it('All error types should be instanceof Error', () => {
     expect(new AppNotRunnableError('a', 'active')).toBeInstanceOf(Error)
-    expect(new NoSubscriptionsError('a')).toBeInstanceOf(Error)
     expect(new ConcurrencyLimitError(1)).toBeInstanceOf(Error)
     expect(new EscalationNotFoundError('a', 'b')).toBeInstanceOf(Error)
     expect(new RunExecutionError('a', 'b', 'c')).toBeInstanceOf(Error)
@@ -1593,7 +1654,7 @@ describe('AppRuntimeService', () => {
       expect(mockEventRouter.on).not.toHaveBeenCalled()
     })
 
-    it('should throw for automation app with no subscriptions', async () => {
+    it('should activate automation app with no subscriptions as a no-op', async () => {
       const appId = randomUUID()
       const app = {
         id: appId,
@@ -1609,7 +1670,12 @@ describe('AppRuntimeService', () => {
       mockAppManager.getApp.mockReturnValue(app)
 
       const service = createService()
-      await expect(service.activate(appId)).rejects.toThrow(NoSubscriptionsError)
+      // Empty subscriptions no longer throw — activate registers nothing.
+      await service.activate(appId)
+
+      expect(mockScheduler.addJob).not.toHaveBeenCalled()
+      expect(mockEventRouter.on).not.toHaveBeenCalled()
+      expect(mockBackground.registerKeepAliveReason).not.toHaveBeenCalled()
     })
 
     it('should use user frequency override when available', async () => {
@@ -1648,8 +1714,13 @@ describe('AppRuntimeService', () => {
         installedAt: Date.now(),
       }
       mockAppManager.getApp.mockReturnValue(app)
-      // Simulate existing job
-      mockScheduler.getJob.mockReturnValue({ id: `${appId}:check-prices`, status: 'paused' })
+      // Simulate an existing job whose schedule matches the desired one — the
+      // service resumes it in place rather than removing and re-adding.
+      mockScheduler.getJob.mockReturnValue({
+        id: `${appId}:check-prices`,
+        status: 'paused',
+        schedule: { kind: 'every', every: '30m' },
+      })
 
       const service = createService()
       await service.activate(appId)

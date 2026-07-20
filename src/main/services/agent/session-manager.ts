@@ -36,6 +36,16 @@ import { setSessionInvalidator, buildCreationTimeServers } from './toolsets/brok
 import { buildToolsetSection } from './toolsets/capability-index'
 import { dropConversationState } from './toolsets/state'
 
+/**
+ * Mask a secret for a diagnostic log line: report presence + length only, never
+ * the value. The session_env log exists to debug credential *wiring* (is a key
+ * set, which base URL), for which length is enough — the raw key must never hit
+ * the log file, which is user-readable and often shared in bug reports.
+ */
+function maskSecretForLog(value: string | undefined): string {
+  return value ? `set(len=${value.length})` : 'unset'
+}
+
 // ============================================
 // Session Maps
 // ============================================
@@ -63,7 +73,15 @@ export const v2Sessions = new Map<string, V2SessionInfo>()
  */
 function invalidateSessionForToolsetChange(conversationId: string): void {
   const info = v2Sessions.get(conversationId)
-  if (!info) return
+  if (!info) {
+    // Session mid-creation: it is being seeded with the pre-toggle set, so flag
+    // it for a rebuild once its consumer starts. When not under creation there is
+    // genuinely no session and creation will seed the current set anyway.
+    if (sessionsUnderCreation.has(conversationId)) {
+      pendingConsumerRebuilds.add(conversationId)
+    }
+    return
+  }
 
   // Legacy callers (app-chat/execute) close on turn idle via unregisterActiveSession.
   if (activeSessions.has(conversationId)) {
@@ -75,6 +93,14 @@ function invalidateSessionForToolsetChange(conversationId: string): void {
   // consumer breaks after the turn and the next sendMessage rebuilds.
   const consumer = consumers.get(conversationId)
   if (consumer?.isRunning && consumer.getActiveSessionState()) {
+    pendingConsumerRebuilds.add(conversationId)
+    return
+  }
+
+  // Consumer idle between turns but the CC subprocess still has team agents
+  // running — cleanup now would kill them all. Defer: the consumer only
+  // consumes the pending flag once no team tasks remain (see consumeLoop).
+  if (consumer?.isRunning && hasActiveTeamTasks(consumer.getTeamLifecycleThoughts())) {
     pendingConsumerRebuilds.add(conversationId)
     return
   }
@@ -105,6 +131,16 @@ const pendingInvalidations = new Set<string>()
  * after each turn and breaks its loop, triggering rebuild on next sendMessage.
  */
 const pendingConsumerRebuilds = new Set<string>()
+
+/**
+ * Conversations whose V2 session is mid-creation (inside `await createSession`).
+ * A toolset toggle that lands in this window would otherwise be lost: the
+ * session is not in v2Sessions yet, so the invalidator has nothing to act on,
+ * and once stored it carries the pre-toggle MCP set with a credentials
+ * fingerprint that never triggers a rebuild. Flagging such a conversation for a
+ * deferred rebuild (see invalidateSessionForToolsetChange) closes the gap.
+ */
+const sessionsUnderCreation = new Set<string>()
 
 /**
  * Check if a session is busy (has an in-flight request).
@@ -141,7 +177,7 @@ function cleanupSession(conversationId: string, reason: string, skipMapCheck = f
   const info = v2Sessions.get(conversationId)
   if (!info && !skipMapCheck) return
 
-  console.log(`[Agent][${conversationId}] Cleaning up session: ${reason}`, new Error('cleanupSession caller trace').stack)
+  console.log(`[Agent][${conversationId}] Cleaning up session: ${reason}`)
 
   // Stop the persistent consumer first (if any)
   const consumer = consumers.get(conversationId)
@@ -528,9 +564,9 @@ export async function getOrCreateV2Session(
         // abort all in-flight agent tasks.
         const isIdleBetweenTurns = consumer?.isRunning && !consumer.getActiveSessionState()
         if (isIdleBetweenTurns && hasActiveTeamTasks(consumer!.getTeamLifecycleThoughts())) {
-          // Clear the flag that invalidateAllSessions may have set — we don't want
-          // the consumer to break after the next team turn while messages are queued.
-          pendingConsumerRebuilds.delete(conversationId)
+          // A pending rebuild flag (credential or toolset change) is safe to keep:
+          // the consumer only consumes it once no team tasks remain (consumeLoop),
+          // so it cannot break the loop mid-team while messages are queued.
           console.log(
             `[Agent][${conversationId}] Session rebuild deferred — active team agents detected ` +
             `(gen ${existing.credentialsGeneration}→${currentGen}). Will rebuild after team tasks complete.`
@@ -580,8 +616,16 @@ export async function getOrCreateV2Session(
   if (effectiveSessionId) {
     sdkOptions.resume = effectiveSessionId
   }
-  // resolved-sdk handles sdkEngine switch (Halo SDK vs CC SDK) transparently
-  const session = (await createSession(sdkOptions)) as unknown as V2SDKSession
+  // resolved-sdk handles sdkEngine switch (Halo SDK vs CC SDK) transparently.
+  // Mark the creation window so a toolset toggle arriving during this await is
+  // not lost (see invalidateSessionForToolsetChange / sessionsUnderCreation).
+  sessionsUnderCreation.add(conversationId)
+  let session: V2SDKSession
+  try {
+    session = (await createSession(sdkOptions)) as unknown as V2SDKSession
+  } finally {
+    sessionsUnderCreation.delete(conversationId)
+  }
 
   // Log PID for health system verification (via SDK patch)
   const pid = (session as any).pid
@@ -589,7 +633,7 @@ export async function getOrCreateV2Session(
 
   const sdkEnv = ((sdkOptions as Record<string, unknown>).env || {}) as Record<string, string | undefined>
   console.log(`[Agent] session_create conv=${conversationId} pid=${pid ?? ''} model=${sdkOptions.model || ''} base_url=${sdkEnv.ANTHROPIC_BASE_URL || ''}`)
-  console.log(`[SDK Config] session_env conv=${conversationId} ANTHROPIC_BASE_URL=${sdkEnv.ANTHROPIC_BASE_URL || ''} ANTHROPIC_API_KEY=${sdkEnv.ANTHROPIC_API_KEY || ''} HTTP_PROXY=${sdkEnv.HTTP_PROXY || ''} HTTPS_PROXY=${sdkEnv.HTTPS_PROXY || ''} NO_PROXY=${sdkEnv.NO_PROXY || ''}`)
+  console.log(`[SDK Config] session_env conv=${conversationId} ANTHROPIC_BASE_URL=${sdkEnv.ANTHROPIC_BASE_URL || ''} ANTHROPIC_API_KEY=${maskSecretForLog(sdkEnv.ANTHROPIC_API_KEY)} HTTP_PROXY=${sdkEnv.HTTP_PROXY || ''} HTTPS_PROXY=${sdkEnv.HTTPS_PROXY || ''} NO_PROXY=${sdkEnv.NO_PROXY || ''}`)
 
   // Register with health system for orphan detection
   const instanceId = getCurrentInstanceId()

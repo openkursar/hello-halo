@@ -34,6 +34,7 @@ import { createReportToolServer } from './report-tool'
 import type { ReportToolContext } from './report-tool'
 import { createNotifyToolServer } from './notify-tool'
 import { FileExportGate } from './file-export-gate'
+import { truncateUtf16Safe } from './text-truncate'
 import { getImSessionRegistry } from './im-session-registry'
 import { autoSyncRunResult } from './im-auto-sync'
 import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getWorkingDir, getMcpServersForRequires } from '../../services/agent/helpers'
@@ -373,7 +374,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // files live under workingDir||path — see getSpaceDir().
     const exportGate = new FileExportGate([getSpaceDir(app.spaceId!), tmpdir()])
     const imSessions = usesImPush
-      ? (getImSessionRegistry()?.getAllSessions(app.id) ?? [])
+      ? (getImSessionRegistry()?.getPushableSessions(app.id) ?? [])
       : []
     const notifyMcpServer = createNotifyToolServer({
       appId: app.id,
@@ -958,7 +959,7 @@ function buildSummaryContent(ctx: RunSummaryContext): string {
   // Include the AI's output (truncated to keep file sizes manageable)
   if (ctx.finalText.trim()) {
     const truncated = ctx.finalText.length > MAX_SUMMARY_LENGTH
-      ? ctx.finalText.slice(0, MAX_SUMMARY_LENGTH) + '\n\n*(truncated)*'
+      ? truncateUtf16Safe(ctx.finalText, MAX_SUMMARY_LENGTH) + '\n\n*(truncated)*'
       : ctx.finalText
     lines.push('')
     lines.push('## Output')
@@ -1142,7 +1143,7 @@ async function generateCompactionSummary(
 
     // Truncate input if too large
     const truncatedContent = content.length > MAX_COMPACTION_INPUT_LENGTH
-      ? content.slice(0, MAX_COMPACTION_INPUT_LENGTH) + '\n\n... (truncated)'
+      ? truncateUtf16Safe(content, MAX_COMPACTION_INPUT_LENGTH) + '\n\n... (truncated)'
       : content
 
     const client = new Anthropic({

@@ -32,7 +32,7 @@ import {
   isOutputText,
   isRefusal,
   isFunctionTool
-} from '../types'
+} from '../../../src/main/openai-compat-router/types'
 
 describe('Anthropic Type Guards', () => {
   describe('isTextBlock', () => {

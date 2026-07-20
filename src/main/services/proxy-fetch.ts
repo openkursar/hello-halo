@@ -448,10 +448,14 @@ export async function proxyFetch(
   let response: Response
 
   if (!proxyUrl) {
-    console.log(`[ProxyFetch] DIRECT ${method} ${urlStr}`)
+    // Per-request line is high-volume (every outbound fetch, incl. telemetry/analytics).
+    // Keep it at debug so it is suppressed in normal production (file level=info) and
+    // only surfaces when Developer Mode raises the level to debug. Important requests
+    // (LLM/upstream) are already traced at info by their own handlers.
+    console.debug(`[ProxyFetch] DIRECT ${method} ${urlStr}`)
     response = await _originalFetch(url, init)
   } else {
-    console.log(`[ProxyFetch] VIA ${proxyUrl} → ${method} ${urlStr}`)
+    console.debug(`[ProxyFetch] VIA ${proxyUrl} → ${method} ${urlStr}`)
     const agent = getOrCreateAgent(proxyUrl)
     response = await makeRequest(urlStr, init, agent)
   }

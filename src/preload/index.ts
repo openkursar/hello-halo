@@ -56,6 +56,8 @@ export interface HaloAPI {
   // Config
   getConfig: () => Promise<IpcResponse>
   setConfig: (updates: Record<string, unknown>) => Promise<IpcResponse>
+  getCredentialFailures: () => Promise<IpcResponse>
+  onCredentialDecryptFailed: (callback: (data: { failures: Array<{ path: string; label: string }> }) => void) => () => void
   validateApi: (apiKey: string, apiUrl: string, provider: string, model?: string) => Promise<IpcResponse>
   fetchModels: (apiKey: string, apiUrl: string) => Promise<IpcResponse>
   refreshAISourcesConfig: () => Promise<IpcResponse>
@@ -167,6 +169,7 @@ export interface HaloAPI {
   getSessionState: (conversationId: string) => Promise<IpcResponse>
   ensureSessionWarm: (spaceId: string, conversationId: string) => Promise<IpcResponse>
   testMcpConnections: () => Promise<{ success: boolean; servers: unknown[]; error?: string }>
+  probeMcpApp: (appId: string) => Promise<{ success: boolean; result?: unknown; error?: string }>
   answerQuestion: (data: { conversationId: string; id: string; answers: Record<string, string> }) => Promise<IpcResponse>
   injectMessage: (data: { conversationId: string; message: string }) => Promise<IpcResponse>
   getEngineCapabilities: () => Promise<IpcResponse>
@@ -494,15 +497,23 @@ export interface HaloAPI {
   appMoveSpace: (input: { appId: string; newSpaceId: string | null }) => Promise<IpcResponse>
 
   // App Chat
-  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean }) => Promise<IpcResponse>
-  appChatStop: (appId: string) => Promise<IpcResponse>
-  appChatStatus: (appId: string) => Promise<IpcResponse>
-  appChatMessages: (input: { appId: string; spaceId: string }) => Promise<IpcResponse>
-  appChatSessionState: (appId: string) => Promise<IpcResponse>
-  appChatClear: (input: { appId: string; spaceId: string }) => Promise<IpcResponse>
+  // conversationId addresses a specific native/local session; omit for the app's
+  // native default session.
+  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean; conversationId?: string }) => Promise<IpcResponse<{ conversationId: string }>>
+  appChatStop: (appId: string, conversationId?: string) => Promise<IpcResponse>
+  appChatStatus: (appId: string, conversationId?: string) => Promise<IpcResponse<{ isGenerating: boolean; conversationId: string }>>
+  appChatMessages: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
+  appChatSessionState: (appId: string, conversationId?: string) => Promise<IpcResponse>
+  appChatClear: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
   appChatRestart: (appId: string) => Promise<IpcResponse<{ sessionsClosed: number }>>
   appImChatMessages: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
   appImChatClear: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
+
+  // Native multi-session lifecycle. Listing/renaming reuse imSessionsList /
+  // imSessionsSetCustomName (local sessions surface there with source==='local').
+  appSessionCreate: (input: { appId: string }) => Promise<IpcResponse<{ conversationId: string; record: unknown }>>
+  appSessionFork: (input: { appId: string; spaceId: string; sourceConversationId: string }) => Promise<IpcResponse<{ conversationId: string; record: unknown }>>
+  appSessionDelete: (input: { appId: string; spaceId: string; conversationId: string }) => Promise<IpcResponse>
 
   // App Event Listeners
   onAppStatusChanged: (callback: (data: unknown) => void) => () => void
@@ -628,6 +639,7 @@ const api: HaloAPI = {
 
   // Config + AI Sources CRUD (derived from configRpc contract)
   ...bindRpc(configRpc),
+  onCredentialDecryptFailed: (callback) => createEventListener('credential:decrypt-failed', callback),
 
   // CLI Config
   ...bindRpc(cliConfigRpc),

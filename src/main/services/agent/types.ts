@@ -46,6 +46,13 @@ export interface ApiCredentials {
   /** Provider adapter ID for request/response transformations */
   adapterId?: string
   /**
+   * Explicit per-model vision override (Settings > Provider > Model Config).
+   * Forwarded to the OpenAI-compat converter so a user-enabled "Vision" flag
+   * keeps image content for models the name heuristic would otherwise treat as
+   * text-only (e.g. `minimax-*`). `undefined` = no override.
+   */
+  visionOverride?: boolean
+  /**
    * Resolved capabilities for the chosen model (preset + user override merged).
    * Optional because legacy callers and api-validator construct credentials
    * before capabilities are known; the SDK config layer falls back to safe
@@ -265,6 +272,15 @@ export interface McpServerStatusInfo {
   error?: string
   /** Short tool names provided by this server (without mcp__ prefix) */
   tools?: string[]
+  /**
+   * Human-readable failure reason from the native connection probe
+   * (e.g. "HTTP 401 Unauthorized", "connect ECONNREFUSED ..."). The SDK
+   * only reports failed/connected; this field is how the UI escapes the
+   * black box. Cleared when the server connects.
+   */
+  errorDetail?: string
+  /** Epoch ms of the last probe/SDK report that produced this entry */
+  lastCheckedAt?: number
 }
 
 // ============================================

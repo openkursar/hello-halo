@@ -34,8 +34,7 @@ const minimalSkillSpec = {
   version: '1.0',
   author: 'tester',
   description: 'A test skill',
-  type: 'skill',
-  system_prompt: 'You are a helpful assistant.'
+  type: 'skill'
 }
 
 const minimalAutomationSpec = {
@@ -96,7 +95,9 @@ describe('validateAppSpec - minimal valid specs', () => {
   it('should accept minimal Skill spec', () => {
     const result = validateAppSpec(minimalSkillSpec)
     expect(result.type).toBe('skill')
-    expect(result.system_prompt).toBe('You are a helpful assistant.')
+    expect(result.name).toBe('Test Skill')
+    // Skills are lightweight: system_prompt is not part of the skill contract
+    expect((result as { system_prompt?: unknown }).system_prompt).toBeUndefined()
   })
 
   it('should accept minimal Automation spec', () => {
@@ -127,9 +128,17 @@ describe('validateAppSpec - required fields', () => {
     expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
   })
 
-  it('should reject missing author', () => {
-    const spec = { ...minimalSkillSpec, author: undefined }
+  it('should reject missing author for automation', () => {
+    const spec = { ...minimalAutomationSpec, author: undefined }
     expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
+  })
+
+  it('should accept missing author for skill', () => {
+    // SKILL.md format has no author field, so author is optional for skills
+    const spec = { ...minimalSkillSpec, author: undefined }
+    const result = validateAppSpec(spec)
+    expect(result.type).toBe('skill')
+    expect(result.author).toBeUndefined()
   })
 
   it('should reject missing description', () => {
@@ -169,16 +178,20 @@ describe('validateAppSpec - type-specific constraints', () => {
         expect.arrayContaining([
           expect.objectContaining({
             path: 'system_prompt',
-            message: expect.stringContaining('system_prompt')
+            message: 'Expected string, received undefined',
+            received: 'undefined'
           })
         ])
       )
     }
   })
 
-  it('should reject skill without system_prompt', () => {
+  it('should accept skill without system_prompt', () => {
+    // Skills are lightweight and do not carry a system_prompt
     const spec = { ...minimalSkillSpec, system_prompt: undefined }
-    expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
+    const result = validateAppSpec(spec)
+    expect(result.type).toBe('skill')
+    expect((result as { system_prompt?: unknown }).system_prompt).toBeUndefined()
   })
 
   it('should reject MCP without mcp_server', () => {
@@ -186,30 +199,38 @@ describe('validateAppSpec - type-specific constraints', () => {
     expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
   })
 
-  it('should reject mcp_server on non-MCP type', () => {
+  it('should strip mcp_server on non-MCP type', () => {
+    // Discriminated union validates against the skill schema, which has no
+    // mcp_server field, so the unknown key is stripped rather than rejected.
     const spec = {
       ...minimalSkillSpec,
       mcp_server: { command: 'npx' }
     }
-    expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
+    const result = validateAppSpec(spec)
+    expect(result.type).toBe('skill')
+    expect((result as { mcp_server?: unknown }).mcp_server).toBeUndefined()
   })
 
-  it('should reject subscriptions on non-automation type', () => {
+  it('should strip subscriptions on non-automation type', () => {
     const spec = {
       ...minimalSkillSpec,
       subscriptions: [{
         source: { type: 'schedule' as const, config: { every: '30m' } }
       }]
     }
-    expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
+    const result = validateAppSpec(spec)
+    expect(result.type).toBe('skill')
+    expect((result as { subscriptions?: unknown }).subscriptions).toBeUndefined()
   })
 
-  it('should reject memory_schema on non-automation type', () => {
+  it('should strip memory_schema on non-automation type', () => {
     const spec = {
       ...minimalSkillSpec,
       memory_schema: { price: { type: 'number' } }
     }
-    expect(() => validateAppSpec(spec)).toThrow(AppSpecValidationError)
+    const result = validateAppSpec(spec)
+    expect(result.type).toBe('skill')
+    expect((result as { memory_schema?: unknown }).memory_schema).toBeUndefined()
   })
 
   it('should allow extension without system_prompt', () => {

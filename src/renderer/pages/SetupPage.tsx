@@ -8,7 +8,7 @@ import { useState, useEffect } from 'react'
 import { useAppStore } from '../stores/app.store'
 import { api } from '../api'
 import { LoginSelector, type AuthProviderConfig } from '../components/setup/LoginSelector'
-import { ApiSetup } from '../components/setup/ApiSetup'
+import { SetupProviderConfig } from '../components/setup/SetupProviderConfig'
 import { PreferencesStep } from '../components/setup/PreferencesStep'
 import { useTranslation } from '../i18n'
 import { Loader2, Brain, ExternalLink, Copy, Check } from 'lucide-react'
@@ -56,8 +56,11 @@ export function SetupPage() {
   const [error, setError] = useState<string | null>(null)
   const [deviceCodeInfo, setDeviceCodeInfo] = useState<DeviceCodeInfo | null>(null)
   const [claudeLogin, setClaudeLogin] = useState<ClaudeLoginState | null>(null)
-  // Preset-API entry currently being configured (drives the ApiSetup form)
+  // Preset-API entry currently being configured (drives the setup config form)
   const [presetProvider, setPresetProvider] = useState<AuthProviderConfig | null>(null)
+  // API key carried over from the login screen's inline Custom-API entry, used
+  // to seed the custom config form.
+  const [customPrefillKey, setCustomPrefillKey] = useState<string>('')
 
   // Handle OAuth provider login (generic)
   const handleSelectProvider = async (providerType: string) => {
@@ -212,8 +215,10 @@ export function SetupPage() {
     }
   }
 
-  // Handle Custom API selection
-  const handleSelectCustom = () => {
+  // Handle Custom API selection — carries the optional key typed inline on the
+  // login screen so the config form lands pre-filled.
+  const handleSelectCustom = (apiKey?: string) => {
+    setCustomPrefillKey(apiKey ?? '')
     setStep('custom')
   }
 
@@ -244,6 +249,7 @@ export function SetupPage() {
 
   // Handle back from Custom API
   const handleBackFromCustom = () => {
+    setCustomPrefillKey('')
     setStep('select')
   }
 
@@ -535,15 +541,19 @@ export function SetupPage() {
   }
 
   if (step === 'custom') {
-    return <ApiSetup showBack onBack={handleBackFromCustom} />
+    return (
+      <SetupProviderConfig
+        initialApiKey={customPrefillKey}
+        onBack={handleBackFromCustom}
+      />
+    )
   }
 
   if (step === 'preset' && presetProvider) {
     return (
-      <ApiSetup
-        showBack
+      <SetupProviderConfig
+        presetProvider={presetProvider}
         onBack={handleBackFromPreset}
-        preset={presetProvider}
       />
     )
   }

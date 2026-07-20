@@ -99,6 +99,23 @@ work directories.
 - `platform/background` -- `onStatusChange` uses a handler array with unsubscribe function
 - This is simpler and more explicit than Node.js EventEmitter for single-event patterns.
 
+### 2.6a MCP Change Event Carries Per-App Details
+
+**Signature**: `onMcpAppsChange((spaceId: string | null, change?: McpAppChange) => void)`
+where `McpAppChange = { appId, specId, action }` and `action` is one of
+`installed | uninstalled | reinstalled | paused | resumed | updated | moved | status`.
+The `McpAppChange` type lives in `services/app-bridge.ts` (type-only import here,
+erased at runtime) because its consumers are on the services tier.
+
+**Rationale**: The original space-only payload was enough for session
+invalidation, but per-server subscribers need to know *which* server changed
+and *how*: the agent's MCP status cache drops the entry on `paused`/`uninstalled`
+(prevents stale "connection error" surviving a reinstall) and triggers a native
+connection probe on `installed`/`reinstalled`/`resumed`/`updated`/`status`
+(see `services/agent/mcp-probe.ts`). Every `emitMcpChange` call site in
+`service.ts` must pass the change details; `change` stays optional only so
+space-level handlers can ignore it.
+
 ### 2.7 Migration Namespace
 
 **Decision**: Use `'app_manager'` as the migration namespace.

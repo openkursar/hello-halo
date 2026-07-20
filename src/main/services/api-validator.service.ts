@@ -62,7 +62,13 @@ export async function fetchModelsFromApi(params: FetchModelsParams): Promise<Fet
     }
   }
 
-  if (!baseUrl.includes('/v1') && !baseUrl.includes('/api/paas')) {
+  // Only auto-append /v1 when the URL has no explicit API version segment.
+  // Gateways like Zhipu's Coding Plan already end in /v4 (…/api/coding/paas/v4),
+  // and blindly appending /v1 corrupts the path (…/v4/v1/models → 404 once the
+  // key authenticates), which silently degrades the model list to the static
+  // fallback.
+  const hasVersionSuffix = /\/v\d+$/.test(baseUrl)
+  if (!hasVersionSuffix && !baseUrl.includes('/v1') && !baseUrl.includes('/api/paas')) {
     baseUrl = `${baseUrl}/v1`
   }
 

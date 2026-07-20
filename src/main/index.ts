@@ -69,6 +69,14 @@ log.errorHandler.startCatching({
       log.warn(`[Main] Ignored transient network error: ${code || 'no-code'} ${message}`)
       return false
     }
+
+    // Node 20 Happy-Eyeballs internal timer race (nodejs/node#47644). Primary
+    // mitigation is the autoSelectFamily=false above; this branch covers callers
+    // that opt in explicitly per-connection.
+    if (code === 'ERR_INTERNAL_ASSERTION' && /internalConnectMultiple/.test(stack)) {
+      log.warn(`[Main] Ignored Node autoSelectFamily assertion: ${message}`)
+      return false
+    }
   }
 })
 
@@ -79,13 +87,23 @@ Object.assign(console, log.functions)
 // Must load after console replacement so its initial log calls go through electron-log.
 import './foundation/logging'
 
+// ========================================
+// NETWORK SAFETY (must run before any outbound socket)
+// ========================================
+// Node 20 defaults autoSelectFamily=true; its internal timer race surfaces as
+// ERR_INTERNAL_ASSERTION in internalConnectMultiple (nodejs/node#47644).
+// Restoring the pre-20 sequential fallback for Node-side sockets removes the
+// trigger. Chromium's network stack is separate and unaffected.
+import net from 'net'
+net.setDefaultAutoSelectFamily(false)
+
 // Fix PATH for macOS GUI apps
 // GUI apps don't inherit shell environment variables (.zshrc, .bash_profile, etc.)
 // This ensures tools like git, node, npm are discoverable
 // Executed after page load to avoid blocking startup
 // Note: fix-path is ESM-only, loaded dynamically to support both CJS and ESM builds
 
-import { app, BrowserWindow, Menu } from 'electron'
+import { app, BrowserWindow, Menu, crashReporter } from 'electron'
 import open from 'open'
 
 // GPU compatibility: Disable hardware acceleration on Windows to prevent blank window issues
@@ -94,6 +112,11 @@ import open from 'open'
 if (process.platform === 'win32') {
   app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('disable-gpu')
+  // Windows-only native occlusion tracking pauses compositor frames for
+  // minimized/covered windows, stalling Page.captureScreenshot on the
+  // routinely off-screen views used by AI automation (macOS has no
+  // equivalent). Disabling it keeps frames flowing for background AI browser work.
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 }
 
 // Anti-fingerprinting: Disable automation detection features in Chromium
@@ -172,8 +195,12 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import {
   initializeEssentialServices,
   initializeExtendedServices,
-  cleanupExtendedServices
+  cleanupExtendedServices,
+  applyServerModeSwitches,
+  installServerSignalHandlers,
+  bootServerMode
 } from './bootstrap'
+import { isServerMode } from './foundation/runtime-mode'
 import { initializeApp } from './foundation/config.service'
 import { flushAllPendingIndexWrites } from './services/conversation.service'
 import { shutdownRemoteAccess } from './services/remote.service'
@@ -182,9 +209,19 @@ import { manualCheckForUpdates } from './services/updater.service'
 import { initAnalytics } from './services/analytics'
 import { registerProtocols } from './foundation/protocol.service'
 import { setMainWindow } from './foundation/window.service'
+import { checkAndArmSessionIntegrity, markSessionCleanExit } from './foundation/session-integrity'
+import { relaunchApp } from './services/lifecycle'
 import { initInstanceId, shutdownHealthSystem, onRendererCrash, onRendererUnresponsive } from './services/health'
 import { reconcileAllSpaces } from './services/artifact-cache.service'
 import { initSdk } from './services/agent/resolved-sdk'
+
+// Headless server mode: apply no-display / no-sandbox switches before the app
+// becomes ready (required for Electron to start without a display in a container),
+// and route container stop signals (SIGTERM/SIGINT) into a graceful quit.
+if (isServerMode()) {
+  applyServerModeSwitches(app)
+  installServerSignalHandlers(app)
+}
 
 let mainWindow: BrowserWindow | null = null
 let isAppQuitting = false
@@ -207,8 +244,7 @@ function recoverRenderer(reason: string): void {
 
   if (recoveryAttempts > 3) {
     console.error('[Main] Renderer failed repeatedly. Relaunching app for a clean state.')
-    app.relaunch()
-    app.exit(0)
+    relaunchApp('renderer-recovery')
     return
   }
 
@@ -413,7 +449,7 @@ function createWindow(): void {
 
   // Reconcile artifact caches on window focus (recover missed watcher events)
   mainWindow.on('focus', () => {
-    reconcileAllSpaces().catch((err) => {
+    reconcileAllSpaces('window-focus').catch((err) => {
       console.error('[Main] Artifact reconciliation error on focus:', err)
     })
   })
@@ -441,6 +477,19 @@ function createWindow(): void {
 
 // Initialize application
 app.whenReady().then(async () => {
+  // Capture native crashes (V8 heap OOM, segfault, renderer GPU crashes) that bypass
+  // the JS uncaughtException handler. Minidumps are kept locally (uploadToServer:false)
+  // under app.getPath('crashDumps') — the only on-disk evidence when the process dies
+  // without running any shutdown code.
+  crashReporter.start({ uploadToServer: false })
+  console.log(`[CrashReporter] Native crash capture enabled, dumps at: ${app.getPath('crashDumps')}`)
+
+  // Detect whether the previous session ended without a graceful shutdown, then arm
+  // the marker for this session. Runs as the first whenReady step so a crash during
+  // the heavy init that follows is still attributed on the next launch (a crash
+  // before whenReady cannot be marked, but is rare).
+  checkAndArmSessionIntegrity()
+
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.halo.app')
 
@@ -463,6 +512,20 @@ app.whenReady().then(async () => {
   // Initialize health system instance ID (synchronous, <1ms)
   // Must be called before any subprocess is spawned
   initInstanceId()
+
+  // Headless server mode: no window/menu/tray. bootServerMode runs the essential
+  // + extended services directly (the GUI path chains Extended init to the
+  // window's ready-to-show, which never fires here) and force-starts remote
+  // access.
+  if (isServerMode()) {
+    await bootServerMode().catch((err) => {
+      // Fail fast with a non-zero exit so the orchestrator restarts the
+      // container instead of leaving a process up with no HTTP server.
+      console.error('[ServerMode] fatal boot error, exiting:', (err as Error)?.stack || err)
+      app.exit(1)
+    })
+    return
+  }
 
   // Create application menu
   createAppMenu()
@@ -516,6 +579,11 @@ async function shutdownServices(): Promise<void> {
   }
   hasShutdown = true
 
+  // Record that a graceful shutdown was initiated. Done first so a normal quit is
+  // marked clean even if a later cleanup step is slow; an ungraceful death never
+  // reaches this path and so remains flagged on the next launch.
+  markSessionCleanExit()
+
   // Flush pending conversation index writes before shutdown
   flushAllPendingIndexWrites()
 
@@ -546,6 +614,12 @@ app.on('before-quit', () => {
 })
 
 app.on('window-all-closed', () => {
+  // Headless server mode: the only BrowserWindows are incidental hidden
+  // automation surfaces (daemon / offscreen browser). Their unexpected close
+  // (e.g. a renderer OOM in the container) must NOT quit the service — process
+  // lifetime is owned by the signal handlers instead.
+  if (isServerMode()) return
+
   // With close-to-tray, this event only fires during actual quit
   // (isAppQuitting=true, so the close handler did not preventDefault).
   // On non-macOS, ensure clean shutdown before exiting.

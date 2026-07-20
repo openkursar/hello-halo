@@ -18,8 +18,8 @@ import {
   convertOpenAIChatToAnthropic,
   convertOpenAIResponsesToAnthropic,
   createAnthropicErrorResponse
-} from '../converters'
-import type { AnthropicRequest, OpenAIChatResponse } from '../types'
+} from '../../../src/main/openai-compat-router/converters'
+import type { AnthropicRequest, OpenAIChatResponse } from '../../../src/main/openai-compat-router/types'
 
 describe('Request Converters', () => {
   describe('convertAnthropicToOpenAIChat', () => {
@@ -666,98 +666,74 @@ describe('Request Converters', () => {
       expect(fco.output).toContain('ok')
     })
 
-    // Issue #139: the router receives the provider-declared
-    // ModelOption.supportsVision through the encoded BackendConfig. Models that
-    // are NOT in the built-in blacklist (so supportsVisionById would return
-    // true) must still strip images when the override says the model has no
-    // vision capability. Without this, non-multimodal custom/niche models
-    // receive image payloads and reject them with HTTP 400.
-    it('Chat path honors explicit supportsVision=false override for unknown models', () => {
-      const request: AnthropicRequest = {
-        model: 'some-novel-future-model',
-        max_tokens: 1024,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: 'What is this?' },
-              { type: 'image', source: PNG_SOURCE }
-            ]
-          }
-        ]
-      }
+  })
 
-      const result = convertAnthropicToOpenAIChat(request, { supportsVision: false })
+  // The name heuristic blacklists whole families (e.g. minimax-*) as
+  // text-only. When a user ticks "Vision" in Model Config, that explicit
+  // override must win and keep image content; conversely an explicit `false`
+  // must strip images even for a name the heuristic would treat as vision.
+  describe('vision override', () => {
+    const PNG_SOURCE = {
+      type: 'base64' as const,
+      media_type: 'image/png',
+      data: 'abc123'
+    }
 
-      expect(result.hasImages).toBe(true)
+    const imageRequest = (model: string): AnthropicRequest => ({
+      model,
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What is in the image?' },
+            { type: 'image', source: PNG_SOURCE }
+          ]
+        }
+      ]
+    })
+
+    it('keeps images for a blacklisted model when visionOverride=true (Chat)', () => {
+      const result = convertAnthropicToOpenAIChat(imageRequest('minimax-m3-tc-pfs'), {
+        visionOverride: true
+      })
+
       const content = result.request.messages[0].content as any[]
-      expect(content).toHaveLength(1)
-      expect(content[0].type).toBe('text')
+      expect(content.some((p: any) => p.type === 'image_url')).toBe(true)
+    })
+
+    it('strips images for the same model without an override (Chat)', () => {
+      const result = convertAnthropicToOpenAIChat(imageRequest('minimax-m3-tc-pfs'))
+
+      const content = result.request.messages[0].content as any[]
       expect(content.some((p: any) => p.type === 'image_url')).toBe(false)
     })
 
-    it('Chat path honors explicit supportsVision=true override for blacklisted models', () => {
-      // Override wins both ways: a provider can declare a blacklisted model
-      // actually supports vision (e.g. a custom multimodal deepseek variant).
-      const request: AnthropicRequest = {
-        model: 'deepseek-chat',
-        max_tokens: 1024,
-        messages: [
-          {
-            role: 'user',
-            content: [{ type: 'image', source: PNG_SOURCE }]
-          }
-        ]
-      }
-
-      const result = convertAnthropicToOpenAIChat(request, { supportsVision: true })
+    it('strips images when visionOverride=false overrides a vision-capable name (Chat)', () => {
+      const result = convertAnthropicToOpenAIChat(imageRequest('gpt-4o'), {
+        visionOverride: false
+      })
 
       const content = result.request.messages[0].content as any[]
-      expect(content[0].type).toBe('image_url')
+      expect(content.some((p: any) => p.type === 'image_url')).toBe(false)
     })
 
-    it('Responses path honors explicit supportsVision=false override for unknown models', () => {
-      const request: AnthropicRequest = {
-        model: 'some-novel-future-model',
-        max_tokens: 1024,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: 'What is this?' },
-              { type: 'image', source: PNG_SOURCE }
-            ]
-          }
-        ]
-      }
+    it('keeps images for a blacklisted model when visionOverride=true (Responses)', () => {
+      const result = convertAnthropicToOpenAIResponses(imageRequest('minimax-m3-tc-pfs'), {
+        visionOverride: true
+      })
 
-      const result = convertAnthropicToOpenAIResponses(request, { supportsVision: false })
-
-      expect(result.hasImages).toBe(true)
       const userMsg = (result.request.input as any[]).find((i) => i.role === 'user')
-      expect(userMsg).toBeDefined()
-      expect(userMsg.content.some((p: any) => p.type === 'input_image')).toBe(false)
-      expect(userMsg.content.some((p: any) => p.type === 'input_text')).toBe(true)
+      expect(userMsg.content.some((p: any) => p.type === 'input_image')).toBe(true)
     })
 
-    it('converter omits override → falls back to supportsVisionById (preserves default behavior)', () => {
-      // Sanity: when no override is passed, the heuristic still defaults
-      // unknown models to vision-capable.
-      const request: AnthropicRequest = {
-        model: 'some-novel-future-model',
-        max_tokens: 1024,
-        messages: [
-          {
-            role: 'user',
-            content: [{ type: 'image', source: PNG_SOURCE }]
-          }
-        ]
-      }
+    it('strips images when visionOverride=false overrides a vision-capable name (Responses)', () => {
+      const result = convertAnthropicToOpenAIResponses(imageRequest('gpt-4o'), {
+        visionOverride: false
+      })
 
-      const result = convertAnthropicToOpenAIChat(request)
-
-      const content = result.request.messages[0].content as any[]
-      expect(content[0].type).toBe('image_url')
+      const userMsg = (result.request.input as any[]).find((i) => i.role === 'user')
+      expect(userMsg.content.some((p: any) => p.type === 'input_image')).toBe(false)
     })
   })
 })

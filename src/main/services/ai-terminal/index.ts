@@ -11,7 +11,6 @@
 
 export { createTerminalMcpServer } from './sdk-mcp-server'
 export {
-  createScopedTerminalContext,
   getGlobalTerminalContext,
   peekGlobalTerminalContext,
   cleanupAITerminal
@@ -44,7 +43,7 @@ You can control interactive terminal sessions. All terminal tools are prefixed w
 
 ### Core Workflow
 1. \`terminal_create\` — start a session (a persistent shell). Returns a session id.
-2. \`terminal_write\` — send a command (include the trailing newline) and get its output in one call.
+2. \`terminal_write\` — send a command (no trailing newline needed — submit presses Enter for you) and get its output in one call.
 3. \`terminal_read\` — read more output by position: mode "new" to poll, "screen" for the ground-truth current screen, "scrollback" to page back through history.
 4. \`terminal_search\` — regex-search a session's history for matching lines (smart-case), to filter noisy output down to the signal.
 5. \`terminal_wait_for\` — block until expected text appears (long tasks, prompts).

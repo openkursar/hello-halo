@@ -22,7 +22,13 @@ import type {
 import { DEFAULT_MODEL } from '../../shared/types'
 import { BUILTIN_PROVIDERS, getBuiltinProvider } from '../../shared/constants'
 import { decryptString } from './secure-storage.service'
-import { encryptConfigFields, decryptConfigFields, configHasUnmigratedCredentials } from './config-encryption'
+import {
+  encryptConfigFields,
+  decryptConfigFields,
+  configHasUnmigratedCredentials,
+  applyFailedDecodeGuard,
+  type CredentialDecodeFailure,
+} from './config-encryption'
 import { encodeForStorage, decodeFromStorage, needsKeyMigration } from './crypto-envelope'
 import { isCredentialAtRestSafe } from './credential-safety'
 
@@ -38,7 +44,9 @@ import { isCredentialAtRestSafe } from './credential-safety'
 // This migration runs once at startup (before any service reads config) to:
 // 1. Detect encrypted values (enc: prefix)
 // 2. Attempt decryption
-// 3. Save plaintext on success, clear invalid data on failure
+// 3. On success, re-store via encodeForStorage — plaintext on open-source
+//    builds, v2 envelope on enterprise (so a decrypted secret is never left in
+//    plaintext at rest); on failure, preserve the original value (recoverable)
 // 4. Ensure subsequent reads get valid data
 // ============================================================================
 
@@ -104,16 +112,24 @@ function migrateEncryptedCredentials(): void {
     failures: []
   }
 
+  // Re-store a successfully decrypted legacy value. encodeForStorage keeps the
+  // at-rest contract: open-source builds get plaintext (unchanged), while
+  // enterprise (credentialAtRestSafe) builds get the v2 envelope directly — so
+  // this startup pass never leaves a decrypted secret in plaintext on disk
+  // waiting for the later re-encryption idle task.
+  const restore = (plain: string): string => encodeForStorage(plain)
+
   // 1. Migrate legacy api.apiKey (if exists and encrypted)
   if (parsed.api && isEncryptedValue(parsed.api.apiKey)) {
     const decryptResult = tryDecrypt(parsed.api.apiKey)
     if (decryptResult.success) {
-      parsed.api.apiKey = decryptResult.value
+      parsed.api.apiKey = restore(decryptResult.value)
       result.migrated = true
       result.fields.push('api.apiKey')
     } else {
-      parsed.api.apiKey = ''
-      result.migrated = true
+      // Non-destructive: leave the original enc: value on disk so a transient
+      // safeStorage failure (locked Keychain, etc.) can recover on a later run
+      // instead of wiping a recoverable credential.
       result.failures.push('api.apiKey')
     }
   }
@@ -122,12 +138,10 @@ function migrateEncryptedCredentials(): void {
   if (parsed.aiSources?.custom && isEncryptedValue(parsed.aiSources.custom.apiKey)) {
     const decryptResult = tryDecrypt(parsed.aiSources.custom.apiKey)
     if (decryptResult.success) {
-      parsed.aiSources.custom.apiKey = decryptResult.value
+      parsed.aiSources.custom.apiKey = restore(decryptResult.value)
       result.migrated = true
       result.fields.push('aiSources.custom.apiKey')
     } else {
-      parsed.aiSources.custom.apiKey = ''
-      result.migrated = true
       result.failures.push('aiSources.custom.apiKey')
     }
   }
@@ -147,12 +161,10 @@ function migrateEncryptedCredentials(): void {
       if (isEncryptedValue(provider.accessToken)) {
         const decryptResult = tryDecrypt(provider.accessToken)
         if (decryptResult.success) {
-          provider.accessToken = decryptResult.value
+          provider.accessToken = restore(decryptResult.value)
           result.migrated = true
           result.fields.push(`aiSources.${key}.accessToken`)
         } else {
-          provider.accessToken = ''
-          result.migrated = true
           result.failures.push(`aiSources.${key}.accessToken`)
         }
       }
@@ -161,36 +173,36 @@ function migrateEncryptedCredentials(): void {
       if (isEncryptedValue(provider.refreshToken)) {
         const decryptResult = tryDecrypt(provider.refreshToken)
         if (decryptResult.success) {
-          provider.refreshToken = decryptResult.value
+          provider.refreshToken = restore(decryptResult.value)
           result.migrated = true
           result.fields.push(`aiSources.${key}.refreshToken`)
         } else {
-          provider.refreshToken = ''
-          result.migrated = true
           result.failures.push(`aiSources.${key}.refreshToken`)
         }
       }
     }
   }
 
-  // Save migrated config if any changes were made
+  // Save migrated config only when at least one value was successfully
+  // converted. Pure-failure runs intentionally write nothing, leaving the
+  // original enc: values on disk for a later recovery attempt.
   if (result.migrated) {
     try {
       writeFileSync(configPath, JSON.stringify(parsed, null, 2))
-
       if (result.fields.length > 0) {
         console.log(`[Config Migration] Successfully migrated: ${result.fields.join(', ')}`)
-      }
-      if (result.failures.length > 0) {
-        console.warn(
-          `[Config Migration] Failed to decrypt (cleared): ${result.failures.join(', ')}. ` +
-            'User will need to re-enter these credentials.'
-        )
       }
     } catch (error) {
       console.error('[Config Migration] Failed to save migrated config:', error)
       // Don't throw - let the app continue, user can re-enter credentials
     }
+  }
+
+  if (result.failures.length > 0) {
+    console.warn(
+      `[Config Migration] Could not decrypt (preserved on disk): ${result.failures.join(', ')}. ` +
+        'Original values are kept so a transient failure can recover; the user is alerted to re-enter if it persists.'
+    )
   }
 }
 
@@ -361,6 +373,65 @@ let credentialsGeneration = 0
  */
 export function getCredentialsGeneration(): number {
   return credentialsGeneration
+}
+
+// Tracks sensitive fields that could not be decoded at rest. The consumer gets
+// an empty value, but the original ciphertext is kept here so saveConfig's write
+// guard never persists empty over a recoverable credential, and the renderer can
+// alert the user to re-enter it. Process-scoped; getConfig() rebuilds it per read.
+
+const failedDecode = new Map<string, { label: string; ciphertext: string }>()
+
+/** Paths already pushed to the renderer, so the live alert fires once per field. */
+const alertedCredentialPaths = new Set<string>()
+
+/** Renderer-facing failure record (never carries ciphertext). */
+export interface CredentialDecodeFailureInfo {
+  path: string
+  label: string
+}
+
+type CredentialFailureNotifier = (failures: CredentialDecodeFailureInfo[]) => void
+let credentialFailureNotifier: CredentialFailureNotifier | null = null
+
+/**
+ * Register the transport-aware notifier used to push newly-detected credential
+ * decode failures to clients (IPC renderer + remote WS). Foundation stays
+ * decoupled from the http/ipc tiers via this seam, mirroring onApiConfigChange.
+ */
+export function setCredentialFailureNotifier(fn: CredentialFailureNotifier | null): void {
+  credentialFailureNotifier = fn
+}
+
+/**
+ * Refresh the failed-decode map from the supplied decrypt report and push any
+ * newly-seen failures to the registered notifier exactly once.
+ */
+function syncCredentialDecodeFailures(failures: CredentialDecodeFailure[]): void {
+  failedDecode.clear()
+  for (const f of failures) {
+    failedDecode.set(f.path, { label: f.label, ciphertext: f.ciphertext })
+  }
+
+  if (!credentialFailureNotifier) return
+  const fresh = failures.filter(f => !alertedCredentialPaths.has(f.path))
+  if (fresh.length === 0) return
+  try {
+    credentialFailureNotifier(fresh.map(f => ({ path: f.path, label: f.label })))
+    for (const f of fresh) alertedCredentialPaths.add(f.path)
+  } catch (err) {
+    console.error('[Config] Credential failure notifier threw:', (err as Error).message)
+  }
+}
+
+/**
+ * Current credential fields that could not be decoded, for the renderer alert.
+ * Refreshes from disk first so a late-subscribing client (or one that pulls on
+ * mount) always sees the authoritative state. Never returns ciphertext.
+ */
+export function getCredentialDecodeFailures(): CredentialDecodeFailureInfo[] {
+  getConfig()
+  return Array.from(failedDecode, ([path, info]) => ({ path, label: info.label }))
 }
 
 /**
@@ -1080,13 +1151,13 @@ export function getConfig(): HaloConfig {
     const content = readFileSync(configPath, 'utf-8')
     const parsed = JSON.parse(content)
 
-    // Decrypt sensitive fields that were encrypted at rest (no-op when
-    // credentialAtRestSafe is off or the values are still plain).
-    decryptConfigFields(parsed)
-
-    const aiSources = normalizeAiSources(parsed)
-
-    // Migrate legacy copilotIdentity → copilot.identity (one-time)
+    // Migrate legacy copilotIdentity → copilot.identity (one-time).
+    // MUST run before decryptConfigFields: it persists `parsed` to disk, and at
+    // this point sensitive fields are still in their on-disk ciphertext form.
+    // Doing it after decrypt would write decrypted plaintext (defeating at-rest
+    // encryption) and, worse, persist the empty placeholder a failed-decode
+    // leaves behind — silently overwriting a recoverable credential. copilot
+    // identity fields are not sensitive, so writing them here is safe.
     if (parsed.copilotIdentity && !parsed.copilot?.identity) {
       parsed.copilot = { ...parsed.copilot, identity: parsed.copilotIdentity }
       delete parsed.copilotIdentity
@@ -1094,6 +1165,15 @@ export function getConfig(): HaloConfig {
         writeFileSync(configPath, JSON.stringify(parsed, null, 2))
       } catch { /* non-fatal */ }
     }
+
+    // Decrypt sensitive fields that were encrypted at rest (no-op when
+    // credentialAtRestSafe is off or the values are still plain). Failures are
+    // reported (not silently zeroed) so the write guard can preserve the
+    // original ciphertext and the user can be alerted.
+    const decodeFailures = decryptConfigFields(parsed)
+    syncCredentialDecodeFailures(decodeFailures)
+
+    const aiSources = normalizeAiSources(parsed)
 
     // Deep merge to ensure all nested defaults are applied
     return {
@@ -1210,6 +1290,14 @@ export function saveConfig(config: Partial<HaloConfig>): HaloConfig {
   // and for the return value that callers read.
   const toWrite = JSON.parse(JSON.stringify(newConfig))
   encryptConfigFields(toWrite)
+  // A field that failed to decode is empty in memory; restore its original
+  // ciphertext so the write never wipes a recoverable credential. A value the
+  // user re-entered is non-empty and wins (see applyFailedDecodeGuard).
+  if (failedDecode.size > 0) {
+    const preserved = new Map<string, string>()
+    for (const [path, info] of failedDecode) preserved.set(path, info.ciphertext)
+    applyFailedDecodeGuard(toWrite, preserved)
+  }
   // rename(2) is atomic on POSIX and Windows: a crash mid-write can never
   // leave a truncated/half-encrypted config that would corrupt credentials.
   const tmpPath = `${configPath}.tmp`
@@ -1292,20 +1380,18 @@ export function migrateCredentialEncryption(): void {
       saveConfig({
         remoteAccess: { ...current.remoteAccess, password: encodeForStorage(plainPin) },
       })
-      console.log('[Config] Re-encrypted stored credentials (incl. remote PIN) under persisted master key')
+      console.log('[Config] Re-encrypted stored credentials (incl. remote PIN) under static product key (v2)')
       return
     }
-    // PIN already orphaned by pre-fix drift: leave it for remote.service to
-    // regenerate on next enable; still migrate the remaining fields below.
+    // Undecodable PIN: leave it for remote.service to regenerate on next enable;
+    // still migrate the remaining fields below.
     console.warn('[Config] Remote PIN could not be decoded for migration; it will be regenerated on next remote-access enable')
   }
 
-  // saveConfig re-encrypts all sensitive fields under the master key: its
-  // getConfig() baseline decrypts via master-or-legacy fallback to plaintext,
-  // then the write path encrypts under the master key. An empty patch touches
-  // no API/agent/network fields, so no change handlers fire.
+  // An empty patch still re-encrypts every sensitive field under the v2 key on
+  // write, while touching no fields that would fire change handlers.
   saveConfig({})
-  console.log('[Config] Re-encrypted stored credentials under persisted master key')
+  console.log('[Config] Re-encrypted stored credentials under static product key (v2)')
 }
 
 /**

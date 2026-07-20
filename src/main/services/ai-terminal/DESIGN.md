@@ -29,7 +29,7 @@ appears in the capability index, toolset menu, or transport on Linux.
 | `shell.ts` | Per-platform shell resolution (zsh/bash, Git Bash on Windows) |
 | `session.ts` | `TerminalSession`: pty + `@xterm/headless` screen buffer + read modes + write-and-wait. **node-pty is lazy-required here** (see §5) |
 | `text-utils.ts` | Pure helpers (completion heuristic, output shaping) — unit-tested, no pty/xterm deps |
-| `context.ts` | `TerminalContext`: session registry; global singleton (main chat) + scoped (automation) |
+| `context.ts` | `TerminalContext`: session registry; one process-global singleton shared by all callers |
 | `events.ts` | Process-global event bus the global context forwards to; transport subscribes here |
 | `sdk-mcp-server.ts` | `createTerminalMcpServer(ctx)` — the 7 MCP tools |
 | `service.ts` | User/transport-facing ops (list/input/resize/kill/create/replay) |
@@ -180,8 +180,10 @@ buffer (`getReplayData`) so it can reproduce colors/cursor faithfully.
 
 1. **TerminalContext is process-scoped** and decoupled from SDK sessions. Never
    tie a pty's lifetime to a conversation/session rebuild.
-2. **Global singleton** backs the main chat and forwards to the event bus;
-   **scoped contexts** (automation) are isolated and do NOT forward to the bus.
+2. **One global singleton** backs every caller (main chat and automation runs)
+   and forwards to the event bus, so all sessions are visible and stoppable in
+   the UI. Cross-space isolation is enforced by the MCP tool layer
+   (`sdk-mcp-server` scopes lookups by `spaceId`), not by separate registries.
 3. Max sessions per context is capped; app shutdown kills all via
    `cleanupAITerminal()` (wired in `bootstrap/extended.ts`).
 4. `terminal_write` is arbitrary command execution — same trust model as the

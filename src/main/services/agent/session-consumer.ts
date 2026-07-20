@@ -296,7 +296,11 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
 
         // API config or toolset change during this turn → break the loop so the
         // session is rebuilt with the new set on the next sendMessage.
-        if (consumePendingRebuild(conversationId)) {
+        // Deferred while team agents are still running: breaking now would leave
+        // the CC subprocess unread and the next sendMessage would kill it (and
+        // every in-flight team task) as a zombie. The flag stays set and is
+        // consumed after the team's final turn.
+        if (!hasActiveTeamTasks(state.teamLifecycleThoughts) && consumePendingRebuild(conversationId)) {
           console.log(`[Consumer][${conversationId}] Rebuild pending, breaking for rebuild`)
           break
         }

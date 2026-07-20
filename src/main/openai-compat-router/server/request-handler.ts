@@ -25,7 +25,7 @@ import {
   streamAnthropicPassthrough,
   pipeAnthropicPassthrough
 } from '../stream'
-import { isNativeAnthropicHost } from '../utils'
+import { isNativeAnthropicHost, normalizeSystemPrompt } from '../utils'
 import { proxyFetch } from '../../services/proxy-fetch'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { withRequestQueue, generateQueueKey } from './request-queue'
@@ -489,10 +489,10 @@ async function handleOpenAIConversion(
 
       // Convert request
       const requestToSend = { ...anthropicRequest, stream: wantStream }
-      const visionOverride = { supportsVision: config.supportsVision }
+      const convertOptions = { visionOverride: config.visionOverride }
       const openaiRequest = apiType === 'responses'
-        ? convertAnthropicToOpenAIResponses(requestToSend, visionOverride).request
-        : convertAnthropicToOpenAIChat(requestToSend, visionOverride).request
+        ? convertAnthropicToOpenAIResponses(requestToSend, convertOptions).request
+        : convertAnthropicToOpenAIChat(requestToSend, convertOptions).request
 
       const toolCount = (openaiRequest as any).tools?.length ?? 0
       console.log(`[RequestHandler] wire=${apiType} tools=${toolCount}`)
@@ -538,8 +538,8 @@ async function handleOpenAIConversion(
           // Retry with stream enabled
           wantStream = true
           const retryRequest = apiType === 'responses'
-            ? convertAnthropicToOpenAIResponses({ ...anthropicRequest, stream: true }, visionOverride).request
-            : convertAnthropicToOpenAIChat({ ...anthropicRequest, stream: true }, visionOverride).request
+            ? convertAnthropicToOpenAIResponses({ ...anthropicRequest, stream: true }, convertOptions).request
+            : convertAnthropicToOpenAIChat({ ...anthropicRequest, stream: true }, convertOptions).request
 
           // Re-apply provider adapter to retry request (reuse same headers and context)
           applyProviderAdapter(backendUrl, retryRequest as Record<string, unknown>, requestHeaders, adapterId, adapterContext)
@@ -635,14 +635,15 @@ export async function handleMessagesRequest(
     return
   }
 
-  // Use potentially modified request from interceptors
-  const request = interceptResult.request
+  // Normalize the system prompt's opening identity line (see utils/normalize-system-prompt.ts).
+  const { request, modified: systemNormalized } = normalizeSystemPrompt(interceptResult.request)
+  const requestModified = interceptResult.intercepted || systemNormalized
 
   // Route based on apiType
   if (configApiType === 'anthropic_passthrough') {
     return handleAnthropicPassthrough(request, config, res, {
       ...options,
-      requestModified: interceptResult.intercepted
+      requestModified
     })
   }
 

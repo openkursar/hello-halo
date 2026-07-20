@@ -237,6 +237,10 @@ export interface McpServerStatus {
   error?: string;
   /** Short tool names provided by this server (without mcp__ prefix) */
   tools?: string[];
+  /** Human-readable failure reason from the native connection probe */
+  errorDetail?: string;
+  /** Epoch ms of the last probe/SDK report that produced this entry */
+  lastCheckedAt?: number;
 }
 
 export interface NotificationConfig {
@@ -415,7 +419,7 @@ export interface EngineCapabilities {
   subAgent: { model: 'declarative' | 'imperative' | 'none'; visibleLifecycle: boolean };
   features: {
     skills: boolean; mcp: boolean; hooks: boolean;
-    sessionResume: boolean; interrupt: boolean;
+    sessionResume: boolean; sessionFork: boolean; interrupt: boolean;
     multimodalImage: boolean; contextCompaction: boolean; askUserQuestion: boolean;
   };
 }

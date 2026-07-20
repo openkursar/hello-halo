@@ -22,7 +22,10 @@ export function registerProtocols(): void {
   // halo-file:// - Proxy to file:// for local resources
   // Chromium blocks file:// from localhost/app origins, this bypasses that
   protocol.handle('halo-file', (request) => {
-    const filePath = decodeURIComponent(request.url.replace('halo-file://', ''))
+    // The renderer appends a ?v=<token> cache-buster to force <img> reloads when a
+    // file is rewritten in place; strip any query/hash before resolving the real path.
+    const raw = request.url.replace('halo-file://', '')
+    const filePath = decodeURIComponent(raw.split(/[?#]/)[0])
     return net.fetch(`file://${filePath}`)
   })
 

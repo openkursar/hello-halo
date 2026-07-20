@@ -38,7 +38,7 @@ import type { InboundMessage, ReplyHandle } from './inbound-message'
  *
  * At runtime, this list is split by prefix:
  *   - Built-in tools (no prefix) → SDK `disallowedTools` (inverted whitelist)
- *   - MCP tools (`mcp__*`)       → legacy; replaced by injection-control fields below
+ *   - MCP tools → the injection-control fields below
  *
  * Used by ImChannelInstanceConfig (persisted) and ImPermissionContext (runtime).
  */
@@ -53,8 +53,8 @@ export interface GuestPolicy {
    */
   allowedTools?: string[]
 
-  // ── Halo MCP injection control (new — replaces mcp__ entries in allowedTools) ──
-  // Conservative strategy: not configured = not injected for guests.
+  // ── Halo MCP injection control ──
+  // Conservative: not configured = not injected for guests.
 
   /** Allow guest to use AI browser */
   allowAiBrowser?: boolean
@@ -78,8 +78,60 @@ export interface GuestPolicy {
 // ImChannelInstanceConfig (Persisted)
 // ============================================
 
-/** Supported IM channel provider types */
-export type ImChannelType = 'wecom-bot' | 'feishu-bot' | 'dingtalk-bot' | 'weixin-ilink-bot'
+/**
+ * Supported IM channel provider types. A runtime tuple (not a bare union) so it
+ * doubles as the source of truth for channel classification (classifySessionSource).
+ */
+export const IM_CHANNEL_TYPES = ['wecom-bot', 'feishu-bot', 'dingtalk-bot', 'weixin-ilink-bot'] as const
+
+export type ImChannelType = typeof IM_CHANNEL_TYPES[number]
+
+/**
+ * Origin of a digital-human external session.
+ *
+ *   'im'    — a bidirectional IM channel session (WeCom, Feishu, ...). Has a
+ *             live channel instance, so it can be proactively pushed to
+ *             (notify_bot / auto-sync).
+ *   'http'  — an external session created via the HTTP API. Read/write only
+ *             through HTTP; there is no IM adapter, so it is NOT pushable.
+ *   'local' — a native client-side chat session the desktop user created in
+ *             the digital human's own chat window (multiple named sessions per
+ *             app). Fully interactive, but not pushable and never auto-evicted
+ *             (unlike 'http', which a backend can mint unboundedly).
+ *
+ * Stored explicitly rather than inferred from key shape: HTTP, IM, and local
+ * keys share the same 5-segment format, so segment count cannot tell them apart.
+ */
+export type SessionSource = 'im' | 'http' | 'local'
+
+/**
+ * Channel value used for external sessions created via the HTTP API.
+ * The app-chat conversation key for such a session is
+ * "app-chat:{appId}:http:{chatType}:{chatId}".
+ */
+export const HTTP_SESSION_CHANNEL = 'http'
+
+/**
+ * Channel value used for native client-side multi-sessions. The app-chat
+ * conversation key is "app-chat:{appId}:local:direct:{sessionUuid}". These are
+ * the desktop user's own extra chat windows for a digital human, alongside the
+ * legacy default session keyed "app-chat:{appId}".
+ */
+export const LOCAL_SESSION_CHANNEL = 'local'
+
+/**
+ * Classify a session's source from its channel value.
+ *
+ * Conservative: only channels explicitly registered in {@link IM_CHANNEL_TYPES}
+ * are treated as IM (pushable). The native {@link LOCAL_SESSION_CHANNEL} is its
+ * own source so it is exempt from HTTP eviction bounds. Everything else — the
+ * HTTP channel and any unknown/future channel — is classified as 'http', so a
+ * non-IM session can never accidentally leak into IM push paths.
+ */
+export function classifySessionSource(channel: string): SessionSource {
+  if (channel === LOCAL_SESSION_CHANNEL) return 'local'
+  return (IM_CHANNEL_TYPES as readonly string[]).includes(channel) ? 'im' : 'http'
+}
 
 /**
  * Persisted configuration for a single IM channel instance.
@@ -383,6 +435,13 @@ export interface ImChannelInstanceStatus {
   appId: string
   /** Bound digital human App name (resolved at query time) */
   appName?: string
+  /**
+   * Human-readable reason the instance is not connected, when known
+   * (e.g. invalid/undecodable config). Provider-agnostic: set from the
+   * manager's validation/creation failure path, never brand-specific.
+   * Absent when connected or when no specific reason is available.
+   */
+  reason?: string
 }
 
 // ============================================
@@ -399,8 +458,15 @@ export interface ImChannelInstanceStatus {
 export interface ImSessionRecord {
   /** Associated digital human (App) ID */
   appId: string
-  /** Channel type identifier: 'wecom-bot' | 'feishu-bot' | 'dingtalk-bot' | ... */
+  /** Channel type identifier: 'wecom-bot' | 'feishu-bot' | 'dingtalk-bot' | 'http' | ... */
   channel: string
+  /**
+   * Session origin. Determines whether the session can be proactively pushed
+   * to (only 'im' sessions have a live channel adapter). Set at registration
+   * time via {@link classifySessionSource}; legacy records without this field
+   * are backfilled to 'im' on load (all pre-existing sessions were IM).
+   */
+  source: SessionSource
   /** IM channel instance ID that owns this session (for adapter lookup on push) */
   instanceId: string
   /** Platform-side conversation ID */
@@ -424,4 +490,22 @@ export interface ImSessionRecord {
   proactive: boolean
   /** Last activity timestamp (epoch ms) */
   lastActiveAt: number
+
+  // ── Native local-session fork metadata (source === 'local' only) ──
+
+  /**
+   * When this local session was forked from another session ("continue in
+   * client"), the source conversationId it was branched from. Purely
+   * informational for the UI; absent for freshly-created local sessions.
+   */
+  forkOrigin?: string
+
+  /**
+   * A source SDK sessionId to resume-and-fork from on this session's FIRST
+   * message. Set when the session is forked from an IM/other session so the
+   * new client session inherits the full model context without sharing the
+   * source's session id (SDK `resume` + `forkSession: true`). Cleared once the
+   * first message captures the new forked session id. Absent thereafter.
+   */
+  pendingResumeSessionId?: string
 }

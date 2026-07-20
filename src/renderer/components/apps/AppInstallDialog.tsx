@@ -81,10 +81,6 @@ system_prompt: |
   1. Open https://news.ycombinator.com and get today's Top 10 stories
   2. For each story, write a concise Chinese summary (2-3 sentences)
   3. Format as a clean digest with title, link, and summary
-  4. Report completion via report_to_user(type="run_complete")
-
-  If you encounter any issues, use
-  report_to_user(type="escalation") to ask the user for help.
 
 # -- Schedule --
 # Use "every" for intervals or "cron" for cron expressions.
