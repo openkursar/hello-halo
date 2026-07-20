@@ -50,24 +50,6 @@ For each piece of conflicting code, determine whether its intent is to be **kept
 - **Discarded** — the code appears intended for removal (deleted on one side, superseded, obsolete).
   - **Do NOT discard autonomously. Confirm with the human first**, even if it looks non-functional. Report which code you believe should be dropped and why, and wait for confirmation.
 
-#### 3.1.1 Judge Intent by Timeline, Not by Convenience
-
-"Keep or discard" is about *intent*, not about which resolution is less work. Use the commit history to tell them apart: `git log <side> -- <path>` and compare dates of the two diverging changes.
-
-- The **structurally newer direction** wins for *form* (e.g. a file deleted-and-replaced by a refactor supersedes the old file).
-- The **chronologically newer change** expresses the *latest intent* for *behavior*. A feature added to a file on one side is not "discarded" just because the other side deleted that file — if the feature commit is newer, its intent is **kept**, and must be carried onto the new structure.
-
-A side deleting a file did **not** consciously reject a feature that was added to that file *later* on the other branch — the two never met. Do not read the deletion as a rejection of newer intent.
-
-#### 3.1.2 Modify/Delete Conflicts Are Almost Always Functional
-
-When one side deletes a file and the other modifies it, the file choice may be mechanical (honor the delete if nothing imports the old file), but whether the *modification's intent* survives is a **functional** question. Separate the two:
-
-1. Which file/structure is the final architecture? (often the newer refactor)
-2. Does the other side's change carry an intent that must be re-applied to that new structure?
-
-Answer both. Escalate (2) to the human whenever the intents are in tension (e.g. one side surfaces an error, the other silently degrades) — and prefer a **reconciliation that preserves both** over dropping either.
-
 #### 3.2 Refactor / File Merge Hygiene
 
 When merging produces combined code:
