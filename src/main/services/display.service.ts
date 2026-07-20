@@ -10,10 +10,11 @@
 
 import { ipcMain, type BrowserWindow } from 'electron'
 import { getConfig, saveConfig } from '../foundation/config.service'
+import { DISPLAY_SCALE_MIN, DISPLAY_SCALE_MAX, DISPLAY_SCALE_STEP } from '../../shared/constants'
 
-const MIN = 0.5
-const MAX = 1.5
-export const DISPLAY_STEP = 0.1
+const MIN = DISPLAY_SCALE_MIN
+const MAX = DISPLAY_SCALE_MAX
+export const DISPLAY_STEP = DISPLAY_SCALE_STEP
 
 const clamp = (f: number): number => {
   const n = Number(f)

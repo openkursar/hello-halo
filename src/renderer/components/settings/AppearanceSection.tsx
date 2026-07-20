@@ -7,6 +7,7 @@ import { useState, useCallback, useEffect } from 'react'
 import type { HaloConfig, ThemeMode, SendKeyMode } from '../../types'
 import { useTranslation, setLanguage, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
 import { api } from '../../api'
+import { DISPLAY_SCALE_MIN, DISPLAY_SCALE_MAX, DISPLAY_SCALE_STEP } from '../../../shared/constants/display-scale'
 
 interface AppearanceSectionProps {
   config: HaloConfig | null
@@ -88,27 +89,38 @@ export function AppearanceSection({ config, setConfig }: AppearanceSectionProps)
           </div>
         </div>
 
-        {/* Display Size — desktop only */}
+        {/* Display Size — desktop only. Slider covers the same 50–150% range as
+            the ⌘/Ctrl +/−/0 shortcuts, so any value they produce lands exactly
+            on the slider instead of falling between discrete presets. */}
         {isDesktop && (
           <div>
-            <label className="block text-sm text-muted-foreground mb-2">{t('Display Size')}</label>
-            <div className="flex gap-4">
-              {([[t('Small'), 0.8], [t('Default'), 1.0], [t('Large'), 1.2]] as [string, number][]).map(([label, val]) => (
-                <button
-                  key={val}
-                  onClick={() => handleScaleChange(val)}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
-                    Math.abs(displayScale - val) < 0.05
-                      ? 'bg-primary/20 text-primary border border-primary'
-                      : 'bg-secondary hover:bg-secondary/80'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-sm text-muted-foreground">{t('Display Size')}</label>
+              <span className="text-sm font-medium tabular-nums">{Math.round(displayScale * 100)}%</span>
+            </div>
+            <div className="flex items-center gap-3 sm:gap-4">
+              <span className="text-xs text-muted-foreground tabular-nums">{DISPLAY_SCALE_MIN * 100}%</span>
+              <input
+                type="range"
+                min={DISPLAY_SCALE_MIN}
+                max={DISPLAY_SCALE_MAX}
+                step={DISPLAY_SCALE_STEP}
+                value={displayScale}
+                onChange={(e) => handleScaleChange(Number(e.target.value))}
+                className="flex-1 accent-primary cursor-pointer"
+                aria-label={t('Display Size')}
+              />
+              <span className="text-xs text-muted-foreground tabular-nums">{DISPLAY_SCALE_MAX * 100}%</span>
+              <button
+                onClick={() => handleScaleChange(1)}
+                disabled={displayScale === 1}
+                className="px-3 py-1.5 text-sm rounded-lg transition-colors bg-secondary hover:bg-secondary/80 disabled:opacity-50 disabled:cursor-default"
+              >
+                {t('Reset')}
+              </button>
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
-              {t('Adjust the overall interface size. You can also use ⌘/Ctrl with + / − / 0.')} · {Math.round(displayScale * 100)}%
+              {t('Adjust the overall interface size. You can also use ⌘/Ctrl with + / − / 0.')}
             </p>
           </div>
         )}

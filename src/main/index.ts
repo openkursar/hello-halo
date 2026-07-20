@@ -175,7 +175,7 @@ import {
   cleanupExtendedServices
 } from './bootstrap'
 import { initializeApp } from './foundation/config.service'
-import { applyDisplayScale, nudgeDisplayScale, setDisplayScale, DISPLAY_STEP, registerDisplayHandlers } from './services/display.service'
+import { applyDisplayScale, currentDisplayScale, nudgeDisplayScale, setDisplayScale, DISPLAY_STEP, registerDisplayHandlers } from './services/display.service'
 import { flushAllPendingIndexWrites } from './services/conversation.service'
 import { shutdownRemoteAccess } from './services/remote.service'
 import { stopOpenAICompatRouter } from './openai-compat-router'
@@ -378,7 +378,12 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // Seed the persistent display scale before first paint: zoomFactor applies
+      // the zoom natively, and the CLI arg lets the preload set --display-scale
+      // synchronously, so chrome-inset compensation is correct on frame one.
+      zoomFactor: currentDisplayScale(),
+      additionalArguments: [`--halo-display-scale=${currentDisplayScale()}`]
     }
   })
 

@@ -38,6 +38,23 @@ import type {
 } from '../shared/types'
 import type { StoreInstallProgress } from '../shared/store/store-types'
 
+// Seed --display-scale before the renderer's first paint. The main process
+// passes the persisted scale via additionalArguments at window creation;
+// waiting for the async display:get-scale IPC instead would leave the native
+// window-chrome inset compensation wrong for one visible frame.
+{
+  const arg = process.argv.find((a) => a.startsWith('--halo-display-scale='))
+  const scale = arg ? Number(arg.slice(arg.indexOf('=') + 1)) : NaN
+  if (Number.isFinite(scale) && scale > 0) {
+    const seed = () => document.documentElement.style.setProperty('--display-scale', String(scale))
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', seed, { once: true })
+    } else {
+      seed()
+    }
+  }
+}
+
 // Type definitions for exposed API
 export interface HaloAPI {
   // Generic Auth (provider-agnostic)
