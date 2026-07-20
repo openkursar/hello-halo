@@ -64,6 +64,7 @@
   "{{field}} is required": "{{field}} is required",
   "{{name}} running": "{{name}} running",
   "{{name}} was installed, but some bundled skills failed.": "{{name}} was installed, but some bundled skills failed.",
+  "{{time}} active": "{{time}} active",
   "← → to switch files": "← → to switch files",
   "🤖 AI Browser": "🤖 AI Browser",
   "1 file": "1 file",

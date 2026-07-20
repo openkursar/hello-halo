@@ -1438,6 +1438,7 @@
   "{{field}} is required": "{{field}} est requis",
   "{{name}} running": "{{name}} en cours d'exécution",
   "{{name}} was installed, but some bundled skills failed.": "{{name}} a été installé, mais certaines compétences regroupées ont échoué.",
+  "{{time}} active": "{{time}} actif",
   "← → to switch files": "← → pour changer de fichier",
   "🤖 AI Browser": "🤖 Navigateur IA",
   "Cannot reach server, check network or proxy": "Impossible de joindre le serveur. Vérifiez le réseau ou le proxy",

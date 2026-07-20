@@ -275,7 +275,7 @@ export function HomePage() {
                 <p className="text-xs text-muted-foreground mt-2">
                   {space.isMissing
                     ? t('Path unavailable. Reconnect the drive to open this space.')
-                    : `${formatTimeAgo(space.lastActiveAt || space.updatedAt)}${t('active')}`}
+                    : t('{{time}} active', { time: formatTimeAgo(space.lastActiveAt || space.updatedAt) })}
                 </p>
               </div>
             )}

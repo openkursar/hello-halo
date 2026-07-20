@@ -1396,6 +1396,7 @@
   "{{field}} is required": "{{field}} ist erforderlich",
   "{{name}} running": "{{name}} läuft",
   "{{name}} was installed, but some bundled skills failed.": "{{name}} wurde installiert, aber einige gebündelte Fähigkeiten sind fehlgeschlagen.",
+  "{{time}} active": "{{time}} aktiv",
   "← → to switch files": "← → zum Wechseln der Dateien",
   "🤖 AI Browser": "🤖 AI-Browser",
   "Cannot reach server, check network or proxy": "Server nicht erreichbar. Netzwerk oder Proxy prüfen",
