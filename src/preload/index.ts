@@ -279,6 +279,11 @@ export interface HaloAPI {
   getVersion: () => Promise<IpcResponse>
   onUpdaterStatus: (callback: (data: unknown) => void) => () => void
 
+  // Display scale (persistent UI zoom)
+  getDisplayScale: () => Promise<IpcResponse>
+  setDisplayScale: (factor: number) => Promise<IpcResponse>
+  onDisplayScale: (callback: (factor: number) => void) => () => void
+
   // Browser (embedded browser for Content Canvas)
   getBrowserHomepage: () => Promise<IpcResponse>
   createBrowserView: (viewId: string, url?: string) => Promise<IpcResponse>
@@ -647,6 +652,9 @@ const api: HaloAPI = {
   // NOTE: these preload methods PACK positional args into the object shape the
   // main handlers destructure (e.g. (viewId, url) -> { viewId, url }), so they
   // are kept hand-written — bindRpc's positional passthrough would break them.
+  getDisplayScale: () => ipcRenderer.invoke('display:get-scale'),
+  setDisplayScale: (factor) => ipcRenderer.invoke('display:set-scale', factor),
+  onDisplayScale: (callback) => createEventListener('display:scale-changed', callback),
   getBrowserHomepage: () => ipcRenderer.invoke('browser:get-homepage'),
   createBrowserView: (viewId, url) => ipcRenderer.invoke('browser:create', { viewId, url }),
   destroyBrowserView: (viewId) => ipcRenderer.invoke('browser:destroy', { viewId }),
