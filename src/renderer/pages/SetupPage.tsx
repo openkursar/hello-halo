@@ -16,7 +16,7 @@ import { Loader2, Brain, ExternalLink, Copy, Check } from 'lucide-react'
 // First step is `preferences` only on the very first launch (gated by
 // config.isFirstLaunch). Old users re-entering Setup (e.g., after clearing
 // the AI source) skip preferences and land on `select` directly.
-type SetupStep = 'preferences' | 'select' | 'oauth-waiting' | 'claude-login' | 'custom' | 'preset'
+type SetupStep = 'preferences' | 'select' | 'oauth-waiting' | 'claude-login' | 'preset'
 
 /** Device code info for display in UI */
 interface DeviceCodeInfo {
@@ -58,9 +58,6 @@ export function SetupPage() {
   const [claudeLogin, setClaudeLogin] = useState<ClaudeLoginState | null>(null)
   // Preset-API entry currently being configured (drives the setup config form)
   const [presetProvider, setPresetProvider] = useState<AuthProviderConfig | null>(null)
-  // API key carried over from the login screen's inline Custom-API entry, used
-  // to seed the custom config form.
-  const [customPrefillKey, setCustomPrefillKey] = useState<string>('')
 
   // Handle OAuth provider login (generic)
   const handleSelectProvider = async (providerType: string) => {
@@ -215,13 +212,6 @@ export function SetupPage() {
     }
   }
 
-  // Handle Custom API selection — carries the optional key typed inline on the
-  // login screen so the config form lands pre-filled.
-  const handleSelectCustom = (apiKey?: string) => {
-    setCustomPrefillKey(apiKey ?? '')
-    setStep('custom')
-  }
-
   // Handle skip — defer model configuration and enter Home directly.
   // The modelConfigSkipped flag tells the setup-entry guard not to re-show
   // the wizard on next launch despite the empty aiSources.
@@ -245,12 +235,6 @@ export function SetupPage() {
       console.error('[SetupPage] skip error:', err)
       setError(err instanceof Error ? err.message : t('Skip failed'))
     }
-  }
-
-  // Handle back from Custom API
-  const handleBackFromCustom = () => {
-    setCustomPrefillKey('')
-    setStep('select')
   }
 
   // Handle preset-API selection (fixed-baseUrl API key form)
@@ -289,7 +273,6 @@ export function SetupPage() {
       <>
         <LoginSelector
           onSelectProvider={handleSelectProvider}
-          onSelectCustom={handleSelectCustom}
           onSelectPreset={handleSelectPreset}
           onSkip={handleSkipModelConfig}
         />
@@ -537,15 +520,6 @@ export function SetupPage() {
           {t('Cancel')}
         </button>
       </div>
-    )
-  }
-
-  if (step === 'custom') {
-    return (
-      <SetupProviderConfig
-        initialApiKey={customPrefillKey}
-        onBack={handleBackFromCustom}
-      />
     )
   }
 

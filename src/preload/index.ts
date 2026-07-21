@@ -51,6 +51,7 @@ export interface HaloAPI {
   authRefreshToken: (sourceId: string) => Promise<IpcResponse>
   authCheckToken: (sourceId: string) => Promise<IpcResponse>
   authLogout: (sourceId: string) => Promise<IpcResponse>
+  authGetQuota: (sourceId: string) => Promise<IpcResponse>
   onAuthLoginProgress: (callback: (data: { provider: string; status: string }) => void) => () => void
 
   // Config

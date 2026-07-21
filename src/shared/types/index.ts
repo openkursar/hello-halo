@@ -28,7 +28,9 @@ export type {
   AISourceUserInfo,
   LocalizedText,
   PresetApiConfig,
-  AuthProviderConfig
+  AuthProviderConfig,
+  ProviderDocsLink,
+  AuthQuotaSnapshot
 } from './ai-sources'
 
 // AI Sources - export constants and functions

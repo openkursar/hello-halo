@@ -28,6 +28,7 @@ import { Header } from '../components/layout/Header'
 import { SidebarToggle } from '../components/layout/SidebarToggle'
 import { SpaceSelector } from '../components/layout/SpaceSelector'
 import { ModelSelector } from '../components/layout/ModelSelector'
+import { QuotaPill } from '../components/layout/QuotaPill'
 import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
 import { KBIndicator } from '../components/tlon/KBIndicator'
 import { ContentCanvas } from '../components/canvas'
@@ -63,6 +64,15 @@ export function SpacePage() {
   const startGitBashInstall = useAppStore(state => state.startGitBashInstall)
   const sidebarOpenConfig = useAppStore(state => state.config?.layout?.sidebarOpen)
   const artifactRailWidthConfig = useAppStore(state => state.config?.layout?.artifactRailWidth)
+
+  // Active source id for the header quota pill (string identity → re-renders
+  // only when the selection actually changes).
+  const currentSourceId = useAppStore(state => {
+    const src = state.config?.aiSources
+    return src?.version === 2 && src.currentId && src.sources.some(s => s.id === src.currentId)
+      ? src.currentId
+      : undefined
+  })
 
   const currentSpace = useSpaceStore(state => state.currentSpace)
 
@@ -371,6 +381,9 @@ export function SpacePage() {
                 <KBIndicator spaceId={currentSpace.id} />
               </div>
             )}
+
+            {/* Metered quota — renders only when the active source reports it */}
+            <QuotaPill sourceId={currentSourceId} />
 
             {/* Model Selector - hidden on mobile (in overflow menu) */}
             <div className="hidden sm:block">
