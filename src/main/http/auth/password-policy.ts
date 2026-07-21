@@ -26,13 +26,12 @@ const TERMINAL_MESSAGES: Record<'NOT_A_STRING' | 'TOO_SHORT' | 'TOO_LONG', strin
 }
 
 const CLASS_FRAGMENTS: Record<
-  'MISSING_UPPER' | 'MISSING_LOWER' | 'MISSING_DIGIT' | 'MISSING_SPECIAL',
+  'MISSING_UPPER' | 'MISSING_LOWER' | 'MISSING_DIGIT',
   string
 > = {
   MISSING_UPPER: 'uppercase letter',
   MISSING_LOWER: 'lowercase letter',
   MISSING_DIGIT: 'digit',
-  MISSING_SPECIAL: 'special character',
 }
 
 function isTerminal(code: PasswordPolicyCode): code is keyof typeof TERMINAL_MESSAGES {
