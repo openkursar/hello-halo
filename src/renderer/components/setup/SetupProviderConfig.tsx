@@ -1,38 +1,39 @@
 /**
- * SetupProviderConfig — first-run chrome around the preset-gateway config form.
+ * SetupProviderConfig — first-run chrome around a provider config form.
  *
- * Provides the setup wizard's logo/back/title chrome for a preset-API entry and
- * persists the created source via `saveFirstRunSource`. Renders `ProviderSelector`
- * in its locked, API-key-only preset panel (the same form Settings uses to add a
- * preset source).
- *
- * The Custom API (BYOK) path is handled inline on the login screen
- * (`LoginSelector` → `CustomApiSetupForm`), not here.
+ * Provides the setup wizard's logo/back/title chrome for a configurable auth
+ * entry and persists the created source via `saveFirstRunSource`. The form it
+ * wraps depends on the entry shape:
+ *   - Preset gateway (`entry.preset`): the locked, API-key-only `ProviderSelector`
+ *     panel (fixed baseUrl, provider switching hidden).
+ *   - Custom API / BYOK (no preset): the key-first `CustomApiSetupForm`.
  */
 
 import { useAppStore } from '../../stores/app.store'
 import { ArrowLeft } from 'lucide-react'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { ProviderSelector } from '../settings/ProviderSelector'
+import { CustomApiSetupForm } from './CustomApiSetupForm'
 import { saveFirstRunSource } from './saveFirstRunSource'
 import type { AISource, AISourcesConfig } from '../../types'
 import { resolveLocalizedText, type AuthProviderConfig } from '../../../shared/types'
 
 interface SetupProviderConfigProps {
-  /** Preset-API entry driving the locked API-key form. */
-  presetProvider: AuthProviderConfig
+  /** Auth entry driving the config form (preset gateway or Custom API/BYOK). */
+  entry: AuthProviderConfig
   /** Return to the login method selection. */
   onBack: () => void
 }
 
-export function SetupProviderConfig({ presetProvider, onBack }: SetupProviderConfigProps) {
+export function SetupProviderConfig({ entry, onBack }: SetupProviderConfigProps) {
   const { t } = useTranslation()
   const { config, setConfig, setView } = useAppStore()
 
-  const title = resolveLocalizedText(presetProvider.displayName, getCurrentLanguage())
+  const title = resolveLocalizedText(entry.displayName, getCurrentLanguage())
+  const isPreset = Boolean(entry.preset)
 
   // Persist the first source created during onboarding (shared with the login
-  // screen's inline Custom-API path).
+  // screen's preset and custom paths).
   const handleSave = (source: AISource) => saveFirstRunSource(source, { config, setConfig, setView })
 
   const emptySources: AISourcesConfig = config?.aiSources ?? {
@@ -64,12 +65,16 @@ export function SetupProviderConfig({ presetProvider, onBack }: SetupProviderCon
           <h2 className="text-center text-lg">{title}</h2>
         </div>
 
-        <ProviderSelector
-          aiSources={emptySources}
-          onSave={handleSave}
-          onCancel={onBack}
-          presetProvider={presetProvider}
-        />
+        {isPreset ? (
+          <ProviderSelector
+            aiSources={emptySources}
+            onSave={handleSave}
+            onCancel={onBack}
+            presetProvider={entry}
+          />
+        ) : (
+          <CustomApiSetupForm docs={entry.docs} onSave={handleSave} />
+        )}
       </div>
     </div>
   )

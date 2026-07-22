@@ -40,7 +40,8 @@ function build(session?: ReturnType<typeof fakeSession>) {
     list: vi.fn(() => []),
     create: vi.fn(),
     kill: vi.fn(() => true),
-    markAiActivity: vi.fn()
+    markAiActivity: vi.fn(),
+    markAiTouched: vi.fn()
   }
   const server = createTerminalMcpServer(ctx as any, SCOPE) as unknown as { tools: Tool[] }
   const tools = Object.fromEntries(server.tools.map(t => [t.name, t]))

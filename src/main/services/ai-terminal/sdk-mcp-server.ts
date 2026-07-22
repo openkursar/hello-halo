@@ -131,6 +131,7 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
     async (args: { session: string; input: string; submit?: boolean; timeout?: number }) => {
       const session = getScoped(args.session)
       if (!session) return errorText(`No such terminal session: ${args.session}`)
+      ctx.markAiTouched(args.session)
       ctx.markAiActivity(args.session, true)
       try {
         const result = await session.write(args.input, clampSeconds(args.timeout, 10) * 1000, args.submit ?? true)
@@ -172,6 +173,7 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
     }) => {
       const session = getScoped(args.session)
       if (!session) return errorText(`No such terminal session: ${args.session}`)
+      ctx.markAiTouched(args.session)
       const result = session.read(args.mode ?? 'new', { lines: args.lines, offset: args.offset })
       const header =
         result.mode === 'screen' && result.cursor
@@ -199,6 +201,7 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
     async (args: { session: string; pattern: string; context?: number }) => {
       const session = getScoped(args.session)
       if (!session) return errorText(`No such terminal session: ${args.session}`)
+      ctx.markAiTouched(args.session)
       const result = session.search(args.pattern, args.context)
       if (result.totalMatches === 0) return text(`No lines match /${args.pattern}/.`)
       const header = `[${result.totalMatches} matching line${result.totalMatches === 1 ? '' : 's'}` +
@@ -221,6 +224,7 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
     async (args: { session: string; text: string; timeout?: number }) => {
       const session = getScoped(args.session)
       if (!session) return errorText(`No such terminal session: ${args.session}`)
+      ctx.markAiTouched(args.session)
       const outcome = await waitForText(session, args.text, clampSeconds(args.timeout, 60) * 1000)
       if (outcome === 'found') {
         const screen = session.read('screen')

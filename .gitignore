@@ -13,6 +13,9 @@ out
 # never checked in.
 resources/builtin-apps/
 
+# Portable Git archive for Windows builds (downloaded by scripts/prepare-binaries.mjs)
+resources/git-bash/
+
 # Release notes temp file
 .release-notes-current.md
 

@@ -8,8 +8,8 @@
  * identity always yields the same hostname.
  */
 
-import type { DeviceIdentity } from '../foundation/device-identity'
-import { loadProductConfig } from '../foundation/product-config'
+import type { DeviceIdentity } from '../../foundation/device-identity'
+import { loadProductConfig } from '../../foundation/product-config'
 
 export interface NamedTunnelGrant {
   hostname: string

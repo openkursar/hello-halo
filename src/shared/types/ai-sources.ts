@@ -634,6 +634,12 @@ export interface AuthQuotaSnapshot {
   used: number
   /** Display label for the number, e.g. { 'zh-CN': '积分', en: 'credits' } */
   unit?: LocalizedText
+  /**
+   * Currency-style prefix symbol (e.g. "$", "¥") shown before the number when
+   * the amounts are money-denominated. Mutually exclusive with `unit` (a
+   * suffix). Absent for point/token quotas.
+   */
+  symbol?: string
   /** Epoch seconds of the next quota reset; renders a countdown when present */
   nextResetTime?: number
   /** Breakdown rows shown in the popover, e.g. base / bonus pools */
@@ -672,6 +678,14 @@ export interface AuthProviderConfig {
   recommended: boolean
   /** Whether this provider is enabled */
   enabled: boolean
+  /**
+   * Hide this entry from the first-run login selector while keeping it available
+   * in the in-app AI source settings. For providers that are valid but should not
+   * lead onboarding (e.g. an account type most users won't have on first run).
+   * Defaults to visible when absent. Orthogonal to `enabled`, which removes the
+   * provider everywhere.
+   */
+  setupHidden?: boolean
   /** Path to an external provider module, resolved relative to product.json */
   path?: string
   /** Whether this is a built-in provider (loaded by manager, no path required) */

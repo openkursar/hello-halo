@@ -16,6 +16,7 @@
 import { join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync } from 'fs'
 import { getSpace, touchSpaceActivity } from './space.service'
+import { getSeedKBIds } from './tlon'
 import { getConfig } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
 import type { FileChangesSummary } from '../../shared/file-changes'
@@ -690,6 +691,15 @@ export function listConversations(spaceId: string): ConversationMeta[] {
 }
 
 // Create a new conversation (always v2 format)
+/**
+ * Out-of-box toolset selection for the very first conversation, before the user
+ * has ever toggled a toolset (no config.lastToolsets yet). AI Browser is a core
+ * capability, so it is on by default; the user can turn it off, after which
+ * config.lastToolsets (possibly empty) takes over. Ids must match the registry
+ * (services/agent/toolsets); unavailable ids are dropped at use time.
+ */
+const FIRST_RUN_DEFAULT_TOOLSETS = ['ai-browser']
+
 export function createConversation(spaceId: string, title?: string): Conversation {
   const id = uuidv4()
   const now = new Date().toISOString()
@@ -706,8 +716,14 @@ export function createConversation(spaceId: string, title?: string): Conversatio
   // Stamp the global last-used toolset selection so a new conversation inherits
   // the previous window's enabled toolsets (mirrors the model pin above). Unknown
   // or unavailable ids are ignored at use time (toolsets/registry availability
-  // gate), so no filtering here.
-  let toolsets: string[] = []
+  // gate), so no filtering here. On first run (no persisted selection yet) the
+  // browser toolset is on out of the box; once the user toggles anything,
+  // config.lastToolsets is authoritative — including an empty set (all off).
+  let toolsets: string[] = FIRST_RUN_DEFAULT_TOOLSETS
+  // KB ids to preload: the space's bound KBs plus the global default, snapshotted
+  // once at creation so the conversation owns its knowledge set (space rebinds
+  // affect only later conversations; the user can add/remove per conversation).
+  let knowledgeBaseIds: string[] = []
   try {
     const cfg = getConfig()
     const cfgEngine = cfg?.agent?.sdkEngine
@@ -729,6 +745,11 @@ export function createConversation(spaceId: string, title?: string): Conversatio
     // getConfig() may throw if config service hasn't initialized — fall
     // back to the documented defaults.
   }
+  try {
+    knowledgeBaseIds = getSeedKBIds(spaceId)
+  } catch (e) {
+    console.error(`[Conversation] Failed to resolve seed knowledge bases for ${spaceId}:`, e)
+  }
 
   const conversation: Conversation = {
     id,
@@ -746,6 +767,8 @@ export function createConversation(spaceId: string, title?: string): Conversatio
     // Only persist toolsets when the last-used set is non-empty, so an empty
     // seed leaves the field unset (hydrates to an empty open-set).
     ...(toolsets.length > 0 ? { toolsets: [...toolsets] } : {}),
+    // Only persist knowledge bases when the space/default seed is non-empty.
+    ...(knowledgeBaseIds.length > 0 ? { knowledgeBaseIds: [...knowledgeBaseIds] } : {}),
   }
 
   const conversationsDir = getConversationsDir(spaceId)

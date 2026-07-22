@@ -16,7 +16,7 @@
  */
 
 import { platform } from 'os'
-import { detectGitBash } from '../git-bash.service'
+import { detectGitBash } from '../git-bash'
 
 /** Shell family, used to decide which one-time hardening a session may apply. */
 export type ShellFamily = 'posix' | 'other'

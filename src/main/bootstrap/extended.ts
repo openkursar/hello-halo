@@ -26,7 +26,7 @@
 import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
 import { registerSecurityHandlers } from '../ipc/security'
-import { enableRemoteAccess, enableTunnel } from '../services/remote.service'
+import { enableRemoteAccess, enableTunnel } from '../services/remote'
 import { getConfig, migrateCredentialEncryption, setCredentialFailureNotifier } from '../foundation/config.service'
 import { broadcastToAll } from '../http/websocket'
 import { isServerMode } from '../foundation/runtime-mode'

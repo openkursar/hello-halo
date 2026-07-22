@@ -16,7 +16,7 @@ import { Loader2, Brain, ExternalLink, Copy, Check } from 'lucide-react'
 // First step is `preferences` only on the very first launch (gated by
 // config.isFirstLaunch). Old users re-entering Setup (e.g., after clearing
 // the AI source) skip preferences and land on `select` directly.
-type SetupStep = 'preferences' | 'select' | 'oauth-waiting' | 'claude-login' | 'preset'
+type SetupStep = 'preferences' | 'select' | 'oauth-waiting' | 'claude-login' | 'config'
 
 /** Device code info for display in UI */
 interface DeviceCodeInfo {
@@ -56,8 +56,9 @@ export function SetupPage() {
   const [error, setError] = useState<string | null>(null)
   const [deviceCodeInfo, setDeviceCodeInfo] = useState<DeviceCodeInfo | null>(null)
   const [claudeLogin, setClaudeLogin] = useState<ClaudeLoginState | null>(null)
-  // Preset-API entry currently being configured (drives the setup config form)
-  const [presetProvider, setPresetProvider] = useState<AuthProviderConfig | null>(null)
+  // Auth entry currently being configured (preset gateway or Custom API/BYOK);
+  // drives the setup config form.
+  const [configEntry, setConfigEntry] = useState<AuthProviderConfig | null>(null)
 
   // Handle OAuth provider login (generic)
   const handleSelectProvider = async (providerType: string) => {
@@ -239,13 +240,19 @@ export function SetupPage() {
 
   // Handle preset-API selection (fixed-baseUrl API key form)
   const handleSelectPreset = (provider: AuthProviderConfig) => {
-    setPresetProvider(provider)
-    setStep('preset')
+    setConfigEntry(provider)
+    setStep('config')
   }
 
-  // Handle back from preset
-  const handleBackFromPreset = () => {
-    setPresetProvider(null)
+  // Handle Custom API (BYOK) selection — same config step, key-first form
+  const handleSelectCustom = (entry: AuthProviderConfig) => {
+    setConfigEntry(entry)
+    setStep('config')
+  }
+
+  // Handle back from the config step
+  const handleBackFromConfig = () => {
+    setConfigEntry(null)
     setStep('select')
   }
 
@@ -274,6 +281,7 @@ export function SetupPage() {
         <LoginSelector
           onSelectProvider={handleSelectProvider}
           onSelectPreset={handleSelectPreset}
+          onSelectCustom={handleSelectCustom}
           onSkip={handleSkipModelConfig}
         />
         {error && (
@@ -523,11 +531,11 @@ export function SetupPage() {
     )
   }
 
-  if (step === 'preset' && presetProvider) {
+  if (step === 'config' && configEntry) {
     return (
       <SetupProviderConfig
-        presetProvider={presetProvider}
-        onBack={handleBackFromPreset}
+        entry={configEntry}
+        onBack={handleBackFromConfig}
       />
     )
   }

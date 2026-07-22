@@ -234,11 +234,12 @@ export type V2SDKSession = {
  * V2 Session info stored in the sessions map
  *
  * Note: session rebuilds are driven by credentialsGeneration (global model /
- * API-config changes) plus a per-conversation credentialsFingerprint (this
+ * API-config changes), a per-conversation credentialsFingerprint (this
  * conversation's own model/source pin — see session-manager
- * computeCredentialsFingerprint). Toolset changes are seeded at creation and
- * take effect via a session rebuild (toolset broker), so no config snapshot needs
- * to be tracked here for rebuild detection.
+ * computeCredentialsFingerprint), and a knowledgeFingerprint (the conversation's
+ * knowledge-base set, baked into the system prompt at creation). Toolset changes
+ * are seeded at creation and take effect via an explicit rebuild (toolset broker),
+ * so no toolset snapshot needs to be tracked here.
  */
 export interface V2SessionInfo {
   session: V2SDKSession
@@ -253,6 +254,11 @@ export interface V2SessionInfo {
   // Detects a change to THIS conversation's model pin (which the global
   // credentialsGeneration does not track), triggering a targeted rebuild.
   credentialsFingerprint: string
+  // The conversation's knowledge-base set at session creation time. The KB list
+  // is baked into the system prompt (frozen at creation) but not covered by the
+  // credentials fingerprint; tracking it here rebuilds the session when the user
+  // attaches/detaches a KB — or when a session was created before its KB seed.
+  knowledgeFingerprint: string
 }
 
 // ============================================

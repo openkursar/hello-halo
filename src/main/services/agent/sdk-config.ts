@@ -25,7 +25,6 @@ import {
   CONTEXT_WINDOW_HARD_MIN,
   CONTEXT_WINDOW_HARD_CAP,
 } from '../../../shared/constants/model-runtime-limits'
-import type { KBReference } from '../../../shared/types/tlon'
 
 // ============================================
 // Configuration
@@ -212,8 +211,6 @@ export interface BaseSdkOptionsParams {
    * override systemPrompt entirely after this builder returns.
    */
   toolsetIndex?: string
-  /** Knowledge bases bound to this session's space (Tlon) */
-  knowledgeBases?: KBReference[]
 }
 
 // ============================================
@@ -546,7 +543,7 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
       return injected
     })(),
 
-    // Windows: pass through Git Bash path (set by git-bash.service during startup)
+    // Windows: pass through Git Bash path (set by the git-bash module during startup)
     // This was stripped by getCleanUserEnv() along with all CLAUDE_* vars
     ...(process.env.CLAUDE_CODE_GIT_BASH_PATH
       ? { CLAUDE_CODE_GIT_BASH_PATH: process.env.CLAUDE_CODE_GIT_BASH_PATH }
@@ -709,15 +706,15 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
     // The capability index advertises optional toolsets (agent/toolsets) the AI
     // can ask the user to enable; full tool schemas enter context only once the
     // toolset is enabled and the session is rebuilt. AI Browser is one such
-    // on-demand toolset here, so no aiBrowserEnabled branch. Knowledge bases are
-    // injected into the same prompt.
+    // on-demand toolset here, so no aiBrowserEnabled branch. The Knowledge
+    // section is appended at actual session creation (getOrCreateV2Session's
+    // resolveKnowledgeBases) so a reused session never pays the index reads.
     systemPrompt: buildSystemPrompt({
       workDir,
       modelInfo: credentials.displayModel,
       promptProfile: params.promptProfile,
       digitalHumansEnabled: params.digitalHumansEnabled,
-      toolsetIndex: params.toolsetIndex,
-      knowledgeBases: params.knowledgeBases
+      toolsetIndex: params.toolsetIndex
     }),
     maxTurns: params.maxTurns ?? 50,
     allowedTools: [...DEFAULT_ALLOWED_TOOLS],

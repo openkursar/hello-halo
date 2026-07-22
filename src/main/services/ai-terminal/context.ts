@@ -103,6 +103,22 @@ export class TerminalContext extends EventEmitter {
     if (this.global) emitTerminalLifecycle(event)
   }
 
+  /**
+   * Record that the AI operated a session through a terminal tool. Emits the
+   * 'touched' lifecycle event once (the first time the flag flips) so the UI can
+   * update the session's close policy and tray membership; later calls are
+   * no-ops. AI-created sessions are already aiTouched, so this only matters for
+   * user-opened terminals the AI later drives.
+   */
+  markAiTouched(id: string): void {
+    const session = this.sessions.get(id)
+    if (!session) return
+    if (!session.markAiTouched()) return
+    const event = { sessionId: id, type: 'touched' as const, info: session.info }
+    this.emit('lifecycle', event)
+    if (this.global) emitTerminalLifecycle(event)
+  }
+
   private liveCount(): number {
     let n = 0
     for (const s of this.sessions.values()) if (s.state === 'running') n++

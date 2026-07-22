@@ -45,6 +45,14 @@ export interface TerminalInfo {
   cols: number
   rows: number
   owner: TerminalOwner
+  /**
+   * True once the AI has operated this session through any terminal_* tool
+   * (always true for owner==='ai', since the AI created it). Distinct from
+   * `owner`: a user-opened terminal the AI later drove is `owner:'user'` but
+   * `aiTouched:true`. Drives the close policy (closing an aiTouched terminal's
+   * tab prompts keep-background vs terminate) and the live-sessions tray.
+   */
+  aiTouched: boolean
   state: TerminalRunState
   exitCode: number | null
   /** ms epoch of last output or input */
@@ -112,7 +120,8 @@ export interface TerminalDataEvent {
 /** Lifecycle event pushed to renderer / WS */
 export interface TerminalLifecycleEvent {
   sessionId: string
-  type: 'created' | 'exited' | 'title' | 'ai-activity'
+  /** 'touched' fires once when a user-owned session first becomes aiTouched. */
+  type: 'created' | 'exited' | 'title' | 'ai-activity' | 'touched'
   info?: TerminalInfo
   /** For 'ai-activity': whether the AI is currently writing */
   aiWriting?: boolean

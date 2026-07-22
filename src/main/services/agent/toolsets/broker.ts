@@ -21,7 +21,7 @@ import { createWebSearchMcpServer } from '../../web-search'
 import { createHaloAppsMcpServer } from '../../app-bridge'
 import { emitAgentEvent } from '../events'
 import { getAvailableToolsets, getToolset } from './registry'
-import { getOpenToolsets, markOpen, markClosed, getServerCache } from './state'
+import { getOpenToolsets, markOpen, markClosed } from './state'
 import { createBrokerMetaServer, CAPABILITIES_SERVER_NAME } from './meta-server'
 import type { ToolsetOpener, ToolsetScope, ToolsetStatus, ToolsetsChangedEvent } from './types'
 
@@ -59,41 +59,35 @@ export function setSessionInvalidator(invalidator: SessionInvalidator): void {
 
 /**
  * Build the complete in-process MCP server record for a session's creation-time
- * options. Toolset/always-on instances are cached per conversation so a rebuild
- * keeps name-stable identities. The capabilities meta server is the exception:
- * its tool description bakes in the current disabled list, so it is recreated
- * on every build — caching it would leave the AI a stale "Currently off" list
- * after a toggle-triggered rebuild.
+ * options. Every instance is created fresh: an in-process MCP server binds to
+ * exactly one session transport, so instances must never outlive the session
+ * they were seeded into (a reused instance fails to connect and its tools
+ * silently vanish). Callers therefore invoke this only at actual session
+ * creation (see getOrCreateV2Session's buildMcpServers parameter).
  */
 export function buildMcpServerRecord(scope: ToolsetScope): Record<string, unknown> {
-  const cache = getServerCache(scope.conversationId)
   const record: Record<string, unknown> = {}
 
-  const ensure = (name: string, factory: () => unknown): void => {
-    let instance = cache.get(name)
-    if (!instance) {
-      instance = factory()
-      if (instance) cache.set(name, instance)
-    }
+  const add = (name: string, factory: () => unknown): void => {
+    const instance = factory()
     if (instance) record[name] = instance
   }
 
   // Always-on servers
-  ensure('web-search', () => createWebSearchMcpServer())
+  add('web-search', () => createWebSearchMcpServer())
   if (getConfig().agent?.enableDigitalHumans !== false) {
-    ensure('halo-apps', () => createHaloAppsMcpServer(scope.spaceId))
+    add('halo-apps', () => createHaloAppsMcpServer(scope.spaceId))
   }
 
   // On-demand toolsets currently enabled for this conversation
   const openIds = getOpenToolsets(scope.spaceId, scope.conversationId)
   for (const id of openIds) {
     const def = getToolset(id)
-    if (def) ensure(id, () => def.createServer(scope))
+    if (def) add(id, () => def.createServer(scope))
   }
 
   // The "capabilities" meta server (request_toolset) is present only while at
   // least one optional toolset is disabled — nothing to request once all are on.
-  // Never cached: recreated per build so its description reflects the current set.
   const hasDisabled = getAvailableToolsets().some(def => !openIds.has(def.id))
   if (hasDisabled) {
     record[CAPABILITIES_SERVER_NAME] = createBrokerMetaServer(scope, {
@@ -154,7 +148,6 @@ export function closeToolset(
     return { ok: true, alreadyOpen: false }
   }
 
-  getServerCache(scope.conversationId).delete(toolsetId)
   invalidateSessionForRebuild(scope.conversationId)
   rememberLastToolsets(scope, opener)
   emitChanged(scope, toolsetId, 'close', opener)

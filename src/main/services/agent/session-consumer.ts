@@ -39,7 +39,7 @@ import { getConversation } from '../conversation.service'
 import { type FileChangesSummary, extractFileChangesSummaryFromThoughts } from '../../../shared/file-changes'
 import { resolveSourcesForReadPaths } from '../tlon'
 import type { KBSource } from '../../../shared/types/tlon'
-import { createSessionState, consumePendingRebuild } from './session-manager'
+import { createSessionState, consumePendingRebuild, markTurnInitReceived } from './session-manager'
 import { hasActiveTeamTasks, isTeamLifecycleThought } from './subagent-handler'
 
 // ============================================
@@ -234,6 +234,9 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
             // getOrCreateV2Session will correctly defer session rebuilds
             // until this turn completes (protecting in-flight responses).
             state.currentSessionState = sessionState
+            // The dispatched turn is acknowledged — hand the busy-window
+            // ownership from turnsAwaitingInit over to currentSessionState.
+            markTurnInitReceived(conversationId)
 
             // Create assistant placeholder message for this turn
             addMessage(spaceId, conversationId, {

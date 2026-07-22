@@ -68,7 +68,8 @@ interface AuthQuotaSnapshot {
   remaining: number                                  // number shown on the pill
   total: number                                      // progress = remaining / total
   used: number
-  unit?: LocalizedText                               // e.g. { en: 'credits', 'zh-CN': '积分' }
+  unit?: LocalizedText                               // suffix label, e.g. { en: 'credits', 'zh-CN': '积分' }
+  symbol?: string                                    // currency prefix, e.g. "$" (mutually exclusive with unit)
   nextResetTime?: number                             // epoch seconds; renders a countdown
   segments?: { label: LocalizedText; value: number }[] // breakdown rows in the popover
   detailsUrl?: string                                // external top-up page (system browser)

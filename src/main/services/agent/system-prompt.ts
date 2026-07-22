@@ -507,16 +507,14 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
   // Toolset-broker sessions (main chat): append the usage guides of currently-
   // enabled optional toolsets. Awareness of disabled ones lives in the
-  // request_toolset tool description, not here.
+  // request_toolset tool description, not here. Legacy static-injection sessions
+  // (apps/runtime) instead get the "AI Browser (Not Enabled)" guidance when the
+  // browser is off (when enabled, AI_BROWSER_SYSTEM_PROMPT is appended via
+  // buildSystemPromptWithAIBrowser). Do NOT early-return from either branch:
+  // the Knowledge section below applies to both session kinds.
   if (ctx.toolsetIndex !== undefined) {
     if (ctx.toolsetIndex) prompt += '\n\n' + ctx.toolsetIndex.trim()
-    return prompt
-  }
-
-  // Legacy static-injection sessions (apps/runtime): when AI Browser is NOT
-  // enabled, append guidance so the AI can direct users to enable it.
-  // When enabled, AI_BROWSER_SYSTEM_PROMPT is appended via buildSystemPromptWithAIBrowser.
-  if (!ctx.aiBrowserEnabled) {
+  } else if (!ctx.aiBrowserEnabled) {
     prompt += '\n\n'
       + '# AI Browser (Not Enabled)\n'
       + 'You do NOT have browser automation tools in this session. '
@@ -524,30 +522,41 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
       + 'tell them to enable AI Browser via the toggle in the bottom-left of the input area, then retry.'
   }
 
-  if (ctx.knowledgeBases?.length) {
-    prompt += '\n\n# Knowledge\n\n'
-      + 'You have knowledge bases of source documents. Search them on demand to '
-      + 'answer, like a colleague who knows where everything is:\n'
-      + '- To answer from a knowledge base, Grep/Glob the listed document files for '
-      + 'relevant passages and Read the matching ones — refine your search and look '
-      + 'again until you have what you need. Do not answer from memory when a document '
-      + 'can be checked.\n'
-      + '- Answer in your own words and attribute what you use to the source document '
-      + 'by name (e.g. "your PCB survey"), never to a file path. Be proactive: surface '
-      + 'relevant context, draw cross-document links, and flag tensions worth knowing.\n'
-      + '- Search exhaustively before enumerating or concluding absence: try several '
-      + 'Grep patterns (synonyms, translations, spelling variants) — one pattern '
-      + 'finding nothing does not mean the corpus lacks it.\n'
-      + '- If the documents do not actually cover the question, say so plainly rather '
-      + 'than forcing a connection.\n'
-      + '- Each entry below is a document with a one-line synopsis and the path of its '
-      + 'extracted text to Grep/Read.\n\n'
-    for (const kb of ctx.knowledgeBases) {
-      prompt += `## ${kb.name}\n\n${truncateIndexContent(kb.indexContent)}\n\n`
-    }
-  }
+  prompt += buildKnowledgeSection(ctx.knowledgeBases)
 
   return prompt
+}
+
+/**
+ * The "# Knowledge" system-prompt section for a set of resolved knowledge
+ * bases; '' when there are none. Exported separately from buildSystemPrompt so
+ * chat sessions can defer the expensive part (each KB's index.md content) to
+ * actual session creation and append it there — a reused session never reads
+ * or formats KB content (see getOrCreateV2Session's resolveKnowledgeBases).
+ */
+export function buildKnowledgeSection(knowledgeBases?: KBReference[]): string {
+  if (!knowledgeBases?.length) return ''
+  let section = '\n\n# Knowledge\n\n'
+    + 'You have knowledge bases of source documents. Search them on demand to '
+    + 'answer, like a colleague who knows where everything is:\n'
+    + '- To answer from a knowledge base, Grep/Glob the listed document files for '
+    + 'relevant passages and Read the matching ones — refine your search and look '
+    + 'again until you have what you need. Do not answer from memory when a document '
+    + 'can be checked.\n'
+    + '- Answer in your own words and attribute what you use to the source document '
+    + 'by name (e.g. "your PCB survey"), never to a file path. Be proactive: surface '
+    + 'relevant context, draw cross-document links, and flag tensions worth knowing.\n'
+    + '- Search exhaustively before enumerating or concluding absence: try several '
+    + 'Grep patterns (synonyms, translations, spelling variants) — one pattern '
+    + 'finding nothing does not mean the corpus lacks it.\n'
+    + '- If the documents do not actually cover the question, say so plainly rather '
+    + 'than forcing a connection.\n'
+    + '- Each entry below is a document with a one-line synopsis and the path of its '
+    + 'extracted text to Grep/Read.\n\n'
+  for (const kb of knowledgeBases) {
+    section += `## ${kb.name}\n\n${truncateIndexContent(kb.indexContent)}\n\n`
+  }
+  return section
 }
 
 // Last-resort guard against a pathologically large document map blowing up the

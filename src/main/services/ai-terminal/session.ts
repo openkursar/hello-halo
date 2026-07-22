@@ -148,6 +148,9 @@ export class TerminalSession extends EventEmitter {
       cols,
       rows,
       owner: opts.owner,
+      // An AI-created session is operated by the AI from birth; a user session
+      // flips to true the first time an AI tool drives it (markAiTouched).
+      aiTouched: opts.owner === 'ai',
       state: 'running',
       exitCode: null,
       lastActivityAt: Date.now(),
@@ -521,6 +524,17 @@ export class TerminalSession extends EventEmitter {
   setTitle(title: string): void {
     this.info.title = title
     this.emit('title', title)
+  }
+
+  /**
+   * Record that the AI has operated this session (via any terminal_* tool).
+   * Returns true only on the first flip, so the context emits the 'touched'
+   * lifecycle event exactly once instead of on every AI tool call.
+   */
+  markAiTouched(): boolean {
+    if (this.info.aiTouched) return false
+    this.info.aiTouched = true
+    return true
   }
 
   get state(): TerminalRunState {

@@ -12,7 +12,7 @@
  */
 import type { App } from 'electron'
 import { initializeEssentialServices, initializeExtendedServices } from './index'
-import { enableRemoteAccess } from '../services/remote.service'
+import { enableRemoteAccess } from '../services/remote'
 import { getServerPort } from '../foundation/runtime-mode'
 import { applyEnvConfig } from '../foundation/env-config'
 

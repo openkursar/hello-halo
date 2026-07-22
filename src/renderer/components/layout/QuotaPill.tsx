@@ -13,6 +13,7 @@ import { Cloud, AlertTriangle } from 'lucide-react'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useSourceQuota } from '../../hooks/useSourceQuota'
 import { resolveLocalizedText } from '../../../shared/types'
+import { formatQuotaNumber } from './quotaFormat'
 import { QuotaPopover } from './QuotaPopover'
 
 interface QuotaPillProps {
@@ -30,10 +31,12 @@ export function QuotaPill({ sourceId }: QuotaPillProps) {
 
   if (!supported || !snapshot) return null
 
-  const { remaining, total, unit } = snapshot
-  const ratio = total > 0 ? Math.max(0, Math.min(1, remaining / total)) : 0
-  const low = ratio < LOW_RATIO
-  const unitLabel = unit ? resolveLocalizedText(unit, getCurrentLanguage()) : ''
+  const { remaining, total, symbol, unit } = snapshot
+  const hasBar = total > 0
+  const ratio = hasBar ? Math.max(0, Math.min(1, remaining / total)) : 0
+  const low = hasBar && ratio < LOW_RATIO
+  // Currency symbol renders as a prefix; a unit word renders as a suffix.
+  const unitLabel = !symbol && unit ? resolveLocalizedText(unit, getCurrentLanguage()) : ''
 
   const toggle = () => {
     setOpen(prev => {
@@ -57,16 +60,18 @@ export function QuotaPill({ sourceId }: QuotaPillProps) {
       >
         <Cloud className={`w-3.5 h-3.5 shrink-0 ${low ? 'text-amber-500' : 'text-primary'}`} />
         <span className={`font-semibold tabular-nums ${low ? 'text-amber-600 dark:text-amber-500' : 'text-primary'}`}>
-          {remaining}
+          {symbol}{formatQuotaNumber(remaining)}
         </span>
         {/* Unit + mini progress bar — desktop only to keep the mobile header tight */}
         {unitLabel && <span className="hidden sm:inline text-muted-foreground">{unitLabel}</span>}
-        <span className="hidden sm:block w-12 h-1 rounded-full bg-secondary overflow-hidden">
-          <span
-            className={`block h-full rounded-full ${low ? 'bg-amber-500' : 'bg-primary'}`}
-            style={{ width: `${ratio * 100}%` }}
-          />
-        </span>
+        {hasBar && (
+          <span className="hidden sm:block w-12 h-1 rounded-full bg-secondary overflow-hidden">
+            <span
+              className={`block h-full rounded-full ${low ? 'bg-amber-500' : 'bg-primary'}`}
+              style={{ width: `${ratio * 100}%` }}
+            />
+          </span>
+        )}
         {stale && <AlertTriangle className="w-3 h-3 shrink-0 text-amber-500" />}
       </button>
 

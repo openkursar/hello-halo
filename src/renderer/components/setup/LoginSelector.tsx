@@ -7,8 +7,11 @@
  *     recommended the first managed-login provider is promoted so there is
  *     always a lead action.
  *   - Secondary: the remaining managed-login providers as bordered rows.
- *   - Custom API (BYOK): a collapsed row that expands the inline
- *     `CustomApiSetupForm`.
+ *   - Custom API (BYOK): a bordered row that navigates to the key-first config
+ *     panel (owned by SetupPage), mirroring the preset entry's step navigation.
+ *
+ * Entries flagged `setupHidden` in product.json are filtered out here so they
+ * stay out of onboarding while remaining available in the in-app AI settings.
  */
 
 import { useState, useEffect, useMemo } from 'react'
@@ -16,12 +19,9 @@ import type React from 'react'
 import { Globe, ChevronDown, ChevronRight, MessageSquare, Wrench, Key, KeyRound, Cloud, Server, Shield, Lock, Zap, LogIn, User, Github, Brain, type LucideIcon } from 'lucide-react'
 import { useTranslation, setLanguage, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
 import { api } from '../../api'
-import { useAppStore } from '../../stores/app.store'
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
-import { getApiKeyProviders, type AISource } from '../../types'
+import { getApiKeyProviders } from '../../types'
 import { getBrandIcon } from '../icons/BrandIcons'
-import { CustomApiSetupForm } from './CustomApiSetupForm'
-import { saveFirstRunSource } from './saveFirstRunSource'
 
 // Re-export so existing renderer imports (`from './LoginSelector'`) continue
 // to work without churn. The canonical definition lives in shared/types.
@@ -44,6 +44,8 @@ interface LoginSelectorProps {
   onSelectProvider: (providerType: string) => void
   /** Invoked when the user selects a preset-API provider entry */
   onSelectPreset: (provider: AuthProviderConfig) => void
+  /** Invoked when the user selects the Custom API (BYOK) entry */
+  onSelectCustom: (entry: AuthProviderConfig) => void
   /** Invoked when the user defers model configuration and enters Home directly */
   onSkip?: () => void
 }
@@ -96,9 +98,8 @@ type IconComponent = React.ComponentType<{ className?: string; style?: React.CSS
 /** Number of provider-name chips previewed under the collapsed Custom API row. */
 const CUSTOM_CHIP_COUNT = 5
 
-export function LoginSelector({ onSelectProvider, onSelectPreset, onSkip }: LoginSelectorProps) {
+export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom, onSkip }: LoginSelectorProps) {
   const { t } = useTranslation()
-  const { config, setConfig, setView } = useAppStore()
 
   // Language selector state
   const [isLangDropdownOpen, setIsLangDropdownOpen] = useState(false)
@@ -108,9 +109,9 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSkip }: Logi
   const [providers, setProviders] = useState<AuthProviderConfig[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
-  const [customExpanded, setCustomExpanded] = useState(false)
-
-  // Fetch available providers on mount
+  // Fetch available providers on mount. `setupHidden` entries are dropped here so
+  // they stay out of first-run onboarding while remaining in the in-app settings
+  // (which reads the same list without this filter).
   useEffect(() => {
     const fetchProviders = async () => {
       try {
@@ -118,16 +119,10 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSkip }: Logi
         const list = result.success && result.data
           ? (result.data as AuthProviderConfig[])
           : FALLBACK_PROVIDERS
-        setProviders(list)
-        // When there is no managed-login provider to lead with (only Custom API
-        // is available), open the form immediately — collapsing the sole option
-        // behind a click would be pointless.
-        const hasManagedLogin = list.some(p => !isByokEntry(p))
-        if (!hasManagedLogin) setCustomExpanded(true)
+        setProviders(list.filter(p => !p.setupHidden))
       } catch (error) {
         console.error('[LoginSelector] Failed to fetch providers:', error)
         setProviders(FALLBACK_PROVIDERS)
-        setCustomExpanded(true)
       } finally {
         setIsLoading(false)
       }
@@ -161,10 +156,6 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSkip }: Logi
     onSelectProvider(provider.type)
   }
 
-  // Persist the source built by the inline Custom API form and enter the app
-  // (shared with the preset config step).
-  const handleCustomSave = (source: AISource) => saveFirstRunSource(source, { config, setConfig, setView })
-
   const getIconComponent = (provider: AuthProviderConfig): IconComponent =>
     getBrandIcon(provider.type) || iconMap[provider.icon] || Wrench
 
@@ -184,13 +175,13 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSkip }: Logi
       <div>
         <button
           onClick={() => handleProviderSelect(provider)}
-          className="w-full flex flex-col items-start gap-1 p-4 rounded-xl bg-gradient-to-br from-primary to-primary/80 text-primary-foreground text-left transition-all duration-150 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/30"
+          className="login-hero w-full flex flex-col items-start gap-1 p-4 rounded-xl text-left"
         >
           <span className="flex items-center gap-2 text-[15px] font-semibold">
             <Icon className="w-5 h-5" />
             {getLocalizedText(provider.displayName)}
           </span>
-          <span className="text-xs text-primary-foreground/80">
+          <span className="login-hero-sub text-xs">
             {getLocalizedText(provider.description)}
           </span>
         </button>
@@ -250,48 +241,41 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSkip }: Logi
     )
   }
 
-  // Custom API: collapsed row that expands the inline key-first config form.
+  // Custom API: navigate-on-click row that opens the key-first config panel
+  // (mirrors the preset entry's step navigation rather than expanding inline).
   const renderCustom = (entry: AuthProviderConfig) => {
     const Icon = getIconComponent(entry)
     return (
-      <div>
-        <button
-          onClick={() => setCustomExpanded(v => !v)}
-          aria-expanded={customExpanded}
-          className="w-full flex items-center gap-3 p-3 bg-card rounded-xl border border-border hover:border-primary/50 transition-all duration-200 text-left"
+      <button
+        onClick={() => onSelectCustom(entry)}
+        className="w-full flex items-center gap-3 p-3 bg-card rounded-xl border border-border hover:border-primary/50 hover:bg-card/80 transition-all duration-200 group text-left"
+      >
+        <div
+          className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+          style={{ backgroundColor: hexToRgba(entry.iconBgColor, 0.15) }}
         >
-          <div
-            className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-            style={{ backgroundColor: hexToRgba(entry.iconBgColor, 0.15) }}
-          >
-            <Icon className="w-5 h-5" style={{ color: entry.iconBgColor }} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium">{getLocalizedText(entry.displayName)}</div>
-            <div className="text-xs text-muted-foreground mt-0.5 truncate">{getLocalizedText(entry.description)}</div>
-            {customChips.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1.5">
-                {customChips.map(name => (
-                  <span key={name} className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">
-                    {name}
-                  </span>
-                ))}
-                {customExtra > 0 && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">
-                    +{customExtra}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-          <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform shrink-0 ${customExpanded ? 'rotate-180' : ''}`} />
-        </button>
-        {customExpanded && (
-          <div className="mt-2">
-            <CustomApiSetupForm docs={entry.docs} onSave={handleCustomSave} />
-          </div>
-        )}
-      </div>
+          <Icon className="w-5 h-5" style={{ color: entry.iconBgColor }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium">{getLocalizedText(entry.displayName)}</div>
+          <div className="text-xs text-muted-foreground mt-0.5 truncate">{getLocalizedText(entry.description)}</div>
+          {customChips.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {customChips.map(name => (
+                <span key={name} className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">
+                  {name}
+                </span>
+              ))}
+              {customExtra > 0 && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">
+                  +{customExtra}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+        <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors shrink-0" />
+      </button>
     )
   }
 
@@ -341,7 +325,7 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSkip }: Logi
         <div className="w-20 h-20 rounded-full border-2 border-primary/60 flex items-center justify-center halo-glow">
           <div className="w-14 h-14 rounded-full bg-gradient-to-br from-primary/30 to-transparent" />
         </div>
-        <h1 className="mt-4 text-3xl font-light tracking-wide">Halo</h1>
+        <h1 className="mt-4 text-3xl font-light tracking-wide">{t('Welcome to Halo')}</h1>
       </div>
 
       {/* Main content */}

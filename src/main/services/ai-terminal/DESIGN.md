@@ -174,7 +174,9 @@ buffer (`getReplayData`) so it can reproduce colors/cursor faithfully.
   TerminalTaskCard.tsx` (chat card → opens the tab), and
   `components/chat/LiveSessionsHeader.tsx` (ambient strip docked to the composer's
   top edge to perceive, reveal, and stop live AI sessions; sourced via the
-  `hooks/useLiveSessions.ts` seam).
+  `hooks/useLiveSessions.ts` seam, which surfaces every running **aiTouched**
+  session — see §9), and `components/canvas/TerminalCloseGuard.tsx` (tab-close
+  policy — see §9).
 
 ## 8) Lifecycle hard rules
 
@@ -188,3 +190,45 @@ buffer (`getReplayData`) so it can reproduce colors/cursor faithfully.
    `cleanupAITerminal()` (wired in `bootstrap/extended.ts`).
 4. `terminal_write` is arbitrary command execution — same trust model as the
    Bash tool. The tool description constrains reading during credential entry.
+
+## 9) aiTouched & the tab-close policy
+
+The pty outlives its tab (§8.1), so closing a terminal tab is a separate question
+from ending the process. That question is answered by **`aiTouched`**, a sticky
+flag on `TerminalInfo`:
+
+- `owner: 'ai'` sessions are `aiTouched` from birth (the AI created them).
+- A `owner: 'user'` session flips to `aiTouched` the first time the AI drives it
+  through **any** `terminal_*` tool (`ctx.markAiTouched`, called in
+  `sdk-mcp-server` for write/read/search/wait; create is AI-owned already). The
+  flip emits the `touched` lifecycle event **once** so the renderer store updates
+  the session's close policy and tray membership. Never cleared.
+
+Two surfaces key off it, replacing the old `owner === 'ai'` checks:
+
+- **Tab close** (`TerminalCloseGuard` registers a two-method policy via
+  `canvasLifecycle.setTerminalClosePolicy`, mounted at **SpacePage** so it stays
+  active even when the canvas is collapsed):
+  - `confirmSingleClose` — deliberate single-tab close (tab X, middle-click, ⌘W,
+    context menu): a not-running session just closes; a running non-`aiTouched`
+    session (the user's own) is terminated with its tab; a running `aiTouched`
+    session prompts keep-in-background vs terminate (killing a pty is
+    irreversible, so keep is the safe default).
+  - `disposeOnBulkClose` — non-interactive bulk teardown (`closeAll`, and
+    `enterSpace` → `closeAll` on space switch): **no prompt**; terminate the
+    user's own terminals (the tab was their only handle), keep `aiTouched` ones
+    running (they remain in the tray). This holds the invariant *every live pty
+    is reachable via a tab or the tray* on every tab-removal path.
+- **Live-sessions tray** (`useLiveSessions`): shows every running `aiTouched`
+  terminal **scoped to the current space** (`spaceId === currentSpaceId`), so a
+  user terminal the AI drove stays perceivable and stoppable after its tab is
+  closed, without leaking another space's sessions into this one (it reappears on
+  return). The AI browser is a single active view destroyed on space switch, so
+  it needs no such filter.
+
+Contrast with the AI browser (`services/ai-browser`): its WebContents is
+**tab-bound** (the canvas tab's `browserViewId` *is* the AI's `activeViewId`), so
+closing the tab / `closeAll` / space switch destroys it — a page is cheap to
+re-open. A pty's running process and state are not recreatable, so the terminal
+deliberately decouples and keeps `aiTouched` work alive with the tray as the
+reclaim path.

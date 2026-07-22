@@ -118,6 +118,28 @@ const BINARY_DEPENDENCIES = [
     }
   },
 
+  // Portable Git - bundled into the Windows build for offline Git Bash setup.
+  // Downloaded by prepare-binaries.mjs, shipped via win.extraResources.
+  {
+    name: 'Windows Portable Git archive',
+    path: 'resources/git-bash',
+    platform: 'win',
+    fix: 'node scripts/prepare-binaries.mjs --platform win',
+    validate: (dirPath) => {
+      try {
+        const archive = fs.readdirSync(dirPath).find(f => /^PortableGit-.+\.7z\.exe$/.test(f))
+        if (!archive) {
+          return { valid: false, info: 'no PortableGit-*.7z.exe found' }
+        }
+        const stats = fs.statSync(path.join(dirPath, archive))
+        const sizeMB = (stats.size / 1024 / 1024).toFixed(1)
+        return { valid: stats.size > 40 * 1024 * 1024, info: `${archive} (${sizeMB} MB)` }
+      } catch {
+        return { valid: false, info: 'cannot read directory' }
+      }
+    }
+  },
+
   // @parcel/watcher - Native file system watcher (same engine as VS Code)
   // Each platform has a separate npm package with prebuilt .node binaries.
   {

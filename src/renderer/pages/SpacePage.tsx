@@ -30,8 +30,7 @@ import { SpaceSelector } from '../components/layout/SpaceSelector'
 import { ModelSelector } from '../components/layout/ModelSelector'
 import { QuotaPill } from '../components/layout/QuotaPill'
 import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
-import { KBIndicator } from '../components/tlon/KBIndicator'
-import { ContentCanvas } from '../components/canvas'
+import { ContentCanvas, TerminalCloseGuard } from '../components/canvas'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
 import { api } from '../api'
 import { useLayoutPreferences } from '../hooks/useLayoutPreferences'
@@ -319,6 +318,11 @@ export function SpacePage() {
 
   return (
     <div className="h-full w-full flex flex-col">
+      {/* Terminal pty close policy — mounted here (not in the canvas) so it stays
+          active for closeAll/space-switch teardown even when the canvas is
+          collapsed. Renders its prompt via a portal; no layout footprint. */}
+      <TerminalCloseGuard />
+
       {/*
         ChatCapsule overlay is now managed via IPC to render above BrowserView.
         The overlay SPA is a separate WebContentsView that appears above all views.
@@ -374,13 +378,6 @@ export function SpacePage() {
             <div className="hidden sm:block">
               <SearchIcon onClick={openSearch} isInSpace={true} />
             </div>
-
-            {/* Connected knowledge bases indicator - desktop only (mobile uses the overflow menu) */}
-            {currentSpace && (
-              <div className="hidden sm:block">
-                <KBIndicator spaceId={currentSpace.id} />
-              </div>
-            )}
 
             {/* Metered quota — renders only when the active source reports it */}
             <QuotaPill sourceId={currentSourceId} />

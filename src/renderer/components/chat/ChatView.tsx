@@ -28,7 +28,7 @@ import { api } from '../../api'
 import type { ImageAttachment, Artifact } from '../../types'
 import type { SlashCommandItem } from '../../types/slash-command'
 import { useTranslation } from '../../i18n'
-import { useEngineCapabilities } from '../../stores/engine.store'
+import { pickEmptyStateSuggestions } from './emptyStateSuggestions'
 
 interface ChatViewProps {
   isCompact?: boolean
@@ -374,7 +374,10 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
           {isLoadingConversation ? (
             <LoadingState />
           ) : !hasMessages ? (
-            <EmptyState isTemp={currentSpace?.isTemp || false} isCompact={isCompact} />
+            <EmptyState
+              isCompact={isCompact}
+              onSuggestion={(prompt) => handleSend(prompt)}
+            />
           ) : (
             <MessageList
               key={currentConversation?.id ?? 'empty'}
@@ -437,13 +440,16 @@ function LoadingState() {
 }
 
 // Empty state component - adapts to compact mode
-function EmptyState({ isTemp, isCompact = false }: { isTemp: boolean; isCompact?: boolean }) {
+function EmptyState({
+  isCompact = false,
+  onSuggestion,
+}: {
+  isCompact?: boolean
+  onSuggestion?: (prompt: string) => void
+}) {
   const { t } = useTranslation()
-  // Reflect the actual driving engine ("Claude Code" / "Codex" / "Halo SDK")
-  // so a user creating a new conversation immediately sees what's powering
-  // it, rather than a hardcoded brand name.
-  const capabilities = useEngineCapabilities()
-  const engineDisplayName = capabilities?.displayName ?? 'Claude Code'
+  // Stable random draw per mount; re-drawn on next empty state
+  const [suggestions] = useState(() => pickEmptyStateSuggestions(t, 4))
 
   // Compact mode shows minimal UI
   if (isCompact) {
@@ -458,23 +464,34 @@ function EmptyState({ isTemp, isCompact = false }: { isTemp: boolean; isCompact?
   }
 
   return (
-    <div className="h-full flex flex-col items-center justify-center text-center px-8">
-      {/* Icon */}
-      <Sparkles className="w-12 h-12 text-primary" />
+    // Outer scroll container keeps content reachable on short viewports
+    <div className="h-full overflow-y-auto px-6 sm:px-8">
+      <div className="min-h-full flex flex-col items-center justify-center text-center py-8">
+        {/* Icon */}
+        <Sparkles className="w-12 h-12 text-primary" />
 
-      {/* Title - concise and warm */}
-      <h2 className="mt-6 text-xl font-medium">
-        Halo
-      </h2>
-      <p className="mt-2 text-muted-foreground">
-        {t('Not just chat, help you get things done')}
-      </p>
+        {/* Title - concise and warm */}
+        <h2 className="mt-6 text-xl font-medium">
+          Halo
+        </h2>
+        <p className="mt-2 text-muted-foreground">
+          {t('Not just chat, help you get things done')}
+        </p>
 
-      {/* Powered by badge - simplified */}
-      <div className="mt-8 px-3 py-1.5 rounded-full border border-border">
-        <span className="text-xs text-muted-foreground">
-          {t('Powered by {{name}}', { name: engineDisplayName })}
-        </span>
+        {/* Clickable suggestions - random sample of Halo capabilities */}
+        <div className="mt-8 w-full max-w-md flex flex-col gap-2">
+          {suggestions.map(({ icon: Icon, prompt }, index) => (
+            <button
+              key={prompt}
+              onClick={() => onSuggestion?.(prompt)}
+              style={{ animationDelay: `${index * 60}ms`, animationFillMode: 'backwards' }}
+              className="animate-fade-in group flex items-center gap-3 px-4 py-2.5 sm:py-3 rounded-xl border border-border text-sm text-muted-foreground text-left transition-colors hover:text-foreground hover:border-primary/40 hover:bg-secondary/50 active:scale-[0.98]"
+            >
+              <Icon className="w-4 h-4 shrink-0 text-primary/60 transition-colors duration-200 group-hover:text-primary" />
+              <span className="truncate">{prompt}</span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )
