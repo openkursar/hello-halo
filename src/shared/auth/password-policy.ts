@@ -21,6 +21,11 @@ export const PASSWORD_MAX_LENGTH = 64
  * alone because they are terminal — until the password is long enough,
  * class coverage cannot be evaluated meaningfully. Class failures are
  * aggregated so the UI can list everything still missing in one pass.
+ *
+ * A special character is allowed but intentionally NOT required: this
+ * credential is primarily typed on mobile, where symbols force a keyboard
+ * switch and some Android password fields block pasting them. Length plus
+ * upper/lower/digit keeps the strength adequate for an HTTPS-guarded PIN.
  */
 export type PasswordPolicyCode =
   | 'NOT_A_STRING'
@@ -29,15 +34,10 @@ export type PasswordPolicyCode =
   | 'MISSING_UPPER'
   | 'MISSING_LOWER'
   | 'MISSING_DIGIT'
-  | 'MISSING_SPECIAL'
 
 export type PasswordPolicyResult =
   | { ok: true }
   | { ok: false; codes: PasswordPolicyCode[] }
-
-// ASCII printable specials. Anchored to ASCII to avoid surprising
-// Unicode-class matches and to keep the rule auditable.
-const SPECIAL_PATTERN = /[!-/:-@[-`{-~]/
 
 export function checkPasswordPolicy(password: unknown): PasswordPolicyResult {
   if (typeof password !== 'string') return { ok: false, codes: ['NOT_A_STRING'] }
@@ -48,7 +48,6 @@ export function checkPasswordPolicy(password: unknown): PasswordPolicyResult {
   if (!/[A-Z]/.test(password)) codes.push('MISSING_UPPER')
   if (!/[a-z]/.test(password)) codes.push('MISSING_LOWER')
   if (!/[0-9]/.test(password)) codes.push('MISSING_DIGIT')
-  if (!SPECIAL_PATTERN.test(password)) codes.push('MISSING_SPECIAL')
 
   if (codes.length > 0) return { ok: false, codes }
   return { ok: true }
