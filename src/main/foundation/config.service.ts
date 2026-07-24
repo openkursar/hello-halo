@@ -803,7 +803,7 @@ export function resolveClaudeConfigDir(
     case 'cc':
       return join(homedir(), '.claude')
     case 'custom':
-      return customDir || join(app.getPath('userData'), 'claude-config')
+      return (customDir ?? getConfig().agent?.customConfigDir) || join(app.getPath('userData'), 'claude-config')
     default:
       return join(app.getPath('userData'), 'claude-config')
   }

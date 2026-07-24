@@ -14,10 +14,9 @@
  */
 
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
-import { Save, RotateCcw, Unplug, Loader2, FileCode, Settings, Code, AlertTriangle, Globe, Bell, Download, ExternalLink, FolderOpen, Wrench, Send, Trash2, Mail, HelpCircle, RefreshCw, X, TerminalSquare } from 'lucide-react'
+import { Save, RotateCcw, Unplug, Loader2, FileCode, Settings, Code, AlertTriangle, Globe, Bell, Download, ExternalLink, FolderOpen, Wrench, Send, Trash2, HelpCircle, RefreshCw, X } from 'lucide-react'
 import { stringify as stringifyYaml, parse as parseYaml } from 'yaml'
 import { useAppsStore } from '../../stores/apps.store'
-import { useAppStore } from '../../stores/app.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import type { InputDef, SubscriptionDef, AppSpec } from '../../../shared/apps/spec-types'
 import type { InstalledApp } from '../../../shared/apps/app-types'
@@ -27,6 +26,9 @@ import { api } from '../../api'
 import { useSpaceStore } from '../../stores/space.store'
 import { AppModelSelector } from './AppModelSelector'
 import { AppNotifyChannelsSection } from './AppNotifyChannelsSection'
+import { AppCapabilitiesSection } from './AppCapabilitiesSection'
+import { AppMcpDepsSection } from './AppMcpDepsSection'
+import { AppSkillsSection } from './AppSkillsSection'
 import { appTypeLabel } from './appTypeUtils'
 import { SystemPromptEditor } from './SystemPromptEditor'
 import { Switch } from '../ui/Switch'
@@ -331,25 +333,7 @@ interface SettingsTabProps {
 }
 
 function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTabProps) {
-  const { updateAppConfig, updateAppSpec, updateAppOverrides, grantPermission, revokePermission } = useAppsStore()
-  const { setView } = useAppStore()
-
-  // Check if email notification channel is configured
-  const [emailConfigured, setEmailConfigured] = useState(false)
-  // Check if any IM channel instances are enabled (for im-push toggle gating)
-  const [hasImInstances, setHasImInstances] = useState(false)
-  useEffect(() => {
-    api.getConfig().then((res: any) => {
-      if (res.success && res.data) {
-        setEmailConfigured(Boolean(res.data.notificationChannels?.email?.enabled))
-      }
-    }).catch(() => {})
-    api.imChannelsStatus().then((res: any) => {
-      if (res.success && res.data) {
-        setHasImInstances(res.data.some((s: any) => s.enabled))
-      }
-    }).catch(() => {})
-  }, [])
+  const { updateAppConfig, updateAppSpec, updateAppOverrides } = useAppsStore()
 
   // Type-narrowed helpers for automation-specific fields
   const isAutomation = app.spec.type === 'automation'
@@ -518,12 +502,13 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
           User Settings (top section)
           ════════════════════════════════════════════ */}
 
-      {/* ── Schedule Settings ── */}
+      {/* ── Scheduled Execution ── */}
       {isAutomation && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {t('Schedule')}
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+              {t('Scheduled Execution')}
+              <InfoTip text={t('Automatically wake this digital human to run on a fixed interval. When off, it can still be triggered manually or by an incoming IM message.')} />
             </h3>
             <Switch
               checked={hasSchedule}
@@ -544,13 +529,11 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
         </div>
       )}
 
-      {/* ── Runtime Settings (Model + AI Browser + Notifications) ── */}
-      <div className="space-y-4">
+      {/* ── Model ── */}
+      <div className="space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {t('Runtime')}
+          {t('Model')}
         </h3>
-
-        {/* Model selector */}
         <AppModelSelector
           modelSourceId={app.userOverrides.modelSourceId}
           modelId={app.userOverrides.modelId}
@@ -562,199 +545,57 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
             })
           }}
         />
+      </div>
 
-        {/* AI Browser toggle */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <Globe className="w-3.5 h-3.5 text-muted-foreground" />
-              <span className="text-sm text-foreground">{t('AI Browser')}</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {t('Enable browser tools for web automation')}
-            </p>
-          </div>
-          <Switch
-            checked={resolvePermission(app, 'ai-browser')}
-            onCheckedChange={async (checked) => {
-              if (checked) {
-                await grantPermission(appId, 'ai-browser')
-              } else {
-                await revokePermission(appId, 'ai-browser')
-              }
-            }}
-            size="sm"
-          />
-        </div>
-        {/* Warn when user disabled a permission the spec declares */}
-        {!resolvePermission(app, 'ai-browser') && app.spec.permissions?.includes('ai-browser') && (
-          <p className="text-xs text-amber-500 flex items-center gap-1 -mt-2">
-            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-            {t('This app may require AI Browser to work properly')}
-          </p>
-        )}
+      {/* ── Capabilities / MCP Tools / Skills (automation only) ── */}
+      {isAutomation && (
+        <>
+          <AppCapabilitiesSection app={app} appId={appId} onRequireRestart={onRequireRestart} />
+          <AppMcpDepsSection app={app} appId={appId} onRequireRestart={onRequireRestart} />
+          <AppSkillsSection appId={appId} spaceId={app.spaceId} />
+        </>
+      )}
 
-        {/* AI Terminal toggle (default off — powerful capability) */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <TerminalSquare className="w-3.5 h-3.5 text-muted-foreground" />
-              <span className="text-sm text-foreground">{t('AI Terminal')}</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {t('Allow this app to run shell commands and interactive terminals')}
-            </p>
-          </div>
-          <Switch
-            checked={resolvePermission(app, 'ai-terminal', false)}
-            onCheckedChange={async (checked) => {
-              if (checked) {
-                await grantPermission(appId, 'ai-terminal')
-              } else {
-                await revokePermission(appId, 'ai-terminal')
-              }
-            }}
-            size="sm"
-          />
-        </div>
-        {!resolvePermission(app, 'ai-terminal', false) && app.spec.permissions?.includes('ai-terminal') && (
-          <p className="text-xs text-amber-500 flex items-center gap-1 -mt-2">
-            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-            {t('This app may require AI Terminal to work properly')}
-          </p>
-        )}
-
-        {/* Email MCP toggle */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <Mail className={`w-3.5 h-3.5 ${emailConfigured ? 'text-muted-foreground' : 'text-muted-foreground/50'}`} />
-              <span className={`text-sm ${emailConfigured ? 'text-foreground' : 'text-muted-foreground'}`}>{t('Email')}</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {t('Allow this app to read, send, and manage emails and calendar')}
-            </p>
-          </div>
-          <Switch
-            checked={emailConfigured && resolvePermission(app, 'email', false)}
-            onCheckedChange={async (checked) => {
-              if (!emailConfigured) return
-              if (checked) {
-                await grantPermission(appId, 'email')
-              } else {
-                await revokePermission(appId, 'email')
-              }
-            }}
-            disabled={!emailConfigured}
-            size="sm"
-          />
-        </div>
-        {/* Not configured: show hint with link to settings */}
-        {!emailConfigured && (
-          <button
-            onClick={() => {
-              setView('settings')
-              setTimeout(() => {
-                const el = document.getElementById('message-channels')
-                el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-              }, 100)
-            }}
-            className="text-xs text-amber-500 flex items-center gap-1 -mt-2 hover:text-amber-400 transition-colors"
-          >
-            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-            {t('Email not configured. Go to Settings > Notification Channels to set up.')}
-          </button>
-        )}
-        {/* Warn when user disabled a permission the spec declares */}
-        {emailConfigured && !resolvePermission(app, 'email', false) && app.spec.permissions?.includes('email') && (
-          <p className="text-xs text-amber-500 flex items-center gap-1 -mt-2">
-            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-            {t('This app may require Email to work properly')}
-          </p>
-        )}
-
-        {/* IM Push toggle */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <Send className={`w-3.5 h-3.5 ${hasImInstances ? 'text-muted-foreground' : 'text-muted-foreground/50'}`} />
-              <span className={`text-sm ${hasImInstances ? 'text-foreground' : 'text-muted-foreground'}`}>{t('IM Push')}</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {t('Allow this app to send messages to IM contacts')}
-            </p>
-          </div>
-          <Switch
-            checked={hasImInstances && resolvePermission(app, 'im-push')}
-            onCheckedChange={async (checked) => {
-              if (!hasImInstances) return
-              if (checked) {
-                await grantPermission(appId, 'im-push')
-              } else {
-                await revokePermission(appId, 'im-push')
-              }
-            }}
-            disabled={!hasImInstances}
-            size="sm"
-          />
-        </div>
-        {/* Not configured: show hint with link to settings */}
-        {!hasImInstances && (
-          <button
-            onClick={() => {
-              setView('settings')
-              setTimeout(() => {
-                const el = document.getElementById('message-channels')
-                el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-              }, 100)
-            }}
-            className="text-xs text-amber-500 flex items-center gap-1 -mt-2 hover:text-amber-400 transition-colors"
-          >
-            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-            {t('No IM channels configured. Go to Settings to set up.')}
-          </button>
-        )}
-        {/* Warn when user disabled a permission the spec declares */}
-        {hasImInstances && !resolvePermission(app, 'im-push') && app.spec.permissions?.includes('im-push') && (
-          <p className="text-xs text-amber-500 flex items-center gap-1 -mt-2">
-            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-            {t('This app may require IM Push to work properly')}
-          </p>
-        )}
-
-        {/* Browser login sites */}
-        {browserLoginEntries.length > 0 && (
-          <div className="space-y-2">
-            <span className="text-sm text-foreground">{t('Required Logins')}</span>
-            <div className="space-y-1">
-              {browserLoginEntries.map(entry => (
-                <button
-                  key={entry.url}
-                  onClick={() => {
-                    api.openLoginWindow(entry.url, entry.label)
-                  }}
-                  className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left rounded-lg bg-secondary/50 border border-border hover:bg-secondary transition-colors group"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Globe className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
-                    <span className="text-sm text-foreground truncate">{entry.label}</span>
-                  </div>
-                  <ExternalLink className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
-                </button>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {t('Click to open the website and log in via the Halo browser.')}
-            </p>
-          </div>
-        )}
-
-        {/* Notification level */}
+      {/* ── Required Logins ── */}
+      {browserLoginEntries.length > 0 && (
         <div className="space-y-2">
-          <div className="flex items-center gap-1.5">
-            <Bell className="w-3.5 h-3.5 text-muted-foreground" />
-            <span className="text-sm text-foreground">{t('System Notifications')}</span>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+            <Globe className="w-3.5 h-3.5" />
+            {t('Required Logins')}
+          </h3>
+          <div className="space-y-1">
+            {browserLoginEntries.map(entry => (
+              <button
+                key={entry.url}
+                onClick={() => {
+                  api.openLoginWindow(entry.url, entry.label)
+                }}
+                className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left rounded-lg bg-secondary/50 border border-border hover:bg-secondary transition-colors group"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <Globe className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                  <span className="text-sm text-foreground truncate">{entry.label}</span>
+                </div>
+                <ExternalLink className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+              </button>
+            ))}
           </div>
+          <p className="text-xs text-muted-foreground">
+            {t('Click to open the website and log in via the Halo browser.')}
+          </p>
+        </div>
+      )}
+
+      {/* ── Notifications (system level + message channels) ── */}
+      <div className="space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+          <Bell className="w-3.5 h-3.5" />
+          {t('Notifications')}
+        </h3>
+
+        {/* System notification level */}
+        <div className="space-y-2">
+          <span className="text-sm text-foreground">{t('System Notifications')}</span>
           <div className="flex flex-wrap gap-1.5">
             {([
               { value: 'important', label: t('Important') },
@@ -786,25 +627,24 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
                 : t('Notify on milestones, escalations, and outputs')}
           </p>
         </div>
-      </div>
 
-      {/* ── Notification Methods (channel selector) ── */}
-      {isAutomation && (
-        <div className="space-y-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-            <Send className="w-3.5 h-3.5" />
-            {t('Message Channels')}
-          </h3>
-          <p className="text-xs text-muted-foreground -mt-2">
-            {t('Notification channels and contacts available to this digital human')}
-          </p>
-          <AppNotifyChannelsSection
-            appId={appId}
-            appName={app.spec.name}
-            imPushEnabled={resolvePermission(app, 'im-push')}
-          />
-        </div>
-      )}
+        {/* Message channels + reachable contacts */}
+        {isAutomation && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
+              <Send className="w-3.5 h-3.5 text-muted-foreground" />
+              <span className="text-sm text-foreground">{t('Message Channels')}</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t('Notification channels and contacts available to this digital human')}
+            </p>
+            <AppNotifyChannelsSection
+              appId={appId}
+              imPushEnabled={resolvePermission(app, 'im-push')}
+            />
+          </div>
+        )}
+      </div>
 
       {/* ── User Configuration Fields ── */}
       {hasConfig && (

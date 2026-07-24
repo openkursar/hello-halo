@@ -35,6 +35,7 @@ export const appRpc = {
   appExportSpec: rawRpcMethod('app:export-spec'),
   appImportSpec: rawRpcMethod('app:import-spec'),
   appOpenSkillFolder: rawRpcMethod('app:open-skill-folder'),
+  appListAvailableSkills: rawRpcMethod('app:list-available-skills'),
   appGetDataPath: rawRpcMethod('app:get-data-path'),
   appOpenDataFolder: rawRpcMethod('app:open-data-folder'),
   appClearMemory: rawRpcMethod('app:clear-memory'),

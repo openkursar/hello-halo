@@ -43,6 +43,7 @@ import type { AppListFilter, UninstallOptions, InstalledApp } from '../../apps/m
 import type { ActivityQueryOptions, EscalationResponse, AppChatRequest } from '../../apps/runtime'
 import { readSessionMessages } from '../../apps/runtime/session-store'
 import { getImSessionRegistry } from '../../apps/runtime/im-session-registry'
+import { listAvailableSkills } from '../../apps/skill-discovery'
 import { analytics } from '../../services/analytics/analytics.service'
 import { broadcastToAll } from '../websocket'
 import * as appController from '../../controllers/app.controller'
@@ -249,6 +250,7 @@ export {
   getAppChatConversationId,
   getAppChatSessionState,
   getAppManager,
+  listAvailableSkills,
   getAppRuntime,
   getEnabledAuthProviderConfigs,
   getImChannelManager,

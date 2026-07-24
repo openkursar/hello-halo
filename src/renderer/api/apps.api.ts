@@ -12,6 +12,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import type { AvailableSkill } from '../../shared/apps/app-types'
 
 export const appsApi = {
   // ===== Apps =====
@@ -222,6 +223,13 @@ export const appsApi = {
     }
     // No filesystem access in web mode
     return { success: false, error: 'Not supported outside Electron' }
+  },
+
+  appListAvailableSkills: async (appId: string): Promise<ApiResponse<AvailableSkill[]>> => {
+    if (isElectron()) {
+      return window.halo.appListAvailableSkills(appId)
+    }
+    return httpRequest('GET', `/api/apps/${appId}/available-skills`)
   },
 
   appOpenDataFolder: async (appId: string): Promise<ApiResponse> => {

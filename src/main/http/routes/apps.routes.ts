@@ -19,6 +19,7 @@ import {
   isAppChatGenerating,
   isAppChatConversationGenerating,
   isMcpAppSpec,
+  listAvailableSkills,
   loadAppChatMessages,
   loadImChatMessages,
   loadChatMessagesForConversation,
@@ -144,6 +145,27 @@ export function registerAppsRoutes(app: Express): void {
       if (!manager) return
       const appData = manager.getApp(appId)
       res.json({ success: true, data: appData })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/available-skills — skills loadable by this digital human
+  app.get('/api/apps/:appId/available-skills', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      const appData = manager.getApp(appId)
+      if (!appData || !appData.spaceId) {
+        res.json({ success: false, error: 'App not found or has no space' })
+        return
+      }
+      res.json({ success: true, data: listAvailableSkills(appData.spaceId) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

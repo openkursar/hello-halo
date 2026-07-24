@@ -388,9 +388,9 @@ export async function sendAppChatMessage(
   // ── 3. Build system prompt for interactive chat ──────
   const memoryInstructions = memory.getPromptInstructions()
   const usesAIBrowser = resolvePermission(app, 'ai-browser')
-  const usesTerminal = resolvePermission(app, 'ai-terminal', false) && isTerminalAvailable() // default off
-  const usesEmail = resolvePermission(app, 'email', false) // default false — higher trust
-  const usesImPush = resolvePermission(app, 'im-push') // default true — AI-driven IM push
+  const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
+  const usesEmail = resolvePermission(app, 'email') // gated on channel config downstream
+  const usesImPush = resolvePermission(app, 'im-push') // AI-driven IM push
 
   // ── Merge config_schema defaults into userConfig ────
   const mergedConfig = mergeConfigWithDefaults(app.userConfig, app.spec.config_schema)
@@ -424,8 +424,18 @@ export async function sendAppChatMessage(
   // ── 4. Build MCP servers ─────────────────────────────
   const memoryMcpServer = createMemoryStatusMcpServer(memoryScope)
 
-  // Include user-installed external MCPs (same as regular space chat)
-  const dbMcpServers = getDbMcpServers(spaceId)
+  // Include user-installed external MCPs (same as regular space chat), minus
+  // any this digital human has explicitly disabled (requires.mcps[].enabled ===
+  // false) so the per-app switch is consistent between chat and automation runs.
+  const disabledMcpIds = new Set(
+    (app.spec.requires?.mcps ?? [])
+      .filter(d => d.enabled === false)
+      .map(d => d.id)
+  )
+  const dbMcpServersRaw = getDbMcpServers(spaceId)
+  const dbMcpServers = dbMcpServersRaw && disabledMcpIds.size > 0
+    ? Object.fromEntries(Object.entries(dbMcpServersRaw).filter(([id]) => !disabledMcpIds.has(id)))
+    : dbMcpServersRaw
 
   // Get or create scoped browser context for this chat session
   let scopedBrowserCtx: BrowserContext | undefined
@@ -459,6 +469,7 @@ export async function sendAppChatMessage(
   // Chat sessions have no automation_runs row, so any call fails with a FOREIGN
   // KEY constraint and the model retries in a loop (see issue #200). Chat replies
   // reach the user directly as text, so the Activity Thread is not needed here.
+  // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
   const mcpServers: Record<string, any> = {
     ...(dbMcpServers ?? {}),
     'halo-memory': memoryMcpServer,

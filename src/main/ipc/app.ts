@@ -40,6 +40,7 @@ import { getAppManager } from '../apps/manager'
 import { AppAlreadyInstalledError, McpCommandBlockedError } from '../apps/manager/errors'
 import { MCP_COMMAND_BLOCKED_MESSAGE } from '../services/security-policy'
 import { getSkillDir } from '../apps/manager/skill-sync'
+import { listAvailableSkills } from '../apps/skill-discovery'
 import {
   getAppRuntime,
   sendAppChatMessage,
@@ -798,6 +799,26 @@ export function registerAppHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:open-skill-folder error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:list-available-skills ──────────────────────────────────────────
+    appListAvailableSkills: async (appId: string) => {
+      try {
+        const r = requireManager()
+        if (!r.success) return r
+
+        const app = r.manager.getApp(appId)
+        if (!app || !app.spaceId) {
+          return { success: false, error: 'App not found or has no space' }
+        }
+
+        const skills = listAvailableSkills(app.spaceId)
+        return { success: true, data: skills }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:list-available-skills error:', err.message)
         return { success: false, error: err.message }
       }
     },

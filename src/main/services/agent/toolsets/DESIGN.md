@@ -99,12 +99,13 @@ returns guidance so the AI tells the user which toolset to enable, then stops.
 ## 6) Automation (digital humans)
 
 Automation does NOT use this broker or the meta server. Enabled toolsets are
-**app permissions** resolved via `resolvePermission(app, '<id>', default)` in
+**app permissions** resolved via `resolvePermission(app, '<id>')` in
 `apps/runtime/execute.ts` + `app-chat.ts`, seeded into the run's static MCP set at
 creation, and their usage guides appended in `prompt.ts` / `prompt/identity.ts`.
-`ai-terminal` / `ai-browser` are toggled in `AppConfigPanel.tsx`
-(grant/revoke-permission). `ai-terminal` defaults OFF and is excluded for guests
-(conservative default in `app-chat.ts` `buildGuestMcpServers`).
+Capabilities are toggled in `AppCapabilitiesSection.tsx` (grant/revoke-permission).
+All built-in capabilities default ON (only an explicit user deny turns one off —
+see PROTOCOL.md §13); `ai-terminal` is still excluded for guests
+(conservative allowlist in `app-chat.ts` `buildGuestMcpServers`).
 
 ## 7) Session rebuild contract
 

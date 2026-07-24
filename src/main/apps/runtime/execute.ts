@@ -255,9 +255,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // ── 2. Build system prompt ─────────────────────────────
     const memoryInstructions = memory.getPromptInstructions()
     const usesAIBrowser = resolvePermission(app, 'ai-browser')
-    const usesTerminal = resolvePermission(app, 'ai-terminal', false) && isTerminalAvailable() // default off
-    const usesEmail = resolvePermission(app, 'email', false) // default false — higher trust
-    const usesImPush = resolvePermission(app, 'im-push') // default true — AI-driven IM push
+    const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
+    const usesEmail = resolvePermission(app, 'email') // gated on channel config below
+    const usesImPush = resolvePermission(app, 'im-push') // AI-driven IM push
 
     // ── Merge config_schema defaults into userConfig ─────
     //    Ensures defaults are available even if the user never opened the config panel.
@@ -402,7 +402,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // Only injects explicitly declared MCPs (least-privilege: automation gets only what it declares).
     // Automation apps always have a spaceId (enforced earlier in this function).
     const requiredMcpServers = getMcpServersForRequires(
-      (app.spec.requires?.mcps as Array<{ id: string }> | undefined),
+      app.spec.requires?.mcps,
       app.spaceId!
     )
 
@@ -415,6 +415,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       stderrHandler: (data: string) => {
         console.error(`[Runtime][${app.id}] CLI stderr:`, data)
       },
+      // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
       mcpServers: {
         ...requiredMcpServers,              // declared MCP dependencies
         'halo-memory': memoryMcpServer,     // built-in: persistent memory

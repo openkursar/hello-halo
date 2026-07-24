@@ -357,7 +357,7 @@ Each element is a `McpDependency`:
 
 > **Note**: `ai-browser` is a built-in MCP. When declared, the runtime automatically injects AI
 > Browser tools. Even without an explicit declaration, it is injected by default (`resolvePermission`
-> uses `defaultValue=true`). Use `permissions` to explicitly opt out.
+> uses `defaultValue=true`). Only an explicit user deny from the UI turns it off (see Section 13).
 
 ### Skill Dependencies (`requires.skills`)
 
@@ -663,16 +663,23 @@ permissions:
 
 | Permission identifier | Description |
 |---|---|
-| `ai-browser` | Allows the App to use AI Browser (web automation capability) at runtime. Default behavior: enabled for all automation Apps; users can revoke it from the UI. |
+| `ai-browser` | AI Browser tools (web automation). |
+| `ai-terminal` | Shell commands and interactive terminals (only when the platform terminal is available). |
+| `email` | Email/calendar tools (only injected when the user has configured an email channel). |
+| `im-push` | Proactively send messages to IM contacts. |
 
 > **Permission resolution priority** (`resolvePermission` function):
 > 1. Permission is in `app.permissions.denied` → **Denied**
 > 2. Permission is in `app.permissions.granted` → **Allowed**
 > 3. Permission is declared in `spec.permissions` → **Allowed**
-> 4. None of the above → uses `defaultValue` (`ai-browser` defaults to `true`)
+> 4. None of the above → uses `defaultValue` (defaults to `true`)
 >
-> Users can manually grant or revoke permissions after installation via the UI
-> (stored in `InstalledApp.permissions.granted` / `InstalledApp.permissions.denied`).
+> All built-in capabilities are **enabled by default** (deliberate product
+> decision): a spec's `permissions` list only *adds* capability and never turns
+> one off. The only way a capability ends up off is an explicit user opt-out
+> from the UI (stored in `InstalledApp.permissions.denied`; grants in
+> `InstalledApp.permissions.granted`). `email` and `im-push` are additionally
+> gated at runtime on the corresponding channel being configured.
 
 ---
 

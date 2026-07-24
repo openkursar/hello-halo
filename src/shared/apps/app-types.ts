@@ -236,6 +236,28 @@ export interface AppErrorResponse {
 export type AppResponse<T = unknown> = AppSuccessResponse<T> | AppErrorResponse
 
 // ============================================
+// Available Skills (runtime disk discovery)
+// ============================================
+
+/**
+ * A skill actually loadable by a digital human at runtime.
+ * Produced by disk discovery — see main/apps/skill-discovery.ts for why the
+ * disk, not the installed-apps table, is the source of truth.
+ */
+export interface AvailableSkill {
+  /** Display name (SKILL.md frontmatter `name`, falls back to directory name) */
+  name: string
+  /** Frontmatter `description` — what the skill does */
+  description: string
+  /** Where the skill lives relative to the digital human */
+  scope: 'global' | 'space'
+  /** Directory basename; matches an installed skill app's sanitized specId when one exists */
+  dirName: string
+  /** SKILL.md content (may be truncated); empty when unreadable */
+  content: string
+}
+
+// ============================================
 // Permission Helpers
 // ============================================
 
@@ -245,12 +267,15 @@ export type AppResponse<T = unknown> = AppSuccessResponse<T> | AppErrorResponse
  * Resolution order (user override wins over spec declaration):
  * 1. If explicitly denied  → false
  * 2. If explicitly granted → true
- * 3. Fall back to spec.permissions (default: true for ai-browser)
+ * 3. If the spec declares it → true
+ * 4. Otherwise → defaultValue (on by default)
  *
- * The default-true fallback for 'ai-browser' ensures that most automation Apps
- * (which rely on browser capabilities) work out of the box. Users or spec authors
- * can opt out by adding 'ai-browser' to the denied list or omitting it from
- * spec.permissions respectively.
+ * A spec's `permissions` list only ADDS capability — it never forces a
+ * permission off just because the author didn't list it. An undeclared
+ * permission therefore falls through to `defaultValue`, which defaults to
+ * `true`: built-in capabilities are enabled out of the box so digital humans
+ * work without the user hunting for a switch. The only way a capability ends
+ * up off is an explicit user opt-out (added to `denied`).
  */
 export function resolvePermission(
   app: Pick<InstalledApp, 'permissions' | 'spec'>,
@@ -259,6 +284,6 @@ export function resolvePermission(
 ): boolean {
   if (app.permissions.denied.includes(permission)) return false
   if (app.permissions.granted.includes(permission)) return true
-  // Fall back to spec declaration, then to the provided default
-  return app.spec.permissions?.includes(permission) ?? defaultValue
+  if (app.spec.permissions?.includes(permission)) return true
+  return defaultValue
 }
