@@ -74,7 +74,9 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
           // File watcher worker — runs in a separate child process
-          'worker/file-watcher/index': resolve(__dirname, 'src/worker/file-watcher/index.ts')
+          'worker/file-watcher/index': resolve(__dirname, 'src/worker/file-watcher/index.ts'),
+          // Pty host worker — owns all terminal ptys in a separate child process
+          'worker/pty-host/index': resolve(__dirname, 'src/worker/pty-host/index.ts')
         },
         output: {
           format: 'es',

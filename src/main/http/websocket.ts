@@ -55,6 +55,7 @@ export function initWebSocket(server: any): WebSocketServer {
     // Handle disconnection
     ws.on('close', () => {
       clients.delete(clientId)
+      releaseTerminalAttachments(clientId)
       console.log(`[WS] Client disconnected: ${clientId}`)
     })
 
@@ -62,11 +63,22 @@ export function initWebSocket(server: any): WebSocketServer {
     ws.on('error', (error) => {
       console.error(`[WS] Client error ${clientId}:`, error)
       clients.delete(clientId)
+      releaseTerminalAttachments(clientId)
     })
   })
 
   console.log('[WS] WebSocket server initialized')
   return wss
+}
+
+/**
+ * A vanished client must stop gating terminal flow control, or its unacked
+ * backlog would pause a pty forever (see ai-terminal/flow-control.ts).
+ */
+function releaseTerminalAttachments(clientId: string): void {
+  void import('../services/ai-terminal').then(({ terminalViewerDisconnected }) => {
+    terminalViewerDisconnected(clientId)
+  }).catch(() => { /* terminal module unavailable on this platform */ })
 }
 
 /**
@@ -141,6 +153,41 @@ function handleClientMessage(
       ) {
         void import('../services/ai-terminal').then(({ terminalResize }) => {
           terminalResize(message.payload.sessionId, cols, rows)
+        })
+      }
+      break
+    }
+
+    // Remote viewer flow control: an attached viewer's rendered-char acks gate
+    // the pty's output rate (see ai-terminal/flow-control.ts). The client id is
+    // the viewer id, so a dropped connection detaches everything it gated.
+    case 'terminal-attach':
+      if (!client.authenticated) {
+        sendToClient(client, { type: 'error', error: 'Not authenticated' })
+        break
+      }
+      if (typeof message.payload?.sessionId === 'string') {
+        void import('../services/ai-terminal').then(({ terminalViewerAttach }) => {
+          terminalViewerAttach(message.payload.sessionId, client.id)
+        })
+      }
+      break
+
+    case 'terminal-detach':
+      if (!client.authenticated) break
+      if (typeof message.payload?.sessionId === 'string') {
+        void import('../services/ai-terminal').then(({ terminalViewerDetach }) => {
+          terminalViewerDetach(message.payload.sessionId, client.id)
+        })
+      }
+      break
+
+    case 'terminal-ack': {
+      if (!client.authenticated) break
+      const charCount = Number(message.payload?.charCount)
+      if (typeof message.payload?.sessionId === 'string' && Number.isFinite(charCount)) {
+        void import('../services/ai-terminal').then(({ terminalViewerAck }) => {
+          terminalViewerAck(message.payload.sessionId, client.id, charCount)
         })
       }
       break

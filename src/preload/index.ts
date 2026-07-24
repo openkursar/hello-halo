@@ -185,6 +185,9 @@ export interface HaloAPI {
   terminalResize: (data: { sessionId: string; cols: number; rows: number }) => Promise<IpcResponse>
   killTerminal: (data: { sessionId: string }) => Promise<IpcResponse>
   getTerminalReplay: (data: { sessionId: string }) => Promise<IpcResponse>
+  terminalAttach: (data: { sessionId: string }) => Promise<IpcResponse>
+  terminalDetach: (data: { sessionId: string }) => Promise<IpcResponse>
+  terminalAck: (data: { sessionId: string; charCount: number }) => Promise<IpcResponse>
   onTerminalData: (callback: (data: unknown) => void) => () => void
   onTerminalLifecycle: (callback: (data: unknown) => void) => () => void
 

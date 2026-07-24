@@ -44,7 +44,7 @@ export function registerTerminalRoutes(app: Express): void {
       // spawn an arbitrary executable. cwd/title are safe (a shell can cd itself).
       const cwd = typeof req.body.cwd === 'string' ? req.body.cwd : undefined
       const title = typeof req.body.title === 'string' ? req.body.title : undefined
-      const result = createTerminalForUser(spaceId, workDir, { cwd, title })
+      const result = await createTerminalForUser(spaceId, workDir, { cwd, title })
       res.json(result.ok ? { success: true, data: result.info } : { success: false, error: result.error })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -96,7 +96,7 @@ export function registerTerminalRoutes(app: Express): void {
     if (!ensureAvailable(res)) return
     try {
       const { getTerminalReplay } = await import('../../services/ai-terminal')
-      const replay = getTerminalReplay(req.body.sessionId)
+      const replay = await getTerminalReplay(req.body.sessionId)
       res.json(replay ? { success: true, data: replay } : { success: false, error: 'No such terminal session' })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })

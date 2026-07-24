@@ -1,7 +1,9 @@
 /**
- * AI Terminal - Session
+ * Pty Host worker - Session
  *
- * One pty process + a headless xterm screen buffer. The pty is the single
+ * One pty process + a headless xterm screen buffer, living in the pty-host
+ * worker process so pty I/O, ANSI interpretation, and (synchronous) native
+ * spawn calls can never block the Electron main process. The pty is the single
  * source of truth: user and AI write to the same stream and see the same
  * interpreted screen. Raw ANSI is never handed to the model — the AI reads
  * from the interpreted buffer (screen / scrollback) or from write-and-wait
@@ -13,13 +15,32 @@
  * but we never inject prompt hacks ourselves — that mangles custom prompts and
  * differs per shell. The idle heuristic is also exactly what the SSH/remote
  * path needs, so it is a first-class mechanism, not a fallback.
+ *
+ * Three hardening mechanisms guard the pty against known ConPTY / slow-tty
+ * failure modes:
+ *  - every pty write goes through a chunked write queue (max chunk size +
+ *    inter-chunk pacing) so a large paste cannot corrupt a slow tty;
+ *  - spawn/kill calls on ConPTY are throttled to dodge a conhost hang that
+ *    surfaces when kill and spawn race within a short window;
+ *  - the pty can be paused/resumed for flow control (the pause policy itself
+ *    lives in the main process, driven by viewer acks).
  */
 
 import type { IPty, IDisposable } from 'node-pty'
 import { createRequire } from 'module'
+import { platform, release } from 'os'
 import { Terminal } from '@xterm/headless'
 import { EventEmitter } from 'events'
-import { resolveShell } from './shell'
+import type { CreateSessionSpec } from '../../shared/protocol/pty-host.protocol'
+import type {
+  TerminalInfo,
+  TerminalReadMode,
+  TerminalReadResult,
+  TerminalRunState,
+  TerminalSearchResult,
+  TerminalWaitOutcome,
+  TerminalWriteResult
+} from '../../shared/types/terminal'
 import {
   MAX_RETURN_LINES,
   defaultTitle,
@@ -34,10 +55,10 @@ import {
 } from './text-utils'
 
 // node-pty is a native addon that is intentionally NOT packaged on Linux
-// (afterPack excludes its prebuilds). Load it lazily via require so merely
-// importing this module (e.g. through the toolset registry on every platform)
-// never touches the native binding — only constructing a session does, which
-// is gated behind isTerminalAvailable() and thus never happens on Linux.
+// (afterPack excludes its prebuilds). Load it lazily via require so importing
+// this module never touches the native binding — only constructing a session
+// does, and the pty-host worker is only forked on platforms where
+// isTerminalAvailable() passed in the main process.
 const nodeRequire = createRequire(import.meta.url)
 type NodePty = typeof import('node-pty')
 let ptyModule: NodePty | null = null
@@ -45,15 +66,6 @@ function loadPty(): NodePty {
   if (!ptyModule) ptyModule = nodeRequire('node-pty') as NodePty
   return ptyModule
 }
-import type {
-  CreateTerminalOptions,
-  TerminalInfo,
-  TerminalReadMode,
-  TerminalReadResult,
-  TerminalRunState,
-  TerminalSearchResult,
-  TerminalWriteResult
-} from './types'
 
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 30
@@ -70,17 +82,68 @@ const DEFAULT_WRITE_TIMEOUT_MS = 10_000
 const SUBMIT_KEY_DELAY_MS = 20
 /** Raw replay buffer cap (bytes) for late-attaching UI viewers */
 const REPLAY_BUFFER_BYTES = 256_000
-/** terminal_search safety bounds (model-authored regex on the main process) */
+/** terminal_search safety bounds (model-authored regex) */
 const SEARCH_BUDGET_MS = 1000
 const SEARCH_LINE_CAP = 2000
+/** terminal_wait_for poll interval */
+const WAIT_FOR_POLL_MS = 250
+
+// ConPTY / slow-tty hardening constants.
+/** Max chars per pty write; larger pastes can be corrupted by a slow tty. */
+const WRITE_MAX_CHUNK_SIZE = 50
+/** Delay between chunked pty writes. */
+const WRITE_INTERVAL_MS = 5
+/** Min spacing between ConPTY kill/spawn calls (avoids a conhost hang). */
+const KILL_SPAWN_THROTTLE_MS = 250
+/** Extra margin when a throttled call waits, to avoid double-interval stacking. */
+const KILL_SPAWN_SPACING_MS = 50
+
+/**
+ * Whether node-pty will drive this pty with ConPTY (its auto-detection:
+ * Windows build >= 18309). The kill/spawn throttle only applies there.
+ */
+function usesConpty(): boolean {
+  if (platform() !== 'win32') return false
+  const build = Number(release().split('.')[2] ?? 0)
+  return build >= 18309
+}
+
+const timeout = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
+
+/**
+ * Split pty input into chunks that avoid tty-side paste corruption, never
+ * splitting an escape sequence across chunks.
+ */
+export function chunkInput(data: string): string[] {
+  const chunks: string[] = []
+  let nextChunkStartIndex = 0
+  for (let i = 0; i < data.length - 1; i++) {
+    if (
+      i - nextChunkStartIndex + 1 >= WRITE_MAX_CHUNK_SIZE ||
+      data[i + 1] === '\x1b'
+    ) {
+      chunks.push(data.substring(nextChunkStartIndex, i + 1))
+      nextChunkStartIndex = i + 1
+      i++
+    }
+  }
+  if (nextChunkStartIndex !== data.length) {
+    chunks.push(data.substring(nextChunkStartIndex))
+  }
+  return chunks
+}
 
 let seq = 0
 
 export class TerminalSession extends EventEmitter {
   readonly id: string
-  private proc: IPty
+  private proc!: IPty
   private term: Terminal
   readonly info: TerminalInfo
+  private readonly spec: CreateSessionSpec
+
+  /** Min spacing between ConPTY kill/spawn calls, shared process-wide. */
+  private static lastKillOrStart = 0
 
   /** Bounded raw output ring for UI replay when a viewer attaches late */
   private replayBuffer = ''
@@ -90,13 +153,18 @@ export class TerminalSession extends EventEmitter {
   private waitTimer: NodeJS.Timeout | null = null
   /** Pending split-off submit Enter (see deliverInput) */
   private submitTimer: NodeJS.Timeout | null = null
+  /** Chunked pty write queue (paced by WRITE_INTERVAL_MS) */
+  private writeQueue: string[] = []
+  private writeTimeout: NodeJS.Timeout | null = null
+  /** Flow control: pty paused because viewers are behind (main decides) */
+  private ptyPaused = false
   /** Last command exit code parsed from OSC 133;D */
   private lastExitCode: number | null = null
   /** Set when OSC 133;D fires during a wait window */
   private sawCommandEnd = false
   /** Marks the "already read" watermark for mode:'new' */
   private newReadConsumed = ''
-  /** True once kill() has run; guards late pty callbacks against a disposed xterm */
+  /** True once dispose() has run; guards late pty callbacks against a disposed xterm */
   private disposed = false
   /**
    * Resolves once one-time session hardening (see prime()) has run. AI writes
@@ -105,19 +173,18 @@ export class TerminalSession extends EventEmitter {
    */
   private ready!: Promise<void>
   private readyResolve!: () => void
-  /** pty output listener; detached on kill() before the xterm buffer is disposed */
+  /** pty output listener; detached on dispose() before the xterm buffer is disposed */
   private dataListener: IDisposable | null = null
   /** pty exit listener */
   private exitListener: IDisposable | null = null
 
-  constructor(opts: CreateTerminalOptions, workDir: string) {
+  constructor(spec: CreateSessionSpec) {
     super()
     this.id = `term_${++seq}_${Date.now().toString(36)}`
+    this.spec = spec
 
-    const shell = resolveShell(opts.shell)
-    const cols = opts.cols ?? DEFAULT_COLS
-    const rows = opts.rows ?? DEFAULT_ROWS
-    const cwd = opts.cwd ?? workDir
+    const cols = spec.cols ?? DEFAULT_COLS
+    const rows = spec.rows ?? DEFAULT_ROWS
 
     this.term = new Terminal({
       cols,
@@ -132,31 +199,41 @@ export class TerminalSession extends EventEmitter {
       return true
     })
 
-    this.proc = loadPty().spawn(shell.file, shell.args, {
-      name: 'xterm-256color',
-      cols,
-      rows,
-      cwd,
-      env: { ...process.env, ...shell.env } as Record<string, string>
-    })
-
     this.info = {
       id: this.id,
-      title: opts.title || defaultTitle(shell.file),
-      shell: shell.file,
-      cwd,
+      title: spec.title || defaultTitle(spec.shell.file),
+      shell: spec.shell.file,
+      cwd: spec.cwd,
       cols,
       rows,
-      owner: opts.owner,
+      owner: spec.owner,
       // An AI-created session is operated by the AI from birth; a user session
       // flips to true the first time an AI tool drives it (markAiTouched).
-      aiTouched: opts.owner === 'ai',
+      aiTouched: spec.owner === 'ai',
       state: 'running',
       exitCode: null,
       lastActivityAt: Date.now(),
       createdAt: Date.now(),
-      spaceId: opts.spaceId
+      spaceId: spec.spaceId
     }
+  }
+
+  /**
+   * Spawn the pty. Separate from the constructor because the ConPTY spawn
+   * throttle is async, and because node-pty's spawn is a synchronous native
+   * call that may stall for seconds under endpoint-security scanning — the
+   * whole reason sessions live in this worker and not in main.
+   */
+  async start(): Promise<void> {
+    await this.throttleKillSpawn()
+    const { shell } = this.spec
+    this.proc = loadPty().spawn(shell.file, shell.args, {
+      name: 'xterm-256color',
+      cols: this.info.cols,
+      rows: this.info.rows,
+      cwd: this.spec.cwd,
+      env: { ...process.env, ...shell.env } as Record<string, string>
+    })
 
     this.dataListener = this.proc.onData((chunk) => this.onData(chunk))
     this.exitListener = this.proc.onExit(({ exitCode }) => this.onExit(exitCode))
@@ -164,7 +241,7 @@ export class TerminalSession extends EventEmitter {
     this.ready = new Promise<void>((resolve) => { this.readyResolve = resolve })
     // AI-owned posix sessions get one-time hardening; everything else is ready
     // to accept commands immediately.
-    if (opts.owner === 'ai' && shell.family === 'posix') {
+    if (this.spec.owner === 'ai' && shell.family === 'posix') {
       this.prime()
     } else {
       this.readyResolve()
@@ -186,7 +263,7 @@ export class TerminalSession extends EventEmitter {
    * incremental view by advancing the read watermark once the prompt returns.
    */
   private prime(): void {
-    this.proc.write('set +o histexpand 2>/dev/null\n')
+    this.queuePtyWrite('set +o histexpand 2>/dev/null\n')
     const start = Date.now()
     const poll = (): void => {
       if (this.disposed || this.info.state === 'exited') { this.readyResolve(); return }
@@ -234,7 +311,7 @@ export class TerminalSession extends EventEmitter {
       this.replayBuffer = this.replayBuffer.slice(this.replayBuffer.length - REPLAY_BUFFER_BYTES)
     }
 
-    // Live stream to UI (renderer xterm renders ANSI faithfully)
+    // Live stream to main → renderer (xterm renders ANSI faithfully)
     this.emit('data', chunk)
   }
 
@@ -242,7 +319,7 @@ export class TerminalSession extends EventEmitter {
     this.info.state = 'exited'
     this.info.exitCode = exitCode
     // settleWait renders the (still-live) buffer, so only run it when the term
-    // has not been disposed by kill(). On a user kill, waitResolve is already
+    // has not been disposed by dispose(). On a user kill, waitResolve is already
     // settled and nulled, so this is a no-op there anyway.
     if (this.waitResolve && !this.disposed) this.settleWait('exited')
     this.emit('exit', exitCode)
@@ -265,6 +342,65 @@ export class TerminalSession extends EventEmitter {
   }
 
   // ============================================
+  // Chunked write queue
+  // ============================================
+
+  /**
+   * All pty writes are queued and paced: chunks capped at WRITE_MAX_CHUNK_SIZE
+   * with WRITE_INTERVAL_MS between them, escape sequences never split. A large
+   * paste written in one syscall corrupts on slow ttys — the exact environment
+   * (VDI/SSH) this terminal targets.
+   */
+  private queuePtyWrite(data: string): void {
+    if (!data) return
+    this.writeQueue.push(...chunkInput(data))
+    this.startWrite()
+  }
+
+  private startWrite(): void {
+    if (this.writeTimeout !== null || this.writeQueue.length === 0) return
+    this.doWrite()
+    if (this.writeQueue.length === 0) return
+    this.writeTimeout = setTimeout(() => {
+      this.writeTimeout = null
+      this.startWrite()
+    }, WRITE_INTERVAL_MS)
+  }
+
+  private doWrite(): void {
+    if (this.disposed || this.info.state === 'exited') {
+      this.writeQueue.length = 0
+      return
+    }
+    const data = this.writeQueue.shift()!
+    try { this.proc.write(data) } catch { /* pty already gone */ }
+  }
+
+  private async throttleKillSpawn(): Promise<void> {
+    if (!usesConpty()) return
+    while (Date.now() - TerminalSession.lastKillOrStart < KILL_SPAWN_THROTTLE_MS) {
+      await timeout(KILL_SPAWN_THROTTLE_MS - (Date.now() - TerminalSession.lastKillOrStart) + KILL_SPAWN_SPACING_MS)
+    }
+    TerminalSession.lastKillOrStart = Date.now()
+  }
+
+  // ============================================
+  // Flow control (policy in main; mechanics here)
+  // ============================================
+
+  pause(): void {
+    if (this.disposed || this.info.state === 'exited' || this.ptyPaused) return
+    this.ptyPaused = true
+    try { this.proc.pause() } catch { /* pty already gone */ }
+  }
+
+  resume(): void {
+    if (this.disposed || !this.ptyPaused) return
+    this.ptyPaused = false
+    try { this.proc.resume() } catch { /* pty already gone */ }
+  }
+
+  // ============================================
   // Write-and-wait
   // ============================================
 
@@ -277,7 +413,7 @@ export class TerminalSession extends EventEmitter {
     // Never let the first AI command race one-time session priming.
     await this.ready
 
-    // disposed covers the kill()-to-onExit window where state is still
+    // disposed covers the dispose()-to-onExit window where state is still
     // 'running' but the xterm buffer is gone — renderAll/proc.write would throw.
     if (this.disposed || this.info.state === 'exited') {
       return {
@@ -316,9 +452,9 @@ export class TerminalSession extends EventEmitter {
    * Ink-based TUIs (Claude Code, Codex) paste-detect a single read carrying
    * text-then-CR and insert a newline instead of submitting — verified against
    * Claude Code: "cmd\r" in one write does not submit, "cmd" then "\r" (a tick
-   * later) does. Writing both in the same tick races (the OS coalesces them into
-   * one read), so the split-off Enter is sent after a short delay. Harmless for
-   * cooked-mode shells (the tty maps CR→NL regardless of split).
+   * later) does. The write queue's chunk pacing does not guarantee the split (a
+   * short body + CR fit one chunk), so the Enter is delayed into its own queued
+   * write. Harmless for cooked-mode shells (the tty maps CR→NL regardless).
    */
   private deliverInput(input: string, submit: boolean): void {
     // Cancel any Enter still pending from a previous, superseded write so it
@@ -327,14 +463,14 @@ export class TerminalSession extends EventEmitter {
 
     const chunks = toPtyWrites(input, submit)
     if (chunks.length === 0) return
-    if (chunks.length === 1) { this.proc.write(chunks[0]); return }
+    if (chunks.length === 1) { this.queuePtyWrite(chunks[0]); return }
 
     // chunks === [body, '\r']: body now, submit Enter in its own later read.
-    this.proc.write(chunks[0])
+    this.queuePtyWrite(chunks[0])
     this.submitTimer = setTimeout(() => {
       this.submitTimer = null
       if (this.disposed || this.info.state === 'exited') return
-      try { this.proc.write('\r') } catch { /* pty already gone */ }
+      this.queuePtyWrite('\r')
       this.info.lastActivityAt = Date.now()
     }, SUBMIT_KEY_DELAY_MS)
   }
@@ -411,10 +547,10 @@ export class TerminalSession extends EventEmitter {
     const ctx = Math.max(0, context)
     const keep = new Set<number>()
     let totalMatches = 0
-    // The regex is model-authored and runs synchronously on the main process:
-    // bound each line's length (kills polynomial backtracking on huge lines)
-    // and the whole scan's wall time so a pathological pattern degrades to a
-    // partial result instead of freezing the event loop.
+    // The regex is model-authored and runs synchronously: bound each line's
+    // length (kills polynomial backtracking on huge lines) and the whole scan's
+    // wall time so a pathological pattern degrades to a partial result instead
+    // of freezing the worker's event loop (and with it every session's I/O).
     const deadline = Date.now() + SEARCH_BUDGET_MS
     for (let i = 0; i < all.length; i++) {
       if ((i & 63) === 0 && Date.now() > deadline) break
@@ -429,6 +565,29 @@ export class TerminalSession extends EventEmitter {
     const picked = [...keep].sort((a, b) => a - b).map(i => `${i + 1}: ${all[i]}`)
     const { text, truncated } = capOutput(picked.join('\n'), { pagingHint: false })
     return { content: text, totalMatches, truncated }
+  }
+
+  /**
+   * Block until `needle` appears in output produced AFTER this call began,
+   * the session exits, or the timeout elapses. Anchoring on a baseline snapshot
+   * (rather than scanning the whole buffer) prevents a stale match: text already
+   * present from an earlier run — or the command echo itself — must not satisfy
+   * the wait. It still catches matches that scroll off-screen between ticks,
+   * since the "since baseline" diff covers the full interpreted buffer, not just
+   * the viewport. Runs worker-side as one RPC so the wait never chats over IPC.
+   */
+  waitFor(needle: string, timeoutMs: number): Promise<TerminalWaitOutcome> {
+    return new Promise((resolve) => {
+      const start = Date.now()
+      const baseline = this.snapshotBuffer()
+      const tick = (): void => {
+        if (!this.disposed && diffTail(baseline, this.renderAll()).includes(needle)) return resolve('found')
+        if (this.disposed || this.info.state === 'exited') return resolve('exited')
+        if (Date.now() - start >= timeoutMs) return resolve('timeout')
+        setTimeout(tick, WAIT_FOR_POLL_MS)
+      }
+      tick()
+    })
   }
 
   /** Incremental output since the last write/read watermark. */
@@ -479,7 +638,7 @@ export class TerminalSession extends EventEmitter {
   /** Raw input passthrough (user keyboard from renderer/WS). No waiting. */
   input(data: string): void {
     if (this.disposed || this.info.state === 'exited') return
-    this.proc.write(data)
+    this.queuePtyWrite(data)
     this.info.lastActivityAt = Date.now()
   }
 
@@ -488,25 +647,9 @@ export class TerminalSession extends EventEmitter {
     return this.replayBuffer
   }
 
-  /**
-   * Snapshot the interpreted buffer as a watermark for terminal_wait_for.
-   * Empty on a disposed session.
-   */
-  snapshotBuffer(): string {
+  /** Snapshot the interpreted buffer (waitFor baseline). Empty when disposed. */
+  private snapshotBuffer(): string {
     return this.disposed ? '' : this.renderAll()
-  }
-
-  /**
-   * Whether `needle` appears in output produced AFTER `baseline` was snapshotted.
-   * terminal_wait_for uses this so a needle already present in history (e.g. a
-   * previous run's "BUILD SUCCESS", or the command echo itself) cannot falsely
-   * satisfy the wait — only genuinely new output counts. It still catches matches
-   * that scrolled off-screen between polls, because it diffs against the full
-   * interpreted buffer, not just the visible viewport. Safe on a disposed session.
-   */
-  includesSince(needle: string, baseline: string): boolean {
-    if (this.disposed) return false
-    return diffTail(baseline, this.renderAll()).includes(needle)
   }
 
   resize(cols: number, rows: number): void {
@@ -517,19 +660,14 @@ export class TerminalSession extends EventEmitter {
       this.info.cols = cols
       this.info.rows = rows
     } catch (e) {
-      console.error(`[Terminal ${this.id}] resize failed:`, e)
+      console.error(`[PtyHost ${this.id}] resize failed:`, e)
     }
-  }
-
-  setTitle(title: string): void {
-    this.info.title = title
-    this.emit('title', title)
   }
 
   /**
    * Record that the AI has operated this session (via any terminal_* tool).
-   * Returns true only on the first flip, so the context emits the 'touched'
-   * lifecycle event exactly once instead of on every AI tool call.
+   * Returns true only on the first flip, so the 'touched' lifecycle event fires
+   * exactly once instead of on every AI tool call.
    */
   markAiTouched(): boolean {
     if (this.info.aiTouched) return false
@@ -541,7 +679,7 @@ export class TerminalSession extends EventEmitter {
     return this.info.state
   }
 
-  kill(): void {
+  dispose(): void {
     if (this.disposed) return
     // Order matters: settle any in-flight wait (so its caller resolves instead
     // of hanging), detach the pty onData listener and mark disposed so buffered
@@ -551,6 +689,8 @@ export class TerminalSession extends EventEmitter {
     if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null }
     if (this.waitTimer) { clearTimeout(this.waitTimer); this.waitTimer = null }
     if (this.submitTimer) { clearTimeout(this.submitTimer); this.submitTimer = null }
+    if (this.writeTimeout) { clearTimeout(this.writeTimeout); this.writeTimeout = null }
+    this.writeQueue.length = 0
     if (this.waitResolve) {
       const resolve = this.waitResolve
       this.waitResolve = null
@@ -564,10 +704,17 @@ export class TerminalSession extends EventEmitter {
     this.readyResolve?.()
     try { this.dataListener?.dispose() } catch { /* already gone */ }
     this.dataListener = null
-    try {
-      this.proc.kill()
-    } catch {
-      // already dead
+    // Kill synchronously where possible: the process-exit paths (shutdown /
+    // disconnect / signals) call process.exit right after disposeAll, which
+    // would preempt a deferred kill and leave nohup'd children to outlive us.
+    // Only ConPTY defers, for its kill/spawn throttle (same conhost hang as
+    // spawn) — there the ConPTY teardown on process exit reaps the children.
+    if (usesConpty()) {
+      void this.throttleKillSpawn().then(() => {
+        try { this.proc?.kill() } catch { /* already dead */ }
+      })
+    } else {
+      try { this.proc?.kill() } catch { /* already dead */ }
     }
     try {
       this.term.dispose()

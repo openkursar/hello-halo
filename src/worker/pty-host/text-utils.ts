@@ -1,5 +1,5 @@
 /**
- * AI Terminal - Pure text helpers
+ * AI Terminal (pty-host worker) - Pure text helpers
  *
  * Extracted from session.ts so the completion heuristics and output shaping can
  * be unit-tested in isolation (no pty / xterm dependency).

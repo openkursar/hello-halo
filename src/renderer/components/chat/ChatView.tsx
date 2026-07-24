@@ -68,23 +68,69 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const [mockStreamingContent, setMockStreamingContent] = useState<string>('')
   // Artifact list for @ mention suggestions in InputArea
   const [mentionArtifacts, setMentionArtifacts] = useState<Artifact[]>([])
+  // Tracks the space a fetch was issued for, so stale responses (after a space
+  // switch) can be discarded instead of overwriting the current list.
+  const mentionSpaceIdRef = useRef<string | undefined>(undefined)
 
   // Load artifacts for @ mention suggestions (depth=5 for deeper file references)
-  useEffect(() => {
-    if (!currentSpace?.id) {
+  const loadMentionArtifacts = useCallback(async () => {
+    const spaceId = currentSpace?.id
+    mentionSpaceIdRef.current = spaceId
+    if (!spaceId) {
       setMentionArtifacts([])
       return
     }
-    let cancelled = false
-    api.listArtifacts(currentSpace.id, 5).then(response => {
-      if (!cancelled && response.success && response.data) {
+    try {
+      const response = await api.listArtifacts(spaceId, 5)
+      if (mentionSpaceIdRef.current !== spaceId) return
+      if (response.success && response.data) {
         setMentionArtifacts(response.data as Artifact[])
       }
-    }).catch(error => {
-      if (!cancelled) console.error('[ChatView] Failed to load mention artifacts:', error)
-    })
-    return () => { cancelled = true }
+    } catch (error) {
+      if (mentionSpaceIdRef.current === spaceId) {
+        console.error('[ChatView] Failed to load mention artifacts:', error)
+      }
+    }
   }, [currentSpace?.id])
+
+  // Initial load and reload when the active space changes
+  useEffect(() => {
+    loadMentionArtifacts()
+  }, [loadMentionArtifacts])
+
+  // Keep the @ mention list in sync with filesystem changes. Files created by
+  // external tools (e.g. Claude Code) after the space opened must appear without
+  // requiring a space switch. The backend already debounces watcher events; a
+  // short debounce here coalesces bursts into a single refresh.
+  useEffect(() => {
+    const spaceId = currentSpace?.id
+    if (!spaceId) return
+
+    // Ensure the watcher is active even when the Artifact Rail is not mounted
+    // (chat runs full-width with no Canvas open). initArtifactWatcher is idempotent.
+    api.initArtifactWatcher(spaceId).catch(error => {
+      console.error('[ChatView] Failed to init artifact watcher:', error)
+    })
+
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleReload = () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(loadMentionArtifacts, 300)
+    }
+
+    const cleanup = api.onArtifactChanged(event => {
+      if (event.spaceId !== spaceId) return
+      // Content-only edits don't alter the file list; only structural changes
+      // (create/delete/rename) affect @ mention candidates.
+      if (event.type === 'change') return
+      scheduleReload()
+    })
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      cleanup()
+    }
+  }, [currentSpace?.id, loadMentionArtifacts])
 
   // Clear mock state when onboarding completes
   useEffect(() => {

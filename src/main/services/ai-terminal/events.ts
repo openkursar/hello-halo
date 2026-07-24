@@ -9,7 +9,7 @@
  */
 
 import { EventEmitter } from 'events'
-import type { TerminalDataEvent, TerminalLifecycleEvent } from './types'
+import type { TerminalDataEvent, TerminalLifecycleEvent } from '../../../shared/types/terminal'
 
 class TerminalEventBus extends EventEmitter {}
 

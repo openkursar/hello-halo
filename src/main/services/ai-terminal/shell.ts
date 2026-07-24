@@ -1,7 +1,17 @@
 /**
- * AI Terminal - Shell resolution
+ * AI Terminal - Shell resolution (policy; runs in the main process)
  *
- * Resolves the default interactive shell per platform.
+ * Resolves the default interactive shell per platform into a ResolvedShellSpec
+ * the pty-host worker can execute verbatim. Kept in main because policy may
+ * consult main-only facilities; the worker never decides which shell to run.
+ *
+ * Windows default is PowerShell — the standard default shell on Windows. It
+ * matters beyond familiarity: `ssh` then resolves to the native Windows OpenSSH
+ * (System32), not Git Bash's MSYS ssh, whose emulated socket layer breaks
+ * inside VDI virtual-network stacks (10s disconnect + wedged raw mode); and
+ * PowerShell starts as a single process, unlike Git Bash `--login` whose MSYS
+ * init forks dozens of processes (10s+ open time under endpoint scanning).
+ * Git Bash remains reachable via an explicit `preferred` path.
  *
  * Command-completion strategy: we do NOT inject prompt hacks into the user's
  * shell. Per-shell PS1/PROMPT_COMMAND rewriting is fragile (quoting differs
@@ -10,48 +20,31 @@
  * boundaries with a shell-agnostic output-idle heuristic — the same mechanism
  * the remote/SSH path needs anyway.
  *
- * OSC 133 markers are still PARSED opportunistically (session.ts registers the
- * handler): if a shell or remote host already emits them, we get precise
+ * OSC 133 markers are still PARSED opportunistically (worker session registers
+ * the handler): if a shell or remote host already emits them, we get precise
  * boundaries + exit codes for free. We just never inject them ourselves.
  */
 
 import { platform } from 'os'
-import { detectGitBash } from '../git-bash'
+import type { ResolvedShellSpec, ShellFamily } from '../../../shared/types/terminal'
 
-/** Shell family, used to decide which one-time hardening a session may apply. */
-export type ShellFamily = 'posix' | 'other'
-
-export interface ResolvedShell {
-  file: string
-  args: string[]
-  /** Extra env layered onto the pty environment */
-  env: Record<string, string>
-  /** posix = bash/zsh/sh family (accepts `set -o`); other = powershell/cmd/… */
-  family: ShellFamily
-}
+export type { ResolvedShellSpec, ShellFamily }
 
 /**
  * Resolve the shell to spawn. An explicit `preferred` executable wins and
  * receives neutral interactive args for its own family; otherwise the platform
  * default is used.
  */
-export function resolveShell(preferred?: string): ResolvedShell {
+export function resolveShell(preferred?: string): ResolvedShellSpec {
   const env = { HALO_TERMINAL: '1' }
 
   // An explicit choice must get args matching THAT executable — never staple
-  // git-bash's `--login -i` onto e.g. powershell.exe (different arg grammar).
+  // one shell family's args onto another (different arg grammar).
   if (preferred) {
     return { file: preferred, args: interactiveArgs(preferred), env, family: shellFamily(preferred) }
   }
 
   if (platform() === 'win32') {
-    // Reuse Git Bash so the Unix-shell system prompt holds (forward slashes,
-    // /dev/null, etc.). ConPTY drives the pty (node-pty default).
-    const gitBash = detectGitBash()
-    if (gitBash.found && gitBash.path) {
-      return { file: gitBash.path, args: ['--login', '-i'], env, family: 'posix' }
-    }
-    // Fallback: PowerShell.
     return { file: 'powershell.exe', args: [], env, family: 'other' }
   }
 

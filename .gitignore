@@ -33,6 +33,9 @@ local_docs/
 halo-local/
 product.json
 
+# Active product variant pointer (per-machine, managed by `npm run product`)
+.product-source
+
 # Local debug scripts
 vscode-debug/
 
