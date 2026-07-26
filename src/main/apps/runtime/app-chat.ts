@@ -77,7 +77,8 @@ import { getAppChatConversationId, buildImSessionKey } from '../../../shared/app
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../services/agent/types'
 import { ProgressEventParser } from './progress-formatter'
-import { flushSupplementBuffer } from './dispatch-inbound'
+import { flushSupplementBuffer, clearSupplementBuffer } from './dispatch-inbound'
+import { getImStreamHandle, clearImStreamHandle } from './im-stream-registry'
 export { getAppChatConversationId, buildImSessionKey }
 
 // ============================================
@@ -677,6 +678,11 @@ export async function sendAppChatMessage(
     // but IM sessions can accumulate unboundedly — clean up to prevent memory leaks.
     const defaultConvId = getAppChatConversationId(appId)
     if (conversationId !== defaultConvId) {
+      // Round is over — drop the streaming handle registered by dispatch-inbound
+      // so stopImSession can no longer reach it. Stale handles left from a prior
+      // round would let stop() finish/dispose a stream that's already complete.
+      clearImStreamHandle(conversationId)
+
       const ctx = scopedContexts.get(conversationId)
       if (ctx) {
         ctx.destroy()
@@ -838,6 +844,10 @@ async function clearSessionByConversationId(
     await stopGeneration(conversationId)
   }
 
+  // Drop the IM stream handle so subsequent stop() calls are idempotent;
+  // the stream itself is finalized by clearImSession's tear-down below.
+  clearImStreamHandle(conversationId)
+
   // 2. Close V2 session to force fresh session on next message
   closeV2Session(conversationId)
 
@@ -952,6 +962,57 @@ export async function restartAppChat(appId: string): Promise<{ sessionsClosed: n
 
   console.log(`[AppChat][${appId}] Restart complete: ${closed} session(s) closed (history preserved)`)
   return { sessionsClosed: closed }
+}
+
+/**
+ * Stop an active IM session's generation without clearing history.
+ *
+ * Aborts the current agent turn for the given IM session and discards any
+ * buffered supplement messages, but keeps the V2 session and JSONL transcript
+ * intact so the next inbound message resumes the conversation context. This
+ * contrasts with {@link clearImSession}, which tears down the V2 session and
+ * wipes history.
+ *
+ * Idempotent: returns `stopped: false` when no generation is active.
+ */
+export async function stopImSession(
+  appId: string,
+  channel: string,
+  chatType: 'direct' | 'group',
+  chatId: string
+): Promise<{ stopped: boolean }> {
+  const conversationId = buildImSessionKey(appId, channel, chatType, chatId)
+  const wasActive = activeSessions.has(conversationId)
+
+  // Drop buffered supplements so the aborted round's queued follow-ups do not
+  // get flushed into a fresh generation on the next inbound message.
+  clearSupplementBuffer(conversationId)
+
+  // Terminate the IM-side stream (if any) before aborting generation. dispose()
+  // is preferred over finish() — stop means "send nothing", and finish() would
+  // push a final message into the group. The registry entry is set by
+  // dispatch-inbound when reply.streaming is present, and cleared by
+  // sendAppChatMessage's finally block on round completion.
+  const streamHandle = getImStreamHandle(conversationId)
+  if (streamHandle) {
+    try {
+      streamHandle.dispose?.()
+    } catch (err) {
+      console.error(`[AppChat][${appId}] Stream dispose failed: ${conversationId}`, err)
+    }
+  }
+  // Always clear — a stale entry left from a crashed round would otherwise let
+  // a future stop() dispose a stream that no longer exists.
+  clearImStreamHandle(conversationId)
+
+  if (wasActive) {
+    await stopGeneration(conversationId)
+    console.log(`[AppChat][${appId}] IM session stopped: ${conversationId}`)
+    return { stopped: true }
+  }
+
+  console.log(`[AppChat][${appId}] IM session stop requested but not active: ${conversationId}`)
+  return { stopped: false }
 }
 
 /**

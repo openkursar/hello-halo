@@ -477,6 +477,7 @@ export interface HaloAPI {
   appChatRestart: (appId: string) => Promise<IpcResponse<{ sessionsClosed: number }>>
   appImChatMessages: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
   appImChatClear: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
+  appImChatStop: (input: { appId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
 
   // App Event Listeners
   onAppStatusChanged: (callback: (data: unknown) => void) => () => void

@@ -27,6 +27,9 @@
  *   app:chat-messages      Load persisted chat messages for an app
  *   app:chat-session-state Get session state for recovery after refresh
  *   app:chat-restart       Restart an app's chat agent (reload prompt/config)
+ *   app:im-chat-messages   Load persisted IM session chat messages
+ *   app:im-chat-clear      Clear an IM session's chat history (wipes history)
+ *   app:im-chat-stop       Stop an IM session's active generation (keeps history)
  *   app:export-spec        Export an app's spec as a YAML string
  *   app:import-spec        Install an app from a YAML spec string
  *   app:open-skill-folder  Reveal a skill's on-disk directory in the OS file manager
@@ -51,6 +54,7 @@ import {
   getAppChatConversationId,
   clearAppChat,
   clearImSession,
+  stopImSession,
   restartAppChat,
 } from '../apps/runtime'
 import type { AppSpec } from '../apps/spec'
@@ -667,6 +671,25 @@ export function registerAppHandlers(): void {
       }
     },
 
+    // ── app:im-chat-stop ────────────────────────────────────────────────
+    // Aborts the current generation for a single IM session while preserving
+    // V2 session and JSONL history. Contrast with appImChatClear which wipes
+    // history and tears down the V2 session.
+    appImChatStop: async (input: { appId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => {
+      try {
+        const result = await stopImSession(input.appId, input.channel, input.chatType, input.chatId)
+        console.log(
+          `[AppIPC] app:im-chat-stop: appId=${input.appId} channel=${input.channel} ` +
+          `chatId=${input.chatId} stopped=${result.stopped}`
+        )
+        return { success: true, data: result }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:im-chat-stop error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
     // ── app:export-spec ────────────────────────────────────────────────────
     appExportSpec: async (appId: string) => {
       try {
@@ -848,5 +871,5 @@ export function registerAppHandlers(): void {
     },
   })
 
-  console.log('[AppIPC] App management handlers registered (30 channels)')
+  console.log('[AppIPC] App management handlers registered (31 channels)')
 }

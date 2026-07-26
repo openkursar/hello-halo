@@ -51,6 +51,7 @@ import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, setActiveIm
 import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
 import { dispatchInboundMessage, clearSupplementBuffersForInstance } from './dispatch-inbound'
 import { clearAllImPermissionContexts } from './im-permission-registry'
+import { clearAllImStreamHandles } from './im-stream-registry'
 import { getConfig } from '../../foundation/config.service'
 import { getDataFolderName } from '../../foundation/product-config'
 import { getAppManager } from '../manager'
@@ -102,6 +103,7 @@ export {
   cleanupAppChatBrowserContext,
   clearAppChat,
   clearImSession,
+  stopImSession,
   restartAppChat,
 } from './app-chat'
 export type { AppChatRequest } from './app-chat'
@@ -117,6 +119,14 @@ export {
   clearAllImPermissionContexts,
 } from './im-permission-registry'
 export type { ImPermissionContext } from './im-permission-registry'
+
+// Re-export IM stream registry
+export {
+  setImStreamHandle,
+  getImStreamHandle,
+  clearImStreamHandle,
+  clearAllImStreamHandles,
+} from './im-stream-registry'
 
 // Re-export IM session registry accessor
 export { getImSessionRegistry } from './im-session-registry'
@@ -391,6 +401,10 @@ export async function shutdownAppRuntime(): Promise<void> {
 
   // Clear all IM permission contexts (in-memory only, no persistence needed)
   clearAllImPermissionContexts()
+
+  // Drop any in-flight IM stream handles so a post-shutdown stopImSession
+  // call cannot reach a disposed WecomStreamSession.
+  clearAllImStreamHandles()
 
   console.log('[Runtime] App Runtime shutdown complete')
 }

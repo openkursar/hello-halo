@@ -10,7 +10,7 @@
  */
 
 import { useState, useCallback } from 'react'
-import { Eraser, User, Users } from 'lucide-react'
+import { Eraser, Square, User, Users } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
@@ -23,6 +23,8 @@ interface ImSessionItemProps {
   onClick: () => void
   /** Called when the user confirms clearing this session */
   onClearConfirm?: (session: ImSessionRecord) => void
+  /** Called when the user confirms stopping this session's active generation */
+  onStopConfirm?: (session: ImSessionRecord) => void
 }
 
 /** Format relative time from epoch ms — all strings go through t() for i18n. */
@@ -37,9 +39,11 @@ function formatRelativeTime(epochMs: number, t: (key: string, options?: Record<s
   return t('{{count}}d', { count: days })
 }
 
-export function ImSessionItem({ session, isSelected, onClick, onClearConfirm }: ImSessionItemProps) {
+export function ImSessionItem({ session, isSelected, onClick, onClearConfirm, onStopConfirm }: ImSessionItemProps) {
   const { t } = useTranslation()
   const [showClearConfirm, setShowClearConfirm] = useState(false)
+  const [showStopConfirm, setShowStopConfirm] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
 
   const conversationId = buildImSessionKey(session.appId, session.channel, session.chatType, session.chatId)
   const isGenerating = useChatStore(s => s.getSession(conversationId).isGenerating)
@@ -63,6 +67,28 @@ export function ImSessionItem({ session, isSelected, onClick, onClearConfirm }: 
   const handleCancel = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
     setShowClearConfirm(false)
+  }, [])
+
+  const handleStopClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    setShowStopConfirm(true)
+  }, [])
+
+  const handleStopConfirm = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (isStopping) return
+    setIsStopping(true)
+    try {
+      await onStopConfirm?.(session)
+    } finally {
+      setIsStopping(false)
+      setShowStopConfirm(false)
+    }
+  }, [session, onStopConfirm, isStopping])
+
+  const handleStopCancel = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    setShowStopConfirm(false)
   }, [])
 
   return (
@@ -100,9 +126,27 @@ export function ImSessionItem({ session, isSelected, onClick, onClearConfirm }: 
           )}
         </div>
 
-        {/* Time + Clear button / Inline confirmation */}
+        {/* Time + Stop/Clear button / Inline confirmation */}
         <div className="flex flex-col items-end gap-1 flex-shrink-0 self-start mt-0.5">
-          {showClearConfirm ? (
+          {showStopConfirm ? (
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-muted-foreground/80">{t('Stop?')}</span>
+              <button
+                onClick={handleStopConfirm}
+                disabled={isStopping}
+                className="px-1.5 py-0.5 text-[11px] text-destructive hover:bg-destructive/10 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isStopping ? t('Stopping...') : t('Confirm')}
+              </button>
+              <button
+                onClick={handleStopCancel}
+                disabled={isStopping}
+                className="px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-secondary rounded transition-colors disabled:opacity-50"
+              >
+                {t('Cancel')}
+              </button>
+            </div>
+          ) : showClearConfirm ? (
             <div className="flex items-center gap-1.5">
               <button
                 onClick={handleConfirm}
@@ -122,6 +166,15 @@ export function ImSessionItem({ session, isSelected, onClick, onClearConfirm }: 
               <span className="text-[10px] text-muted-foreground/50">
                 {formatRelativeTime(session.lastActiveAt, t)}
               </span>
+              {onStopConfirm && isGenerating && (
+                <button
+                  onClick={handleStopClick}
+                  className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-secondary transition-all"
+                  title={t('Stop generation')}
+                >
+                  <Square className="w-3 h-3 text-destructive/80 hover:text-destructive" fill="currentColor" />
+                </button>
+              )}
               {onClearConfirm && !isGenerating && (
                 <button
                   onClick={handleClearClick}

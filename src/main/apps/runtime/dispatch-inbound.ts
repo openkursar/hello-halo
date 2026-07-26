@@ -29,6 +29,7 @@ import { broadcastToAll } from '../../http/websocket'
 import { stopGeneration } from '../../services/agent/control'
 import { activeSessions } from '../../services/agent/session-manager'
 import { setImPermissionContext, clearImPermissionContext } from './im-permission-registry'
+import { setImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
 import { FileExportGate } from './file-export-gate'
@@ -258,7 +259,7 @@ function buildRoundSwitchPrefix(buffer: SupplementEntry[]): string {
 }
 
 /** Drop all buffered supplements for a conversation, disposing stream sessions. */
-function clearSupplementBuffer(conversationId: string): SupplementEntry[] {
+export function clearSupplementBuffer(conversationId: string): SupplementEntry[] {
   const entries = supplementBuffers.get(conversationId)
   if (!entries || entries.length === 0) {
     supplementBuffers.delete(conversationId)
@@ -688,6 +689,16 @@ export async function dispatchInboundMessage(
     guestPolicy: permissionEnabled ? instanceCfg?.guestPolicy : undefined,
     ownerIds: hasOwnerRestriction ? owners! : undefined,
   })
+
+  // Register the active round's streaming handle ONLY on the start-of-round
+  // path — never on the supplement-buffer branch above (which returns early).
+  // A buffered supplement's reply.streaming belongs to a round that will
+  // never start; registering it would overwrite the running round's handle
+  // and leave the live stream undiscoverable to stopImSession. stopImSession
+  // must always reach the handle of the round currently in flight.
+  if (reply.streaming) {
+    setImStreamHandle(conversationId, reply.streaming)
+  }
 
   // Inject file attachment context so the AI can access them via the Read tool.
   // Images are passed separately as multimodal input (see `images` below);

@@ -11,6 +11,7 @@ import {
   broadcastToAll,
   clearAppChat,
   clearImSession,
+  stopImSession,
   getAppChatConversationId,
   getAppChatSessionState,
   getAppManager,
@@ -955,6 +956,32 @@ export function registerAppsRoutes(app: Express): void {
       await clearImSession(appId, spaceId, channel, resolvedChatType, chatId)
       console.log('[HTTP] POST /api/apps/%s/im-chat/clear channel=%s chatId=%s', appId, channel, chatId)
       res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/im-chat/stop — stop an IM session's active generation
+  // Aborts the current turn only; V2 session and history are preserved so the
+  // next inbound message resumes context. Contrast with im-chat/clear.
+  app.post('/api/apps/:appId/im-chat/stop', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const { channel, chatType, chatId } = req.body as {
+        channel?: string; chatType?: string; chatId?: string
+      }
+      if (!channel || !chatType || !chatId) {
+        res.status(400).json({ success: false, error: 'Missing required body params: channel, chatType, chatId' })
+        return
+      }
+      const resolvedChatType = chatType === 'group' ? 'group' as const : 'direct' as const
+      const result = await stopImSession(appId, channel, resolvedChatType, chatId)
+      console.log('[HTTP] POST /api/apps/%s/im-chat/stop channel=%s chatId=%s stopped=%s', appId, channel, chatId, result.stopped)
+      res.json({ success: true, data: result })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

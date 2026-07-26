@@ -50,4 +50,5 @@ export const appRpc = {
   appChatRestart: rawRpcMethod('app:chat-restart'),
   appImChatMessages: rawRpcMethod('app:im-chat-messages'),
   appImChatClear: rawRpcMethod('app:im-chat-clear'),
+  appImChatStop: rawRpcMethod('app:im-chat-stop'),
 }

@@ -318,6 +318,13 @@ export const appsApi = {
     return httpRequest('POST', `/api/apps/${appId}/im-chat/clear`, { spaceId, channel, chatType, chatId })
   },
 
+  appImChatStop: async (appId: string, spaceId: string, channel: string, chatType: 'direct' | 'group', chatId: string): Promise<ApiResponse<{ stopped: boolean }>> => {
+    if (isElectron()) {
+      return window.halo.appImChatStop({ appId, channel, chatType, chatId })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/im-chat/stop`, { spaceId, channel, chatType, chatId })
+  },
+
   // App Event Listeners
   onAppStatusChanged: (callback: (data: unknown) => void) =>
     onEvent('app:status_changed', callback),

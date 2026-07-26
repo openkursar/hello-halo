@@ -79,6 +79,20 @@ export function ImSessionPanel({ appId, spaceId, onSessionCleared }: ImSessionPa
     }
   }, [appId, spaceId, resetSession, onSessionCleared])
 
+  // Stop an IM session's active generation. History is preserved on the backend;
+  // no resetSession here — the chat store's isGenerating flag flips to false
+  // once the abort propagates through the stream processor.
+  const handleStopConfirm = useCallback(async (session: ImSessionRecord) => {
+    try {
+      const res = await api.appImChatStop(appId, spaceId, session.channel, session.chatType, session.chatId)
+      if (!res.success) {
+        console.error('[ImSessionPanel] Stop session error:', res.error)
+      }
+    } catch (err) {
+      console.error('[ImSessionPanel] Stop session error:', err)
+    }
+  }, [appId, spaceId])
+
   const isHaloChatSelected = selectedImSession === null
 
   return (
@@ -130,6 +144,7 @@ export function ImSessionPanel({ appId, spaceId, onSessionCleared }: ImSessionPa
             }
             onClick={() => handleSelectImSession(session)}
             onClearConfirm={handleClearConfirm}
+            onStopConfirm={handleStopConfirm}
           />
         ))}
 
