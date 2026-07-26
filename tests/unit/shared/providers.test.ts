@@ -20,11 +20,11 @@ describe('Atlas Cloud built-in provider', () => {
     expect(getAllProviderIds()).toContain('atlascloud')
   })
 
-  it('uses a verified Atlas Cloud text model as the default', () => {
-    expect(getDefaultModel('atlascloud')).toBe('deepseek-ai/deepseek-v4-pro')
+  it('defaults to the cheaper V4 Flash tier, matching the DeepSeek preset ordering', () => {
+    expect(getDefaultModel('atlascloud')).toBe('deepseek-ai/deepseek-v4-flash')
     expect(getBuiltinProvider('atlascloud')?.models.map(model => model.id)).toEqual([
-      'deepseek-ai/deepseek-v4-pro',
       'deepseek-ai/deepseek-v4-flash',
+      'deepseek-ai/deepseek-v4-pro',
       'qwen/qwen3.5-27b'
     ])
   })
