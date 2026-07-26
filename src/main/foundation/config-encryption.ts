@@ -16,6 +16,7 @@ import {
   encodeForStorage,
   tryDecodeFromStorage,
   needsKeyMigration,
+  type DecodeFailureReason,
 } from './crypto-envelope'
 
 // ============================================================================
@@ -162,6 +163,28 @@ export function encryptConfigFields(config: Record<string, unknown>): void {
   })
 }
 
+/**
+ * How a failed credential is meant to be recovered:
+ *   - 'user': only the user can restore it (re-enter the API key, re-login).
+ *             Surfaced in the credential alert and preserved on disk.
+ *   - 'auto': the app regenerates it on its own (device re-registration,
+ *             named-tunnel re-issue). Logged for diagnostics but never shown
+ *             to the user, and not preserved — the empty value flows through so
+ *             the consumer mints a fresh secret.
+ */
+export type CredentialRecoverability = 'user' | 'auto'
+
+/**
+ * Internal secrets the app can re-mint without user input, keyed by their
+ * stable field path. A decode failure on these heals automatically at the
+ * consumer (`getDeviceIdentity`, `enableTunnel`), so nagging the user — who has
+ * no way to type these values — would be pure noise.
+ */
+const AUTO_RECOVERABLE_PATHS = new Set<string>([
+  'deviceIdentity.deviceSecret',
+  'remoteAccess.namedTunnel.tunnelSecret',
+])
+
 /** A sensitive field that could not be decoded from disk. */
 export interface CredentialDecodeFailure {
   /** Stable field path (matches the write-time guard). */
@@ -170,6 +193,10 @@ export interface CredentialDecodeFailure {
   label: string
   /** The original on-disk ciphertext, preserved for non-destructive re-save. */
   ciphertext: string
+  /** Why the decode failed (storage format / key mismatch), for diagnostics. */
+  reason: DecodeFailureReason
+  /** Who restores this credential — the user or the app itself. */
+  recoverable: CredentialRecoverability
 }
 
 /**
@@ -188,7 +215,13 @@ export function decryptConfigFields(config: Record<string, unknown>): Credential
       parent[key] = outcome.value
     } else {
       parent[key] = ''
-      failures.push({ path, label, ciphertext: val })
+      failures.push({
+        path,
+        label,
+        ciphertext: val,
+        reason: outcome.reason,
+        recoverable: AUTO_RECOVERABLE_PATHS.has(path) ? 'auto' : 'user',
+      })
     }
   })
   return failures

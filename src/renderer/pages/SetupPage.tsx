@@ -16,7 +16,7 @@ import { Loader2, Brain, ExternalLink, Copy, Check } from 'lucide-react'
 // First step is `preferences` only on the very first launch (gated by
 // config.isFirstLaunch). Old users re-entering Setup (e.g., after clearing
 // the AI source) skip preferences and land on `select` directly.
-type SetupStep = 'preferences' | 'select' | 'oauth-waiting' | 'claude-login' | 'custom' | 'preset'
+type SetupStep = 'preferences' | 'select' | 'oauth-waiting' | 'claude-login' | 'config'
 
 /** Device code info for display in UI */
 interface DeviceCodeInfo {
@@ -56,11 +56,9 @@ export function SetupPage() {
   const [error, setError] = useState<string | null>(null)
   const [deviceCodeInfo, setDeviceCodeInfo] = useState<DeviceCodeInfo | null>(null)
   const [claudeLogin, setClaudeLogin] = useState<ClaudeLoginState | null>(null)
-  // Preset-API entry currently being configured (drives the setup config form)
-  const [presetProvider, setPresetProvider] = useState<AuthProviderConfig | null>(null)
-  // API key carried over from the login screen's inline Custom-API entry, used
-  // to seed the custom config form.
-  const [customPrefillKey, setCustomPrefillKey] = useState<string>('')
+  // Auth entry currently being configured (preset gateway or Custom API/BYOK);
+  // drives the setup config form.
+  const [configEntry, setConfigEntry] = useState<AuthProviderConfig | null>(null)
 
   // Handle OAuth provider login (generic)
   const handleSelectProvider = async (providerType: string) => {
@@ -215,13 +213,6 @@ export function SetupPage() {
     }
   }
 
-  // Handle Custom API selection — carries the optional key typed inline on the
-  // login screen so the config form lands pre-filled.
-  const handleSelectCustom = (apiKey?: string) => {
-    setCustomPrefillKey(apiKey ?? '')
-    setStep('custom')
-  }
-
   // Handle skip — defer model configuration and enter Home directly.
   // The modelConfigSkipped flag tells the setup-entry guard not to re-show
   // the wizard on next launch despite the empty aiSources.
@@ -247,21 +238,21 @@ export function SetupPage() {
     }
   }
 
-  // Handle back from Custom API
-  const handleBackFromCustom = () => {
-    setCustomPrefillKey('')
-    setStep('select')
-  }
-
   // Handle preset-API selection (fixed-baseUrl API key form)
   const handleSelectPreset = (provider: AuthProviderConfig) => {
-    setPresetProvider(provider)
-    setStep('preset')
+    setConfigEntry(provider)
+    setStep('config')
   }
 
-  // Handle back from preset
-  const handleBackFromPreset = () => {
-    setPresetProvider(null)
+  // Handle Custom API (BYOK) selection — same config step, key-first form
+  const handleSelectCustom = (entry: AuthProviderConfig) => {
+    setConfigEntry(entry)
+    setStep('config')
+  }
+
+  // Handle back from the config step
+  const handleBackFromConfig = () => {
+    setConfigEntry(null)
     setStep('select')
   }
 
@@ -289,8 +280,8 @@ export function SetupPage() {
       <>
         <LoginSelector
           onSelectProvider={handleSelectProvider}
-          onSelectCustom={handleSelectCustom}
           onSelectPreset={handleSelectPreset}
+          onSelectCustom={handleSelectCustom}
           onSkip={handleSkipModelConfig}
         />
         {error && (
@@ -540,20 +531,11 @@ export function SetupPage() {
     )
   }
 
-  if (step === 'custom') {
+  if (step === 'config' && configEntry) {
     return (
       <SetupProviderConfig
-        initialApiKey={customPrefillKey}
-        onBack={handleBackFromCustom}
-      />
-    )
-  }
-
-  if (step === 'preset' && presetProvider) {
-    return (
-      <SetupProviderConfig
-        presetProvider={presetProvider}
-        onBack={handleBackFromPreset}
+        entry={configEntry}
+        onBack={handleBackFromConfig}
       />
     )
   }

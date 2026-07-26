@@ -302,18 +302,24 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
         />
       </div>
 
-      {/* Continue in client — primary action for this read-only view, placed where an
-          input area would normally sit so users naturally look here to take over the chat. */}
-      {canFork && (messages.length > 0 || hasStreamingContent) && (
-        <div className="flex-shrink-0 flex justify-center px-4 py-3 border-t border-border bg-muted/30">
-          <button
-            onClick={handleForkToClient}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-primary text-primary-foreground text-sm font-medium shadow-sm hover:bg-primary/90 transition-colors"
-            title={t('Continue this conversation in a client chat')}
-          >
-            <ArrowRightToLine className="w-4 h-4" />
-            <span>{t('Continue in client')}</span>
-          </button>
+      {/* Styled like a disabled composer so it occupies the input slot. */}
+      {(messages.length > 0 || hasStreamingContent) && (
+        <div className="flex-shrink-0 px-3 py-2.5 sm:px-4">
+          <div className="flex items-center gap-2 rounded-2xl border border-border bg-muted/40 px-3 py-2">
+            <span className="flex-1 min-w-0 truncate text-xs text-muted-foreground">
+              {t('Read-only IM session · copy the context to continue in a client chat')}
+            </span>
+            {canFork && (
+              <button
+                onClick={handleForkToClient}
+                className="flex-shrink-0 flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
+                title={t('Continue this conversation in a client chat')}
+              >
+                <span>{t('Continue in client')}</span>
+                <ArrowRightToLine className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

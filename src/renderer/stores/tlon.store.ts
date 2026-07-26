@@ -126,6 +126,7 @@ interface TlonState {
   loadRawFiles: (kbId: string) => Promise<void>
   addFiles: (kbId: string, filePaths: string[]) => Promise<AddRawFilesResult | null>
   removeRawFile: (kbId: string, relativePath: string) => Promise<boolean>
+  removeRawFiles: (kbId: string, relativePaths: string[]) => Promise<number>
   pickAndAddFiles: (kbId: string) => Promise<void>
   pickAndImportFolder: (kbId: string) => Promise<void>
 
@@ -373,6 +374,24 @@ export const useTlonStore = create<TlonState>((set, get) => ({
       console.error('[TlonStore] removeRawFile error:', err)
       return false
     }
+  },
+
+  removeRawFiles: async (kbId, relativePaths) => {
+    let removed = 0
+    for (const p of relativePaths) {
+      try {
+        const res = await api.tlon.removeRaw(kbId, p)
+        if (res.success) removed++
+      } catch (err) {
+        console.error('[TlonStore] removeRawFiles error:', err)
+      }
+    }
+    // Refresh once after the whole batch instead of per file.
+    if (removed > 0) {
+      await get().loadRawFiles(kbId)
+      await get().refreshKB(kbId)
+    }
+    return removed
   },
 
   pickAndAddFiles: async (kbId) => {

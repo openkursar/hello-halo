@@ -42,6 +42,12 @@ interface TerminalViewerProps {
   tab: TabState
 }
 
+/**
+ * Rendered chars accumulated before sending a flow-control ack. Must stay ≤ the
+ * main-side low watermark or a paused pty could never resume.
+ */
+const CHAR_COUNT_ACK_SIZE = 5000
+
 export function TerminalViewer({ tab }: TerminalViewerProps) {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -103,6 +109,26 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
     // Keyboard → pty
     const dataSub = term.onData(sendInput)
 
+    // Flow control: register as a live consumer, then acknowledge chars AFTER
+    // xterm has rendered them (the write callback), in CHAR_COUNT_ACK_SIZE
+    // batches. Main pauses the pty when this viewer's unacked backlog passes the
+    // high watermark — bounding memory end-to-end when a command floods output
+    // faster than the renderer can draw.
+    void api.terminalAttach(sessionId)
+    let unackedChars = 0
+    const ackRendered = (charCount: number) => {
+      if (deadRef.current) return
+      unackedChars += charCount
+      if (unackedChars >= CHAR_COUNT_ACK_SIZE) {
+        const n = unackedChars
+        unackedChars = 0
+        void api.terminalAck(sessionId, n)
+      }
+    }
+    const writeLive = (data: string) => {
+      term.write(data, () => ackRendered(data.length))
+    }
+
     // Live output → xterm (filtered by sessionId). Until the replay snapshot
     // has been written, live chunks are buffered rather than written directly:
     // the replay is a point-in-time snapshot and must land BEFORE any live data
@@ -113,7 +139,7 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
     const unsubData = api.onTerminalData((payload: unknown) => {
       const e = payload as { sessionId: string; data: string }
       if (e.sessionId !== sessionId || disposed) return
-      if (replayApplied) term.write(e.data)
+      if (replayApplied) writeLive(e.data)
       else pendingLive.push(e.data)
     })
 
@@ -132,7 +158,7 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
       // Flush live chunks that arrived during the replay round-trip, in arrival
       // order, then switch to direct streaming.
       replayApplied = true
-      for (const chunk of pendingLive) term.write(chunk)
+      for (const chunk of pendingLive) writeLive(chunk)
       pendingLive.length = 0
       try {
         fit.fit()
@@ -157,6 +183,9 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
 
     return () => {
       disposed = true
+      // Stop gating flow control the moment this consumer goes away, or an
+      // unacked backlog would keep the pty paused with nobody left to ack.
+      void api.terminalDetach(sessionId)
       ro.disconnect()
       dataSub.dispose()
       unsubData()

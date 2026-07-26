@@ -408,13 +408,28 @@ export function setCredentialFailureNotifier(fn: CredentialFailureNotifier | nul
  * newly-seen failures to the registered notifier exactly once.
  */
 function syncCredentialDecodeFailures(failures: CredentialDecodeFailure[]): void {
-  failedDecode.clear()
+  // Diagnostics: one line per failed field with its storage-format reason and
+  // recovery path — never the ciphertext. Enough to root-cause from a shipped
+  // log without another round of guesswork.
   for (const f of failures) {
+    console.warn(
+      `[Config] Credential decode failed: path=${f.path} reason=${f.reason} recovery=${f.recoverable}`,
+    )
+  }
+
+  // Auto-recoverable secrets (device identity, named tunnel) are re-minted by
+  // their consumer, so they are neither preserved on disk nor surfaced to the
+  // user. Excluding them from the failed-decode map lets the empty in-memory
+  // value flow through, which is exactly what triggers the consumer to re-issue.
+  const userFailures = failures.filter(f => f.recoverable === 'user')
+
+  failedDecode.clear()
+  for (const f of userFailures) {
     failedDecode.set(f.path, { label: f.label, ciphertext: f.ciphertext })
   }
 
   if (!credentialFailureNotifier) return
-  const fresh = failures.filter(f => !alertedCredentialPaths.has(f.path))
+  const fresh = userFailures.filter(f => !alertedCredentialPaths.has(f.path))
   if (fresh.length === 0) return
   try {
     credentialFailureNotifier(fresh.map(f => ({ path: f.path, label: f.label })))
@@ -790,7 +805,7 @@ export function resolveClaudeConfigDir(
     case 'cc':
       return join(homedir(), '.claude')
     case 'custom':
-      return customDir || join(app.getPath('userData'), 'claude-config')
+      return (customDir ?? getConfig().agent?.customConfigDir) || join(app.getPath('userData'), 'claude-config')
     default:
       return join(app.getPath('userData'), 'claude-config')
   }

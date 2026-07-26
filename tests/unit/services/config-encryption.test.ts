@@ -467,17 +467,35 @@ describe('config-encryption', () => {
 
       // Consumer sees empty (never the raw ciphertext)...
       expect((config.api as any).apiKey).toBe('')
-      // ...and the original ciphertext is reported for the write guard.
+      // ...and the original ciphertext is reported for the write guard, tagged
+      // with the decode reason and a user-recovery classification.
       expect(failures).toContainEqual({
         path: 'api.apiKey',
         label: 'API key',
         ciphertext: 'enc:undecodable-legacy',
+        reason: 'legacy-safestorage',
+        recoverable: 'user',
       })
     })
 
     it('reports no failures for plaintext / empty values', () => {
       const config = { api: { provider: 'openai', apiKey: 'sk-plain', apiUrl: '' } }
       expect(decryptConfigFields(config)).toEqual([])
+    })
+
+    it('classifies internal device/tunnel secrets as auto-recoverable', () => {
+      const config = {
+        deviceIdentity: { deviceId: 'x', deviceSecret: 'enc:orphaned-device' },
+        remoteAccess: { namedTunnel: { tunnelSecret: 'enc:orphaned-tunnel' } },
+      }
+      const failures = decryptConfigFields(config)
+
+      const byPath = new Map(failures.map((f) => [f.path, f]))
+      expect(byPath.get('deviceIdentity.deviceSecret')?.recoverable).toBe('auto')
+      expect(byPath.get('remoteAccess.namedTunnel.tunnelSecret')?.recoverable).toBe('auto')
+      // In-memory value is emptied so the consumer re-issues a fresh secret.
+      expect((config.deviceIdentity as any).deviceSecret).toBe('')
+      expect((config.remoteAccess as any).namedTunnel.tunnelSecret).toBe('')
     })
   })
 

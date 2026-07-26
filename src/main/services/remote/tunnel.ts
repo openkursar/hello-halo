@@ -14,14 +14,14 @@
 import { ChildProcess, spawn } from 'child_process'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { getHaloDir } from '../foundation/config.service'
-import { registerProcess, unregisterProcess, getCurrentInstanceId } from './health'
-import type { NamedTunnelGrant } from './tunnel-issuer.client'
+import { getHaloDir } from '../../foundation/config.service'
+import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
+import type { NamedTunnelGrant } from './issuer-client'
 import {
   isTunnelSafe,
   TUNNEL_DISABLED_BY_POLICY,
   TUNNEL_DISABLED_BY_POLICY_MESSAGE,
-} from './security-policy'
+} from '../security-policy'
 
 /**
  * Error thrown by tunnel start functions when the tunnel feature is disabled

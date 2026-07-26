@@ -56,7 +56,7 @@ import { clearAllImStreamHandles } from './im-stream-registry'
 import { getConfig } from '../../foundation/config.service'
 import { getDataFolderName } from '../../foundation/product-config'
 import { getAppManager } from '../manager'
-import { onMcpAppsChange } from '../manager/service'
+import { onMcpAppsChange, onAppSessionInvalidate } from '../manager/service'
 import { createHaloAppsMcpServer } from '../conversation-mcp'
 import { registerAppBridge } from '../../services/app-bridge'
 import { handleMcpAppsChange } from '../../services/agent/session-manager'
@@ -221,6 +221,21 @@ export async function initAppRuntime(
   // Keep the shared MCP status cache honest: probe on enable/install/update,
   // drop stale entries on pause/uninstall.
   onMcpAppsChange(handleMcpAppsChangeForStatus)
+
+  // Auto-apply an app's own config changes (permissions, prompt, requires.mcps,
+  // config values) to its live chat: rebuild the session in the background so
+  // the next message picks them up — no manual "Restart agent" click needed.
+  // A mid-generation turn is never aborted; it finishes with its current tool
+  // set and the session-inputs fingerprint rebuilds on the next message.
+  onAppSessionInvalidate((appId) => {
+    restartAppChat(appId)
+      .then(({ sessionsClosed }) => {
+        if (sessionsClosed > 0) {
+          console.log(`[Runtime] Auto-restarted app chat after config change: app=${appId}, sessionsClosed=${sessionsClosed}`)
+        }
+      })
+      .catch((err) => console.error(`[Runtime] Auto-restart app chat failed: app=${appId}:`, err))
+  })
 
   // Get the app-level database
   const appDb = deps.db.getAppDatabase()

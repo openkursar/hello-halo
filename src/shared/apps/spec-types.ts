@@ -147,6 +147,12 @@ export interface McpDependency {
   id: string
   reason?: string
   bundled?: boolean
+  /**
+   * Whether this digital human uses the dependency. Absent = enabled.
+   * `false` keeps the declaration but stops injecting the MCP for THIS digital
+   * human only (per-app switch; never affects the shared MCP server's status).
+   */
+  enabled?: boolean
 }
 
 // ============================================

@@ -1,73 +1,40 @@
 /**
- * SetupProviderConfig — first-run chrome around the provider config form.
+ * SetupProviderConfig — first-run chrome around a provider config form.
  *
- * Provides the setup wizard's logo/back/title chrome and owns the first-launch
- * persistence: it mirrors the saved source into the legacy `config.api` field,
- * writes the v2 `aiSources`, clears `isFirstLaunch`, and enters the app.
- *
- * Two modes use two different forms (same persistence):
- *   - Custom API (BYOK): `CustomApiSetupForm` — the key-first onboarding layout.
- *   - Preset gateway: `ProviderSelector` in its locked, API-key-only preset
- *     panel (the same form Settings uses to add a preset source).
+ * Provides the setup wizard's logo/back/title chrome for a configurable auth
+ * entry and persists the created source via `saveFirstRunSource`. The form it
+ * wraps depends on the entry shape:
+ *   - Preset gateway (`entry.preset`): the locked, API-key-only `ProviderSelector`
+ *     panel (fixed baseUrl, provider switching hidden).
+ *   - Custom API / BYOK (no preset): the key-first `CustomApiSetupForm`.
  */
 
 import { useAppStore } from '../../stores/app.store'
-import { api } from '../../api'
 import { ArrowLeft } from 'lucide-react'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { ProviderSelector } from '../settings/ProviderSelector'
 import { CustomApiSetupForm } from './CustomApiSetupForm'
+import { saveFirstRunSource } from './saveFirstRunSource'
 import type { AISource, AISourcesConfig } from '../../types'
 import { resolveLocalizedText, type AuthProviderConfig } from '../../../shared/types'
 
 interface SetupProviderConfigProps {
-  /** Preset-API entry. When set, the form runs in locked preset mode. */
-  presetProvider?: AuthProviderConfig
-  /** API key carried over from the login screen's inline Custom-API entry. */
-  initialApiKey?: string
+  /** Auth entry driving the config form (preset gateway or Custom API/BYOK). */
+  entry: AuthProviderConfig
   /** Return to the login method selection. */
   onBack: () => void
 }
 
-export function SetupProviderConfig({ presetProvider, initialApiKey, onBack }: SetupProviderConfigProps) {
+export function SetupProviderConfig({ entry, onBack }: SetupProviderConfigProps) {
   const { t } = useTranslation()
   const { config, setConfig, setView } = useAppStore()
 
-  const title = presetProvider
-    ? resolveLocalizedText(presetProvider.displayName, getCurrentLanguage())
-    : t('Configure Custom API')
+  const title = resolveLocalizedText(entry.displayName, getCurrentLanguage())
+  const isPreset = Boolean(entry.preset)
 
-  // Persist the first source created during onboarding. Mirrors the legacy
-  // `config.api` field (read by older code paths) alongside the v2 aiSources.
-  const handleSave = async (source: AISource) => {
-    const legacyProvider: 'anthropic' | 'openai' =
-      source.apiType === 'anthropic_passthrough' || source.provider === 'anthropic'
-        ? 'anthropic'
-        : 'openai'
-
-    const aiSources: AISourcesConfig = {
-      version: 2,
-      currentId: source.id,
-      sources: [source]
-    }
-
-    const newConfig = {
-      ...config,
-      api: {
-        provider: legacyProvider,
-        apiKey: source.apiKey,
-        apiUrl: source.apiUrl,
-        model: source.model,
-        availableModels: source.availableModels.map(m => m.id)
-      },
-      aiSources,
-      isFirstLaunch: false
-    }
-
-    await api.setConfig(newConfig)
-    setConfig(newConfig as any)
-    setView('home')
-  }
+  // Persist the first source created during onboarding (shared with the login
+  // screen's preset and custom paths).
+  const handleSave = (source: AISource) => saveFirstRunSource(source, { config, setConfig, setView })
 
   const emptySources: AISourcesConfig = config?.aiSources ?? {
     version: 2,
@@ -98,18 +65,15 @@ export function SetupProviderConfig({ presetProvider, initialApiKey, onBack }: S
           <h2 className="text-center text-lg">{title}</h2>
         </div>
 
-        {presetProvider ? (
+        {isPreset ? (
           <ProviderSelector
             aiSources={emptySources}
             onSave={handleSave}
             onCancel={onBack}
-            presetProvider={presetProvider}
+            presetProvider={entry}
           />
         ) : (
-          <CustomApiSetupForm
-            initialApiKey={initialApiKey}
-            onSave={handleSave}
-          />
+          <CustomApiSetupForm docs={entry.docs} onSave={handleSave} />
         )}
       </div>
     </div>

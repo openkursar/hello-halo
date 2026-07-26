@@ -35,7 +35,8 @@ import {
   type OAuthStartResult,
   type OAuthCompleteResult,
   type ModelOption,
-  type ProviderId
+  type ProviderId,
+  type AuthQuotaSnapshot
 } from '../../../shared/types'
 import { getBuiltinProvider, isAnthropicProvider, isBuiltinProvider } from '../../../shared/constants'
 import { getConfig, saveConfig } from '../../foundation/config.service'
@@ -945,6 +946,53 @@ class AISourceManager {
         console.error(`[AISourceManager] Failed to refresh ${source.name}:`, error)
       }
     }
+  }
+
+  // ========== Metered Quota ==========
+
+  /**
+   * Report the current metered quota for a source. The provider owns the
+   * semantics: it queries its own server with a fresh token and returns a
+   * uniform AuthQuotaSnapshot. A provider that is not OAuth or lacks getQuota()
+   * has no quota concept and returns `data: null` (unsupported, not an error).
+   */
+  async getSourceQuota(sourceId: string): Promise<ProviderResult<AuthQuotaSnapshot | null>> {
+    await this.ensureInitialized()
+
+    // Capability check first — decide "unsupported" without an unrelated token
+    // refresh. Uses the plain (non-decrypted) config since only provider type is
+    // needed here.
+    const source = this.getAiSourcesConfig().sources.find(s => s.id === sourceId)
+    if (!source) {
+      return { success: false, error: 'Source not found' }
+    }
+
+    const provider = this.providers.get(source.provider)
+    if (!provider || !this.isOAuthProvider(provider) || !provider.getQuota) {
+      return { success: true, data: null }
+    }
+
+    // Renew an expired OAuth token before the provider calls its server;
+    // providers never retry internally.
+    const tokenResult = await this.ensureValidToken(sourceId)
+    if (!tokenResult.success) {
+      return { success: false, error: tokenResult.error || 'Token refresh failed' }
+    }
+
+    // Re-read decrypted config AFTER refresh so a rotated token is carried in.
+    const refreshed = this.getDecryptedAiSources().sources.find(s => s.id === sourceId)
+    if (!refreshed) {
+      return { success: false, error: 'Source not found' }
+    }
+
+    const legacyConfig = this.buildLegacyOAuthConfig(refreshed)
+    const result = await provider.getQuota(legacyConfig)
+    if (!result.success) {
+      console.warn(`[AISourceManager] Quota fetch failed for "${refreshed.name}":`, result.error)
+      return { success: false, error: result.error || 'Quota fetch failed' }
+    }
+
+    return { success: true, data: result.data ?? null }
   }
 
   // ========== Helper Methods ==========

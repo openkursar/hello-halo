@@ -51,6 +51,19 @@ const CLOUDFLARED_PATHS = {
   'linux': 'node_modules/cloudflared/bin/cloudflared-linux-x64'
 }
 
+// Portable Git self-extracting archive, bundled into the Windows build so
+// Git Bash setup works on offline/intranet machines (git-bash/installer.ts
+// extracts it locally instead of downloading). Globbed by filename pattern at
+// runtime, so bumping the version here is enough.
+const PORTABLE_GIT_VERSION = '2.47.1'
+const PORTABLE_GIT_FILENAME = `PortableGit-${PORTABLE_GIT_VERSION}-64-bit.7z.exe`
+const PORTABLE_GIT_DEST = `resources/git-bash/${PORTABLE_GIT_FILENAME}`
+const PORTABLE_GIT_URLS = [
+  `https://registry.npmmirror.com/-/binary/git-for-windows/v${PORTABLE_GIT_VERSION}.windows.1/${PORTABLE_GIT_FILENAME}`,
+  `https://mirrors.huaweicloud.com/git-for-windows/v${PORTABLE_GIT_VERSION}.windows.1/${PORTABLE_GIT_FILENAME}`,
+  `https://github.com/git-for-windows/git/releases/download/v${PORTABLE_GIT_VERSION}.windows.1/${PORTABLE_GIT_FILENAME}`
+]
+
 // @parcel/watcher packages per platform
 const WATCHER_PACKAGES = {
   'mac-arm64': '@parcel/watcher-darwin-arm64',
@@ -418,6 +431,50 @@ function installWatcher(platform) {
   }
 }
 
+/**
+ * Check if the bundled Portable Git archive exists and looks valid.
+ * The .7z.exe is a self-extracting PE, so it must start with the MZ magic.
+ */
+function checkPortableGit() {
+  const filePath = path.join(PROJECT_ROOT, PORTABLE_GIT_DEST)
+  if (!fs.existsSync(filePath)) {
+    return { exists: false }
+  }
+  const stats = fs.statSync(filePath)
+  const valid = stats.size > 40 * 1024 * 1024 && detectBinaryPlatform(filePath) === 'win'
+  if (!valid) {
+    log.warn(`Portable Git archive invalid (${(stats.size / 1024 / 1024).toFixed(1)} MB), will re-download`)
+  }
+  return { exists: true, valid }
+}
+
+/**
+ * Download the Portable Git self-extracting archive (mirrors first, GitHub fallback).
+ */
+function downloadPortableGit() {
+  const outputPath = path.join(PROJECT_ROOT, PORTABLE_GIT_DEST)
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+
+  let lastError = null
+  for (const url of PORTABLE_GIT_URLS) {
+    log.info(`Downloading Portable Git ${PORTABLE_GIT_VERSION}: ${url}`)
+    try {
+      curlDownload(url, outputPath)
+      const stats = fs.statSync(outputPath)
+      if (stats.size <= 40 * 1024 * 1024 || detectBinaryPlatform(outputPath) !== 'win') {
+        fs.unlinkSync(outputPath)
+        throw new Error(`invalid archive (${(stats.size / 1024 / 1024).toFixed(1)} MB)`)
+      }
+      log.success(`Downloaded Portable Git (${(stats.size / 1024 / 1024).toFixed(1)} MB)`)
+      return
+    } catch (err) {
+      lastError = err
+      log.warn(`Source failed: ${err.message}`)
+    }
+  }
+  throw new Error(`All Portable Git download sources failed: ${lastError?.message}`)
+}
+
 function getCodexVersion() {
   const pkgPath = path.join(PROJECT_ROOT, 'node_modules', '@openai', 'codex', 'package.json')
   return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
@@ -515,6 +572,16 @@ function preparePlatform(platform) {
     installCodex(platform)
   } else {
     log.success(`@openai/codex native package already exists for ${platform}`)
+  }
+
+  // Portable Git: bundled into the Windows build for offline Git Bash setup
+  if (platform === 'win') {
+    const gitStatus = checkPortableGit()
+    if (!gitStatus.exists || !gitStatus.valid) {
+      downloadPortableGit()
+    } else {
+      log.success('Portable Git archive already exists')
+    }
   }
 
   // node-pty: mac/win prebuilds ship with the npm package automatically.

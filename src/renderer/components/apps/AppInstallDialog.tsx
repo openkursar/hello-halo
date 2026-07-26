@@ -305,11 +305,16 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
   const { t } = useTranslation()
   const { installApp, importApp, loadApps, updateAppOverrides } = useAppsStore()
 
-  const currentSpace = useSpaceStore(state => state.currentSpace)
   const spaces = useSpaceStore(state => state.spaces)
+  const haloSpace = useSpaceStore(state => state.haloSpace)
 
-  // Exclude halo-temp: digital humans must be installed in a dedicated space
-  const dedicatedSpaces = useMemo(() => spaces, [spaces])
+  // Install targets: Halo space first, then dedicated spaces. Halo is a valid
+  // home for a digital human (the WeCom scan-auth flow installs there too), so
+  // offering it here keeps both entry points consistent.
+  const allSpaces = useMemo(
+    () => (haloSpace ? [haloSpace, ...spaces] : spaces),
+    [haloSpace, spaces]
+  )
 
   const [mode, setMode] = useState<InstallMode>('visual')
   const [form, setForm] = useState<VisualFormState>({ ...INITIAL_FORM })
@@ -320,10 +325,8 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
   const [modelSourceId, setModelSourceId] = useState<string | undefined>(undefined)
   const [modelId, setModelId] = useState<string | undefined>(undefined)
 
-  const [selectedSpaceId, setSelectedSpaceId] = useState(
-    // Skip halo-temp as default; fall back to first dedicated space
-    (currentSpace && !currentSpace.isTemp ? currentSpace.id : null) ?? dedicatedSpaces[0]?.id ?? ''
-  )
+  // No default target: the user must actively pick a space before creating.
+  const [selectedSpaceId, setSelectedSpaceId] = useState('')
 
   const [showCreateSpaceForm, setShowCreateSpaceForm] = useState(false)
 
@@ -601,7 +604,7 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
     }
   }
 
-  const canCreate = dedicatedSpaces.length > 0 && (mode === 'yaml'
+  const canCreate = selectedSpaceId !== '' && (mode === 'yaml'
     ? yamlContent.trim().length > 0
     : (form.name.trim().length > 0 && form.systemPrompt.trim().length > 0))
 
@@ -776,7 +779,7 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
             /* ── Import mode ── */
             <ImportTab
               importState={importState}
-              allSpaces={dedicatedSpaces}
+              allSpaces={allSpaces}
               selectedSpaceId={selectedSpaceId}
               onSelectedSpaceChange={setSelectedSpaceId}
               onFile={handleImportFile}
@@ -807,23 +810,16 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
               <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {t('Install to')}
               </h3>
-              {dedicatedSpaces.length > 0 && (
-                <select
-                  value={selectedSpaceId}
-                  onChange={e => setSelectedSpaceId(e.target.value)}
-                  className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
-                >
-                  {dedicatedSpaces.map(s => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </select>
-              )}
-              {dedicatedSpaces.length === 0 && (
-                <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-secondary border border-border text-sm text-muted-foreground">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-orange-400" />
-                  <span>{t('A digital human requires a dedicated space. Please create one first from the home page.')}</span>
-                </div>
-              )}
+              <select
+                value={selectedSpaceId}
+                onChange={e => setSelectedSpaceId(e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+              >
+                <option value="" disabled>{t('Select a space')}</option>
+                {allSpaces.map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
               {/* New Space — accordion (toggle + body as one unit to avoid spacing leaks) */}
               <div>
                 <button
@@ -1107,19 +1103,16 @@ function ImportTab({
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {t('Install to')}
           </h3>
-          {allSpaces.length <= 1 ? (
-            <p className="text-sm text-foreground">{allSpaces[0]?.name ?? t('No spaces available')}</p>
-          ) : (
-            <select
-              value={selectedSpaceId}
-              onChange={e => onSelectedSpaceChange(e.target.value)}
-              className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
-            >
-              {allSpaces.map(s => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-          )}
+          <select
+            value={selectedSpaceId}
+            onChange={e => onSelectedSpaceChange(e.target.value)}
+            className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+          >
+            <option value="" disabled>{t('Select a space')}</option>
+            {allSpaces.map(s => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
         </div>
       )}
 
@@ -1128,6 +1121,7 @@ function ImportTab({
         phase={phase}
         onReset={onReset}
         loading={loading}
+        canInstall={selectedSpaceId !== ''}
         onYamlInstall={phase === 'yaml-preview' ? () => onYamlInstall(importState.yamlContent) : undefined}
         onBundleInstall={phase === 'bundle-preview' ? () => onBundleInstall(importState.result) : undefined}
       />
@@ -1140,12 +1134,16 @@ function ImportFooter({
   phase,
   onReset,
   loading,
+  canInstall,
   onYamlInstall,
   onBundleInstall,
 }: {
   phase: ImportState['phase']
   onReset: () => void
   loading: boolean
+  // Only meaningful in yaml-preview / bundle-preview, where the install button
+  // shows. Terminal-phase footers omit it.
+  canInstall?: boolean
   onYamlInstall?: () => void
   onBundleInstall?: () => void
 }) {
@@ -1174,7 +1172,7 @@ function ImportFooter({
         </button>
         <button
           onClick={onYamlInstall}
-          disabled={loading}
+          disabled={loading || !canInstall}
           className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
         >
           {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
@@ -1192,7 +1190,7 @@ function ImportFooter({
         </button>
         <button
           onClick={onBundleInstall}
-          disabled={loading}
+          disabled={loading || !canInstall}
           className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
         >
           {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}

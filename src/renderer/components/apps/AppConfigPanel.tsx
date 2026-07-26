@@ -14,10 +14,9 @@
  */
 
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
-import { Save, RotateCcw, Unplug, Loader2, FileCode, Settings, Code, AlertTriangle, Globe, Bell, Download, ExternalLink, FolderOpen, Wrench, Send, Trash2, Mail, HelpCircle, RefreshCw, X, TerminalSquare } from 'lucide-react'
+import { Save, RotateCcw, Unplug, Loader2, FileCode, Settings, Code, AlertTriangle, Globe, Bell, Download, ExternalLink, FolderOpen, Wrench, Send, Trash2, HelpCircle, RefreshCw, X } from 'lucide-react'
 import { stringify as stringifyYaml, parse as parseYaml } from 'yaml'
 import { useAppsStore } from '../../stores/apps.store'
-import { useAppStore } from '../../stores/app.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import type { InputDef, SubscriptionDef, AppSpec } from '../../../shared/apps/spec-types'
 import type { InstalledApp } from '../../../shared/apps/app-types'
@@ -27,6 +26,9 @@ import { api } from '../../api'
 import { useSpaceStore } from '../../stores/space.store'
 import { AppModelSelector } from './AppModelSelector'
 import { AppNotifyChannelsSection } from './AppNotifyChannelsSection'
+import { AppCapabilitiesSection } from './AppCapabilitiesSection'
+import { AppMcpDepsSection } from './AppMcpDepsSection'
+import { AppSkillsSection } from './AppSkillsSection'
 import { appTypeLabel } from './appTypeUtils'
 import { SystemPromptEditor } from './SystemPromptEditor'
 import { Switch } from '../ui/Switch'
@@ -323,33 +325,14 @@ interface SettingsTabProps {
   spaceName?: string
   t: (s: string, opts?: Record<string, unknown>) => string
   /**
-   * Invoked when a save changes a field that requires the running agent
-   * to be restarted to take effect (system_prompt, user config values).
-   * Parent owns the hint visibility so the banner persists across tab switches.
+   * Invoked after a session-affecting save. The change already auto-applies in
+   * the background; this raises the visible manual-restart fallback banner.
    */
   onRequireRestart: () => void
 }
 
 function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTabProps) {
-  const { updateAppConfig, updateAppSpec, updateAppOverrides, grantPermission, revokePermission } = useAppsStore()
-  const { setView } = useAppStore()
-
-  // Check if email notification channel is configured
-  const [emailConfigured, setEmailConfigured] = useState(false)
-  // Check if any IM channel instances are enabled (for im-push toggle gating)
-  const [hasImInstances, setHasImInstances] = useState(false)
-  useEffect(() => {
-    api.getConfig().then((res: any) => {
-      if (res.success && res.data) {
-        setEmailConfigured(Boolean(res.data.notificationChannels?.email?.enabled))
-      }
-    }).catch(() => {})
-    api.imChannelsStatus().then((res: any) => {
-      if (res.success && res.data) {
-        setHasImInstances(res.data.some((s: any) => s.enabled))
-      }
-    }).catch(() => {})
-  }, [])
+  const { updateAppConfig, updateAppSpec, updateAppOverrides } = useAppsStore()
 
   // Type-narrowed helpers for automation-specific fields
   const isAutomation = app.spec.type === 'automation'
@@ -436,8 +419,9 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
     if (ok) {
       setSpecSaveSuccess(true)
       setTimeout(() => setSpecSaveSuccess(false), 2000)
-      // system_prompt is loaded at session creation; flag restart so users
-      // see the inline hint instead of silently getting stale behavior.
+      // system_prompt is loaded at session creation; the backend auto-restarts
+      // the chat session so it applies next message. Surface the manual
+      // fallback banner too, in case that background apply ever fails.
       if (promptChanged) onRequireRestart()
     } else {
       setSpecError(t('Failed to save spec changes'))
@@ -459,8 +443,9 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
     if (ok) {
       setConfigSaveSuccess(true)
       setTimeout(() => setConfigSaveSuccess(false), 2000)
-      // config values are baked into the system prompt at session creation,
-      // so changes only take effect for a fresh session.
+      // config values are baked into the system prompt at session creation; the
+      // backend auto-restarts the chat session so the change applies next
+      // message. Surface the manual fallback banner too.
       onRequireRestart()
     }
   }
@@ -518,12 +503,13 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
           User Settings (top section)
           ════════════════════════════════════════════ */}
 
-      {/* ── Schedule Settings ── */}
+      {/* ── Scheduled Execution ── */}
       {isAutomation && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {t('Schedule')}
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+              {t('Scheduled Execution')}
+              <InfoTip text={t('Automatically wake this digital human to run on a fixed interval. When off, it can still be triggered manually or by an incoming IM message.')} />
             </h3>
             <Switch
               checked={hasSchedule}
@@ -544,13 +530,11 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
         </div>
       )}
 
-      {/* ── Runtime Settings (Model + AI Browser + Notifications) ── */}
-      <div className="space-y-4">
+      {/* ── Model ── */}
+      <div className="space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {t('Runtime')}
+          {t('Model')}
         </h3>
-
-        {/* Model selector */}
         <AppModelSelector
           modelSourceId={app.userOverrides.modelSourceId}
           modelId={app.userOverrides.modelId}
@@ -562,199 +546,57 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
             })
           }}
         />
+      </div>
 
-        {/* AI Browser toggle */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <Globe className="w-3.5 h-3.5 text-muted-foreground" />
-              <span className="text-sm text-foreground">{t('AI Browser')}</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {t('Enable browser tools for web automation')}
-            </p>
-          </div>
-          <Switch
-            checked={resolvePermission(app, 'ai-browser')}
-            onCheckedChange={async (checked) => {
-              if (checked) {
-                await grantPermission(appId, 'ai-browser')
-              } else {
-                await revokePermission(appId, 'ai-browser')
-              }
-            }}
-            size="sm"
-          />
-        </div>
-        {/* Warn when user disabled a permission the spec declares */}
-        {!resolvePermission(app, 'ai-browser') && app.spec.permissions?.includes('ai-browser') && (
-          <p className="text-xs text-amber-500 flex items-center gap-1 -mt-2">
-            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-            {t('This app may require AI Browser to work properly')}
-          </p>
-        )}
+      {/* ── Capabilities / MCP Tools / Skills (automation only) ── */}
+      {isAutomation && (
+        <>
+          <AppCapabilitiesSection app={app} appId={appId} onRequireRestart={onRequireRestart} />
+          <AppMcpDepsSection app={app} appId={appId} onRequireRestart={onRequireRestart} />
+          <AppSkillsSection appId={appId} spaceId={app.spaceId} />
+        </>
+      )}
 
-        {/* AI Terminal toggle (default off — powerful capability) */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <TerminalSquare className="w-3.5 h-3.5 text-muted-foreground" />
-              <span className="text-sm text-foreground">{t('AI Terminal')}</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {t('Allow this app to run shell commands and interactive terminals')}
-            </p>
-          </div>
-          <Switch
-            checked={resolvePermission(app, 'ai-terminal', false)}
-            onCheckedChange={async (checked) => {
-              if (checked) {
-                await grantPermission(appId, 'ai-terminal')
-              } else {
-                await revokePermission(appId, 'ai-terminal')
-              }
-            }}
-            size="sm"
-          />
-        </div>
-        {!resolvePermission(app, 'ai-terminal', false) && app.spec.permissions?.includes('ai-terminal') && (
-          <p className="text-xs text-amber-500 flex items-center gap-1 -mt-2">
-            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-            {t('This app may require AI Terminal to work properly')}
-          </p>
-        )}
-
-        {/* Email MCP toggle */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <Mail className={`w-3.5 h-3.5 ${emailConfigured ? 'text-muted-foreground' : 'text-muted-foreground/50'}`} />
-              <span className={`text-sm ${emailConfigured ? 'text-foreground' : 'text-muted-foreground'}`}>{t('Email')}</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {t('Allow this app to read, send, and manage emails and calendar')}
-            </p>
-          </div>
-          <Switch
-            checked={emailConfigured && resolvePermission(app, 'email', false)}
-            onCheckedChange={async (checked) => {
-              if (!emailConfigured) return
-              if (checked) {
-                await grantPermission(appId, 'email')
-              } else {
-                await revokePermission(appId, 'email')
-              }
-            }}
-            disabled={!emailConfigured}
-            size="sm"
-          />
-        </div>
-        {/* Not configured: show hint with link to settings */}
-        {!emailConfigured && (
-          <button
-            onClick={() => {
-              setView('settings')
-              setTimeout(() => {
-                const el = document.getElementById('message-channels')
-                el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-              }, 100)
-            }}
-            className="text-xs text-amber-500 flex items-center gap-1 -mt-2 hover:text-amber-400 transition-colors"
-          >
-            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-            {t('Email not configured. Go to Settings > Notification Channels to set up.')}
-          </button>
-        )}
-        {/* Warn when user disabled a permission the spec declares */}
-        {emailConfigured && !resolvePermission(app, 'email', false) && app.spec.permissions?.includes('email') && (
-          <p className="text-xs text-amber-500 flex items-center gap-1 -mt-2">
-            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-            {t('This app may require Email to work properly')}
-          </p>
-        )}
-
-        {/* IM Push toggle */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <Send className={`w-3.5 h-3.5 ${hasImInstances ? 'text-muted-foreground' : 'text-muted-foreground/50'}`} />
-              <span className={`text-sm ${hasImInstances ? 'text-foreground' : 'text-muted-foreground'}`}>{t('IM Push')}</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {t('Allow this app to send messages to IM contacts')}
-            </p>
-          </div>
-          <Switch
-            checked={hasImInstances && resolvePermission(app, 'im-push')}
-            onCheckedChange={async (checked) => {
-              if (!hasImInstances) return
-              if (checked) {
-                await grantPermission(appId, 'im-push')
-              } else {
-                await revokePermission(appId, 'im-push')
-              }
-            }}
-            disabled={!hasImInstances}
-            size="sm"
-          />
-        </div>
-        {/* Not configured: show hint with link to settings */}
-        {!hasImInstances && (
-          <button
-            onClick={() => {
-              setView('settings')
-              setTimeout(() => {
-                const el = document.getElementById('message-channels')
-                el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-              }, 100)
-            }}
-            className="text-xs text-amber-500 flex items-center gap-1 -mt-2 hover:text-amber-400 transition-colors"
-          >
-            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-            {t('No IM channels configured. Go to Settings to set up.')}
-          </button>
-        )}
-        {/* Warn when user disabled a permission the spec declares */}
-        {hasImInstances && !resolvePermission(app, 'im-push') && app.spec.permissions?.includes('im-push') && (
-          <p className="text-xs text-amber-500 flex items-center gap-1 -mt-2">
-            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-            {t('This app may require IM Push to work properly')}
-          </p>
-        )}
-
-        {/* Browser login sites */}
-        {browserLoginEntries.length > 0 && (
-          <div className="space-y-2">
-            <span className="text-sm text-foreground">{t('Required Logins')}</span>
-            <div className="space-y-1">
-              {browserLoginEntries.map(entry => (
-                <button
-                  key={entry.url}
-                  onClick={() => {
-                    api.openLoginWindow(entry.url, entry.label)
-                  }}
-                  className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left rounded-lg bg-secondary/50 border border-border hover:bg-secondary transition-colors group"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Globe className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
-                    <span className="text-sm text-foreground truncate">{entry.label}</span>
-                  </div>
-                  <ExternalLink className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
-                </button>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {t('Click to open the website and log in via the Halo browser.')}
-            </p>
-          </div>
-        )}
-
-        {/* Notification level */}
+      {/* ── Required Logins ── */}
+      {browserLoginEntries.length > 0 && (
         <div className="space-y-2">
-          <div className="flex items-center gap-1.5">
-            <Bell className="w-3.5 h-3.5 text-muted-foreground" />
-            <span className="text-sm text-foreground">{t('System Notifications')}</span>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+            <Globe className="w-3.5 h-3.5" />
+            {t('Required Logins')}
+          </h3>
+          <div className="space-y-1">
+            {browserLoginEntries.map(entry => (
+              <button
+                key={entry.url}
+                onClick={() => {
+                  api.openLoginWindow(entry.url, entry.label)
+                }}
+                className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left rounded-lg bg-secondary/50 border border-border hover:bg-secondary transition-colors group"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <Globe className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                  <span className="text-sm text-foreground truncate">{entry.label}</span>
+                </div>
+                <ExternalLink className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+              </button>
+            ))}
           </div>
+          <p className="text-xs text-muted-foreground">
+            {t('Click to open the website and log in via the Halo browser.')}
+          </p>
+        </div>
+      )}
+
+      {/* ── Notifications (system level + message channels) ── */}
+      <div className="space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+          <Bell className="w-3.5 h-3.5" />
+          {t('Notifications')}
+        </h3>
+
+        {/* System notification level */}
+        <div className="space-y-2">
+          <span className="text-sm text-foreground">{t('System Notifications')}</span>
           <div className="flex flex-wrap gap-1.5">
             {([
               { value: 'important', label: t('Important') },
@@ -786,25 +628,24 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
                 : t('Notify on milestones, escalations, and outputs')}
           </p>
         </div>
-      </div>
 
-      {/* ── Notification Methods (channel selector) ── */}
-      {isAutomation && (
-        <div className="space-y-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-            <Send className="w-3.5 h-3.5" />
-            {t('Message Channels')}
-          </h3>
-          <p className="text-xs text-muted-foreground -mt-2">
-            {t('Notification channels and contacts available to this digital human')}
-          </p>
-          <AppNotifyChannelsSection
-            appId={appId}
-            appName={app.spec.name}
-            imPushEnabled={resolvePermission(app, 'im-push')}
-          />
-        </div>
-      )}
+        {/* Message channels + reachable contacts */}
+        {isAutomation && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
+              <Send className="w-3.5 h-3.5 text-muted-foreground" />
+              <span className="text-sm text-foreground">{t('Message Channels')}</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t('Notification channels and contacts available to this digital human')}
+            </p>
+            <AppNotifyChannelsSection
+              appId={appId}
+              imPushEnabled={resolvePermission(app, 'im-push')}
+            />
+          </div>
+        )}
+      </div>
 
       {/* ── User Configuration Fields ── */}
       {hasConfig && (
@@ -1058,15 +899,15 @@ function YamlTab({ app, appId, t, onRequireRestart }: YamlTabProps) {
 
     setSaving(true)
 
-    // Detect whether the saved YAML changed any field that requires an
-    // agent restart to take effect. We diff before sending so the hint is
-    // not raised for cosmetic edits (e.g. comment/whitespace-only changes).
+    // Detect whether the saved YAML changed a session-affecting field so the
+    // manual-restart fallback banner is not raised for cosmetic edits.
     const promptChanged = parsed.system_prompt !== app.spec.system_prompt
     const configChanged = JSON.stringify(parsed.config_schema ?? null)
       !== JSON.stringify(app.spec.config_schema ?? null)
 
-    // Send the full parsed spec as the patch.
-    // The backend applies JSON Merge Patch and re-validates with Zod.
+    // Send the full parsed spec as the patch. The backend applies JSON Merge
+    // Patch, re-validates with Zod, and auto-restarts the chat session when a
+    // session-affecting field changed — so edits apply on the next message.
     const ok = await updateAppSpec(appId, parsed)
     setSaving(false)
 
@@ -1178,9 +1019,10 @@ export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
   const [showClearMemoryConfirm, setShowClearMemoryConfirm] = useState(false)
   const [clearingMemory, setClearingMemory] = useState(false)
 
-  // Restart-required hint: raised by a save that changes a field loaded only
-  // at session creation (system_prompt, config_schema, userConfig). Cleared
-  // by a successful restart or explicit dismissal.
+  // Config changes auto-apply (the backend rebuilds the chat session on
+  // permission/spec/config change). This hint stays as a visible, safe manual
+  // fallback: if the background restart ever fails to take effect, the user can
+  // force it. Raised by a session-affecting save, cleared on restart/dismiss.
   const [restartHinted, setRestartHinted] = useState(false)
   const [restarting, setRestarting] = useState(false)
   // Brief inline success indicator next to the Restart button. Auto-clears
@@ -1260,22 +1102,22 @@ export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
         </button>
       </div>
 
-      {/* Restart-required hint banner: appears after a save that changes a
-          field loaded only at session creation. Persists across tab switches
-          and dismissals so users don't lose track of stuck state. */}
+      {/* Config changes apply automatically on the next message. This banner is
+          a visible, safe manual fallback in case the background apply doesn't
+          take effect — clicking is harmless and loses no data. */}
       {restartHinted && (
         <div
           role="status"
           className="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-3 p-3 rounded-lg border border-amber-400/30 bg-amber-400/5"
         >
           <div className="flex items-start gap-2 flex-1 min-w-0">
-            <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+            <RefreshCw className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
             <div className="min-w-0">
               <p className="text-sm text-foreground">
-                {t('Changes require an {{name}} restart to take effect.', { name: 'Agent' })}
+                {t('Quickly restart the AI digital human to apply your changes.')}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {t('Conversation history is preserved.')}
+                {t('No data is affected. Any work in progress will be stopped and interrupted.')}
               </p>
             </div>
           </div>
@@ -1288,7 +1130,7 @@ export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
               {restarting
                 ? <Loader2 className="w-3 h-3 animate-spin" />
                 : <RefreshCw className="w-3 h-3" />}
-              {t('Restart Now')}
+              {t('Quick restart')}
             </button>
             <button
               onClick={() => setRestartHinted(false)}

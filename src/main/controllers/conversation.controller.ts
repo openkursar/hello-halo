@@ -14,6 +14,7 @@ import {
   getMessageThoughts as serviceGetMessageThoughts,
   toggleStarConversation as serviceToggleStarConversation
 } from '../services/conversation.service'
+import { closeV2Session } from '../services/agent'
 
 export interface ControllerResponse<T = unknown> {
   success: boolean
@@ -88,6 +89,9 @@ export function updateConversation(
  */
 export function deleteConversation(spaceId: string, conversationId: string): ControllerResponse {
   try {
+    // Close the conversation's CC session (idempotent) so the subprocess dies
+    // with the record instead of lingering until the 30-min idle sweep.
+    closeV2Session(conversationId)
     const result = serviceDeleteConversation(spaceId, conversationId)
     return { success: result }
   } catch (error: unknown) {

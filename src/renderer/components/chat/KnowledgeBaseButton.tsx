@@ -1,19 +1,30 @@
 /**
- * KnowledgeBaseButton — toolbar control that loads Tlon knowledge bases into
- * the current conversation. Lives in the input toolbar next to Web Control /
- * Deep Thinking. Active (tinted) when ≥1 KB is loaded; the label shows the
- * loaded KB's name. Clicking opens a picker to toggle KBs and set the default.
+ * KnowledgeBaseButton — toolbar control that manages which Tlon knowledge bases
+ * feed the current conversation. Lives in the input toolbar next to Web Control /
+ * Deep Thinking. Active (tinted) when ≥1 KB is loaded into this conversation;
+ * the count badge reflects that set.
  *
- * New conversations auto-load the default KB (see chat.store.createConversation);
- * on a brand-new chat with no conversation yet, toggling creates one on demand.
+ * Two scopes, both surfaced here (single entry point for all knowledge wiring):
+ *  - This conversation: row click toggles a KB in/out of the conversation's own
+ *    knowledgeBaseIds (opt-in, and opt-out of a space-seeded KB for a one-off task).
+ *  - This space (pin): binds a KB to the current space so future conversations in
+ *    it seed with the KB. It does NOT retroactively touch existing conversations
+ *    (snapshot-at-creation model), so the pin is captioned "applies to new
+ *    conversations".
+ *
+ * New conversations seed knowledgeBaseIds in the main process from the space's
+ * bindings + the default KB (conversation.service.createConversation). On a
+ * brand-new chat with no conversation yet, toggling creates one on demand.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 import { useTlonStore } from '../../stores/tlon.store'
 import { useSpaceStore } from '../../stores/space.store'
-import { BookOpen, Check, Star } from 'lucide-react'
+import { useAppStore } from '../../stores/app.store'
+import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
+import { BookOpen, Check, Star, Pin, ArrowRight } from 'lucide-react'
 
 const NO_IDS: string[] = []
 
@@ -23,6 +34,9 @@ export function KnowledgeBaseButton() {
   const kbs = useTlonStore(s => s.kbs)
   const loadKBs = useTlonStore(s => s.loadKBs)
   const setDefaultKB = useTlonStore(s => s.setDefaultKB)
+  const bindSpace = useTlonStore(s => s.bindSpace)
+  const unbindSpace = useTlonStore(s => s.unbindSpace)
+  const setView = useAppStore(s => s.setView)
 
   const getCurrentConversationId = useChatStore(s => s.getCurrentConversationId)
   const getCachedConversation = useChatStore(s => s.getCachedConversation)
@@ -33,30 +47,24 @@ export function KnowledgeBaseButton() {
   const cache = useChatStore(s => s.conversationCache)
 
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => { void loadKBs() }, [loadKBs])
 
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
-
+  const spaceId = currentSpace?.id ?? null
   const convId = getCurrentConversationId()
   const convIds = (convId ? cache.get(convId)?.knowledgeBaseIds : undefined) ?? NO_IDS
   const defaultKb = kbs.find(k => k.isDefault)
-  // Before the conversation exists, reflect the default that will auto-load.
-  const effectiveIds = convId ? convIds : (defaultKb ? [defaultKb.id] : NO_IDS)
+  // Before the conversation exists, mirror what the main process would seed:
+  // the space's bound KBs plus the default (see getSeedKBIds).
+  const seedIds = kbs
+    .filter(k => (spaceId && k.spaceIds.includes(spaceId)) || k.isDefault)
+    .map(k => k.id)
+  const effectiveIds = convId ? convIds : (seedIds.length > 0 ? seedIds : NO_IDS)
   const loaded = kbs.filter(k => effectiveIds.includes(k.id))
   const count = loaded.length
   const active = count > 0
 
   const toggleKb = async (kbId: string) => {
-    const spaceId = currentSpace?.id
     if (!spaceId) return
     let conversationId = getCurrentConversationId()
     if (!conversationId) {
@@ -74,16 +82,28 @@ export function KnowledgeBaseButton() {
     void setDefaultKB(defaultKb?.id === kbId ? null : kbId)
   }
 
+  const toggleSpaceBinding = (e: React.MouseEvent, kbId: string) => {
+    e.stopPropagation()
+    if (!spaceId) return
+    const kb = kbs.find(k => k.id === kbId)
+    if (kb?.spaceIds.includes(spaceId)) void unbindSpace(kbId, spaceId)
+    else void bindSpace(kbId, spaceId)
+  }
+
+  const openKnowledgePage = () => {
+    setOpen(false)
+    setView('tlon')
+  }
+
   return (
-    <div className="relative" ref={ref}>
-      <button
-        onClick={() => setOpen(!open)}
-        className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg transition-colors duration-200 ${
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        title={t('Load knowledge bases into this conversation')}
+        className={`h-8 shrink-0 items-center gap-1.5 px-2.5 rounded-lg cursor-pointer transition-colors duration-200 ${
           active
             ? 'bg-primary/10 text-primary'
             : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50'
         }`}
-        title={t('Load knowledge bases into this conversation')}
       >
         <BookOpen size={15} className="flex-shrink-0" />
         <span className="text-xs">{t('Knowledge')}</span>
@@ -92,57 +112,106 @@ export function KnowledgeBaseButton() {
             {count}
           </span>
         )}
-      </button>
+      </PopoverTrigger>
 
-      {open && (
-        <div className="absolute bottom-full left-0 mb-2 w-72 max-h-72 overflow-y-auto py-1.5 bg-popover border border-border rounded-xl shadow-lg z-30 animate-fade-in">
-          <div className="px-3 py-1.5 text-xs font-medium text-muted-foreground">
-            {t('Load knowledge bases')}
-          </div>
+      <PopoverContent side="top" align="start" sideOffset={8} className="w-72 max-h-80 overflow-y-auto py-1.5 rounded-xl">
+        <div>
           {kbs.length === 0 ? (
-            <div className="px-3 py-3 text-xs text-muted-foreground">
-              {t('No knowledge bases yet. Create one in the Knowledge section.')}
+            <div className="px-3 py-4 flex flex-col items-center text-center gap-2">
+              <BookOpen className="w-6 h-6 text-muted-foreground/50" />
+              <p className="text-sm text-foreground">{t('No knowledge yet')}</p>
+              <p className="text-xs text-muted-foreground">
+                {t('Add documents to a knowledge base so the AI can reference them.')}
+              </p>
+              <button
+                onClick={openKnowledgePage}
+                className="mt-1 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs hover:bg-primary/90 transition-colors"
+              >
+                {t('Add knowledge')}
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
             </div>
           ) : (
-            kbs.map(kb => {
-              const isLoaded = effectiveIds.includes(kb.id)
-              const isDefault = kb.id === defaultKb?.id
-              return (
-                <button
-                  key={kb.id}
-                  onClick={() => toggleKb(kb.id)}
-                  className="w-full px-3 py-2 flex items-center gap-2.5 text-sm text-foreground hover:bg-muted/50 transition-colors"
-                >
-                  <span className="w-5 flex justify-center flex-shrink-0">
-                    {isLoaded ? <Check className="w-4 h-4 text-primary" /> : <BookOpen className="w-4 h-4 text-muted-foreground" />}
-                  </span>
-                  <div className="min-w-0 flex-1 text-left">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <p className="truncate">{kb.name}</p>
-                      {isDefault && (
-                        <span className="text-[9px] leading-none px-1 py-0.5 rounded bg-primary/15 text-primary flex-shrink-0 uppercase tracking-wide">
-                          {t('Default')}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[11px] text-muted-foreground truncate">
-                      {t('{{count}} documents', { count: kb.stats.rawFileCount })}
-                    </p>
-                  </div>
-                  <span
+            <>
+              <div className="px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                {t('Load knowledge bases')}
+              </div>
+              {kbs.map(kb => {
+                const isLoaded = effectiveIds.includes(kb.id)
+                const isDefault = kb.id === defaultKb?.id
+                const isPinned = spaceId ? kb.spaceIds.includes(spaceId) : false
+                return (
+                  // Row is the primary toggle; pin/star are nested actions. A native
+                  // <button> may not contain other buttons, so the row is role="button"
+                  // and the target guard keeps its key handler from firing while an
+                  // inner action button holds focus.
+                  <div
+                    key={kb.id}
                     role="button"
-                    onClick={(e) => toggleDefault(e, kb.id)}
-                    className={`p-1 rounded hover:bg-muted flex-shrink-0 ${isDefault ? 'text-primary' : 'text-muted-foreground/40'}`}
-                    title={isDefault ? t('Default — loaded into new conversations') : t('Set as default')}
+                    tabIndex={0}
+                    onClick={() => toggleKb(kb.id)}
+                    onKeyDown={(e) => {
+                      if (e.target !== e.currentTarget) return
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        void toggleKb(kb.id)
+                      }
+                    }}
+                    className="w-full px-3 py-2 flex items-center gap-2.5 text-sm text-foreground hover:bg-muted/50 transition-colors cursor-pointer"
                   >
-                    <Star className="w-3.5 h-3.5" fill={isDefault ? 'currentColor' : 'none'} />
-                  </span>
+                    <span className="w-5 flex justify-center flex-shrink-0">
+                      {isLoaded ? <Check className="w-4 h-4 text-primary" /> : <BookOpen className="w-4 h-4 text-muted-foreground" />}
+                    </span>
+                    <div className="min-w-0 flex-1 text-left">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <p className="truncate">{kb.name}</p>
+                        {isPinned && (
+                          <span className="text-[9px] leading-none px-1 py-0.5 rounded bg-primary/15 text-primary flex-shrink-0 uppercase tracking-wide">
+                            {t('Space')}
+                          </span>
+                        )}
+                        {isDefault && (
+                          <span className="text-[9px] leading-none px-1 py-0.5 rounded bg-primary/15 text-primary flex-shrink-0 uppercase tracking-wide">
+                            {t('Default')}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-muted-foreground truncate">
+                        {t('{{count}} documents', { count: kb.stats.rawFileCount })}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => toggleSpaceBinding(e, kb.id)}
+                      className={`p-1 rounded hover:bg-muted flex-shrink-0 ${isPinned ? 'text-primary' : 'text-muted-foreground/40'}`}
+                      title={isPinned ? t('Always enabled in this space (applies to new conversations)') : t('Always enable in this space (applies to new conversations)')}
+                    >
+                      <Pin className="w-3.5 h-3.5" fill={isPinned ? 'currentColor' : 'none'} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => toggleDefault(e, kb.id)}
+                      className={`p-1 rounded hover:bg-muted flex-shrink-0 ${isDefault ? 'text-primary' : 'text-muted-foreground/40'}`}
+                      title={isDefault ? t('Default — seeded into new conversations everywhere') : t('Set as default')}
+                    >
+                      <Star className="w-3.5 h-3.5" fill={isDefault ? 'currentColor' : 'none'} />
+                    </button>
+                  </div>
+                )
+              })}
+              <div className="mt-1 pt-1 border-t border-border">
+                <button
+                  onClick={openKnowledgePage}
+                  className="w-full px-3 py-2 flex items-center justify-between text-xs text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
+                >
+                  {t('Manage knowledge bases')}
+                  <ArrowRight className="w-3.5 h-3.5" />
                 </button>
-              )
-            })
+              </div>
+            </>
           )}
         </div>
-      )}
-    </div>
+      </PopoverContent>
+    </Popover>
   )
 }

@@ -13,6 +13,9 @@ out
 # never checked in.
 resources/builtin-apps/
 
+# Portable Git archive for Windows builds (downloaded by scripts/prepare-binaries.mjs)
+resources/git-bash/
+
 # Release notes temp file
 .release-notes-current.md
 
@@ -29,6 +32,9 @@ local_docs/
 # Local plugins
 halo-local/
 product.json
+
+# Active product variant pointer (per-machine, managed by `npm run product`)
+.product-source
 
 # Local debug scripts
 vscode-debug/

@@ -4,7 +4,6 @@
 import type { ChatSlice, ChatState } from './internal'
 import { CONVERSATION_CACHE_SIZE, api, createEmptySessionState, createEmptySpaceState } from './internal'
 import type { Conversation, ConversationMeta, Thought, Question } from './internal'
-import { useTlonStore } from '../tlon.store'
 
 /**
  * Optimistically write a conversation's knowledgeBaseIds into the cache, then
@@ -166,20 +165,9 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
           console.error('[ChatStore] Failed to trigger session warm up:', error)
         }
 
-        // Auto-load the default knowledge base (one-time, at creation). Persisted
-        // on the conversation, so removing it later sticks. Resolved lazily to
-        // avoid coupling the import graph.
-        try {
-          const tlon = useTlonStore.getState()
-          if (tlon.kbs.length === 0) await tlon.loadKBs()
-          const defaultKb = useTlonStore.getState().kbs.find(k => k.isDefault)
-          if (defaultKb) {
-            await get().attachKnowledgeBase(spaceId, newConversation.id, defaultKb.id)
-          }
-        } catch (error) {
-          console.error('[ChatStore] Failed to auto-load default knowledge base:', error)
-        }
-
+        // Knowledge bases (space bindings + default KB) are snapshotted onto the
+        // conversation by the main process at creation, so newConversation already
+        // carries knowledgeBaseIds — no renderer-side attach needed.
         return newConversation
       }
 

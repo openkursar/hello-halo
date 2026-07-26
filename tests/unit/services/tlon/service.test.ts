@@ -59,7 +59,7 @@ import {
   getRawFileLearnedStatus,
   resolveSources,
   resolveSourcesForReadPaths,
-  getKBReferencesForSpace,
+  getSeedKBIds,
   getKBReferenceById,
   getKBChatContext,
   collectIngestCandidates,
@@ -640,15 +640,26 @@ describe('Tlon Service', () => {
   })
 
   describe('conversation integration', () => {
-    it('builds references only for active, bound KBs with an index', () => {
-      const kb = createKB({ name: 'Ref' })
-      bindToSpace(kb.id, 'space-1')
-      expect(getKBReferencesForSpace('space-1')).toEqual([
-        { id: kb.id, name: 'Ref', indexContent: DEFAULT_INDEX_MD },
-      ])
+    it('seeds a new conversation with space-bound KBs plus the default, deduped', () => {
+      const bound = createKB({ name: 'Bound' })
+      const other = createKB({ name: 'Other' })
+      const def = createKB({ name: 'Default' })
+      bindToSpace(bound.id, 'space-1')
+      setDefaultKB(def.id)
 
+      const seeded = getSeedKBIds('space-1').sort()
+      expect(seeded).toEqual([bound.id, def.id].sort())
+      // A KB bound to a different space is not seeded here.
+      expect(getSeedKBIds('space-1')).not.toContain(other.id)
+    })
+
+    it('keeps seed ids regardless of status (use-time gating resolves them)', () => {
+      // Space bindings snapshot at creation; status/index availability is gated
+      // later by getKBReferenceById, so a paused KB is still seeded.
+      const kb = createKB({ name: 'Paused' })
+      bindToSpace(kb.id, 'space-2')
       updateKB(kb.id, { status: 'paused' })
-      expect(getKBReferencesForSpace('space-1')).toEqual([])
+      expect(getSeedKBIds('space-2')).toEqual([kb.id])
       expect(getKBReferenceById(kb.id)).toBeNull()
     })
 

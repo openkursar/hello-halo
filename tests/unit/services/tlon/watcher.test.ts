@@ -35,11 +35,6 @@ vi.mock('../../../../src/main/services/tlon/ingest', () => ({
   rebuildIndexMd: (...args: unknown[]) => rebuildIndexMd(...args),
 }))
 
-const shutdownOcr = vi.fn(async () => {})
-vi.mock('../../../../src/main/services/tlon/ocr', () => ({
-  shutdownOcr: (...args: unknown[]) => shutdownOcr(...args),
-}))
-
 import {
   _resetTlonRegistry,
   createKB,
@@ -225,14 +220,11 @@ describe('Tlon Watcher', () => {
       const kb = await createKbAndSettle('Shutdown', [{ path: linked, label: 'l' }])
       const handles = [subscriptions.get(getKBRawDir(kb.id))!, subscriptions.get(linked)!]
 
-      shutdownOcr.mockClear()
       await shutdownTlon()
       for (const h of handles) {
         expect(h.unsubscribe).toHaveBeenCalled()
       }
       expect(subscriptions.size).toBe(0)
-      // The OCR worker thread is released as part of the shutdown path.
-      expect(shutdownOcr).toHaveBeenCalled()
 
       await startWatchersForKB(kb.id)
       expect(subscriptions.has(getKBRawDir(kb.id))).toBe(true)

@@ -14,6 +14,8 @@ import { AlertTriangle, X } from 'lucide-react'
 import { api } from '../../api'
 import { useAppStore } from '../../stores/app.store'
 import { useTranslation } from '../../i18n'
+import { usePlatform } from '../layout/Header'
+import { isElectron, isCapacitor } from '../../api/transport'
 
 interface CredentialFailure {
   path: string
@@ -39,6 +41,7 @@ function extractFailures(data: unknown): CredentialFailure[] {
 
 export function CredentialAlertBanner({ topOffset = 0 }: CredentialAlertBannerProps) {
   const { t } = useTranslation()
+  const platform = usePlatform()
   const setView = useAppStore((s) => s.setView)
   const [failures, setFailures] = useState<CredentialFailure[]>([])
   const [dismissed, setDismissed] = useState(false)
@@ -74,9 +77,21 @@ export function CredentialAlertBanner({ topOffset = 0 }: CredentialAlertBannerPr
 
   const labels = failures.map((f) => f.label).join(', ')
 
+  // This banner overlays the top of the window, where the native window
+  // controls live (macOS traffic lights on the left, Windows/Linux
+  // titleBarOverlay buttons on the right). Reserve their space — mirroring the
+  // Header convention — so the banner's own buttons never sit under the native
+  // controls (unclickable). Remote/browser/Capacitor have no overlay.
+  const overlayPadding =
+    isElectron() && !isCapacitor()
+      ? platform.isMac
+        ? 'pl-20 pr-4'
+        : 'pl-4 pr-36'
+      : 'px-4'
+
   return (
     <div
-      className="fixed inset-x-0 z-40 flex items-center justify-between gap-3 px-4 py-2 bg-halo-warning/95 border-b border-halo-warning safe-area-top"
+      className={`fixed inset-x-0 z-40 flex items-center justify-between gap-3 py-2 bg-halo-warning/95 border-b border-halo-warning safe-area-top drag-region ${overlayPadding}`}
       style={{ top: topOffset, paddingTop: 'max(8px, var(--sat))' }}
       role="alert"
     >
@@ -90,7 +105,8 @@ export function CredentialAlertBanner({ topOffset = 0 }: CredentialAlertBannerPr
           {t('Please re-enter them in Settings.')}
         </span>
       </div>
-      <div className="flex items-center gap-2 flex-shrink-0">
+      {/* Interactive controls must opt out of the drag region to stay clickable. */}
+      <div className="no-drag flex items-center gap-2 flex-shrink-0">
         <button
           onClick={() => setView('settings')}
           className="text-sm font-medium text-foreground hover:underline"

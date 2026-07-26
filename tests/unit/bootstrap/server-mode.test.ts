@@ -14,7 +14,7 @@ vi.mock('../../../src/main/bootstrap/index', () => ({
   initializeExtendedServices: vi.fn(),
 }))
 
-vi.mock('../../../src/main/services/remote.service', () => ({
+vi.mock('../../../src/main/services/remote', () => ({
   enableRemoteAccess: vi.fn(),
 }))
 

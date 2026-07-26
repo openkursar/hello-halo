@@ -68,6 +68,7 @@ export interface HaloAPI {
   authRefreshToken: (sourceId: string) => Promise<IpcResponse>
   authCheckToken: (sourceId: string) => Promise<IpcResponse>
   authLogout: (sourceId: string) => Promise<IpcResponse>
+  authGetQuota: (sourceId: string) => Promise<IpcResponse>
   onAuthLoginProgress: (callback: (data: { provider: string; status: string }) => void) => () => void
 
   // Config
@@ -201,6 +202,9 @@ export interface HaloAPI {
   terminalResize: (data: { sessionId: string; cols: number; rows: number }) => Promise<IpcResponse>
   killTerminal: (data: { sessionId: string }) => Promise<IpcResponse>
   getTerminalReplay: (data: { sessionId: string }) => Promise<IpcResponse>
+  terminalAttach: (data: { sessionId: string }) => Promise<IpcResponse>
+  terminalDetach: (data: { sessionId: string }) => Promise<IpcResponse>
+  terminalAck: (data: { sessionId: string; charCount: number }) => Promise<IpcResponse>
   onTerminalData: (callback: (data: unknown) => void) => () => void
   onTerminalLifecycle: (callback: (data: unknown) => void) => () => void
 
@@ -513,6 +517,7 @@ export interface HaloAPI {
   appExportSpec: (appId: string) => Promise<IpcResponse<{ yaml: string; filename: string }>>
   appImportSpec: (input: { spaceId: string; yamlContent: string; userConfig?: Record<string, unknown> }) => Promise<IpcResponse>
   appOpenSkillFolder: (appId: string) => Promise<IpcResponse>
+  appListAvailableSkills: (appId: string) => Promise<IpcResponse<import('../shared/apps/app-types').AvailableSkill[]>>
   appGetDataPath: (appId: string) => Promise<IpcResponse<{ path: string }>>
   appOpenDataFolder: (appId: string) => Promise<IpcResponse>
   appClearMemory: (appId: string) => Promise<IpcResponse<{ filesRemoved: number }>>

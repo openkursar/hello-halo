@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.12-rc.14",
+  "version": "2.1.12-rc.46",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.mjs",
@@ -10,7 +10,8 @@
     "dev": "npm run bundle:builtin && cross-env HALO_DATA_DIR=~/.halo-dev electron-vite dev",
     "build": "electron-vite build",
     "prebuild": "node scripts/sync-builtin-apps.mjs",
-    "bundle:builtin": "node scripts/sync-builtin-apps.mjs",
+    "bundle:builtin": "node scripts/sync-builtin-apps.mjs --interactive",
+    "product": "node scripts/select-product.mjs",
     "start": "electron-vite preview",
     "postinstall": "node scripts/postinstall.mjs",
     "bump-rc": "node scripts/bump-rc-version.mjs",
@@ -204,6 +205,7 @@
       "out/**/*",
       "resources/**/*",
       "!resources/ocr/**/*",
+      "!resources/git-bash/**/*",
       "product.json",
       "halo-local/dist/**/*",
       "!node_modules/better-sqlite3/prebuilds",
@@ -284,6 +286,12 @@
     },
     "win": {
       "icon": "resources/icon.ico",
+      "extraResources": [
+        {
+          "from": "resources/git-bash",
+          "to": "git-bash"
+        }
+      ],
       "target": [
         {
           "target": "nsis",

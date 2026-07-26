@@ -6,12 +6,12 @@
  */
 
 import { app } from 'electron'
-import { createWriteStream, existsSync, mkdirSync, unlinkSync } from 'fs'
+import { createWriteStream, existsSync, mkdirSync, readdirSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import https from 'https'
 import http from 'http'
 import { execSync } from 'child_process'
-import { getAppLocalGitBashDir } from './git-bash.service'
+import { getAppLocalGitBashDir } from './detection'
 
 // Portable Git version to download
 const PORTABLE_GIT_VERSION = '2.47.1'
@@ -43,7 +43,29 @@ function getDownloadSources(arch: '64' | '32'): string[] {
 }
 
 /**
+ * Locate the Portable Git archive bundled with the app (Windows builds only).
+ * Bundled by prepare-binaries.mjs + win.extraResources so installation works
+ * on offline/intranet machines. Matched by pattern so version bumps in the
+ * build pipeline need no change here.
+ */
+function findBundledPortableGit(): string | null {
+  const dir = app.isPackaged
+    ? join(process.resourcesPath, 'git-bash')
+    : join(app.getAppPath(), 'resources', 'git-bash')
+
+  try {
+    const archive = readdirSync(dir).find(f => /^PortableGit-.+\.7z\.exe$/.test(f))
+    return archive ? join(dir, archive) : null
+  } catch {
+    return null
+  }
+}
+
+/**
  * Download and install Portable Git
+ *
+ * Prefers the archive bundled in the app's resources (offline-capable);
+ * falls back to online download when no bundled archive is present.
  *
  * @param onProgress - Callback for progress updates
  * @returns Installation result with path or error
@@ -57,35 +79,42 @@ export async function downloadAndInstallGitBash(
   const tempFile = join(tempDir, `PortableGit-${arch}.7z.exe`)
   const installDir = getAppLocalGitBashDir()
 
+  const bundledArchive = findBundledPortableGit()
+  const archivePath = bundledArchive ?? tempFile
+
   try {
-    // Phase 1: Download
-    onProgress({ phase: 'downloading', progress: 0, message: 'Connecting to download server...' })
+    // Phase 1: Obtain archive (bundled copy skips the network entirely)
+    if (bundledArchive) {
+      console.log(`[GitBash] Using bundled archive: ${bundledArchive}`)
+    } else {
+      onProgress({ phase: 'downloading', progress: 0, message: 'Connecting to download server...' })
 
-    let downloaded = false
-    let lastError = ''
+      let downloaded = false
+      let lastError = ''
 
-    for (let i = 0; i < sources.length; i++) {
-      const url = sources[i]
-      try {
-        console.log(`[GitBash] Trying download source ${i + 1}/${sources.length}: ${url}`)
-        await downloadFile(url, tempFile, (percent) => {
-          onProgress({
-            phase: 'downloading',
-            progress: percent,
-            message: `Downloading command execution environment... ${percent}%`
+      for (let i = 0; i < sources.length; i++) {
+        const url = sources[i]
+        try {
+          console.log(`[GitBash] Trying download source ${i + 1}/${sources.length}: ${url}`)
+          await downloadFile(url, tempFile, (percent) => {
+            onProgress({
+              phase: 'downloading',
+              progress: percent,
+              message: `Downloading command execution environment... ${percent}%`
+            })
           })
-        })
-        downloaded = true
-        console.log('[GitBash] Download completed successfully')
-        break
-      } catch (e) {
-        lastError = e instanceof Error ? e.message : String(e)
-        console.log(`[GitBash] Download source ${url} failed: ${lastError}, trying next...`)
+          downloaded = true
+          console.log('[GitBash] Download completed successfully')
+          break
+        } catch (e) {
+          lastError = e instanceof Error ? e.message : String(e)
+          console.log(`[GitBash] Download source ${url} failed: ${lastError}, trying next...`)
+        }
       }
-    }
 
-    if (!downloaded) {
-      throw new Error(`All download sources failed: ${lastError}`)
+      if (!downloaded) {
+        throw new Error(`All download sources failed: ${lastError}`)
+      }
     }
 
     // Phase 2: Extract and install
@@ -99,7 +128,7 @@ export async function downloadAndInstallGitBash(
     // Silent extraction (-y auto confirm, -o output directory)
     // PortableGit-*.7z.exe is a self-extracting archive
     console.log(`[GitBash] Extracting to: ${installDir}`)
-    execSync(`"${tempFile}" -y -o"${installDir}"`, {
+    execSync(`"${archivePath}" -y -o"${installDir}"`, {
       windowsHide: true,
       timeout: 180000  // 3 minutes timeout for extraction
     })
@@ -114,10 +143,12 @@ export async function downloadAndInstallGitBash(
       throw new Error('Installation completed but bash.exe not found, extraction may have failed')
     }
 
-    // Clean up temp file
+    // Clean up temp file (never the bundled archive)
     try {
-      unlinkSync(tempFile)
-      console.log('[GitBash] Temp file cleaned up')
+      if (!bundledArchive) {
+        unlinkSync(tempFile)
+        console.log('[GitBash] Temp file cleaned up')
+      }
     } catch {
       // Ignore cleanup errors
     }

@@ -29,6 +29,8 @@ import type {
 } from './types'
 import { RunExecutionError } from './errors'
 import { buildAppSystemPrompt, buildInitialMessage, buildEscalationResumeMessage } from './prompt'
+import { buildDisabledCapabilitiesGuidance, buildUnconfiguredCapabilitiesGuidance } from './prompt/capabilities'
+import { resolveNotifyAvailability } from './notify-availability'
 import { mergeConfigWithDefaults } from './config-defaults'
 import { createReportToolServer } from './report-tool'
 import type { ReportToolContext } from './report-tool'
@@ -43,6 +45,7 @@ import { getOrCreateV2Session } from '../../services/agent/session-manager'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { createWebSearchMcpServer } from '../../services/web-search'
+import { createOcrMcpServer } from '../../services/ocr'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { getConfig, resolveClaudeConfigDir } from '../../foundation/config.service'
 import { getSpace, getSpaceDir } from '../../services/space.service'
@@ -255,9 +258,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // ── 2. Build system prompt ─────────────────────────────
     const memoryInstructions = memory.getPromptInstructions()
     const usesAIBrowser = resolvePermission(app, 'ai-browser')
-    const usesTerminal = resolvePermission(app, 'ai-terminal', false) && isTerminalAvailable() // default off
-    const usesEmail = resolvePermission(app, 'email', false) // default false — higher trust
-    const usesImPush = resolvePermission(app, 'im-push') // default true — AI-driven IM push
+    const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
+    const usesEmail = resolvePermission(app, 'email') // gated on channel config below
+    const usesImPush = resolvePermission(app, 'im-push') // AI-driven IM push
 
     // ── Merge config_schema defaults into userConfig ─────
     //    Ensures defaults are available even if the user never opened the config panel.
@@ -275,6 +278,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       ? (getImSessionRegistry()?.getProactiveSessions(app.id) ?? [])
       : []
 
+    // Pushable IM contacts + notify availability. Resolved before the prompt so
+    // capability-awareness and notification guidance reflect the real tool set;
+    // reused for the notify MCP server below (one registry lookup).
+    const imSessions = usesImPush
+      ? (getImSessionRegistry()?.getPushableSessions(app.id) ?? [])
+      : []
+    const notifyAvail = resolveNotifyAvailability(app, config.notificationChannels, imSessions)
+
     const systemPrompt = buildAppSystemPrompt({
       appSpec: app.spec,
       memoryInstructions,
@@ -285,6 +296,12 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       workDir,
       modelInfo: resolvedCreds.displayModel,
       autoSyncSessions,
+      disabledCapabilities: buildDisabledCapabilitiesGuidance(app) ?? undefined,
+      unconfiguredCapabilities: buildUnconfiguredCapabilitiesGuidance(app, {
+        emailChannelConfigured: notifyAvail.emailChannelConfigured,
+        imContactsAvailable: notifyAvail.imContactsAvailable,
+      }) ?? undefined,
+      notifyToolsAvailable: notifyAvail.anyNotifyToolAvailable,
     })
 
     console.log(
@@ -373,9 +390,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // memory lives under space.path (internal storage), while exportable
     // files live under workingDir||path — see getSpaceDir().
     const exportGate = new FileExportGate([getSpaceDir(app.spaceId!), tmpdir()])
-    const imSessions = usesImPush
-      ? (getImSessionRegistry()?.getPushableSessions(app.id) ?? [])
-      : []
     const notifyMcpServer = createNotifyToolServer({
       appId: app.id,
       appName: app.spec.name,
@@ -409,7 +423,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // Only injects explicitly declared MCPs (least-privilege: automation gets only what it declares).
     // Automation apps always have a spaceId (enforced earlier in this function).
     const requiredMcpServers = getMcpServersForRequires(
-      (app.spec.requires?.mcps as Array<{ id: string }> | undefined),
+      app.spec.requires?.mcps,
       app.spaceId!
     )
 
@@ -422,12 +436,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       stderrHandler: (data: string) => {
         console.error(`[Runtime][${app.id}] CLI stderr:`, data)
       },
+      // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
       mcpServers: {
         ...requiredMcpServers,              // declared MCP dependencies
         'halo-memory': memoryMcpServer,     // built-in: persistent memory
         'halo-report': reportMcpServer,     // built-in: completion signal
         'halo-notify': notifyMcpServer,     // built-in: user notification
         'web-search': createWebSearchMcpServer(), // built-in: web search
+        'ocr': createOcrMcpServer(),              // built-in: on-device image OCR
         ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
         ...(usesTerminal
           ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId: app.spaceId!, workDir }) }

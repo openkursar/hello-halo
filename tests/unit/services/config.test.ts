@@ -375,6 +375,23 @@ describe('non-destructive credential guard (issue #172 regression)', () => {
     expect(onDisk.api.apiKey).toBe(undecodable)
   })
 
+  it('does not surface auto-recoverable internal secrets (device/tunnel) to the user', () => {
+    // Orphaned internal secrets the user cannot possibly re-type. They must not
+    // appear in the alert; the consumer re-issues them automatically.
+    fs.writeFileSync(
+      getConfigPath(),
+      JSON.stringify({
+        isFirstLaunch: false,
+        deviceIdentity: { deviceId: 'dev-1', deviceSecret: 'enc:cannot-recover' },
+        remoteAccess: { namedTunnel: { tunnelSecret: 'enc:cannot-recover' } },
+      }),
+    )
+
+    // Consumers see empty (so re-issue kicks in) and nothing is user-facing.
+    expect(getConfig().deviceIdentity?.deviceSecret).toBe('')
+    expect(getCredentialDecodeFailures()).toEqual([])
+  })
+
   it('lets the user replace an undecodable credential by re-entering it', () => {
     fs.writeFileSync(
       getConfigPath(),

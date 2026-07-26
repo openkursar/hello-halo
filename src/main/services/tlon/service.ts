@@ -680,6 +680,22 @@ export function readIndexMd(kbId: string): string | null {
 }
 
 /**
+ * Cheap availability probe: would getKBReferenceById resolve this KB?
+ * Checks registry status + index.md presence WITHOUT reading the content.
+ * Runs on the per-message hot path (session knowledge fingerprint), where the
+ * full resolution's index.md read would be wasted on every reused session.
+ */
+export function isKBIndexReady(kbId: string): boolean {
+  const kb = getRegistry().get(kbId)
+  if (!kb || kb.status !== 'active') return false
+  try {
+    return statSync(getKBIndexMdPath(kbId)).size > 0
+  } catch {
+    return false
+  }
+}
+
+/**
  * Resolve the text-corpus files an agent Read during a KB chat turn back to the
  * original source documents (name + absolute path) for clickable citations.
  * Reads are keyed by the extracted-text filename; map it back via hashes.json.
@@ -741,16 +757,22 @@ export function resolveSourcesForReadPaths(readPaths: string[]): KBSource[] {
 // Conversation integration (SYNC, pure memory read — hot path)
 // ============================================================================
 
-export function getKBReferencesForSpace(spaceId: string): KBReference[] {
-  const refs: KBReference[] = []
+/**
+ * KB ids to seed onto a new conversation created in this space: the space-bound
+ * KBs plus the global default, deduped. Snapshotted onto the conversation record
+ * at creation (conversation.service). Ids are stored as-is — status and index
+ * availability are gated at use time (getKBReferenceById), so a KB that is
+ * paused now but reactivated later still resolves for a seeded conversation,
+ * matching the old realtime space-binding behavior.
+ */
+export function getSeedKBIds(spaceId: string): string[] {
+  const ids = new Set<string>()
   for (const kb of getRegistry().values()) {
-    if (kb.status !== 'active') continue
-    if (!kb.spaceIds.includes(spaceId)) continue
-    const indexContent = readIndexMd(kb.id)
-    if (!indexContent) continue
-    refs.push({ id: kb.id, name: kb.name, indexContent })
+    if (kb.spaceIds.includes(spaceId)) ids.add(kb.id)
   }
-  return refs
+  const def = getDefaultKB()
+  if (def) ids.add(def.id)
+  return [...ids]
 }
 
 /**

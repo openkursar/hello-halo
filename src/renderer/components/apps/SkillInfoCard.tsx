@@ -36,6 +36,8 @@ import { useSpaceStore } from '../../stores/space.store'
 import { AppStatusDot } from './AppStatusDot'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
+import { getSkillMdContent } from '../../../shared/skill-frontmatter'
+import { buildSkillContentPatch } from '../../utils/skill-content'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import { CodeMirrorEditor } from '../canvas/viewers/CodeMirrorEditor'
 import { api } from '../../api'
@@ -64,28 +66,6 @@ function statusLabel(status: AppStatus, t: (s: string) => string): string {
     case 'error':   return t('Error')
     default:        return String(status)
   }
-}
-
-/**
- * Extract the primary SKILL.md content from a skill spec.
- * skill_files takes priority (registry installs); falls back to skill_content.
- */
-function getSkillContent(spec: SkillSpec): string {
-  return spec.skill_files?.['SKILL.md'] ?? spec.skill_content ?? ''
-}
-
-/**
- * Build the spec patch needed to update SKILL.md content.
- * Preserves all other files in skill_files when present.
- */
-function buildSkillContentPatch(
-  spec: SkillSpec,
-  newContent: string
-): Record<string, unknown> {
-  if (spec.skill_files) {
-    return { skill_files: { ...spec.skill_files, 'SKILL.md': newContent } }
-  }
-  return { skill_content: newContent }
 }
 
 // ============================================
@@ -143,7 +123,7 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
   const isGlobal   = app.spaceId === null
 
   const triggerCommand  = `/${spec.name.toLowerCase().replace(/\s+/g, '-')}`
-  const skillContent    = getSkillContent(spec)
+  const skillContent    = getSkillMdContent(spec)
   const hasSkillContent = skillContent.length > 0
 
   // Build the ordered space list for the selector.

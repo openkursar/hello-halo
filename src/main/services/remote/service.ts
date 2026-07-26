@@ -10,7 +10,7 @@ import {
   stopHttpServer,
   isServerRunning,
   getServerInfo
-} from '../http/server'
+} from '../../http/server'
 import {
   startTunnel,
   startNamedTunnel,
@@ -20,23 +20,23 @@ import {
   TunnelDisabledByPolicyError,
   NamedTunnelAuthError,
   type TunnelMode,
-} from './tunnel.service'
+} from './tunnel'
 import {
   issueNamedTunnel,
   revokeNamedTunnel,
   TunnelIssueError,
   type NamedTunnelGrant,
-} from './tunnel-issuer.client'
-import { getDeviceIdentity } from '../foundation/device-identity'
-import { getConfig, saveConfig } from '../foundation/config.service'
+} from './issuer-client'
+import { getDeviceIdentity } from '../../foundation/device-identity'
+import { getConfig, saveConfig } from '../../foundation/config.service'
 import {
   setCustomAccessToken,
   generateAccessToken,
   encodeForStorage,
   CredentialRestoreError,
   logAuthEvent,
-} from '../http/auth/index'
-import { isTunnelSafe } from './security-policy'
+} from '../../http/auth/index'
+import { isTunnelSafe } from '../security-policy'
 
 /**
  * Persist the access token to config so it survives restarts. The token

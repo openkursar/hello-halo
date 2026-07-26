@@ -45,8 +45,7 @@ vi.mock('../../../../src/main/services/agent/toolsets/registry', () => ({
 vi.mock('../../../../src/main/services/agent/toolsets/state', () => ({
   getOpenToolsets: vi.fn(() => openSet),
   markOpen: vi.fn((_s: string, _c: string, id: string) => (openSet.has(id) ? false : (openSet.add(id), true))),
-  markClosed: vi.fn((_s: string, _c: string, id: string) => (openSet.has(id) ? (openSet.delete(id), true) : false)),
-  getServerCache: vi.fn(() => new Map())
+  markClosed: vi.fn((_s: string, _c: string, id: string) => (openSet.has(id) ? (openSet.delete(id), true) : false))
 }))
 
 import { openToolset, closeToolset } from '../../../../src/main/services/agent/toolsets/broker'

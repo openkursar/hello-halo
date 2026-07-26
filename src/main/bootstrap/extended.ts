@@ -26,7 +26,7 @@
 import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
 import { registerSecurityHandlers } from '../ipc/security'
-import { enableRemoteAccess, enableTunnel } from '../services/remote.service'
+import { enableRemoteAccess, enableTunnel } from '../services/remote'
 import { getConfig, migrateCredentialEncryption, setCredentialFailureNotifier } from '../foundation/config.service'
 import { broadcastToAll } from '../http/websocket'
 import { isServerMode } from '../foundation/runtime-mode'
@@ -73,6 +73,7 @@ import { registerModelCapabilitiesHandlers } from '../ipc/model-capabilities'
 import { registerWeixinIlinkHandlers } from '../ipc/weixin-ilink'
 import { registerTlonHandlers } from '../ipc/tlon'
 import { initTlonWatchers, shutdownTlon, migrateKBsToTextIndex } from '../services/tlon'
+import { shutdownOcr } from '../services/ocr'
 import { initRegistryService, shutdownRegistryService } from '../store'
 import { startUpgradeScheduler, stopUpgradeScheduler } from '../store/upgrade.service'
 import { cleanupImChannelTempFiles } from '../apps/runtime/im-channels'
@@ -471,6 +472,9 @@ export async function cleanupExtendedServices(): Promise<void> {
 
   // Tlon: Unsubscribe all KB watchers and clear timers
   await shutdownTlon().catch(err => console.error('[Bootstrap] Tlon shutdown error:', err))
+
+  // OCR: Terminate the shared tesseract worker (used by tlon, chat toolset, automation)
+  await shutdownOcr().catch(err => console.error('[Bootstrap] OCR shutdown error:', err))
 
   console.log('[Bootstrap] Extended services cleaned up')
 }

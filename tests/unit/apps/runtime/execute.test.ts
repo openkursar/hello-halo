@@ -82,6 +82,10 @@ vi.mock('../../../../src/main/services/web-search', () => ({
   createWebSearchMcpServer: vi.fn().mockReturnValue({ name: 'web-search', _isMcpServer: true }),
 }))
 
+vi.mock('../../../../src/main/services/ocr', () => ({
+  createOcrMcpServer: vi.fn().mockReturnValue({ name: 'ocr', _isMcpServer: true }),
+}))
+
 vi.mock('../../../../src/main/services/email-mcp', () => ({
   createEmailMcpServer: vi.fn().mockReturnValue(null),
 }))
@@ -115,6 +119,18 @@ vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
 
 vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({
   createNotifyToolServer: vi.fn().mockReturnValue({ name: 'halo-notify', _isMcpServer: true }),
+}))
+
+// Stubbed so the real helper's transitive notify-channels → logging import
+// (which needs a fuller config.service mock) stays out of this orchestration test.
+vi.mock('../../../../src/main/apps/runtime/notify-availability', () => ({
+  resolveNotifyAvailability: vi.fn().mockReturnValue({
+    channelsConfigured: false,
+    emailChannelConfigured: false,
+    imContactsAvailable: false,
+    notifyBotAvailable: false,
+    anyNotifyToolAvailable: false,
+  }),
 }))
 
 vi.mock('../../../../src/main/apps/runtime/file-export-gate', () => ({

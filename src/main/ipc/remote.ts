@@ -14,9 +14,9 @@ import {
   onRemoteAccessStatusChange,
   setCustomPassword,
   regeneratePassword,
-  resetTunnelAddress
-} from '../services/remote.service'
-import { TunnelIssueError } from '../services/tunnel-issuer.client'
+  resetTunnelAddress,
+  TunnelIssueError
+} from '../services/remote'
 import { getMainWindow, onMainWindowChange } from '../foundation/window.service'
 import {
   isTunnelSafe,

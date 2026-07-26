@@ -20,15 +20,19 @@ export interface TerminalInfo {
   cols: number
   rows: number
   owner: 'ai' | 'user'
+  /** True once the AI has operated this session via any terminal_* tool. */
+  aiTouched: boolean
   state: 'running' | 'exited'
   exitCode: number | null
   lastActivityAt: number
   createdAt: number
+  /** Owning space id — drives per-space scoping of the live-sessions tray. */
+  spaceId?: string
 }
 
 interface TerminalLifecycleEvent {
   sessionId: string
-  type: 'created' | 'exited' | 'title' | 'ai-activity'
+  type: 'created' | 'exited' | 'title' | 'ai-activity' | 'touched'
   info?: TerminalInfo
   aiWriting?: boolean
 }
@@ -92,6 +96,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         if (e.info) sessions.set(e.sessionId, e.info)
         if (e.aiWriting) aiWriting.add(e.sessionId)
         else aiWriting.delete(e.sessionId)
+        break
+      case 'touched':
+        // A user-opened session became AI-operated: refresh its info so the
+        // close policy and tray membership see the new aiTouched flag.
+        if (e.info) sessions.set(e.sessionId, e.info)
         break
     }
 

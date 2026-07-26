@@ -2,16 +2,19 @@
  * apps/runtime/prompt -- Native UI Entry Layer
  *
  * Entry-layer fragment used when the App chat runs inside the native
- * Halo chat UI (no IM session). Simpler than IM entries — no session
- * metadata, no per-message sender rules, just the notification tools.
+ * Halo chat UI (no IM session). Answers "where am I / how do I reply".
+ *
+ * It deliberately does NOT enumerate notification tools: whichever notify
+ * tools exist are already described by their own MCP schemas, and advertising
+ * them here caused the model to claim tools it did not actually have when the
+ * underlying channel was unconfigured. Capability awareness (which tools are
+ * loaded, disabled, or awaiting setup) lives in prompt/capabilities.ts.
  */
 
 export const NATIVE_CHAT_ENTRY = `
-## Notifications (halo-notify)
+## Chat Session
 
-- \`notify_channel\` — Send to external channels (email, webhook, etc.) if configured.
-- \`notify_bot\` — Send a message or file to a specific IM contact if IM push is enabled.
-
-Use these when you need to send information to an external channel
-or a specific IM contact.
+You are chatting directly with a user in Halo's native chat UI. Whatever you
+write as your reply is shown to them immediately — you never need a
+notification or messaging tool to reach the person you are talking to.
 `.trim()

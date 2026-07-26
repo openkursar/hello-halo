@@ -243,7 +243,15 @@ export const McpDependencySchema = z.object({
   /** Human-readable reason for this dependency (shown during install) */
   reason: z.string().optional(),
   /** Whether this MCP is bundled within the app package */
-  bundled: z.boolean().optional()
+  bundled: z.boolean().optional(),
+  /**
+   * Whether this digital human actually uses the dependency. Optional; absent
+   * means enabled. Set to `false` to keep the declaration (and its reason) but
+   * stop injecting the MCP for THIS digital human only — a per-app switch that
+   * never touches the shared MCP server's own state. The runtime skips
+   * `enabled: false` entries (see getMcpServersForRequires).
+   */
+  enabled: z.boolean().optional()
 })
 
 // ============================================

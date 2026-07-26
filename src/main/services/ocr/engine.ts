@@ -1,16 +1,20 @@
 /**
- * Local, offline OCR for image sources (tesseract.js, LSTM engine).
+ * Local, offline OCR engine (tesseract.js, LSTM engine).
  *
- * Images have no grep-able text, so at ingest we OCR them to plaintext and index
- * that like any document. Everything runs on-device: the WASM engine ships in the
+ * Shared on-device text-from-image capability with three consumers: knowledge-
+ * base ingest (services/tlon), the interactive `ocr` toolset, and the automation
+ * runtime's built-in OCR. Everything runs on-device: the WASM engine ships in the
  * app bundle and the eng+chi_sim language data under resources/ocr/tessdata is
  * passed as a local path, so nothing is fetched from a CDN and image content
  * never leaves the machine.
  *
- * The worker is created lazily and reused across images. If it fails to
- * initialize, OCR degrades gracefully: the image is skipped rather than crashing
- * ingest. Chinese recognition is serviceable but not exact; a high-precision
+ * The worker is created lazily and reused across images and across consumers. If
+ * it fails to initialize, OCR degrades gracefully: the caller gets '' rather than
+ * a crash. Chinese recognition is serviceable but not exact; a high-precision
  * engine is a separate optional pack.
+ *
+ * Lifecycle note: because the worker is shared, its shutdown is owned by the
+ * bootstrap cleanup flow (cleanupExtendedServices), not by any single consumer.
  */
 
 import { join } from 'path'
@@ -48,7 +52,7 @@ async function getWorker(): Promise<Worker | null> {
         logger: () => {},
       })
     })().catch(err => {
-      console.error('[Tlon] OCR engine failed to initialize; images will be skipped:', err)
+      console.error('[OCR] Engine failed to initialize; images will be skipped:', err)
       workerPromise = null
       return null
     })
@@ -78,7 +82,7 @@ export async function shutdownOcr(): Promise<void> {
     const worker = await pending
     await worker?.terminate()
   } catch (err) {
-    console.error('[Tlon] OCR worker termination failed:', err)
+    console.error('[OCR] Worker termination failed:', err)
   }
 }
 
@@ -90,7 +94,7 @@ export async function ocrImage(buf: Buffer): Promise<string> {
     const { data } = await worker.recognize(buf)
     return collapseCjkSpaces(data.text).trim()
   } catch (err) {
-    console.error('[Tlon] OCR failed for an image:', err)
+    console.error('[OCR] Recognition failed for an image:', err)
     return ''
   }
 }

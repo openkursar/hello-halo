@@ -3,7 +3,7 @@
  *
  * Implements the onboarding design's key-first flow, deliberately different
  * from the Settings provider editor (`ProviderSelector`):
- *   1. API Key (carried in from the login screen's inline entry) sits on top.
+ *   1. API Key sits on top, with the login entry's optional tutorial link.
  *   2. Provider is chosen *after*, from the full catalog, with NO default — the
  *      user must actively pick ("Select provider"), reinforcing the "enter your
  *      key, then tell us whose key it is" mental model.
@@ -19,24 +19,25 @@
 
 import { useState } from 'react'
 import { v4 as uuidv4 } from 'uuid'
-import { Eye, EyeOff, Loader2, CheckCircle2, XCircle } from 'lucide-react'
+import { Eye, EyeOff, Loader2, CheckCircle2, XCircle, ExternalLink } from 'lucide-react'
 import { api } from '../../api'
 import { getBuiltinProvider, type AISource, type ModelOption, type ProviderId } from '../../types'
-import { useTranslation } from '../../i18n'
+import { useTranslation, getCurrentLanguage } from '../../i18n'
+import { resolveLocalizedText, type ProviderDocsLink } from '../../../shared/types'
 import { formatModelFetchError } from '../../utils/model-fetch-error'
 import { ProviderCatalogDropdown } from '../ai-config/ProviderCatalogDropdown'
 
 interface CustomApiSetupFormProps {
-  /** API key carried over from the login screen's inline Custom-API entry. */
-  initialApiKey?: string
+  /** Optional tutorial link from the login entry (e.g. "how to get a key"). */
+  docs?: ProviderDocsLink
   /** Persist the built source and enter the app (owns the legacy mirror). */
   onSave: (source: AISource) => Promise<void>
 }
 
-export function CustomApiSetupForm({ initialApiKey, onSave }: CustomApiSetupFormProps) {
+export function CustomApiSetupForm({ docs, onSave }: CustomApiSetupFormProps) {
   const { t } = useTranslation()
 
-  const [apiKey, setApiKey] = useState(initialApiKey ?? '')
+  const [apiKey, setApiKey] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
   const [providerId, setProviderId] = useState<ProviderId | ''>('')
   const [apiUrl, setApiUrl] = useState('')
@@ -197,6 +198,18 @@ export function CustomApiSetupForm({ initialApiKey, onSave }: CustomApiSetupForm
             {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
           </button>
         </div>
+        {docs && (
+          <button
+            type="button"
+            onClick={() => { void api.openExternal(docs.url) }}
+            className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            {docs.label
+              ? resolveLocalizedText(docs.label, getCurrentLanguage())
+              : t("Don't know how to get it? View tutorial")}
+            <ExternalLink className="w-3 h-3" />
+          </button>
+        )}
       </div>
 
       {/* Provider — no default; the user must actively choose. Shares the same

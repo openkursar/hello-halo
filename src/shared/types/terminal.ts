@@ -1,10 +1,7 @@
 /**
- * AI Terminal - Types
- *
- * A pty-backed interactive terminal that the AI controls via MCP tools and the
- * user can see and take over. The pty lives in the main process, decoupled from
- * any UI or SDK session — so a task keeps running whether or not the user is
- * watching (activity chip → one-click reveal).
+ * Terminal domain types, shared by the main process (ai-terminal module), the
+ * pty-host worker process, and transport layers. Pure data — no runtime deps —
+ * so the worker can import them without touching Electron or main-process code.
  */
 
 /** How a terminal session was created */
@@ -13,9 +10,26 @@ export type TerminalOwner = 'ai' | 'user'
 /** Run state of a session */
 export type TerminalRunState = 'running' | 'exited'
 
-/** Options for creating a session */
+/** Shell family, used to decide which one-time hardening a session may apply. */
+export type ShellFamily = 'posix' | 'other'
+
+/**
+ * A fully-resolved shell to spawn. Shell POLICY (which executable, which args)
+ * lives in the main process (it may consult Electron paths / installed Git
+ * Bash); the pty-host worker only executes a resolved spec.
+ */
+export interface ResolvedShellSpec {
+  file: string
+  args: string[]
+  /** Extra env layered onto the pty environment */
+  env: Record<string, string>
+  /** posix = bash/zsh/sh family (accepts `set -o`); other = powershell/cmd/… */
+  family: ShellFamily
+}
+
+/** Options for creating a session (caller-facing; shell is a preference path) */
 export interface CreateTerminalOptions {
-  /** Shell executable; defaults to the platform login shell */
+  /** Shell executable; defaults to the platform default shell */
   shell?: string
   /** Working directory; defaults to the space working dir */
   cwd?: string
@@ -45,6 +59,14 @@ export interface TerminalInfo {
   cols: number
   rows: number
   owner: TerminalOwner
+  /**
+   * True once the AI has operated this session through any terminal_* tool
+   * (always true for owner==='ai', since the AI created it). Distinct from
+   * `owner`: a user-opened terminal the AI later drove is `owner:'user'` but
+   * `aiTouched:true`. Drives the close policy (closing an aiTouched terminal's
+   * tab prompts keep-background vs terminate) and the live-sessions tray.
+   */
+  aiTouched: boolean
   state: TerminalRunState
   exitCode: number | null
   /** ms epoch of last output or input */
@@ -102,6 +124,9 @@ export interface TerminalSearchResult {
   truncated: boolean
 }
 
+/** Outcome of a wait-for-text call (terminal_wait_for) */
+export type TerminalWaitOutcome = 'found' | 'timeout' | 'exited'
+
 /** Data event pushed to renderer / WS for live rendering */
 export interface TerminalDataEvent {
   sessionId: string
@@ -112,7 +137,8 @@ export interface TerminalDataEvent {
 /** Lifecycle event pushed to renderer / WS */
 export interface TerminalLifecycleEvent {
   sessionId: string
-  type: 'created' | 'exited' | 'title' | 'ai-activity'
+  /** 'touched' fires once when a user-owned session first becomes aiTouched. */
+  type: 'created' | 'exited' | 'title' | 'ai-activity' | 'touched'
   info?: TerminalInfo
   /** For 'ai-activity': whether the AI is currently writing */
   aiWriting?: boolean
