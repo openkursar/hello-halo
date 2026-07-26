@@ -143,24 +143,7 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
     try {
       await api.stopGeneration(targetId)
 
-      if (targetId) {
-        set((state) => {
-          const newSessions = new Map(state.sessions)
-          const session = newSessions.get(targetId)
-          if (session) {
-            newSessions.set(targetId, {
-              ...session,
-              isGenerating: false,
-              isThinking: false,
-              // Mark pending question as cancelled on stop
-              pendingQuestion: session.pendingQuestion?.status === 'active'
-                ? { ...session.pendingQuestion, status: 'cancelled' as const }
-                : session.pendingQuestion
-            })
-          }
-          return { sessions: newSessions }
-        })
-      }
+      if (targetId) get().markSessionStopped(targetId)
     } catch (error) {
       console.error('Failed to stop generation:', error)
     }

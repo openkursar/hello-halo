@@ -220,7 +220,6 @@ export function ImSessionItem({ session, isSelected, onClick, onClearConfirm, on
         <div className="flex flex-col items-end gap-1 flex-shrink-0 self-start mt-0.5">
           {showStopConfirm ? (
             <div className="flex items-center gap-1.5">
-              <span className="text-[11px] text-muted-foreground/80">{t('Stop?')}</span>
               <button
                 onClick={handleStopConfirm}
                 disabled={isStopping}

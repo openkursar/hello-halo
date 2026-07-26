@@ -153,9 +153,8 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
   const [showClearConfirm, setShowClearConfirm] = useState(false)
 
   // ── Stop generation (with confirmation) ──
-  // Aborts the current turn only; history is preserved. The chat store's
-  // isGenerating flag flips to false once the abort propagates through the
-  // stream processor — no manual resetSession needed.
+  // Aborts the current turn only; history is preserved.
+  const markSessionStopped = useChatStore(s => s.markSessionStopped)
   const [showStopConfirm, setShowStopConfirm] = useState(false)
   const [isStopping, setIsStopping] = useState(false)
 
@@ -164,7 +163,9 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
     setIsStopping(true)
     try {
       const res = await api.appImChatStop(appId, spaceId, session.channel, session.chatType, session.chatId)
-      if (!res.success) {
+      if (res.success) {
+        markSessionStopped(conversationId)
+      } else {
         console.error('[ImChatView] Stop session error:', res.error)
       }
     } catch (err) {
@@ -173,7 +174,7 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
       setIsStopping(false)
       setShowStopConfirm(false)
     }
-  }, [appId, spaceId, session.channel, session.chatType, session.chatId, isStopping])
+  }, [appId, spaceId, session.channel, session.chatType, session.chatId, conversationId, isStopping, markSessionStopped])
 
   const handleClearSession = useCallback(async () => {
     try {

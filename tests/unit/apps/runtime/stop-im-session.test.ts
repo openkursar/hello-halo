@@ -146,8 +146,12 @@ vi.mock('../../../../src/main/platform/memory/snapshot', () => ({
 // Imports (after all mocks)
 // ============================================
 
-import { stopImSession } from '../../../../src/main/apps/runtime/app-chat'
-import { buildImSessionKey } from '../../../../src/shared/apps/im-keys'
+import {
+  stopImSession,
+  stopAppChat,
+  stopAppChatConversation,
+} from '../../../../src/main/apps/runtime/app-chat'
+import { buildImSessionKey, getAppChatConversationId } from '../../../../src/shared/apps/im-keys'
 
 // ============================================
 // Tests
@@ -263,5 +267,67 @@ describe('stopImSession', () => {
     expect(stopGeneration).not.toHaveBeenCalled()
     expect(dispose).toHaveBeenCalledTimes(1)
     expect(clearImStreamHandle).toHaveBeenCalledWith(conversationId)
+  })
+})
+
+/**
+ * All stop entry points share one implementation, so none of them can skip the
+ * supplement-buffer drop or the stream dispose. Before they were unified, both
+ * functions below called stopGeneration() directly: the app-level stop left the
+ * buffer queued (the round's finally block then flushed it, restarting
+ * generation immediately after the user stopped it) and left the WeCom stream
+ * open until the server-side timeout.
+ */
+describe('stop entry points share the same cleanup', () => {
+  beforeEach(() => {
+    activeSessions.clear()
+    v2Sessions.clear()
+    stopGeneration.mockClear()
+    clearSupplementBuffer.mockClear()
+    getImStreamHandle.mockClear()
+    clearImStreamHandle.mockClear()
+    getImStreamHandle.mockReturnValue(undefined)
+  })
+
+  it('stopAppChatConversation drops the buffer and disposes the stream', async () => {
+    const conversationId = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
+    activeSessions.set(conversationId, {})
+    const dispose = vi.fn()
+    getImStreamHandle.mockReturnValue({ dispose })
+
+    await stopAppChatConversation(conversationId)
+
+    expect(stopGeneration).toHaveBeenCalledWith(conversationId)
+    expect(clearSupplementBuffer).toHaveBeenCalledWith(conversationId)
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(clearImStreamHandle).toHaveBeenCalledWith(conversationId)
+  })
+
+  it('stopAppChat cleans up every session of the app, native and IM alike', async () => {
+    const nativeKey = getAppChatConversationId('app-1')
+    const imKey = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
+    activeSessions.set(nativeKey, {})
+    activeSessions.set(imKey, {})
+
+    await stopAppChat('app-1')
+
+    expect(stopGeneration).toHaveBeenCalledWith(nativeKey)
+    expect(stopGeneration).toHaveBeenCalledWith(imKey)
+    expect(clearSupplementBuffer).toHaveBeenCalledWith(nativeKey)
+    expect(clearSupplementBuffer).toHaveBeenCalledWith(imKey)
+    expect(clearImStreamHandle).toHaveBeenCalledWith(imKey)
+  })
+
+  it('stopAppChat leaves other apps untouched', async () => {
+    const ownKey = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
+    const otherKey = buildImSessionKey('app-2', 'wecom-bot', 'group', 'room-1')
+    activeSessions.set(ownKey, {})
+    activeSessions.set(otherKey, {})
+
+    await stopAppChat('app-1')
+
+    expect(stopGeneration).toHaveBeenCalledTimes(1)
+    expect(stopGeneration).toHaveBeenCalledWith(ownKey)
+    expect(activeSessions.has(otherKey)).toBe(true)
   })
 })

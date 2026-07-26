@@ -38,6 +38,7 @@ export function ImSessionPanel({ appId, spaceId, onSessionCleared }: ImSessionPa
     imSessions, fetchImSessions,
   } = useAppsPageStore()
   const resetSession = useChatStore(s => s.resetSession)
+  const markSessionStopped = useChatStore(s => s.markSessionStopped)
 
   // Fetch + poll from shared store
   useEffect(() => {
@@ -80,19 +81,20 @@ export function ImSessionPanel({ appId, spaceId, onSessionCleared }: ImSessionPa
     }
   }, [appId, spaceId, resetSession, onSessionCleared])
 
-  // Stop an IM session's active generation. History is preserved on the backend;
-  // no resetSession here — the chat store's isGenerating flag flips to false
-  // once the abort propagates through the stream processor.
+  // Stop an IM session's active generation. Backend keeps the history, so settle
+  // the generating state rather than resetting the session.
   const handleStopConfirm = useCallback(async (session: ImSessionRecord) => {
     try {
       const res = await api.appImChatStop(appId, spaceId, session.channel, session.chatType, session.chatId)
-      if (!res.success) {
+      if (res.success) {
+        markSessionStopped(buildImSessionKey(appId, session.channel, session.chatType, session.chatId))
+      } else {
         console.error('[ImSessionPanel] Stop session error:', res.error)
       }
     } catch (err) {
       console.error('[ImSessionPanel] Stop session error:', err)
     }
-  }, [appId, spaceId])
+  }, [appId, spaceId, markSessionStopped])
 
   // ── Native local sessions: create / rename / delete ──
   // Local sessions surface in the same list (source==='local'); split them out

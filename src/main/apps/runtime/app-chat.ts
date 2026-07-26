@@ -836,10 +836,46 @@ export async function sendAppChatMessage(
 }
 
 /**
+ * Abort one conversation's turn and release the resources that would otherwise
+ * outlive it. The single stop path for every caller — every entry point below
+ * delegates here so no route can forget a step.
+ *
+ * Three things must happen together, in this order:
+ *   1. Drop buffered supplements. `sendAppChatMessage`'s finally block flushes
+ *      them, so leaving them queued restarts a round right after the stop.
+ *   2. Dispose (not finish) the IM stream. Stop means "send nothing"; finish()
+ *      would push a final message into the chat.
+ *   3. Abort the generation.
+ *
+ * Steps 1–2 run even when nothing is generating: a crashed round can leave a
+ * buffer entry or stream handle behind, and the next inbound message would pick
+ * it up. Both are no-ops for native conversations, which never register either.
+ *
+ * @returns whether a generation was actually running
+ */
+async function stopConversation(conversationId: string): Promise<boolean> {
+  const wasActive = activeSessions.has(conversationId)
+
+  clearSupplementBuffer(conversationId)
+
+  const streamHandle = getImStreamHandle(conversationId)
+  if (streamHandle) {
+    try {
+      streamHandle.dispose?.()
+    } catch (err) {
+      console.error(`[AppChat] Stream dispose failed: ${conversationId}`, err)
+    }
+  }
+  clearImStreamHandle(conversationId)
+
+  if (wasActive) await stopGeneration(conversationId)
+  return wasActive
+}
+
+/**
  * Stop an active app chat generation.
  *
  * Stops the native Halo chat session AND all IM channel sessions for this app.
- * Uses the same stop mechanism as the main agent (V2 session interrupt + drain).
  *
  * @param appId - App ID to stop chat for
  */
@@ -852,7 +888,7 @@ export async function stopAppChat(appId: string): Promise<void> {
     k => k === prefix || k.startsWith(prefix + ':')
   )
   for (const convId of toStop) {
-    await stopGeneration(convId)
+    await stopConversation(convId)
   }
   console.log(`[AppChat][${appId}] Generation stopped (${toStop.length} session(s))`)
 }
@@ -865,8 +901,8 @@ export async function stopAppChat(appId: string): Promise<void> {
  * @param conversationId - The specific session to stop
  */
 export async function stopAppChatConversation(conversationId: string): Promise<void> {
-  await stopGeneration(conversationId)
-  console.log(`[AppChat] Generation stopped for conversation: ${conversationId}`)
+  const wasActive = await stopConversation(conversationId)
+  console.log(`[AppChat] Generation stopped for conversation: ${conversationId} (active=${wasActive})`)
 }
 
 /**
@@ -1169,37 +1205,14 @@ export async function stopImSession(
   chatId: string
 ): Promise<{ stopped: boolean }> {
   const conversationId = buildImSessionKey(appId, channel, chatType, chatId)
-  const wasActive = activeSessions.has(conversationId)
+  const stopped = await stopConversation(conversationId)
 
-  // Drop buffered supplements so the aborted round's queued follow-ups do not
-  // get flushed into a fresh generation on the next inbound message.
-  clearSupplementBuffer(conversationId)
-
-  // Terminate the IM-side stream (if any) before aborting generation. dispose()
-  // is preferred over finish() — stop means "send nothing", and finish() would
-  // push a final message into the group. The registry entry is set by
-  // dispatch-inbound when reply.streaming is present, and cleared by
-  // sendAppChatMessage's finally block on round completion.
-  const streamHandle = getImStreamHandle(conversationId)
-  if (streamHandle) {
-    try {
-      streamHandle.dispose?.()
-    } catch (err) {
-      console.error(`[AppChat][${appId}] Stream dispose failed: ${conversationId}`, err)
-    }
-  }
-  // Always clear — a stale entry left from a crashed round would otherwise let
-  // a future stop() dispose a stream that no longer exists.
-  clearImStreamHandle(conversationId)
-
-  if (wasActive) {
-    await stopGeneration(conversationId)
-    console.log(`[AppChat][${appId}] IM session stopped: ${conversationId}`)
-    return { stopped: true }
-  }
-
-  console.log(`[AppChat][${appId}] IM session stop requested but not active: ${conversationId}`)
-  return { stopped: false }
+  console.log(
+    stopped
+      ? `[AppChat][${appId}] IM session stopped: ${conversationId}`
+      : `[AppChat][${appId}] IM session stop requested but not active: ${conversationId}`
+  )
+  return { stopped }
 }
 
 /**

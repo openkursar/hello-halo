@@ -189,6 +189,7 @@ export interface ChatState {
   // Session management
   resetSession: (conversationId: string) => void
   setSessionError: (conversationId: string, error: string) => void
+  markSessionStopped: (conversationId: string) => void
 
   // Cleanup
   reset: () => void
