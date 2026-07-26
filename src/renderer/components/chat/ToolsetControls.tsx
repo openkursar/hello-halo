@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { SlidersHorizontal, Globe, TerminalSquare } from 'lucide-react'
+import { SlidersHorizontal, Globe, TerminalSquare, ScanText } from 'lucide-react'
 import { useToolsetsStore, type ToolsetStatus } from '../../stores/toolsets.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useSpaceStore } from '../../stores/space.store'
@@ -24,6 +24,8 @@ function toolsetIcon(id: string, size = 15) {
       return <Globe size={size} />
     case 'ai-terminal':
       return <TerminalSquare size={size} />
+    case 'ocr':
+      return <ScanText size={size} />
     default:
       return <SlidersHorizontal size={size} />
   }
@@ -40,6 +42,8 @@ function toolsetLabel(t: (key: string) => string, ts: ToolsetStatus): string {
       return t('Web Control')
     case 'ai-terminal':
       return t('Terminal')
+    case 'ocr':
+      return t('Text Extraction (OCR)')
     default:
       return ts.displayName
   }
@@ -56,6 +60,8 @@ function toolsetDescription(t: (key: string) => string, ts: ToolsetStatus): stri
       return t('Let AI control your browser')
     case 'ai-terminal':
       return t('Let AI use interactive terminals')
+    case 'ocr':
+      return t('Let AI read text from images')
     default:
       return ts.summary
   }

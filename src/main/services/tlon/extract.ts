@@ -48,7 +48,7 @@ export function isExtractable(filePath: string): boolean {
 export async function extractText(absPath: string, buf: Buffer): Promise<string> {
   const ext = fileExtension(absPath)
   if (IMAGE_EXTENSIONS.has(ext)) {
-    const { ocrImage } = await import('./ocr')
+    const { ocrImage } = await import('../ocr')
     return ocrImage(buf)
   }
   switch (ext) {

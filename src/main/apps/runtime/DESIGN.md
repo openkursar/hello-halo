@@ -254,8 +254,9 @@ rules, security rules) lives in the channel's module, not in the assembler.
 src/main/apps/runtime/
 ├── prompt/
 │   ├── assembler.ts        — assembleAppChatPrompt(fragments) — joins layers
-│   ├── identity.ts         — buildIdentityFragments() — base + spec + memory + config
-│   └── entry-native.ts     — NATIVE_CHAT_ENTRY — native UI fallback
+│   ├── identity.ts         — buildIdentityFragments() — base + spec + memory + config + capability awareness
+│   ├── capabilities.ts     — disabled + awaiting-setup capability guidance (Identity layer)
+│   └── entry-native.ts     — NATIVE_CHAT_ENTRY — native UI entry (reply orientation only)
 └── im-channels/
     └── im-prompt.ts        — buildImEntry / buildImConstraints / ImSessionContext
 ```
@@ -264,8 +265,8 @@ src/main/apps/runtime/
 
 | Layer | Answers | Examples |
 |---|---|---|
-| Identity | Who am I, what do I do | Base Agent prompt, App spec, memory access, user config |
-| Entry | Where am I, how do I reply | IM group/direct session context, native UI notification tools |
+| Identity | Who am I, what do I do | Base Agent prompt, App spec, memory access, user config, capability awareness (disabled + awaiting-setup) |
+| Entry | Where am I, how do I reply | IM group/direct session context, native UI reply orientation |
 | Constraint | What I must not do | IM anti-impersonation rules when owners are configured |
 
 **Rationale**:
@@ -383,6 +384,7 @@ src/main/apps/runtime/
   prompt.ts                  -- buildAppSystemPrompt() for automation (headless) sessions
   report-tool.ts             -- report_to_user SDK MCP tool
   notify-tool.ts             -- halo-notify SDK MCP tool (notify_channel + notify_bot)
+  notify-availability.ts     -- resolveNotifyAvailability() — single source of truth for whether notify tools are actually loaded (mirrors notify-tool injection rules; consumed by chat + automation prompts)
   concurrency.ts              -- Counting semaphore
   execute.ts                 -- executeRun() core logic for automation runs
   service.ts                 -- AppRuntimeService implementation
@@ -402,6 +404,7 @@ src/main/apps/runtime/
   prompt/
     assembler.ts             -- assembleAppChatPrompt() — channel-agnostic joiner
     identity.ts              -- buildIdentityFragments() — identity layer
+    capabilities.ts          -- disabled + awaiting-setup capability guidance
     entry-native.ts          -- NATIVE_CHAT_ENTRY — native UI entry fragment
 
   -- IM channel providers and IM-specific prompt content:

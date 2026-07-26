@@ -24,8 +24,9 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import {
   Wrench, ChevronDown, ChevronRight, Plus, Loader2, PlugZap,
-  ExternalLink, Trash2, AlertTriangle, Download,
+  ExternalLink, Trash2, AlertTriangle, Download, Info,
 } from 'lucide-react'
+import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppStore } from '../../stores/app.store'
@@ -40,7 +41,7 @@ import type { McpServerStatus } from '../../types'
 interface AppMcpDepsSectionProps {
   app: InstalledApp
   appId: string
-  /** Raised when requires.mcps changes (takes effect on a fresh session). */
+  /** Raises the visible manual-restart fallback banner (change also auto-applies). */
   onRequireRestart: () => void
 }
 
@@ -181,13 +182,16 @@ function DepRow({
   const server = mcpApp?.spec.type === 'mcp' ? (mcpApp.spec as McpSpec).mcp_server : undefined
   const toolCount = sdkEntry?.tools?.length ?? 0
   const isMissing = health === 'not-installed'
+  // Shared server paused space-wide: its tools cannot be injected regardless of
+  // this digital human's own switch, so the switch must read as inactive (gray).
+  const serverUnavailable = health === 'disabled'
 
   // Server-side availability text — independent of the per-app enable switch.
   // Empty for an installed-but-unprobed server (no news is good news).
   const statusText = (() => {
     switch (health) {
       case 'connected':    return toolCount > 0 ? t('Connected · {{count}} tools', { count: toolCount }) : t('Connected')
-      case 'disabled':     return t('Server disabled')
+      case 'disabled':     return t('MCP server globally disabled')
       case 'failed':       return t('Connection failed')
       case 'needs-login':  return t('Needs login')
       case 'not-installed':return t('Not installed')
@@ -247,6 +251,31 @@ function DepRow({
           </span>
         )}
 
+        {/* Why-disabled explainer: the shared server is paused space-wide, so
+            spell out the consequence and point to where to re-enable it. */}
+        {serverUnavailable && mcpApp && (
+          <Popover>
+            <PopoverTrigger
+              title={t('Why disabled?')}
+              className="flex-shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Info className="w-3.5 h-3.5" />
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-64 p-3 text-xs space-y-2">
+              <p className="text-muted-foreground leading-relaxed">
+                {t('The MCP server is disabled globally, so this digital human will not inject its tools at runtime.')}
+              </p>
+              <button
+                onClick={() => onOpenDetail(mcpApp)}
+                className="flex items-center gap-1 text-primary hover:underline"
+              >
+                <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                {t('Open MCP management to enable')}
+              </button>
+            </PopoverContent>
+          </Popover>
+        )}
+
         {/* Per-digital-human switch: does THIS digital human use the dependency.
             Never touches the shared MCP server's own status. */}
         <button
@@ -257,7 +286,7 @@ function DepRow({
           disabled={toggling}
           onClick={handleToggle}
           className={`relative inline-flex h-5 w-9 flex-shrink-0 rounded-full transition-colors disabled:opacity-50
-            ${enabled ? 'bg-primary' : 'bg-muted'}`}
+            ${enabled && !serverUnavailable ? 'bg-primary' : 'bg-muted'}`}
         >
           {toggling ? (
             <Loader2 className="absolute inset-0 m-auto w-3 h-3 animate-spin text-white/70" />
@@ -418,6 +447,8 @@ export function AppMcpDepsSection({ app, appId, onRequireRestart }: AppMcpDepsSe
     return effectiveMcpApps.filter(a => !declared.has(a.specId))
   }, [effectiveMcpApps, declaredMcps])
 
+  // Persist requires.mcps. The backend auto-restarts this app's chat session on
+  // the change so it applies next message; the fallback banner is surfaced too.
   const writeMcps = useCallback(async (next: McpDependency[]) => {
     const ok = await updateAppSpec(appId, {
       requires: { ...(app.spec.requires ?? {}), mcps: next },

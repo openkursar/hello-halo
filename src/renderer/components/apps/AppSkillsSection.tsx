@@ -17,6 +17,7 @@ import {
   FolderOpen, Download, Loader2,
 } from 'lucide-react'
 import { api } from '../../api'
+import { isElectron } from '../../api/transport'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore, tabForAppType } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
@@ -48,11 +49,14 @@ function SkillRow({
 
   const isGlobal = skill.scope === 'global'
   const body = stripFrontmatter(skill.content).trim()
+  // Reveal works off the on-disk path, so it's available for every skill —
+  // including disk-authored ones that have no installed-app record. Desktop-only:
+  // Web/Capacitor clients cannot open local folders.
+  const canOpenFolder = isElectron() && !!skill.path
 
   async function openFolder() {
-    if (!installedApp) return
-    const res = await api.appOpenSkillFolder(installedApp.id)
-    if (!res.success) console.error('[AppSkillsSection] openSkillFolder failed:', res.error)
+    const res = await api.showArtifactInFolder(skill.path)
+    if (!res.success) console.error('[AppSkillsSection] reveal skill folder failed:', res.error)
   }
 
   function openDetail() {
@@ -77,6 +81,17 @@ function SkillRow({
           <span className="text-sm truncate text-foreground">{skill.name}</span>
         </button>
 
+        {canOpenFolder && (
+          <button
+            onClick={openFolder}
+            title={t('Open skill folder')}
+            aria-label={t('Open skill folder')}
+            className="p-1 text-muted-foreground hover:text-foreground transition-colors rounded flex-shrink-0"
+          >
+            <FolderOpen className="w-3.5 h-3.5" />
+          </button>
+        )}
+
         <span className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-medium border flex-shrink-0
           ${isGlobal
             ? 'bg-primary/10 text-primary border-primary/25'
@@ -94,14 +109,7 @@ function SkillRow({
           )}
 
           {installedApp && (
-            <div className="flex items-center justify-end gap-1.5">
-              <button
-                onClick={openFolder}
-                title={t('Open skill folder')}
-                className="p-1 text-muted-foreground hover:text-foreground transition-colors rounded"
-              >
-                <FolderOpen className="w-3.5 h-3.5" />
-              </button>
+            <div className="flex items-center justify-end">
               <button
                 onClick={openDetail}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary rounded transition-colors"

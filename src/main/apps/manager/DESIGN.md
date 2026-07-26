@@ -116,6 +116,27 @@ connection probe on `installed`/`reinstalled`/`resumed`/`updated`/`status`
 `service.ts` must pass the change details; `change` stays optional only so
 space-level handlers can ignore it.
 
+### 2.6b App Session Invalidation Event
+
+**Signature**: `onAppSessionInvalidate((appId: string) => void)`
+
+Fires when an app's OWN configuration changes in a way that is baked into its
+chat session at creation time: permissions (grant/revoke), user config values,
+and session-affecting spec fields (`system_prompt`, `requires`, `config_schema`,
+`permissions`). The runtime subscribes (`apps/runtime/index.ts`) and calls
+`restartAppChat(appId)` so the change auto-applies on the next message — no
+manual "Restart agent" click. Distinct from `onMcpAppsChange`, which tracks
+shared MCP *server* app lifecycle.
+
+**Invariants**:
+- Never fires for no-op saves (unchanged config values, repeated grant/revoke)
+  or cosmetic spec edits (rename) — emitters compare values before emitting, so
+  a warm chat subprocess is never torn down for nothing.
+- Never aborts a mid-generation turn: the in-flight reply finishes with its
+  current tool set; the session-inputs fingerprint
+  (`computeSessionInputsFingerprint`) rebuilds the session on the next message.
+  Only the manual restart path (IPC/HTTP) interrupts in-flight turns.
+
 ### 2.7 Migration Namespace
 
 **Decision**: Use `'app_manager'` as the migration namespace.

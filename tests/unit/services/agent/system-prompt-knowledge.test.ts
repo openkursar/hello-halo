@@ -1,9 +1,10 @@
 /**
  * Regression tests: the Knowledge section must reach the system prompt for BOTH
  * session kinds. A toolset-broker session always sets toolsetIndex (main chat);
- * an early return after appending the toolset guides once silently dropped the
- * Knowledge section for every chat session, so the model never saw attached
- * knowledge bases despite correct resolution upstream.
+ * a digital-human session leaves it undefined and injects its own capability
+ * guidance. An early return after appending the toolset guides once silently
+ * dropped the Knowledge section for every chat session, so the model never saw
+ * attached knowledge bases despite correct resolution upstream.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -39,9 +40,11 @@ describe('buildSystemPrompt knowledge injection', () => {
     expect(prompt).not.toContain('# AI Browser (Not Enabled)')
   })
 
-  it('appends Knowledge for legacy static-injection sessions (no toolsetIndex)', () => {
-    const prompt = buildSystemPrompt({ ...baseCtx, aiBrowserEnabled: false, knowledgeBases: kbs })
-    expect(prompt).toContain('# AI Browser (Not Enabled)')
+  it('appends Knowledge for digital-human sessions (no toolsetIndex) without capability hints', () => {
+    const prompt = buildSystemPrompt({ ...baseCtx, knowledgeBases: kbs })
+    // Digital-human prompts own their capability guidance; buildSystemPrompt must
+    // stay hint-free for them (no legacy static AI Browser guidance).
+    expect(prompt).not.toContain('# AI Browser (Not Enabled)')
     expect(prompt).toContain('# Knowledge')
     expect(prompt).toContain('## PCB Survey')
   })

@@ -1,12 +1,12 @@
 /**
- * Tlon OCR Unit Tests
+ * OCR Engine Unit Tests
  *
  * tesseract.js is mocked — no real OCR runs. Covers CJK space collapsing
  * (via ocrImage output), worker reuse, and graceful degradation when the
  * engine fails to initialize or recognition throws.
  *
  * The module caches its worker promise, so each test resets the module
- * registry and re-imports ocr.ts fresh.
+ * registry and re-imports engine.ts fresh.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -27,10 +27,10 @@ vi.mock('tesseract.js', () => ({
 
 async function importOcr() {
   vi.resetModules()
-  return import('../../../../src/main/services/tlon/ocr')
+  return import('../../../../src/main/services/ocr/engine')
 }
 
-describe('Tlon OCR', () => {
+describe('OCR engine', () => {
   beforeEach(() => {
     // The setup mock reports app.isPackaged=true, so tessdataDir resolves via
     // process.resourcesPath — undefined outside Electron. Point it at a dummy.

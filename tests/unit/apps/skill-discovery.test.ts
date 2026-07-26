@@ -59,6 +59,8 @@ describe('listAvailableSkills', () => {
     ])
     expect(skills[0].description).toBe('First skill')
     expect(skills[0].dirName).toBe('alpha')
+    expect(skills[0].path).toBe(join(globalSkillsDir(), 'alpha'))
+    expect(skills[1].path).toBe(join(spaceSkillsDir(), 'beta'))
   })
 
   it('falls back to the directory name when frontmatter has no name', () => {

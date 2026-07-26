@@ -29,7 +29,7 @@ import {
 import { isImSessionKey } from '../../../shared/apps/im-keys'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
-import { resolveCredentialsForSdk, buildBaseSdkOptions, computeCredentialsFingerprint } from './sdk-config'
+import { resolveCredentialsForSdk, buildBaseSdkOptions, computeCredentialsFingerprint, computeSessionInputsFingerprint } from './sdk-config'
 import { startConsumer, type ConsumerHandle } from './session-consumer'
 import { hasActiveTeamTasks } from './subagent-handler'
 import { setSessionInvalidator, buildCreationTimeServers } from './toolsets/broker'
@@ -670,6 +670,12 @@ async function getOrCreateV2SessionInner(
   // resolved KB set or working directory has diverged (attach/detach, indexing
   // completed after creation, or a KB-chat/normal turn switch).
   const currentKnowledgeFingerprint = computeKnowledgeFingerprint(resolvedKbIds, workDir)
+  // Tool set + system prompt baked in eagerly by app chat / automation runs.
+  // Main chat builds MCP servers lazily (buildMcpServers) and drives toolset
+  // changes via requestSessionRebuild, so it opts out to avoid double-handling.
+  const currentInputsFingerprint = buildMcpServers
+    ? undefined
+    : computeSessionInputsFingerprint(sdkOptions)
 
   // Check if we have an existing session for this conversation
   const existing = v2Sessions.get(conversationId)
@@ -705,7 +711,8 @@ async function getOrCreateV2SessionInner(
       const needsCredentialRebuild =
         existing.credentialsGeneration !== currentGen ||
         existing.credentialsFingerprint !== currentFingerprint ||
-        existing.knowledgeFingerprint !== currentKnowledgeFingerprint
+        existing.knowledgeFingerprint !== currentKnowledgeFingerprint ||
+        existing.inputsFingerprint !== currentInputsFingerprint
 
       if (needsCredentialRebuild) {
         const consumer = consumers.get(conversationId)
@@ -756,7 +763,7 @@ async function getOrCreateV2SessionInner(
         }
 
         // No active processing and no team agents — safe to rebuild now.
-        console.log(`[Agent][${conversationId}] Session inputs changed (gen ${existing.credentialsGeneration}→${currentGen}, fp ${existing.credentialsFingerprint}→${currentFingerprint}, kb ${existing.knowledgeFingerprint}→${currentKnowledgeFingerprint}), recreating session`)
+        console.log(`[Agent][${conversationId}] Session inputs changed (gen ${existing.credentialsGeneration}→${currentGen}, fp ${existing.credentialsFingerprint}→${currentFingerprint}, kb ${existing.knowledgeFingerprint}→${currentKnowledgeFingerprint}, tools ${existing.inputsFingerprint ?? '∅'}→${currentInputsFingerprint ?? '∅'}), recreating session`)
         closeV2SessionForRebuild(conversationId)
         // Fall through to create new session
       } else {
@@ -856,7 +863,8 @@ async function getOrCreateV2SessionInner(
     lastUsedAt: Date.now(),
     credentialsGeneration: getCredentialsGeneration(),
     credentialsFingerprint: currentFingerprint,
-    knowledgeFingerprint: currentKnowledgeFingerprint
+    knowledgeFingerprint: currentKnowledgeFingerprint,
+    inputsFingerprint: currentInputsFingerprint
   })
 
   // Start cleanup if not already running

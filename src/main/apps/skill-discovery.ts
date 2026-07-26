@@ -60,6 +60,7 @@ function scanSkillsDir(dir: string, scope: 'global' | 'space'): AvailableSkill[]
       description,
       scope,
       dirName: entry.name,
+      path: skillDir,
       content: content.length > MAX_CONTENT_CHARS ? content.slice(0, MAX_CONTENT_CHARS) : content,
     })
   }

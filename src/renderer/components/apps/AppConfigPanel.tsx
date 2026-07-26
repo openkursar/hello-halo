@@ -325,9 +325,8 @@ interface SettingsTabProps {
   spaceName?: string
   t: (s: string, opts?: Record<string, unknown>) => string
   /**
-   * Invoked when a save changes a field that requires the running agent
-   * to be restarted to take effect (system_prompt, user config values).
-   * Parent owns the hint visibility so the banner persists across tab switches.
+   * Invoked after a session-affecting save. The change already auto-applies in
+   * the background; this raises the visible manual-restart fallback banner.
    */
   onRequireRestart: () => void
 }
@@ -420,8 +419,9 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
     if (ok) {
       setSpecSaveSuccess(true)
       setTimeout(() => setSpecSaveSuccess(false), 2000)
-      // system_prompt is loaded at session creation; flag restart so users
-      // see the inline hint instead of silently getting stale behavior.
+      // system_prompt is loaded at session creation; the backend auto-restarts
+      // the chat session so it applies next message. Surface the manual
+      // fallback banner too, in case that background apply ever fails.
       if (promptChanged) onRequireRestart()
     } else {
       setSpecError(t('Failed to save spec changes'))
@@ -443,8 +443,9 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
     if (ok) {
       setConfigSaveSuccess(true)
       setTimeout(() => setConfigSaveSuccess(false), 2000)
-      // config values are baked into the system prompt at session creation,
-      // so changes only take effect for a fresh session.
+      // config values are baked into the system prompt at session creation; the
+      // backend auto-restarts the chat session so the change applies next
+      // message. Surface the manual fallback banner too.
       onRequireRestart()
     }
   }
@@ -898,15 +899,15 @@ function YamlTab({ app, appId, t, onRequireRestart }: YamlTabProps) {
 
     setSaving(true)
 
-    // Detect whether the saved YAML changed any field that requires an
-    // agent restart to take effect. We diff before sending so the hint is
-    // not raised for cosmetic edits (e.g. comment/whitespace-only changes).
+    // Detect whether the saved YAML changed a session-affecting field so the
+    // manual-restart fallback banner is not raised for cosmetic edits.
     const promptChanged = parsed.system_prompt !== app.spec.system_prompt
     const configChanged = JSON.stringify(parsed.config_schema ?? null)
       !== JSON.stringify(app.spec.config_schema ?? null)
 
-    // Send the full parsed spec as the patch.
-    // The backend applies JSON Merge Patch and re-validates with Zod.
+    // Send the full parsed spec as the patch. The backend applies JSON Merge
+    // Patch, re-validates with Zod, and auto-restarts the chat session when a
+    // session-affecting field changed — so edits apply on the next message.
     const ok = await updateAppSpec(appId, parsed)
     setSaving(false)
 
@@ -1018,9 +1019,10 @@ export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
   const [showClearMemoryConfirm, setShowClearMemoryConfirm] = useState(false)
   const [clearingMemory, setClearingMemory] = useState(false)
 
-  // Restart-required hint: raised by a save that changes a field loaded only
-  // at session creation (system_prompt, config_schema, userConfig). Cleared
-  // by a successful restart or explicit dismissal.
+  // Config changes auto-apply (the backend rebuilds the chat session on
+  // permission/spec/config change). This hint stays as a visible, safe manual
+  // fallback: if the background restart ever fails to take effect, the user can
+  // force it. Raised by a session-affecting save, cleared on restart/dismiss.
   const [restartHinted, setRestartHinted] = useState(false)
   const [restarting, setRestarting] = useState(false)
   // Brief inline success indicator next to the Restart button. Auto-clears
@@ -1100,22 +1102,22 @@ export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
         </button>
       </div>
 
-      {/* Restart-required hint banner: appears after a save that changes a
-          field loaded only at session creation. Persists across tab switches
-          and dismissals so users don't lose track of stuck state. */}
+      {/* Config changes apply automatically on the next message. This banner is
+          a visible, safe manual fallback in case the background apply doesn't
+          take effect — clicking is harmless and loses no data. */}
       {restartHinted && (
         <div
           role="status"
           className="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-3 p-3 rounded-lg border border-amber-400/30 bg-amber-400/5"
         >
           <div className="flex items-start gap-2 flex-1 min-w-0">
-            <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+            <RefreshCw className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
             <div className="min-w-0">
               <p className="text-sm text-foreground">
-                {t('Changes require an {{name}} restart to take effect.', { name: 'Agent' })}
+                {t('Quickly restart the AI digital human to apply your changes.')}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {t('Conversation history is preserved.')}
+                {t('No data is affected. Any work in progress will be stopped and interrupted.')}
               </p>
             </div>
           </div>
@@ -1128,7 +1130,7 @@ export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
               {restarting
                 ? <Loader2 className="w-3 h-3 animate-spin" />
                 : <RefreshCw className="w-3 h-3" />}
-              {t('Restart Now')}
+              {t('Quick restart')}
             </button>
             <button
               onClick={() => setRestartHinted(false)}

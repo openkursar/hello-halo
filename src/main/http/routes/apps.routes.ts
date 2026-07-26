@@ -1036,7 +1036,8 @@ export function registerAppsRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing appId' })
         return
       }
-      const result = await restartAppChat(appId)
+      // Manual restart: the user clicked "Restart agent", so interrupt in-flight turns.
+      const result = await restartAppChat(appId, { interruptActive: true })
       console.log('[HTTP] POST /api/apps/%s/chat/restart: closed=%d', appId, result.sessionsClosed)
       res.json({ success: true, data: result })
     } catch (error) {

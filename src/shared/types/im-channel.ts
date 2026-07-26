@@ -66,6 +66,13 @@ export interface GuestPolicy {
   allowApps?: boolean
   /** Allow guest to send files via IM */
   allowFileSend?: boolean
+  /**
+   * Allow guest to use on-device OCR (ocr_image). Gated because the tool reads
+   * arbitrary local file paths — unlike web-search/halo-memory it reaches the
+   * local filesystem, so it must be host-controlled like the other capabilities
+   * above rather than always-on.
+   */
+  allowOcr?: boolean
 
   /**
    * User-installed MCP server names (specId) that guests are allowed to use.

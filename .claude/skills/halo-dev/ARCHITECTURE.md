@@ -111,6 +111,8 @@ src/
 │       │                              #   Single subscriber for config.agent.developerMode;
 │       │                              #   transports expose setLevel/setEnabled only.
 │       ├── notify-channels/           # Outbound notification channels (Email/WeCom/DingTalk/Feishu/Webhook)
+│       ├── ocr/                       # On-device OCR (tesseract.js engine + ocr_image MCP server);
+│       │                              #   shared by tlon ingest, chat toolset, digital-human runtime
 │       ├── perf/                      # Performance monitoring
 │       ├── remote/                     # Remote Access: HTTP-server + Cloudflare tunnel coordination (service + tunnel + issuer-client)
 │       ├── stealth/                   # Anti-detection evasions

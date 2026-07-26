@@ -64,14 +64,14 @@ export interface SystemPromptContext {
   promptProfile?: PromptProfile
   /** Claude config directory path (defaults to platform-specific path) */
   claudeConfigDir?: string
-  /** Whether AI Browser is currently enabled (controls capability description) */
-  aiBrowserEnabled?: boolean
   /** Whether Digital Humans MCP tools are enabled */
   digitalHumansEnabled?: boolean
   /**
    * Capability index for toolset-broker sessions (see agent/toolsets).
-   * When set (even to ''), the session uses on-demand toolsets and the legacy
-   * "AI Browser (Not Enabled)" guidance is skipped.
+   * When set (even to ''), the session appends the usage guides of currently
+   * enabled optional toolsets; awareness of disabled ones lives in the
+   * request_toolset tool description. Undefined for sessions that manage their
+   * own capability guidance (e.g. digital-human prompts).
    */
   toolsetIndex?: string
   /** Knowledge bases bound to this session's space/app (Tlon) */
@@ -507,20 +507,11 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
   // Toolset-broker sessions (main chat): append the usage guides of currently-
   // enabled optional toolsets. Awareness of disabled ones lives in the
-  // request_toolset tool description, not here. Legacy static-injection sessions
-  // (apps/runtime) instead get the "AI Browser (Not Enabled)" guidance when the
-  // browser is off (when enabled, AI_BROWSER_SYSTEM_PROMPT is appended via
-  // buildSystemPromptWithAIBrowser). Do NOT early-return from either branch:
-  // the Knowledge section below applies to both session kinds.
-  if (ctx.toolsetIndex !== undefined) {
-    if (ctx.toolsetIndex) prompt += '\n\n' + ctx.toolsetIndex.trim()
-  } else if (!ctx.aiBrowserEnabled) {
-    prompt += '\n\n'
-      + '# AI Browser (Not Enabled)\n'
-      + 'You do NOT have browser automation tools in this session. '
-      + 'If the user asks you to browse the web, fill forms, scrape pages, or perform any browser interaction, '
-      + 'tell them to enable AI Browser via the toggle in the bottom-left of the input area, then retry.'
-  }
+  // request_toolset tool description, not here. Sessions that manage their own
+  // capability guidance (digital-human prompts — see apps/runtime/prompt) leave
+  // toolsetIndex undefined and inject their own "disabled capabilities" fragment;
+  // this function stays capability-hint free for them.
+  if (ctx.toolsetIndex) prompt += '\n\n' + ctx.toolsetIndex.trim()
 
   prompt += buildKnowledgeSection(ctx.knowledgeBases)
 

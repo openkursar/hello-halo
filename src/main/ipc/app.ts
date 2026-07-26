@@ -656,7 +656,9 @@ export function registerAppHandlers(): void {
     // prompt and config. Conversation history is preserved via saved sessionId.
     appChatRestart: async (appId: string) => {
       try {
-        const result = await restartAppChat(appId)
+        // Manual restart: the user clicked "Restart agent" (its banner warns work
+        // in progress is stopped), so interrupt any in-flight turn.
+        const result = await restartAppChat(appId, { interruptActive: true })
         console.log(`[AppIPC] app:chat-restart: appId=${appId}, closed=${result.sessionsClosed}`)
         return { success: true, data: result }
       } catch (error: unknown) {

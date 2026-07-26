@@ -253,6 +253,8 @@ export interface AvailableSkill {
   scope: 'global' | 'space'
   /** Directory basename; matches an installed skill app's sanitized specId when one exists */
   dirName: string
+  /** Absolute on-disk skill directory — the skill's real source, openable regardless of any installed-app record */
+  path: string
   /** SKILL.md content (may be truncated); empty when unreadable */
   content: string
 }

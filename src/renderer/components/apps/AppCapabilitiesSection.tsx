@@ -35,7 +35,7 @@ import { Switch } from '../ui/Switch'
 interface AppCapabilitiesSectionProps {
   app: InstalledApp
   appId: string
-  /** Raised when a toggle changes a capability that only takes effect on a fresh session. */
+  /** Raises the visible manual-restart fallback banner (change also auto-applies). */
   onRequireRestart: () => void
 }
 
@@ -100,8 +100,9 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
     return () => { cancelled = true }
   }, [])
 
-  // A capability change alters the tool set the running agent was created with,
-  // so it only takes effect on a fresh session — surface the restart hint.
+  // A capability change alters the tool set the running agent was created with.
+  // The backend auto-restarts this app's chat session on permission change so it
+  // applies next message; the fallback banner is surfaced too in case it fails.
   async function setPermission(permission: string, next: boolean) {
     if (next) {
       await grantPermission(appId, permission)

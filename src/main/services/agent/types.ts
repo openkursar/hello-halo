@@ -259,6 +259,14 @@ export interface V2SessionInfo {
   // credentials fingerprint; tracking it here rebuilds the session when the user
   // attaches/detaches a KB — or when a session was created before its KB seed.
   knowledgeFingerprint: string
+  // Fingerprint of the session-defining inputs a caller bakes into sdkOptions up
+  // front (system prompt + MCP server set). Only set for callers that fully
+  // specify these eagerly — app chat and automation runs — so a permission /
+  // prompt / config change is detected on the next send and the session is
+  // rebuilt, instead of silently reusing a process wired with the old tool set.
+  // undefined for main chat, which builds MCP servers lazily and handles toolset
+  // changes via requestSessionRebuild.
+  inputsFingerprint?: string
 }
 
 // ============================================

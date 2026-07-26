@@ -57,17 +57,20 @@ import {
 import { stopGeneration } from '../../services/agent/control'
 import { assembleAppChatPrompt } from './prompt/assembler'
 import { buildIdentityFragments } from './prompt/identity'
+import { buildDisabledCapabilitiesGuidance, buildUnconfiguredCapabilitiesGuidance } from './prompt/capabilities'
 import { NATIVE_CHAT_ENTRY } from './prompt/entry-native'
 import { buildImEntry, buildImConstraints, type ImSessionContext } from './im-channels/im-prompt'
 import { createFileSendMcpServer } from './im-channels/file-send-mcp'
 import { mergeConfigWithDefaults } from './config-defaults'
 import { tmpdir as osTmpdir } from 'os'
 import { createNotifyToolServer } from './notify-tool'
+import { resolveNotifyAvailability } from './notify-availability'
 import { FileExportGate } from './file-export-gate'
 import { truncateUtf16Safe } from './text-truncate'
 import { getImSessionRegistry } from './im-session-registry'
 import { createHaloAppsMcpServer } from '../conversation-mcp'
 import { createWebSearchMcpServer } from '../../services/web-search'
+import { createOcrMcpServer } from '../../services/ocr'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { getSpace, getSpaceDir } from '../../services/space.service'
 import { openSessionWriter, readSessionMessages, saveChatSessionId, loadChatSessionId, deleteChatSessionId, copySessionJsonl } from './session-store'
@@ -127,8 +130,10 @@ const ALL_BUILTIN_TOOLS = [
 ]
 
 /**
- * Halo MCP servers that are always safe for guests (read-only, no side effects).
- * These are injected into guest sessions regardless of GuestPolicy.
+ * Halo MCP servers that are always safe for guests (read-only, no side effects,
+ * no local-filesystem reach). These are injected into guest sessions regardless
+ * of GuestPolicy. OCR is deliberately NOT here: it reads arbitrary local file
+ * paths, so it is host-controlled via GUEST_TOGGLEABLE_MCP below.
  */
 const GUEST_SAFE_MCP = new Set(['web-search', 'halo-memory'])
 
@@ -143,6 +148,7 @@ const GUEST_TOGGLEABLE_MCP: Record<string, keyof GuestPolicy> = {
   'halo-notify':  'allowNotify',
   'halo-apps':    'allowApps',
   'im-file-send': 'allowFileSend',
+  'ocr':          'allowOcr',
 }
 
 /**
@@ -158,7 +164,7 @@ const GUEST_TOGGLEABLE_MCP: Record<string, keyof GuestPolicy> = {
  * @param dbMcpServers - User-installed MCP servers from database (null if none)
  * @param policy - Guest policy from channel instance config
  */
-function buildGuestMcpServers(
+export function buildGuestMcpServers(
   allMcpServers: Record<string, any>,
   dbMcpServers: Record<string, unknown> | null,
   policy?: GuestPolicy
@@ -392,6 +398,15 @@ export async function sendAppChatMessage(
   const usesEmail = resolvePermission(app, 'email') // gated on channel config downstream
   const usesImPush = resolvePermission(app, 'im-push') // AI-driven IM push
 
+  // Runtime facts a capability toggle cannot convey: a capability can be ON yet
+  // still tool-less until its channel/contact exists. Computed once here and
+  // reused for the notify MCP server, the capability-awareness prompt, and the
+  // IM entry's notify_bot constraints.
+  const imSessions = usesImPush
+    ? (getImSessionRegistry()?.getPushableSessions(app.id) ?? [])
+    : []
+  const notifyAvail = resolveNotifyAvailability(app, config.notificationChannels, imSessions)
+
   // ── Merge config_schema defaults into userConfig ────
   const mergedConfig = mergeConfigWithDefaults(app.userConfig, app.spec.config_schema)
 
@@ -412,9 +427,14 @@ export async function sendAppChatMessage(
     usesTerminal,
     workDir,
     modelInfo: resolvedCreds.displayModel,
+    disabledCapabilities: buildDisabledCapabilitiesGuidance(app) ?? undefined,
+    unconfiguredCapabilities: buildUnconfiguredCapabilitiesGuidance(app, {
+      emailChannelConfigured: notifyAvail.emailChannelConfigured,
+      imContactsAvailable: notifyAvail.imContactsAvailable,
+    }) ?? undefined,
   })
   const entry = imSession
-    ? buildImEntry(imSession, permCtx?.ownerIds)
+    ? buildImEntry(imSession, permCtx?.ownerIds, notifyAvail.notifyBotAvailable)
     : NATIVE_CHAT_ENTRY
   const constraints = imSession
     ? buildImConstraints(imSession, permCtx?.ownerIds)
@@ -453,9 +473,6 @@ export async function sendAppChatMessage(
   // cwd) + tmpdir. Not the same as memoryScope.spacePath, which targets
   // space.path (internal storage) — see getSpaceDir().
   const exportGate = new FileExportGate([getSpaceDir(app.spaceId!), osTmpdir()])
-  const imSessions = usesImPush
-    ? (getImSessionRegistry()?.getPushableSessions(app.id) ?? [])
-    : []
   const notifyMcpServer = createNotifyToolServer({
     appId: app.id,
     appName: app.spec.name,
@@ -476,6 +493,7 @@ export async function sendAppChatMessage(
     'halo-notify': notifyMcpServer,
     ...(digitalHumansEnabled ? { 'halo-apps': createHaloAppsMcpServer(spaceId) } : {}),
     'web-search': createWebSearchMcpServer(),
+    'ocr': createOcrMcpServer(),
     ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
     ...(usesTerminal
       ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId, workDir }) }
@@ -1047,15 +1065,27 @@ export async function clearAppChat(appId: string, spaceId: string, conversationI
  * the next message resumes the conversation context via SDK session resume.
  * Only the in-process CC subprocess + cached V2 session are reset.
  *
- * In-flight generations are aborted first via `stopGeneration()`, then the
- * V2 session is closed and any per-session browser context is destroyed.
+ * In-flight handling depends on `interruptActive`:
+ *   - false (default, all automatic config-change restarts): a mid-generation
+ *     session is LEFT ALONE — the reply is not dropped. Its session-inputs
+ *     fingerprint (systemPrompt + MCP set + guest permission envelope) has
+ *     changed, so the very next message rebuilds it with the new wiring. Only
+ *     idle sessions are torn down eagerly.
+ *   - true (manual "Restart agent" only): a mid-generation session is aborted
+ *     via `stopGeneration()` first — the UI banner warns that work in progress
+ *     is stopped.
  *
  * Idempotent: returns `sessionsClosed: 0` when nothing is active.
  *
  * @param appId - App ID
+ * @param options.interruptActive - Abort in-flight turns (manual restart only). Default false.
  * @returns Count of sessions that were closed
  */
-export async function restartAppChat(appId: string): Promise<{ sessionsClosed: number }> {
+export async function restartAppChat(
+  appId: string,
+  options: { interruptActive?: boolean } = {}
+): Promise<{ sessionsClosed: number }> {
+  const { interruptActive = false } = options
   const prefix = getAppChatConversationId(appId)
 
   // Collect all session keys belonging to this app from both maps:
@@ -1071,10 +1101,20 @@ export async function restartAppChat(appId: string): Promise<{ sessionsClosed: n
   }
 
   let closed = 0
+  let deferred = 0
   for (const convId of sessionIds) {
     try {
+      const isActive = activeSessions.has(convId)
+
+      // Mid-generation + non-interrupting edit: leave the live turn to finish.
+      // The fingerprint rebuilds this session on its next message.
+      if (isActive && !interruptActive) {
+        deferred++
+        continue
+      }
+
       // 1. Abort any in-flight generation before closing the underlying session.
-      if (activeSessions.has(convId)) {
+      if (isActive) {
         await stopGeneration(convId)
       }
 
@@ -1099,7 +1139,10 @@ export async function restartAppChat(appId: string): Promise<{ sessionsClosed: n
     }
   }
 
-  console.log(`[AppChat][${appId}] Restart complete: ${closed} session(s) closed (history preserved)`)
+  console.log(
+    `[AppChat][${appId}] Restart complete: ${closed} session(s) closed` +
+    `${deferred > 0 ? `, ${deferred} deferred to next message` : ''} (history preserved)`
+  )
   return { sessionsClosed: closed }
 }
 

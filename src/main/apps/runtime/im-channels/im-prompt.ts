@@ -38,14 +38,23 @@ export interface ImSessionContext {
  * Group and direct chats need different content: groups rely on
  * per-message `<msg-sender>` tags, direct chats have a single fixed
  * sender that lives in `senderIdentity`.
+ *
+ * `notifyBotAvailable` gates the notify_bot constraint block: that block only
+ * exists to keep the model from misusing notify_bot (to reply to the current
+ * session, or by a guest). When notify_bot is not loaded — im-push off, or no
+ * pushable contact — the block is pure noise and is omitted.
  */
-export function buildImEntry(session: ImSessionContext, ownerIds?: string[]): string {
+export function buildImEntry(
+  session: ImSessionContext,
+  ownerIds?: string[],
+  notifyBotAvailable = false
+): string {
   return session.chatType === 'group'
-    ? buildGroupEntry(session, ownerIds)
-    : buildDirectEntry(session, ownerIds)
+    ? buildGroupEntry(session, ownerIds, notifyBotAvailable)
+    : buildDirectEntry(session, ownerIds, notifyBotAvailable)
 }
 
-function buildGroupEntry(session: ImSessionContext, ownerIds?: string[]): string {
+function buildGroupEntry(session: ImSessionContext, ownerIds?: string[], notifyBotAvailable = false): string {
   const lines: string[] = [
     '## IM Session Context',
     '',
@@ -77,26 +86,25 @@ function buildGroupEntry(session: ImSessionContext, ownerIds?: string[]): string
   // Constraint layer (buildSecurityRules). Do not duplicate here — the Entry
   // layer only carries session metadata and tool-usage hints.
 
-  lines.push(
-    '',
-    '### Notifications (halo-notify)',
-    '',
-    '- `notify_channel` — Send to external channels (email, webhook, etc.).',
-    '- `notify_bot` — Send a message or file to another IM contact.',
-    '  Only use when:',
-    '  1. An owner explicitly asks to send/forward to a specific contact',
-    '  2. The app\'s task definition requires pushing to a designated contact',
-    '',
-    'Do NOT use notify_bot to reply to the current session.',
-    ...(ownerIds && ownerIds.length > 0
-      ? ['Guest users (non-owners) cannot trigger notify_bot.']
-      : []),
-  )
+  if (notifyBotAvailable) {
+    lines.push(
+      '',
+      '### Using notify_bot',
+      '',
+      'notify_bot pushes to ANOTHER IM contact — never use it to reply to this',
+      'session (your text output is already delivered here). Only use it when:',
+      '1. An owner explicitly asks to send/forward to a specific contact',
+      '2. The app\'s task definition requires pushing to a designated contact',
+      ...(ownerIds && ownerIds.length > 0
+        ? ['', 'Guest users (non-owners) cannot trigger notify_bot.']
+        : []),
+    )
+  }
 
   return lines.join('\n')
 }
 
-function buildDirectEntry(session: ImSessionContext, ownerIds?: string[]): string {
+function buildDirectEntry(session: ImSessionContext, ownerIds?: string[], notifyBotAvailable = false): string {
   const sender = session.senderIdentity
   const lines: string[] = [
     '## IM Session Context',
@@ -136,18 +144,17 @@ function buildDirectEntry(session: ImSessionContext, ownerIds?: string[]): strin
     )
   }
 
-  lines.push(
-    '',
-    '### Notifications (halo-notify)',
-    '',
-    '- `notify_channel` — Send to external channels (email, webhook, etc.).',
-    '- `notify_bot` — Send a message or file to another IM contact.',
-    '  Only use when:',
-    '  1. The owner explicitly asks to send/forward to a specific contact',
-    '  2. The app\'s task definition requires pushing to a designated contact',
-    '',
-    'Do NOT use notify_bot to reply to the current session.',
-  )
+  if (notifyBotAvailable) {
+    lines.push(
+      '',
+      '### Using notify_bot',
+      '',
+      'notify_bot pushes to ANOTHER IM contact — never use it to reply to this',
+      'session (your text output is already delivered here). Only use it when:',
+      '1. The owner explicitly asks to send/forward to a specific contact',
+      '2. The app\'s task definition requires pushing to a designated contact',
+    )
+  }
 
   return lines.join('\n')
 }
