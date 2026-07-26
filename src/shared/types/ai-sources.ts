@@ -130,24 +130,19 @@ export const AVAILABLE_MODELS: ModelOption[] = [
     description: 'Frontier model with native 1M context, strongest coding and agentic performance'
   },
   {
+    id: 'claude-opus-5',
+    name: 'Claude Opus 5',
+    description: 'Most capable model for complex agentic coding and enterprise work'
+  },
+  {
     id: 'claude-opus-4-8',
     name: 'Claude Opus 4.8',
     description: 'Most capable model for complex agentic coding and enterprise work'
   },
   {
-    id: 'claude-opus-4-7',
-    name: 'Claude Opus 4.7',
-    description: 'Powerful model, great for complex reasoning and architecture decisions'
-  },
-  {
     id: 'claude-opus-4-6',
     name: 'Claude Opus 4.6',
     description: 'Powerful model, great for complex reasoning and architecture decisions'
-  },
-  {
-    id: 'claude-sonnet-4-6',
-    name: 'Claude Sonnet 4.6',
-    description: 'Balanced performance and cost, suitable for most tasks'
   },
   {
     id: 'claude-haiku-4-5-20251001',

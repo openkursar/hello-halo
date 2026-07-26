@@ -179,6 +179,28 @@ export function sessionExists(spacePath: string, appId: string, runId: string): 
 }
 
 /**
+ * Resolve the on-disk transcript path for a run, or undefined when no
+ * transcript exists yet.
+ *
+ * This is the only sanctioned way for other modules to obtain a transcript
+ * location — the directory layout is this module's private rule. Callers must
+ * resolve at use time, never persist the returned path.
+ */
+export function resolveTranscriptPath(
+  spacePath: string,
+  appId: string,
+  runId: string
+): string | undefined {
+  try {
+    const filePath = getSessionFilePath(spacePath, appId, runId)
+    return existsSync(filePath) ? filePath : undefined
+  } catch {
+    // Invalid path parameters — treat as no transcript
+    return undefined
+  }
+}
+
+/**
  * Copy a run's JSONL transcript to a new runId.
  *
  * Used when forking a session into a new native client session so the forked

@@ -49,6 +49,7 @@ import { FileWatcherSource } from './sources/file-watcher.source'
 import { WebhookSource, type WebhookSecretResolver } from './sources/webhook.source'
 import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, setActiveImChannelManager } from './im-channels'
 import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
+import { PendingRelayStore, setPendingRelayStore, getPendingRelayStore } from './pending-relays'
 import { dispatchInboundMessage, clearSupplementBuffersForInstance } from './dispatch-inbound'
 import { clearAllImPermissionContexts } from './im-permission-registry'
 import { getConfig } from '../../foundation/config.service'
@@ -261,6 +262,12 @@ export async function initAppRuntime(
   setImSessionRegistry(registry)
   imSessionRegistryInstance = registry
 
+  // ── Pending Relay Spool ─────────────────────────────────────────────
+  // Records notify_bot pushes against their target sessions so the target's
+  // AI regains awareness of them on its next inbound message.
+  const relaySpoolPath = join(homedir(), `.${getDataFolderName()}`, 'im-pending-relays.json')
+  setPendingRelayStore(new PendingRelayStore(relaySpoolPath))
+
   // ── IM Channel Manager (multi-instance) ─────────────────────────────
   // Manages all IM channel instances (WeCom Bot, Feishu Bot, DingTalk Bot, etc.)
   // Each instance is a separate connection bound to a specific digital human.
@@ -390,6 +397,11 @@ export async function shutdownAppRuntime(): Promise<void> {
 
   imSessionRegistryInstance = null
   setImSessionRegistry(null as any)
+
+  // Flush synchronously: a relay recorded seconds before exit must survive,
+  // since its target may not send another message for weeks.
+  getPendingRelayStore()?.flush()
+  setPendingRelayStore(null)
 
   // Clear all IM permission contexts (in-memory only, no persistence needed)
   clearAllImPermissionContexts()

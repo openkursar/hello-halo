@@ -19,6 +19,7 @@ import { dirname } from 'path'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
 import { truncateUtf16Safe } from './text-truncate'
+import { getPendingRelayStore } from './pending-relays'
 
 // ============================================
 // Types
@@ -313,6 +314,9 @@ export class ImSessionRegistry {
     const deleted = this.sessions.delete(key)
     if (deleted) {
       this.requestPersist(true)
+      // Cascade: undelivered relay context is keyed by session and must not
+      // outlive it, or a chat re-registered under the same id would inherit it.
+      getPendingRelayStore()?.clearForChat(appId, channel, chatId)
     }
     return deleted
   }
@@ -326,6 +330,7 @@ export class ImSessionRegistry {
     for (const [key, session] of this.sessions) {
       if (session.appId === appId) {
         this.sessions.delete(key)
+        getPendingRelayStore()?.clearForChat(session.appId, session.channel, session.chatId)
         count++
       }
     }

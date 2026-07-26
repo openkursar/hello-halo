@@ -63,6 +63,7 @@ import { createFileSendMcpServer } from './im-channels/file-send-mcp'
 import { mergeConfigWithDefaults } from './config-defaults'
 import { tmpdir as osTmpdir } from 'os'
 import { createNotifyToolServer } from './notify-tool'
+import { buildQuoteFromMessage } from './pending-relays'
 import { FileExportGate } from './file-export-gate'
 import { truncateUtf16Safe } from './text-truncate'
 import { getImSessionRegistry } from './im-session-registry'
@@ -253,6 +254,26 @@ export interface AppChatRequest {
    * Absent for native Halo chat UI.
    */
   imSession?: ImSessionContext
+  /**
+   * Origin facts recorded against any notify_bot push this run makes, so the
+   * target session can later attribute the push and report an outcome back.
+   *
+   * Supplied by the caller because only it has the raw inbound message: the
+   * assembled `message` carries runtime tags and possibly a consumed relay
+   * block, neither of which belongs in a quote. Absent for native chat, where
+   * `message` is the user's own text.
+   */
+  relayOrigin?: {
+    subject?: { id: string; name: string }
+    quote?: string
+  }
+  /**
+   * Invoked once the engine has accepted this message, i.e. the text is now
+   * part of its conversation history. Callers use it to commit at-most-once
+   * context they attached to the message; it never fires if the run fails
+   * before reaching the engine.
+   */
+  onMessageAccepted?: () => void
 }
 
 // ============================================
@@ -345,7 +366,10 @@ function registerExternalChatSession(
 export async function sendAppChatMessage(
   request: AppChatRequest
 ): Promise<void> {
-  const { appId, spaceId, message, images, thinkingEnabled, onReply, onProgress, imFileSend, senderIdentity, imSession } = request
+  const {
+    appId, spaceId, message, images, thinkingEnabled, onReply, onProgress,
+    imFileSend, senderIdentity, imSession, relayOrigin, onMessageAccepted,
+  } = request
   const conversationId = request.conversationId ?? getAppChatConversationId(appId)
 
   console.log(`[AppChat][${appId}] sendMessage: "${message.substring(0, 100)}"`)
@@ -453,6 +477,16 @@ export async function sendAppChatMessage(
     imSessions,
     usesImPush,
     exportGate,
+    // Relay provenance: pushes from this chat are recorded against their
+    // target sessions with this run as the traceable origin. Native chat has
+    // no permCtx and counts as owner (the desktop user).
+    relay: {
+      sessionKey: conversationId,
+      contact: imSession?.sessionId,
+      subject: relayOrigin?.subject ?? senderIdentity,
+      isOwner: permCtx ? permCtx.isOwner : true,
+      quote: relayOrigin?.quote ?? buildQuoteFromMessage(message, senderIdentity?.name),
+    },
   })
   // NOTE: report_to_user (halo-report) is intentionally NOT injected in chat/IM
   // mode. It writes to activity_entries, whose run_id has a FK to automation_runs.
@@ -630,6 +664,19 @@ export async function sendAppChatMessage(
     // text across delta events, emits complete ProgressEvents on block_stop.
     const progressParser = onProgress ? new ProgressEventParser() : null
 
+    // The first SDK message is the earliest proof the engine accepted our
+    // message — before it, nothing entered the engine's history.
+    let messageAccepted = false
+    const acceptMessage = () => {
+      if (messageAccepted || !onMessageAccepted) return
+      messageAccepted = true
+      try {
+        onMessageAccepted()
+      } catch (acceptErr) {
+        console.error(`[AppChat][${appId}] onMessageAccepted callback error:`, acceptErr)
+      }
+    }
+
     await processStream({
       v2Session,
       sessionState,
@@ -681,6 +728,8 @@ export async function sendAppChatMessage(
           }
         },
         onRawMessage: (sdkMessage) => {
+          acceptMessage()
+
           // Persist SDK messages to JSONL for "View process" / reload recovery.
           //
           // We skip `stream_event` for both engines: token-level deltas are

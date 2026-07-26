@@ -476,6 +476,22 @@
       "vision": true,
       "thinking": true
     },
+    "claude-opus-5": {
+      "displayName": "Claude Opus 5",
+      "provider": "anthropic",
+      "contextWindow": 200000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true
+    },
+    "claude-opus-5[1m]": {
+      "displayName": "Claude Opus 5 (1M)",
+      "provider": "anthropic",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true
+    },
     "claude-opus-4-8": {
       "displayName": "Claude Opus 4.8",
       "provider": "anthropic",

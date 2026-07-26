@@ -89,14 +89,12 @@ const CLAUDE_MODELS: Record<string, string> = {
   'claude-sonnet-5[1m]': 'Claude Sonnet 5 (1M context)',
   'claude-fable-5': 'Claude Fable 5',
   'claude-fable-5[1m]': 'Claude Fable 5 (1M context)',
+  'claude-opus-5': 'Claude Opus 5',
+  'claude-opus-5[1m]': 'Claude Opus 5 (1M context)',
   'claude-opus-4-8': 'Claude Opus 4.8',
   'claude-opus-4-8[1m]': 'Claude Opus 4.8 (1M context)',
-  'claude-opus-4-7': 'Claude Opus 4.7',
-  'claude-opus-4-7[1m]': 'Claude Opus 4.7 (1M context)',
   'claude-opus-4-6': 'Claude Opus 4.6',
   'claude-opus-4-6[1m]': 'Claude Opus 4.6 (1M context)',
-  'claude-sonnet-4-6': 'Claude Sonnet 4.6',
-  'claude-sonnet-4-6[1m]': 'Claude Sonnet 4.6 (1M context)',
   'claude-haiku-4-5-20251001': 'Claude Haiku 4.5'
 }
 

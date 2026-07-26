@@ -383,6 +383,13 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       imSessions,
       usesImPush,
       exportGate,
+      // Relay provenance: automation runs act for the owner and have no human
+      // subject; the trigger description gives the recipient AI the push context.
+      relay: {
+        sessionKey,
+        isOwner: true,
+        quote: trigger.description,
+      },
     })
 
     // ── 5. Create V2 session ───────────────────────────────
