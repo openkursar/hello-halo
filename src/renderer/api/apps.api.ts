@@ -323,6 +323,13 @@ export const appsApi = {
     return httpRequest('POST', `/api/apps/${appId}/im-chat/clear`, { spaceId, channel, chatType, chatId })
   },
 
+  appImChatStop: async (appId: string, spaceId: string, channel: string, chatType: 'direct' | 'group', chatId: string): Promise<ApiResponse<{ stopped: boolean }>> => {
+    if (isElectron()) {
+      return window.halo.appImChatStop({ appId, channel, chatType, chatId })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/im-chat/stop`, { spaceId, channel, chatType, chatId })
+  },
+
   // ── Native multi-session lifecycle ──
   // Listing and renaming reuse imSessionsList / imSessionsSetCustomName (see
   // im.api.ts); local sessions surface there with source==='local'.
