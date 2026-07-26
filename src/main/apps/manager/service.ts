@@ -86,58 +86,6 @@ function emitMcpChange(spaceId: string | null, change?: McpAppChange): void {
 }
 
 // ============================================
-// App session invalidation
-//
-// Fired when an app's OWN configuration changes in a way that is baked into a
-// chat session at creation time (permissions → tool set, system_prompt, config
-// values, requires.mcps → injected MCP servers). The runtime subscribes and
-// restarts the app's chat agent so the change applies on the next message with
-// no manual "Restart agent" click. A mid-generation turn is never aborted for
-// this — the change lands via the session-inputs fingerprint on the next
-// message, so an in-flight reply keeps its full tool set until it finishes.
-// Distinct from onMcpAppsChange, which tracks the lifecycle of shared MCP
-// *server* apps.
-// ============================================
-
-type AppSessionInvalidateHandler = (appId: string) => void
-const appSessionInvalidateHandlers: AppSessionInvalidateHandler[] = []
-
-/**
- * Register a callback invoked when an app's session-affecting config changes.
- * @returns Unsubscribe function
- */
-export function onAppSessionInvalidate(handler: AppSessionInvalidateHandler): () => void {
-  appSessionInvalidateHandlers.push(handler)
-  return () => {
-    const idx = appSessionInvalidateHandlers.indexOf(handler)
-    if (idx >= 0) appSessionInvalidateHandlers.splice(idx, 1)
-  }
-}
-
-function emitAppSessionInvalidate(appId: string): void {
-  for (const handler of appSessionInvalidateHandlers) {
-    try {
-      handler(appId)
-    } catch (err) {
-      console.error('[AppManager] appSessionInvalidate handler error:', err)
-    }
-  }
-}
-
-/**
- * Top-level spec fields that are baked into a digital human's CHAT session at
- * creation, so editing them must rebuild it. Cosmetic edits (name/description/
- * version/icon/store) are excluded so a rename never disturbs a live chat. So
- * are fields that never reach the chat prompt or MCP set — `subscriptions`
- * (scheduling), `mcp_server`/`skill_content`/`skill_files` (MCP/skill-app
- * payloads handled via emitMcpChange / filesystem sync) — which would otherwise
- * trigger a needless rebuild.
- */
-const SESSION_AFFECTING_SPEC_KEYS = new Set([
-  'system_prompt', 'requires', 'config_schema', 'permissions',
-])
-
-// ============================================
 // State Machine
 // ============================================
 
@@ -701,13 +649,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
     updateConfig(appId: string, config: Record<string, unknown>): void {
       const app = requireApp(appId) // Throws if not found
-      // A save with unchanged values must not invalidate the session: rebuilding
-      // on a no-op discards a warm subprocess for nothing. Compare by value; a key
-      // reorder at worst falls through to a harmless rebuild, never a missed one.
+      // Skip the write when nothing actually changed. Compare by value; a key
+      // reorder at worst falls through to a harmless no-op write.
       if (JSON.stringify(app.userConfig ?? {}) === JSON.stringify(config)) return
       store.updateConfig(appId, config)
-      // Config values are baked into the system prompt at session creation.
-      emitAppSessionInvalidate(appId)
     },
 
     updateFrequency(appId: string, subscriptionId: string, frequency: string): void {
@@ -786,20 +731,6 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       // invalidate affected sessions so they reconnect with the new config.
       if (validatedSpec.type === 'mcp') {
         emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'updated' })
-      }
-
-      // Rebuild this app's own chat session only when a session-affecting field
-      // actually changed VALUE. Key presence is not enough: YAML-tab saves send
-      // the full spec as the patch, so a rename or comment-only edit would
-      // otherwise tear down a warm session for nothing (compare by value, same
-      // guard as updateConfig above).
-      const validated = validatedSpec as unknown as Record<string, unknown>
-      const sessionInputsChanged = Object.keys(specPatch).some(k =>
-        SESSION_AFFECTING_SPEC_KEYS.has(k) &&
-        JSON.stringify(currentSpec[k] ?? null) !== JSON.stringify(validated[k] ?? null)
-      )
-      if (sessionInputsChanged) {
-        emitAppSessionInvalidate(appId)
       }
 
       console.log(`[AppManager] Updated spec for app ${appId}`)
@@ -909,8 +840,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     grantPermission(appId: string, permission: string): void {
       const app = requireApp(appId)
 
-      // No-op grant (already granted and not denied) must not invalidate the
-      // session — a repeated call would tear down a warm subprocess for nothing.
+      // Skip the write when the permission is already in the target state.
       if (app.permissions.granted.includes(permission) &&
           !app.permissions.denied.includes(permission)) {
         return
@@ -923,14 +853,12 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       permissions.denied = permissions.denied.filter(p => p !== permission)
 
       store.updatePermissions(appId, permissions)
-      emitAppSessionInvalidate(appId)
     },
 
     revokePermission(appId: string, permission: string): void {
       const app = requireApp(appId)
 
-      // No-op revoke (already denied and not granted) must not invalidate the
-      // session, mirroring the grant guard above.
+      // Skip the write when the permission is already in the target state.
       if (app.permissions.denied.includes(permission) &&
           !app.permissions.granted.includes(permission)) {
         return
@@ -943,7 +871,6 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       }
 
       store.updatePermissions(appId, permissions)
-      emitAppSessionInvalidate(appId)
     },
 
     // ── File System ───────────────────────────
