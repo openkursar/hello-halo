@@ -40,6 +40,23 @@ import type {
 } from '../shared/types'
 import type { StoreInstallProgress } from '../shared/store/store-types'
 
+// Seed --display-scale before the renderer's first paint. The main process
+// passes the persisted scale via additionalArguments at window creation;
+// waiting for the async display:get-scale IPC instead would leave the native
+// window-chrome inset compensation wrong for one visible frame.
+{
+  const arg = process.argv.find((a) => a.startsWith('--halo-display-scale='))
+  const scale = arg ? Number(arg.slice(arg.indexOf('=') + 1)) : NaN
+  if (Number.isFinite(scale) && scale > 0) {
+    const seed = () => document.documentElement.style.setProperty('--display-scale', String(scale))
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', seed, { once: true })
+    } else {
+      seed()
+    }
+  }
+}
+
 // Type definitions for exposed API
 export interface HaloAPI {
   // Generic Auth (provider-agnostic)
@@ -328,6 +345,11 @@ export interface HaloAPI {
   installUpdate: () => Promise<IpcResponse>
   getVersion: () => Promise<IpcResponse>
   onUpdaterStatus: (callback: (data: unknown) => void) => () => void
+
+  // Display scale (persistent UI zoom)
+  getDisplayScale: () => Promise<IpcResponse>
+  setDisplayScale: (factor: number) => Promise<IpcResponse>
+  onDisplayScale: (callback: (factor: number) => void) => () => void
 
   // Browser (embedded browser for Content Canvas)
   getBrowserHomepage: () => Promise<IpcResponse>
@@ -719,6 +741,9 @@ const api: HaloAPI = {
   // NOTE: these preload methods PACK positional args into the object shape the
   // main handlers destructure (e.g. (viewId, url) -> { viewId, url }), so they
   // are kept hand-written — bindRpc's positional passthrough would break them.
+  getDisplayScale: () => ipcRenderer.invoke('display:get-scale'),
+  setDisplayScale: (factor) => ipcRenderer.invoke('display:set-scale', factor),
+  onDisplayScale: (callback) => createEventListener('display:scale-changed', callback),
   getBrowserHomepage: () => ipcRenderer.invoke('browser:get-homepage'),
   createBrowserView: (viewId, url) => ipcRenderer.invoke('browser:create', { viewId, url }),
   destroyBrowserView: (viewId) => ipcRenderer.invoke('browser:destroy', { viewId }),

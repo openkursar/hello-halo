@@ -194,7 +194,7 @@ export function CreateSpaceForm({ onCreated, onCancel, compact = false }: Create
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && canCreate) handleCreate() }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && canCreate) handleCreate() }}
           placeholder={t('My Project')}
           className={`w-full ${inputPad} text-sm bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors`}
         />

@@ -552,6 +552,8 @@ interface HaloConfig {
   }
   appearance: {
     theme: 'light' | 'dark' | 'system'
+    /** UI zoom factor (webContents.setZoomFactor). 1 = default. */
+    displayScale?: number
   }
   system: {
     autoLaunch: boolean
@@ -814,7 +816,8 @@ const DEFAULT_CONFIG: HaloConfig = {
     trustMode: false
   },
   appearance: {
-    theme: 'dark'
+    theme: 'dark',
+    displayScale: 1
   },
   system: {
     autoLaunch: false

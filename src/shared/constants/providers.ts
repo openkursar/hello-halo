@@ -351,6 +351,22 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     notes: 'Requires HTTP-Referer and X-Title headers. Supports model array for failover'
   },
   {
+    id: 'atlascloud',
+    name: 'Atlas Cloud',
+    authType: 'api-key',
+    apiUrl: 'https://api.atlascloud.ai/v1',
+    modelsUrl: 'https://api.atlascloud.ai/v1/models',
+    models: [
+      { id: 'deepseek-ai/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+      { id: 'deepseek-ai/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+      { id: 'qwen/qwen3.5-27b', name: 'Qwen3.5 27B' }
+    ],
+    description: 'Atlas Cloud OpenAI-compatible model API',
+    website: 'https://www.atlascloud.ai/',
+    region: 'global',
+    icon: 'cloud'
+  },
+  {
     id: 'requesty',
     name: 'Requesty',
     authType: 'api-key',

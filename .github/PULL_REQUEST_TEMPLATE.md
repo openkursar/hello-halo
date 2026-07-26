@@ -1,15 +1,25 @@
 ## Related Issue
-<!-- Please link the issue this PR addresses using: Fixes #issue_number -->
+<!-- Link the issue this MR addresses -->
 Fixes #
 
 ## Changes
-<!-- Describe what this PR changes and why -->
+<!-- What changed and why -->
 
-## Pre-submit Checklist
-- [ ] Ran the `/code-review` skill to review this change
-- [ ] Ran the `/code-commit` skill to create the commit
+## Dev Checklist
+- [ ] Verified locally with `npm run dev`
+- [ ] Ran `/code-review` and addressed valid findings
+- [ ] Ran `/comment-review` to clean up comments
+- [ ] Committed via `/code-commit` (no manual `git add .`)
 - [ ] Ran `test:unit`
-- [ ] Ran `test:e2e:smoke` (Optional, recommended for large changes)
+- [ ] Ran `test:e2e:smoke` (recommended for large changes)
 
-## Screenshots (if applicable)
-<!-- Add screenshots for UI changes -->
+## Red Lines (common reasons for rejection)
+- [ ] Code and comments are in English only
+- [ ] All UI text uses `t('English text')`, no hardcoded strings
+- [ ] No unrelated changes, temporary code, or debug statements
+
+## Screenshots (required for UI changes)
+<!-- Add before/after screenshots -->
+
+---
+> ℹ️ After submission, an automated Halo AI review team will review this MR and leave comments. Please watch for and address their feedback.

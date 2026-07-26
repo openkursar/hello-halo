@@ -126,6 +126,18 @@ export default function App() {
   // For search result navigation
   const { spaces, haloSpace, setCurrentSpace: setSpaceStoreCurrentSpace, refreshCurrentSpace } = useSpaceStore()
 
+  // Expose the persistent display scale as a CSS variable so layout that must
+  // clear the non-scaling native window chrome (macOS traffic lights) can
+  // compensate — reserved space in real pixels then stays constant across zoom.
+  useEffect(() => {
+    if (!isElectron()) return
+    const apply = (s: number) => document.documentElement.style.setProperty('--display-scale', String(s))
+    void window.halo?.getDisplayScale?.().then((r) => {
+      if (r?.success && typeof r.data === 'number') apply(r.data)
+    })
+    return window.halo?.onDisplayScale?.((s) => apply(s))
+  }, [])
+
   // Initialize app on mount - wait for backend extended services to be ready
   // Uses Pull+Push pattern for reliable initialization:
   // - Pull: Query status immediately (handles HMR, error recovery - 0ms delay)

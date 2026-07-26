@@ -74,6 +74,7 @@ export type BuiltinProviderId =
   | 'yi'
   | 'stepfun'
   | 'openrouter'
+  | 'atlascloud'
   | 'requesty'
   | 'groq'
   | 'mistral'
