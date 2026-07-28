@@ -15,6 +15,9 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { api } from '../api'
 import { getCurrentLanguage } from '../i18n'
+import { invalidateCategoryTaxonomyCache } from '../hooks/useStoreCategories'
+import { invalidateDiscoverLayoutCache } from '../hooks/useDiscoverLayout'
+import { invalidateStoreCollectionsCache } from '../hooks/useStoreCollections'
 import type { RegistryEntry, StoreAppDetail, UpdateInfo, StoreQuery, StoreQueryResponse, StoreInstallProgress } from '../../shared/store/store-types'
 import type { AppType } from '../../shared/apps/spec-types'
 import type { ImSessionRecord } from '../../shared/types/im-channel'
@@ -92,7 +95,14 @@ interface AppsPageState {
   storeTypeFilter: AppType | null
   storePage: number
   storeHasMore: boolean
+  /** True when the store's "My Publications" second-level view is open. */
+  storeMineOpen: boolean
   storeSelectedSlug: string | null
+  storeAutoInstall: boolean
+  /** Pending "open the publish dialog pre-selected on this installed app"
+   * intent, carried across navigation from a detail page's Share action and
+   * consumed once by the store header (mirrors storeAutoInstall). */
+  storePublishIntent: { type: AppType; appId: string } | null
   storeSelectedDetail: StoreAppDetail | null
   storeDetailLoading: boolean
   storeDetailError: string | null
@@ -127,6 +137,7 @@ interface AppsPageState {
   setStoreSearch: (query: string) => void
   setStoreCategory: (category: string | null) => void
   setStoreTypeFilter: (type: AppType | null) => void
+  setStoreMineOpen: (open: boolean) => void
   /**
    * Switch to the Marketplace tab pre-filtered by the given app type and
    * force a fresh fetch so the listing matches the new filter. Use this
@@ -136,8 +147,15 @@ interface AppsPageState {
    * never forget the reload step.
    */
   openMarketplaceFilteredBy: (type: AppType | null) => Promise<void>
-  selectStoreApp: (slug: string) => Promise<void>
+  selectStoreApp: (slug: string, autoInstall?: boolean) => Promise<void>
   clearStoreSelection: () => void
+  /** Consume the "open install dialog on arrival" intent set by a card's install button. */
+  consumeStoreAutoInstall: () => boolean
+  /** Navigate to the store and request the publish dialog open pre-selected on
+   * the given installed app (used by a detail page's Share action). */
+  openStorePublish: (type: AppType, appId: string) => void
+  /** Consume the publish-dialog intent (returns it once, then clears). */
+  consumeStorePublishIntent: () => { type: AppType; appId: string } | null
   installFromStore: (slug: string, spaceId: string | null, userConfig?: Record<string, unknown>, onProgress?: (progress: StoreInstallProgress) => void) => Promise<string | null>
   refreshStore: () => Promise<void>
   checkUpdates: () => Promise<void>
@@ -168,7 +186,10 @@ export const useAppsPageStore = create<AppsPageState>()(
   storeTypeFilter: null,
   storePage: 1,
   storeHasMore: false,
+  storeMineOpen: false,
   storeSelectedSlug: null,
+  storeAutoInstall: false,
+  storePublishIntent: null,
   storeSelectedDetail: null,
   storeDetailLoading: false,
   storeDetailError: null,
@@ -386,6 +407,7 @@ export const useAppsPageStore = create<AppsPageState>()(
   setStoreCategory: (category) => set({ storeCategory: category }),
 
   setStoreTypeFilter: (type) => set({ storeTypeFilter: type }),
+  setStoreMineOpen: (open) => set({ storeMineOpen: open }),
 
   openMarketplaceFilteredBy: async (type) => {
     // Set filter + tab atomically before kicking off the fetch so the
@@ -395,9 +417,9 @@ export const useAppsPageStore = create<AppsPageState>()(
     await get().loadStoreApps()
   },
 
-  selectStoreApp: async (slug) => {
+  selectStoreApp: async (slug, autoInstall = false) => {
     const requestId = ++storeDetailRequestSeq
-    set({ storeSelectedSlug: slug, storeDetailLoading: true, storeSelectedDetail: null, storeDetailError: null })
+    set({ storeSelectedSlug: slug, storeAutoInstall: autoInstall, storeDetailLoading: true, storeSelectedDetail: null, storeDetailError: null })
     try {
       const res = await api.storeGetAppDetail(slug)
       if (requestId !== storeDetailRequestSeq) return
@@ -419,11 +441,35 @@ export const useAppsPageStore = create<AppsPageState>()(
 
   clearStoreSelection: () => set({
     storeSelectedSlug: null,
+    storeAutoInstall: false,
     storeSelectedDetail: null,
     storeDetailLoading: false,
     storeDetailError: null,
     storeError: null,
   }),
+
+  consumeStoreAutoInstall: () => {
+    if (!get().storeAutoInstall) return false
+    set({ storeAutoInstall: false })
+    return true
+  },
+
+  openStorePublish: (type, appId) => {
+    // Surface the store tab's header (which owns the publish dialog): leave any
+    // detail/mine sub-view so StoreHeader renders and can consume the intent.
+    set({
+      currentTab: 'store',
+      storeMineOpen: false,
+      storeSelectedSlug: null,
+      storePublishIntent: { type, appId },
+    })
+  },
+
+  consumeStorePublishIntent: () => {
+    const intent = get().storePublishIntent
+    if (intent) set({ storePublishIntent: null })
+    return intent
+  },
 
   installFromStore: async (slug, spaceId, userConfig, onProgress) => {
     try {
@@ -451,6 +497,11 @@ export const useAppsPageStore = create<AppsPageState>()(
         set({ storeError: (res.error as string) || 'Failed to refresh store index' })
         return
       }
+      // Scene categories, collections and the discover layout are ops-managed
+      // server-side; refetch them alongside the index.
+      invalidateCategoryTaxonomyCache()
+      invalidateDiscoverLayoutCache()
+      invalidateStoreCollectionsCache()
       // Reload store apps after refresh
       await get().loadStoreApps()
       await get().checkUpdates()

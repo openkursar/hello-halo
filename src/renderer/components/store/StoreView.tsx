@@ -6,11 +6,16 @@
  */
 
 import { useEffect, useRef } from 'react'
-import { Loader2, AlertCircle } from 'lucide-react'
+import { AlertCircle } from 'lucide-react'
+import { api } from '../../api'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { StoreHeader } from './StoreHeader'
+import { StoreCategoryBar } from './StoreCategoryBar'
 import { StoreGrid } from './StoreGrid'
+import { StoreDiscover } from './StoreDiscover'
 import { StoreDetail } from './StoreDetail'
+import { StoreMine } from './StoreMine'
+import { StoreSkeletonGrid } from './StoreSkeletonGrid'
 import { useTranslation } from '../../i18n'
 
 export function StoreView() {
@@ -18,10 +23,18 @@ export function StoreView() {
   const storeLoading = useAppsPageStore(state => state.storeLoading)
   const storeError = useAppsPageStore(state => state.storeError)
   const storeSelectedSlug = useAppsPageStore(state => state.storeSelectedSlug)
+  const storeMineOpen = useAppsPageStore(state => state.storeMineOpen)
   const storeApps = useAppsPageStore(state => state.storeApps)
+  const storeTypeFilter = useAppsPageStore(state => state.storeTypeFilter)
+  const storeSearchQuery = useAppsPageStore(state => state.storeSearchQuery)
   const loadStoreApps = useAppsPageStore(state => state.loadStoreApps)
   const checkUpdates = useAppsPageStore(state => state.checkUpdates)
   const didInitRef = useRef(false)
+
+  // Marketplace funnel: entering the store and every tab switch.
+  useEffect(() => {
+    void api.trackEvent('mkt_market_view', { tab: storeTypeFilter ?? 'discover' })
+  }, [storeTypeFilter])
 
   // Load store apps and update badges on mount.
   // Skip the load if one is already in flight — this happens when an external
@@ -67,13 +80,14 @@ export function StoreView() {
     )
   }
 
-  // Loading state (initial load only)
+  // Loading state (initial load only) — skeleton grid over a bare spinner so
+  // the first paint reads as content arriving.
   if (storeLoading && storeApps.length === 0) {
     return (
       <div className="flex-1 flex flex-col">
         <StoreHeader />
-        <div className="flex-1 flex items-center justify-center">
-          <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        <div className="flex-1 overflow-y-auto bg-muted/20">
+          <StoreSkeletonGrid />
         </div>
       </div>
     )
@@ -88,13 +102,29 @@ export function StoreView() {
     )
   }
 
-  // Grid view
+  // My Publications second-level view
+  if (storeMineOpen) {
+    return <StoreMine />
+  }
+
+  const showDiscover = storeTypeFilter === null && !storeSearchQuery
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <StoreHeader />
-      <div className="flex-1 overflow-y-auto">
-        <StoreGrid />
-      </div>
+      {showDiscover ? (
+        <div className="flex-1 overflow-y-auto bg-muted/20">
+          <StoreDiscover />
+        </div>
+      ) : (
+        // Category bar stays fixed; only the grid scrolls beneath it.
+        <div className="flex-1 flex flex-col overflow-hidden bg-muted/20">
+          <StoreCategoryBar />
+          <div className="flex-1 overflow-y-auto">
+            <StoreGrid />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -225,6 +225,8 @@ export interface StoreMetadata {
   slug?: string
   category?: string
   tags?: string[]
+  /** Per-version release notes surfaced in the store version history. */
+  changelog?: string
   locale?: string
   min_app_version?: string
   license?: string

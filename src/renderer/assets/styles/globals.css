@@ -54,6 +54,11 @@
   --halo-success: 142 71% 45%;
   --halo-warning: 38 92% 50%;
   --halo-error: 0 62% 50%;
+
+  /* App type accent colors (skill = cyan, mcp = amber). Brightened for the
+     dark default; .light carries the source values. */
+  --app-skill: 174 60% 48%;
+  --app-mcp: 38 90% 55%;
 }
 
 /* Light theme */
@@ -83,6 +88,10 @@
   --halo-success: 142 71% 40%;
   --halo-warning: 38 92% 45%;
   --halo-error: 0 72% 51%;
+
+  /* App type accent colors — light values (skill #0d9488, mcp #b26a00) */
+  --app-skill: 175 84% 32%;
+  --app-mcp: 36 100% 35%;
 }
 
 * {

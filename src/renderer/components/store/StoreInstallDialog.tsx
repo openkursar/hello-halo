@@ -10,7 +10,9 @@ import { X, Loader2 } from 'lucide-react'
 import { useSpaceStore } from '../../stores/space.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
+import { useOnlineStatus } from '../../hooks/useOnlineStatus'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
+import { AppTypeIcon } from './AppTypeIcon'
 import type { StoreAppDetail, StoreInstallProgress } from '../../../shared/store/store-types'
 import type { InputDef } from '../../../shared/apps/spec-types'
 
@@ -28,6 +30,9 @@ interface StoreInstallDialogProps {
 export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOption }: StoreInstallDialogProps) {
   const { t } = useTranslation()
   const installFromStore = useAppsPageStore(state => state.installFromStore)
+  // Install downloads spec+files from the registry; block it while offline so it
+  // cannot hang, and cover connectivity dropping after the dialog opened.
+  const online = useOnlineStatus()
 
   // Spaces
   const currentSpace = useSpaceStore(state => state.currentSpace)
@@ -48,10 +53,25 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<StoreInstallProgress | null>(null)
+  // Required config keys flagged by a failed install; cleared as each is filled.
+  const [invalid, setInvalid] = useState<Set<string>>(new Set())
+  const clearInvalid = useCallback((key: string) => {
+    setInvalid(prev => {
+      if (!prev.has(key)) return prev
+      const next = new Set(prev)
+      next.delete(key)
+      return next
+    })
+  }, [])
 
   // Dynamic config form state — use resolved schema for translated display text;
   // field.key and field.required are preserved unchanged by resolveSpecI18n.
   const configSchema = resolveSpecI18n(detail.spec, getCurrentLanguage()).config_schema ?? []
+  const hasConfig = configSchema.length > 0
+
+  // Two-step flow: pick the install location first (with a note on what that
+  // means), then configure. Apps without a config schema skip the second step.
+  const [step, setStep] = useState<'scope' | 'config'>('scope')
   const [configValues, setConfigValues] = useState<Record<string, unknown>>(() => {
     const initial: Record<string, unknown> = {}
     for (const field of configSchema) {
@@ -66,8 +86,9 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
 
   const updateConfigValue = useCallback((key: string, value: unknown) => {
     setConfigValues(prev => ({ ...prev, [key]: value }))
+    clearInvalid(key)
     setError(null)
-  }, [])
+  }, [clearInvalid])
 
   const handleInstall = useCallback(async () => {
     setError(null)
@@ -81,17 +102,21 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
         return
       }
 
-      // Validate required fields
+      // Validate required fields — flag every missing one at once (red) rather
+      // than stopping at the first, matching the publish form.
+      const missing = new Set<string>()
       for (const field of configSchema) {
-        if (field.required) {
-          const val = configValues[field.key]
-          if (val === undefined || val === null || val === '') {
-            setError(t('{{field}} is required').replace('{{field}}', field.label))
-            setLoading(false)
-            return
-          }
-        }
+        if (!field.required) continue
+        const val = configValues[field.key]
+        if (val === undefined || val === null || val === '') missing.add(field.key)
       }
+      if (missing.size > 0) {
+        setInvalid(missing)
+        setError(t('Please complete the required fields'))
+        setLoading(false)
+        return
+      }
+      setInvalid(new Set())
 
       // Build user config (only include fields that have values)
       const userConfig: Record<string, unknown> = {}
@@ -133,65 +158,76 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div
-        className="relative w-full max-w-lg mx-4 bg-background border border-border rounded-xl shadow-xl flex flex-col max-h-[85vh]"
+        className="relative w-full max-w-lg mx-4 bg-background border border-border/60 rounded-xl shadow-xl flex flex-col max-h-[85vh]"
         onMouseDown={e => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
-            {detail.entry.icon && (
-              <span className="text-base">{detail.entry.icon}</span>
-            )}
-            <h2 className="text-sm font-semibold truncate">
-              {t('Install')} {resolveSpecI18n(detail.spec, getCurrentLanguage()).name}
-            </h2>
+        {/* Header — app icon + name + step/context meta (matches the mockup) */}
+        <div className="relative flex-shrink-0 px-7 pt-6 pb-[18px] border-b border-border/60">
+          <div className="flex items-start gap-4 pr-8">
+            <AppTypeIcon type={detail.entry.type} icon={detail.entry.icon} name={detail.entry.name} size="lg" />
+            <div className="min-w-0 flex-1">
+              <h2 className="text-lg font-bold text-foreground truncate">
+                {resolveSpecI18n(detail.spec, getCurrentLanguage()).name}
+              </h2>
+              <p className="text-xs text-muted-foreground mt-1.5">
+                {hasConfig
+                  ? (step === 'scope' ? t('Step 1 of 2 · Choose where to install') : t('Step 2 of 2 · Configure'))
+                  : t('Install settings')}
+              </p>
+            </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 text-muted-foreground hover:text-foreground rounded-md transition-colors"
+            className="absolute top-4 right-4 flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground hover:text-foreground hover:border-border transition-colors"
+            aria-label={t('Close')}
           >
-            <X className="w-4 h-4" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
 
         {/* Body */}
-        <div className="p-4 space-y-4 overflow-y-auto flex-1">
-          {/* Scope selector */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {t('Install to')}
-            </h3>
-            {!showGlobalOption && allSpaces.length <= 1 ? (
-              <p className="text-sm text-foreground">
-                {allSpaces[0]?.name ?? t('No spaces available')}
-              </p>
-            ) : (
-              <select
-                value={selectedSpaceId}
-                onChange={e => setSelectedSpaceId(e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
-              >
-                {showGlobalOption && (
-                  <option value={GLOBAL_SCOPE}>{t('Global (all spaces)')}</option>
-                )}
-                {allSpaces.map(s => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          {/* Config schema form fields */}
-          {configSchema.length > 0 && (
+        <div className="px-7 py-5 space-y-4 overflow-y-auto flex-1">
+          {step === 'scope' ? (
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-muted-foreground">
+                {t('Install to')}
+              </label>
+              {!showGlobalOption && allSpaces.length <= 1 ? (
+                <p className="text-sm text-foreground">
+                  {allSpaces[0]?.name ?? t('No spaces available')}
+                </p>
+              ) : (
+                <select
+                  value={selectedSpaceId}
+                  onChange={e => setSelectedSpaceId(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-muted/40 border border-border/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+                >
+                  {showGlobalOption && (
+                    <option value={GLOBAL_SCOPE}>{t('Global (all spaces)')}</option>
+                  )}
+                  {allSpaces.map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              )}
+              {/* What the scope choice means */}
+              <div className="rounded-lg border border-border/60 bg-muted/30 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
+                {showGlobalOption
+                  ? t('Global installs it once and makes it available across every space. Installing into a single space keeps it available only there — pick a space to scope it to that workspace.')
+                  : t('The app is installed into the selected space and runs and is managed within that space; other spaces are not affected.')}
+              </div>
+            </div>
+          ) : (
             <div className="space-y-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <label className="block text-xs font-semibold text-muted-foreground">
                 {t('Configuration')}
-              </h3>
+              </label>
               {configSchema.map(field => (
                 <ConfigField
                   key={field.key}
                   field={field}
                   value={configValues[field.key]}
+                  invalid={invalid.has(field.key)}
                   onChange={val => updateConfigValue(field.key, val)}
                 />
               ))}
@@ -205,7 +241,7 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
 
         {/* Install progress bar (shown while downloading) */}
         {loading && progress && (
-          <div className="px-4 pt-2 pb-1 space-y-1 border-t border-border flex-shrink-0">
+          <div className="px-4 pt-2 pb-1 space-y-1 border-t border-border/60 flex-shrink-0">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>{progress.message}</span>
               {progress.filesTotal > 0 && (
@@ -222,21 +258,42 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
         )}
 
         {/* Footer */}
-        <div className="flex justify-end gap-2 px-4 py-3 border-t border-border flex-shrink-0">
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            {t('Cancel')}
-          </button>
-          <button
-            onClick={handleInstall}
-            disabled={loading || !selectedSpaceId}
-            className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
-            {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            {t('Install')}
-          </button>
+        <div className="flex items-center gap-3 px-7 py-4 border-t border-border/60 flex-shrink-0">
+          {step === 'config' ? (
+            <button
+              onClick={() => { setStep('scope'); setError(null) }}
+              disabled={loading}
+              className="flex-1 px-5 py-2.5 text-[13px] text-muted-foreground border border-border/60 rounded-lg hover:text-foreground hover:border-border transition-colors disabled:opacity-50"
+            >
+              {t('Back')}
+            </button>
+          ) : (
+            <button
+              onClick={onClose}
+              className="flex-1 px-5 py-2.5 text-[13px] text-muted-foreground border border-border/60 rounded-lg hover:text-foreground hover:border-border transition-colors"
+            >
+              {t('Cancel')}
+            </button>
+          )}
+          {step === 'scope' && hasConfig ? (
+            <button
+              onClick={() => { setError(null); setStep('config') }}
+              disabled={!selectedSpaceId}
+              className="flex-1 flex items-center justify-center gap-1.5 px-5 py-2.5 text-[13px] font-semibold bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              {t('Next')}
+            </button>
+          ) : (
+            <button
+              onClick={handleInstall}
+              disabled={loading || !selectedSpaceId || !online}
+              title={online ? undefined : t('You are offline. Connect to the network to install.')}
+              className="flex-1 flex items-center justify-center gap-1.5 px-5 py-2.5 text-[13px] font-semibold bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {online ? t('Install') : t('Offline')}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -250,13 +307,15 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
 interface ConfigFieldProps {
   field: InputDef
   value: unknown
+  /** Highlight red when a failed install flagged this required field as empty. */
+  invalid?: boolean
   onChange: (value: unknown) => void
 }
 
-function ConfigField({ field, value, onChange }: ConfigFieldProps) {
+function ConfigField({ field, value, invalid, onChange }: ConfigFieldProps) {
   const { t } = useTranslation()
 
-  const inputClasses = 'w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50'
+  const inputClasses = `w-full px-3 py-2 text-sm bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50 ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`
 
   switch (field.type) {
     case 'boolean':
@@ -267,7 +326,7 @@ function ConfigField({ field, value, onChange }: ConfigFieldProps) {
               type="checkbox"
               checked={!!value}
               onChange={e => onChange(e.target.checked)}
-              className="rounded border-border"
+              className={`rounded ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
             />
             {field.label}
             {field.required && <span className="text-red-400">*</span>}

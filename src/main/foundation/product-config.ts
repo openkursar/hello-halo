@@ -16,6 +16,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { app } from 'electron'
 import { type AuthProviderConfig } from '../../shared/types'
+import type { CategoryTaxonomy } from '../../shared/store/store-types'
 
 // AuthProviderConfig is defined in src/shared/types/ai-sources.ts so the main
 // loader and the renderer setup UI share one source of truth. Re-exported here
@@ -158,6 +159,19 @@ export interface ImChannelsProductConfig {
   permissionControl?: ImChannelsPermissionDefaults
 }
 
+/**
+ * Marketplace section of product.json.
+ *
+ * `categories` is the no-server scene-category enumeration: a deployment
+ * without a store server (which would otherwise own the enum, FR-4.9) can
+ * still customize categories here without forking. It is the middle tier of
+ * the resolution chain `server ?? product.json ?? built-in`; a build that
+ * omits it falls back to the built-in community set.
+ */
+export interface MarketplaceProductConfig {
+  categories?: CategoryTaxonomy
+}
+
 // ============================================
 // Product Configuration
 // ============================================
@@ -215,6 +229,26 @@ export interface ProductConfig {
    * Open-source builds omit this (no restrictions by default).
    */
   imChannels?: ImChannelsProductConfig
+
+  /**
+   * Marketplace configuration (optional).
+   *
+   * Holds the no-server scene-category enumeration. Open-source/community
+   * builds omit this and fall back to the built-in category set.
+   */
+  marketplace?: MarketplaceProductConfig
+
+  /**
+   * Marketplace creator-identity provider (optional).
+   *
+   * Declares which AI-source provider type supplies the authoritative user
+   * identity used for publish attribution and "my publications" (e.g.
+   * "halo-cloud"). The marketplace reads the signed-in token of this provider
+   * and forwards it to an identity-bound store server. Omitted → no identity
+   * binding (anonymous / shared-token). The generic core references only this
+   * field, never a specific provider.
+   */
+  identityProvider?: string
 
   /**
    * Identity source for telemetry (optional).
@@ -278,10 +312,18 @@ let productConfigPath: string | null = null
  * In development, product.json is in project root; in production it lives
  * inside app.asar. `app.getAppPath()` resolves to the right base in both
  * cases, so a single join handles both.
+ *
+ * A `product.local.json` next to it takes precedence in unpackaged builds so a
+ * developer can point at local services without editing the packaged
+ * product.json (which electron-builder generates). It never applies once packaged.
  */
 export function getProductConfigPath(): string {
   if (productConfigPath) return productConfigPath
-  productConfigPath = join(app.getAppPath(), 'product.json')
+  const base = app.getAppPath()
+  const localPath = join(base, 'product.local.json')
+  productConfigPath = !app.isPackaged && existsSync(localPath)
+    ? localPath
+    : join(base, 'product.json')
   return productConfigPath
 }
 
@@ -347,6 +389,24 @@ export function getImChannelsPermissionDefaults(): ImChannelsPermissionDefaults 
  */
 export function getIdentitySource(): string | undefined {
   return loadProductConfig().identitySource
+}
+
+/**
+ * Get the marketplace scene-category enumeration from product.json.
+ * Returns undefined when not configured — the taxonomy resolver then falls
+ * back to the built-in community set. Shape validation lives with the
+ * resolver (store tier), not here.
+ */
+export function getMarketplaceCategoriesConfig(): CategoryTaxonomy | undefined {
+  return loadProductConfig().marketplace?.categories
+}
+
+/**
+ * Get the declared marketplace identity provider type from product.json.
+ * Returns undefined when no identity binding is configured (anonymous builds).
+ */
+export function getMarketplaceIdentityProvider(): string | undefined {
+  return loadProductConfig().identityProvider
 }
 
 /**

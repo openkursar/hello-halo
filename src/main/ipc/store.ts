@@ -16,6 +16,7 @@
  *   store:remove-registry                Remove a registry source
  *   store:toggle-registry                Enable or disable a registry source
  *   store:update-registry-adapter-config Update adapter config (e.g. API keys) for a registry
+ *   store:get-capabilities               Resolve renderer-safe marketplace capability flags
  */
 
 import { ipcMain, dialog } from 'electron'
@@ -117,9 +118,9 @@ export function registerStoreHandlers(): void {
     },
 
     // ── store:publish-preview ──────────────────────────────────────────────
-    storePublishPreview: async (input: { appId: string; author?: string }) => {
+    storePublishPreview: async (input: { appId: string; author?: string; name?: string }) => {
       try {
-        return { success: true, data: getPublishPreview(input.appId, input.author) }
+        return { success: true, data: await getPublishPreview(input.appId, input.author, input.name) }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[StoreIPC] store:publish-preview error:', err.message)
@@ -128,9 +129,17 @@ export function registerStoreHandlers(): void {
     },
 
     // ── store:publish ──────────────────────────────────────────────────────
-    storePublish: async (input: { appId: string; author?: string; version?: string }) => {
+    storePublish: async (input: { appId: string; author?: string; version?: string; changelog?: string; category?: string; name?: string; description?: string; tags?: string[] }) => {
       try {
-        const result = await publish(input.appId, input.author, input.version)
+        const result = await publish(input.appId, {
+          author: input.author,
+          version: input.version,
+          changelog: input.changelog,
+          category: input.category,
+          name: input.name,
+          description: input.description,
+          tags: input.tags,
+        })
         console.log(
           `[StoreIPC] store:publish: appId=${input.appId} status=${result.status} target=${result.target}` +
           (result.details ? ` details=${JSON.stringify(result.details)}` : '')
@@ -231,6 +240,61 @@ export function registerStoreHandlers(): void {
         console.error('[StoreIPC] store:import-dhpkg error:', err.message)
         return { success: false, error: err.message }
       }
+    },
+
+    // ── store:get-capabilities ─────────────────────────────────────────────
+    storeGetCapabilities: async () => {
+      return storeController.getStoreCapabilities()
+    },
+
+    // ── store:get-category-taxonomy ────────────────────────────────────────
+    storeGetCategoryTaxonomy: async () => {
+      return storeController.getStoreCategoryTaxonomy()
+    },
+
+    // ── store:get-discover-layout ──────────────────────────────────────────
+    storeGetDiscoverLayout: async () => {
+      return storeController.getStoreDiscoverLayout()
+    },
+
+    // ── store:get-my-publications ──────────────────────────────────────────
+    // ── store:ensure-signed-in ─────────────────────────────────────────────
+    storeEnsureSignedIn: async () => {
+      return storeController.ensureStoreSignedIn()
+    },
+
+    // ── store:get-identity ─────────────────────────────────────────────────
+    storeGetIdentity: async () => {
+      return storeController.getStoreIdentity()
+    },
+
+    // ── store:get-sign-in-status ───────────────────────────────────────────
+    storeGetSignInStatus: async () => {
+      return storeController.getStoreSignInStatus()
+    },
+
+    storeGetMyPublications: async () => {
+      return storeController.getStoreMyPublications()
+    },
+
+    // ── store:unpublish ────────────────────────────────────────────────────
+    storeUnpublish: async (input: { slug: string }) => {
+      return storeController.unpublishStoreApp(input)
+    },
+
+    // ── store:relist ───────────────────────────────────────────────────────
+    storeRelist: async (input: { slug: string }) => {
+      return storeController.relistStoreApp(input)
+    },
+
+    // ── store:get-collections ──────────────────────────────────────────────
+    storeGetCollections: async () => {
+      return storeController.getStoreCollections()
+    },
+
+    // ── store:ignore-version ───────────────────────────────────────────────
+    storeIgnoreVersion: async (input: { appId: string; version: string }) => {
+      return storeController.ignoreStoreVersion(input)
     },
   })
 

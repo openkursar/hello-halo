@@ -746,6 +746,7 @@ export async function checkUpdates(
   installedApps: Array<{
     id: string
     upgradeStrategy?: UpgradeStrategy
+    ignoredVersions?: string[]
     spec: { name: string; version: string; store?: { slug?: string; registry_id?: string } }
   }>
 ): Promise<UpdateInfo[]> {
@@ -763,6 +764,8 @@ export async function checkUpdates(
     if (!found) continue
 
     const { entry } = found
+
+    if (app.ignoredVersions?.includes(entry.version)) continue
 
     if (isNewerVersion(entry.version, app.spec.version)) {
       updates.push({
@@ -877,6 +880,17 @@ export async function applyUpgrade(
 export function getRegistries(): RegistrySource[] {
   ensureInitialized()
   return [...config.registries]
+}
+
+/**
+ * Base URL of the enabled official registry (trailing slash stripped), or null
+ * when absent/disabled. Single source for marketplace calls targeting the
+ * enterprise store server (capabilities probe, my-publications, collections).
+ */
+export function getOfficialRegistryUrl(): string | null {
+  ensureInitialized()
+  const official = config.registries.find(r => r.id === 'official' && r.enabled)
+  return official ? normalizeRegistryUrl(official.url) : null
 }
 
 /**

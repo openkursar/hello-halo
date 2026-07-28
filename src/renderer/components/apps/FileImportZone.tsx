@@ -83,8 +83,15 @@ export function FileImportZone({
   }, [onFile])
 
   const handleFolderInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (files && files.length > 0) onFolderFileList(files)
+    const selected = e.target.files
+    if (selected && selected.length > 0) {
+      // Snapshot into a standalone FileList before resetting the input below:
+      // clearing the input empties its own live FileList, which the async folder
+      // reader would otherwise be left iterating over (seeing zero files).
+      const dt = new DataTransfer()
+      for (const f of Array.from(selected)) dt.items.add(f)
+      onFolderFileList(dt.files)
+    }
     e.target.value = ''
   }, [onFolderFileList])
 

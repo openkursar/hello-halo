@@ -147,6 +147,7 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
       pulseReadAt: new Map(),
       currentSpaceId: null,
       pendingPulseNavigation: null,
+      pendingComposerInput: null,
       artifacts: [],
       isLoadingConversation: false,
       _pulseItems: [],

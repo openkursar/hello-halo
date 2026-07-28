@@ -6,16 +6,65 @@
  */
 
 import { useState, useMemo, useCallback, useEffect } from 'react'
-import { ChevronLeft, ChevronDown, ChevronUp, Loader2, Check, Download, AlertCircle, RotateCcw, Globe } from 'lucide-react'
+import { api } from '../../api'
+import { ArrowLeft, ChevronDown, ChevronUp, Loader2, Check, Download, AlertCircle, RotateCcw, Globe, User } from 'lucide-react'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useAppsStore } from '../../stores/apps.store'
-import { STORE_CATEGORY_META } from '../../../shared/store/store-types'
+import { useAppStore } from '../../stores/app.store'
+import { useSpaceStore } from '../../stores/space.store'
+import { useChatStore } from '../../stores/chat.store'
+import { useStoreCategories, categoryDisplay } from '../../hooks/useStoreCategories'
+import { getEntryVersions, getEntryInstalls } from '../../../shared/store/store-meta'
+import { useStoreEntryInstallState } from '../../hooks/useStoreEntryInstallState'
+import { useStoreUpdateFlow } from '../../hooks/useStoreUpdateFlow'
+import { useMarketplaceCapabilities } from '../../hooks/useMarketplaceCapabilities'
+import { useOnlineStatus } from '../../hooks/useOnlineStatus'
 import { StoreInstallDialog } from './StoreInstallDialog'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveEntryI18n, resolveSpecI18n } from '../../utils/spec-i18n'
-import { AppTypeBadge } from './AppTypeBadge'
+import { AppTypeTag } from './AppTypeTag'
+import { AppTypeIcon } from './AppTypeIcon'
+import { installVerb, installedVerb } from './install-verb'
 import { StoreDocumentation } from './StoreDocumentation'
-import { api } from '../../api'
+import { SkillFileTree } from './SkillFileTree'
+import type { AppType } from '../../../shared/apps/spec-types'
+
+function formatVersionDate(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString()
+}
+
+/** A required MCP/skill dependency: type-glyph icon + name (with type tag
+ * inline) + reason as a sub-line, matching the mockup's `.req-card`. */
+function DependencyRow({ type, name, reason }: { type: AppType; name: string; reason?: string }) {
+  return (
+    <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border/60 bg-background">
+      <AppTypeIcon type={type} size="sm" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-[13px] font-semibold text-foreground truncate">{name}</span>
+          <AppTypeTag type={type} />
+        </div>
+        {reason && <p className="text-xs text-muted-foreground mt-0.5 truncate">{reason}</p>}
+      </div>
+    </div>
+  )
+}
+
+/** Borderless muted back link, positioned inside the centered detail column
+ * (matches the mockup's `.btn-back`, not a full-width header bar). */
+function BackToStore({ onClick }: { onClick: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-primary transition-colors"
+    >
+      <ArrowLeft className="w-3.5 h-3.5" />
+      {t('Back to Store')}
+    </button>
+  )
+}
 
 export function StoreDetail() {
   const { t } = useTranslation()
@@ -23,16 +72,28 @@ export function StoreDetail() {
   const storeDetailLoading = useAppsPageStore(state => state.storeDetailLoading)
   const storeDetailError = useAppsPageStore(state => state.storeDetailError)
   const storeSelectedSlug = useAppsPageStore(state => state.storeSelectedSlug)
-  const availableUpdates = useAppsPageStore(state => state.availableUpdates)
   const clearStoreSelection = useAppsPageStore(state => state.clearStoreSelection)
   const selectStoreApp = useAppsPageStore(state => state.selectStoreApp)
+  const selectApp = useAppsPageStore(state => state.selectApp)
+  const setCurrentTab = useAppsPageStore(state => state.setCurrentTab)
+  const consumeStoreAutoInstall = useAppsPageStore(state => state.consumeStoreAutoInstall)
   const checkUpdates = useAppsPageStore(state => state.checkUpdates)
-  const apps = useAppsStore(state => state.apps)
+  const setView = useAppStore(state => state.setView)
+  const spaces = useSpaceStore(state => state.spaces)
+  const currentSpace = useSpaceStore(state => state.currentSpace)
+  const setCurrentSpace = useSpaceStore(state => state.setCurrentSpace)
+  const refreshCurrentSpace = useSpaceStore(state => state.refreshCurrentSpace)
 
   const [showSystemPrompt, setShowSystemPrompt] = useState(false)
+  const [showVersions, setShowVersions] = useState(false)
   const [showInstallDialog, setShowInstallDialog] = useState(false)
-  const [updateInstalling, setUpdateInstalling] = useState(false)
-  const [updateInstallError, setUpdateInstallError] = useState<string | null>(null)
+
+  const capabilities = useMarketplaceCapabilities()
+  const showInstalls = capabilities?.installs === true
+  // Install/update fetch spec+files from the registry; when offline the button
+  // must be disabled with a hint rather than left clickable and hanging.
+  const online = useOnlineStatus()
+  const offlineHint = t('You are offline. Connect to the network to install or update.')
 
   // Resolve entry and spec from detail
   const entry = storeSelectedDetail?.entry
@@ -40,42 +101,48 @@ export function StoreDetail() {
   const registryId = storeSelectedDetail?.registryId
   const isBundlePackage = entry?.format === 'bundle'
 
-  // Check if this app is already installed (prefer exact slug+registry match).
-  const installedApp = useMemo(() => {
-    if (!entry || !registryId) return null
+  const { installedApp, updateInfo } = useStoreEntryInstallState(entry, registryId)
 
-    const exact = apps.find(a => {
-      const storeSlug = a.spec.store?.slug
-      const storeRegistryId = a.spec.store?.registry_id
-      return storeSlug === entry.slug && storeRegistryId === registryId
+  // Marketplace funnel: a detail page opened, tagged with the install state.
+  useEffect(() => {
+    if (!entry) return
+    void api.trackEvent('mkt_detail_view', {
+      appId: entry.slug,
+      appType: entry.type,
+      installedState: updateInfo ? 'update' : installedApp ? 'installed' : 'new',
     })
-    if (exact) return exact
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entry?.slug])
+  const { start: startUpdate, busy: updating, dialogs: updateDialogs } = useStoreUpdateFlow(
+    entry,
+    updateInfo,
+    storeSelectedDetail,
+  )
 
-    // Backward compatibility for earlier installs that predate registry_id.
-    return apps.find(a => {
-      const storeSlug = a.spec.store?.slug
-      const storeRegistryId = a.spec.store?.registry_id
-      return storeSlug === entry.slug && !storeRegistryId
-    }) ?? null
-  }, [apps, entry, registryId])
-
-  // Check for available update
-  const updateInfo = useMemo(() => {
-    if (!installedApp) return null
-    return availableUpdates.find(u => u.appId === installedApp.id) ?? null
-  }, [availableUpdates, installedApp])
-
-  // Resolve category display (icon + translated label)
-  const categoryMeta = useMemo(() => {
+  // Resolve category display: match against the type's taxonomy, falling back
+  // to the raw string for legacy categories not present in the enum.
+  const categories = useStoreCategories(entry?.type ?? null)
+  const categoryDef = useMemo(() => {
     if (!entry?.category) return null
-    return STORE_CATEGORY_META.find(c => c.id === entry.category) ?? null
-  }, [entry])
+    return categories.find(c => c.id === entry.category) ?? null
+  }, [categories, entry])
+
+  const versions = useMemo(() => (entry ? getEntryVersions(entry) : []), [entry])
 
   useEffect(() => {
     if (installedApp) {
       void checkUpdates()
     }
   }, [installedApp, checkUpdates])
+
+  // Card install buttons navigate here with an "install now" intent; raise the
+  // install dialog once the detail is ready and the app is actually installable.
+  useEffect(() => {
+    if (!storeSelectedDetail) return
+    if (consumeStoreAutoInstall() && isBundlePackage && !installedApp && entry?.type !== 'mcp') {
+      setShowInstallDialog(true)
+    }
+  }, [storeSelectedDetail, isBundlePackage, installedApp, entry?.type, consumeStoreAutoInstall])
 
   // Resolve locale-specific display text
   const locale = getCurrentLanguage()
@@ -96,38 +163,51 @@ export function StoreDetail() {
     console.log('[StoreDetail] App installed:', appId)
   }, [checkUpdates])
 
-  // Upgrade in place via updateSpec — reinstalling would throw AppAlreadyInstalledError.
-  const handleUpdateInPlace = useCallback(async () => {
-    if (!entry || !installedApp) return
-    setUpdateInstallError(null)
-    setUpdateInstalling(true)
-    try {
-      const res = await api.storeApplyUpgrade(installedApp.id, 'force')
-      if (res.success) {
-        useAppsStore.getState().loadApps()
-        void checkUpdates()
-      } else {
-        setUpdateInstallError(res.error ?? t('Update failed. Please try again.'))
+  // "Use" an already-installed app: digital humans open in their dedicated tab;
+  // skills run inside a space conversation, so we open the space they're
+  // installed in (global installs fall back to the current/first space).
+  const handleUse = useCallback(() => {
+    if (!installedApp || !entry) return
+    if (entry.type === 'skill') {
+      const target =
+        (installedApp.spaceId ? spaces.find(s => s.id === installedApp.spaceId) : null) ??
+        currentSpace ??
+        spaces[0] ??
+        null
+      if (target) {
+        setCurrentSpace(target)
+        void refreshCurrentSpace()
+        // Pre-fill the skill's slash command into that space's composer (consumed
+        // once by InputArea on arrival); same slugging as the composer's own list.
+        const command = `/${installedApp.spec.name.toLowerCase().replace(/\s+/g, '-')} `
+        useChatStore.setState({ pendingComposerInput: { spaceId: target.id, text: command } })
       }
-    } catch (err) {
-      setUpdateInstallError(err instanceof Error ? err.message : t('Update failed'))
-    } finally {
-      setUpdateInstalling(false)
+      setView('space')
+      return
     }
-  }, [entry, installedApp, checkUpdates, t])
+    clearStoreSelection()
+    setCurrentTab('my-digital-humans')
+    selectApp(installedApp.id, 'automation')
+  }, [
+    installedApp,
+    entry,
+    spaces,
+    currentSpace,
+    setCurrentSpace,
+    refreshCurrentSpace,
+    setView,
+    clearStoreSelection,
+    setCurrentTab,
+    selectApp,
+  ])
 
+  // Upgrade in place via updateSpec — reinstalling would throw AppAlreadyInstalledError.
   // Loading state
   if (storeDetailLoading) {
     return (
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="px-4 py-3 border-b border-border flex-shrink-0">
-          <button
-            onClick={clearStoreSelection}
-            className="flex items-center gap-1 text-sm text-primary hover:text-primary/80 transition-colors font-medium"
-          >
-            <ChevronLeft className="w-3.5 h-3.5" />
-            {t('Back to Store')}
-          </button>
+      <div className="flex-1 flex flex-col overflow-hidden bg-background">
+        <div className="w-full max-w-[880px] mx-auto px-4 sm:px-6 pt-5">
+          <BackToStore onClick={clearStoreSelection} />
         </div>
         <div className="flex-1 flex items-center justify-center">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -139,15 +219,9 @@ export function StoreDetail() {
   // Error state — fetch failed, stay on detail page and let user retry
   if (storeDetailError) {
     return (
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="px-4 py-3 border-b border-border flex-shrink-0">
-          <button
-            onClick={clearStoreSelection}
-            className="flex items-center gap-1 text-sm text-primary hover:text-primary/80 transition-colors font-medium"
-          >
-            <ChevronLeft className="w-3.5 h-3.5" />
-            {t('Back to Store')}
-          </button>
+      <div className="flex-1 flex flex-col overflow-hidden bg-background">
+        <div className="w-full max-w-[880px] mx-auto px-4 sm:px-6 pt-5">
+          <BackToStore onClick={clearStoreSelection} />
         </div>
         <div className="flex-1 flex flex-col items-center justify-center gap-3">
           <AlertCircle className="w-8 h-8 text-muted-foreground/50" />
@@ -157,7 +231,7 @@ export function StoreDetail() {
           </div>
           <button
             onClick={() => storeSelectedSlug && void selectStoreApp(storeSelectedSlug)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border rounded-lg hover:bg-secondary transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border/60 rounded-lg hover:bg-secondary transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             {t('Retry')}
@@ -170,15 +244,9 @@ export function StoreDetail() {
   // No detail loaded
   if (!storeSelectedDetail || !entry || !spec) {
     return (
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="px-4 py-3 border-b border-border flex-shrink-0">
-          <button
-            onClick={clearStoreSelection}
-            className="flex items-center gap-1 text-sm text-primary hover:text-primary/80 transition-colors font-medium"
-          >
-            <ChevronLeft className="w-3.5 h-3.5" />
-            {t('Back to Store')}
-          </button>
+      <div className="flex-1 flex flex-col overflow-hidden bg-background">
+        <div className="w-full max-w-[880px] mx-auto px-4 sm:px-6 pt-5">
+          <BackToStore onClick={clearStoreSelection} />
         </div>
         <div className="flex-1 flex items-center justify-center">
           <p className="text-sm text-muted-foreground">{t('App not found')}</p>
@@ -189,46 +257,47 @@ export function StoreDetail() {
 
   return (
     <>
-      <div className="flex-1 overflow-y-auto">
-        {/* Back button */}
-        <div className="px-4 py-3 border-b border-border flex-shrink-0">
-          <button
-            onClick={clearStoreSelection}
-            className="flex items-center gap-1 text-sm text-primary hover:text-primary/80 transition-colors font-medium"
-          >
-            <ChevronLeft className="w-3.5 h-3.5" />
-            {t('Back to Store')}
-          </button>
-        </div>
-
-        <div className="p-6 space-y-6 max-w-3xl">
-          {/* Header: Icon + Name + Version + Author */}
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-            <div className="flex items-start gap-3 min-w-0">
-              {entry.icon && (
-                <span className="text-3xl flex-shrink-0">{entry.icon}</span>
-              )}
-              <div className="min-w-0">
-                <h1 className="text-lg font-semibold text-foreground break-words">{resolvedEntry?.name ?? entry.name}</h1>
-                <div className="flex items-center gap-2 mt-1 flex-wrap">
-                  <span className="text-xs text-muted-foreground">v{entry.version}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {t('by')} {entry.author}
+      <div className="flex-1 flex flex-col overflow-hidden bg-background">
+        {/* Fixed header — only the content region below scrolls, so the header
+            stays put, never shows content bleeding under it, and needs no cover
+            background (same gray as the page). */}
+        <div className="flex-shrink-0 w-full max-w-[880px] mx-auto px-4 sm:px-6 pt-5 pb-[18px] border-b border-border/60">
+            <BackToStore onClick={clearStoreSelection} />
+            <div className="flex items-start gap-4 mt-3.5">
+              <AppTypeIcon type={entry.type} icon={entry.icon} name={resolvedEntry?.name ?? entry.name} size="lg" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h1 className="text-[19px] font-bold text-foreground break-words">{resolvedEntry?.name ?? entry.name}</h1>
+                  {entry.type && <AppTypeTag type={entry.type} />}
+                </div>
+                <div className="flex items-center gap-1.5 mt-2 flex-wrap text-xs text-muted-foreground">
+                  {entry.category && entry.category !== 'other' && (
+                    <>
+                      <span>{categoryDef ? categoryDisplay(categoryDef, t) : entry.category}</span>
+                      <span aria-hidden="true">·</span>
+                    </>
+                  )}
+                  <span className="flex items-center gap-0.5">
+                    <User className="w-3 h-3" />
+                    {entry.author}
                   </span>
-                  {categoryMeta && (
-                    <span className="text-xs text-muted-foreground">
-                      {categoryMeta.icon} {t(categoryMeta.labelKey)}
-                    </span>
+                  {showInstalls && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="flex items-center gap-0.5">
+                        <Download className="w-3 h-3" />
+                        {getEntryInstalls(entry) ?? 0}
+                      </span>
+                    </>
                   )}
-                  {entry.type && (
-                    <AppTypeBadge type={entry.type} />
-                  )}
+                  <span aria-hidden="true">·</span>
+                  <span>v{entry.version}</span>
                 </div>
               </div>
-            </div>
 
-            {/* Install / Installed / Update button */}
-            <div className="flex-shrink-0 flex flex-col items-start sm:items-end gap-1">
+              {/* Install / Installed / Update button — right-aligned, pinned to the
+                  bottom of the title/meta column so it sits level with the meta row */}
+              <div className="flex-shrink-0 self-end flex items-center gap-3">
               {!isBundlePackage ? (
                 <button
                   disabled
@@ -237,27 +306,37 @@ export function StoreDetail() {
                 >
                   {t('Unsupported package format')}
                 </button>
-              ) : entry?.type === 'mcp' ? (
-                // MCP: store install disabled — manual add only
+              ) : (
                 <>
-                  {installedApp && !updateInfo ? (
+                  {/* Use — shown for any installed digital human / skill, even when
+                      an update is available (sits alongside the update button). */}
+                  {installedApp && (entry.type === 'automation' || entry.type === 'skill') && (
                     <button
-                      disabled
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-secondary text-muted-foreground rounded-lg cursor-default"
+                      onClick={handleUse}
+                      className="px-4 py-2 text-sm font-medium border border-border/60 bg-background text-foreground rounded-lg hover:border-muted-foreground/40 transition-colors"
                     >
-                      <Check className="w-4 h-4" />
-                      {t('Installed')}
+                      {t('Use')}
                     </button>
-                  ) : updateInfo ? (
+                  )}
+                  {updateInfo ? (
                     <button
-                      onClick={handleUpdateInPlace}
-                      disabled={updateInstalling}
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+                      onClick={startUpdate}
+                      disabled={updating || !online}
+                      title={online ? undefined : offlineHint}
+                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-halo-success text-white rounded-lg hover:bg-halo-success/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {updateInstalling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                      {updating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                       {t('Update to')} v{updateInfo.latestVersion}
                     </button>
-                  ) : (
+                  ) : installedApp ? (
+                    <button
+                      disabled
+                      className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-background border border-border/60 text-muted-foreground rounded-lg cursor-default"
+                    >
+                      <Check className="w-4 h-4" />
+                      {installedVerb(t, entry.type)}
+                    </button>
+                  ) : entry.type === 'mcp' ? (
                     <button
                       disabled
                       className="flex items-center gap-1.5 px-4 py-2 text-sm bg-secondary text-muted-foreground rounded-lg cursor-not-allowed opacity-60"
@@ -265,76 +344,27 @@ export function StoreDetail() {
                     >
                       {t('Coming Soon')}
                     </button>
-                  )}
-                  {updateInstallError && (
-                    <p className="text-xs text-red-400">{updateInstallError}</p>
-                  )}
-                </>
-              ) : entry?.type === 'skill' ? (
-                // Skill: normal install flow
-                <>
-                  {installedApp && !updateInfo ? (
-                    <button
-                      disabled
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-secondary text-muted-foreground rounded-lg cursor-default"
-                    >
-                      <Check className="w-4 h-4" />
-                      {t('Installed')}
-                    </button>
-                  ) : updateInfo ? (
-                    <button
-                      onClick={handleUpdateInPlace}
-                      disabled={updateInstalling}
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-                    >
-                      {updateInstalling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                      {t('Update to')} v{updateInfo.latestVersion}
-                    </button>
                   ) : (
                     <button
                       onClick={() => setShowInstallDialog(true)}
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+                      disabled={!online}
+                      title={online ? undefined : offlineHint}
+                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Download className="w-4 h-4" />
-                      {t('Install')}
-                    </button>
-                  )}
-                  {updateInstallError && (
-                    <p className="text-xs text-red-400">{updateInstallError}</p>
-                  )}
-                </>
-              ) : (
-                <>
-                  {installedApp && !updateInfo ? (
-                    <button
-                      disabled
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-secondary text-muted-foreground rounded-lg cursor-default"
-                    >
-                      <Check className="w-4 h-4" />
-                      {t('Installed')}
-                    </button>
-                  ) : updateInfo ? (
-                    <button
-                      onClick={() => setShowInstallDialog(true)}
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-                    >
-                      <Download className="w-4 h-4" />
-                      {t('Update to')} v{updateInfo.latestVersion}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => setShowInstallDialog(true)}
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-                    >
-                      <Download className="w-4 h-4" />
-                      {t('Install')}
+                      {installVerb(t, entry.type)}
                     </button>
                   )}
                 </>
               )}
+              </div>
             </div>
           </div>
 
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-[880px] mx-auto px-4 sm:px-6 pt-[22px] pb-8">
+            <div className="flex flex-col sm:flex-row gap-6 sm:gap-7">
+            <div className="flex-1 min-w-0 space-y-6">
           {/* Description */}
           <div className="space-y-2">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -360,26 +390,21 @@ export function StoreDetail() {
               <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {t('Configuration')}
               </h2>
-              <div className="space-y-1.5">
+              <div className="rounded-lg border border-border/60 bg-background overflow-hidden divide-y divide-border/60">
                 {(resolvedSpec?.config_schema ?? spec.config_schema)!.map(field => (
-                  <div
-                    key={field.key}
-                    className="flex items-center justify-between px-3 py-2 rounded-lg bg-secondary/50 border border-border"
-                  >
-                    <div className="min-w-0">
-                      <span className="text-sm text-foreground">{field.label}</span>
+                  <div key={field.key} className="flex items-center gap-2.5 px-3.5 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <span className="text-[13px] font-medium text-foreground">
+                        {field.label}
+                        {field.required && <span className="text-red-400 ml-0.5">*</span>}
+                      </span>
                       {field.description && (
                         <p className="text-xs text-muted-foreground mt-0.5">{field.description}</p>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 flex-shrink-0 ml-4">
-                      <span className="text-xs px-2 py-0.5 rounded bg-secondary text-muted-foreground">
-                        {field.type}
-                      </span>
-                      {field.required && (
-                        <span className="text-xs text-red-400">{t('required')}</span>
-                      )}
-                    </div>
+                    <span className="flex-shrink-0 text-[11px] font-mono px-1.5 py-0.5 rounded border border-border/60 bg-muted text-muted-foreground">
+                      {field.type}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -394,31 +419,13 @@ export function StoreDetail() {
               </h2>
               <div className="space-y-1.5">
                 {spec.requires.mcps?.map(mcp => (
-                  <div
-                    key={mcp.id}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 border border-border"
-                  >
-                    <span className="text-xs px-2 py-0.5 rounded bg-secondary text-muted-foreground">MCP</span>
-                    <span className="text-sm text-foreground">{mcp.id}</span>
-                    {mcp.reason && (
-                      <span className="text-xs text-muted-foreground ml-auto">{mcp.reason}</span>
-                    )}
-                  </div>
+                  <DependencyRow key={mcp.id} type="mcp" name={mcp.id} reason={mcp.reason} />
                 ))}
                 {spec.requires.skills?.map(skill => {
                   const skillId = typeof skill === 'string' ? skill : skill.id
                   const skillReason = typeof skill === 'string' ? undefined : skill.reason
                   return (
-                    <div
-                      key={skillId}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 border border-border"
-                    >
-                      <span className="text-xs px-2 py-0.5 rounded bg-secondary text-muted-foreground">{t('Skill')}</span>
-                      <span className="text-sm text-foreground">{skillId}</span>
-                      {skillReason && (
-                        <span className="text-xs text-muted-foreground ml-auto">{skillReason}</span>
-                      )}
-                    </div>
+                    <DependencyRow key={skillId} type="skill" name={skillId} reason={skillReason} />
                   )
                 })}
               </div>
@@ -449,56 +456,126 @@ export function StoreDetail() {
             </div>
           )}
 
-          {/* System Prompt (collapsible) */}
+          {/* System Prompt — collapsible content panel (mockup .detail-collapse) */}
           {spec.type === 'automation' && spec.system_prompt && (
             <div className="space-y-2">
-              <button
-                onClick={() => setShowSystemPrompt(!showSystemPrompt)}
-                className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {showSystemPrompt ? (
-                  <ChevronUp className="w-3.5 h-3.5" />
-                ) : (
-                  <ChevronDown className="w-3.5 h-3.5" />
-                )}
-                {t('System Prompt')}
-              </button>
-              {showSystemPrompt && (
-                <pre className="text-xs text-foreground bg-secondary/50 border border-border rounded-lg p-4 overflow-x-auto whitespace-pre-wrap font-mono max-h-80 overflow-y-auto">
-                  {spec.system_prompt}
-                </pre>
-              )}
-            </div>
-          )}
-
-          {/* Tags */}
-          {entry.tags.length > 0 && (
-            <div className="space-y-2">
               <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                {t('Tags')}
+                {t('System Prompt')}
               </h2>
-              <div className="flex flex-wrap gap-1.5">
-                {entry.tags.map(tag => (
-                  <span
-                    key={tag}
-                    className="text-xs px-2 py-0.5 rounded-full bg-secondary text-muted-foreground"
-                  >
-                    {tag}
-                  </span>
-                ))}
+              <div className="rounded-lg border border-border/60 bg-background overflow-hidden">
+                <button
+                  onClick={() => setShowSystemPrompt(!showSystemPrompt)}
+                  className="flex w-full items-center gap-2 px-3.5 py-2.5 text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {showSystemPrompt ? (
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  ) : (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  )}
+                  {t('View system prompt')}
+                </button>
+                {showSystemPrompt && (
+                  <pre className="text-xs leading-relaxed text-muted-foreground border-t border-border/60 px-4 py-3 whitespace-pre-wrap break-words font-mono">
+                    {spec.system_prompt}
+                  </pre>
+                )}
               </div>
             </div>
           )}
 
-          {/* Metadata footer */}
-          <div className="flex flex-wrap items-center gap-2 sm:gap-4 pt-2 border-t border-border text-xs text-muted-foreground">
-            <span>{t('Format')}: {entry.format}</span>
-            {entry.min_app_version && (
-              <span>{t('Min version')}: {entry.min_app_version}</span>
-            )}
-            {entry.updated_at && (
-              <span>{t('Updated')}: {new Date(entry.updated_at).toLocaleDateString()}</span>
-            )}
+            </div>
+
+            {/* Aside: tags + metadata cards */}
+            <div className="sm:w-60 sm:flex-shrink-0 space-y-4">
+              {spec.type === 'skill' && Object.keys(spec.skill_files ?? {}).length > 1 && (
+                <SkillFileTree paths={Object.keys(spec.skill_files ?? {})} />
+              )}
+              {entry.tags.length > 0 && (
+                <div className="rounded-[10px] border border-border/60 bg-background p-3.5 space-y-2.5">
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    {t('Tags')}
+                  </h4>
+                  <div className="flex flex-wrap gap-1.5">
+                    {entry.tags.map(tag => (
+                      <span
+                        key={tag}
+                        className="text-xs px-2 py-0.5 rounded bg-muted/40 text-muted-foreground whitespace-nowrap"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-[10px] border border-border/60 bg-background p-3.5 space-y-2.5">
+                <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {t('Details')}
+                </h4>
+                <div className="flex flex-col gap-2 text-xs">
+                  <div className="flex justify-between gap-2.5">
+                    <span className="flex-shrink-0 text-muted-foreground">{t('Format')}</span>
+                    <span className="text-right text-foreground">{entry.format}</span>
+                  </div>
+                  {entry.min_app_version && (
+                    <div className="flex justify-between gap-2.5">
+                      <span className="flex-shrink-0 text-muted-foreground">{t('Min version')}</span>
+                      <span className="text-right text-foreground">{entry.min_app_version}</span>
+                    </div>
+                  )}
+                  {entry.updated_at && (
+                    <div className="flex justify-between gap-2.5">
+                      <span className="flex-shrink-0 text-muted-foreground">{t('Updated')}</span>
+                      <span className="text-right text-foreground">{formatVersionDate(entry.updated_at)}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Version history — collapsed by default, expands into a timeline */}
+              {versions.length > 0 && (
+                <div className="rounded-[10px] border border-border/60 bg-background overflow-hidden">
+                  <button
+                    onClick={() => setShowVersions(!showVersions)}
+                    className="flex w-full items-center gap-2 px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showVersions ? (
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    ) : (
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    )}
+                    {t('Version History')}
+                  </button>
+                  {showVersions && (
+                    <ul className="border-t border-border/60 pl-[21px] pr-3.5 pt-3.5 pb-1">
+                      {versions.map((v, i) => (
+                        <li
+                          key={v.version}
+                          className={`relative pl-4 border-l ${
+                            i === versions.length - 1 ? 'border-transparent pb-0' : 'border-border/60 pb-4'
+                          }`}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className="absolute -left-[3px] top-1.5 w-1.5 h-1.5 rounded-full bg-primary"
+                          />
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[13px] font-medium text-foreground">v{v.version}</span>
+                            {v.publishedAt && (
+                              <span className="text-xs text-muted-foreground">{formatVersionDate(v.publishedAt)}</span>
+                            )}
+                          </div>
+                          {v.changelog && (
+                            <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line leading-relaxed">{v.changelog}</p>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
           </div>
         </div>
       </div>
@@ -512,6 +589,8 @@ export function StoreDetail() {
           showGlobalOption={entry?.type === 'mcp' || entry?.type === 'skill'}
         />
       )}
+
+      {updateDialogs}
     </>
   )
 }

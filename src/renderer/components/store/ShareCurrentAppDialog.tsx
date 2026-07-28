@@ -1,32 +1,24 @@
 /**
  * ShareCurrentAppDialog
  *
- * Single-layer "share this installed app" dialog: the dialog itself is the
- * confirmation step. Primary action publishes to the store immediately;
- * a secondary action exports the app as a .dhpkg file.
+ * "Share this installed app" chooser opened from a Digital Human / Skill detail
+ * page (AutomationHeader, SkillInfoCard). Two actions:
+ *   - Export: save the app as a .dhpkg file to share by hand (desktop only).
+ *   - Share:  jump to the store and open the unified publish dialog
+ *             (ShareToStoreDialog) pre-selected on this app.
  *
- * Publish pre-check: on open (and when the author — and therefore the target
- * slug — changes) the store's current version is looked up so the user sees
- * "store vX → publishing vY" with an editable version. Publishing is blocked
- * client-side when vY ≤ vX; the registry enforces the same rule (422) as the
- * backstop. After a successful publish the final version is written back to
- * the local spec so local and store never diverge.
- *
- * Used by the Share buttons on individual Digital Human / Skill detail pages
- * (AutomationHeader, SkillInfoCard). For the store-header "I have nothing
- * picked yet" entry, use ShareToStoreDialog instead.
+ * Publishing itself lives entirely in ShareToStoreDialog so there is a single
+ * publish flow (author/version/category/review) rather than a second inline one.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Share2, Loader2, AlertCircle, CheckCircle2, Bot, BookOpen, Puzzle, Wrench, Upload, Download } from 'lucide-react'
+import { useCallback, useState } from 'react'
+import { X, Share2, Loader2, AlertCircle, CheckCircle2, Bot, BookOpen, Puzzle, Wrench, Download } from 'lucide-react'
 import { useAppsStore } from '../../stores/apps.store'
+import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import { isElectron } from '../../api/transport'
 import type { AppType } from '../../../shared/apps/spec-types'
-import { compareDotVersions, suggestNextVersion } from '../../../shared/store/version-compare'
-import { AuthorField } from './AuthorField'
-import { loadStoredAuthor, saveAuthor } from './publish-author'
 
 export interface ShareCurrentAppDialogProps {
   appId: string
@@ -34,7 +26,6 @@ export interface ShareCurrentAppDialogProps {
 }
 
 type Feedback = { kind: 'success' | 'error'; text: string }
-type PublishPreview = { slug: string; localVersion: string; storeVersion: string | null }
 
 /** Pick a representative icon for the preview header by app type. */
 function iconForType(type: AppType): typeof Bot {
@@ -60,99 +51,19 @@ function typeLabel(type: AppType, t: (s: string) => string): string {
 export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogProps) {
   const { t } = useTranslation()
   const app = useAppsStore(s => s.apps.find(a => a.id === appId))
+  const openStorePublish = useAppsPageStore(s => s.openStorePublish)
 
-  const [publishing, setPublishing] = useState(false)
-  const [published, setPublished] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [feedback, setFeedback] = useState<Feedback | null>(null)
-  const [author, setAuthor] = useState(() => loadStoredAuthor() || app?.spec.author || '')
 
-  const [preview, setPreview] = useState<PublishPreview | null>(null)
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [version, setVersion] = useState(() => app?.spec.version ?? '')
-  // Once the user touches the version field, preview refreshes stop overwriting it.
-  const versionEditedRef = useRef(false)
-  const previewSeqRef = useRef(0)
-
-  useEffect(() => {
-    const trimmed = author.trim()
-    if (!trimmed) {
-      setPreview(null)
-      return
-    }
-    const seq = ++previewSeqRef.current
-    setPreviewLoading(true)
-    // Debounce: the author field changes the target slug on every keystroke.
-    const timer = setTimeout(async () => {
-      try {
-        const res = await api.storePublishPreview(appId, trimmed)
-        if (seq !== previewSeqRef.current) return
-        if (res.success && res.data) {
-          setPreview(res.data)
-          if (!versionEditedRef.current) {
-            const { localVersion, storeVersion } = res.data
-            setVersion(
-              storeVersion && compareDotVersions(localVersion, storeVersion) <= 0
-                ? suggestNextVersion(storeVersion)
-                : localVersion
-            )
-          }
-        } else {
-          setPreview(null)
-        }
-      } catch {
-        if (seq === previewSeqRef.current) setPreview(null)
-      } finally {
-        if (seq === previewSeqRef.current) setPreviewLoading(false)
-      }
-    }, 400)
-    return () => clearTimeout(timer)
-  }, [appId, author])
-
-  const versionTooLow = Boolean(
-    preview?.storeVersion &&
-    version.trim() &&
-    compareDotVersions(version.trim(), preview.storeVersion) <= 0
-  )
-
-  const handlePublish = useCallback(async () => {
-    const trimmedAuthor = author.trim()
-    if (!trimmedAuthor) {
-      setFeedback({ kind: 'error', text: t('Author is required') })
-      return
-    }
-    const trimmedVersion = version.trim()
-    setFeedback(null)
-    setPublishing(true)
-    try {
-      saveAuthor(trimmedAuthor)
-      const res = await api.storePublish(appId, trimmedAuthor, trimmedVersion || undefined)
-      if (!res.success) {
-        const raw = res.error ?? t('Publish failed.')
-        // Registry backstop for the version-monotonicity rule — translate
-        // the wire error into something actionable before the raw details.
-        const text = /HTTP 422/.test(raw) && /version/i.test(raw)
-          ? `${t('The store already has this version or a newer one. Increase the version number and try again.')}\n${raw}`
-          : raw
-        setFeedback({ kind: 'error', text })
-        return
-      }
-      // Write the published version back to the local spec so local and
-      // store never diverge after an in-dialog version edit.
-      if (trimmedVersion && trimmedVersion !== app?.spec.version) {
-        await useAppsStore.getState().updateAppSpec(appId, { version: trimmedVersion })
-      }
-      // Converge the registry cache so the next pre-check sees this release.
-      api.storeRefresh().catch(() => {})
-      const details = (res.data as { details?: string } | undefined)?.details
-      setFeedback({ kind: 'success', text: details ?? t('Published successfully.') })
-      setPublished(true)
-    } catch (err) {
-      setFeedback({ kind: 'error', text: err instanceof Error ? err.message : t('Publish failed.') })
-    } finally {
-      setPublishing(false)
-    }
-  }, [appId, app?.spec.version, author, version, t])
+  const handleShareToMarket = useCallback(() => {
+    if (!app) return
+    // Only digital humans and skills are publishable; the store publish dialog
+    // is scoped to those two types.
+    const shareType: AppType = app.spec.type === 'skill' ? 'skill' : 'automation'
+    onClose()
+    openStorePublish(shareType, appId)
+  }, [app, appId, onClose, openStorePublish])
 
   const handleExportDhpkg = useCallback(async () => {
     setExporting(true)
@@ -237,45 +148,8 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
             </div>
           </div>
 
-          <AuthorField value={author} onChange={v => { setAuthor(v); setFeedback(null) }} />
-
-          {/* Version pre-check */}
-          <div className="space-y-1">
-            <label htmlFor="publish-version" className="text-xs font-medium text-muted-foreground">
-              {t('Version')}
-            </label>
-            <div className="flex items-center gap-2">
-              <span className="flex items-center text-xs text-muted-foreground whitespace-nowrap">
-                {previewLoading
-                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  : preview?.storeVersion
-                    ? <>{t('Store version v{{version}}', { version: preview.storeVersion })} →</>
-                    : preview
-                      ? t('First publish')
-                      : null}
-              </span>
-              <input
-                id="publish-version"
-                type="text"
-                value={version}
-                onChange={e => {
-                  versionEditedRef.current = true
-                  setVersion(e.target.value)
-                  setFeedback(null)
-                }}
-                placeholder={spec.version ?? '1.0.0'}
-                className="flex-1 min-w-0 px-2 py-1.5 text-sm bg-secondary text-foreground border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </div>
-            {versionTooLow && (
-              <p className="text-xs text-red-400">
-                {t('Version must be greater than the store version v{{version}}', { version: preview!.storeVersion })}
-              </p>
-            )}
-          </div>
-
           <p className="text-xs text-muted-foreground">
-            {t('Once published, other users will be able to find and install it from the store.')}
+            {t('Share opens the store publish dialog pre-filled with this app, where you review and publish it.')}
           </p>
 
           {feedback && (
@@ -307,18 +181,13 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
               {t('Export')}
             </button>
           )}
-          {!published && (
-            <button
-              onClick={handlePublish}
-              disabled={publishing || versionTooLow || !version.trim()}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {publishing
-                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                : <Upload className="w-3.5 h-3.5" />}
-              {publishing ? t('Publishing...') : t('Publish to Store')}
-            </button>
-          )}
+          <button
+            onClick={handleShareToMarket}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+          >
+            <Share2 className="w-3.5 h-3.5" />
+            {t('Share to Store')}
+          </button>
         </div>
       </div>
     </div>

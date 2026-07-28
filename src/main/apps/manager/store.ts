@@ -34,6 +34,7 @@ interface AppRow {
   error_message: string | null
   uninstalled_at: number | null
   upgrade_strategy: string
+  ignored_versions: string
 }
 
 // ============================================
@@ -60,6 +61,7 @@ function rowToInstalledApp(row: AppRow): InstalledApp {
     errorMessage: row.error_message ?? undefined,
     uninstalledAt: row.uninstalled_at ?? undefined,
     upgradeStrategy: (row.upgrade_strategy as UpgradeStrategy) ?? 'auto',
+    ignoredVersions: row.ignored_versions ? (JSON.parse(row.ignored_versions) as string[]) : [],
   }
 }
 
@@ -90,6 +92,7 @@ export class AppManagerStore {
   private readonly stmtGetBySpecGlobal: Database.Statement
   private readonly stmtUpdateUninstalledAt: Database.Statement
   private readonly stmtUpdateUpgradeStrategy: Database.Statement
+  private readonly stmtUpdateIgnoredVersions: Database.Statement
 
   constructor(private readonly db: Database.Database) {
     // ── INSERT ────────────────────────────────────
@@ -98,12 +101,12 @@ export class AppManagerStore {
         id, spec_id, space_id, spec_json, status,
         pending_escalation_id, user_config_json, user_overrides_json,
         permissions_json, installed_at, last_run_at, last_run_outcome, error_message,
-        upgrade_strategy
+        upgrade_strategy, ignored_versions
       ) VALUES (
         @id, @spec_id, @space_id, @spec_json, @status,
         @pending_escalation_id, @user_config_json, @user_overrides_json,
         @permissions_json, @installed_at, @last_run_at, @last_run_outcome, @error_message,
-        @upgrade_strategy
+        @upgrade_strategy, @ignored_versions
       )
     `)
 
@@ -188,6 +191,12 @@ export class AppManagerStore {
       SET upgrade_strategy = @upgrade_strategy
       WHERE id = @id
     `)
+
+    this.stmtUpdateIgnoredVersions = db.prepare(`
+      UPDATE installed_apps
+      SET ignored_versions = @ignored_versions
+      WHERE id = @id
+    `)
   }
 
   // ── Create ─────────────────────────────────────
@@ -213,6 +222,7 @@ export class AppManagerStore {
       last_run_outcome: app.lastRunOutcome ?? null,
       error_message: app.errorMessage ?? null,
       upgrade_strategy: app.upgradeStrategy ?? 'auto',
+      ignored_versions: JSON.stringify(app.ignoredVersions ?? []),
     })
   }
 
@@ -224,6 +234,13 @@ export class AppManagerStore {
     this.stmtUpdateUpgradeStrategy.run({
       id: appId,
       upgrade_strategy: strategy,
+    })
+  }
+
+  updateIgnoredVersions(appId: string, versions: string[]): void {
+    this.stmtUpdateIgnoredVersions.run({
+      id: appId,
+      ignored_versions: JSON.stringify(versions),
     })
   }
 

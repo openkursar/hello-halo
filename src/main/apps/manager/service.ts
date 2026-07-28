@@ -686,6 +686,14 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       console.log(`[AppManager] App ${appId}: upgradeStrategy -> ${strategy}`)
     },
 
+    addIgnoredVersion(appId: string, version: string): void {
+      const app = requireApp(appId)
+      const current = app.ignoredVersions ?? []
+      if (current.includes(version)) return
+      store.updateIgnoredVersions(appId, [...current, version])
+      console.log(`[AppManager] App ${appId}: ignore version ${version}`)
+    },
+
     updateSpec(appId: string, specPatch: Record<string, unknown>): void {
       const app = requireApp(appId)
 

@@ -709,6 +709,30 @@ describe('AppManager', () => {
     })
   })
 
+  describe('addIgnoredVersion', () => {
+    it('records and persists an ignored version', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      expect(service.getApp(appId)!.ignoredVersions ?? []).toEqual([])
+
+      service.addIgnoredVersion(appId, '2.0.0')
+      expect(service.getApp(appId)!.ignoredVersions).toEqual(['2.0.0'])
+    })
+
+    it('is idempotent for a version already ignored', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      service.addIgnoredVersion(appId, '2.0.0')
+      service.addIgnoredVersion(appId, '2.0.0')
+      expect(service.getApp(appId)!.ignoredVersions).toEqual(['2.0.0'])
+    })
+
+    it('accumulates distinct ignored versions', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      service.addIgnoredVersion(appId, '2.0.0')
+      service.addIgnoredVersion(appId, '2.1.0')
+      expect(service.getApp(appId)!.ignoredVersions).toEqual(['2.0.0', '2.1.0'])
+    })
+  })
+
   // ===========================================================================
   // Queries
   // ===========================================================================
@@ -1265,6 +1289,33 @@ describe('AppManager', () => {
 
       const row = db.prepare(`SELECT upgrade_strategy FROM installed_apps WHERE id = ?`).get('legacy-app') as { upgrade_strategy: string }
       expect(row.upgrade_strategy).toBe('auto')
+
+      newManager.closeAll()
+    })
+
+    it('migration v5 adds ignored_versions=[] and preserves existing rows (zero data loss)', () => {
+      const newManager = createDatabaseManager(':memory:')
+      const db = newManager.getAppDatabase()
+
+      // Run migrations 1..4 to simulate a pre-v5 database that already holds data
+      newManager.runMigrations(db, MIGRATION_NAMESPACE, migrations.slice(0, 4))
+      const now = Date.now()
+      db.prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run('legacy-app', 'legacy-spec', null, '{"name":"legacy"}', 'active', now)
+
+      // Apply v5 — must add the column without disturbing existing data
+      newManager.runMigrations(db, MIGRATION_NAMESPACE, migrations)
+
+      const row = db.prepare(
+        `SELECT spec_id, status, spec_json, installed_at, ignored_versions FROM installed_apps WHERE id = ?`
+      ).get('legacy-app') as { spec_id: string; status: string; spec_json: string; installed_at: number; ignored_versions: string }
+      expect(row.spec_id).toBe('legacy-spec')
+      expect(row.status).toBe('active')
+      expect(row.spec_json).toBe('{"name":"legacy"}')
+      expect(row.installed_at).toBe(now)
+      expect(row.ignored_versions).toBe('[]')
 
       newManager.closeAll()
     })

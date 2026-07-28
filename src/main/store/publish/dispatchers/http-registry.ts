@@ -41,7 +41,21 @@ export async function dispatch(
     }
   }
 
-  if (!config.token || config.token === 'REPLACE_AT_DEPLOY_TIME') {
+  // In um mode the caller authenticates with their own identity token; the
+  // shared product.json token applies only when no identity provider is set.
+  // Loaded lazily so the (heavier) identity/ai-sources graph is not pulled into
+  // the publish module's load path.
+  let authToken = config.token
+  const { getMarketplaceIdentityProvider } = await import('../../../foundation/product-config')
+  if (getMarketplaceIdentityProvider()) {
+    const { getMarketplaceIdentityToken } = await import('../../marketplace-identity')
+    const umToken = await getMarketplaceIdentityToken()
+    if (!umToken) {
+      return { status: 'error', target: 'http-registry', details: 'Sign in to publish to the store.' }
+    }
+    authToken = umToken
+  }
+  if (!authToken || authToken === 'REPLACE_AT_DEPLOY_TIME') {
     return {
       status: 'error',
       target: 'http-registry',
@@ -94,7 +108,7 @@ export async function dispatch(
   try {
     response = await fetch(endpoint, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${config.token}` },
+      headers: { Authorization: `Bearer ${authToken}` },
       body: form,
     })
   } catch (err) {
@@ -113,6 +127,8 @@ export async function dispatch(
     version?: string
     verdict?: string
     comment?: string
+    error?: string
+    latest_version?: string
     report?: {
       overall?: string
       verdicts?: Array<{ rule: string; severity: string; message: string; requires_human?: boolean }>
@@ -131,6 +147,20 @@ export async function dispatch(
   }
 
   if (!response.ok) {
+    // Identity failures degrade to a re-login prompt rather than a raw error.
+    // A synthetic finding lets the renderer detect session expiry robustly (not
+    // by string-matching) and offer re-login-and-retry without losing the draft.
+    if (response.status === 401) {
+      return {
+        status: 'error',
+        target: 'http-registry',
+        details: 'Sign in to publish to the store.',
+        findings: [{ rule: 'not-signed-in', severity: 'fail', message: 'Sign in to publish to the store.' }],
+      }
+    }
+    if (response.status === 403) {
+      return { status: 'error', target: 'http-registry', details: 'You can only publish under your own account.' }
+    }
     // Surface as much of the actual failure as possible.
     // Surface anything that isn't a clean pass, plus warn-level verdicts that
     // tripped the human-review threshold — those are precisely the cases where
@@ -142,14 +172,27 @@ export async function dispatch(
     const detailParts = [
       `Registry returned HTTP ${response.status}${response.statusText ? ' ' + response.statusText : ''}`,
     ]
+    if (body.error) detailParts.push(body.error)
     if (body.verdict) detailParts.push(`verdict=${body.verdict}`)
     if (body.comment) detailParts.push(body.comment)
     if (rawBody) detailParts.push(rawBody.trim())
     if (ruleSummary) detailParts.push('Review findings:\n' + ruleSummary)
+    const verdictFindings = body.report?.verdicts
+      ?.filter(r => r.severity !== 'pass')
+      .map(r => ({ rule: r.rule, severity: r.severity, message: r.message }))
+    // The version-monotonicity check rejects outside the rules pipeline (no
+    // verdicts), so synthesize a finding for it too — otherwise the renderer
+    // falls back to the raw HTTP error string.
+    const findings = verdictFindings?.length
+      ? verdictFindings
+      : body.latest_version !== undefined
+        ? [{ rule: 'version-conflict', severity: 'fail', message: body.error ?? '' }]
+        : undefined
     return {
       status: 'error',
       target: 'http-registry',
       details: detailParts.join(' — '),
+      findings,
     }
   }
 

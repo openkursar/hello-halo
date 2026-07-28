@@ -10,7 +10,7 @@
  */
 
 import type { StoreQuery, StoreQueryParams, StoreQueryResponse } from '../../shared/store/store-types'
-import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource } from '../../shared/store/store-types'
+import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource, MarketplaceCapabilities, CategoryTaxonomy, DiscoverLayout, MyPublication, StoreCollection } from '../../shared/store/store-types'
 import type { AppType } from '../../shared/apps/spec-types'
 import {
   listApps,
@@ -25,10 +25,25 @@ import {
   removeRegistry,
   toggleRegistry,
   updateRegistryAdapterConfig,
+  getMarketplaceCapabilities,
+  getCategoryTaxonomy,
+  invalidateServerTaxonomyCache,
+  getDiscoverLayout,
+  invalidateDiscoverLayoutCache,
+  fetchMyPublications,
+  unpublishApp,
+  relistApp,
+  ensureMarketplaceIdentity,
+  getMarketplaceIdentity,
+  getMarketplaceSignInStatus,
+  fetchCollections,
 } from '../store'
+import type { MarketplaceIdentity } from '../store/marketplace-identity'
+import type { MarketplaceSignInStatus } from '../../shared/store/store-types'
 import { getAppManager } from '../apps/manager'
 import { McpCommandBlockedError } from '../apps/manager/errors'
 import { MCP_COMMAND_BLOCKED_MESSAGE } from '../services/security-policy'
+import { trackEvent } from '../services/analytics'
 
 const ALLOWED_APP_TYPES: ReadonlySet<AppType> = new Set<AppType>(['automation', 'skill', 'mcp', 'extension'])
 
@@ -160,6 +175,10 @@ export async function installStoreApp(
     }
     // spaceId may be null for global installs (MCP/Skill available across all spaces)
     const appId = await installFromStore(slug, spaceId, userConfig, onProgress)
+    // Fire-and-forget install signal that feeds the store's install-count rollup.
+    // Fired here (the user-initiated entry point) rather than inside
+    // installFromStore, which recurses for skill dependencies and would inflate counts.
+    void trackEvent('mkt_install_done', { appId: slug })
     return { success: true, data: { appId } }
   } catch (error: unknown) {
     const err = error as Error
@@ -181,6 +200,8 @@ export async function installStoreApp(
  */
 export async function refreshStoreIndex(): Promise<StoreControllerResponse<void>> {
   try {
+    invalidateServerTaxonomyCache()
+    invalidateDiscoverLayoutCache()
     await refreshIndex()
     return { success: true, data: undefined }
   } catch (error: unknown) {
@@ -210,6 +231,8 @@ export async function checkStoreUpdates(): Promise<StoreControllerResponse<Updat
     const installedApps = manager.listApps().filter(app => app.status !== 'uninstalled')
     const appsWithStore = installedApps.map(app => ({
       id: app.id,
+      upgradeStrategy: app.upgradeStrategy,
+      ignoredVersions: app.ignoredVersions,
       spec: {
         name: app.spec.name,
         version: app.spec.version,
@@ -222,6 +245,28 @@ export async function checkStoreUpdates(): Promise<StoreControllerResponse<Updat
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] checkStoreUpdates error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Record a version the user chose to skip for an installed app, so it no longer
+ * surfaces as an available update.
+ */
+export function ignoreStoreVersion(input: { appId: string; version: string }): StoreControllerResponse<null> {
+  try {
+    const manager = getAppManager()
+    if (!manager) {
+      return { success: false, error: 'App Manager is not yet initialized. Please try again shortly.' }
+    }
+    if (!input.appId || !input.version) {
+      return { success: false, error: 'appId and version are required' }
+    }
+    manager.addIgnoredVersion(input.appId, input.version)
+    return { success: true, data: null }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] ignoreStoreVersion error:', err.message)
     return { success: false, error: err.message }
   }
 }
@@ -240,6 +285,149 @@ export function getStoreRegistries(): StoreControllerResponse<RegistrySource[]> 
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] getStoreRegistries error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Resolve the renderer-safe marketplace capabilities used to gate UI surfaces.
+ */
+export async function getStoreCapabilities(): Promise<StoreControllerResponse<MarketplaceCapabilities>> {
+  try {
+    const capabilities = await getMarketplaceCapabilities()
+    return { success: true, data: capabilities }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreCapabilities error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Resolve the scene-category taxonomy used for store chips and the publish form.
+ */
+export async function getStoreCategoryTaxonomy(): Promise<StoreControllerResponse<CategoryTaxonomy>> {
+  try {
+    return { success: true, data: await getCategoryTaxonomy() }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreCategoryTaxonomy error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Resolve the config-driven discover-page layout (server ?? built-in catalog).
+ */
+export async function getStoreDiscoverLayout(): Promise<StoreControllerResponse<DiscoverLayout>> {
+  try {
+    return { success: true, data: await getDiscoverLayout() }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreDiscoverLayout error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Ensure the creator identity is signed in, launching the OAuth flow when no
+ * token is held. Returns whether a token is available afterwards.
+ */
+export async function ensureStoreSignedIn(): Promise<StoreControllerResponse<boolean>> {
+  try {
+    return { success: true, data: await ensureMarketplaceIdentity() }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] ensureStoreSignedIn error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Classify whether a creator sign-in is possible, so the "not signed in" notice
+ * can explain a provider-less-but-identity-required misconfiguration instead of
+ * offering a sign-in button that can never succeed.
+ */
+export async function getStoreSignInStatus(): Promise<StoreControllerResponse<MarketplaceSignInStatus>> {
+  try {
+    return { success: true, data: await getMarketplaceSignInStatus() }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreSignInStatus error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Resolve the signed-in creator identity (uid/name) for prefilling the publish
+ * author in um mode. Null when not signed in or no identity provider.
+ */
+export async function getStoreIdentity(): Promise<StoreControllerResponse<MarketplaceIdentity | null>> {
+  try {
+    return { success: true, data: getMarketplaceIdentity() }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreIdentity error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Fetch the signed-in creator's own publications from the store server.
+ */
+export async function getStoreMyPublications(): Promise<StoreControllerResponse<MyPublication[]>> {
+  try {
+    return { success: true, data: await fetchMyPublications() }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreMyPublications error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Fetch curated scene collections from the store server (empty when none).
+ */
+export async function getStoreCollections(): Promise<StoreControllerResponse<StoreCollection[]>> {
+  try {
+    return { success: true, data: await fetchCollections() }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreCollections error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Take down one of the creator's own published apps.
+ */
+export async function unpublishStoreApp(input: { slug: string }): Promise<StoreControllerResponse<null>> {
+  try {
+    if (!input?.slug) {
+      return { success: false, error: 'slug is required' }
+    }
+    await unpublishApp(input.slug)
+    return { success: true, data: null }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] unpublishStoreApp error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Re-list a previously taken-down app the caller owns (clears the hidden flag).
+ */
+export async function relistStoreApp(input: { slug: string }): Promise<StoreControllerResponse<null>> {
+  try {
+    if (!input?.slug) {
+      return { success: false, error: 'slug is required' }
+    }
+    await relistApp(input.slug)
+    return { success: true, data: null }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] relistStoreApp error:', err.message)
     return { success: false, error: err.message }
   }
 }

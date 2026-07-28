@@ -132,3 +132,30 @@ export function getSkillMdContent(
 ): string {
   return spec.skill_files?.['SKILL.md'] ?? spec.skill_content ?? ''
 }
+
+/** Quote a value for a YAML `key: value` line only when it would otherwise be
+ * mis-parsed (colon, comment marker, indicator chars, edge whitespace). */
+function yamlScalar(value: string): string {
+  const needsQuote = /[:#[\]{}&*!|>'"%@`,]/.test(value) || /^[\s?-]/.test(value) || /\s$/.test(value)
+  return needsQuote ? `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : value
+}
+
+/**
+ * Set (or insert) the `name` field in SKILL.md frontmatter, returning the full
+ * file. Used at publish time so the runtime skill command — derived from the
+ * frontmatter name (default: directory name) — stays consistent with the store
+ * listing name. No-op when the content has no frontmatter block.
+ */
+export function setSkillMdName(content: string, name: string): string {
+  const fmRegex = /^(---[ \t]*\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/
+  const match = content.match(fmRegex)
+  if (!match) return content
+
+  const [fullMatch, opening, fmBody, closing] = match
+  const line = `name: ${yamlScalar(name)}`
+  const nameRe = /^name[ \t]*:.*$/m
+  const nextBody = nameRe.test(fmBody) ? fmBody.replace(nameRe, line) : `${line}\n${fmBody}`
+  if (nextBody === fmBody) return content
+
+  return opening + nextBody + closing + content.slice(fullMatch.length)
+}

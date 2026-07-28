@@ -1,50 +1,59 @@
 /**
  * Store Header
  *
- * Search input, type filter tabs, and category filter chips for the store.
- * Provides real-time filtering as user types or selects categories.
+ * Search input and type filter tabs for the store. Category chips live in the
+ * content area (StoreCategoryBar) so they sit on the gray band rather than the
+ * white header.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Search, RefreshCw, Share2 } from 'lucide-react'
+import { Search, RefreshCw, Upload, ChevronRight } from 'lucide-react'
+import { api } from '../../api'
 import { useAppsPageStore } from '../../stores/apps-page.store'
-import { STORE_CATEGORY_META } from '../../../shared/store/store-types'
+import { useMarketplaceCapabilities } from '../../hooks/useMarketplaceCapabilities'
 import { useTranslation } from '../../i18n'
 import type { AppType } from '../../../shared/apps/spec-types'
 import { ShareToStoreDialog } from './ShareToStoreDialog'
 
-const TYPE_FILTERS: Array<{ id: AppType | null; labelKey: string }> = [
-  { id: null, labelKey: 'All' },
-  { id: 'automation', labelKey: 'Digital Human' },
-  { id: 'skill', labelKey: 'Skill' },
-  { id: 'mcp', labelKey: 'MCP' },
-]
+type MainTabId = 'discover' | AppType
+
+const MAIN_TABS: MainTabId[] = ['discover', 'automation', 'skill', 'mcp']
+
+/** Literal t() per tab so i18next-parser can extract the labels. */
+function tabLabel(t: (key: string) => string, id: MainTabId): string {
+  switch (id) {
+    case 'discover': return t('Discover')
+    case 'automation': return t('Digital Human')
+    case 'skill': return t('Skill')
+    case 'mcp': return t('MCP')
+    default: return id
+  }
+}
 
 /**
- * Open the unified Share-to-Store dialog.
- * This replaces the previous "import .dhpkg" entry on the store header — local
- * import has moved to AppsPage → Manual Add → Install from File, where the
- * semantics ("add to my library") fit better.
+ * Primary publish entry point — opens the unified Share-to-Store dialog.
+ * Gated on `capabilities.publish`: hidden when the build has no configured
+ * publish target. Local package import lives on AppsPage → Manual Add instead.
  */
-function ShareButton({ onClick }: { onClick: () => void }) {
+function PublishButton({ onClick }: { onClick: () => void }) {
   const { t } = useTranslation()
   return (
     <button
       onClick={onClick}
-      className="flex items-center gap-1.5 px-2 sm:px-2.5 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-lg transition-colors"
-      title={t('Share your Digital Human or Skill to the store')}
-      aria-label={t('Share to Store')}
+      className="flex flex-shrink-0 items-center gap-1.5 px-3 py-2 text-[13px] border border-border/60 bg-background text-muted-foreground rounded-lg hover:text-foreground hover:border-border transition-colors"
+      title={t('Publish your Digital Human or Skill to the store')}
+      aria-label={t('Publish App')}
     >
-      <Share2 className="w-4 h-4" />
-      <span className="hidden sm:inline">{t('Share')}</span>
+      <Upload className="w-4 h-4" />
+      <span className="hidden sm:inline">{t('Publish App')}</span>
     </button>
   )
 }
 
 export function StoreHeader() {
   const { t } = useTranslation()
+  const capabilities = useMarketplaceCapabilities()
   const storeSearchQuery = useAppsPageStore(state => state.storeSearchQuery)
-  const storeCategory = useAppsPageStore(state => state.storeCategory)
   const storeTypeFilter = useAppsPageStore(state => state.storeTypeFilter)
   const storeLoading = useAppsPageStore(state => state.storeLoading)
   const setStoreSearch = useAppsPageStore(state => state.setStoreSearch)
@@ -52,8 +61,27 @@ export function StoreHeader() {
   const setStoreTypeFilter = useAppsPageStore(state => state.setStoreTypeFilter)
   const loadStoreApps = useAppsPageStore(state => state.loadStoreApps)
   const refreshStore = useAppsPageStore(state => state.refreshStore)
+  const setStoreMineOpen = useAppsPageStore(state => state.setStoreMineOpen)
+
+  const consumeStorePublishIntent = useAppsPageStore(state => state.consumeStorePublishIntent)
+  const storePublishIntent = useAppsPageStore(state => state.storePublishIntent)
 
   const [showShareDialog, setShowShareDialog] = useState(false)
+  // Pre-selection carried from a detail page's Share action.
+  const [publishPreselect, setPublishPreselect] = useState<{ type: AppType; appId: string } | null>(null)
+
+  // A detail page's Share routed here — open the publish dialog pre-selected on
+  // that app (consume the one-shot intent so it doesn't re-fire).
+  useEffect(() => {
+    if (!storePublishIntent) return
+    const intent = consumeStorePublishIntent()
+    if (!intent) return
+    setPublishPreselect(intent)
+    setShowShareDialog(true)
+  }, [storePublishIntent, consumeStorePublishIntent])
+
+  // Publish and "My Publications" open directly; the sign-in prompt lives inside
+  // each surface (ShareToStoreDialog / StoreMine) so users see the page first.
 
   // Debounce timer ref for search
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -66,7 +94,16 @@ export function StoreHeader() {
     }
     debounceRef.current = setTimeout(() => {
       const state = useAppsPageStore.getState()
-      loadStoreApps({ search: value || undefined, category: state.storeCategory ?? undefined, type: state.storeTypeFilter ?? undefined })
+      void Promise.resolve(
+        loadStoreApps({ search: value || undefined, category: state.storeCategory ?? undefined, type: state.storeTypeFilter ?? undefined }),
+      ).then(() => {
+        if (value) {
+          void api.trackEvent('mkt_search', {
+            resultCount: useAppsPageStore.getState().storeApps.length,
+            tabScope: state.storeTypeFilter ?? 'discover',
+          })
+        }
+      })
     }, 300)
   }, [setStoreSearch, loadStoreApps])
 
@@ -79,30 +116,18 @@ export function StoreHeader() {
     }
   }, [])
 
-  // Type filter click triggers immediate filter
-  const handleTypeFilterClick = useCallback((typeId: string | null) => {
-    setStoreTypeFilter(typeId)
+  const handleTabClick = useCallback((tabId: MainTabId) => {
+    const nextType = tabId === 'discover' ? null : tabId
     const state = useAppsPageStore.getState()
-    loadStoreApps({
-      search: state.storeSearchQuery || undefined,
-      category: state.storeCategory ?? undefined,
-      type: typeId ?? undefined,
-    })
-  }, [setStoreTypeFilter, loadStoreApps])
-
-  // Category click triggers immediate filter
-  const handleCategoryClick = useCallback((categoryId: string | null) => {
-    setStoreCategory(categoryId)
-    const state = useAppsPageStore.getState()
-    loadStoreApps({
-      search: state.storeSearchQuery || undefined,
-      category: categoryId ?? undefined,
-      type: state.storeTypeFilter ?? undefined,
-    })
-  }, [setStoreCategory, loadStoreApps])
+    if (state.storeTypeFilter === nextType && !state.storeSearchQuery && !state.storeCategory) return
+    setStoreTypeFilter(nextType)
+    setStoreCategory(null)
+    setStoreSearch('')
+    loadStoreApps({ type: nextType ?? undefined })
+  }, [setStoreTypeFilter, setStoreCategory, setStoreSearch, loadStoreApps])
 
   return (
-    <div className="flex flex-col gap-3 px-4 py-3 border-b border-border flex-shrink-0">
+    <div className="flex flex-col gap-3 px-4 pt-3 flex-shrink-0 border-b border-border/60">
       {/* Search + Refresh row */}
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
@@ -111,8 +136,8 @@ export function StoreHeader() {
             type="text"
             value={storeSearchQuery}
             onChange={e => handleSearchChange(e.target.value)}
-            placeholder={t('Search apps...')}
-            className="w-full pl-9 pr-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50"
+            placeholder={t('Search Digital Humans / Skills / MCP')}
+            className="w-full pl-9 pr-3 py-2 text-[13px] bg-muted/20 border border-border/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50"
           />
         </div>
         <button
@@ -123,55 +148,48 @@ export function StoreHeader() {
         >
           <RefreshCw className={`w-4 h-4 ${storeLoading ? 'animate-spin' : ''}`} />
         </button>
-        <ShareButton onClick={() => setShowShareDialog(true)} />
+        {capabilities?.publish && (
+          <PublishButton onClick={() => { setPublishPreselect(null); setShowShareDialog(true) }} />
+        )}
+        {capabilities?.identity === 'um' && (
+          <button
+            onClick={() => setStoreMineOpen(true)}
+            className="flex flex-shrink-0 items-center gap-1 px-3.5 py-2 text-[13px] border border-border/60 bg-background text-muted-foreground hover:text-foreground hover:border-border rounded-lg transition-colors"
+            title={t('My Publications')}
+          >
+            <span>{t('Mine')}</span>
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
 
-      {/* Type filter tabs */}
-      <div className="flex items-center gap-1 overflow-x-auto">
-        {TYPE_FILTERS.map(tf => (
-          <button
-            key={String(tf.id)}
-            onClick={() => handleTypeFilterClick(tf.id)}
-            className={`flex-shrink-0 px-3 py-1 text-xs rounded-md transition-colors ${
-              storeTypeFilter === tf.id
-                ? 'bg-primary text-primary-foreground font-medium'
-                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
-            }`}
-          >
-            {t(tf.labelKey)}
-          </button>
-        ))}
-      </div>
-
-      {/* Category chips */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
-        <button
-          onClick={() => handleCategoryClick(null)}
-          className={`flex-shrink-0 px-2.5 py-1 text-xs rounded-md transition-colors ${
-            storeCategory === null
-              ? 'bg-secondary text-foreground font-medium'
-              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
-          }`}
-        >
-          {t('All')}
-        </button>
-        {STORE_CATEGORY_META.map(cat => (
-          <button
-            key={cat.id}
-            onClick={() => handleCategoryClick(cat.id)}
-            className={`flex-shrink-0 px-2.5 py-1 text-xs rounded-md transition-colors ${
-              storeCategory === cat.id
-                ? 'bg-secondary text-foreground font-medium'
-                : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
-            }`}
-          >
-            {cat.icon} {t(cat.labelKey)}
-          </button>
-        ))}
+      {/* Main tabs — underline style: the active tab carries its own 2px accent
+          rule; there is no full-width divider under the row. */}
+      <div className="flex items-center gap-1 overflow-x-auto overflow-y-hidden">
+        {MAIN_TABS.map(tab => {
+          const active = tab === 'discover' ? storeTypeFilter === null : storeTypeFilter === tab
+          return (
+            <button
+              key={tab}
+              onClick={() => handleTabClick(tab)}
+              className={`flex-shrink-0 px-3 sm:px-4 py-2 text-sm border-b-2 -mb-px transition-colors ${
+                active
+                  ? 'border-primary text-primary font-semibold'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {tabLabel(t, tab)}
+            </button>
+          )
+        })}
       </div>
 
       {showShareDialog && (
-        <ShareToStoreDialog onClose={() => setShowShareDialog(false)} />
+        <ShareToStoreDialog
+          initialType={publishPreselect?.type}
+          initialAppId={publishPreselect?.appId}
+          onClose={() => { setShowShareDialog(false); setPublishPreselect(null) }}
+        />
       )}
     </div>
   )

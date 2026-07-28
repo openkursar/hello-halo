@@ -149,7 +149,8 @@ interface StructureResult {
 }
 
 function validateStructureLayer(
-  rawFiles: Record<string, string>
+  rawFiles: Record<string, string>,
+  sourceName: string
 ): { ok: true; result: StructureResult } | { ok: false; errors: ZipValidationError[] } {
   const errors: ZipValidationError[] = []
   const warnings: ZipValidationWarning[] = []
@@ -164,10 +165,10 @@ function validateStructureLayer(
 
   if (Object.keys(cleanFiles).length === 0) {
     errors.push({
-      location: 'ZIP archive',
+      location: sourceName,
       expected: 'At least spec.yaml',
-      actual: 'Empty archive (no valid files)',
-      suggestion: 'The ZIP archive contains no usable files.',
+      actual: 'No usable files (only empty folders or system metadata)',
+      suggestion: 'Select the folder that directly contains spec.yaml.',
     })
     return { ok: false, errors }
   }
@@ -214,22 +215,22 @@ function validateStructureLayer(
 
   if (specPaths.length === 0) {
     errors.push({
-      location: 'ZIP root',
+      location: sourceName,
       expected: 'spec.yaml',
       actual: 'Not found',
       suggestion:
-        'Add a spec.yaml file at the root of the ZIP archive. ' +
-        'For single .yaml import, use the "Import" tab instead.',
+        'The digital human package must have a spec.yaml at its root. ' +
+        'For a single .yaml file, use the "Import" tab instead.',
     })
     return { ok: false, errors }
   }
 
   if (specPaths.length > 1) {
     errors.push({
-      location: 'ZIP root',
+      location: sourceName,
       expected: 'Exactly one spec.yaml',
       actual: `Found ${specPaths.length}: ${specPaths.join(', ')}`,
-      suggestion: 'A ZIP bundle must contain exactly one spec.yaml.',
+      suggestion: 'A digital human package must contain exactly one spec.yaml.',
     })
     return { ok: false, errors }
   }
@@ -424,7 +425,7 @@ function validateAndBuildResult(
   sourceName: string
 ): ZipParseOutcome {
   // Layer 2 — Structure validation
-  const structureResult = validateStructureLayer(rawFiles)
+  const structureResult = validateStructureLayer(rawFiles, sourceName)
   if (!structureResult.ok) {
     return { ok: false, errors: structureResult.errors }
   }
@@ -495,6 +496,29 @@ export async function parseDigitalHumanZip(file: File): Promise<ZipParseOutcome>
   }
 
   return validateAndBuildResult(rawFiles, file.name)
+}
+
+/**
+ * Peek a .zip to decide whether it holds a digital human or a skill, so an
+ * import can auto-correct a mismatched type selection. A digital human package
+ * bundles its skills (which carry SKILL.md), so a root spec.yaml is the decisive
+ * marker for a digital human; a SKILL.md with no spec.yaml marks a lone skill.
+ * Returns null when neither is present (caller keeps the selected type).
+ */
+export async function detectZipAppType(file: File): Promise<'automation' | 'skill' | null> {
+  try {
+    const { unzipSync } = await import('fflate')
+    const entries = unzipSync(new Uint8Array(await file.arrayBuffer()))
+    let hasSkillMd = false
+    for (const path of Object.keys(entries)) {
+      const base = (path.split('/').pop() ?? '').toLowerCase()
+      if (base === 'spec.yaml') return 'automation'
+      if (base === 'skill.md') hasSkillMd = true
+    }
+    return hasSkillMd ? 'skill' : null
+  } catch {
+    return null
+  }
 }
 
 /**

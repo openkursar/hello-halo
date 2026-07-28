@@ -180,6 +180,63 @@ export function registerStoreRoutes(app: Express): void {
     }
   })
 
+  // GET /api/store/capabilities — renderer-safe marketplace capability flags
+  app.get('/api/store/capabilities', async (req: Request, res: Response) => {
+    try {
+      const result = await storeController.getStoreCapabilities()
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/store/category-taxonomy — scene-category enum for chips + publish
+  app.get('/api/store/category-taxonomy', async (req: Request, res: Response) => {
+    try {
+      const result = storeController.getStoreCategoryTaxonomy()
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/store/my-publications — the signed-in creator's published apps
+  app.get('/api/store/my-publications', async (req: Request, res: Response) => {
+    try {
+      res.json(await storeController.getStoreMyPublications())
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/unpublish — take down one of the creator's own apps
+  app.post('/api/store/unpublish', async (req: Request, res: Response) => {
+    try {
+      res.json(await storeController.unpublishStoreApp(req.body))
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/store/collections — curated scene collections for the discover page
+  app.get('/api/store/collections', async (req: Request, res: Response) => {
+    try {
+      res.json(await storeController.getStoreCollections())
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/ignore-version — skip an available update version for an app
+  app.post('/api/store/ignore-version', async (req: Request, res: Response) => {
+    try {
+      const result = storeController.ignoreStoreVersion(req.body)
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // POST /api/store/registries — add a new registry source
   app.post('/api/store/registries', async (req: Request, res: Response) => {
     try {
@@ -259,12 +316,12 @@ export function registerStoreRoutes(app: Express): void {
   // POST /api/store/publish/preview — preview publish metadata
   app.post('/api/store/publish/preview', async (req: Request, res: Response) => {
     try {
-      const { appId, author } = req.body as { appId?: string; author?: string }
+      const { appId, author, name } = req.body as { appId?: string; author?: string; name?: string }
       if (!appId) {
         res.status(400).json({ success: false, error: 'Missing appId' })
         return
       }
-      res.json({ success: true, data: getPublishPreview(appId, author) })
+      res.json({ success: true, data: await getPublishPreview(appId, author, name) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

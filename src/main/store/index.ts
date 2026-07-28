@@ -14,6 +14,7 @@ export {
   checkUpdates,
   applyUpgrade,
   getRegistries,
+  getOfficialRegistryUrl,
   addRegistry,
   removeRegistry,
   toggleRegistry,
@@ -24,3 +25,9 @@ export { checkNow as checkUpgradesNow, startUpgradeScheduler, stopUpgradeSchedul
 
 export { publish, collectFiles, getPublishPreview } from './publish'
 export { pack as packDhpkg, unpack as unpackDhpkg } from './dhpkg'
+export { getMarketplaceCapabilities } from './marketplace-capabilities'
+export { getCategoryTaxonomy, invalidateServerTaxonomyCache } from './marketplace-taxonomy'
+export { getDiscoverLayout, invalidateDiscoverLayoutCache } from './marketplace-discover'
+export { fetchMyPublications, unpublishApp, relistApp } from './marketplace-mine'
+export { ensureMarketplaceIdentity, getMarketplaceIdentity, getMarketplaceSignInStatus } from './marketplace-identity'
+export { fetchCollections } from './marketplace-collections'

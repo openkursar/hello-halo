@@ -10,6 +10,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import type { MarketplaceSignInStatus } from '../../shared/store/store-types'
 
 export const storeApi = {
   // ===== Store (App Registry) =====
@@ -128,18 +129,22 @@ export const storeApi = {
     return httpRequest('POST', `/api/store/updates/${appId}/apply`, { mode })
   },
 
-  storePublish: async (appId: string, author?: string, version?: string): Promise<ApiResponse> => {
+  storePublish: async (
+    appId: string,
+    overrides?: { author?: string; version?: string; changelog?: string; category?: string; name?: string; description?: string; tags?: string[] },
+  ): Promise<ApiResponse> => {
+    const payload = { appId, ...overrides }
     if (isElectron()) {
-      return window.halo.storePublish({ appId, author, version })
+      return window.halo.storePublish(payload)
     }
-    return httpRequest('POST', `/api/store/publish`, { appId, author, version })
+    return httpRequest('POST', `/api/store/publish`, payload)
   },
 
-  storePublishPreview: async (appId: string, author?: string): Promise<ApiResponse<{ slug: string; localVersion: string; storeVersion: string | null }>> => {
+  storePublishPreview: async (appId: string, author?: string, name?: string): Promise<ApiResponse<{ slug: string; localVersion: string; storeVersion: string | null }>> => {
     if (isElectron()) {
-      return window.halo.storePublishPreview({ appId, author })
+      return window.halo.storePublishPreview({ appId, author, name })
     }
-    return httpRequest('POST', `/api/store/publish/preview`, { appId, author })
+    return httpRequest('POST', `/api/store/publish/preview`, { appId, author, name })
   },
 
   storeExportDhpkg: async (appId: string): Promise<ApiResponse<{ path: string }>> => {
@@ -157,6 +162,85 @@ export const storeApi = {
       return { success: false, error: 'A server-local filePath is required outside Electron' }
     }
     return httpRequest('POST', '/api/store/import-dhpkg', input)
+  },
+
+  storeGetCapabilities: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeGetCapabilities()
+    }
+    return httpRequest('GET', '/api/store/capabilities')
+  },
+
+  storeGetCategoryTaxonomy: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeGetCategoryTaxonomy()
+    }
+    return httpRequest('GET', '/api/store/category-taxonomy')
+  },
+
+  storeGetDiscoverLayout: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeGetDiscoverLayout()
+    }
+    return httpRequest('GET', '/api/store/discover-layout')
+  },
+
+  storeEnsureSignedIn: async (): Promise<ApiResponse<boolean>> => {
+    if (isElectron()) {
+      return window.halo.storeEnsureSignedIn()
+    }
+    // Browser OAuth login is a desktop-only flow (system browser + loopback).
+    return { success: true, data: false }
+  },
+
+  storeGetIdentity: async (): Promise<ApiResponse<{ uid: string; name: string } | null>> => {
+    if (isElectron()) {
+      return window.halo.storeGetIdentity()
+    }
+    return { success: true, data: null }
+  },
+
+  storeGetSignInStatus: async (): Promise<ApiResponse<MarketplaceSignInStatus>> => {
+    if (isElectron()) {
+      return window.halo.storeGetSignInStatus()
+    }
+    // Creator sign-in is a desktop-only flow; the browser store is read-only.
+    return { success: true, data: 'not-required' }
+  },
+
+  storeGetMyPublications: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeGetMyPublications()
+    }
+    return httpRequest('GET', '/api/store/my-publications')
+  },
+
+  storeUnpublish: async (input: { slug: string }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeUnpublish(input)
+    }
+    return httpRequest('POST', '/api/store/unpublish', input)
+  },
+
+  storeRelist: async (input: { slug: string }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeRelist(input)
+    }
+    return httpRequest('POST', '/api/store/relist', input)
+  },
+
+  storeGetCollections: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeGetCollections()
+    }
+    return httpRequest('GET', '/api/store/collections')
+  },
+
+  storeIgnoreVersion: async (input: { appId: string; version: string }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeIgnoreVersion(input)
+    }
+    return httpRequest('POST', '/api/store/ignore-version', input)
   },
 
   onStoreSyncStatusChanged: (callback: (data: { registryId: string; status: string; appCount: number; error?: string }) => void) => {

@@ -108,6 +108,9 @@ export interface InstalledApp {
    * See `src/main/store/upgrade.service.ts` for the dispatch logic.
    */
   upgradeStrategy: UpgradeStrategy
+
+  /** Versions the user chose to skip; they no longer surface as available updates. */
+  ignoredVersions?: string[]
 }
 
 /**
@@ -337,6 +340,14 @@ export interface AppManagerService {
    * @throws AppNotFoundError if the App does not exist
    */
   setUpgradeStrategy(appId: string, strategy: UpgradeStrategy): void
+
+  /**
+   * Record a version the user chose to skip, so it no longer surfaces as an
+   * available update. Higher versions still surface. No-op if already ignored.
+   *
+   * @throws AppNotFoundError if the App does not exist
+   */
+  addIgnoredVersion(appId: string, version: string): void
 
   /**
    * Update the App spec (JSON Merge Patch semantics).

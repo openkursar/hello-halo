@@ -115,9 +115,12 @@ class AnalyticsService {
    * Should be called after app.whenReady()
    */
   async init(): Promise<void> {
-    // Skip analytics in development mode
-    if (is.dev) {
-      console.log('[Analytics] Skipping in development mode')
+    // Skip analytics in development mode to keep dev noise out of production
+    // telemetry — unless a telemetry endpoint is explicitly configured (via
+    // .env.local), which signals an intentional local telemetry test against a
+    // self-hosted backend rather than the production one.
+    if (is.dev && !PROVIDER_CONFIG.telemetry.endpoint) {
+      console.log('[Analytics] Skipping in development mode (no telemetry endpoint configured)')
       this.markSettled()
       return
     }

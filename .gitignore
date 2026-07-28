@@ -29,6 +29,7 @@ local_docs/
 # Local plugins
 halo-local/
 product.json
+product.local.json
 
 # Local debug scripts
 vscode-debug/

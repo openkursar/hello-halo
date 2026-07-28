@@ -22,6 +22,7 @@
 import { useState, useRef, useEffect, useMemo, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
 import { Plus, ImagePlus, Loader2, AlertCircle, Atom, Globe } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
+import { useChatStore } from '../../stores/chat.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { useAIBrowserStore } from '../../stores/ai-browser.store'
 import { getOnboardingPrompt } from '../onboarding/onboardingData'
@@ -133,6 +134,26 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
   // AI Browser state
   const { enabled: aiBrowserEnabled, setEnabled: setAIBrowserEnabled } = useAIBrowserStore()
+
+  // Consume a composer prefill requested for this space (e.g. a skill's slash
+  // command from the store's "Use" action): fill the box once, focus, cursor to
+  // end. Cleared immediately so it never re-fires or leaks into another space.
+  const pendingComposerInput = useChatStore(state => state.pendingComposerInput)
+  const currentSpaceId = useChatStore(state => state.currentSpaceId)
+  useEffect(() => {
+    if (!pendingComposerInput || pendingComposerInput.spaceId !== currentSpaceId) return
+    const text = pendingComposerInput.text
+    useChatStore.setState({ pendingComposerInput: null })
+    setContent(text)
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus()
+      ta.setSelectionRange(ta.value.length, ta.value.length)
+      ta.style.height = 'auto'
+      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
+    })
+  }, [pendingComposerInput, currentSpaceId])
 
   // Auto-clear error after 3 seconds
   useEffect(() => {

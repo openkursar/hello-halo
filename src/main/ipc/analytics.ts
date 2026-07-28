@@ -26,6 +26,20 @@ const RENDERER_ALLOWED_EVENTS = new Set([
   'page.view',
   'message.sent',
   'message.received',
+  'mkt_market_view',
+  'mkt_detail_view',
+  'mkt_card_click',
+  'mkt_search',
+  'mkt_cat_filter',
+  'mkt_install_click',
+  'mkt_empty_state',
+  'mkt_update_overwrite',
+  'mkt_update_keep_current',
+  'mkt_featured_view',
+  'mkt_publish_open',
+  'mkt_publish_submit',
+  'mkt_mine_view',
+  'mkt_unpublish',
 ])
 
 /**

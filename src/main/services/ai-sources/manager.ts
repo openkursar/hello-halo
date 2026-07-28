@@ -30,6 +30,7 @@ import {
   type AISourceType,
   type AISourcesConfig,
   type AISource,
+  type AISourceUser,
   type BackendRequestConfig,
   type OAuthStartResult,
   type OAuthCompleteResult,
@@ -160,6 +161,29 @@ class AISourceManager {
   getCurrentSourceConfig(): AISource | null {
     const aiSources = this.getDecryptedAiSources()
     return getCurrentSource(aiSources)
+  }
+
+  /**
+   * Return a valid OAuth access token for a provider type, or null when no such
+   * source is signed in. Refreshes an expiring token first. Used by the
+   * marketplace to authenticate to an identity-bound store server.
+   */
+  async getOAuthAccessToken(providerType: ProviderId): Promise<string | null> {
+    const source = this.getDecryptedAiSources().sources.find(
+      s => s.provider === providerType && s.authType === 'oauth' && !!s.accessToken
+    )
+    if (!source) return null
+    await this.ensureValidToken(source.id)
+    const refreshed = this.getDecryptedAiSources().sources.find(s => s.id === source.id)
+    return refreshed?.accessToken ?? null
+  }
+
+  /** The signed-in OAuth user for a provider, or null when not signed in. */
+  getOAuthIdentity(providerType: ProviderId): AISourceUser | null {
+    const source = this.getDecryptedAiSources().sources.find(
+      s => s.provider === providerType && s.authType === 'oauth' && !!s.accessToken
+    )
+    return source?.user ?? null
   }
 
   /**
