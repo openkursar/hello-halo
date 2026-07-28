@@ -13,7 +13,11 @@ import {
   getSessionState,
   ensureSessionWarm,
   testMcpConnections,
+  probeMcpApp,
   resolveQuestion,
+  listToolsets,
+  openToolsetByUser,
+  closeToolsetByUser,
   onAgentEvent,
   onAgentBroadcast
 } from '../services/agent'
@@ -221,6 +225,50 @@ export function registerAgentHandlers(): void {
         const err = error as Error
         analytics.trackErrorSurface('mcp-connect', err)
         return { success: false, servers: [], error: err.message }
+      }
+    },
+
+    // Probe a single installed MCP app (native handshake, no agent session).
+    // Updates the shared status cache and broadcasts agent:mcp-status.
+    probeMcpApp: async (appId: string) => {
+      try {
+        return await probeMcpApp(appId)
+      } catch (error: unknown) {
+        const err = error as Error
+        analytics.trackErrorSurface('mcp-probe', err)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // List on-demand toolsets and their open/closed state for a conversation
+    listToolsets: async (data: { spaceId: string; conversationId: string }) => {
+      try {
+        return { success: true, data: listToolsets(data.spaceId, data.conversationId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
+
+    // User enables a toolset from the "Tools" menu (schedules a session rebuild)
+    openToolset: async (data: { spaceId: string; conversationId: string; toolsetId: string }) => {
+      try {
+        const result = await openToolsetByUser(data.spaceId, data.conversationId, data.toolsetId)
+        return result.ok ? { success: true } : { success: false, error: result.error }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
+
+    // User closes a toolset from the UI
+    closeToolset: async (data: { spaceId: string; conversationId: string; toolsetId: string }) => {
+      try {
+        const result = await closeToolsetByUser(data.spaceId, data.conversationId, data.toolsetId)
+        return result.ok ? { success: true } : { success: false, error: result.error }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
       }
     },
   })

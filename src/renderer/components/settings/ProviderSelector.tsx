@@ -3,36 +3,41 @@
  *
  * Searchable dropdown to select LLM provider, with configuration form.
  *
+ * Shared by two surfaces (catalog, model fetch, AISource construction):
+ *  - Settings (`AISourcesSection`) — add / edit any source.
+ *  - First-run setup (`SetupProviderConfig`) — the preset login step's locked,
+ *    API-key-only panel. The BYOK step uses `CustomApiSetupForm` instead.
+ *
  * Features:
  * - Searchable dropdown with grouped providers (Recommended + All)
  * - API key input for selected provider
  * - Model selection with search and fetch capability
  */
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import {
-  ChevronDown, Search, Check, Loader2, Eye, EyeOff, ExternalLink, X, Star, RefreshCw
+  ChevronDown, Search, Check, Loader2, Eye, EyeOff, ExternalLink, X, RefreshCw
 } from 'lucide-react'
 import type {
   AISource,
   AISourcesConfig,
   ProviderId,
   ModelOption,
-  BuiltinProvider,
   AuthProviderConfig
 } from '../../types'
 import {
   getBuiltinProvider,
-  getApiKeyProviders,
   isAnthropicProvider
 } from '../../types'
 import { resolveLocalizedText } from '../../../shared/types'
+import { formatModelFetchError } from '../../utils/model-fetch-error'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
 import { ModelConfigPanel } from './ModelConfigPanel'
 import type { ModelCapabilityOverride } from '../../../shared/types/model-capabilities'
 import { usePresetModels } from '../../hooks/usePresetModels'
+import { ProviderCatalogDropdown } from '../ai-config/ProviderCatalogDropdown'
 
 interface ProviderSelectorProps {
   aiSources: AISourcesConfig
@@ -40,16 +45,10 @@ interface ProviderSelectorProps {
   onCancel: () => void
   editingSourceId?: string | null
   /**
-   * Preset-API provider entry. When set (and no `editingSourceId`), the
-   * selector renders a stripped-down "Add preset source" panel: apiKey input
-   * + model select from `preset.fallbackModels`. The provider dropdown and
-   * the generic builtin-provider editor are skipped entirely.
-   *
-   * Settings flow uses this to add a preset source. The first-time setup flow
-   * (`ApiSetup.tsx`) does its own live model fetching with race protection;
-   * here we deliberately rely on the static `fallbackModels` list to keep
-   * the settings code path minimal and avoid duplicating the fetch logic.
-   * Users who want to refresh the model list can re-login from setup.
+   * Preset-API provider entry. When set (and no `editingSourceId`), the selector
+   * renders a stripped-down panel: apiKey input + model select from
+   * `preset.fallbackModels`, skipping the provider dropdown and builtin editor.
+   * Live model fetch (with race protection) goes through `usePresetModels`.
    */
   presetProvider?: AuthProviderConfig
 }
@@ -62,7 +61,6 @@ export function ProviderSelector({
   presetProvider
 }: ProviderSelectorProps) {
   const { t } = useTranslation()
-  const dropdownRef = useRef<HTMLDivElement>(null)
 
   // Get the source being edited (if any)
   const editingSource = editingSourceId
@@ -79,18 +77,11 @@ export function ProviderSelector({
   // Adding a brand-new preset source (clicked from AISourcesSection list).
   const isPresetAdd = !editingSource && presetProvider !== undefined
 
-  // Get all API key providers
-  const allProviders = useMemo(() => getApiKeyProviders(), [])
-  const recommendedProviders = useMemo(() => allProviders.filter(p => p.recommended), [allProviders])
-  const otherProviders = useMemo(() => allProviders.filter(p => !p.recommended), [allProviders])
-
   // State — seeded from `editingSource` (edit mode), `presetProvider` (preset
   // add mode), or hardcoded defaults (generic add mode), in that priority.
   const [selectedProvider, setSelectedProvider] = useState<ProviderId>(
     editingSource?.provider || (presetProvider ? 'custom' : 'anthropic')
   )
-  const [showProviderDropdown, setShowProviderDropdown] = useState(false)
-  const [providerSearchQuery, setProviderSearchQuery] = useState('')
 
   const [apiKey, setApiKey] = useState(editingSource?.apiKey || '')
   const [apiUrl, setApiUrl] = useState(
@@ -165,38 +156,6 @@ export function ProviderSelector({
     [selectedProvider]
   )
 
-  // Filter providers by search
-  const filteredRecommended = useMemo(() => {
-    if (!providerSearchQuery) return recommendedProviders
-    const q = providerSearchQuery.toLowerCase()
-    return recommendedProviders.filter(p =>
-      t(p.name).toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)
-    )
-  }, [recommendedProviders, providerSearchQuery, t])
-
-  const filteredOthers = useMemo(() => {
-    if (!providerSearchQuery) return otherProviders
-    const q = providerSearchQuery.toLowerCase()
-    return otherProviders.filter(p =>
-      t(p.name).toLowerCase().includes(q) || p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)
-    )
-  }, [otherProviders, providerSearchQuery, t])
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    if (!showProviderDropdown) return
-
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setShowProviderDropdown(false)
-        setProviderSearchQuery('')
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [showProviderDropdown])
-
   // Update form when provider changes
   useEffect(() => {
     if (currentProvider && !editingSource) {
@@ -226,8 +185,6 @@ export function ProviderSelector({
     setFetchedModels([])
     setShowCustomModel(false)
     setCustomModelInput('')
-    setShowProviderDropdown(false)
-    setProviderSearchQuery('')
   }
 
   // Handle delete model from list
@@ -265,7 +222,11 @@ export function ProviderSelector({
       const response = await api.fetchModels(apiKey, apiUrl)
 
       if (!response.success || !response.data) {
-        throw new Error(response.error || 'Failed to fetch models')
+        setValidationResult({
+          valid: false,
+          message: formatModelFetchError(t, response.code, response.error)
+        })
+        return
       }
 
       const { models } = response.data as { models: ModelOption[] }
@@ -277,9 +238,12 @@ export function ProviderSelector({
       }
 
       setValidationResult({ valid: true, message: t('Found ${count} models').replace('${count}', String(models.length)) })
-    } catch (error) {
-      console.error('[ProviderSelector] Failed to fetch models:', error)
-      setValidationResult({ valid: false, message: t('Failed to fetch models') })
+    } catch {
+      console.error('[ProviderSelector] Failed to fetch models')
+      setValidationResult({
+        valid: false,
+        message: formatModelFetchError(t, 'MODEL_FETCH_NETWORK')
+      })
     } finally {
       setIsFetchingModels(false)
     }
@@ -402,42 +366,6 @@ export function ProviderSelector({
       setIsValidating(false)
     }
   }
-
-  // Render provider item in dropdown
-  const renderProviderItem = (provider: BuiltinProvider, showRecommended = false) => (
-    <button
-      key={provider.id}
-      onClick={() => handleSelectProvider(provider.id)}
-      className={`w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-secondary/80 transition-colors ${
-        selectedProvider === provider.id ? 'bg-primary/10' : ''
-      }`}
-    >
-      {/* Provider Icon/Initial */}
-      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
-        selectedProvider === provider.id ? 'bg-primary/20 text-primary' : 'bg-secondary text-muted-foreground'
-      }`}>
-        <span className="text-sm font-bold">{t(provider.name).charAt(0)}</span>
-      </div>
-
-      {/* Provider Info */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-foreground">{t(provider.name)}</span>
-          {showRecommended && provider.recommended && (
-            <Star className="w-3 h-3 text-amber-500 fill-amber-500" />
-          )}
-        </div>
-        {provider.description && (
-          <div className="text-xs text-muted-foreground truncate">{t(provider.description)}</div>
-        )}
-      </div>
-
-      {/* Check mark */}
-      {selectedProvider === provider.id && (
-        <Check className="w-4 h-4 text-primary shrink-0" />
-      )}
-    </button>
-  )
 
   // ── Preset-source panel (covers both ADD-from-settings and EDIT) ──────
   // Preset entries from product.json carry a fixed baseUrl + apiType. The
@@ -640,7 +568,7 @@ export function ProviderSelector({
                 : 'bg-red-500/10 text-red-600'
             }`}>
               {validationResult.valid ? <Check size={16} /> : <X size={16} />}
-              <span className="text-sm">{validationResult.message}</span>
+              <span className="text-sm min-w-0 break-words">{validationResult.message}</span>
             </div>
           )}
 
@@ -670,82 +598,11 @@ export function ProviderSelector({
   return (
     <div className="space-y-4">
       {/* Provider Dropdown Selector */}
-      <div className="relative" ref={dropdownRef}>
+      <div>
         <label className="block text-sm font-medium text-muted-foreground mb-1.5">
           {t('Provider')}
         </label>
-        <button
-          onClick={() => setShowProviderDropdown(!showProviderDropdown)}
-          className="w-full flex items-center justify-between px-3 py-2.5 bg-input border border-border rounded-lg
-                   text-foreground hover:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/30 transition-colors"
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
-              <span className="text-sm font-bold text-primary">
-                {t(currentProvider?.name || '').charAt(0) || 'C'}
-              </span>
-            </div>
-            <div className="text-left">
-              <div className="text-sm font-medium">{currentProvider ? t(currentProvider.name) : t('Select provider')}</div>
-              {currentProvider?.description && (
-                <div className="text-xs text-muted-foreground">{t(currentProvider.description)}</div>
-              )}
-            </div>
-          </div>
-          <ChevronDown className={`w-5 h-5 text-muted-foreground transition-transform ${showProviderDropdown ? 'rotate-180' : ''}`} />
-        </button>
-
-        {/* Dropdown Menu */}
-        {showProviderDropdown && (
-          <div className="absolute z-50 w-full mt-1 bg-card border border-border rounded-xl shadow-lg overflow-hidden">
-            {/* Search Input */}
-            <div className="p-2 border-b border-border">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <input
-                  type="text"
-                  value={providerSearchQuery}
-                  onChange={(e) => setProviderSearchQuery(e.target.value)}
-                  placeholder={t('Search providers...')}
-                  className="w-full pl-9 pr-3 py-2 text-sm bg-input border border-border rounded-lg
-                           text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-                  autoFocus
-                />
-              </div>
-            </div>
-
-            {/* Scrollable List */}
-            <div className="max-h-80 overflow-y-auto">
-              {/* Recommended Section */}
-              {filteredRecommended.length > 0 && (
-                <>
-                  <div className="px-3 py-2 text-xs font-medium text-muted-foreground bg-secondary/30 flex items-center gap-1.5">
-                    <Star className="w-3 h-3 text-amber-500" />
-                    {t('Recommended')}
-                  </div>
-                  {filteredRecommended.map(p => renderProviderItem(p, false))}
-                </>
-              )}
-
-              {/* Other Providers Section */}
-              {filteredOthers.length > 0 && (
-                <>
-                  <div className="px-3 py-2 text-xs font-medium text-muted-foreground bg-secondary/30">
-                    {t('All Providers')}
-                  </div>
-                  {filteredOthers.map(p => renderProviderItem(p, true))}
-                </>
-              )}
-
-              {/* No Results */}
-              {filteredRecommended.length === 0 && filteredOthers.length === 0 && (
-                <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                  {t('No providers found')}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+        <ProviderCatalogDropdown value={selectedProvider} onChange={handleSelectProvider} />
       </div>
 
       {/* Selected Provider Config */}
@@ -806,25 +663,24 @@ export function ProviderSelector({
             </div>
           </div>
 
-          {/* API URL (for anthropic and openai - protocol entries that support custom URL) */}
-          {(selectedProvider === 'anthropic' || selectedProvider === 'openai') && (
-            <div>
-              <label className="block text-sm font-medium text-muted-foreground mb-1">
-                API URL
-              </label>
-              <input
-                type="text"
-                value={apiUrl}
-                onChange={(e) => setApiUrl(e.target.value)}
-                placeholder={currentProvider?.apiUrl || 'https://api.example.com/v1'}
-                className="w-full px-3 py-2 bg-input border border-border rounded-lg
-                         text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-              />
-              <p className="mt-1 text-xs text-muted-foreground">
-                {t('Default official URL, modify for custom proxy')}
-              </p>
-            </div>
-          )}
+          {/* API URL — shown for every API-key provider so users can see the
+              endpoint and point it at a custom proxy / coding gateway. */}
+          <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">
+              API URL
+            </label>
+            <input
+              type="text"
+              value={apiUrl}
+              onChange={(e) => setApiUrl(e.target.value)}
+              placeholder={currentProvider?.apiUrl || 'https://api.example.com/v1'}
+              className="w-full px-3 py-2 bg-input border border-border rounded-lg
+                       text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('Default official URL, modify for custom proxy')}
+            </p>
+          </div>
 
           {/* Model Selection */}
           <div>
@@ -976,7 +832,7 @@ export function ProviderSelector({
                 : 'bg-red-500/10 text-red-600'
             }`}>
               {validationResult.valid ? <Check size={16} /> : <X size={16} />}
-              <span className="text-sm">{validationResult.message}</span>
+              <span className="text-sm min-w-0 break-words">{validationResult.message}</span>
             </div>
           )}
 

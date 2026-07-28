@@ -21,6 +21,7 @@ import { Virtuoso, VirtuosoHandle } from 'react-virtuoso'
 import { MessageRow } from './MessageRow'
 import { StreamingSection } from './StreamingSection'
 import { useBrowserToolCalls, type BrowserToolCall } from './useBrowserToolCalls'
+import { useTerminalToolCalls, type TerminalToolCall } from './useTerminalToolCalls'
 import { CompactNotice } from './CompactNotice'
 import { InterruptedBubble } from './InterruptedBubble'
 import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion } from '../../types'
@@ -98,6 +99,7 @@ interface StreamingRevision {
   isThinking: boolean
   textBlockVersion: number
   streamingBrowserToolCalls: BrowserToolCall[]
+  streamingTerminalToolCalls: TerminalToolCall[]
   pendingQuestion: PendingQuestion | null
   onAnswerQuestion?: (answers: Record<string, string>) => void
 }
@@ -129,6 +131,7 @@ function StreamingFooterContent({
       isThinking={rev.isThinking}
       textBlockVersion={rev.textBlockVersion}
       browserToolCalls={rev.streamingBrowserToolCalls}
+      terminalToolCalls={rev.streamingTerminalToolCalls}
       showBrowserViewButton={showBrowserViewButton}
       pendingQuestion={rev.pendingQuestion}
       onAnswerQuestion={rev.onAnswerQuestion}
@@ -239,6 +242,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   // Extract real-time browser tool calls from streaming thoughts
   const streamingBrowserToolCalls = useBrowserToolCalls(thoughts)
+  const streamingTerminalToolCalls = useTerminalToolCalls(thoughts)
 
   // Track at-bottom state via native DOM scroll events (independent of Virtuoso).
   const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
@@ -312,22 +316,26 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   // the store to trigger re-renders when streaming state changes.
   const streamingRevision = useMemo(() => {
     return { streamingContent, isStreaming, thoughts, isThinking, textBlockVersion,
-             streamingBrowserToolCalls, pendingQuestion, onAnswerQuestion }
+             streamingBrowserToolCalls, streamingTerminalToolCalls, pendingQuestion, onAnswerQuestion }
   }, [streamingContent, isStreaming, thoughts, isThinking, textBlockVersion,
-      streamingBrowserToolCalls, pendingQuestion, onAnswerQuestion])
+      streamingBrowserToolCalls, streamingTerminalToolCalls, pendingQuestion, onAnswerQuestion])
   const streamingRevisionRef = useRef(streamingRevision)
   streamingRevisionRef.current = streamingRevision
 
   // Footer: stable callback — only depends on low-frequency values
   // High-frequency streaming updates are handled by StreamingFooterContent internally
   const Footer = useCallback(() => {
-    const hasFooterContent = isGenerating || (!isGenerating && error) || compactInfo || footerExtra
+    // Keep the footer mounted for an active question independently of isGenerating:
+    // a recovered question can be paused on the answer with isGenerating false, and
+    // gating on it alone would drop the card and deadlock the conversation.
+    const hasActiveQuestion = pendingQuestion?.status === 'active'
+    const hasFooterContent = isGenerating || hasActiveQuestion || (!isGenerating && error) || compactInfo || footerExtra
     if (!hasFooterContent) return <div className="pb-6" />
 
     return (
       <div className={contentWidthClass}>
         {/* Streaming area — isolated component reads from refs, re-renders independently */}
-        {isGenerating && (
+        {(isGenerating || hasActiveQuestion) && (
           <StreamingFooterContent
             conversationId={conversationId}
             showBrowserViewButton={!hideBrowserViewButton}
@@ -376,6 +384,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     )
   }, [
     isGenerating,
+    pendingQuestion,
     error, errorType,
     compactInfo, t, contentWidthClass,
     conversationId, hideBrowserViewButton, footerExtra,

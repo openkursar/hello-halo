@@ -21,7 +21,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Mail, MessageSquare, Bell, Webhook,
-  ExternalLink, Users, User, Pencil, Trash2, Copy, Check,
+  ExternalLink, Users, User, Pencil, Trash2, Copy, Check, Search,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useAppStore } from '../../stores/app.store'
@@ -39,8 +39,6 @@ import type { ImSessionRecord, ImChannelInstanceStatus } from '../../../shared/t
 
 interface AppNotifyChannelsSectionProps {
   appId: string
-  /** App name for display */
-  appName?: string
   /** Whether im-push permission is enabled for this app */
   imPushEnabled: boolean
 }
@@ -167,13 +165,18 @@ function ContactsSection({ appId }: { appId: string }) {
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
   const renameInputRef = useRef<HTMLInputElement>(null)
+
+  /** Above this count, surface a search box and keep the list height-bounded. */
+  const SEARCH_THRESHOLD = 8
 
   const fetchSessions = useCallback(async () => {
     try {
       const result = await api.imSessionsList(appId) as { success: boolean; data?: ImSessionRecord[] }
       if (result.success && result.data) {
-        setSessions(result.data)
+        // Only IM sessions are pushable; HTTP sessions have no channel adapter.
+        setSessions(result.data.filter(s => s.source === 'im'))
       }
     } catch {
       // Ignore
@@ -290,27 +293,85 @@ function ContactsSection({ appId }: { appId: string }) {
     }
   }, [])
 
+  // Contact header (icon + label + live count) — owned here so the count stays
+  // in sync with the fetched sessions without threading state up to the parent.
+  const header = (
+    <div className="flex items-center gap-1.5">
+      <Users className="w-3.5 h-3.5 text-muted-foreground" />
+      <span className="text-sm font-medium text-foreground">{t('Reachable Contacts')}</span>
+      {sessions.length > 0 && (
+        <span className="text-xs text-muted-foreground/60">({sessions.length})</span>
+      )}
+    </div>
+  )
+
+  const hint = (
+    <p className="text-xs text-muted-foreground">
+      {t('Toggle auto-sync to push the AI final reply to a contact after each run. The AI may also message any contact proactively when your prompt instructs it.')}
+    </p>
+  )
+
   if (loading) {
     return (
-      <div className="text-sm text-muted-foreground py-3 text-center">
-        {t('Loading...')}
+      <div className="space-y-2">
+        {header}
+        <div className="text-sm text-muted-foreground py-3 text-center">
+          {t('Loading...')}
+        </div>
       </div>
     )
   }
 
   if (sessions.length === 0) {
     return (
-      <div className="text-sm text-muted-foreground py-4 text-center space-y-1">
-        <MessageSquare className="w-5 h-5 mx-auto mb-1 opacity-30" />
-        <p>{t('No contacts yet')}</p>
-        <p className="text-xs">{t('Contacts appear automatically when someone messages via Bot')}</p>
+      <div className="space-y-2">
+        {header}
+        {hint}
+        <div className="text-sm text-muted-foreground py-4 text-center space-y-1">
+          <MessageSquare className="w-5 h-5 mx-auto mb-1 opacity-30" />
+          <p>{t('No contacts yet')}</p>
+          <p className="text-xs">{t('Contacts appear automatically when someone messages via Bot')}</p>
+        </div>
       </div>
     )
   }
 
+  const q = query.trim().toLowerCase()
+  const filtered = q
+    ? sessions.filter((s) => {
+        const name = (s.customName ?? s.displayName ?? '').toLowerCase()
+        return name.includes(q) || s.chatId.toLowerCase().includes(q)
+      })
+    : sessions
+
   return (
-    <div className="space-y-1.5">
-      {sessions.map((session) => {
+    <div className="space-y-2">
+      {header}
+      {hint}
+
+      {/* Search — only when the list is long enough to warrant filtering */}
+      {sessions.length > SEARCH_THRESHOLD && (
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/60 pointer-events-none" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('Search contacts')}
+            className="w-full pl-8 pr-3 py-1.5 text-sm bg-secondary border border-border rounded-lg outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50"
+          />
+        </div>
+      )}
+
+      {/* Height-bounded scroll region so a large contact list never pushes the
+          rest of the settings page far down. */}
+      <div className="space-y-1.5 max-h-[320px] overflow-y-auto -mr-1 pr-1">
+        {filtered.length === 0 && (
+          <p className="text-xs text-muted-foreground text-center py-3">
+            {t('No contacts match "{{query}}"', { query })}
+          </p>
+        )}
+        {filtered.map((session) => {
         const channelInfo = getImChannelDisplay(session.channel)
         const key = `${session.appId}:${session.channel}:${session.chatId}`
         const displayName = session.customName ?? session.displayName
@@ -415,7 +476,8 @@ function ContactsSection({ appId }: { appId: string }) {
             </label>
           </div>
         )
-      })}
+        })}
+      </div>
     </div>
   )
 }
@@ -424,27 +486,14 @@ function ContactsSection({ appId }: { appId: string }) {
 // Main Component
 // ============================================
 
-export function AppNotifyChannelsSection({ appId, appName, imPushEnabled }: AppNotifyChannelsSectionProps) {
-  const { t } = useTranslation()
-
+export function AppNotifyChannelsSection({ appId, imPushEnabled }: AppNotifyChannelsSectionProps) {
   return (
     <div className="space-y-4">
       {/* A. Notification Channel Overview */}
       <ChannelOverview />
 
       {/* B. Reachable Contacts (only when im-push enabled) */}
-      {imPushEnabled && (
-        <div className="space-y-2">
-          <div className="flex items-center gap-1.5">
-            <Users className="w-3.5 h-3.5 text-muted-foreground" />
-            <span className="text-sm font-medium text-foreground">{t('Reachable Contacts')}</span>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {t('Toggle auto-sync to push the AI final reply to a contact after each run. The AI may also message any contact proactively when your prompt instructs it.')}
-          </p>
-          <ContactsSection appId={appId} />
-        </div>
-      )}
+      {imPushEnabled && <ContactsSection appId={appId} />}
     </div>
   )
 }

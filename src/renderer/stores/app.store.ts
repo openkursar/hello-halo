@@ -258,8 +258,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ config })
 
         // Determine initial view based on config
-        // Show setup if first launch or no AI source configured (OAuth or Custom API)
-        if (config.isFirstLaunch || !hasAnyAISource(config.aiSources)) {
+        // Show setup if first launch or no AI source configured (OAuth or Custom API).
+        // modelConfigSkipped honors a user's explicit deferral from the first-run wizard.
+        if (config.isFirstLaunch || (!hasAnyAISource(config.aiSources) && !config.modelConfigSkipped)) {
           console.log('[Store] First launch or no AI source, showing setup')
           set({ view: 'setup' })
         } else {

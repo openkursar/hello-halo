@@ -137,9 +137,12 @@ export interface ChatState {
   deleteConversation: (spaceId: string, conversationId: string) => Promise<boolean>
   renameConversation: (spaceId: string, conversationId: string, newTitle: string) => Promise<boolean>
   toggleStarConversation: (spaceId: string, conversationId: string, starred: boolean) => Promise<boolean>
+  setConversationModel: (spaceId: string, conversationId: string, modelSourceId: string, modelId: string) => Promise<boolean>
+  attachKnowledgeBase: (spaceId: string, conversationId: string, kbId: string) => Promise<void>
+  detachKnowledgeBase: (spaceId: string, conversationId: string, kbId: string) => Promise<void>
 
   // Messaging
-  sendMessage: (content: string, images?: ImageAttachment[], aiBrowserEnabled?: boolean, thinkingEnabled?: boolean) => Promise<void>
+  sendMessage: (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => Promise<void>
   stopGeneration: (conversationId?: string) => Promise<void>
   injectMessage: (conversationId: string, message: string) => Promise<void>
 
@@ -190,6 +193,7 @@ export interface ChatState {
   // Session management
   resetSession: (conversationId: string) => void
   setSessionError: (conversationId: string, error: string) => void
+  markSessionStopped: (conversationId: string) => void
 
   // Cleanup
   reset: () => void

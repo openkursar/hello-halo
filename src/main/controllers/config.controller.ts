@@ -5,15 +5,18 @@
 
 import {
   getConfig as serviceGetConfig,
-  saveConfig as serviceSaveConfig
+  saveConfig as serviceSaveConfig,
+  getCredentialDecodeFailures as serviceGetCredentialDecodeFailures
 } from '../foundation/config.service'
 import { maskConfigFields, unmaskSentinels } from '../foundation/config-encryption'
 import { validateApiConnection, fetchModelsFromApi } from '../services/api-validator.service'
+import { ModelFetchError } from '../../shared/model-fetch-error'
 
 export interface ControllerResponse<T = unknown> {
   success: boolean
   data?: T
   error?: string
+  code?: string
 }
 
 /**
@@ -25,6 +28,19 @@ export function getConfig(): ControllerResponse {
   try {
     const config = serviceGetConfig()
     return { success: true, data: maskConfigFields(config as Record<string, unknown>) }
+  } catch (error: unknown) {
+    const err = error as Error
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * List credential fields that could not be decoded at rest. Returns only
+ * path + human label (never ciphertext), so it is safe across the boundary.
+ */
+export function getCredentialFailures(): ControllerResponse {
+  try {
+    return { success: true, data: serviceGetCredentialDecodeFailures() }
   } catch (error: unknown) {
     const err = error as Error
     return { success: false, error: err.message }
@@ -88,7 +104,17 @@ export async function fetchModels(
     const result = await fetchModelsFromApi({ apiKey, apiUrl })
     return { success: true, data: result }
   } catch (error: unknown) {
-    const err = error as Error
-    return { success: false, error: err.message }
+    if (error instanceof ModelFetchError) {
+      return {
+        success: false,
+        code: error.code,
+        ...(error.detail ? { error: error.detail } : {})
+      }
+    }
+
+    return {
+      success: false,
+      code: 'MODEL_FETCH_FAILED'
+    }
   }
 }

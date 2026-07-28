@@ -39,7 +39,7 @@ import type { BackgroundService } from '../../platform/background'
 import { join } from 'path'
 import { homedir } from 'os'
 import { getSpace } from '../../services/space.service'
-import { getExpressApp } from '../../http/server'
+import { getWebhookIngressRouter } from '../../http/server'
 import * as watcherHost from '../../services/watcher-host.service'
 import { ActivityStore } from './store'
 import { createAppRuntimeService } from './service'
@@ -49,8 +49,10 @@ import { FileWatcherSource } from './sources/file-watcher.source'
 import { WebhookSource, type WebhookSecretResolver } from './sources/webhook.source'
 import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, setActiveImChannelManager } from './im-channels'
 import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
+import { PendingRelayStore, setPendingRelayStore, getPendingRelayStore } from './pending-relays'
 import { dispatchInboundMessage, clearSupplementBuffersForInstance } from './dispatch-inbound'
 import { clearAllImPermissionContexts } from './im-permission-registry'
+import { clearAllImStreamHandles } from './im-stream-registry'
 import { getConfig } from '../../foundation/config.service'
 import { getDataFolderName } from '../../foundation/product-config'
 import { getAppManager } from '../manager'
@@ -58,6 +60,7 @@ import { onMcpAppsChange } from '../manager/service'
 import { createHaloAppsMcpServer } from '../conversation-mcp'
 import { registerAppBridge } from '../../services/app-bridge'
 import { handleMcpAppsChange } from '../../services/agent/session-manager'
+import { handleMcpAppsChangeForStatus } from '../../services/agent/mcp-probe'
 import type { AppRuntimeService } from './types'
 
 // Re-export types for consumers
@@ -93,18 +96,25 @@ export { Semaphore } from './concurrency'
 export {
   sendAppChatMessage,
   stopAppChat,
+  stopAppChatConversation,
   isAppChatGenerating,
+  isAppChatConversationGenerating,
   loadAppChatMessages,
   loadImChatMessages,
+  loadChatMessagesForConversation,
   getAppChatSessionState,
   getAppChatConversationId,
   buildImSessionKey,
   cleanupAppChatBrowserContext,
   clearAppChat,
   clearImSession,
+  stopImSession,
   restartAppChat,
+  createNativeChatSession,
+  forkNativeChatSession,
+  deleteNativeChatSession,
 } from './app-chat'
-export type { AppChatRequest } from './app-chat'
+export type { AppChatRequest, NativeSessionResult } from './app-chat'
 
 // Re-export inbound dispatch
 export { dispatchInboundMessage } from './dispatch-inbound'
@@ -117,6 +127,14 @@ export {
   clearAllImPermissionContexts,
 } from './im-permission-registry'
 export type { ImPermissionContext } from './im-permission-registry'
+
+// Re-export IM stream registry
+export {
+  setImStreamHandle,
+  getImStreamHandle,
+  clearImStreamHandle,
+  clearAllImStreamHandles,
+} from './im-stream-registry'
 
 // Re-export IM session registry accessor
 export { getImSessionRegistry } from './im-session-registry'
@@ -134,7 +152,6 @@ export { ImChannelManager } from './im-channels'
 
 let runtimeService: AppRuntimeService | null = null
 let memoryServiceRef: MemoryService | null = null
-let activityStoreRef: ActivityStore | null = null
 let eventRouterInstance: EventRouter | null = null
 let imChannelManagerInstance: ImChannelManager | null = null
 let imSessionRegistryInstance: ImSessionRegistry | null = null
@@ -201,6 +218,9 @@ export async function initAppRuntime(
   // the MCP-apps-change event from this side.
   registerAppBridge({ getAppManager, createHaloAppsMcpServer, onMcpAppsChange })
   onMcpAppsChange(handleMcpAppsChange)
+  // Keep the shared MCP status cache honest: probe on enable/install/update,
+  // drop stale entries on pause/uninstall.
+  onMcpAppsChange(handleMcpAppsChangeForStatus)
 
   // Get the app-level database
   const appDb = deps.db.getAppDatabase()
@@ -220,8 +240,11 @@ export async function initAppRuntime(
   const fileWatcherSource = new FileWatcherSource(watcherHost)
   eventRouter.registerSource(fileWatcherSource)
 
-  // WebhookSource: mounts POST /hooks/* on the Express server to receive
-  // inbound webhooks from external services (GitHub, Stripe, etc.).
+  // WebhookSource: registers its POST route on the webhook ingress router
+  // (mounted at /hooks by http/server ahead of auth middleware) to receive
+  // inbound webhooks from external services (GitHub, Stripe, etc.). The
+  // router is a process-lifetime singleton, so this works even though the
+  // HTTP server starts after initAppRuntime and may be restarted later.
   // The secret resolver looks up HMAC secrets from installed Apps' webhook
   // subscription configs for per-hook signature verification.
   const webhookSecretResolver: WebhookSecretResolver = (hookPath: string) => {
@@ -239,7 +262,7 @@ export async function initAppRuntime(
     }
     return null
   }
-  const webhookSource = new WebhookSource(getExpressApp(), webhookSecretResolver)
+  const webhookSource = new WebhookSource(getWebhookIngressRouter(), webhookSecretResolver)
   eventRouter.registerSource(webhookSource)
 
   // ── IM Session Registry ─────────────────────────────────────────────
@@ -248,6 +271,12 @@ export async function initAppRuntime(
   const registry = new ImSessionRegistry(registryPath)
   setImSessionRegistry(registry)
   imSessionRegistryInstance = registry
+
+  // ── Pending Relay Spool ─────────────────────────────────────────────
+  // Records notify_bot pushes against their target sessions so the target's
+  // AI regains awareness of them on its next inbound message.
+  const relaySpoolPath = join(homedir(), `.${getDataFolderName()}`, 'im-pending-relays.json')
+  setPendingRelayStore(new PendingRelayStore(relaySpoolPath))
 
   // ── IM Channel Manager (multi-instance) ─────────────────────────────
   // Manages all IM channel instances (WeCom Bot, Feishu Bot, DingTalk Bot, etc.)
@@ -317,7 +346,6 @@ export async function initAppRuntime(
 
   runtimeService = service
   memoryServiceRef = deps.memory
-  activityStoreRef = store
 
   const duration = performance.now() - start
   console.log(`[Runtime] App Runtime initialized in ${duration.toFixed(1)}ms`)
@@ -339,14 +367,6 @@ export function getAppRuntime(): AppRuntimeService | null {
  */
 export function getAppMemoryService(): MemoryService | null {
   return memoryServiceRef
-}
-
-/**
- * Get the activity store instance captured during init.
- * Used by app-chat.ts to provide report_to_user in chat mode.
- */
-export function getActivityStore(): ActivityStore | null {
-  return activityStoreRef
 }
 
 /**
@@ -372,7 +392,6 @@ export async function shutdownAppRuntime(): Promise<void> {
     await runtimeService.deactivateAll()
     runtimeService = null
     memoryServiceRef = null
-    activityStoreRef = null
   }
 
   if (eventRouterInstance) {
@@ -389,8 +408,17 @@ export async function shutdownAppRuntime(): Promise<void> {
   imSessionRegistryInstance = null
   setImSessionRegistry(null as any)
 
+  // Flush synchronously: a relay recorded seconds before exit must survive,
+  // since its target may not send another message for weeks.
+  getPendingRelayStore()?.flush()
+  setPendingRelayStore(null)
+
   // Clear all IM permission contexts (in-memory only, no persistence needed)
   clearAllImPermissionContexts()
+
+  // Drop any in-flight IM stream handles so a post-shutdown stopImSession
+  // call cannot reach a disposed WecomStreamSession.
+  clearAllImStreamHandles()
 
   console.log('[Runtime] App Runtime shutdown complete')
 }

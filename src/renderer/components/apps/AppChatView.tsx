@@ -35,13 +35,20 @@ interface AppChatViewProps {
   appId: string
   /** Space ID (for loading messages and sending chat) */
   spaceId: string
+  /**
+   * Session to render. Defaults to the app's native default session
+   * ("app-chat:{appId}"). Native local sessions pass their own
+   * "app-chat:{appId}:local:direct:{uuid}" key. The parent remounts this view
+   * (key={conversationId}) on session switch, so per-session state stays clean.
+   */
+  conversationId?: string
 }
 
 type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
 
-export function AppChatView({ appId, spaceId }: AppChatViewProps) {
+export function AppChatView({ appId, spaceId, conversationId: conversationIdProp }: AppChatViewProps) {
   const { t } = useTranslation()
-  const conversationId = getAppChatConversationId(appId)
+  const conversationId = conversationIdProp ?? getAppChatConversationId(appId)
 
   // ── Subscribe to agent events (remote/Capacitor clients use WebSocket) ──
   useRemoteSubscription(conversationId)
@@ -55,6 +62,7 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
   const session = useChatStore(s => s.getSession(conversationId))
   const sessionInitInfo = useChatStore(s => s.sessionInitInfo)
   const resetSession = useChatStore(s => s.resetSession)
+  const markSessionStopped = useChatStore(s => s.markSessionStopped)
   const answerQuestion = useChatStore(s => s.answerQuestion)
   const {
     isGenerating,
@@ -118,7 +126,7 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
       setLoadState('loading')
       setErrorMsg(null)
       try {
-        const res = await api.appChatMessages(appId, spaceId)
+        const res = await api.appChatMessages(appId, spaceId, conversationId)
         if (cancelled) return
 
         if (res.success && res.data) {
@@ -138,7 +146,7 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
 
     loadMessages()
     return () => { cancelled = true }
-  }, [appId, spaceId])
+  }, [appId, spaceId, conversationId])
 
   // ── Reload messages when generation completes ──
   // This ensures the persisted messages include the latest assistant response
@@ -147,7 +155,7 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
     let cancelled = false
     if (prevIsGeneratingRef.current && !isGenerating) {
       // Generation just completed — reload messages from JSONL
-      api.appChatMessages(appId, spaceId).then(res => {
+      api.appChatMessages(appId, spaceId, conversationId).then(res => {
         if (cancelled) return
         if (res.success && res.data) {
           const msgs = (res.data as Message[]) ?? []
@@ -160,14 +168,14 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
     }
     prevIsGeneratingRef.current = isGenerating
     return () => { cancelled = true }
-  }, [isGenerating, appId, spaceId])
+  }, [isGenerating, appId, spaceId, conversationId])
 
   // ── WebSocket reconnect recovery (remote/Capacitor only) ──
   // When the WebSocket drops and reconnects, events during the gap are lost.
   // Reload messages and reconcile session state to ensure the UI is up-to-date.
   useWsRecovery(useCallback(() => {
     console.log(`[AppChatView] WS reconnected — reloading messages for ${conversationId}`)
-    api.appChatMessages(appId, spaceId).then(res => {
+    api.appChatMessages(appId, spaceId, conversationId).then(res => {
       if (res.success && res.data) {
         const msgs = (res.data as Message[]) ?? []
         setMessages(msgs)
@@ -196,7 +204,7 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
 
   const handleClearChat = useCallback(async () => {
     try {
-      const res = await api.appChatClear(appId, spaceId)
+      const res = await api.appChatClear(appId, spaceId, conversationId)
       if (res.success) {
         setMessages([])
         setLoadState('empty')
@@ -237,6 +245,7 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
         message: content,
         images: apiImages,
         thinkingEnabled,
+        conversationId,
       })
       if (!res.success) {
         console.error('[AppChatView] Send failed:', res.error)
@@ -252,33 +261,14 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
     }
   }, [appId, spaceId, conversationId, resetSession, t])
 
-  // ── Stop generation ──
-  // Must eagerly clear frontend session state (isGenerating/isThinking) in addition
-  // to sending the backend stop IPC. Without this, the UI stays stuck in "thinking"
-  // because agent:complete may arrive late (backend drain) or not at all (drain race).
-  // This mirrors the pattern in chat.store.ts stopGeneration() for space conversations.
   const handleStop = useCallback(async () => {
     try {
-      await api.appChatStop(appId)
-      useChatStore.setState((state) => {
-        const newSessions = new Map(state.sessions)
-        const session = newSessions.get(conversationId)
-        if (session) {
-          newSessions.set(conversationId, {
-            ...session,
-            isGenerating: false,
-            isThinking: false,
-            pendingQuestion: session.pendingQuestion?.status === 'active'
-              ? { ...session.pendingQuestion, status: 'cancelled' as const }
-              : session.pendingQuestion
-          })
-        }
-        return { sessions: newSessions }
-      })
+      await api.appChatStop(appId, conversationId)
+      markSessionStopped(conversationId)
     } catch (err) {
       console.error('[AppChatView] Stop error:', err)
     }
-  }, [appId, conversationId])
+  }, [appId, conversationId, markSessionStopped])
 
   // ── Answer question from AskUserQuestionCard ──
   const handleAnswerQuestion = useCallback((answers: Record<string, string>) => {
@@ -301,6 +291,7 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
             onStop={handleStop}
             isGenerating={false}
             placeholder={t('Chat with this App...')}
+            hideToolsetControls
           />
         </div>
       </div>
@@ -324,6 +315,7 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
             onStop={handleStop}
             isGenerating={false}
             placeholder={t('Chat with this App...')}
+            hideToolsetControls
           />
         </div>
       </div>
@@ -409,6 +401,7 @@ export function AppChatView({ appId, spaceId }: AppChatViewProps) {
           onStop={handleStop}
           isGenerating={isGenerating}
           placeholder={t('Chat with this App...')}
+          hideToolsetControls
           slashCommands={slashCommands}
           mentionArtifacts={mentionArtifacts}
         />

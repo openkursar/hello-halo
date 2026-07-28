@@ -444,6 +444,22 @@
       "vision": false,
       "thinking": true
     },
+    "claude-sonnet-5": {
+      "displayName": "Claude Sonnet 5",
+      "provider": "anthropic",
+      "contextWindow": 200000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true
+    },
+    "claude-sonnet-5[1m]": {
+      "displayName": "Claude Sonnet 5 (1M)",
+      "provider": "anthropic",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true
+    },
     "claude-fable-5": {
       "displayName": "Claude Fable 5",
       "provider": "anthropic",
@@ -454,6 +470,22 @@
     },
     "claude-fable-5[1m]": {
       "displayName": "Claude Fable 5 (1M)",
+      "provider": "anthropic",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true
+    },
+    "claude-opus-5": {
+      "displayName": "Claude Opus 5",
+      "provider": "anthropic",
+      "contextWindow": 200000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true
+    },
+    "claude-opus-5[1m]": {
+      "displayName": "Claude Opus 5 (1M)",
       "provider": "anthropic",
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,

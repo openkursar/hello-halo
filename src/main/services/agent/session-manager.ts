@@ -18,23 +18,36 @@ import { getConversation } from '../conversation.service'
 import type {
   V2SDKSession,
   V2SessionInfo,
-  SessionConfig,
   SessionState,
 } from './types'
 import {
   getHeadlessElectronPath,
   getWorkingDir,
-  getApiCredentials,
+  getApiCredentialsForConversation,
   getDbMcpServers
 } from './helpers'
 import { isImSessionKey } from '../../../shared/apps/im-keys'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
-import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
-import { createHaloAppsMcpServer } from '../app-bridge'
-import { createWebSearchMcpServer } from '../web-search'
+import { resolveCredentialsForSdk, buildBaseSdkOptions, computeCredentialsFingerprint, computeSessionInputsFingerprint } from './sdk-config'
 import { startConsumer, type ConsumerHandle } from './session-consumer'
 import { hasActiveTeamTasks } from './subagent-handler'
+import { setSessionInvalidator, buildCreationTimeServers } from './toolsets/broker'
+import { buildToolsetSection } from './toolsets/capability-index'
+import { dropConversationState } from './toolsets/state'
+import { resolveConversationKnowledgeBases, resolveConversationKnowledgeBaseIds } from './knowledge-context'
+import { buildKnowledgeSection } from './system-prompt'
+import type { KBReference } from '../../../shared/types/tlon'
+
+/**
+ * Mask a secret for a diagnostic log line: report presence + length only, never
+ * the value. The session_env log exists to debug credential *wiring* (is a key
+ * set, which base URL), for which length is enough — the raw key must never hit
+ * the log file, which is user-readable and often shared in bug reports.
+ */
+function maskSecretForLog(value: string | undefined): string {
+  return value ? `set(len=${value.length})` : 'unset'
+}
 
 // ============================================
 // Session Maps
@@ -53,6 +66,87 @@ export const activeSessions = new Map<string, SessionState>()
  * Persistent sessions that can be reused across multiple messages
  */
 export const v2Sessions = new Map<string, V2SessionInfo>()
+
+/**
+ * Stable fingerprint of what the session's Knowledge context actually is:
+ * the RESOLVED knowledge-base set (ids that produced an injectable reference,
+ * not the declared ids) plus the working directory. Compared against the value
+ * captured at session creation to rebuild when they diverge.
+ *
+ * Resolved set, not declared ids: a session created while a KB is still
+ * indexing resolves it to nothing — with declared ids the fingerprint would
+ * never change when indexing completes, and the session would stay blind to
+ * the KB forever. With the resolved set, the next turn after indexing sees a
+ * different fingerprint and rebuilds (self-healing).
+ *
+ * workDir: a KB-chat turn runs in the KB's text/ directory while normal turns
+ * run in the space directory. Without workDir in the fingerprint, alternating
+ * turn kinds on one conversation would silently reuse a session rooted in the
+ * wrong directory.
+ */
+function computeKnowledgeFingerprint(resolvedKbIds?: string[], workDir?: string): string {
+  const ids = resolvedKbIds && resolvedKbIds.length > 0 ? [...resolvedKbIds].sort().join('|') : ''
+  if (!ids && !workDir) return ''
+  return `${ids}::${workDir ?? ''}`
+}
+
+/**
+ * Rebuild a conversation's session so a toolset toggle takes effect: the new MCP
+ * set is seeded at the next session creation via buildCreationTimeServers. Frozen
+ * at creation and not covered by the credentials fingerprint, so a live session
+ * must be torn down to pick it up. (Knowledge-base changes take a different path —
+ * they ARE fingerprinted, see computeKnowledgeFingerprint — so they self-heal on
+ * the next turn without an explicit call here.) Deferred when the consumer is
+ * mid-turn or a legacy turn is in flight (rebuilds after the turn, like a
+ * credential change); a no-op when no session exists yet, since creation will
+ * read the current state anyway.
+ */
+function requestSessionRebuild(conversationId: string, reason = 'session rebuild'): void {
+  const info = v2Sessions.get(conversationId)
+  if (!info) {
+    // Session mid-creation: it is being seeded with the pre-change state, so flag
+    // it for a rebuild once its consumer starts. When not under creation there is
+    // genuinely no session and creation will read the current state anyway.
+    if (sessionsUnderCreation.has(conversationId)) {
+      pendingConsumerRebuilds.add(conversationId)
+    }
+    return
+  }
+
+  // Legacy callers (app-chat/execute) close on turn idle via unregisterActiveSession.
+  if (activeSessions.has(conversationId)) {
+    pendingInvalidations.add(conversationId)
+    return
+  }
+
+  // A user turn is dispatched but CC has not yet emitted system:init — the
+  // consumer looks idle, but cleanup now would destroy the in-flight message.
+  if (turnsAwaitingInit.has(conversationId)) {
+    pendingConsumerRebuilds.add(conversationId)
+    return
+  }
+
+  // Consumer mid-turn: defer so we don't kill an in-flight response; the
+  // consumer breaks after the turn and the next sendMessage rebuilds.
+  const consumer = consumers.get(conversationId)
+  if (consumer?.isRunning && consumer.getActiveSessionState()) {
+    pendingConsumerRebuilds.add(conversationId)
+    return
+  }
+
+  // Consumer idle between turns but the CC subprocess still has team agents
+  // running — cleanup now would kill them all. Defer: the consumer only
+  // consumes the pending flag once no team tasks remain (see consumeLoop).
+  if (consumer?.isRunning && hasActiveTeamTasks(consumer.getTeamLifecycleThoughts())) {
+    pendingConsumerRebuilds.add(conversationId)
+    return
+  }
+
+  cleanupSession(conversationId, reason)
+}
+
+// Wire the toolset broker's rebuild trigger (DI seam, avoids module cycle)
+setSessionInvalidator((conversationId) => requestSessionRebuild(conversationId, 'toolset change'))
 
 /**
  * Consumer handles map: conversationId -> ConsumerHandle
@@ -76,6 +170,37 @@ const pendingInvalidations = new Set<string>()
 const pendingConsumerRebuilds = new Set<string>()
 
 /**
+ * Conversations whose V2 session is mid-creation (inside `await createSession`).
+ * A toolset toggle that lands in this window would otherwise be lost: the
+ * session is not in v2Sessions yet, so the invalidator has nothing to act on,
+ * and once stored it carries the pre-toggle MCP set with a credentials
+ * fingerprint that never triggers a rebuild. Flagging such a conversation for a
+ * deferred rebuild (see requestSessionRebuild) closes the gap.
+ */
+const sessionsUnderCreation = new Set<string>()
+
+/**
+ * Conversations with a user turn dispatched to the CC REPL but not yet
+ * acknowledged by system:init. In this window the consumer looks idle
+ * (currentSessionState is set only at onTurnInit), so an immediate session
+ * rebuild would destroy the in-flight message. The renderer hides the toolset
+ * toggle while generating, but the main process must not rely on that: remote
+ * clients (HTTP/mobile) can toggle at any time. Cleared on init and on cleanup;
+ * a turn that never inits is recycled by the idle-timeout sweep.
+ */
+const turnsAwaitingInit = new Set<string>()
+
+/** Called by send-message right before dispatching a user turn to the REPL. */
+export function markTurnDispatched(conversationId: string): void {
+  turnsAwaitingInit.add(conversationId)
+}
+
+/** Called by the session consumer when CC acknowledges the turn (system:init). */
+export function markTurnInitReceived(conversationId: string): void {
+  turnsAwaitingInit.delete(conversationId)
+}
+
+/**
  * Check if a session is busy (has an in-flight request).
  * Covers both legacy activeSessions (app-chat/execute) and
  * consumer-based chat conversations.
@@ -89,7 +214,7 @@ function isSessionBusy(conversationId: string): boolean {
   // Consumer is idle between turns (waiting in stream()), but the CC subprocess
   // may still have team agents running. Their results will arrive as a future turn.
   // Treat such sessions as busy to prevent the 30-min cleanup from killing them.
-  return hasActiveTeamTasks(consumer.getLastTurnThoughts())
+  return hasActiveTeamTasks(consumer.getTeamLifecycleThoughts())
 }
 
 // ============================================
@@ -110,7 +235,7 @@ function cleanupSession(conversationId: string, reason: string, skipMapCheck = f
   const info = v2Sessions.get(conversationId)
   if (!info && !skipMapCheck) return
 
-  console.log(`[Agent][${conversationId}] Cleaning up session: ${reason}`, new Error('cleanupSession caller trace').stack)
+  console.log(`[Agent][${conversationId}] Cleaning up session: ${reason}`)
 
   // Stop the persistent consumer first (if any)
   const consumer = consumers.get(conversationId)
@@ -131,6 +256,12 @@ function cleanupSession(conversationId: string, reason: string, skipMapCheck = f
 
   unregisterProcess(conversationId, 'v2-session')
   v2Sessions.delete(conversationId)
+  turnsAwaitingInit.delete(conversationId)
+
+  // Drop the in-memory toolset open-set. Persisted toolset selection on the
+  // conversation record is preserved and rehydrated on the next session, so
+  // this is safe on rebuild.
+  dropConversationState(conversationId)
 }
 
 // ============================================
@@ -371,18 +502,6 @@ function migrateSessionIfNeeded(workDir: string, sessionId: string): boolean {
   }
 }
 
-// ============================================
-// Session Config Comparison
-// ============================================
-
-/**
- * Check if session config requires rebuild
- * Only "process-level" params need rebuild; runtime params use setXxx() methods
- */
-export function needsSessionRebuild(existing: V2SessionInfo, newConfig: SessionConfig): boolean {
-  return existing.config.aiBrowserEnabled !== newConfig.aiBrowserEnabled
-}
-
 /**
  * Close and remove an existing V2 session (internal helper for rebuild)
  *
@@ -418,6 +537,44 @@ function closeV2SessionForRebuild(conversationId: string): void {
   cleanupSession(conversationId, 'rebuild required')
 }
 
+/**
+ * True when a deferred rebuild is flagged for this conversation AND the session
+ * is safely idle (no dispatched-but-unacknowledged turn, no active turn, no
+ * running team agents) — i.e. the flag can be applied right now instead of
+ * waiting for the consumer's next turn boundary.
+ */
+function hasConsumablePendingRebuild(conversationId: string): boolean {
+  if (!pendingConsumerRebuilds.has(conversationId)) return false
+  if (turnsAwaitingInit.has(conversationId)) return false
+  const consumer = consumers.get(conversationId)
+  if (consumer?.isRunning && consumer.getActiveSessionState()) return false
+  if (consumer?.isRunning && hasActiveTeamTasks(consumer.getTeamLifecycleThoughts())) return false
+  return true
+}
+
+/**
+ * Invariant: every in-process (sdk-type) MCP server instance seeded into a new
+ * session must be unbound. The SDK's connect call is fire-and-forget — seeding
+ * an instance still bound to a previous session's transport fails as a swallowed
+ * rejection, leaving the server registered but dead ("No such tool available").
+ * This turns that silent failure mode into a loud log line.
+ */
+function assertMcpInstancesUnbound(
+  conversationId: string,
+  mcpServers: Record<string, any> | undefined
+): void {
+  for (const [name, srv] of Object.entries(mcpServers ?? {})) {
+    if (srv?.type !== 'sdk') continue
+    const inst = srv.instance
+    if (inst && (inst.transport ?? inst._transport)) {
+      console.error(
+        `[Agent][${conversationId}] INVARIANT VIOLATION: in-process MCP server "${name}" ` +
+        `is already bound to a transport; its tools will be unavailable in the new session`
+      )
+    }
+  }
+}
+
 // ============================================
 // Session Creation
 // ============================================
@@ -435,21 +592,91 @@ function closeV2SessionForRebuild(conversationId: string): void {
  * @param conversationId - Conversation ID
  * @param sdkOptions - SDK options for session creation
  * @param sessionId - Optional session ID for resumption
- * @param config - Session configuration for rebuild detection
  * @param workDir - Working directory (required for session migration when sessionId is provided)
  * @param displayModel - Display model name for thought parsing (when provided, starts persistent consumer)
  * @param contextWindow - Source-resolved context window for token-usage display
+ * @param resolvedKbIds - Ids of the knowledge bases that resolve for this call
+ *   (registry-active + index ready; NOT the conversation's declared ids — see
+ *   computeKnowledgeFingerprint for why the distinction matters)
+ * @param buildMcpServers - Deferred MCP server assembly, invoked only when a new
+ *   session is actually created (after any cleanup of the previous one). In-process
+ *   MCP server instances bind to exactly one session transport, so they must be
+ *   instantiated by the creation path itself — a record built before the
+ *   reuse/rebuild decision could carry instances still bound to the torn-down
+ *   session, which the SDK fails to connect silently (tools vanish mid-conversation).
+ * @param resolveKnowledgeBases - Deferred knowledge resolution, invoked only at
+ *   actual creation: reads each KB's index.md and appends the "# Knowledge"
+ *   section to the system prompt. Deferred for cost, not correctness — a reused
+ *   session would throw the resolution away (its prompt is frozen at creation).
  */
 export async function getOrCreateV2Session(
   spaceId: string,
   conversationId: string,
   sdkOptions: Record<string, any>,
   sessionId?: string,
-  config?: SessionConfig,
   workDir?: string,
   displayModel?: string,
-  contextWindow?: number
+  contextWindow?: number,
+  resolvedKbIds?: string[],
+  buildMcpServers?: () => Record<string, unknown> | null,
+  resolveKnowledgeBases?: () => KBReference[]
 ): Promise<V2SessionInfo['session']> {
+  // Concurrent calls for the same conversation (a fire-and-forget
+  // ensureSessionWarm racing the first sendMessage) must not both reach
+  // createSession: the loser's v2Sessions.set/registerProcess would overwrite
+  // the winner's, leaking an orphan CC process whose exit listener then tears
+  // down the healthy session by conversationId. Latecomers share the in-flight
+  // result; if their inputs differ (credentials/KB changed mid-flight), the
+  // fingerprint check on the next call reconciles with a rebuild.
+  const inFlight = inFlightSessionCreations.get(conversationId)
+  if (inFlight) {
+    console.log(`[Agent][${conversationId}] Session creation already in flight, sharing result`)
+    return inFlight
+  }
+
+  const promise = getOrCreateV2SessionInner(
+    spaceId, conversationId, sdkOptions, sessionId, workDir,
+    displayModel, contextWindow, resolvedKbIds, buildMcpServers, resolveKnowledgeBases
+  )
+  inFlightSessionCreations.set(conversationId, promise)
+  try {
+    return await promise
+  } finally {
+    inFlightSessionCreations.delete(conversationId)
+  }
+}
+
+/** conversationId -> in-flight getOrCreateV2Session promise. */
+const inFlightSessionCreations = new Map<string, Promise<V2SessionInfo['session']>>()
+
+async function getOrCreateV2SessionInner(
+  spaceId: string,
+  conversationId: string,
+  sdkOptions: Record<string, any>,
+  sessionId?: string,
+  workDir?: string,
+  displayModel?: string,
+  contextWindow?: number,
+  resolvedKbIds?: string[],
+  buildMcpServers?: () => Record<string, unknown> | null,
+  resolveKnowledgeBases?: () => KBReference[]
+): Promise<V2SessionInfo['session']> {
+  // Per-conversation credential/model fingerprint — used to rebuild this
+  // conversation's session when its own model pin changes (the global
+  // credentialsGeneration only tracks the current source's model).
+  const currentFingerprint = computeCredentialsFingerprint(sdkOptions)
+  // Knowledge context baked into the system prompt at creation. Not part of the
+  // credentials fingerprint, so tracked separately to rebuild a session whose
+  // resolved KB set or working directory has diverged (attach/detach, indexing
+  // completed after creation, or a KB-chat/normal turn switch).
+  const currentKnowledgeFingerprint = computeKnowledgeFingerprint(resolvedKbIds, workDir)
+  // Tool set + system prompt baked in eagerly by app chat / automation runs.
+  // Main chat builds MCP servers lazily (buildMcpServers) and drives toolset
+  // changes via requestSessionRebuild, so it opts out to avoid double-handling.
+  const currentInputsFingerprint = buildMcpServers
+    ? undefined
+    : computeSessionInputsFingerprint(sdkOptions)
+
   // Check if we have an existing session for this conversation
   const existing = v2Sessions.get(conversationId)
   if (existing) {
@@ -468,16 +695,40 @@ export async function getOrCreateV2Session(
       console.log(`[Agent][${conversationId}] Consumer exited, session is zombie — rebuilding`)
       closeV2SessionForRebuild(conversationId)
       // Fall through to create new session
+    } else if (hasConsumablePendingRebuild(conversationId)) {
+      // A rebuild was flagged while the session was busy or mid-creation and the
+      // consumer has not hit a turn boundary since (it only consumes the flag at
+      // turn end). Without this check the reuse path would ship one more turn on
+      // the stale session — the "toolset toggle takes effect one turn late" bug.
+      console.log(`[Agent][${conversationId}] Pending rebuild flagged and session idle — rebuilding now`)
+      closeV2SessionForRebuild(conversationId)
+      // Fall through to create new session (cleanup cleared the pending flag)
     } else {
       // Check if credentials have changed since session was created
       // This catches race conditions where session was created with stale credentials
       // (e.g., warm-up started before config save completed)
       const currentGen = getCredentialsGeneration()
-      const needsCredentialRebuild = existing.credentialsGeneration !== currentGen
-      const needsConfigRebuild = config && needsSessionRebuild(existing, config)
+      const needsCredentialRebuild =
+        existing.credentialsGeneration !== currentGen ||
+        existing.credentialsFingerprint !== currentFingerprint ||
+        existing.knowledgeFingerprint !== currentKnowledgeFingerprint ||
+        existing.inputsFingerprint !== currentInputsFingerprint
 
-      if (needsCredentialRebuild || needsConfigRebuild) {
+      if (needsCredentialRebuild) {
         const consumer = consumers.get(conversationId)
+
+        // Guard 0: A user turn is dispatched but not yet acknowledged by
+        // system:init — the consumer looks idle, but rebuilding now (e.g. a
+        // warm-up racing a just-sent message after a model switch) would
+        // destroy the in-flight message. Defer like Guard 1.
+        if (turnsAwaitingInit.has(conversationId)) {
+          pendingConsumerRebuilds.add(conversationId)
+          console.log(
+            `[Agent][${conversationId}] Session rebuild deferred — a dispatched turn is awaiting system:init.`
+          )
+          existing.lastUsedAt = Date.now()
+          return existing.session
+        }
 
         // Guard 1: Consumer is actively processing a turn (mid-API-call, mid-tool, etc.)
         // Killing it now would destroy the in-flight response — the user loses the answer.
@@ -487,12 +738,9 @@ export async function getOrCreateV2Session(
         const isActivelyProcessing = consumer?.isRunning && consumer.getActiveSessionState() !== null
         if (isActivelyProcessing) {
           pendingConsumerRebuilds.add(conversationId)
-          const reason = needsCredentialRebuild
-            ? `gen ${existing.credentialsGeneration}→${currentGen}`
-            : 'config changed'
           console.log(
             `[Agent][${conversationId}] Session rebuild deferred — consumer is actively processing a turn ` +
-            `(${reason}). Will rebuild after turn completes.`
+            `(gen ${existing.credentialsGeneration}→${currentGen}). Will rebuild after turn completes.`
           )
           existing.lastUsedAt = Date.now()
           return existing.session
@@ -502,29 +750,24 @@ export async function getOrCreateV2Session(
         // Their results arrive as a future autonomous turn. Killing the session now would
         // abort all in-flight agent tasks.
         const isIdleBetweenTurns = consumer?.isRunning && !consumer.getActiveSessionState()
-        if (isIdleBetweenTurns && hasActiveTeamTasks(consumer!.getLastTurnThoughts())) {
-          // Clear the flag that invalidateAllSessions may have set — we don't want
-          // the consumer to break after the next team turn while messages are queued.
-          pendingConsumerRebuilds.delete(conversationId)
+        if (isIdleBetweenTurns && hasActiveTeamTasks(consumer!.getTeamLifecycleThoughts())) {
+          // A pending rebuild flag (credential or toolset change) is safe to keep:
+          // the consumer only consumes it once no team tasks remain (consumeLoop),
+          // so it cannot break the loop mid-team while messages are queued.
           console.log(
             `[Agent][${conversationId}] Session rebuild deferred — active team agents detected ` +
-            `(${needsCredentialRebuild ? `gen ${existing.credentialsGeneration}→${currentGen}` : 'config changed'}). ` +
-            `Will rebuild after team tasks complete.`
+            `(gen ${existing.credentialsGeneration}→${currentGen}). Will rebuild after team tasks complete.`
           )
           existing.lastUsedAt = Date.now()
           return existing.session
         }
 
         // No active processing and no team agents — safe to rebuild now.
-        if (needsCredentialRebuild) {
-          console.log(`[Agent][${conversationId}] Credentials changed (gen ${existing.credentialsGeneration} → ${currentGen}), recreating session`)
-        } else {
-          console.log(`[Agent][${conversationId}] Config changed (aiBrowser: ${existing.config.aiBrowserEnabled} → ${config!.aiBrowserEnabled}), rebuilding session...`)
-        }
+        console.log(`[Agent][${conversationId}] Session inputs changed (gen ${existing.credentialsGeneration}→${currentGen}, fp ${existing.credentialsFingerprint}→${currentFingerprint}, kb ${existing.knowledgeFingerprint}→${currentKnowledgeFingerprint}, tools ${existing.inputsFingerprint ?? '∅'}→${currentInputsFingerprint ?? '∅'}), recreating session`)
         closeV2SessionForRebuild(conversationId)
         // Fall through to create new session
       } else {
-        // Session is alive and config is compatible, reuse it
+        // Session is alive and credentials are current, reuse it
         console.log(`[Agent][${conversationId}] Reusing existing V2 session`)
         existing.lastUsedAt = Date.now()
         return existing.session
@@ -536,6 +779,21 @@ export async function getOrCreateV2Session(
   // If sessionId exists, pass resume to let CC restore history from disk
   // After first message, the process stays alive and maintains context in memory
   console.log(`[Agent][${conversationId}] Creating new V2 session...`)
+
+  if (buildMcpServers) {
+    const record = buildMcpServers()
+    if (record && Object.keys(record).length > 0) {
+      sdkOptions.mcpServers = record
+    } else {
+      delete sdkOptions.mcpServers
+    }
+  }
+  assertMcpInstancesUnbound(conversationId, sdkOptions.mcpServers)
+
+  if (resolveKnowledgeBases && typeof sdkOptions.systemPrompt === 'string') {
+    sdkOptions.systemPrompt += buildKnowledgeSection(resolveKnowledgeBases())
+  }
+
   console.debug(`[Agent][${conversationId}] SDK options: model=${sdkOptions.model}, maxTurns=${sdkOptions.maxTurns}, mcpServers=[${Object.keys(sdkOptions.mcpServers || {}).join(', ')}], resume=${!!sessionId}`)
 
   // Handle session resumption with migration support
@@ -560,8 +818,16 @@ export async function getOrCreateV2Session(
   if (effectiveSessionId) {
     sdkOptions.resume = effectiveSessionId
   }
-  // resolved-sdk handles sdkEngine switch (Halo SDK vs CC SDK) transparently
-  const session = (await createSession(sdkOptions)) as unknown as V2SDKSession
+  // resolved-sdk handles sdkEngine switch (Halo SDK vs CC SDK) transparently.
+  // Mark the creation window so a toolset toggle arriving during this await is
+  // not lost (see requestSessionRebuild / sessionsUnderCreation).
+  sessionsUnderCreation.add(conversationId)
+  let session: V2SDKSession
+  try {
+    session = (await createSession(sdkOptions)) as unknown as V2SDKSession
+  } finally {
+    sessionsUnderCreation.delete(conversationId)
+  }
 
   // Log PID for health system verification (via SDK patch)
   const pid = (session as any).pid
@@ -569,7 +835,7 @@ export async function getOrCreateV2Session(
 
   const sdkEnv = ((sdkOptions as Record<string, unknown>).env || {}) as Record<string, string | undefined>
   console.log(`[Agent] session_create conv=${conversationId} pid=${pid ?? ''} model=${sdkOptions.model || ''} base_url=${sdkEnv.ANTHROPIC_BASE_URL || ''}`)
-  console.log(`[SDK Config] session_env conv=${conversationId} ANTHROPIC_BASE_URL=${sdkEnv.ANTHROPIC_BASE_URL || ''} ANTHROPIC_API_KEY=${sdkEnv.ANTHROPIC_API_KEY || ''} HTTP_PROXY=${sdkEnv.HTTP_PROXY || ''} HTTPS_PROXY=${sdkEnv.HTTPS_PROXY || ''} NO_PROXY=${sdkEnv.NO_PROXY || ''}`)
+  console.log(`[SDK Config] session_env conv=${conversationId} ANTHROPIC_BASE_URL=${sdkEnv.ANTHROPIC_BASE_URL || ''} ANTHROPIC_API_KEY=${maskSecretForLog(sdkEnv.ANTHROPIC_API_KEY)} HTTP_PROXY=${sdkEnv.HTTP_PROXY || ''} HTTPS_PROXY=${sdkEnv.HTTPS_PROXY || ''} NO_PROXY=${sdkEnv.NO_PROXY || ''}`)
 
   // Register with health system for orphan detection
   const instanceId = getCurrentInstanceId()
@@ -587,7 +853,7 @@ export async function getOrCreateV2Session(
   // This is event-driven (better than polling) - when process dies, we clean up immediately
   registerProcessExitListener(session, conversationId)
 
-  // Store session with config and current credentials generation
+  // Store session with current credentials generation
   // Generation is used to detect stale credentials on session reuse
   v2Sessions.set(conversationId, {
     session,
@@ -595,8 +861,10 @@ export async function getOrCreateV2Session(
     conversationId,
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
-    config: config || { aiBrowserEnabled: false },
-    credentialsGeneration: getCredentialsGeneration()
+    credentialsGeneration: getCredentialsGeneration(),
+    credentialsFingerprint: currentFingerprint,
+    knowledgeFingerprint: currentKnowledgeFingerprint,
+    inputsFingerprint: currentInputsFingerprint
   })
 
   // Start cleanup if not already running
@@ -643,23 +911,31 @@ export async function ensureSessionWarm(
   const sessionId = conversation?.sessionId
   const electronPath = getHeadlessElectronPath()
 
-  // Get API credentials and resolve for SDK use
-  const credentials = await getApiCredentials(config)
+  // Get API credentials (per-conversation pin, falling back to global) and resolve for SDK use.
+  // Must match sendMessage's resolution exactly so the warmed session isn't
+  // immediately rebuilt on the first message (fingerprint mismatch).
+  const credentials = await getApiCredentialsForConversation(config, conversation)
   console.log(`[Agent] Session warm using: ${credentials.provider}, model: ${credentials.model}`)
 
   // Resolve credentials for SDK (handles OpenAI compat router for non-Anthropic providers)
   const resolvedCredentials = await resolveCredentialsForSdk(credentials)
 
-  // Get MCP servers from installed apps database (global + space-scoped)
-  const dbMcpServers = getDbMcpServers(spaceId)
-
-  // Build MCP servers config (must match sendMessage to avoid session rebuild)
-  const mcpServers: Record<string, any> = dbMcpServers ? { ...dbMcpServers } : {}
-  if (digitalHumansEnabled) {
-    const haloApps = createHaloAppsMcpServer(spaceId)
-    if (haloApps) mcpServers['halo-apps'] = haloApps
+  // Creation-time MCP servers: assembled lazily at actual session creation
+  // (must match sendMessage exactly to avoid a session rebuild on the first message).
+  const buildMcpServers = (): Record<string, unknown> | null => {
+    const dbMcpServers = getDbMcpServers(spaceId)
+    const record: Record<string, unknown> = dbMcpServers ? { ...dbMcpServers } : {}
+    Object.assign(record, buildCreationTimeServers({ spaceId, conversationId, workDir }))
+    return Object.keys(record).length > 0 ? record : null
   }
-  mcpServers['web-search'] = createWebSearchMcpServer()
+
+  // Knowledge context. Must match sendMessage exactly: the first turn reuses
+  // this warm session (fingerprint unchanged), so a warm session built without
+  // knowledge would leave the KB out of the model's context for the whole
+  // session. Ids are resolved cheaply here for the fingerprint; the index
+  // content is read only if a session is actually created.
+  const resolvedKbIds = resolveConversationKnowledgeBaseIds(conversation)
+  const resolveKnowledgeBases = (): KBReference[] => resolveConversationKnowledgeBases(conversation)
 
   // Build SDK options using shared configuration
   const sdkOptions = buildBaseSdkOptions({
@@ -671,7 +947,6 @@ export async function ensureSessionWarm(
     stderrHandler: (data: string) => {
       console.error(`[Agent][${conversationId}] CLI stderr (warm):`, data)
     },
-    mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : null,
     maxTurns: config.agent?.maxTurns,
     promptProfile: config.agent?.promptProfile,
     configDirMode: config.agent?.configDirMode,
@@ -679,12 +954,16 @@ export async function ensureSessionWarm(
     enableTeams: config.agent?.enableTeams,
     disabledTools: config.agent?.disabledTools,
     digitalHumansEnabled,
+    toolsetIndex: buildToolsetSection(spaceId, conversationId),
   })
 
   try {
     const session = await getOrCreateV2Session(
-      spaceId, conversationId, sdkOptions, sessionId, undefined, workDir,
-      resolvedCredentials.displayModel, resolvedCredentials.capabilities?.contextWindow
+      spaceId, conversationId, sdkOptions, sessionId, workDir,
+      resolvedCredentials.displayModel, resolvedCredentials.capabilities?.contextWindow,
+      resolvedKbIds,
+      buildMcpServers,
+      resolveKnowledgeBases
     )
 
     // Ensure consumer's displayModel is up-to-date (same as sendMessage)

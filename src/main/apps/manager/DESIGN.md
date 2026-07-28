@@ -99,6 +99,41 @@ work directories.
 - `platform/background` -- `onStatusChange` uses a handler array with unsubscribe function
 - This is simpler and more explicit than Node.js EventEmitter for single-event patterns.
 
+### 2.6a MCP Change Event Carries Per-App Details
+
+**Signature**: `onMcpAppsChange((spaceId: string | null, change?: McpAppChange) => void)`
+where `McpAppChange = { appId, specId, action }` and `action` is one of
+`installed | uninstalled | reinstalled | paused | resumed | updated | moved | status`.
+The `McpAppChange` type lives in `services/app-bridge.ts` (type-only import here,
+erased at runtime) because its consumers are on the services tier.
+
+**Rationale**: The original space-only payload was enough for session
+invalidation, but per-server subscribers need to know *which* server changed
+and *how*: the agent's MCP status cache drops the entry on `paused`/`uninstalled`
+(prevents stale "connection error" surviving a reinstall) and triggers a native
+connection probe on `installed`/`reinstalled`/`resumed`/`updated`/`status`
+(see `services/agent/mcp-probe.ts`). Every `emitMcpChange` call site in
+`service.ts` must pass the change details; `change` stays optional only so
+space-level handlers can ignore it.
+
+### 2.6b Applying an App's Own Config Changes to Its Chat
+
+**Decision**: The manager emits no event for this. Changing permissions, user
+config, or a spec field is a plain store write.
+
+**Rationale**: A chat session's defining inputs (system prompt, MCP server set,
+guest permission envelope) are fingerprinted at creation and re-checked on every
+send (`computeSessionInputsFingerprint`, `services/agent/session-manager.ts`).
+A session whose inputs no longer match is torn down and rebuilt before the
+message is dispatched, so a config change lands on the next message with nobody
+notifying anybody. That path is declarative and self-healing; a parallel
+manager→runtime notification would be a second, weaker answer to the same
+question, able only to duplicate what the fingerprint already guarantees.
+
+Interrupting an in-flight turn is a separate and explicitly manual concern —
+`restartAppChat(appId, { interruptActive: true })`, reachable only from the
+"Restart agent" IPC/HTTP path.
+
 ### 2.7 Migration Namespace
 
 **Decision**: Use `'app_manager'` as the migration namespace.

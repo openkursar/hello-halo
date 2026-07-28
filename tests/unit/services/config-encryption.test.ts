@@ -17,6 +17,7 @@ import { isCredentialAtRestSafe } from '../../../src/main/foundation/credential-
 import {
   encryptConfigFields,
   decryptConfigFields,
+  applyFailedDecodeGuard,
   maskConfigFields,
   unmaskSentinels,
   configHasUnmigratedCredentials,
@@ -95,25 +96,25 @@ describe('config-encryption', () => {
 
       encryptConfigFields(config)
 
-      // Verify fields are encrypted (start with gmcred:v1:)
-      expect((config.api as any).apiKey).toMatch(/^gmcred:v1:/)
+      // Verify fields are encrypted (start with gmcred:v2:)
+      expect((config.api as any).apiKey).toMatch(/^gmcred:v2:/)
       const src = (config.aiSources as any).sources[0]
-      expect(src.apiKey).toMatch(/^gmcred:v1:/)
-      expect(src.accessToken).toMatch(/^gmcred:v1:/)
-      expect(src.refreshToken).toMatch(/^gmcred:v1:/)
-      expect(src.oauth.accessToken).toMatch(/^gmcred:v1:/)
-      expect(src.oauth.refreshToken).toMatch(/^gmcred:v1:/)
+      expect(src.apiKey).toMatch(/^gmcred:v2:/)
+      expect(src.accessToken).toMatch(/^gmcred:v2:/)
+      expect(src.refreshToken).toMatch(/^gmcred:v2:/)
+      expect(src.oauth.accessToken).toMatch(/^gmcred:v2:/)
+      expect(src.oauth.refreshToken).toMatch(/^gmcred:v2:/)
 
       // MCP env: only the sensitive key, not PYTHONPATH
       const mcp = (config.mcpServers as any).myServer
-      expect(mcp.env.API_KEY).toMatch(/^gmcred:v1:/)
+      expect(mcp.env.API_KEY).toMatch(/^gmcred:v2:/)
       expect(mcp.env.PYTHONPATH).toBe('/usr/lib')
-      expect(mcp.headers.Authorization).toMatch(/^gmcred:v1:/)
+      expect(mcp.headers.Authorization).toMatch(/^gmcred:v2:/)
 
       // Notification channels
-      expect((config.notificationChannels as any).email.password).toMatch(/^gmcred:v1:/)
-      expect((config.notificationChannels as any).wecom.secret).toMatch(/^gmcred:v1:/)
-      expect((config.notificationChannels as any).dingtalk.appKey).toMatch(/^gmcred:v1:/)
+      expect((config.notificationChannels as any).email.password).toMatch(/^gmcred:v2:/)
+      expect((config.notificationChannels as any).wecom.secret).toMatch(/^gmcred:v2:/)
+      expect((config.notificationChannels as any).dingtalk.appKey).toMatch(/^gmcred:v2:/)
 
       // Roundtrip
       decryptConfigFields(config)
@@ -266,6 +267,361 @@ describe('config-encryption', () => {
       unmaskSentinels(incoming, existing)
 
       expect((incoming.remoteAccess as any).password).toBe('123456')
+    })
+
+    it('matches sources by id, not index, when the client reorders them', () => {
+      const existing = makeConfig()
+      ;(existing.aiSources as any).sources.push({
+        id: 'src-2',
+        name: 'Other',
+        provider: 'anthropic',
+        apiKey: 'sk-other-key',
+      })
+
+      // Client sends the same sources in reversed order, both masked.
+      const incoming = JSON.parse(JSON.stringify(existing))
+      ;(incoming.aiSources as any).sources.reverse()
+      ;(incoming.aiSources as any).sources[0].apiKey = MASK_SENTINEL // src-2
+      ;(incoming.aiSources as any).sources[1].apiKey = MASK_SENTINEL // src-1
+
+      unmaskSentinels(incoming, existing)
+
+      // Index-based matching would swap these; id-based keeps each correct.
+      expect((incoming.aiSources as any).sources[0].apiKey).toBe('sk-other-key')
+      expect((incoming.aiSources as any).sources[1].apiKey).toBe('sk-source-key')
+    })
+
+    // ── IM channel instances ───────────────────────────────────────
+    // Bug #172: WeCom Bot Secret lost after restart. The frontend
+    // (MessageChannelsSection.saveInstances) sends the full instances
+    // array; unchanged instances carry `config.secret === '***'` from
+    // getConfig(). unmaskSentinels must restore each by instance ID,
+    // never persist the literal '***', and self-heal prior corruption.
+
+    it('restores IM channel instance secrets by instance ID, not array index', () => {
+      const existing = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: 'real-secret-a' } },
+            { id: 'B', type: 'wecom-bot', config: { botId: 'aib-b', secret: 'real-secret-b' } },
+          ],
+        },
+      }
+      // Incoming array reordered [B, A] with both secrets masked.
+      const incoming = {
+        imChannels: {
+          instances: [
+            { id: 'B', type: 'wecom-bot', config: { botId: 'aib-b', secret: MASK_SENTINEL } },
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+
+      unmaskSentinels(incoming as any, existing as any)
+
+      const inc = (incoming.imChannels as any).instances
+      expect(inc[0].config.secret).toBe('real-secret-b')
+      expect(inc[1].config.secret).toBe('real-secret-a')
+    })
+
+    it('preserves a new IM channel instance real secret when prepended before existing masked instance', () => {
+      const existing = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: 'real-secret-a' } },
+          ],
+        },
+      }
+      // Incoming: new B (real secret) prepended before A (masked).
+      const incoming = {
+        imChannels: {
+          instances: [
+            { id: 'B', type: 'wecom-bot', config: { botId: 'aib-b', secret: 'real-secret-b' } },
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+
+      unmaskSentinels(incoming as any, existing as any)
+
+      const inc = (incoming.imChannels as any).instances
+      expect(inc[0].config.secret).toBe('real-secret-b')
+      expect(inc[1].config.secret).toBe('real-secret-a')
+    })
+
+    it('clears IM channel instance *** to empty string when no matching existing instance exists', () => {
+      // Existing has no instance at all; incoming carries a stale '***'.
+      const existing = { imChannels: { instances: [] } }
+      const incoming = {
+        imChannels: {
+          instances: [
+            { id: 'orphan', type: 'wecom-bot', config: { botId: 'aib-x', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+
+      unmaskSentinels(incoming as any, existing as any)
+
+      expect((incoming.imChannels as any).instances[0].config.secret).toBe('')
+    })
+
+    it('self-heals a corrupted existing IM channel *** to empty string', () => {
+      // Simulates prior corruption: '***' was previously written to disk.
+      const existing = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+      const incoming = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+
+      unmaskSentinels(incoming as any, existing as any)
+
+      expect((incoming.imChannels as any).instances[0].config.secret).toBe('')
+    })
+
+    it('restoreMap clears unmatched sentinels when existing config is undefined', () => {
+      // Edge case: existing instance missing entirely (incoming references
+      // an id that does not exist). restoreMap must not leave '***' in place.
+      const existing = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: 'real-secret-a' } },
+          ],
+        },
+      }
+      const incoming = {
+        imChannels: {
+          instances: [
+            // B has no counterpart in existing.
+            { id: 'B', type: 'wecom-bot', config: { botId: 'aib-b', secret: MASK_SENTINEL } },
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+
+      unmaskSentinels(incoming as any, existing as any)
+
+      const inc = (incoming.imChannels as any).instances
+      expect(inc[0].config.secret).toBe('')
+      expect(inc[1].config.secret).toBe('real-secret-a')
+    })
+
+    it('does not mutate existing during self-heal (existing is read-only)', () => {
+      const existing = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+      const incoming = {
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: MASK_SENTINEL } },
+          ],
+        },
+      }
+      const existingBefore = JSON.parse(JSON.stringify(existing))
+
+      unmaskSentinels(incoming as any, existing as any)
+
+      // The contract states `existing` is read-only.
+      expect(existing).toEqual(existingBefore)
+    })
+
+    it('skips IM channel restore when incoming.imChannels is absent (partial update)', () => {
+      // Partial config update: only api is touched, imChannels not in incoming.
+      const existing = {
+        api: { provider: 'openai', apiKey: 'sk-real', apiUrl: '' },
+        imChannels: {
+          instances: [
+            { id: 'A', type: 'wecom-bot', config: { botId: 'aib-a', secret: 'real-secret-a' } },
+          ],
+        },
+      }
+      const incoming = { api: { provider: 'openai', apiKey: MASK_SENTINEL, apiUrl: '' } }
+
+      expect(() => unmaskSentinels(incoming as any, existing as any)).not.toThrow()
+      expect((incoming as any).api.apiKey).toBe('sk-real')
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Non-destructive decode failure contract (invariant ②)
+  // --------------------------------------------------------------------------
+
+  describe('decryptConfigFields failure reporting', () => {
+    it('reports undecodable fields, empties the in-memory value, and keeps the ciphertext', () => {
+      const config = {
+        api: { provider: 'openai', apiKey: 'enc:undecodable-legacy', apiUrl: '' },
+      }
+      const failures = decryptConfigFields(config)
+
+      // Consumer sees empty (never the raw ciphertext)...
+      expect((config.api as any).apiKey).toBe('')
+      // ...and the original ciphertext is reported for the write guard, tagged
+      // with the decode reason and a user-recovery classification.
+      expect(failures).toContainEqual({
+        path: 'api.apiKey',
+        label: 'API key',
+        ciphertext: 'enc:undecodable-legacy',
+        reason: 'legacy-safestorage',
+        recoverable: 'user',
+      })
+    })
+
+    it('reports no failures for plaintext / empty values', () => {
+      const config = { api: { provider: 'openai', apiKey: 'sk-plain', apiUrl: '' } }
+      expect(decryptConfigFields(config)).toEqual([])
+    })
+
+    it('classifies internal device/tunnel secrets as auto-recoverable', () => {
+      const config = {
+        deviceIdentity: { deviceId: 'x', deviceSecret: 'enc:orphaned-device' },
+        remoteAccess: { namedTunnel: { tunnelSecret: 'enc:orphaned-tunnel' } },
+      }
+      const failures = decryptConfigFields(config)
+
+      const byPath = new Map(failures.map((f) => [f.path, f]))
+      expect(byPath.get('deviceIdentity.deviceSecret')?.recoverable).toBe('auto')
+      expect(byPath.get('remoteAccess.namedTunnel.tunnelSecret')?.recoverable).toBe('auto')
+      // In-memory value is emptied so the consumer re-issues a fresh secret.
+      expect((config.deviceIdentity as any).deviceSecret).toBe('')
+      expect((config.remoteAccess as any).namedTunnel.tunnelSecret).toBe('')
+    })
+  })
+
+  describe('applyFailedDecodeGuard', () => {
+    it('restores the original ciphertext for a still-empty failed field', () => {
+      const failed = new Map([['api.apiKey', 'enc:original-cipher']])
+      const config = { api: { provider: 'openai', apiKey: '', apiUrl: '' } }
+
+      applyFailedDecodeGuard(config, failed)
+
+      expect((config.api as any).apiKey).toBe('enc:original-cipher')
+    })
+
+    it('keeps a value the user explicitly re-entered (non-empty wins)', () => {
+      const failed = new Map([['api.apiKey', 'enc:original-cipher']])
+      const config = { api: { provider: 'openai', apiKey: 'sk-re-entered', apiUrl: '' } }
+
+      applyFailedDecodeGuard(config, failed)
+
+      expect((config.api as any).apiKey).toBe('sk-re-entered')
+    })
+
+    it('is a no-op with an empty failure map', () => {
+      const config = { api: { provider: 'openai', apiKey: '', apiUrl: '' } }
+      applyFailedDecodeGuard(config, new Map())
+      expect((config.api as any).apiKey).toBe('')
+    })
+
+    it('keys array sections by id so deletion/reorder cannot cross-wire ciphertext', () => {
+      // Disk order: two orphaned sources A and B (both undecodable).
+      const disk = {
+        aiSources: {
+          version: 2,
+          currentId: 'a',
+          sources: [
+            { id: 'a', name: 'A', provider: 'openai', apiKey: 'enc:fail-A' },
+            { id: 'b', name: 'B', provider: 'openai', apiKey: 'enc:fail-B' },
+          ],
+        },
+      }
+      const failures = decryptConfigFields(disk)
+      const failedMap = new Map(failures.map((f) => [f.path, f.ciphertext]))
+
+      // Client deletes A and submits only B (still orphaned → empty). With an
+      // index-based key, B (now at index 0) would receive A's ciphertext.
+      const toWrite = {
+        aiSources: {
+          version: 2,
+          currentId: 'b',
+          sources: [{ id: 'b', name: 'B', provider: 'openai', apiKey: '' }],
+        },
+      }
+      applyFailedDecodeGuard(toWrite, failedMap)
+
+      expect((toWrite.aiSources.sources[0] as any).apiKey).toBe('enc:fail-B')
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Device identity + named tunnel (permanent remote-access hostname)
+  // --------------------------------------------------------------------------
+
+  describe('deviceIdentity + remoteAccess.namedTunnel', () => {
+    function makeTunnelConfig(): Record<string, unknown> {
+      return makeConfig({
+        deviceIdentity: {
+          deviceId: '74b24652-1dac-4ab4-9a41-6d94d0f8624c',
+          deviceSecret: 'f'.repeat(64),
+        },
+        remoteAccess: {
+          enabled: true,
+          port: 3847,
+          password: '123456',
+          tunnelEnabled: true,
+          namedTunnel: {
+            hostname: 'r-abc123.example.com',
+            tunnelId: 'tid-1',
+            accountTag: 'acc-1',
+            tunnelSecret: 'base64-tunnel-secret',
+            issuerUrl: 'https://issuer.example.com',
+            issuedAt: 1,
+          },
+        },
+      })
+    }
+
+    it('encrypts both secrets at rest when credentialAtRestSafe is on', () => {
+      setProfile(true)
+      const config = makeTunnelConfig()
+
+      encryptConfigFields(config)
+      expect((config.deviceIdentity as any).deviceSecret).toMatch(/^gmcred:v2:/)
+      expect((config.remoteAccess as any).namedTunnel.tunnelSecret).toMatch(/^gmcred:v2:/)
+      // Non-secret grant fields stay readable
+      expect((config.remoteAccess as any).namedTunnel.hostname).toBe('r-abc123.example.com')
+
+      decryptConfigFields(config)
+      expect((config.deviceIdentity as any).deviceSecret).toBe('f'.repeat(64))
+      expect((config.remoteAccess as any).namedTunnel.tunnelSecret).toBe('base64-tunnel-secret')
+    })
+
+    it('masks both secrets on output', () => {
+      setProfile(false)
+      const masked = maskConfigFields(makeTunnelConfig())
+      expect((masked.deviceIdentity as any).deviceSecret).toBe(MASK_SENTINEL)
+      expect((masked.remoteAccess as any).namedTunnel.tunnelSecret).toBe(MASK_SENTINEL)
+      expect((masked.remoteAccess as any).namedTunnel.hostname).toBe('r-abc123.example.com')
+    })
+
+    it('restores masked sentinels on write-back', () => {
+      const existing = makeTunnelConfig()
+      const incoming = makeTunnelConfig()
+      ;(incoming.deviceIdentity as any).deviceSecret = MASK_SENTINEL
+      ;(incoming.remoteAccess as any).namedTunnel.tunnelSecret = MASK_SENTINEL
+
+      unmaskSentinels(incoming, existing)
+
+      expect((incoming.deviceIdentity as any).deviceSecret).toBe('f'.repeat(64))
+      expect((incoming.remoteAccess as any).namedTunnel.tunnelSecret).toBe('base64-tunnel-secret')
+    })
+
+    it('handles configs without deviceIdentity or namedTunnel gracefully', () => {
+      setProfile(true)
+      const config = makeConfig()
+      expect(() => encryptConfigFields(config)).not.toThrow()
+      expect(() => unmaskSentinels(makeConfig(), makeConfig())).not.toThrow()
     })
   })
 })

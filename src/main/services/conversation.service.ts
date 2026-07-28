@@ -16,9 +16,11 @@
 import { join } from 'path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync } from 'fs'
 import { getSpace, touchSpaceActivity } from './space.service'
+import { getSeedKBIds } from './tlon'
 import { getConfig } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
 import type { FileChangesSummary } from '../../shared/file-changes'
+import type { KBSource } from '../../shared/types/tlon'
 
 // Re-export for existing consumers
 export type { FileChangesSummary } from '../../shared/file-changes'
@@ -88,6 +90,7 @@ interface Message {
   }
   error?: string  // Error message when assistant response failed (e.g., 429 rate limit)
   source?: string  // How the message entered the conversation (e.g., 'injection')
+  sources?: KBSource[]  // Knowledge-base documents the agent Read this turn (clickable citations)
 }
 
 interface ToolCall {
@@ -122,6 +125,18 @@ interface Conversation extends ConversationMeta {
   sessionId?: string
   version?: number  // 2 = thoughts stored separately
   /**
+   * Open toolsets (on-demand MCP servers) for this conversation.
+   * Written by services/agent/toolsets; restored into the session on resume.
+   */
+  toolsets?: string[]
+  /**
+   * Knowledge bases (Tlon) loaded into THIS conversation. Their index.md is
+   * injected into the system prompt for every turn (in addition to any KBs
+   * bound at the space level). Optional + read with a `?? []` fallback, so
+   * legacy conversations work without migration (same pattern as engineId).
+   */
+  knowledgeBaseIds?: string[]
+  /**
    * Agent engine that owns this conversation.
    *
    * Recorded on `createConversation` from the active `config.agent.sdkEngine`.
@@ -131,6 +146,23 @@ interface Conversation extends ConversationMeta {
    * process-bound (see resolved-sdk.ts), changing it requires a restart.
    */
   engineId?: 'anthropic' | 'halo' | 'codex' | null
+  /**
+   * Per-conversation model pin (Cursor-style). Pins this conversation to a
+   * specific AI source + model independent of the global "current" selection,
+   * so switching a model in one conversation never affects the others.
+   *
+   * Stamped on `createConversation` from the active global selection
+   * (`aiSources.currentId` + that source's `model`) so a new conversation
+   * inherits the last-used model. Resolved at send time by
+   * `getApiCredentialsForConversation` with a fallback to the global selection,
+   * so legacy conversations (created before these fields existed) and pins
+   * whose source/model became unavailable keep working without migration.
+   *
+   * `modelSourceId` is the `AISource.id`; `modelId` is the wire model id within
+   * that source. Always written together (both set or both absent).
+   */
+  modelSourceId?: string
+  modelId?: string
 }
 
 // Thoughts file structure
@@ -659,6 +691,15 @@ export function listConversations(spaceId: string): ConversationMeta[] {
 }
 
 // Create a new conversation (always v2 format)
+/**
+ * Out-of-box toolset selection for the very first conversation, before the user
+ * has ever toggled a toolset (no config.lastToolsets yet). AI Browser is a core
+ * capability, so it is on by default; the user can turn it off, after which
+ * config.lastToolsets (possibly empty) takes over. Ids must match the registry
+ * (services/agent/toolsets); unavailable ids are dropped at use time.
+ */
+const FIRST_RUN_DEFAULT_TOOLSETS = ['ai-browser']
+
 export function createConversation(spaceId: string, title?: string): Conversation {
   const id = uuidv4()
   const now = new Date().toISOString()
@@ -667,13 +708,47 @@ export function createConversation(spaceId: string, title?: string): Conversatio
   // (single config field) and avoids needing a separate IPC call from
   // the renderer when displaying the engine badge.
   let engineId: 'anthropic' | 'halo' | 'codex' = 'anthropic'
+  // Stamp the active global model selection so a new conversation inherits the
+  // last-used source + model (Cursor-style). Left undefined when no source is
+  // configured — the credential resolver falls back to the global selection.
+  let modelSourceId: string | undefined
+  let modelId: string | undefined
+  // Stamp the global last-used toolset selection so a new conversation inherits
+  // the previous window's enabled toolsets (mirrors the model pin above). Unknown
+  // or unavailable ids are ignored at use time (toolsets/registry availability
+  // gate), so no filtering here. On first run (no persisted selection yet) the
+  // browser toolset is on out of the box; once the user toggles anything,
+  // config.lastToolsets is authoritative — including an empty set (all off).
+  let toolsets: string[] = FIRST_RUN_DEFAULT_TOOLSETS
+  // KB ids to preload: the space's bound KBs plus the global default, snapshotted
+  // once at creation so the conversation owns its knowledge set (space rebinds
+  // affect only later conversations; the user can add/remove per conversation).
+  let knowledgeBaseIds: string[] = []
   try {
     const cfg = getConfig()
     const cfgEngine = cfg?.agent?.sdkEngine
     if (cfgEngine === 'halo' || cfgEngine === 'codex') engineId = cfgEngine
+
+    const aiSources = cfg?.aiSources
+    if (aiSources?.version === 2 && aiSources.currentId) {
+      const currentSource = aiSources.sources.find(s => s.id === aiSources.currentId)
+      if (currentSource) {
+        modelSourceId = currentSource.id
+        modelId = currentSource.model
+      }
+    }
+
+    if (Array.isArray(cfg?.lastToolsets)) {
+      toolsets = cfg.lastToolsets
+    }
   } catch {
     // getConfig() may throw if config service hasn't initialized — fall
-    // back to the documented default.
+    // back to the documented defaults.
+  }
+  try {
+    knowledgeBaseIds = getSeedKBIds(spaceId)
+  } catch (e) {
+    console.error(`[Conversation] Failed to resolve seed knowledge bases for ${spaceId}:`, e)
   }
 
   const conversation: Conversation = {
@@ -686,6 +761,14 @@ export function createConversation(spaceId: string, title?: string): Conversatio
     messages: [],
     version: CONVERSATION_FORMAT_VERSION,
     engineId,
+    // Only persist the pin when a source is configured; conditional spread keeps
+    // undefined keys out of the JSON so legacy detection stays clean.
+    ...(modelSourceId ? { modelSourceId, modelId } : {}),
+    // Only persist toolsets when the last-used set is non-empty, so an empty
+    // seed leaves the field unset (hydrates to an empty open-set).
+    ...(toolsets.length > 0 ? { toolsets: [...toolsets] } : {}),
+    // Only persist knowledge bases when the space/default seed is non-empty.
+    ...(knowledgeBaseIds.length > 0 ? { knowledgeBaseIds: [...knowledgeBaseIds] } : {}),
   }
 
   const conversationsDir = getConversationsDir(spaceId)

@@ -26,11 +26,16 @@
 import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
 import { registerSecurityHandlers } from '../ipc/security'
-import { enableRemoteAccess } from '../services/remote.service'
-import { getConfig, migrateCredentialEncryption } from '../foundation/config.service'
+import { enableRemoteAccess, enableTunnel } from '../services/remote'
+import { getConfig, migrateCredentialEncryption, setCredentialFailureNotifier } from '../foundation/config.service'
+import { broadcastToAll } from '../http/websocket'
+import { isServerMode } from '../foundation/runtime-mode'
 import { registerBrowserHandlers } from '../ipc/browser'
 import { registerBrowserPolicyHandlers } from '../ipc/browser-policy'
+import { registerAIBrowserHandlers, cleanupAIBrowserHandlers } from '../ipc/ai-browser'
 import { cleanupAIBrowser } from '../services/ai-browser'
+import { cleanupAITerminal } from '../services/ai-terminal'
+import { cleanupTerminalHandlers } from '../ipc/terminal'
 import { registerOverlayHandlers, cleanupOverlayHandlers } from '../ipc/overlay'
 import { initializeSearchHandlers, cleanupSearchHandlers } from '../ipc/search'
 import { registerPerfHandlers } from '../ipc/perf'
@@ -66,6 +71,9 @@ import { registerStoreHandlers } from '../ipc/store'
 import { registerCliConfigHandlers } from '../ipc/cli-config'
 import { registerModelCapabilitiesHandlers } from '../ipc/model-capabilities'
 import { registerWeixinIlinkHandlers } from '../ipc/weixin-ilink'
+import { registerTlonHandlers } from '../ipc/tlon'
+import { initTlonWatchers, shutdownTlon, migrateKBsToTextIndex } from '../services/tlon'
+import { shutdownOcr } from '../services/ocr'
 import { initRegistryService, shutdownRegistryService } from '../store'
 import { startUpgradeScheduler, stopUpgradeScheduler } from '../store/upgrade.service'
 import { cleanupImChannelTempFiles } from '../apps/runtime/im-channels'
@@ -145,6 +153,18 @@ async function initPlatformAndApps(): Promise<void> {
   // Must come after both appManager and runtime are ready.
   installAppsSubscribers(appManager, runtime)
 
+  // ── Phase 3.6: Tlon knowledge base watchers ───────────────────────────
+  // Subscribe to each active KB's raw/ + linked directories so file changes
+  // re-trigger ingest. Non-fatal: a watcher failure must not block bootstrap.
+  await initTlonWatchers().catch(err =>
+    console.error('[Bootstrap] Tlon watcher init failed:', err)
+  )
+  // Migrate any not-yet-indexed sources (incl. wiki-era KBs) onto the text
+  // index. Fire-and-forget: extraction is cheap and must not block bootstrap.
+  void migrateKBsToTextIndex().catch(err =>
+    console.error('[Bootstrap] Tlon text-index migration failed:', err)
+  )
+
   // ── Phase 4: Registry Service (App Store) ─────────────────────────────
   initRegistryService({ db })
 
@@ -207,8 +227,20 @@ export function initializeExtendedServices(): void {
   // gate features (e.g. Tunnel section visibility under tunnelSafe).
   registerSecurityHandlers()
 
-  // Move credentials still under the legacy machine key (or plaintext) onto the
-  // persisted master key. No-op on open-source and already-migrated installs.
+  // Push credential decode failures to renderer (IPC) and remote clients (WS).
+  // Registered before the migration task so failures surfaced during it reach a
+  // connected UI; later clients pull via config:get-credential-failures.
+  setCredentialFailureNotifier((failures) => {
+    sendToRenderer('credential:decrypt-failed', { failures })
+    try {
+      broadcastToAll('credential:decrypt-failed', { failures })
+    } catch (err) {
+      console.warn('[Bootstrap] credential failure WS broadcast failed:', (err as Error).message)
+    }
+  })
+
+  // Move credentials still under a legacy format (plaintext / v1) onto the v2
+  // static product key. No-op on open-source and already-migrated installs.
   registerIdleTask('migrate-credential-encryption', async () => {
     try {
       migrateCredentialEncryption()
@@ -221,8 +253,10 @@ export function initializeExtendedServices(): void {
   })
 
   // Auto-restore so paired devices keep working without manual re-enable.
-  // CF tunnel is intentionally not restored — its Quick Tunnel URL changes per
-  // run, which would break any previously shared link.
+  // The named tunnel is restored too — its hostname is permanent, so links
+  // shared before the restart keep working. Tunnel failures are logged and
+  // swallowed independently: a dead issuer or edge outage must not take the
+  // LAN/localhost server restore down with it.
   //
   // Errors are caught here (rather than letting the idle task crash) so a
   // corrupted credential at rest cannot block other extended bootstrap
@@ -239,6 +273,17 @@ export function initializeExtendedServices(): void {
         '[Bootstrap] Remote access auto-restore failed:',
         (err as Error).message,
       )
+      return
+    }
+    if (!cfg.remoteAccess.tunnelEnabled) return
+    try {
+      const url = await enableTunnel()
+      console.log('[Bootstrap] Tunnel auto-restored:', url)
+    } catch (err) {
+      console.warn(
+        '[Bootstrap] Tunnel auto-restore failed:',
+        (err as Error).message,
+      )
     }
   })
 
@@ -249,9 +294,10 @@ export function initializeExtendedServices(): void {
   // Browser Policy: user-extensible allowlist (Settings + blocked-page action)
   registerBrowserPolicyHandlers()
 
-  // AI Browser: No startup registration needed.
-  // Initialization is self-contained in createAIBrowserMcpServer() (called on
-  // demand by send-message, app-chat, and execute). See ai-browser/DESIGN.md.
+  // AI Browser: tool initialization is self-contained in createAIBrowserMcpServer()
+  // (called on demand). Only the view-lifecycle event forwarding is wired here so
+  // the renderer can reveal the AI's live view. See ai-browser/DESIGN.md.
+  registerAIBrowserHandlers()
 
   // Overlay: Floating UI elements (chat capsule, etc.)
   // Already implements lazy initialization internally
@@ -276,7 +322,11 @@ export function initializeExtendedServices(): void {
   // Provides infrastructure for automation Apps to keep the process alive
   // and access a shared hidden BrowserWindow with stealth injection
   const backgroundService = initBackground()
-  backgroundService.initTray()
+  // Tray requires a desktop session; skip it in headless server mode where
+  // creating a Tray would throw (no display / no status-icon host).
+  if (!isServerMode()) {
+    backgroundService.initTray()
+  }
 
   // Wire browser-domain stealth injection into the platform daemon browser
   // without the platform tier importing services (keeps platform → services
@@ -312,6 +362,9 @@ export function initializeExtendedServices(): void {
 
   // WeChat iLink Bot: QR code login + token management IPC handlers
   registerWeixinIlinkHandlers()
+
+  // Tlon: knowledge base management IPC handlers
+  registerTlonHandlers()
 
   // Windows-specific: Initialize Git Bash in background
   if (process.platform === 'win32') {
@@ -397,8 +450,13 @@ export async function cleanupExtendedServices(): Promise<void> {
   shutdownBackground()
 
   // AI Browser: Cleanup global singleton context (scoped contexts are cleaned
-  // up by their owners: app-chat.ts / execute.ts)
+  // up by their owners: app-chat.ts / execute.ts) and unsubscribe event forwarding
+  cleanupAIBrowserHandlers()
   cleanupAIBrowser()
+
+  // AI Terminal: Unsubscribe event forwarding, then kill all pty sessions
+  cleanupTerminalHandlers()
+  cleanupAITerminal()
 
   // Web Search: Dispose search context (cleanup any in-flight BrowserViews)
   await disposeSearchContext().catch(err => console.error('[Bootstrap] WebSearch shutdown error:', err))
@@ -411,6 +469,12 @@ export async function cleanupExtendedServices(): Promise<void> {
 
   // Artifact Cache: Close file watchers and clear caches
   await cleanupAllCaches()
+
+  // Tlon: Unsubscribe all KB watchers and clear timers
+  await shutdownTlon().catch(err => console.error('[Bootstrap] Tlon shutdown error:', err))
+
+  // OCR: Terminate the shared tesseract worker (used by tlon, chat toolset, automation)
+  await shutdownOcr().catch(err => console.error('[Bootstrap] OCR shutdown error:', err))
 
   console.log('[Bootstrap] Extended services cleaned up')
 }

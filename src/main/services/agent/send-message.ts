@@ -18,17 +18,19 @@
 
 import { getConfig } from '../../foundation/config.service'
 import { addMessage } from '../conversation.service'
-import { createAIBrowserMcpServer } from '../ai-browser'
-import { createWebSearchMcpServer } from '../web-search'
-import { createHaloAppsMcpServer } from '../app-bridge'
+import { buildCreationTimeServers } from './toolsets/broker'
+import { buildToolsetSection } from './toolsets/capability-index'
+// The toolset broker (above) supplies AI Browser / web-search / apps as
+// on-demand toolsets; only the knowledge-base helpers are still called directly.
+import { getKBChatContext } from '../tlon'
+import { resolveConversationKnowledgeBases, resolveConversationKnowledgeBaseIds } from './knowledge-context'
 import type {
   AgentRequest,
-  SessionConfig,
 } from './types'
 import {
   getHeadlessElectronPath,
   getWorkingDir,
-  getApiCredentials,
+  getApiCredentialsForConversation,
   getDbMcpServers
 } from './helpers'
 import { emitAgentEvent } from './events'
@@ -36,6 +38,7 @@ import {
   getOrCreateV2Session,
   closeV2Session,
   updateConsumerDisplayModel,
+  markTurnDispatched,
 } from './session-manager'
 import {
   formatCanvasContext,
@@ -67,15 +70,25 @@ export async function sendMessage(
     message,
     resumeSessionId,
     images,
-    aiBrowserEnabled,
     thinkingEnabled,
     canvasContext
   } = request
 
-  console.log(`[Agent] sendMessage: conv=${conversationId}${images && images.length > 0 ? `, images=${images.length}` : ''}${aiBrowserEnabled ? ', AI Browser enabled' : ''}${thinkingEnabled ? ', thinking=ON' : ''}${canvasContext?.isOpen ? `, canvas tabs=${canvasContext.tabCount}` : ''}`)
+  console.log(`[Agent] sendMessage: conv=${conversationId}${images && images.length > 0 ? `, images=${images.length}` : ''}${thinkingEnabled ? ', thinking=ON' : ''}${canvasContext?.isOpen ? `, canvas tabs=${canvasContext.tabCount}` : ''}`)
 
   const config = getConfig()
-  const workDir = getWorkingDir(spaceId)
+  // "Chat with this KB" turns (knowledgeBaseId set) target one KB directly: the
+  // working dir becomes that KB's text/ dir so Read/Glob/Grep search its
+  // extracted documents. Resolved up front so the working dir is correct for
+  // MCP setup below too.
+  const kbChatCtx = request.knowledgeBaseId ? getKBChatContext(request.knowledgeBaseId) : null
+  if (request.knowledgeBaseId && !kbChatCtx) {
+    console.warn(`[Agent] knowledgeBaseId ${request.knowledgeBaseId} has no chat context; falling back to space context`)
+  }
+  let workDir = kbChatCtx ? kbChatCtx.workDir : getWorkingDir(spaceId)
+  if (request.knowledgeBaseId) {
+    console.log(`[Agent] KB chat turn: knowledgeBaseId=${request.knowledgeBaseId} ctx=${kbChatCtx ? 'resolved' : 'NULL'} workDir=${workDir}`)
+  }
   const digitalHumansEnabled = config.agent?.enableDigitalHumans !== false
 
   // Accumulate stderr for detailed error messages
@@ -93,32 +106,47 @@ export async function sendMessage(
   })
 
   try {
-    // Get API credentials and resolve for SDK use
-    const credentials = await getApiCredentials(config)
+    // Load the conversation first: it carries both the resume sessionId and the
+    // per-conversation model pin used to resolve credentials.
+    const { getConversation } = await import('../conversation.service')
+    const conversation = getConversation(spaceId, conversationId)
+    const sessionId = resumeSessionId || conversation?.sessionId
+
+    // Get API credentials (per-conversation pin, falling back to global) and resolve for SDK use
+    const credentials = await getApiCredentialsForConversation(config, conversation)
     console.log(`[Agent] sendMessage using: ${credentials.provider}, model: ${credentials.model}, prompt: ${config.agent?.promptProfile ?? 'halo'}`)
     console.log(`[Agent] turn_start conv=${conversationId} model=${credentials.model} ts=${Date.now()}`)
 
     const resolvedCredentials = await resolveCredentialsForSdk(credentials)
-
-    // Get conversation for session resumption
-    const { getConversation } = await import('../conversation.service')
-    const conversation = getConversation(spaceId, conversationId)
-    const sessionId = resumeSessionId || conversation?.sessionId
     const electronPath = getHeadlessElectronPath()
 
-    // Get MCP servers from installed apps database (global + space-scoped, with override)
-    const dbMcpServers = getDbMcpServers(spaceId)
+    // Creation-time MCP servers: external process-based servers (user-installed
+    // apps) plus the complete in-process set (always-on web-search / halo-apps,
+    // broker meta tools, and currently-enabled toolsets). Assembled lazily by
+    // getOrCreateV2Session only when a session is actually created — in-process
+    // instances bind to one session, so instantiating them before the
+    // reuse/rebuild decision would hand a rebuilt session dead instances.
+    const buildMcpServers = (): Record<string, unknown> | null => {
+      const dbMcpServers = getDbMcpServers(spaceId)
+      const record: Record<string, unknown> = dbMcpServers ? { ...dbMcpServers } : {}
+      Object.assign(record, buildCreationTimeServers({ spaceId, conversationId, workDir }))
+      return Object.keys(record).length > 0 ? record : null
+    }
 
-    // Build MCP servers config (DB apps + built-in MCPs)
-    const mcpServers: Record<string, any> = dbMcpServers ? { ...dbMcpServers } : {}
-    if (aiBrowserEnabled) {
-      mcpServers['ai-browser'] = createAIBrowserMcpServer(undefined, workDir)
-    }
-    if (digitalHumansEnabled) {
-      const haloApps = createHaloAppsMcpServer(spaceId)
-      if (haloApps) mcpServers['halo-apps'] = haloApps
-    }
-    mcpServers['web-search'] = createWebSearchMcpServer()
+    // Knowledge context for the session. A KB-chat turn targets just its KB; a
+    // normal turn uses the conversation's own knowledge set — snapshotted at
+    // creation from the space's bindings plus the default KB
+    // (conversation.service), then user-editable per conversation. Must match
+    // ensureSessionWarm exactly so a warmed session isn't reused without the
+    // Knowledge section on the first turn. Ids are resolved cheaply for the
+    // per-message fingerprint; the index.md reads happen only if a session is
+    // actually created (resolveKnowledgeBases, invoked by getOrCreateV2Session).
+    const resolvedKbIds = kbChatCtx
+      ? [kbChatCtx.reference.id]
+      : resolveConversationKnowledgeBaseIds(conversation)
+    const resolveKnowledgeBases = () => kbChatCtx
+      ? [kbChatCtx.reference]
+      : resolveConversationKnowledgeBases(conversation)
 
     // Build base SDK options
     const sdkOptions = buildBaseSdkOptions({
@@ -131,15 +159,14 @@ export async function sendMessage(
         console.error(`[Agent][${conversationId}] CLI stderr:`, data)
         stderrBuffer += data
       },
-      mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : null,
       maxTurns: config.agent?.maxTurns,
       promptProfile: config.agent?.promptProfile,
       configDirMode: config.agent?.configDirMode,
       customConfigDir: config.agent?.customConfigDir,
       enableTeams: config.agent?.enableTeams,
       disabledTools: config.agent?.disabledTools,
-      aiBrowserEnabled: !!aiBrowserEnabled,
       digitalHumansEnabled,
+      toolsetIndex: buildToolsetSection(spaceId, conversationId),
     })
 
     // Apply dynamic configurations (Thinking mode)
@@ -150,16 +177,14 @@ export async function sendMessage(
     const t0 = Date.now()
     console.log(`[Agent][${conversationId}] Getting or creating V2 session...`)
 
-    // Session config for rebuild detection
-    const sessionConfig: SessionConfig = {
-      aiBrowserEnabled: !!aiBrowserEnabled
-    }
-
     // Get or create persistent V2 session (also starts persistent consumer if new)
     const v2Session = await getOrCreateV2Session(
-      spaceId, conversationId, sdkOptions, sessionId, sessionConfig, workDir,
+      spaceId, conversationId, sdkOptions, sessionId, workDir,
       resolvedCredentials.displayModel,  // Passed to consumer for thought parsing
-      resolvedCredentials.capabilities?.contextWindow
+      resolvedCredentials.capabilities?.contextWindow,
+      resolvedKbIds,
+      buildMcpServers,
+      resolveKnowledgeBases
     )
 
     sessionObtained = true
@@ -171,11 +196,11 @@ export async function sendMessage(
       conversationId, resolvedCredentials.displayModel, resolvedCredentials.capabilities?.contextWindow
     )
 
-    // Dynamic runtime parameter adjustment
+    // Dynamic runtime parameter adjustment. Model is intentionally NOT set
+    // here: model changes rebuild the session via credentialsFingerprint, and
+    // the CLI's set_model handler injects "/model" replay messages into the
+    // transcript on every call, polluting context and surfacing in the chat UI.
     try {
-      if (v2Session.setModel) {
-        await v2Session.setModel(resolvedCredentials.sdkModel)
-      }
       if (v2Session.setMaxThinkingTokens) {
         await v2Session.setMaxThinkingTokens(thinkingEnabled ? 10240 : null)
       }
@@ -189,7 +214,10 @@ export async function sendMessage(
     const messageWithContext = canvasPrefix + message
     const messageContent = buildMessageContent(messageWithContext, images)
 
-    // Send to CC's REPL — consumer handles the response
+    // Send to CC's REPL — consumer handles the response. Mark the dispatch
+    // BEFORE send: from here until system:init the consumer looks idle, and an
+    // unguarded rebuild in that window would destroy this message.
+    markTurnDispatched(conversationId)
     if (typeof messageContent === 'string') {
       v2Session.send(messageContent)
     } else {
@@ -225,7 +253,7 @@ export async function sendMessage(
                           errorMessage.includes('ENOENT')
 
       if (isExitCode1 || isBashError) {
-        const { detectGitBash } = require('../git-bash.service')
+        const { detectGitBash } = require('../git-bash')
         const gitBashStatus = detectGitBash()
         errorMessage = !gitBashStatus.found
           ? 'Command execution environment not installed. Please restart the app and complete setup, or install manually in settings.'

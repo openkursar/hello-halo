@@ -35,6 +35,7 @@ export const appRpc = {
   appExportSpec: rawRpcMethod('app:export-spec'),
   appImportSpec: rawRpcMethod('app:import-spec'),
   appOpenSkillFolder: rawRpcMethod('app:open-skill-folder'),
+  appListAvailableSkills: rawRpcMethod('app:list-available-skills'),
   appGetDataPath: rawRpcMethod('app:get-data-path'),
   appOpenDataFolder: rawRpcMethod('app:open-data-folder'),
   appClearMemory: rawRpcMethod('app:clear-memory'),
@@ -50,4 +51,12 @@ export const appRpc = {
   appChatRestart: rawRpcMethod('app:chat-restart'),
   appImChatMessages: rawRpcMethod('app:im-chat-messages'),
   appImChatClear: rawRpcMethod('app:im-chat-clear'),
+  appImChatStop: rawRpcMethod('app:im-chat-stop'),
+
+  // Native multi-session lifecycle (create / fork / delete). Listing and
+  // renaming reuse the generic im-sessions RPC (imSessionsList /
+  // imSessionsSetCustomName), which already covers 'local'-source sessions.
+  appSessionCreate: rawRpcMethod('app:session-create'),
+  appSessionFork: rawRpcMethod('app:session-fork'),
+  appSessionDelete: rawRpcMethod('app:session-delete'),
 }

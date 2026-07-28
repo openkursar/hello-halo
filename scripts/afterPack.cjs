@@ -47,6 +47,25 @@ const NODE_PTY_PREBUILD_TARGETS = {
   'win32-x64':    'win32-x64',
 };
 
+// Packages that vendor per-platform binaries under vendor/<tool>/{arch}-{platform}/.
+// Their runtime resolves paths via `${process.arch}-${process.platform}`, so only
+// the target directory is needed; the other 5 platform directories are dead weight.
+const ANTHROPIC_VENDOR_PACKAGES = [
+  '@anthropic-ai/claude-agent-sdk',
+  '@anthropic-ai/claude-code',
+];
+
+// Maps platform-arch to the cloudflared binary variant stored by
+// prepare-binaries.mjs in node_modules/cloudflared/bin/. At runtime the
+// cloudflared lib only reads bin/cloudflared (bin/cloudflared.exe on Windows),
+// so afterPack installs the target variant under that name and removes the rest.
+const CLOUDFLARED_VARIANTS = {
+  'darwin-arm64': 'cloudflared',
+  'darwin-x64':   'cloudflared-darwin-x64',
+  'win32-x64':    'cloudflared.exe',
+  'linux-x64':    'cloudflared-linux-x64',
+};
+
 // Maps platform-arch to the @openai/codex native package required at runtime.
 const CODEX_TARGETS = {
   'darwin-arm64': { packageName: 'codex-darwin-arm64', targetTriple: 'aarch64-apple-darwin', binaryName: 'codex' },
@@ -272,6 +291,143 @@ function cleanAndValidateCodexNativePackage(context) {
 }
 
 /**
+ * Identify an executable's target platform-arch from its file header.
+ * Returns a `${platform}-${arch}` key (win32/linux assume x64, matching the
+ * only shipped targets) or null if unrecognized.
+ */
+function detectExecutableTarget(filePath) {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const header = Buffer.alloc(8);
+    if (fs.readSync(fd, header, 0, 8, 0) < 8) return null;
+
+    // ELF: 0x7F 'E' 'L' 'F'
+    if (header[0] === 0x7F && header[1] === 0x45 && header[2] === 0x4C && header[3] === 0x46) {
+      return 'linux-x64';
+    }
+    // PE: 'M' 'Z'
+    if (header[0] === 0x4D && header[1] === 0x5A) {
+      return 'win32-x64';
+    }
+    // Mach-O 64-bit LE: CF FA ED FE, cputype at offset 4
+    if (header[0] === 0xCF && header[1] === 0xFA && header[2] === 0xED && header[3] === 0xFE) {
+      const cpuType = header.readUInt32LE(4);
+      if (cpuType === 0x0100000C) return 'darwin-arm64';
+      if (cpuType === 0x01000007) return 'darwin-x64';
+    }
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Keep only the target {arch}-{platform} directory in the vendored binary
+ * trees of @anthropic-ai/claude-agent-sdk and @anthropic-ai/claude-code
+ * (vendor/ripgrep, vendor/audio-capture). Non-directory files (e.g. COPYING)
+ * are preserved.
+ */
+function cleanAnthropicVendorBinaries(context) {
+  const platform = context.electronPlatformName;
+  const archStr = ARCH_NAMES[context.arch] || String(context.arch);
+  const targetDir = `${archStr}-${platform}`;
+
+  const unpackedDir = getUnpackedDir(context);
+
+  for (const pkg of ANTHROPIC_VENDOR_PACKAGES) {
+    const vendorDir = path.join(unpackedDir, 'node_modules', pkg, 'vendor');
+    if (!fs.existsSync(vendorDir)) {
+      console.warn(`[afterPack] No vendor dir for ${pkg} in unpacked output, skipping cleanup`);
+      continue;
+    }
+
+    const removed = [];
+    let targetFound = false;
+
+    for (const tool of fs.readdirSync(vendorDir, { withFileTypes: true })) {
+      if (!tool.isDirectory()) continue;
+      const toolDir = path.join(vendorDir, tool.name);
+
+      for (const entry of fs.readdirSync(toolDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name === targetDir) {
+          targetFound = true;
+          continue;
+        }
+        fs.rmSync(path.join(toolDir, entry.name), { recursive: true });
+        removed.push(`${tool.name}/${entry.name}`);
+      }
+    }
+
+    if (!targetFound) {
+      console.warn(`[afterPack] ${pkg}: no ${targetDir} vendor binaries found in unpacked output`);
+    }
+    console.log(`[afterPack] ${pkg}: removed ${removed.length} non-target vendor dir(s), keeping */${targetDir}`);
+  }
+}
+
+/**
+ * Install the target-platform cloudflared binary under its runtime name and
+ * remove all other variants.
+ *
+ * prepare-binaries.mjs stores per-platform variants in the project's
+ * node_modules/cloudflared/bin/ (see CLOUDFLARED_VARIANTS). The copy goes from
+ * the project node_modules (source of truth) into the unpacked output, so the
+ * result is deterministic regardless of which variants electron-builder packed.
+ */
+function installCloudflaredBinary(context) {
+  const platform = context.electronPlatformName;
+  const archStr = ARCH_NAMES[context.arch] || String(context.arch);
+  const key = `${platform}-${archStr}`;
+  const variant = CLOUDFLARED_VARIANTS[key];
+
+  if (!variant) {
+    console.warn(`[afterPack] No cloudflared variant mapping for ${key}, skipping`);
+    return;
+  }
+
+  const projectRoot = path.resolve(__dirname, '..');
+  const srcBinary = path.join(projectRoot, 'node_modules/cloudflared/bin', variant);
+
+  if (!fs.existsSync(srcBinary) || fs.statSync(srcBinary).size < 10 * 1024 * 1024) {
+    console.error(`[afterPack] ${key}: missing or invalid cloudflared binary: ${srcBinary}`);
+    console.error(`[afterPack] Run "npm run prepare:all" to download cloudflared for all platforms`);
+    throw new Error(`Missing cloudflared binary for ${key}`);
+  }
+
+  // Arch/format check via magic bytes. Local bin/ files can be polluted by
+  // manual swaps (e.g. an x64 binary left under the arm64 name), which would
+  // otherwise ship silently and break tunnels on the target machine.
+  const detected = detectExecutableTarget(srcBinary);
+  if (detected !== key) {
+    console.error(`[afterPack] ${key}: cloudflared binary is ${detected || 'unrecognized'}: ${srcBinary}`);
+    console.error(`[afterPack] Delete it and run "npm run prepare:all" to re-download`);
+    throw new Error(`cloudflared binary mismatch for ${key} (got ${detected || 'unknown'})`);
+  }
+
+  const runtimeName = platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
+  const destDir = path.join(getUnpackedDir(context), 'node_modules', 'cloudflared', 'bin');
+  fs.mkdirSync(destDir, { recursive: true });
+
+  fs.copyFileSync(srcBinary, path.join(destDir, runtimeName));
+  if (platform !== 'win32') {
+    fs.chmodSync(path.join(destDir, runtimeName), 0o755);
+  }
+
+  const removed = [];
+  for (const entry of fs.readdirSync(destDir)) {
+    if (entry === runtimeName) continue;
+    if (!entry.startsWith('cloudflared')) continue;
+    fs.rmSync(path.join(destDir, entry), { recursive: true });
+    removed.push(entry);
+  }
+
+  const sizeMB = (fs.statSync(path.join(destDir, runtimeName)).size / 1024 / 1024).toFixed(1);
+  console.log(`[afterPack] ${key}: installed cloudflared as bin/${runtimeName} (${sizeMB} MB)` +
+    (removed.length > 0 ? `, removed ${removed.length} variant(s): ${removed.join(', ')}` : ''));
+}
+
+/**
  * Ensure all native binaries in the unpacked output have executable permission.
  *
  * npm packages occasionally ship tarballs with missing +x on vendored binaries
@@ -390,20 +546,35 @@ module.exports = async function(context) {
   // Ensure the packaged app contains the Codex native binary for this arch.
   cleanAndValidateCodexNativePackage(context);
 
+  // Keep only target-platform binaries in @anthropic-ai vendored trees.
+  cleanAnthropicVendorBinaries(context);
+
+  // Install the target cloudflared binary under its runtime name.
+  installCloudflaredBinary(context);
+
   // Ensure all native binaries in unpacked output have +x permission.
   // Defends against upstream npm packages shipping broken permissions
   // (e.g. @anthropic-ai/claude-code v2.1.89 ripgrep EACCES bug).
   ensureNativeBinaryPermissions(context);
 
-  // macOS ad-hoc signing (other platforms skip)
+  // macOS signing (other platforms skip)
   if (context.electronPlatformName !== 'darwin') {
+    return;
+  }
+
+  // Developer ID mode: electron-builder performs real Developer ID signing and
+  // notarization in its own later step. Ad-hoc signing here would overwrite that
+  // with an unnotarizable signature, so skip it entirely.
+  if (process.env.HALO_MAC_SIGN_MODE === 'developer-id') {
+    console.log('[afterPack] \u2705 Developer ID signing mode \u2014 skipping ad-hoc; electron-builder will sign & notarize');
     return;
   }
 
   const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
   const entitlementsPath = path.join(__dirname, '..', 'resources', 'entitlements.mac.plist');
 
-  console.log(`[afterPack] Professional ad-hoc signing: ${appPath}`);
+  console.warn('[afterPack] \u26a0\ufe0f AD-HOC signing (NOT notarized \u2014 will be blocked by macOS 26.5+ Gatekeeper/XProtect)');
+  console.log(`[afterPack] Ad-hoc signing: ${appPath}`);
 
   try {
     // 1. Remove quarantine attribute (if exists)

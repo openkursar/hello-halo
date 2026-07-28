@@ -2,11 +2,12 @@
  * Config IPC Handlers (v2)
  */
 
-import { getConfig, saveConfig } from '../foundation/config.service'
+import { getConfig, saveConfig, getCredentialDecodeFailures } from '../foundation/config.service'
 import { getAISourceManager } from '../services/ai-sources'
 import { decryptString } from '../foundation/secure-storage.service'
 import { maskConfigFields, unmaskSentinels } from '../foundation/config-encryption'
-import { validateApiConnection, fetchModelsFromApi } from '../services/api-validator.service'
+import { validateApiConnection } from '../services/api-validator.service'
+import { fetchModels as controllerFetchModels } from '../controllers/config.controller'
 import { runConfigProbe, emitConfigChange } from '../services/health'
 import type { AISourcesConfig, AISource } from '../../shared/types'
 import { configRpc } from '../../shared/rpc/contracts/config.contract'
@@ -43,6 +44,16 @@ export function registerConfigHandlers(): void {
         const err = error as Error
         console.error('[Settings] config:get - Failed:', err.message)
         return { success: false, error: err.message }
+      }
+    },
+
+    // Credential fields that could not be decoded at rest (for the alert
+    // banner). Never returns ciphertext — only path + human label.
+    getCredentialFailures: async () => {
+      try {
+        return { success: true, data: getCredentialDecodeFailures() }
+      } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
       }
     },
 
@@ -130,15 +141,14 @@ export function registerConfigHandlers(): void {
     // Fetch available models from API endpoint
     fetchModels: async (apiKey: string, apiUrl: string) => {
       console.log('[Settings] config:fetch-models - Fetching from:', apiUrl ? `${apiUrl.slice(0, 30)}...` : '(no url)')
-      try {
-        const result = await fetchModelsFromApi({ apiKey, apiUrl })
-        console.log('[Settings] config:fetch-models - Found', result.models.length, 'models')
-        return { success: true, data: result }
-      } catch (error: unknown) {
-        const err = error as Error
-        console.error('[Settings] config:fetch-models - Failed:', err.message)
-        return { success: false, error: err.message }
+      const response = await controllerFetchModels(apiKey, apiUrl)
+      if (response.success) {
+        const data = response.data as { models: unknown[] }
+        console.log('[Settings] config:fetch-models - Found', data.models.length, 'models')
+      } else {
+        console.error('[Settings] config:fetch-models - Failed:', response.code || 'MODEL_FETCH_FAILED')
       }
+      return response
     },
 
     // Refresh AI sources configuration (auto-detects logged-in sources)

@@ -1,0 +1,40 @@
+{
+  "$schema": "./product.schema.json",
+  "name": "Halo",
+  "dataFolderName": "halo",
+  "version": "1.0.0",
+  "updateConfig": {
+    "provider": "github",
+    "owner": "openkursar",
+    "repo": "hello-halo"
+  },
+  "authProviders": [
+    {
+      "type": "custom",
+      "displayName": {
+        "en": "Custom API",
+        "zh-CN": "自定义 API"
+      },
+      "description": {
+        "en": "Claude / OpenAI compatible — the only auth that works headless",
+        "zh-CN": "兼容 Claude / OpenAI — 服务端唯一可用的接入方式"
+      },
+      "icon": "key",
+      "iconBgColor": "#da7756",
+      "recommended": true,
+      "builtin": true,
+      "enabled": true
+    }
+  ],
+  "registryOverrides": {
+    "official": {
+      "publish": {
+        "target": "github-pr",
+        "github": {
+          "owner": "openkursar",
+          "repo": "digital-human-protocol"
+        }
+      }
+    }
+  }
+}

@@ -76,9 +76,11 @@ export function Popover({ open: controlled, onOpenChange, children }: PopoverPro
 interface PopoverTriggerProps {
   children: ReactNode
   className?: string
+  /** Tooltip text; also used as the accessible name for icon-only triggers */
+  title?: string
 }
 
-export function PopoverTrigger({ children, className }: PopoverTriggerProps) {
+export function PopoverTrigger({ children, className, title }: PopoverTriggerProps) {
   const { setOpen, open, triggerRef } = usePopoverCtx()
 
   return (
@@ -86,6 +88,8 @@ export function PopoverTrigger({ children, className }: PopoverTriggerProps) {
       ref={triggerRef}
       role="button"
       tabIndex={0}
+      title={title}
+      aria-label={title}
       onClick={() => setOpen(!open)}
       onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {

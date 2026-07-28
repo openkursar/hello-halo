@@ -11,21 +11,29 @@ import {
   broadcastToAll,
   clearAppChat,
   clearImSession,
+  stopImSession,
   getAppChatConversationId,
   getAppChatSessionState,
   getAppManager,
   getAppRuntime,
   getSpace,
   isAppChatGenerating,
+  isAppChatConversationGenerating,
   isMcpAppSpec,
+  listAvailableSkills,
   loadAppChatMessages,
   loadImChatMessages,
+  loadChatMessagesForConversation,
+  createNativeChatSession,
+  forkNativeChatSession,
+  deleteNativeChatSession,
   patchTouchesMcp,
   readSessionMessages,
   rejectIfRemoteMcpForbidden,
   restartAppChat,
   sendAppChatMessage,
   stopAppChat,
+  stopAppChatConversation,
   writeMcpCommandBlockedResponse,
   yamlIsMcpSpec,
 } from './_shared'
@@ -38,6 +46,7 @@ import type {
   InstalledApp,
   UninstallOptions,
 } from './_shared'
+import { resolveHttpConversationId } from '../../../shared/apps/im-keys'
 
 export function registerAppsRoutes(app: Express): void {
   // ===== Apps Routes =====
@@ -137,6 +146,27 @@ export function registerAppsRoutes(app: Express): void {
       if (!manager) return
       const appData = manager.getApp(appId)
       res.json({ success: true, data: appData })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/available-skills — skills loadable by this digital human
+  app.get('/api/apps/:appId/available-skills', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      const appData = manager.getApp(appId)
+      if (!appData || !appData.spaceId) {
+        res.json({ success: false, error: 'App not found or has no space' })
+        return
+      }
+      res.json({ success: true, data: listAvailableSkills(appData.spaceId) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -769,15 +799,25 @@ export function registerAppsRoutes(app: Express): void {
       }
       const runtime = getRuntimeOrFail(res)
       if (!runtime) return
-      const request: AppChatRequest = { ...req.body, appId }
+      // Trust boundary for the caller-supplied conversationId: rejects malformed
+      // ids, forbids addressing IM sessions over HTTP, and constrains chatId to a
+      // filename-safe charset (it flows into the JSONL filename).
+      const resolved = resolveHttpConversationId(appId, req.body?.conversationId)
+      if (!resolved.ok) {
+        res.status(400).json({ success: false, error: resolved.error })
+        return
+      }
+      const conversationId = resolved.conversationId
+      const request: AppChatRequest = { ...req.body, appId, conversationId }
       sendAppChatMessage(request).catch((error: unknown) => {
         const err = error as Error
         console.error(`[HTTP] POST /api/apps/:appId/chat/send background error:`, err.message)
       })
-      console.log('[HTTP] POST /api/apps/%s/chat/send', appId)
+      // Return the resolved conversationId so the caller can read back / poll it.
+      console.log('[HTTP] POST /api/apps/%s/chat/send (conversationId=%s)', appId, conversationId)
       res.json({
         success: true,
-        data: { conversationId: getAppChatConversationId(appId) }
+        data: { conversationId }
       })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -792,8 +832,22 @@ export function registerAppsRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing appId' })
         return
       }
-      await stopAppChat(appId)
-      console.log('[HTTP] POST /api/apps/%s/chat/stop', appId)
+      // Same trust boundary as send: a supplied conversationId is validated
+      // (rejects IM keys / bad chatIds) before it can stop a session; absent,
+      // stop every session of this app.
+      const rawConvId = (req.body ?? {}).conversationId
+      if (typeof rawConvId === 'string' && rawConvId) {
+        const resolved = resolveHttpConversationId(appId, rawConvId)
+        if (!resolved.ok) {
+          res.status(400).json({ success: false, error: resolved.error })
+          return
+        }
+        await stopAppChatConversation(resolved.conversationId)
+        console.log('[HTTP] POST /api/apps/%s/chat/stop (conversationId=%s)', appId, resolved.conversationId)
+      } else {
+        await stopAppChat(appId)
+        console.log('[HTTP] POST /api/apps/%s/chat/stop (conversationId=%s)', appId, '(all)')
+      }
       res.json({ success: true })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -806,6 +860,25 @@ export function registerAppsRoutes(app: Express): void {
       const { appId } = req.params
       if (!appId) {
         res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      // Optional conversationId narrows the check to one session; validated
+      // through the same trust boundary as send (rejects IM keys / bad chatIds).
+      // Without it, report whether ANY of the app's sessions is generating.
+      const rawConvId = typeof req.query.conversationId === 'string' ? req.query.conversationId : ''
+      if (rawConvId) {
+        const resolved = resolveHttpConversationId(appId, rawConvId)
+        if (!resolved.ok) {
+          res.status(400).json({ success: false, error: resolved.error })
+          return
+        }
+        res.json({
+          success: true,
+          data: {
+            isGenerating: isAppChatConversationGenerating(resolved.conversationId),
+            conversationId: resolved.conversationId,
+          }
+        })
         return
       }
       res.json({
@@ -840,6 +913,19 @@ export function registerAppsRoutes(app: Express): void {
         res.json({ success: true, data: [] })
         return
       }
+      // Optional conversationId loads a specific native/local session; validated
+      // through the same trust boundary as send (rejects IM keys / bad chatIds).
+      const rawConvId = req.query.conversationId
+      if (typeof rawConvId === 'string' && rawConvId) {
+        const resolved = resolveHttpConversationId(appId, rawConvId)
+        if (!resolved.ok) {
+          res.status(400).json({ success: false, error: resolved.error })
+          return
+        }
+        const messages = loadChatMessagesForConversation(space.path, appId, resolved.conversationId)
+        res.json({ success: true, data: messages })
+        return
+      }
       const messages = loadAppChatMessages(space.path, appId)
       res.json({ success: true, data: messages })
     } catch (error) {
@@ -855,7 +941,19 @@ export function registerAppsRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing appId' })
         return
       }
-      const state = getAppChatSessionState(appId)
+      // Optional conversationId is validated through the same trust boundary as
+      // send (rejects IM keys / bad chatIds) before reading session state.
+      let conversationId: string | undefined
+      const rawConvId = typeof req.query.conversationId === 'string' ? req.query.conversationId : ''
+      if (rawConvId) {
+        const resolved = resolveHttpConversationId(appId, rawConvId)
+        if (!resolved.ok) {
+          res.status(400).json({ success: false, error: resolved.error })
+          return
+        }
+        conversationId = resolved.conversationId
+      }
+      const state = getAppChatSessionState(appId, conversationId)
       res.json({ success: true, data: state })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -905,13 +1003,24 @@ export function registerAppsRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing appId' })
         return
       }
-      const { spaceId } = req.body as { spaceId?: string }
+      const { spaceId, conversationId } = req.body as { spaceId?: string; conversationId?: string }
       if (!spaceId) {
         res.status(400).json({ success: false, error: 'Missing spaceId in body' })
         return
       }
-      await clearAppChat(appId, spaceId)
-      console.log('[HTTP] POST /api/apps/%s/chat/clear', appId)
+      // Optional conversationId clears a specific native/local session, validated
+      // through the same trust boundary as send.
+      let resolvedConvId: string | undefined
+      if (typeof conversationId === 'string' && conversationId) {
+        const resolved = resolveHttpConversationId(appId, conversationId)
+        if (!resolved.ok) {
+          res.status(400).json({ success: false, error: resolved.error })
+          return
+        }
+        resolvedConvId = resolved.conversationId
+      }
+      await clearAppChat(appId, spaceId, resolvedConvId)
+      console.log('[HTTP] POST /api/apps/%s/chat/clear (conversationId=%s)', appId, resolvedConvId ?? '(default)')
       res.json({ success: true })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
@@ -928,7 +1037,8 @@ export function registerAppsRoutes(app: Express): void {
         res.status(400).json({ success: false, error: 'Missing appId' })
         return
       }
-      const result = await restartAppChat(appId)
+      // Manual restart: the user clicked "Restart agent", so interrupt in-flight turns.
+      const result = await restartAppChat(appId, { interruptActive: true })
       console.log('[HTTP] POST /api/apps/%s/chat/restart: closed=%d', appId, result.sessionsClosed)
       res.json({ success: true, data: result })
     } catch (error) {
@@ -954,6 +1064,92 @@ export function registerAppsRoutes(app: Express): void {
       const resolvedChatType = chatType === 'group' ? 'group' as const : 'direct' as const
       await clearImSession(appId, spaceId, channel, resolvedChatType, chatId)
       console.log('[HTTP] POST /api/apps/%s/im-chat/clear channel=%s chatId=%s', appId, channel, chatId)
+      res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/im-chat/stop — stop an IM session's active generation
+  // Aborts the current turn only; V2 session and history are preserved so the
+  // next inbound message resumes context. Contrast with im-chat/clear.
+  app.post('/api/apps/:appId/im-chat/stop', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const { channel, chatType, chatId } = req.body as {
+        channel?: string; chatType?: string; chatId?: string
+      }
+      if (!channel || !chatType || !chatId) {
+        res.status(400).json({ success: false, error: 'Missing required body params: channel, chatType, chatId' })
+        return
+      }
+      const resolvedChatType = chatType === 'group' ? 'group' as const : 'direct' as const
+      const result = await stopImSession(appId, channel, resolvedChatType, chatId)
+      console.log('[HTTP] POST /api/apps/%s/im-chat/stop channel=%s chatId=%s stopped=%s', appId, channel, chatId, result.stopped)
+      res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // ── Native Multi-Session Lifecycle Routes ───────────────────────────────
+
+  // POST /api/apps/:appId/sessions/create — create a fresh native client session
+  app.post('/api/apps/:appId/sessions/create', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const result = createNativeChatSession(appId)
+      console.log('[HTTP] POST /api/apps/%s/sessions/create → %s', appId, result.conversationId)
+      res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/sessions/fork — fork a session into a new client session
+  app.post('/api/apps/:appId/sessions/fork', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const { spaceId, sourceConversationId } = req.body as { spaceId?: string; sourceConversationId?: string }
+      if (!spaceId || !sourceConversationId) {
+        res.status(400).json({ success: false, error: 'Missing required body params: spaceId, sourceConversationId' })
+        return
+      }
+      const result = forkNativeChatSession(appId, spaceId, sourceConversationId)
+      console.log('[HTTP] POST /api/apps/%s/sessions/fork from=%s → %s', appId, sourceConversationId, result.conversationId)
+      res.json({ success: true, data: result })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/apps/:appId/sessions/delete — delete a native local session
+  app.post('/api/apps/:appId/sessions/delete', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const { spaceId, conversationId } = req.body as { spaceId?: string; conversationId?: string }
+      if (!spaceId || !conversationId) {
+        res.status(400).json({ success: false, error: 'Missing required body params: spaceId, conversationId' })
+        return
+      }
+      await deleteNativeChatSession(appId, spaceId, conversationId)
+      console.log('[HTTP] POST /api/apps/%s/sessions/delete %s', appId, conversationId)
       res.json({ success: true })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })

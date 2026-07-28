@@ -46,12 +46,26 @@ export interface ApiCredentials {
   /** Provider adapter ID for request/response transformations */
   adapterId?: string
   /**
+   * Explicit per-model vision override (Settings > Provider > Model Config).
+   * Forwarded to the OpenAI-compat converter so a user-enabled "Vision" flag
+   * keeps image content for models the name heuristic would otherwise treat as
+   * text-only (e.g. `minimax-*`). `undefined` = no override.
+   */
+  visionOverride?: boolean
+  /**
    * Resolved capabilities for the chosen model (preset + user override merged).
    * Optional because legacy callers and api-validator construct credentials
    * before capabilities are known; the SDK config layer falls back to safe
    * defaults when this is missing.
    */
   capabilities?: ResolvedModelCapabilities
+  /**
+   * Provider-declared vision capability for the chosen model. Propagated into
+   * the encoded BackendConfig so the OpenAI-compat router strips image content
+   * for non-vision models instead of letting the upstream provider reject them
+   * with HTTP 400. undefined = router falls back to supportsVisionById. (#139)
+   */
+  supportsVision?: boolean
 }
 
 // ============================================
@@ -81,16 +95,18 @@ export interface CanvasContext {
   isOpen: boolean
   tabCount: number
   activeTab: {
-    type: string  // 'browser' | 'code' | 'markdown' | 'image' | 'pdf' | 'text' | 'json' | 'csv'
+    type: string  // 'browser' | 'code' | 'markdown' | 'image' | 'pdf' | 'text' | 'json' | 'csv' | 'terminal'
     title: string
     url?: string   // For browser/pdf tabs
     path?: string  // For file tabs
+    terminalSessionId?: string  // For terminal tabs - the pty session id the AI drives via terminal_* tools
   } | null
   tabs: Array<{
     type: string
     title: string
     url?: string
     path?: string
+    terminalSessionId?: string  // For terminal tabs - the pty session id the AI drives via terminal_* tools
     isActive: boolean
   }>
 }
@@ -105,10 +121,11 @@ export interface AgentRequest {
   message: string
   resumeSessionId?: string
   images?: ImageAttachment[]  // Optional images for multi-modal messages
-  aiBrowserEnabled?: boolean  // Enable AI Browser tools for this request
   thinkingEnabled?: boolean   // Enable extended thinking mode (maxThinkingTokens: 10240)
   model?: string              // Model to use (for future model switching)
   canvasContext?: CanvasContext  // Current canvas state for AI awareness
+  knowledgeBaseId?: string         // When set, run as a "chat with this knowledge base" turn:
+                              // working dir = the KB's wiki dir, that KB injected into the prompt
 }
 
 // ============================================
@@ -206,27 +223,23 @@ export type V2SDKSession = {
   stream: () => AsyncIterable<any>
   close: () => void
   interrupt?: () => Promise<void> | void
-  // Dynamic runtime methods (exposed via patch)
-  setModel?: (model: string | undefined) => Promise<void>
+  // Dynamic runtime methods forwarded from the SDK Query object to the v2
+  // session by patches/@anthropic-ai+claude-agent-sdk (anthropic engine).
+  // Optional because alternate engines may not expose them — callers must guard.
   setMaxThinkingTokens?: (maxThinkingTokens: number | null) => Promise<void>
   setPermissionMode?: (mode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan') => Promise<void>
 }
 
 /**
- * Session configuration that requires session rebuild when changed
- * These are "process-level" parameters fixed at Claude Code subprocess startup
- *
- * Note: model changes are handled via credentialsGeneration in config.service
- * (model is part of the aiSources signature), not through SessionConfig.
- */
-export interface SessionConfig {
-  aiBrowserEnabled: boolean
-  // thinkingEnabled is dynamic via setMaxThinkingTokens, no rebuild needed
-  // digitalHumansEnabled: intentionally excluded — low-frequency toggle, relies on new conversation to take effect (UI hints this)
-}
-
-/**
  * V2 Session info stored in the sessions map
+ *
+ * Note: session rebuilds are driven by credentialsGeneration (global model /
+ * API-config changes), a per-conversation credentialsFingerprint (this
+ * conversation's own model/source pin — see session-manager
+ * computeCredentialsFingerprint), and a knowledgeFingerprint (the conversation's
+ * knowledge-base set, baked into the system prompt at creation). Toolset changes
+ * are seeded at creation and take effect via an explicit rebuild (toolset broker),
+ * so no toolset snapshot needs to be tracked here.
  */
 export interface V2SessionInfo {
   session: V2SDKSession
@@ -234,11 +247,26 @@ export interface V2SessionInfo {
   conversationId: string
   createdAt: number
   lastUsedAt: number
-  // Track config at session creation time for rebuild detection
-  config: SessionConfig
   // Credentials generation at session creation time
-  // Used to detect stale credentials (session created before config change)
+  // Used to detect stale credentials (session created before global config change)
   credentialsGeneration: number
+  // Per-conversation credential/model fingerprint at session creation time.
+  // Detects a change to THIS conversation's model pin (which the global
+  // credentialsGeneration does not track), triggering a targeted rebuild.
+  credentialsFingerprint: string
+  // The conversation's knowledge-base set at session creation time. The KB list
+  // is baked into the system prompt (frozen at creation) but not covered by the
+  // credentials fingerprint; tracking it here rebuilds the session when the user
+  // attaches/detaches a KB — or when a session was created before its KB seed.
+  knowledgeFingerprint: string
+  // Fingerprint of the session-defining inputs a caller bakes into sdkOptions up
+  // front (system prompt + MCP server set). Only set for callers that fully
+  // specify these eagerly — app chat and automation runs — so a permission /
+  // prompt / config change is detected on the next send and the session is
+  // rebuilt, instead of silently reusing a process wired with the old tool set.
+  // undefined for main chat, which builds MCP servers lazily and handles toolset
+  // changes via requestSessionRebuild.
+  inputsFingerprint?: string
 }
 
 // ============================================
@@ -258,6 +286,15 @@ export interface McpServerStatusInfo {
   error?: string
   /** Short tool names provided by this server (without mcp__ prefix) */
   tools?: string[]
+  /**
+   * Human-readable failure reason from the native connection probe
+   * (e.g. "HTTP 401 Unauthorized", "connect ECONNREFUSED ..."). The SDK
+   * only reports failed/connected; this field is how the UI escapes the
+   * black box. Cleared when the server connects.
+   */
+  errorDetail?: string
+  /** Epoch ms of the last probe/SDK report that produced this entry */
+  lastCheckedAt?: number
 }
 
 // ============================================

@@ -3,10 +3,11 @@
  * Manages theme and language settings
  */
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import type { HaloConfig, ThemeMode, SendKeyMode } from '../../types'
 import { useTranslation, setLanguage, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
 import { api } from '../../api'
+import { DISPLAY_SCALE_MIN, DISPLAY_SCALE_MAX, DISPLAY_SCALE_STEP } from '../../../shared/constants/display-scale'
 
 interface AppearanceSectionProps {
   config: HaloConfig | null
@@ -21,6 +22,22 @@ export function AppearanceSection({ config, setConfig }: AppearanceSectionProps)
 
   // Send key mode state
   const [sendKeyMode, setSendKeyMode] = useState<SendKeyMode>(config?.chat?.sendKeyMode || 'enter')
+
+  // Display scale (persistent UI zoom) — desktop only
+  const isDesktop = !api.isRemoteMode()
+  const [displayScale, setDisplayScale] = useState(1)
+  useEffect(() => {
+    if (!isDesktop) return
+    void window.halo?.getDisplayScale?.().then((r) => {
+      if (r?.success && typeof r.data === 'number') setDisplayScale(r.data)
+    })
+    // Keep in sync when zoom is changed via keyboard/menu while this panel is open
+    return window.halo?.onDisplayScale?.((factor) => setDisplayScale(factor))
+  }, [isDesktop])
+  const handleScaleChange = async (value: number) => {
+    setDisplayScale(value)
+    try { await window.halo?.setDisplayScale?.(value) } catch { /* best-effort */ }
+  }
 
   // Auto-save helper for appearance settings
   const autoSave = useCallback(async (partialConfig: Partial<HaloConfig>) => {
@@ -71,6 +88,42 @@ export function AppearanceSection({ config, setConfig }: AppearanceSectionProps)
             ))}
           </div>
         </div>
+
+        {/* Display Size — desktop only. Slider covers the same 50–150% range as
+            the ⌘/Ctrl +/−/0 shortcuts, so any value they produce lands exactly
+            on the slider instead of falling between discrete presets. */}
+        {isDesktop && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-sm text-muted-foreground">{t('Display Size')}</label>
+              <span className="text-sm font-medium tabular-nums">{Math.round(displayScale * 100)}%</span>
+            </div>
+            <div className="flex items-center gap-3 sm:gap-4">
+              <span className="text-xs text-muted-foreground tabular-nums">{DISPLAY_SCALE_MIN * 100}%</span>
+              <input
+                type="range"
+                min={DISPLAY_SCALE_MIN}
+                max={DISPLAY_SCALE_MAX}
+                step={DISPLAY_SCALE_STEP}
+                value={displayScale}
+                onChange={(e) => handleScaleChange(Number(e.target.value))}
+                className="flex-1 accent-primary cursor-pointer"
+                aria-label={t('Display Size')}
+              />
+              <span className="text-xs text-muted-foreground tabular-nums">{DISPLAY_SCALE_MAX * 100}%</span>
+              <button
+                onClick={() => handleScaleChange(1)}
+                disabled={displayScale === 1}
+                className="px-3 py-1.5 text-sm rounded-lg transition-colors bg-secondary hover:bg-secondary/80 disabled:opacity-50 disabled:cursor-default"
+              >
+                {t('Reset')}
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {t('Adjust the overall interface size. You can also use ⌘/Ctrl with + / − / 0.')}
+            </p>
+          </div>
+        )}
 
         {/* Language */}
         <div>

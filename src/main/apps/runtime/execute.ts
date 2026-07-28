@@ -29,18 +29,23 @@ import type {
 } from './types'
 import { RunExecutionError } from './errors'
 import { buildAppSystemPrompt, buildInitialMessage, buildEscalationResumeMessage } from './prompt'
+import { buildDisabledCapabilitiesGuidance, buildUnconfiguredCapabilitiesGuidance } from './prompt/capabilities'
+import { resolveNotifyAvailability } from './notify-availability'
 import { mergeConfigWithDefaults } from './config-defaults'
 import { createReportToolServer } from './report-tool'
 import type { ReportToolContext } from './report-tool'
 import { createNotifyToolServer } from './notify-tool'
 import { FileExportGate } from './file-export-gate'
+import { truncateUtf16Safe } from './text-truncate'
 import { getImSessionRegistry } from './im-session-registry'
 import { autoSyncRunResult } from './im-auto-sync'
 import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getWorkingDir, getMcpServersForRequires } from '../../services/agent/helpers'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
 import { getOrCreateV2Session } from '../../services/agent/session-manager'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
+import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { createWebSearchMcpServer } from '../../services/web-search'
+import { createOcrMcpServer } from '../../services/ocr'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { getConfig, resolveClaudeConfigDir } from '../../foundation/config.service'
 import { getSpace, getSpaceDir } from '../../services/space.service'
@@ -253,8 +258,9 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // ── 2. Build system prompt ─────────────────────────────
     const memoryInstructions = memory.getPromptInstructions()
     const usesAIBrowser = resolvePermission(app, 'ai-browser')
-    const usesEmail = resolvePermission(app, 'email', false) // default false — higher trust
-    const usesImPush = resolvePermission(app, 'im-push') // default true — AI-driven IM push
+    const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
+    const usesEmail = resolvePermission(app, 'email') // gated on channel config below
+    const usesImPush = resolvePermission(app, 'im-push') // AI-driven IM push
 
     // ── Merge config_schema defaults into userConfig ─────
     //    Ensures defaults are available even if the user never opened the config panel.
@@ -272,15 +278,30 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       ? (getImSessionRegistry()?.getProactiveSessions(app.id) ?? [])
       : []
 
+    // Pushable IM contacts + notify availability. Resolved before the prompt so
+    // capability-awareness and notification guidance reflect the real tool set;
+    // reused for the notify MCP server below (one registry lookup).
+    const imSessions = usesImPush
+      ? (getImSessionRegistry()?.getPushableSessions(app.id) ?? [])
+      : []
+    const notifyAvail = resolveNotifyAvailability(app, config.notificationChannels, imSessions)
+
     const systemPrompt = buildAppSystemPrompt({
       appSpec: app.spec,
       memoryInstructions,
       triggerContext: trigger.description,
       userConfig: mergedConfig,
       usesAIBrowser,
+      usesTerminal,
       workDir,
       modelInfo: resolvedCreds.displayModel,
       autoSyncSessions,
+      disabledCapabilities: buildDisabledCapabilitiesGuidance(app) ?? undefined,
+      unconfiguredCapabilities: buildUnconfiguredCapabilitiesGuidance(app, {
+        emailChannelConfigured: notifyAvail.emailChannelConfigured,
+        imContactsAvailable: notifyAvail.imContactsAvailable,
+      }) ?? undefined,
+      notifyToolsAvailable: notifyAvail.anyNotifyToolAvailable,
     })
 
     console.log(
@@ -331,7 +352,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     //    Scoped context isolates activeViewId from user's interactive browser
     //    and other concurrent runs, while sharing the same session/cookies.
     scopedBrowserCtx = usesAIBrowser
-      ? createScopedBrowserContext(null)
+      ? createScopedBrowserContext()
       : undefined
 
     // ── 4. Create MCP servers ──────────────────────────────
@@ -369,9 +390,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // memory lives under space.path (internal storage), while exportable
     // files live under workingDir||path — see getSpaceDir().
     const exportGate = new FileExportGate([getSpaceDir(app.spaceId!), tmpdir()])
-    const imSessions = usesImPush
-      ? (getImSessionRegistry()?.getAllSessions(app.id) ?? [])
-      : []
     const notifyMcpServer = createNotifyToolServer({
       appId: app.id,
       appName: app.spec.name,
@@ -379,6 +397,13 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       imSessions,
       usesImPush,
       exportGate,
+      // Relay provenance: automation runs act for the owner and have no human
+      // subject; the trigger description gives the recipient AI the push context.
+      relay: {
+        sessionKey,
+        isOwner: true,
+        quote: trigger.description,
+      },
     })
 
     // ── 5. Create V2 session ───────────────────────────────
@@ -398,7 +423,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // Only injects explicitly declared MCPs (least-privilege: automation gets only what it declares).
     // Automation apps always have a spaceId (enforced earlier in this function).
     const requiredMcpServers = getMcpServersForRequires(
-      (app.spec.requires?.mcps as Array<{ id: string }> | undefined),
+      app.spec.requires?.mcps,
       app.spaceId!
     )
 
@@ -411,13 +436,18 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       stderrHandler: (data: string) => {
         console.error(`[Runtime][${app.id}] CLI stderr:`, data)
       },
+      // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
       mcpServers: {
         ...requiredMcpServers,              // declared MCP dependencies
         'halo-memory': memoryMcpServer,     // built-in: persistent memory
         'halo-report': reportMcpServer,     // built-in: completion signal
         'halo-notify': notifyMcpServer,     // built-in: user notification
         'web-search': createWebSearchMcpServer(), // built-in: web search
+        'ocr': createOcrMcpServer(),              // built-in: on-device image OCR
         ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
+        ...(usesTerminal
+          ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId: app.spaceId!, workDir }) }
+          : {}),
         ...(usesEmail && config.notificationChannels?.email?.enabled
           ? { 'halo-email': createEmailMcpServer(config.notificationChannels.email) }
           : {}),
@@ -451,6 +481,10 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const escalationResumeId = trigger.escalation?.sessionId
     const continueResumeId = trigger.continue?.sessionId
 
+    // No displayModel: automation runs drive their own processStream(), so they
+    // must not start a persistent session consumer (that would fight over the
+    // stream). workDir is the 5th positional arg — passing it as displayModel
+    // would silently spawn a consumer.
     if (trigger.type === 'escalation_followup' && escalationResumeId) {
       console.log(`[Runtime][${runTag}] Restoring session for escalation followup: ${escalationResumeId}`)
       session = await getOrCreateV2Session(
@@ -458,7 +492,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         sessionKey,
         sdkOptions,
         escalationResumeId,
-        undefined,
         workDir
       )
     } else if (trigger.type === 'continue_followup' && continueResumeId) {
@@ -468,7 +501,6 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         sessionKey,
         sdkOptions,
         continueResumeId,
-        undefined,
         workDir
       )
     } else {
@@ -950,7 +982,7 @@ function buildSummaryContent(ctx: RunSummaryContext): string {
   // Include the AI's output (truncated to keep file sizes manageable)
   if (ctx.finalText.trim()) {
     const truncated = ctx.finalText.length > MAX_SUMMARY_LENGTH
-      ? ctx.finalText.slice(0, MAX_SUMMARY_LENGTH) + '\n\n*(truncated)*'
+      ? truncateUtf16Safe(ctx.finalText, MAX_SUMMARY_LENGTH) + '\n\n*(truncated)*'
       : ctx.finalText
     lines.push('')
     lines.push('## Output')
@@ -1134,7 +1166,7 @@ async function generateCompactionSummary(
 
     // Truncate input if too large
     const truncatedContent = content.length > MAX_COMPACTION_INPUT_LENGTH
-      ? content.slice(0, MAX_COMPACTION_INPUT_LENGTH) + '\n\n... (truncated)'
+      ? truncateUtf16Safe(content, MAX_COMPACTION_INPUT_LENGTH) + '\n\n... (truncated)'
       : content
 
     const client = new Anthropic({

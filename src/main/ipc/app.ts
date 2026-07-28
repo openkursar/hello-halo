@@ -27,6 +27,9 @@
  *   app:chat-messages      Load persisted chat messages for an app
  *   app:chat-session-state Get session state for recovery after refresh
  *   app:chat-restart       Restart an app's chat agent (reload prompt/config)
+ *   app:im-chat-messages   Load persisted IM session chat messages
+ *   app:im-chat-clear      Clear an IM session's chat history (wipes history)
+ *   app:im-chat-stop       Stop an IM session's active generation (keeps history)
  *   app:export-spec        Export an app's spec as a YAML string
  *   app:import-spec        Install an app from a YAML spec string
  *   app:open-skill-folder  Reveal a skill's on-disk directory in the OS file manager
@@ -40,18 +43,26 @@ import { getAppManager } from '../apps/manager'
 import { AppAlreadyInstalledError, McpCommandBlockedError } from '../apps/manager/errors'
 import { MCP_COMMAND_BLOCKED_MESSAGE } from '../services/security-policy'
 import { getSkillDir } from '../apps/manager/skill-sync'
+import { listAvailableSkills } from '../apps/skill-discovery'
 import {
   getAppRuntime,
   sendAppChatMessage,
   stopAppChat,
+  stopAppChatConversation,
   isAppChatGenerating,
+  isAppChatConversationGenerating,
   loadAppChatMessages,
   loadImChatMessages,
+  loadChatMessagesForConversation,
   getAppChatSessionState,
   getAppChatConversationId,
   clearAppChat,
   clearImSession,
+  stopImSession,
   restartAppChat,
+  createNativeChatSession,
+  forkNativeChatSession,
+  deleteNativeChatSession,
 } from '../apps/runtime'
 import type { AppSpec } from '../apps/spec'
 import type { AppListFilter, UninstallOptions, UpgradeStrategy } from '../apps/manager'
@@ -538,10 +549,14 @@ export function registerAppHandlers(): void {
           const err = error as Error
           console.error(`[AppIPC] app:chat-send background error:`, err.message)
         })
-        console.log(`[AppIPC] app:chat-send: appId=${request.appId}`)
+        // Echo back the session actually addressed: the caller's explicit
+        // conversationId (native local / IM / HTTP session) or the app's
+        // native default when none was supplied.
+        const conversationId = request.conversationId ?? getAppChatConversationId(request.appId)
+        console.log(`[AppIPC] app:chat-send: appId=${request.appId} conversationId=${conversationId}`)
         return {
           success: true,
-          data: { conversationId: getAppChatConversationId(request.appId) }
+          data: { conversationId }
         }
       } catch (error: unknown) {
         const err = error as Error
@@ -552,10 +567,16 @@ export function registerAppHandlers(): void {
     },
 
     // ── app:chat-stop ──────────────────────────────────────────────────────
-    appChatStop: async (appId: string) => {
+    // Optional conversationId stops just that session (so sibling sessions keep
+    // generating); absent, it stops all of the app's chat sessions.
+    appChatStop: async (appId: string, conversationId?: string) => {
       try {
-        await stopAppChat(appId)
-        console.log(`[AppIPC] app:chat-stop: appId=${appId}`)
+        if (conversationId) {
+          await stopAppChatConversation(conversationId)
+        } else {
+          await stopAppChat(appId)
+        }
+        console.log(`[AppIPC] app:chat-stop: appId=${appId} conversationId=${conversationId ?? '(all)'}`)
         return { success: true }
       } catch (error: unknown) {
         const err = error as Error
@@ -565,13 +586,18 @@ export function registerAppHandlers(): void {
     },
 
     // ── app:chat-status ────────────────────────────────────────────────────
-    appChatStatus: async (appId: string) => {
+    // Optional conversationId narrows the check to one native/local/IM session;
+    // absent, it reports whether ANY session for the app is generating.
+    appChatStatus: async (appId: string, conversationId?: string) => {
       try {
+        const isGenerating = conversationId
+          ? isAppChatConversationGenerating(conversationId)
+          : isAppChatGenerating(appId)
         return {
           success: true,
           data: {
-            isGenerating: isAppChatGenerating(appId),
-            conversationId: getAppChatConversationId(appId),
+            isGenerating,
+            conversationId: conversationId ?? getAppChatConversationId(appId),
           }
         }
       } catch (error: unknown) {
@@ -582,13 +608,17 @@ export function registerAppHandlers(): void {
     },
 
     // ── app:chat-messages ──────────────────────────────────────────────────
-    appChatMessages: async (input: { appId: string; spaceId: string }) => {
+    // Optional conversationId loads a specific native/local session's history;
+    // absent, it loads the app's native default session.
+    appChatMessages: async (input: { appId: string; spaceId: string; conversationId?: string }) => {
       try {
         const space = getSpace(input.spaceId)
         if (!space?.path) {
           return { success: true, data: [] }
         }
-        const messages = loadAppChatMessages(space.path, input.appId)
+        const messages = input.conversationId
+          ? loadChatMessagesForConversation(space.path, input.appId, input.conversationId)
+          : loadAppChatMessages(space.path, input.appId)
         return { success: true, data: messages }
       } catch (error: unknown) {
         const err = error as Error
@@ -598,9 +628,9 @@ export function registerAppHandlers(): void {
     },
 
     // ── app:chat-session-state ─────────────────────────────────────────────
-    appChatSessionState: async (appId: string) => {
+    appChatSessionState: async (appId: string, conversationId?: string) => {
       try {
-        const state = getAppChatSessionState(appId)
+        const state = getAppChatSessionState(appId, conversationId)
         return { success: true, data: state }
       } catch (error: unknown) {
         const err = error as Error
@@ -610,10 +640,12 @@ export function registerAppHandlers(): void {
     },
 
     // ── app:chat-clear ────────────────────────────────────────────────────
-    appChatClear: async (input: { appId: string; spaceId: string }) => {
+    // Optional conversationId clears a specific native/local session; absent,
+    // it clears the app's native default session.
+    appChatClear: async (input: { appId: string; spaceId: string; conversationId?: string }) => {
       try {
-        await clearAppChat(input.appId, input.spaceId)
-        console.log(`[AppIPC] app:chat-clear: appId=${input.appId}`)
+        await clearAppChat(input.appId, input.spaceId, input.conversationId)
+        console.log(`[AppIPC] app:chat-clear: appId=${input.appId} conversationId=${input.conversationId ?? '(default)'}`)
         return { success: true }
       } catch (error: unknown) {
         const err = error as Error
@@ -628,7 +660,9 @@ export function registerAppHandlers(): void {
     // prompt and config. Conversation history is preserved via saved sessionId.
     appChatRestart: async (appId: string) => {
       try {
-        const result = await restartAppChat(appId)
+        // Manual restart: the user clicked "Restart agent" (its banner warns work
+        // in progress is stopped), so interrupt any in-flight turn.
+        const result = await restartAppChat(appId, { interruptActive: true })
         console.log(`[AppIPC] app:chat-restart: appId=${appId}, closed=${result.sessionsClosed}`)
         return { success: true, data: result }
       } catch (error: unknown) {
@@ -663,6 +697,69 @@ export function registerAppHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:im-chat-clear error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:im-chat-stop ────────────────────────────────────────────────
+    // Aborts the current generation for a single IM session while preserving
+    // V2 session and JSONL history. Contrast with appImChatClear which wipes
+    // history and tears down the V2 session.
+    appImChatStop: async (input: { appId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => {
+      try {
+        const result = await stopImSession(input.appId, input.channel, input.chatType, input.chatId)
+        console.log(
+          `[AppIPC] app:im-chat-stop: appId=${input.appId} channel=${input.channel} ` +
+          `chatId=${input.chatId} stopped=${result.stopped}`
+        )
+        return { success: true, data: result }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:im-chat-stop error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:session-create ───────────────────────────────────────────────
+    // Create a fresh native client-side chat session for a digital human.
+    appSessionCreate: async (input: { appId: string }) => {
+      try {
+        const result = createNativeChatSession(input.appId)
+        console.log(`[AppIPC] app:session-create: appId=${input.appId} conversationId=${result.conversationId}`)
+        return { success: true, data: result }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:session-create error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:session-fork ─────────────────────────────────────────────────
+    // Fork an existing session (IM/http/local) into a new native local session
+    // that continues in the client with full prior context. Callers gate this
+    // on the engine's sessionFork capability.
+    appSessionFork: async (input: { appId: string; spaceId: string; sourceConversationId: string }) => {
+      try {
+        const result = forkNativeChatSession(input.appId, input.spaceId, input.sourceConversationId)
+        console.log(`[AppIPC] app:session-fork: appId=${input.appId} from=${input.sourceConversationId} to=${result.conversationId}`)
+        return { success: true, data: result }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:session-fork error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:session-delete ───────────────────────────────────────────────
+    // Delete a native local session (only 'local'-source keys are accepted).
+    appSessionDelete: async (input: { appId: string; spaceId: string; conversationId: string }) => {
+      try {
+        await deleteNativeChatSession(input.appId, input.spaceId, input.conversationId)
+        console.log(`[AppIPC] app:session-delete: appId=${input.appId} conversationId=${input.conversationId}`)
+        return { success: true }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:session-delete error:', err.message)
         return { success: false, error: err.message }
       }
     },
@@ -727,6 +824,26 @@ export function registerAppHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:open-skill-folder error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:list-available-skills ──────────────────────────────────────────
+    appListAvailableSkills: async (appId: string) => {
+      try {
+        const r = requireManager()
+        if (!r.success) return r
+
+        const app = r.manager.getApp(appId)
+        if (!app || !app.spaceId) {
+          return { success: false, error: 'App not found or has no space' }
+        }
+
+        const skills = listAvailableSkills(app.spaceId)
+        return { success: true, data: skills }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:list-available-skills error:', err.message)
         return { success: false, error: err.message }
       }
     },
@@ -848,5 +965,5 @@ export function registerAppHandlers(): void {
     },
   })
 
-  console.log('[AppIPC] App management handlers registered (30 channels)')
+  console.log('[AppIPC] App management handlers registered (42 channels)')
 }

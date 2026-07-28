@@ -67,14 +67,11 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     authType: 'api-key',
     apiUrl: 'https://api.anthropic.com',
     models: [
-      { id: 'claude-mythos-preview', name: 'Claude Mythos (Preview)' },
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
       { id: 'claude-fable-5', name: 'Claude Fable 5' },
+      { id: 'claude-opus-5', name: 'Claude Opus 5' },
       { id: 'claude-opus-4-8', name: 'Claude Opus 4.8' },
-      { id: 'claude-opus-4-7', name: 'Claude Opus 4.7' },
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
-      { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5' },
-      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
-      { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5' }
     ],
     description: 'Official and compatible proxies',
@@ -212,6 +209,28 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     notes: 'GLM-4.7 is 355B MoE model with strong coding capabilities'
   },
   {
+    id: 'zhipu-coding',
+    name: 'Zhipu GLM (Coding Plan)',
+    authType: 'api-key',
+    apiUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+    modelsUrl: 'https://open.bigmodel.cn/api/coding/paas/v4/models',
+    // Offline fallback only — the live list is fetched from the gateway on save.
+    // Verified against GET /api/coding/paas/v4/models (2026-06).
+    models: [
+      { id: 'glm-5.2', name: 'GLM-5.2' },
+      { id: 'glm-5.1', name: 'GLM-5.1' },
+      { id: 'glm-5', name: 'GLM-5' },
+      { id: 'glm-4.7', name: 'GLM-4.7' },
+      { id: 'glm-4.6', name: 'GLM-4.6' },
+      { id: 'glm-4.5', name: 'GLM-4.5' }
+    ],
+    description: 'Zhipu GLM Coding Plan gateway (OpenAI-compatible)',
+    website: 'https://open.bigmodel.cn/',
+    region: 'cn',
+    icon: 'sparkles',
+    notes: 'Coding Plan endpoint; the live model list is fetched from the gateway'
+  },
+  {
     id: 'minimax',
     name: 'MiniMax (中国)',
     authType: 'api-key',
@@ -330,6 +349,41 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     recommended: true,
     icon: 'route',
     notes: 'Requires HTTP-Referer and X-Title headers. Supports model array for failover'
+  },
+  {
+    id: 'atlascloud',
+    name: 'Atlas Cloud',
+    authType: 'api-key',
+    apiUrl: 'https://api.atlascloud.ai/v1',
+    modelsUrl: 'https://api.atlascloud.ai/v1/models',
+    models: [
+      { id: 'deepseek-ai/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+      { id: 'deepseek-ai/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+      { id: 'qwen/qwen3.5-27b', name: 'Qwen3.5 27B' }
+    ],
+    description: 'Atlas Cloud OpenAI-compatible model API',
+    website: 'https://www.atlascloud.ai/',
+    region: 'global',
+    icon: 'cloud'
+  },
+  {
+    id: 'requesty',
+    name: 'Requesty',
+    authType: 'api-key',
+    apiUrl: 'https://router.requesty.ai/v1',
+    modelsUrl: 'https://router.requesty.ai/v1/models',
+    models: [
+      { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini' },
+      { id: 'openai/gpt-4o', name: 'GPT-4o' },
+      { id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5' },
+      { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
+      { id: 'deepseek/deepseek-chat', name: 'DeepSeek Chat' }
+    ],
+    description: 'Requesty router with 400+ models across providers',
+    website: 'https://requesty.ai/',
+    region: 'global',
+    icon: 'route',
+    notes: 'OpenAI-compatible. Supports optional HTTP-Referer and X-Title headers'
   },
   {
     id: 'groq',
@@ -468,14 +522,11 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     authType: 'oauth',
     apiUrl: 'https://api.anthropic.com',
     models: [
-      { id: 'claude-mythos-preview', name: 'Claude Mythos (Preview)' },
+      { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
       { id: 'claude-fable-5', name: 'Claude Fable 5' },
+      { id: 'claude-opus-5', name: 'Claude Opus 5' },
       { id: 'claude-opus-4-8', name: 'Claude Opus 4.8' },
-      { id: 'claude-opus-4-7', name: 'Claude Opus 4.7' },
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
-      { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5' },
-      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
-      { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5' }
     ],
     description: 'Login with Claude.ai account (Pro/Max subscription)',

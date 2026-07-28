@@ -19,8 +19,23 @@
 
 import type { AppManagerService } from '../apps/manager'
 
-/** Handler invoked when MCP apps change. `spaceId === null` = global change. */
-export type McpAppsChangeHandler = (spaceId: string | null) => void
+/**
+ * Details of a single MCP app lifecycle change. Lets subscribers react
+ * per-server (e.g. connection probe, status-cache cleanup) instead of
+ * only per-space.
+ */
+export interface McpAppChange {
+  appId: string
+  specId: string
+  action: 'installed' | 'uninstalled' | 'reinstalled' | 'paused' | 'resumed' | 'updated' | 'moved' | 'status'
+}
+
+/**
+ * Handler invoked when MCP apps change. `spaceId === null` = global change.
+ * `change` is present for single-app lifecycle events; handlers that only
+ * care about space-level invalidation may ignore it.
+ */
+export type McpAppsChangeHandler = (spaceId: string | null, change?: McpAppChange) => void
 
 interface AppBridgeImpl {
   getAppManager: () => AppManagerService | null

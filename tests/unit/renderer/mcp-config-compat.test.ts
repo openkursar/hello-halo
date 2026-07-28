@@ -4,6 +4,7 @@ import {
   internalMcpServerToJsonConfig,
   keyValueLinesToRecord,
   mcpJsonConfigToInternal,
+  parseMcpJsonInput,
   recordToKeyValueLines,
   validateMcpJsonConfig,
 } from '../../../src/renderer/utils/mcpConfigCompat'
@@ -81,12 +82,92 @@ describe('mcpConfigCompat', () => {
     })
   })
 
-  it('rejects nested wrapped config objects', () => {
-    expect(validateMcpJsonConfig({
-      server: {
-        command: 'npx',
+  // ── wrapped-paste compatibility (issue #126) ──
+
+  it('unwraps the Cursor/Claude Desktop mcpServers wrapper and recovers the name', () => {
+    const result = mcpJsonConfigToInternal({
+      mcpServers: {
+        'my-server': {
+          command: 'npx',
+          args: ['-y', '@example/mcp'],
+        },
       },
-    })).toBe('Invalid format: detected nested "server". Configure the MCP server object directly without extra nesting.')
+    })
+
+    expect(result.error).toBeUndefined()
+    expect(result.name).toBe('my-server')
+    expect(result.data).toEqual({
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', '@example/mcp'],
+    })
+  })
+
+  it('unwraps a bare name-keyed wrapper', () => {
+    const result = mcpJsonConfigToInternal({
+      docsmcp: {
+        type: 'streamable_http',
+        url: 'http://example.com/mcp',
+        headers: {},
+      },
+    })
+
+    expect(result.error).toBeUndefined()
+    expect(result.name).toBe('docsmcp')
+    expect(result.data).toEqual({
+      transport: 'streamable-http',
+      command: 'http://example.com/mcp',
+    })
+  })
+
+  it('rejects multi-server wrappers in single-server contexts', () => {
+    const result = mcpJsonConfigToInternal({
+      mcpServers: {
+        a: { command: 'npx' },
+        b: { command: 'uvx' },
+      },
+    })
+    expect(result.error).toContain('multiple servers')
+  })
+
+  it('parses multi-server wrappers into named configs', () => {
+    const result = parseMcpJsonInput({
+      mcpServers: {
+        a: { command: 'npx' },
+        b: { type: 'http', url: 'https://example.com/mcp' },
+      },
+    })
+
+    expect(result.error).toBeUndefined()
+    expect(result.servers).toEqual([
+      { name: 'a', config: { transport: 'stdio', command: 'npx' } },
+      { name: 'b', config: { transport: 'streamable-http', command: 'https://example.com/mcp' } },
+    ])
+  })
+
+  it('reports the offending server name when a wrapped entry is invalid', () => {
+    const result = parseMcpJsonInput({
+      mcpServers: {
+        good: { command: 'npx' },
+        bad: { type: 'http', url: 'not a url' },
+      },
+    })
+    expect(result.error).toContain('bad:')
+  })
+
+  it('rejects wrappers whose values are not server configs', () => {
+    const result = mcpJsonConfigToInternal({ someKey: { random: true } })
+    expect(result.error).toBe('Invalid format: requires command (stdio) or type + url (http/sse)')
+  })
+
+  // ── type value normalization (issue #126) ──
+
+  it('normalizes underscore/case type variants to canonical form', () => {
+    const underscore = mcpJsonConfigToInternal({ type: 'streamable_http', url: 'https://example.com/mcp' })
+    const upper = mcpJsonConfigToInternal({ type: 'SSE', url: 'https://example.com/sse' })
+
+    expect(underscore.data?.transport).toBe('streamable-http')
+    expect(upper.data?.transport).toBe('sse')
   })
 
   it('round-trips key-value text helpers', () => {

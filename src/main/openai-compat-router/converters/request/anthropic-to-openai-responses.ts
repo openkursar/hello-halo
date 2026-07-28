@@ -10,6 +10,11 @@ import {
   convertAnthropicThinkingToResponsesReasoning
 } from '../tools'
 import { supportsVisionById } from '../../../../shared/constants/model-capabilities'
+import { buildStreamOptionsIncludeUsage } from './stream-options'
+import { resolveOutputTokenLimit } from './max-tokens'
+import type { ConvertRequestOptions } from './types'
+
+export type { ConvertRequestOptions } from './types'
 
 export interface ConversionResult {
   request: OpenAIResponsesRequest
@@ -20,11 +25,15 @@ export interface ConversionResult {
 /**
  * Convert Anthropic request to OpenAI Responses API request
  */
-export function convertAnthropicToOpenAIResponses(anthropicRequest: AnthropicRequest): ConversionResult {
+export function convertAnthropicToOpenAIResponses(
+  anthropicRequest: AnthropicRequest,
+  options?: ConvertRequestOptions
+): ConversionResult {
   // Mirror the Chat-Completions path: drop image content when the target
   // model has no vision capability so the Responses API does not reject
   // `input_image` parts. Symmetric handling keeps both paths consistent.
-  const stripImages = !supportsVisionById(anthropicRequest.model)
+  // An explicit user vision override wins over the name heuristic.
+  const stripImages = !(options?.visionOverride ?? supportsVisionById(anthropicRequest.model))
 
   // Detect images on the original input so we can log/report accurately
   // even after stripping.
@@ -54,11 +63,28 @@ export function convertAnthropicToOpenAIResponses(anthropicRequest: AnthropicReq
   const hasTools = !!tools && tools.length > 0
 
   // Build request - only include essential parameters
-  // Omit max_output_tokens as many providers don't support it
   const request: OpenAIResponsesRequest = {
     model: anthropicRequest.model,
     input: inputItems,
     stream: anthropicRequest.stream
+  }
+
+  // Issue #181 (Responses-specific nuance): the native OpenAI Responses API
+  // returns usage in `response.completed` unconditionally and silently ignores
+  // `stream_options`. However, translation-style gateways (e.g. litellm) map
+  // the Responses API to Chat Completions internally, where usage is gated by
+  // `stream_options.include_usage`. Injecting it is harmless for the native
+  // API and required for such gateways.
+  if (request.stream) {
+    request.stream_options = buildStreamOptionsIncludeUsage()
+  }
+
+  // Mirror the Chat Completions path. `max_output_tokens` is part of the
+  // Responses API public spec — without forwarding, Halo's "max output tokens"
+  // setting is silently dropped for Responses-routed backends.
+  const outputTokens = resolveOutputTokenLimit(anthropicRequest.max_tokens)
+  if (outputTokens !== undefined) {
+    request.max_output_tokens = outputTokens
   }
 
   // Add tools if present

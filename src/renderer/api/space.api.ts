@@ -109,4 +109,12 @@ export const spaceApi = {
     return httpRequest('GET', `/api/spaces/${spaceId}/preferences`)
   },
 
+  // Reorder spaces (persist user-defined display order)
+  reorderSpaces: async (spaceIds: string[]): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.reorderSpaces(spaceIds)
+    }
+    return httpRequest('PUT', '/api/spaces/reorder', { spaceIds })
+  },
+
 }

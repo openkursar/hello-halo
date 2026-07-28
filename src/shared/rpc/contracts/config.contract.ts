@@ -8,6 +8,7 @@ import { rawRpcMethod } from '../define'
 export const configRpc = {
   getConfig: rawRpcMethod('config:get'),
   setConfig: rawRpcMethod('config:set'),
+  getCredentialFailures: rawRpcMethod('config:get-credential-failures'),
   validateApi: rawRpcMethod('config:validate-api'),
   fetchModels: rawRpcMethod('config:fetch-models'),
   refreshAISourcesConfig: rawRpcMethod('config:refresh-ai-sources'),

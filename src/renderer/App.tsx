@@ -7,11 +7,14 @@ import { useAppStore } from './stores/app.store'
 import { useChatStore } from './stores/chat.store'
 import { useOnboardingStore } from './stores/onboarding.store'
 import { initAIBrowserStoreListeners } from './stores/ai-browser.store'
+import { initTerminalStoreListeners } from './stores/terminal.store'
 import { initPerfStoreListeners } from './stores/perf.store'
 import { useSpaceStore } from './stores/space.store'
 import { useSearchStore } from './stores/search.store'
 import { useAppsStore } from './stores/apps.store'
 import { useAppsPageStore } from './stores/apps-page.store'
+import { useToolsetsStore, type ToolsetsChangedEvent, type ToolsetsRequestedEvent } from './stores/toolsets.store'
+import { useTlonStore } from './stores/tlon.store'
 import { SplashPage } from './pages/SplashPage'
 import { SetupPage } from './pages/SetupPage'
 import { GitBashSetupPage } from './pages/GitBashSetupPage'
@@ -26,15 +29,17 @@ import { SearchHighlightBar } from './components/search/SearchHighlightBar'
 import { OnboardingOverlay } from './components/onboarding'
 import { UpdateNotification } from './components/updater/UpdateNotification'
 import { NotificationToast } from './components/notification/NotificationToast'
+import { CredentialAlertBanner } from './components/settings/CredentialAlertBanner'
 import { useNotificationStore } from './stores/notification.store'
 import { api } from './api'
 import { syncStatusBarStyle } from './api/safe-area'
-import { isCapacitor, isElectron } from './api/transport'
+import { isCapacitor, isElectron, onEvent } from './api/transport'
 import { useTelemetry } from './hooks/useTelemetry'
 import type { WsConnectionState } from './api/transport'
 import { useTranslation } from './i18n'
 import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, Question, McpServerStatus } from './types'
 import type { SessionInitInfo } from './types/slash-command'
+import type { IngestProgressEvent } from '../shared/types/tlon'
 import { hasAnyAISource } from './types'
 
 // Lazy load heavy page components for better initial load performance
@@ -43,6 +48,7 @@ const HomePage = lazy(() => import('./pages/HomePage').then(m => ({ default: m.H
 const SpacePage = lazy(() => import('./pages/SpacePage').then(m => ({ default: m.SpacePage })))
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
 const AppsPage = lazy(() => import('./pages/AppsPage').then(m => ({ default: m.AppsPage })))
+const TlonPage = lazy(() => import('./pages/TlonPage').then(m => ({ default: m.TlonPage })))
 
 // Page loading fallback - minimal spinner that matches app style
 function PageLoader() {
@@ -119,6 +125,18 @@ export default function App() {
 
   // For search result navigation
   const { spaces, haloSpace, setCurrentSpace: setSpaceStoreCurrentSpace, refreshCurrentSpace } = useSpaceStore()
+
+  // Expose the persistent display scale as a CSS variable so layout that must
+  // clear the non-scaling native window chrome (macOS traffic lights) can
+  // compensate — reserved space in real pixels then stays constant across zoom.
+  useEffect(() => {
+    if (!isElectron()) return
+    const apply = (s: number) => document.documentElement.style.setProperty('--display-scale', String(s))
+    void window.halo?.getDisplayScale?.().then((r) => {
+      if (r?.success && typeof r.data === 'number') apply(r.data)
+    })
+    return window.halo?.onDisplayScale?.((s) => apply(s))
+  }, [])
 
   // Initialize app on mount - wait for backend extended services to be ready
   // Uses Pull+Push pattern for reliable initialization:
@@ -372,7 +390,10 @@ export default function App() {
         // Ask the backend if this session is actually still active
         api.getSessionState(conversationId).then(res => {
           if (res.success && res.data) {
-            const backendState = res.data as { isActive: boolean }
+            const backendState = res.data as {
+              isActive: boolean
+              pendingQuestion?: { id: string; questions: Question[] }
+            }
             if (!backendState.isActive) {
               console.log(`[App] Session ${conversationId} completed while backgrounded — recovering`)
 
@@ -384,6 +405,16 @@ export default function App() {
                 // to reload. Clear session state directly to unblock the UI; the owning component
                 // (AppChatView / ImChatView) will reload messages via its own isGenerating effect.
                 chatState.resetSession(conversationId)
+              }
+            } else if (backendState.pendingQuestion) {
+              // Still active and waiting on an answer: the `agent:ask-question` event
+              // was almost certainly pushed while the WebSocket was suspended. Re-hydrate
+              // the question so the card reappears instead of silently deadlocking.
+              const pq = backendState.pendingQuestion
+              const current = chatState.getSession(conversationId).pendingQuestion
+              if (current?.status !== 'active' || current.id !== pq.id) {
+                console.log(`[App] Re-hydrating pending question for ${conversationId} after resume`)
+                chatState.handleAskQuestion({ spaceId: spaceId ?? '', conversationId, id: pq.id, questions: pq.questions })
               }
             }
           }
@@ -492,8 +523,12 @@ export default function App() {
   useEffect(() => {
     console.log('[App] Initializing AI Browser store listeners')
     initPerfStoreListeners()
-    const cleanup = initAIBrowserStoreListeners()
-    return cleanup
+    const cleanupBrowser = initAIBrowserStoreListeners()
+    const cleanupTerminal = initTerminalStoreListeners()
+    return () => {
+      cleanupBrowser()
+      cleanupTerminal()
+    }
   }, [])
 
   // Register agent event listeners (global - handles events for all conversations)
@@ -581,6 +616,17 @@ export default function App() {
       }
     })
 
+    // Toolset broker changes (user toggle). Keeps the input toolbar menu/pills in
+    // sync with the authoritative main-process open set.
+    const unsubToolsets = api.onToolsetsChanged((data) => {
+      useToolsetsStore.getState().applyChangedEvent(data as ToolsetsChangedEvent)
+    })
+
+    // AI asked the user to enable a toolset — pop the Tools menu + highlight it.
+    const unsubToolsetReq = api.onToolsetsRequested((data) => {
+      useToolsetsStore.getState().applyRequestedEvent(data as ToolsetsRequestedEvent)
+    })
+
     return () => {
       unsubThought()
       unsubThoughtDelta()
@@ -594,6 +640,8 @@ export default function App() {
       unsubSessionInfo()
       unsubTurnStart()
       unsubMcpStatus()
+      unsubToolsets()
+      unsubToolsetReq()
     }
   }, [
     handleAgentMessage,
@@ -649,6 +697,29 @@ export default function App() {
       unsubNavigate()
     }
   }, [setInitialAppId, setView])
+
+  // Register Tlon (knowledge base) real-time event listeners.
+  // Uses the imported onEvent() transport directly (not api.onEvent) so the
+  // channel mapping in transport.ts methodMap is honored. Progress events
+  // drive animation only; the store re-pulls authoritative status from disk.
+  useEffect(() => {
+    const unsubProgress = onEvent('tlon:ingest-progress', (data) => {
+      useTlonStore.getState().handleIngestProgress(data as IngestProgressEvent)
+    })
+    const unsubStats = onEvent('tlon:stats-updated', (data) => {
+      const { kbId } = data as { kbId: string }
+      if (kbId) useTlonStore.getState().handleStatsUpdated(kbId)
+    })
+    // KB chat turns settle on agent:complete/error. Subscribe globally (like the
+    // main chat, not per-tab) so completion is never missed when the user leaves
+    // the chat tab mid-turn — otherwise the "Searching…" indicator hangs forever.
+    const unsubChat = useTlonStore.getState().subscribeChatEvents()
+    return () => {
+      unsubProgress()
+      unsubStats()
+      unsubChat()
+    }
+  }, [])
 
   // Register in-app toast listener (notification:toast from main process)
   const showToast = useNotificationStore((s) => s.show)
@@ -842,7 +913,8 @@ export default function App() {
       const loadedConfig = response.data as HaloConfig
       setConfig(loadedConfig)  // Sync config to store (was missing, causing empty apiKey in settings)
       // Show setup if first launch or no AI source configured
-      if (loadedConfig.isFirstLaunch || !hasAnyAISource(loadedConfig.aiSources)) {
+      // (modelConfigSkipped honors an explicit deferral from the first-run wizard)
+      if (loadedConfig.isFirstLaunch || (!hasAnyAISource(loadedConfig.aiSources) && !loadedConfig.modelConfigSkipped)) {
         setView('setup')
       } else {
         setView('home')
@@ -907,6 +979,12 @@ export default function App() {
             <AppsPage />
           </Suspense>
         )
+      case 'tlon':
+        return (
+          <Suspense fallback={<PageLoader />}>
+            <TlonPage />
+          </Suspense>
+        )
       default:
         return <SplashPage />
     }
@@ -934,6 +1012,9 @@ export default function App() {
       <UpdateNotification />
       {/* Unified in-app toast notifications */}
       <NotificationToast />
+      {/* At-rest credential decode failure alert (enterprise builds only).
+          Offset below the reconnection bar when it is showing so they stack. */}
+      <CredentialAlertBanner topOffset={showReconnectBanner ? 32 : 0} />
     </div>
   )
 }

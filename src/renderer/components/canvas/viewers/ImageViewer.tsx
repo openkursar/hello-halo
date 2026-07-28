@@ -29,49 +29,100 @@ export function ImageViewer({ tab }: ImageViewerProps) {
   const [imageLoaded, setImageLoaded] = useState(false)
   const [imageError, setImageError] = useState(false)
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 })
+  // True while the image is auto-fitted to the container (never upscaled past
+  // 100%). Manual zoom/pan drops it so resizes stop overriding the user's zoom.
+  const [isFitted, setIsFitted] = useState(true)
+
+  // Scale that fits w×h inside the container, capped at 1 (don't upscale).
+  const fitScaleFor = useCallback((w: number, h: number): number => {
+    const c = containerRef.current
+    if (!c || !w || !h) return 1
+    // Clamp to a positive floor: a container narrower than the padding (or 0
+    // while hidden / mid-resize) would otherwise yield a negative, mirrored scale.
+    return Math.max(0.05, Math.min((c.clientWidth - 48) / w, (c.clientHeight - 48) / h, 1))
+  }, [])
+
+  // Cache-buster: bumps to defeat Chromium's <img> URL cache when the same path is
+  // rewritten in place (in-place overwrite keeps tab.path stable, so the URL would
+  // otherwise be identical and serve a stale image).
+  const [reloadToken, setReloadToken] = useState(() => Date.now())
+  const isFirstRender = useRef(true)
 
   // Get image URL
   // Priority: halo-file:// (custom protocol, fast) > remote download > base64 fallback
-  const imageUrl = tab.path
+  const fileUrl = tab.path
     ? (api.isRemoteMode()
         ? api.getArtifactDownloadUrl(tab.path)
         : `halo-file://${tab.path}`)
+    : ''
+  const imageUrl = fileUrl
+    ? `${fileUrl}${fileUrl.includes('?') ? '&' : '?'}v=${reloadToken}`
     : tab.content
       ? `data:${tab.mimeType || 'image/png'};base64,${tab.content}`
       : ''
 
-  // Reset view when tab changes
+  // Reset view when the viewer switches to another file; also force a fresh fetch so
+  // switching back to a file changed while it was hidden never shows a cached image.
   useEffect(() => {
     setScale(1)
     setPosition({ x: 0, y: 0 })
     setImageLoaded(false)
     setImageError(false)
+    setIsFitted(true)
+    if (isFirstRender.current) {
+      isFirstRender.current = false
+    } else {
+      setReloadToken(t => t + 1)
+    }
   }, [tab.id])
 
-  // Zoom functions
-  const zoomIn = () => setScale(s => Math.min(s * 1.25, 5))
-  const zoomOut = () => setScale(s => Math.max(s / 1.25, 0.1))
+  // Live-refresh when the file currently shown is rewritten on disk.
+  useEffect(() => {
+    if (!tab.path) return
+    return api.onArtifactChanged((data) => {
+      if (data.path === tab.path && (data.type === 'change' || data.type === 'add')) {
+        setImageError(false)
+        setReloadToken(t => t + 1)
+      }
+    })
+  }, [tab.path])
+
+  // Zoom functions — manual zoom exits fitted mode so resizes stop refitting.
+  const zoomIn = () => { setIsFitted(false); setScale(s => Math.min(s * 1.25, 5)) }
+  const zoomOut = () => { setIsFitted(false); setScale(s => Math.max(s / 1.25, 0.1)) }
   const resetZoom = () => {
+    setIsFitted(false)
     setScale(1)
     setPosition({ x: 0, y: 0 })
   }
   const fitToWindow = () => {
-    if (!containerRef.current || !naturalSize.width) return
-    const container = containerRef.current
-    const containerWidth = container.clientWidth - 48
-    const containerHeight = container.clientHeight - 48
-    const scaleX = containerWidth / naturalSize.width
-    const scaleY = containerHeight / naturalSize.height
-    setScale(Math.min(scaleX, scaleY, 1))
+    if (!naturalSize.width) return
+    setScale(fitScaleFor(naturalSize.width, naturalSize.height))
     setPosition({ x: 0, y: 0 })
+    setIsFitted(true)
   }
 
   // Handle wheel zoom
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
+    setIsFitted(false)
     const delta = e.deltaY > 0 ? 0.9 : 1.1
     setScale(s => Math.max(0.1, Math.min(5, s * delta)))
   }, [])
+
+  // Re-fit while in fitted mode when the container resizes (e.g. dragging the
+  // chat/canvas split narrower) so the image never spills out of view.
+  useEffect(() => {
+    const c = containerRef.current
+    if (!c) return
+    const ro = new ResizeObserver(() => {
+      if (!isFitted || !naturalSize.width) return
+      setScale(fitScaleFor(naturalSize.width, naturalSize.height))
+      setPosition({ x: 0, y: 0 })
+    })
+    ro.observe(c)
+    return () => ro.disconnect()
+  }, [isFitted, naturalSize, fitScaleFor])
 
   // Handle drag
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -112,9 +163,14 @@ export function ImageViewer({ tab }: ImageViewerProps) {
   // Image load handlers
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget
-    setNaturalSize({ width: img.naturalWidth, height: img.naturalHeight })
+    const w = img.naturalWidth, h = img.naturalHeight
+    setNaturalSize({ width: w, height: h })
     setImageLoaded(true)
     setImageError(false)
+    // Open fitted to the container so a large image never lands cropped.
+    setScale(fitScaleFor(w, h))
+    setPosition({ x: 0, y: 0 })
+    setIsFitted(true)
   }
 
   const handleImageError = () => {

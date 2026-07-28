@@ -21,13 +21,14 @@ import {
   getConfigPath,
   initializeApp,
   getCredentialsGeneration,
-  migrateCredentialEncryption
+  migrateCredentialEncryption,
+  getCredentialDecodeFailures
 } from '../../../src/main/foundation/config.service'
 import { isCredentialAtRestSafe } from '../../../src/main/foundation/credential-safety'
 import {
-  encodeForStorage,
   decodeFromStorage,
   needsKeyMigration,
+  __encryptLegacyV1ForTests,
   __resetKeyCacheForTests,
 } from '../../../src/main/foundation/crypto-envelope'
 
@@ -294,14 +295,12 @@ describe('migrateCredentialEncryption', () => {
     expect(fs.readFileSync(getConfigPath(), 'utf-8')).toBe(before)
   })
 
-  it('re-encrypts a legacy-seed remote PIN under the master key, preserving other fields', () => {
+  it('re-encrypts a legacy v1 remote PIN to v2, preserving other fields', () => {
     setCredentialAtRestSafe(true)
-    const credKey = path.join(getHaloDir(), 'cred.key')
-
-    // Produce a PIN encoded under the legacy machine seed (master unavailable).
-    fs.writeFileSync(credKey, 'malformed-not-hex')
     __resetKeyCacheForTests()
-    const legacyPin = encodeForStorage('842913')
+
+    // A PIN written by an older build under the gmcred:v1: format.
+    const legacyPin = __encryptLegacyV1ForTests('842913')
     expect(legacyPin.startsWith('gmcred:v1:')).toBe(true)
 
     fs.writeFileSync(
@@ -309,17 +308,14 @@ describe('migrateCredentialEncryption', () => {
       JSON.stringify({ remoteAccess: { enabled: true, port: 3847, password: legacyPin } }),
     )
 
-    // New build establishes a real master key.
-    fs.rmSync(credKey)
-    __resetKeyCacheForTests()
-
     migrateCredentialEncryption()
 
     const after = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'))
     expect(after.remoteAccess.password).not.toBe(legacyPin) // re-encoded
+    expect(after.remoteAccess.password.startsWith('gmcred:v2:')).toBe(true)
     expect(after.remoteAccess.enabled).toBe(true) // preserved
     expect(after.remoteAccess.port).toBe(3847) // preserved
-    expect(needsKeyMigration(after.remoteAccess.password)).toBe(false) // now under master
+    expect(needsKeyMigration(after.remoteAccess.password)).toBe(false) // now v2
     expect(decodeFromStorage(after.remoteAccess.password)).toBe('842913')
   })
 
@@ -341,11 +337,104 @@ describe('migrateCredentialEncryption', () => {
 
     migrateCredentialEncryption()
     const first = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'))
-    expect(first.aiSources.sources[0].apiKey).toMatch(/^gmcred:v1:/)
+    expect(first.aiSources.sources[0].apiKey).toMatch(/^gmcred:v2:/)
 
     // Second run: nothing left to migrate → no rewrite.
     const snapshot = fs.readFileSync(getConfigPath(), 'utf-8')
     migrateCredentialEncryption()
     expect(fs.readFileSync(getConfigPath(), 'utf-8')).toBe(snapshot)
+  })
+})
+
+describe('non-destructive credential guard (issue #172 regression)', () => {
+  beforeEach(() => {
+    setCredentialAtRestSafe(true)
+    __resetKeyCacheForTests()
+  })
+
+  it('a decode failure yields an empty value to consumers but never wipes the stored ciphertext', () => {
+    // An undecodable credential on disk (e.g. legacy safeStorage that can no
+    // longer be decrypted). 'enc:' is always treated as an undecodable failure.
+    const undecodable = 'enc:cannot-recover'
+    fs.writeFileSync(
+      getConfigPath(),
+      JSON.stringify({
+        isFirstLaunch: false,
+        api: { provider: 'openai', apiKey: undecodable, apiUrl: '' },
+      }),
+    )
+
+    // Consumer sees an empty value (not the raw ciphertext)...
+    expect(getConfig().api.apiKey).toBe('')
+    // ...and the failure is reported for the alert.
+    expect(getCredentialDecodeFailures()).toContainEqual({ path: 'api.apiKey', label: 'API key' })
+
+    // An unrelated save must NOT overwrite the preserved ciphertext.
+    saveConfig({ system: { autoLaunch: true } })
+    const onDisk = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'))
+    expect(onDisk.api.apiKey).toBe(undecodable)
+  })
+
+  it('does not surface auto-recoverable internal secrets (device/tunnel) to the user', () => {
+    // Orphaned internal secrets the user cannot possibly re-type. They must not
+    // appear in the alert; the consumer re-issues them automatically.
+    fs.writeFileSync(
+      getConfigPath(),
+      JSON.stringify({
+        isFirstLaunch: false,
+        deviceIdentity: { deviceId: 'dev-1', deviceSecret: 'enc:cannot-recover' },
+        remoteAccess: { namedTunnel: { tunnelSecret: 'enc:cannot-recover' } },
+      }),
+    )
+
+    // Consumers see empty (so re-issue kicks in) and nothing is user-facing.
+    expect(getConfig().deviceIdentity?.deviceSecret).toBe('')
+    expect(getCredentialDecodeFailures()).toEqual([])
+  })
+
+  it('lets the user replace an undecodable credential by re-entering it', () => {
+    fs.writeFileSync(
+      getConfigPath(),
+      JSON.stringify({
+        isFirstLaunch: false,
+        api: { provider: 'openai', apiKey: 'enc:cannot-recover', apiUrl: '' },
+      }),
+    )
+    getConfig() // populate the failed-decode map
+
+    // User re-enters a real key → it is encrypted to v2 and replaces the orphan.
+    saveConfig({ api: { provider: 'openai', apiKey: 'sk-fresh', apiUrl: '' } })
+
+    const onDisk = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'))
+    expect(onDisk.api.apiKey.startsWith('gmcred:v2:')).toBe(true)
+    expect(getConfig().api.apiKey).toBe('sk-fresh')
+  })
+
+  it('one-time copilotIdentity migration preserves an undecodable credential (writes ciphertext, not empty/plaintext)', () => {
+    setCredentialAtRestSafe(true)
+    __resetKeyCacheForTests()
+
+    // Legacy top-level copilotIdentity (triggers the one-time getConfig writeback)
+    // alongside an undecodable credential.
+    const undecodable = 'enc:cannot-recover'
+    fs.writeFileSync(
+      getConfigPath(),
+      JSON.stringify({
+        isFirstLaunch: false,
+        api: { provider: 'openai', apiKey: undecodable, apiUrl: '' },
+        copilotIdentity: { machineId: 'm-1', deviceId: 'd-1' },
+      }),
+    )
+
+    // getConfig performs the copilotIdentity migration write.
+    getConfig()
+
+    const onDisk = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'))
+    // Migration happened...
+    expect(onDisk.copilot?.identity).toEqual({ machineId: 'm-1', deviceId: 'd-1' })
+    expect(onDisk.copilotIdentity).toBeUndefined()
+    // ...without wiping (empty) or leaking (plaintext) the credential: the
+    // original ciphertext is written through untouched.
+    expect(onDisk.api.apiKey).toBe(undecodable)
   })
 })

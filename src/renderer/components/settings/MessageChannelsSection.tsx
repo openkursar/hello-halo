@@ -342,7 +342,11 @@ function InstanceCard({
   permissionDefaults,
 }: InstanceCardProps) {
   const { t } = useTranslation()
-  const isConnected = status?.connected ?? false
+  // Prefer the fine-grained state; fall back to the connected boolean for
+  // providers/statuses that don't report it.
+  const state = status?.state ?? (status?.connected ? 'online' : 'offline')
+  const isConnected = state === 'online'
+  const isStandby = state === 'standby'
   const isEnabled = instance.enabled
   const cfg = instance.config as Record<string, unknown>
   const botId = (cfg.botId as string) || ''
@@ -351,18 +355,23 @@ function InstanceCard({
   const boundApp = automationApps.find(a => a.id === instance.appId)
   const displayName = boundApp?.spec.name || t('Not bound')
 
-  // Status indicator
+  // Status indicator. Standby (superseded by another device) is informational
+  // rather than an error, so it gets its own colour.
   const statusDot = !isEnabled
     ? 'bg-muted-foreground/30'
     : isConnected
       ? 'bg-green-500'
-      : 'bg-amber-500'
+      : isStandby
+        ? 'bg-sky-500'
+        : 'bg-amber-500'
 
   const statusText = !isEnabled
     ? t('Disabled')
     : isConnected
       ? t('Connected')
-      : t('Disconnected')
+      : isStandby
+        ? t('Standby')
+        : t('Disconnected')
 
   const [showMenu, setShowMenu] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -429,6 +438,21 @@ function InstanceCard({
     onChange({ ...instance, streaming: instance.streaming === true ? undefined : true })
   }
 
+  const handleQuoteReplyChange = () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    setDraft(null)
+    // quoteReply defaults to on (true). Toggle off → explicit false; toggle on → undefined (legacy default).
+    const nextQuote = (cfg.quoteReply as boolean) === false ? undefined : false
+    const nextConfig = { ...cfg, quoteReply: nextQuote }
+    // Disabling Quote Reply also disables Streaming, since streaming in group
+    // chats relies on the passive reply path that produces the quote bubble.
+    let nextInstance = { ...instance, config: nextConfig }
+    if (nextQuote === false && instance.streaming === true) {
+      nextInstance = { ...nextInstance, streaming: undefined }
+    }
+    onChange(nextInstance)
+  }
+
   const handleReplyScopeChange = (scope: string) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     setDraft(null)
@@ -436,6 +460,7 @@ function InstanceCard({
   }
 
   const isStreamingEnabled = instance.streaming === true
+  const isQuoteReplyEnabled = (cfg.quoteReply as boolean) !== false
   const replyScope = instance.replyScope ?? 'all'
 
   return (
@@ -644,12 +669,18 @@ function InstanceCard({
                   ? t('Shows thinking process in real-time')
                   : t('Only sends the final reply')}
               </p>
+              {!isQuoteReplyEnabled && (
+                <p className="text-xs text-amber-500">
+                  {t('Streaming requires Quote Reply (group chats)')}
+                </p>
+              )}
             </div>
-            <label className="relative inline-flex items-center cursor-pointer">
+            <label className={`relative inline-flex items-center ${!isQuoteReplyEnabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
               <input
                 type="checkbox"
                 checked={isStreamingEnabled}
                 onChange={handleStreamingChange}
+                disabled={!isQuoteReplyEnabled}
                 className="sr-only peer"
               />
               <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
@@ -662,15 +693,62 @@ function InstanceCard({
             </label>
           </div>
 
+          {/* Quote Reply toggle */}
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <p className="text-sm text-muted-foreground">{t('Quote Reply (Group)')}</p>
+              <p className="text-xs text-muted-foreground/70">
+                {isQuoteReplyEnabled
+                  ? t('Group replies quote the original message')
+                  : t('Group replies are sent as plain text without quote bubbles')}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isQuoteReplyEnabled}
+                onChange={handleQuoteReplyChange}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-secondary rounded-full peer peer-checked:bg-primary transition-colors">
+                <div
+                  className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${
+                    isQuoteReplyEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                  } mt-0.5`}
+                />
+              </div>
+            </label>
+          </div>
+
           {/* ── Permission Control ── */}
           <PermissionSection instance={instance} onChange={onChange} onDebouncedChange={scheduleChange} permissionDefaults={permissionDefaults} />
 
           {/* Connection status */}
           {isEnabled && (
-            <div className={`flex items-center gap-1.5 text-sm ${isConnected ? 'text-green-500' : 'text-amber-500'}`}>
-              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-amber-500'}`} />
-              <span>{isConnected ? t('Connected') : t('Disconnected')}</span>
-            </div>
+            isStandby ? (
+              <div className="space-y-2 rounded-lg bg-sky-500/10 border border-sky-500/30 px-3 py-2">
+                <div className="flex items-center gap-1.5 text-sm text-sky-500">
+                  <div className="w-2 h-2 rounded-full bg-sky-500" />
+                  <span>{t('In use on another device')}</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {t('This bot is currently active on another device. Take over to use it here — the other device will switch to standby.')}
+                </p>
+                <button
+                  type="button"
+                  onClick={onReconnect}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  {t('Use on this device')}
+                </button>
+              </div>
+            ) : (
+              <div className={`flex items-center gap-1.5 text-sm ${isConnected ? 'text-green-500' : 'text-amber-500'}`}>
+                <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-amber-500'}`} />
+                <span>{isConnected ? t('Connected') : t('Disconnected')}</span>
+              </div>
+            )
           )}
         </div>
       )}
@@ -718,6 +796,7 @@ const HALO_MCP_TOGGLES: { key: keyof GuestPolicy; labelKey: string }[] = [
   { key: 'allowNotify',    labelKey: 'Notifications' },
   { key: 'allowApps',      labelKey: 'Digital Humans' },
   { key: 'allowFileSend',  labelKey: 'File Send' },
+  { key: 'allowOcr',       labelKey: 'Text Extraction (OCR)' },
 ]
 
 interface PermissionSectionProps {
@@ -1439,19 +1518,24 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   const weixinIlinkInstances = (instances as ImChannelInstanceConfig[]).filter(i => i.type === 'weixin-ilink-bot')
 
   const wecomConnectedCount = imStatuses.filter(s => s.type === 'wecom-bot' && s.connected).length
+  const wecomStandbyCount = imStatuses.filter(s => s.type === 'wecom-bot' && s.state === 'standby').length
   const weixinConnectedCount = imStatuses.filter(s => s.type === 'weixin-ilink-bot' && s.connected).length
 
   const wecomStatusSummary = wecomInstances.length === 0
     ? t('Not configured')
     : wecomConnectedCount > 0
       ? `${wecomConnectedCount} ${t('connected')}`
-      : t('Disconnected')
+      : wecomStandbyCount > 0
+        ? t('Standby')
+        : t('Disconnected')
 
   const wecomStatusColor = wecomInstances.length === 0
     ? 'bg-muted-foreground/30'
     : wecomConnectedCount > 0
       ? 'bg-green-500'
-      : 'bg-amber-500'
+      : wecomStandbyCount > 0
+        ? 'bg-sky-500'
+        : 'bg-amber-500'
 
   const weixinStatusSummary = weixinIlinkInstances.length === 0
     ? t('Not configured')

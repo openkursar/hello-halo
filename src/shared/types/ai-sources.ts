@@ -66,6 +66,7 @@ export type BuiltinProviderId =
   | 'moonshot'
   | 'moonshot-global'
   | 'zhipu'
+  | 'zhipu-coding'
   | 'minimax'
   | 'minimax-global'
   | 'minimax-token-plan'
@@ -73,6 +74,8 @@ export type BuiltinProviderId =
   | 'yi'
   | 'stepfun'
   | 'openrouter'
+  | 'atlascloud'
+  | 'requesty'
   | 'groq'
   | 'mistral'
   | 'deepinfra'
@@ -118,9 +121,9 @@ export interface ModelOption {
  */
 export const AVAILABLE_MODELS: ModelOption[] = [
   {
-    id: 'claude-mythos-preview',
-    name: 'Claude Mythos (Preview)',
-    description: 'Next-generation frontier model, preview access'
+    id: 'claude-sonnet-5',
+    name: 'Claude Sonnet 5',
+    description: 'Best combination of speed and intelligence, suitable for most tasks'
   },
   {
     id: 'claude-fable-5',
@@ -128,29 +131,19 @@ export const AVAILABLE_MODELS: ModelOption[] = [
     description: 'Frontier model with native 1M context, strongest coding and agentic performance'
   },
   {
-    id: 'claude-opus-4-7',
-    name: 'Claude Opus 4.7',
-    description: 'Latest and most powerful model, great for complex reasoning and architecture decisions'
+    id: 'claude-opus-5',
+    name: 'Claude Opus 5',
+    description: 'Most capable model for complex agentic coding and enterprise work'
+  },
+  {
+    id: 'claude-opus-4-8',
+    name: 'Claude Opus 4.8',
+    description: 'Most capable model for complex agentic coding and enterprise work'
   },
   {
     id: 'claude-opus-4-6',
     name: 'Claude Opus 4.6',
-    description: 'Most powerful model, great for complex reasoning and architecture decisions'
-  },
-  {
-    id: 'claude-opus-4-5-20251101',
-    name: 'Claude Opus 4.5',
-    description: 'great for complex reasoning and architecture decisions'
-  },
-  {
-    id: 'claude-sonnet-4-6',
-    name: 'Claude Sonnet 4.6',
-    description: 'Balanced performance and cost, suitable for most tasks'
-  },
-  {
-    id: 'claude-sonnet-4-5-20250929',
-    name: 'Claude Sonnet 4.5',
-    description: 'Balanced performance and cost, suitable for most tasks'
+    description: 'Powerful model, great for complex reasoning and architecture decisions'
   },
   {
     id: 'claude-haiku-4-5-20251001',
@@ -159,7 +152,20 @@ export const AVAILABLE_MODELS: ModelOption[] = [
   }
 ]
 
-export const DEFAULT_MODEL = 'claude-sonnet-4-6'
+export const DEFAULT_MODEL = 'claude-sonnet-5'
+
+/** Model ids retired upstream — requests with them are rejected by the API. */
+const RETIRED_MODEL_IDS = new Set(['claude-mythos-preview'])
+
+/**
+ * Resolve a stored model id to a usable one: fills empty values and remaps
+ * retired ids to DEFAULT_MODEL so persisted configs keep working after a
+ * model is delisted.
+ */
+export function resolveModelId(model?: string | null): string {
+  if (!model || RETIRED_MODEL_IDS.has(model)) return DEFAULT_MODEL
+  return model
+}
 
 // ============================================================================
 // AI Source Configuration Types (v2)
@@ -306,6 +312,29 @@ export interface LegacyAISourcesConfig {
 // ============================================================================
 
 /**
+ * Ready-to-POST descriptor for a direct, non-streaming HTTP call to the active
+ * source — the path used by callers that bypass the SDK and the compat router
+ * (e.g. Tlon ingest). Resolved by `AISourceManager.getDirectCallEndpoint()`
+ * from the same `getBackendConfig()` logic the agent path uses, so URL
+ * normalization, wire format and auth headers stay defined in one place.
+ */
+export interface DirectCallEndpoint {
+  /** Fully composed endpoint URL (auth path already appended). */
+  url: string
+  /** Auth + content-type headers, ready to send as-is. */
+  headers: Record<string, string>
+  /** Which request/response shape the caller must speak. */
+  wireFormat: 'anthropic' | 'openai'
+  /** Model id to send on the wire. */
+  model: string
+  /**
+   * Resolved apiType, when known. Callers that cannot speak `responses` / `kiro`
+   * (which need the router's translation layer) should reject those values.
+   */
+  apiType?: 'chat_completions' | 'responses' | 'anthropic_passthrough' | 'kiro'
+}
+
+/**
  * Configuration for making API requests
  * Used by OpenAI compat router
  */
@@ -321,6 +350,14 @@ export interface BackendRequestConfig {
   profileArn?: string
   /** Provider adapter ID — selects a registered adapter for request/response transformations */
   adapterId?: string
+  /**
+   * Explicit per-model vision override from Settings > Provider > Model Config.
+   * When set, it overrides the OpenAI-compat converter's name-based vision
+   * inference when deciding whether to keep or strip image content.
+   * `undefined` = no override; the converter falls back to its built-in
+   * blacklist/keyword heuristic (`supportsVisionById`).
+   */
+  visionOverride?: boolean
 }
 
 // ============================================================================
@@ -403,6 +440,30 @@ export function getCurrentModelName(config: AISourcesConfig): string {
 
   const modelOption = source.availableModels.find(m => m.id === source.model)
   return modelOption?.name || source.model
+}
+
+/**
+ * Resolve the display name for an explicit source + model pair, used by the
+ * per-conversation model selector (a conversation may be pinned to a model that
+ * differs from the current global selection).
+ *
+ * Falls back to the current global model name when the pin is absent or its
+ * source is no longer available — so legacy conversations and pins whose source
+ * was deleted still render a sensible label.
+ */
+export function getModelDisplayName(
+  config: AISourcesConfig,
+  sourceId?: string,
+  modelId?: string
+): string {
+  if (sourceId && modelId) {
+    const source = config.sources.find(s => s.id === sourceId)
+    if (source) {
+      const modelOption = source.availableModels.find(m => m.id === modelId)
+      return modelOption?.name || modelId
+    }
+  }
+  return getCurrentModelName(config)
 }
 
 /**
@@ -558,11 +619,39 @@ export interface ProviderDocsLink {
 }
 
 /**
+ * Metered-quota snapshot reported by a provider that implements getQuota().
+ * Pure display view-model: the provider translates whatever its server exposes
+ * into this uniform report, and no backend field shapes leak into this type.
+ */
+export interface AuthQuotaSnapshot {
+  /** Number shown on the pill; progress = remaining / total */
+  remaining: number
+  total: number
+  used: number
+  /** Display label for the number, e.g. { 'zh-CN': '积分', en: 'credits' } */
+  unit?: LocalizedText
+  /**
+   * Currency-style prefix symbol (e.g. "$", "¥") shown before the number when
+   * the amounts are money-denominated. Mutually exclusive with `unit` (a
+   * suffix). Absent for point/token quotas.
+   */
+  symbol?: string
+  /** Epoch seconds of the next quota reset; renders a countdown when present */
+  nextResetTime?: number
+  /** Breakdown rows shown in the popover, e.g. base / bonus pools */
+  segments?: { label: LocalizedText; value: number }[]
+  /** External page for topping up / earning quota; opens in system browser */
+  detailsUrl?: string
+  /** Button label for detailsUrl. Defaults to a generic "Manage quota" */
+  detailsLabel?: LocalizedText
+}
+
+/**
  * Authentication provider entry as declared in product.json `authProviders[]`.
  *
  * Used as the single source of truth across the main process loader
  * (`src/main/services/ai-sources/auth-loader.ts`) and the renderer setup UI
- * (`LoginSelector.tsx`, `SetupPage.tsx`, `ApiSetup.tsx`). Keeping the type here
+ * (`LoginSelector.tsx`, `SetupPage.tsx`, `SetupProviderConfig.tsx`). Keeping the type here
  * prevents the two layers from drifting as fields are added (e.g. `preset`).
  *
  * Three mutually-exclusive shapes are supported by the loader:
@@ -585,6 +674,14 @@ export interface AuthProviderConfig {
   recommended: boolean
   /** Whether this provider is enabled */
   enabled: boolean
+  /**
+   * Hide this entry from the first-run login selector while keeping it available
+   * in the in-app AI source settings. For providers that are valid but should not
+   * lead onboarding (e.g. an account type most users won't have on first run).
+   * Defaults to visible when absent. Orthogonal to `enabled`, which removes the
+   * provider everywhere.
+   */
+  setupHidden?: boolean
   /** Path to an external provider module, resolved relative to product.json */
   path?: string
   /** Whether this is a built-in provider (loaded by manager, no path required) */

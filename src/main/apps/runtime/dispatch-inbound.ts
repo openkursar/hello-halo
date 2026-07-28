@@ -29,10 +29,19 @@ import { broadcastToAll } from '../../http/websocket'
 import { stopGeneration } from '../../services/agent/control'
 import { activeSessions } from '../../services/agent/session-manager'
 import { setImPermissionContext, clearImPermissionContext } from './im-permission-registry'
+import { setImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
 import { FileExportGate } from './file-export-gate'
-import { getSpaceDir } from '../../services/space.service'
+import { truncateUtf16Safe } from './text-truncate'
+import { getSpace, getSpaceDir } from '../../services/space.service'
+import {
+  getPendingRelayStore,
+  renderRelayContext,
+  sanitizeRuntimeTags,
+  buildQuoteFromMessage,
+} from './pending-relays'
+import { resolveTranscriptPath } from './session-store'
 import { maybeClaimOwner } from './im-channels/owner-claim'
 import { getImChannelsPermissionDefaults } from '../../foundation/product-config'
 
@@ -213,7 +222,7 @@ const supplementBuffers = new Map<string, SupplementEntry[]>()
 function truncatePreview(body: string): string {
   const trimmed = body.trim().replace(/\s+/g, ' ')
   if (trimmed.length <= SUPPLEMENT_PREVIEW_MAX) return trimmed || '(empty)'
-  return trimmed.slice(0, SUPPLEMENT_PREVIEW_MAX) + '...'
+  return truncateUtf16Safe(trimmed, SUPPLEMENT_PREVIEW_MAX) + '...'
 }
 
 function buildSupplementAck(buffer: SupplementEntry[]): string {
@@ -258,7 +267,7 @@ function buildRoundSwitchPrefix(buffer: SupplementEntry[]): string {
 }
 
 /** Drop all buffered supplements for a conversation, disposing stream sessions. */
-function clearSupplementBuffer(conversationId: string): SupplementEntry[] {
+export function clearSupplementBuffer(conversationId: string): SupplementEntry[] {
   const entries = supplementBuffers.get(conversationId)
   if (!entries || entries.length === 0) {
     supplementBuffers.delete(conversationId)
@@ -317,15 +326,16 @@ function buildMergedMessageText(
 ): string {
   if (chatType === 'direct') {
     return entries
-      .map((e) => e.msg.body)
+      .map((e) => sanitizeRuntimeTags(e.msg.body))
       .filter((b) => b && b.length > 0)
       .join('\n')
   }
   return entries
     .map((e) => {
       const senderName = e.msg.fromName ?? e.msg.from
-      if (!e.msg.from) return e.msg.body
-      return `<msg-sender id="${e.msg.from}" name="${senderName}" />\n${e.msg.body}`
+      const body = sanitizeRuntimeTags(e.msg.body)
+      if (!e.msg.from) return body
+      return `<msg-sender id="${e.msg.from}" name="${senderName}" />\n${body}`
     })
     .filter((b) => b && b.length > 0)
     .join('\n')
@@ -567,7 +577,7 @@ export async function dispatchInboundMessage(
     registry.register(app.id, msg.channel, msg.chatId, msg.chatType, instanceId, {
       displayName,
       lastSender: msg.fromName,
-      lastMessage: msg.body.slice(0, 50),
+      lastMessage: truncateUtf16Safe(msg.body, 50),
     })
 
     // Notify renderer of session update for real-time panel refresh
@@ -577,7 +587,7 @@ export async function dispatchInboundMessage(
       chatId: msg.chatId,
       chatType: msg.chatType,
       instanceId,
-      lastMessage: msg.body.slice(0, 50),
+      lastMessage: truncateUtf16Safe(msg.body, 50),
       lastSender: msg.fromName,
     }
     sendToRenderer('app:im-session-updated', sessionEvent)
@@ -616,6 +626,8 @@ export async function dispatchInboundMessage(
     try {
       await clearImSession(app.id, app.spaceId!, msg.channel, msg.chatType, msg.chatId)
       clearImPermissionContext(conversationId)
+      // Undelivered relay context belongs to the discarded conversation.
+      getPendingRelayStore()?.clear(conversationId)
       await reply.send('Context cleared. Starting a fresh conversation.')
     } catch (err) {
       console.error(`${LOG_TAG} Failed to clear context: session=${conversationId}`, err)
@@ -651,6 +663,8 @@ export async function dispatchInboundMessage(
   // ── Identity injection ───────────────────────────────
   // Direct: senderIdentity in system prompt. Group: per-message <msg-sender> tag.
   // Pre-built paths (from flushSupplementBuffer) short-circuit here.
+  // Runtime tags are escaped out of the body first: the whole identity scheme
+  // rests on those tags being system-emitted only.
   const senderName = msg.fromName ?? msg.from
   let messageText: string
   let senderIdentity: { id: string; name: string } | undefined
@@ -659,15 +673,16 @@ export async function dispatchInboundMessage(
     messageText = options.preBuiltMessageText
     senderIdentity = options.preBuiltSenderIdentity
   } else if (msg.chatType === 'direct') {
-    messageText = msg.body
+    messageText = sanitizeRuntimeTags(msg.body)
     if (msg.from) {
       senderIdentity = { id: msg.from, name: senderName }
     }
   } else {
     // Group: per-message sender tag (AI sees who said what in conversation history)
+    const body = sanitizeRuntimeTags(msg.body)
     messageText = msg.from
-      ? `<msg-sender id="${msg.from}" name="${senderName}" />\n${msg.body}`
-      : msg.body
+      ? `<msg-sender id="${msg.from}" name="${senderName}" />\n${body}`
+      : body
   }
 
   // Resolve owner status and write permission context to the registry.
@@ -689,6 +704,16 @@ export async function dispatchInboundMessage(
     ownerIds: hasOwnerRestriction ? owners! : undefined,
   })
 
+  // Register the active round's streaming handle ONLY on the start-of-round
+  // path — never on the supplement-buffer branch above (which returns early).
+  // A buffered supplement's reply.streaming belongs to a round that will
+  // never start; registering it would overwrite the running round's handle
+  // and leave the live stream undiscoverable to stopImSession. stopImSession
+  // must always reach the handle of the round currently in flight.
+  if (reply.streaming) {
+    setImStreamHandle(conversationId, reply.streaming)
+  }
+
   // Inject file attachment context so the AI can access them via the Read tool.
   // Images are passed separately as multimodal input (see `images` below);
   // files and videos are described here so the AI knows to use Read/Bash.
@@ -697,6 +722,44 @@ export async function dispatchInboundMessage(
       .map(a => `- [${a.type}] ${a.filename}: ${a.localPath}`)
       .join('\n')
     messageText += `\n\n[Attached files — use the Read tool to access their content]\n${fileLines}`
+  }
+
+  // ── Cross-session relay context ───────────────────────
+  // Messages previously pushed to THIS chat via notify_bot (from other
+  // sessions) left no trace in this session's AI context — the push was pure
+  // SDK transport. Append them so they ride this inbound message into the
+  // engine's history, the only engine-agnostic route in.
+  //
+  // Appended, never prefixed: position 0 belongs to <msg-sender> (the identity
+  // rules define authority by position), and a prefix would also break slash
+  // commands and skills, which must start the message.
+  //
+  // Events are committed only once the engine accepts the message, so any
+  // failure in between re-delivers them with the next inbound message.
+  const relayStore = getPendingRelayStore()
+  const pendingRelays = relayStore?.peek(conversationId) ?? []
+  let relayIdsToCommit: string[] = []
+  if (pendingRelays.length > 0) {
+    try {
+      const spacePath = getSpace(app.spaceId!)?.path ?? ''
+      const relayContext = renderRelayContext(pendingRelays, {
+        includeOrigin: isOwner,
+        allowTranscript: hasOwnerRestriction && isOwner,
+        resolveTranscriptPath: spacePath
+          ? (e) => resolveTranscriptPath(spacePath, e.source.appId, e.source.runId)
+          : undefined,
+      })
+      messageText += `\n\n${relayContext}`
+      relayIdsToCommit = pendingRelays.map(e => e.id)
+      console.log(
+        `${LOG_TAG} Appended ${pendingRelays.length} relay event(s): session=${conversationId}, ` +
+        `origin=${isOwner}, transcript=${hasOwnerRestriction && isOwner}`
+      )
+    } catch (err) {
+      // Never let relay rendering cost the user their message; with nothing to
+      // commit the events stay queued for the next inbound message.
+      console.error(`${LOG_TAG} Relay rendering failed: session=${conversationId}`, err)
+    }
   }
 
   // FileExportGate roots = the space's working directory (matches the AI's
@@ -761,6 +824,21 @@ export async function dispatchInboundMessage(
       senderIdentity,
       imSession,
 
+      // Relay origin for pushes this run makes. Captured from the raw inbound
+      // body (assembled text carries runtime tags and, after a relay was
+      // consumed, the previous hop's block). The subject is set for group chats
+      // too, unlike senderIdentity, which is deliberately direct-only.
+      relayOrigin: {
+        subject: msg.from ? { id: msg.from, name: senderName } : undefined,
+        quote: buildQuoteFromMessage(msg.body, senderName),
+      },
+
+      // Relay events are consumed only when the engine has taken the message:
+      // from here on the appended block lives in its history permanently.
+      onMessageAccepted: relayIdsToCommit.length > 0
+        ? () => relayStore?.commit(conversationId, relayIdsToCommit)
+        : undefined,
+
       // Forward progress events to streaming handle (if channel supports streaming)
       onProgress: reply.streaming
         ? (event: ProgressEvent) => {
@@ -790,7 +868,7 @@ export async function dispatchInboundMessage(
         // we must still finish the streaming session (the only normal-path
         // terminator), but surface a notice rather than a blank message.
         const replyText = finalContent.trim()
-          ? finalContent.slice(0, MAX_REPLY_LENGTH)
+          ? truncateUtf16Safe(finalContent, MAX_REPLY_LENGTH)
           : EMPTY_RESPONSE_NOTICE
         const sendFn = reply.streaming
           ? () => reply.streaming!.finish(replyText)

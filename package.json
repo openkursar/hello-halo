@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.10-rc.29",
+  "version": "2.1.13-rc.1",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.mjs",
@@ -10,17 +10,20 @@
     "dev": "npm run bundle:builtin && cross-env HALO_DATA_DIR=~/.halo-dev electron-vite dev",
     "build": "electron-vite build",
     "prebuild": "node scripts/sync-builtin-apps.mjs",
-    "bundle:builtin": "node scripts/sync-builtin-apps.mjs",
+    "bundle:builtin": "node scripts/sync-builtin-apps.mjs --interactive",
+    "product": "node scripts/select-product.mjs",
     "start": "electron-vite preview",
     "postinstall": "node scripts/postinstall.mjs",
     "bump-rc": "node scripts/bump-rc-version.mjs",
-    "build:mac": "npm run bump-rc && npm run prepare:all && npm run build && electron-builder --mac",
+    "build:mac": "export CSC_IDENTITY_AUTO_DISCOVERY=false && npm run bump-rc && npm run prepare:all && npm run build && electron-builder --mac",
+    "build:mac-signed": "bash scripts/build-mac-signed.sh",
     "build:win": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform win && npm run build && electron-builder --win",
     "build:win-x64": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform win && npm run build && electron-builder --win --x64",
     "prepare": "node scripts/prepare-binaries.mjs",
     "prepare:all": "node scripts/prepare-binaries.mjs --platform all",
     "build:mac-x64": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform mac-x64 && npm run build && electron-builder --mac --x64",
     "build:linux": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform linux && npm run build && electron-builder --linux",
+    "build:server": "bash scripts/build-server-halo.sh",
     "icons": "bash scripts/generate-icons.sh",
     "release": "npm run prepare:all && npm run build && electron-builder --mac --win --publish always",
     "release:mac": "npm run prepare:all && npm run build && electron-builder --mac --publish always",
@@ -85,6 +88,9 @@
     "@codemirror/search": "^6.6.0",
     "@codemirror/state": "^6.5.4",
     "@codemirror/view": "^6.39.11",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@electron-toolkit/preload": "^3.0.0",
     "@electron-toolkit/utils": "^3.0.0",
     "@lezer/highlight": "^1.2.3",
@@ -97,6 +103,9 @@
     "@tailwindcss/typography": "^0.5.19",
     "@types/diff": "^7.0.2",
     "@wecom/aibot-node-sdk": "^1.0.6",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/headless": "^5.5.0",
+    "@xterm/xterm": "^5.5.0",
     "better-sqlite3": "^12.6.2",
     "boring-avatars": "^2.0.4",
     "cloudflared": "^0.7.1",
@@ -116,6 +125,7 @@
     "ignore": "^7.0.5",
     "imapflow": "^1.3.1",
     "jsonrepair": "^3.13.3",
+    "jszip": "^3.10.1",
     "katex": "^0.16.47",
     "lucide-react": "^0.555.0",
     "mailparser": "^3.9.8",
@@ -140,6 +150,8 @@
     "sm-crypto": "^0.4.0",
     "streamdown": "^2.2.0",
     "tailwind-merge": "^2.2.0",
+    "tesseract.js": "^5.1.1",
+    "unpdf": "^1.6.2",
     "uuid": "^13.0.0",
     "ws": "^8.18.3",
     "yaml": "^2.8.2",
@@ -192,9 +204,18 @@
     "files": [
       "out/**/*",
       "resources/**/*",
+      "!resources/ocr/**/*",
+      "!resources/git-bash/**/*",
       "product.json",
-      "halo-webank/build/dist/**/*",
-      "!node_modules/better-sqlite3/prebuilds"
+      "halo-local/dist/**/*",
+      "!node_modules/better-sqlite3/prebuilds",
+      "!node_modules/@capacitor/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/ocr",
+        "to": "ocr"
+      }
     ],
     "asarUnpack": [
       "node_modules/@openai/codex/bin/**/*",
@@ -204,7 +225,9 @@
       "node_modules/cloudflared/**/*",
       "node_modules/@parcel/watcher-*/**/*",
       "node_modules/better-sqlite3/build/Release/*.node",
-      "node_modules/node-pty/prebuilds/**"
+      "node_modules/node-pty/prebuilds/**",
+      "node_modules/tesseract.js/**",
+      "node_modules/tesseract.js-core/**"
     ],
     "publish": {
       "provider": "github",
@@ -217,6 +240,8 @@
       "icon": "resources/icon.icns",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist",
       "notarize": false,
       "target": [
         {
@@ -261,6 +286,12 @@
     },
     "win": {
       "icon": "resources/icon.ico",
+      "extraResources": [
+        {
+          "from": "resources/git-bash",
+          "to": "git-bash"
+        }
+      ],
       "target": [
         {
           "target": "nsis",

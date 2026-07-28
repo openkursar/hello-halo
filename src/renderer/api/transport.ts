@@ -118,7 +118,13 @@ export function getRemoteServerUrl(): string {
     }
     return url
   }
-  return window.location.origin
+  // Remote: derive the base from the directory the app is served from, so a
+  // reverse-proxy path prefix (e.g. WFaaS serves the app under /fc-xxx/) is
+  // preserved on API and WebSocket requests — origin alone would drop it.
+  // SPA assets are already relative to this base; new URL('.', …) yields the
+  // mount directory, and we strip the trailing slash so `${base}${path}`
+  // (path begins with '/') composes correctly.
+  return new URL('.', document.baseURI).href.replace(/\/$/, '')
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +397,19 @@ export function unsubscribeFromConversation(conversationId: string): void {
 }
 
 /**
+ * Send a raw message over the active WebSocket (remote/Capacitor only).
+ * Returns true if the message was sent. Used for low-latency terminal input so
+ * remote keyboard takeover does not incur an HTTP round-trip per keystroke.
+ */
+export function sendWsMessage(type: string, payload: unknown): boolean {
+  if (wsConnection?.readyState === WebSocket.OPEN) {
+    wsConnection.send(JSON.stringify({ type, payload }))
+    return true
+  }
+  return false
+}
+
+/**
  * Force immediate WebSocket reconnection (skip backoff timer).
  * Used when the app returns to foreground and needs to recover immediately.
  */
@@ -432,11 +451,17 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
       'agent:ask-question': 'onAgentAskQuestion',
       'agent:session-info': 'onAgentSessionInfo',
       'agent:turn-start': 'onAgentTurnStart',
+      'toolsets:changed': 'onToolsetsChanged',
+      'toolsets:requested': 'onToolsetsRequested',
+      'terminal:data': 'onTerminalData',
+      'terminal:lifecycle': 'onTerminalLifecycle',
       'remote:status-change': 'onRemoteStatusChange',
+      'credential:decrypt-failed': 'onCredentialDecryptFailed',
       'browser:state-change': 'onBrowserStateChange',
       'browser:zoom-changed': 'onBrowserZoomChanged',
       'canvas:tab-action': 'onCanvasTabAction',
       'ai-browser:active-view-changed': 'onAIBrowserActiveViewChanged',
+      'ai-browser:view-gone': 'onAIBrowserViewGone',
       'artifact:tree-update': 'onArtifactTreeUpdate',
       'perf:snapshot': 'onPerfSnapshot',
       'perf:warning': 'onPerfWarning',
@@ -447,6 +472,8 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
       'app:im-session-updated': 'onImSessionUpdated',
       'im-channels:instance-updated': 'onImChannelInstanceUpdated',
       'notification:toast': 'onNotificationToast',
+      'tlon:stats-updated': 'onTlonStatsUpdated',
+      'tlon:ingest-progress': 'onTlonIngestProgress',
       'store:sync-status-changed': 'onStoreSyncStatusChanged',
       'store:upgrade-available': 'onStoreUpgradeAvailable',
     }

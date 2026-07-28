@@ -191,5 +191,25 @@ describe('agent/helpers — MCP command blacklist runtime filter', () => {
       )
       expect(Object.keys(result)).toEqual(['echo-mcp'])
     })
+
+    it('skips a dependency explicitly disabled for this digital human (enabled: false)', () => {
+      setInstalledMcps([
+        stdioMcp('echo-mcp', 'echo'),
+        stdioMcp('cat-mcp', 'cat'),
+      ])
+      const result = getMcpServersForRequires(
+        [{ id: 'echo-mcp', enabled: false }, { id: 'cat-mcp' }],
+        SPACE,
+      )
+      // echo-mcp is installed + active but the per-app switch is off → excluded.
+      // cat-mcp has no flag → treated as enabled → injected.
+      expect(Object.keys(result)).toEqual(['cat-mcp'])
+    })
+
+    it('injects a dependency with enabled: true (explicit) same as an absent flag', () => {
+      setInstalledMcps([stdioMcp('echo-mcp', 'echo')])
+      const result = getMcpServersForRequires([{ id: 'echo-mcp', enabled: true }], SPACE)
+      expect(Object.keys(result)).toEqual(['echo-mcp'])
+    })
   })
 })

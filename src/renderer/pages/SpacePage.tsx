@@ -28,7 +28,9 @@ import { Header } from '../components/layout/Header'
 import { SidebarToggle } from '../components/layout/SidebarToggle'
 import { SpaceSelector } from '../components/layout/SpaceSelector'
 import { ModelSelector } from '../components/layout/ModelSelector'
-import { ContentCanvas } from '../components/canvas'
+import { QuotaPill } from '../components/layout/QuotaPill'
+import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
+import { ContentCanvas, TerminalCloseGuard } from '../components/canvas'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
 import { api } from '../api'
 import { useLayoutPreferences } from '../hooks/useLayoutPreferences'
@@ -61,6 +63,15 @@ export function SpacePage() {
   const startGitBashInstall = useAppStore(state => state.startGitBashInstall)
   const sidebarOpenConfig = useAppStore(state => state.config?.layout?.sidebarOpen)
   const artifactRailWidthConfig = useAppStore(state => state.config?.layout?.artifactRailWidth)
+
+  // Active source id for the header quota pill (string identity → re-renders
+  // only when the selection actually changes).
+  const currentSourceId = useAppStore(state => {
+    const src = state.config?.aiSources
+    return src?.version === 2 && src.currentId && src.sources.some(s => s.id === src.currentId)
+      ? src.currentId
+      : undefined
+  })
 
   const currentSpace = useSpaceStore(state => state.currentSpace)
 
@@ -307,6 +318,11 @@ export function SpacePage() {
 
   return (
     <div className="h-full w-full flex flex-col">
+      {/* Terminal pty close policy — mounted here (not in the canvas) so it stays
+          active for closeAll/space-switch teardown even when the canvas is
+          collapsed. Renders its prompt via a portal; no layout footprint. */}
+      <TerminalCloseGuard />
+
       {/*
         ChatCapsule overlay is now managed via IPC to render above BrowserView.
         The overlay SPA is a separate WebContentsView that appears above all views.
@@ -358,17 +374,25 @@ export function SpacePage() {
               <span className="hidden sm:inline">{t('New conversation')}</span>
             </button>
 
-            {/* Search Icon - hidden on mobile, accessible via shortcut */}
+            {/* Search Icon - hidden on mobile (in overflow menu) */}
             <div className="hidden sm:block">
               <SearchIcon onClick={openSearch} isInSpace={true} />
             </div>
 
-            {/* Model Selector */}
-            <ModelSelector />
+            {/* Metered quota — renders only when the active source reports it */}
+            <QuotaPill sourceId={currentSourceId} />
+
+            {/* Model Selector - hidden on mobile (in overflow menu) */}
+            <div className="hidden sm:block">
+              <ModelSelector />
+            </div>
+
+            {/* Mobile: overflow menu collapses model/search/settings */}
+            <MobileOverflowMenu onSearch={() => openSearch('space')} />
 
             <button
               onClick={() => setView('settings')}
-              className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
+              className="hidden sm:block p-1.5 hover:bg-secondary rounded-lg transition-colors"
               title={t('Settings')}
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

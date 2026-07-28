@@ -13,7 +13,8 @@ import { getSpace } from '../space.service'
 import { getAISourceManager } from '../ai-sources'
 import { getAppManager } from '../app-bridge'
 import type { McpSpec } from '../../apps/spec/schema'
-import type { BackendRequestConfig, AISource } from '../../../shared/types/ai-sources'
+import type { InstalledApp } from '../../../shared/apps/app-types'
+import { resolveModelId, type BackendRequestConfig, type AISource } from '../../../shared/types/ai-sources'
 import { modelCapabilitiesService } from '../model-capabilities.service'
 import { isMcpCommandBlocked } from '../security-policy'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
@@ -255,7 +256,7 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
     console.log(`[Agent] Using OpenAI-compatible API (${currentSource?.provider || 'unknown'}) via AISourceManager`)
   }
 
-  const modelId = backendConfig.model || 'claude-opus-4-5-20251101'
+  const modelId = resolveModelId(backendConfig.model)
   const modelOption = currentSource?.availableModels?.find(m => m.id === modelId)
   const displayModel = modelOption?.name || modelId
   // Capabilities MUST resolve against the wire model id. Both the preset
@@ -278,7 +279,9 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
     forceStream: backendConfig.forceStream,
     filterContent: backendConfig.filterContent,
     adapterId: backendConfig.adapterId,
+    visionOverride: backendConfig.visionOverride,
     capabilities,
+    supportsVision: modelOption?.supportsVision,
   }
 }
 
@@ -351,8 +354,41 @@ export async function getApiCredentialsForSource(
     forceStream: backendConfig.forceStream,
     filterContent: backendConfig.filterContent,
     adapterId: backendConfig.adapterId,
+    visionOverride: backendConfig.visionOverride,
     capabilities,
+    supportsVision: modelOption?.supportsVision,
   }
+}
+
+/**
+ * Get API credentials for a conversation, honoring its per-conversation model
+ * pin (Cursor-style) and falling back to the global selection.
+ *
+ * Resolution order:
+ *  1. Conversation has a `modelSourceId` that still exists in config → resolve
+ *     from that source + `modelId` (reuses the per-app override path).
+ *  2. Otherwise (legacy conversation with no pin, or a pin whose source was
+ *     deleted) → fall back to the global current source via getApiCredentials.
+ *
+ * Accepts a minimal structural shape rather than the full Conversation type to
+ * avoid coupling the agent module to conversation.service's internal interface.
+ */
+export async function getApiCredentialsForConversation(
+  config: ReturnType<typeof getConfig>,
+  conversation: { modelSourceId?: string; modelId?: string } | null | undefined
+): Promise<ApiCredentials> {
+  const sourceId = conversation?.modelSourceId
+  if (sourceId) {
+    const aiSources = config.aiSources
+    const sourceExists = aiSources?.version === 2 && aiSources.sources.some(s => s.id === sourceId)
+    if (sourceExists) {
+      return getApiCredentialsForSource(config, sourceId, conversation?.modelId)
+    }
+    console.warn(
+      `[AgentService] Conversation model pin source ${sourceId} unavailable, falling back to global selection`
+    )
+  }
+  return getApiCredentials(config)
 }
 
 /**
@@ -399,8 +435,70 @@ export function credentialsToBackendConfig(
     forceStream: credentials.forceStream,
     filterContent: credentials.filterContent,
     adapterId: credentials.adapterId,
+    visionOverride: credentials.visionOverride,
     ...overrides
   }
+}
+
+/**
+ * Convert an installed MCP app to an SDK `mcpServers` entry.
+ *
+ * Single conversion point shared by session config assembly, automation
+ * least-privilege injection, and the connection probe — so all consumers
+ * see the exact same server definition (transport, merged env, headers).
+ *
+ * Returns null when the app has no usable server definition or its stdio
+ * command is blocked by security policy.
+ */
+export function appToSdkServerConfig(app: InstalledApp): Record<string, unknown> | null {
+  if (app.spec.type !== 'mcp') return null
+  const mcpServer = (app.spec as McpSpec).mcp_server
+  if (!mcpServer) return null // defensive: required by schema but guard against old data
+
+  const serverConfig: Record<string, unknown> = {}
+
+  // Map transport type
+  if (mcpServer.transport === 'sse') {
+    serverConfig.type = 'sse'
+    serverConfig.url = mcpServer.command // For SSE, command holds URL
+  } else if (mcpServer.transport === 'streamable-http') {
+    serverConfig.type = 'http'
+    serverConfig.url = mcpServer.command
+  } else {
+    // stdio (default)
+    // Defense in depth: if the blacklist was updated after this MCP was
+    // installed, skip the entry here so the SDK never spawns the child
+    // process. The install-time check in AppManager.install() is the
+    // primary gate; this runtime filter only catches the
+    // "policy tightened post-install" case. No-op on open-source builds.
+    if (isMcpCommandBlocked(mcpServer.command)) {
+      console.warn(
+        `[Security] Skipped MCP '${app.specId}': command '${mcpServer.command}' blocked by policy`
+      )
+      return null
+    }
+    serverConfig.command = mcpServer.command
+    if (mcpServer.args?.length) serverConfig.args = mcpServer.args
+    if (mcpServer.cwd) serverConfig.cwd = mcpServer.cwd
+  }
+  // Merge static spec env with user-provided config values (e.g. API tokens).
+  // userConfig keys map directly to env var names; user values override spec defaults.
+  const mergedEnv: Record<string, string> = {
+    ...(mcpServer.env ?? {}),
+    ...Object.fromEntries(
+      Object.entries(app.userConfig ?? {})
+        .filter(([, v]) => v != null)
+        .map(([k, v]) => [k, String(v)])
+    )
+  }
+  if (Object.keys(mergedEnv).length > 0) {
+    serverConfig.env = mergedEnv
+  }
+  if (mcpServer.headers && Object.keys(mcpServer.headers).length > 0) {
+    serverConfig.headers = mcpServer.headers
+  }
+
+  return serverConfig
 }
 
 /**
@@ -418,53 +516,8 @@ export function getDbMcpServers(spaceId: string): Record<string, unknown> | null
   const servers: Record<string, unknown> = {}
   for (const app of mcpApps) {
     if (app.status === 'paused') continue
-    if (app.spec.type !== 'mcp') continue
-    const mcpServer = (app.spec as McpSpec).mcp_server
-    if (!mcpServer) continue // defensive: required by schema but guard against old data
-
-    const serverConfig: Record<string, unknown> = {}
-
-    // Map transport type
-    if (mcpServer.transport === 'sse') {
-      serverConfig.type = 'sse'
-      serverConfig.url = mcpServer.command // For SSE, command holds URL
-    } else if (mcpServer.transport === 'streamable-http') {
-      serverConfig.type = 'http'
-      serverConfig.url = mcpServer.command
-    } else {
-      // stdio (default)
-      // Defense in depth: if the blacklist was updated after this MCP was
-      // installed, skip the entry here so the SDK never spawns the child
-      // process. The install-time check in AppManager.install() is the
-      // primary gate; this runtime filter only catches the
-      // "policy tightened post-install" case. No-op on open-source builds.
-      if (isMcpCommandBlocked(mcpServer.command)) {
-        console.warn(
-          `[Security] Skipped MCP '${app.specId}': command '${mcpServer.command}' blocked by policy`
-        )
-        continue
-      }
-      serverConfig.command = mcpServer.command
-      if (mcpServer.args?.length) serverConfig.args = mcpServer.args
-      if (mcpServer.cwd) serverConfig.cwd = mcpServer.cwd
-    }
-    // Merge static spec env with user-provided config values (e.g. API tokens).
-    // userConfig keys map directly to env var names; user values override spec defaults.
-    const mergedEnv: Record<string, string> = {
-      ...(mcpServer.env ?? {}),
-      ...Object.fromEntries(
-        Object.entries(app.userConfig ?? {})
-          .filter(([, v]) => v != null)
-          .map(([k, v]) => [k, String(v)])
-      )
-    }
-    if (Object.keys(mergedEnv).length > 0) {
-      serverConfig.env = mergedEnv
-    }
-    if (mcpServer.headers && Object.keys(mcpServer.headers).length > 0) {
-      serverConfig.headers = mcpServer.headers
-    }
-
+    const serverConfig = appToSdkServerConfig(app)
+    if (!serverConfig) continue
     servers[app.specId] = serverConfig
   }
 
@@ -483,7 +536,7 @@ export function getDbMcpServers(spaceId: string): Record<string, unknown> | null
  * @returns SDK-compatible mcpServers config, keyed by specId
  */
 export function getMcpServersForRequires(
-  requiredMcps: Array<{ id: string; reason?: string; bundled?: boolean }> | undefined,
+  requiredMcps: Array<{ id: string; reason?: string; bundled?: boolean; enabled?: boolean }> | undefined,
   spaceId: string
 ): Record<string, unknown> {
   if (!requiredMcps || requiredMcps.length === 0) return {}
@@ -497,6 +550,13 @@ export function getMcpServersForRequires(
   const result: Record<string, unknown> = {}
 
   for (const dep of requiredMcps) {
+    // Per-digital-human switch: an explicitly disabled dependency is skipped
+    // for this app only. The shared MCP server's own status is untouched.
+    if (dep.enabled === false) {
+      console.log(`[Agent] Required MCP "${dep.id}" disabled for this digital human (spaceId=${spaceId})`)
+      continue
+    }
+
     const app = allMcpApps.find(
       (a) => a.specId === dep.id && a.status === 'active'
     )
@@ -507,49 +567,8 @@ export function getMcpServersForRequires(
       continue
     }
 
-    if (app.spec.type !== 'mcp') continue
-    const mcpServer = (app.spec as McpSpec).mcp_server
-    if (!mcpServer) continue // defensive: required by schema but guard against old data
-
-    const serverConfig: Record<string, unknown> = {}
-
-    // Map transport type — mirrors getDbMcpServers conversion logic
-    if (mcpServer.transport === 'sse') {
-      serverConfig.type = 'sse'
-      serverConfig.url = mcpServer.command // For SSE, command holds URL
-    } else if (mcpServer.transport === 'streamable-http') {
-      serverConfig.type = 'http'
-      serverConfig.url = mcpServer.command
-    } else {
-      // stdio (default)
-      // Defense in depth: skip blacklisted commands so the SDK never spawns
-      // the child process. Mirrors the filter in getDbMcpServers above.
-      if (isMcpCommandBlocked(mcpServer.command)) {
-        console.warn(
-          `[Security] Skipped required MCP '${app.specId}': command '${mcpServer.command}' blocked by policy`
-        )
-        continue
-      }
-      serverConfig.command = mcpServer.command
-      if (mcpServer.args?.length) serverConfig.args = mcpServer.args
-      if (mcpServer.cwd) serverConfig.cwd = mcpServer.cwd
-    }
-    // Merge static spec env with user-provided config values (e.g. API tokens).
-    // userConfig keys map directly to env var names; user values override spec defaults.
-    const mergedEnv: Record<string, string> = {
-      ...(mcpServer.env ?? {}),
-      ...Object.fromEntries(
-        Object.entries(app.userConfig ?? {})
-          .filter(([, v]) => v != null)
-          .map(([k, v]) => [k, String(v)])
-      )
-    }
-    if (Object.keys(mergedEnv).length > 0) {
-      serverConfig.env = mergedEnv
-    }
-    if (mcpServer.headers && Object.keys(mcpServer.headers).length > 0) {
-      serverConfig.headers = mcpServer.headers
-    }
+    const serverConfig = appToSdkServerConfig(app)
+    if (!serverConfig) continue
 
     result[app.specId] = serverConfig
   }

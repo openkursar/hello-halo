@@ -19,7 +19,12 @@ import path from 'path'
 import { ensureOpenAICompatRouter, encodeBackendConfig, normalizeApiUrl } from '../openai-compat-router'
 import type { BackendConfig } from '../openai-compat-router'
 import { buildSdkEnv } from './agent/sdk-config'
-import { AVAILABLE_MODELS } from '../../shared/types/ai-sources'
+import { DEFAULT_MODEL } from '../../shared/types/ai-sources'
+import {
+  ModelFetchError,
+  modelFetchFailureFromError,
+  modelFetchFailureFromResponse
+} from '../../shared/model-fetch-error'
 import { getHeadlessElectronPath } from './agent/helpers'
 
 // Re-export normalizeApiUrl for external use (moved to router module)
@@ -57,7 +62,13 @@ export async function fetchModelsFromApi(params: FetchModelsParams): Promise<Fet
     }
   }
 
-  if (!baseUrl.includes('/v1') && !baseUrl.includes('/api/paas')) {
+  // Only auto-append /v1 when the URL has no explicit API version segment.
+  // Gateways like Zhipu's Coding Plan already end in /v4 (…/api/coding/paas/v4),
+  // and blindly appending /v1 corrupts the path (…/v4/v1/models → 404 once the
+  // key authenticates), which silently degrades the model list to the static
+  // fallback.
+  const hasVersionSuffix = /\/v\d+$/.test(baseUrl)
+  if (!hasVersionSuffix && !baseUrl.includes('/v1') && !baseUrl.includes('/api/paas')) {
     baseUrl = `${baseUrl}/v1`
   }
 
@@ -65,37 +76,43 @@ export async function fetchModelsFromApi(params: FetchModelsParams): Promise<Fet
 
   console.log('[API Validator] Fetching models from:', modelsUrl)
 
-  const response = await proxyFetch(modelsUrl, {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    signal: AbortSignal.timeout(15000)
-  })
+  try {
+    const response = await proxyFetch(modelsUrl, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      signal: AbortSignal.timeout(15000)
+    })
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch models (${response.status})`)
+    if (!response.ok) {
+      const body = await response.text()
+      throw new ModelFetchError(modelFetchFailureFromResponse(response.status, body, apiKey))
+    }
+
+    const data = await response.json()
+
+    if (!data.data || !Array.isArray(data.data)) {
+      throw new Error('Invalid API response format')
+    }
+
+    const models = data.data
+      .filter((m: any) => typeof m.id === 'string')
+      .map((m: any) => ({ id: m.id, name: m.id }))
+      .sort((a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id))
+
+    if (models.length === 0) {
+      throw new Error('No models found')
+    }
+
+    console.log(`[API Validator] Found ${models.length} models`)
+
+    return { models }
+  } catch (error) {
+    if (error instanceof ModelFetchError) throw error
+    throw new ModelFetchError(modelFetchFailureFromError(error))
   }
-
-  const data = await response.json()
-
-  if (!data.data || !Array.isArray(data.data)) {
-    throw new Error('Invalid API response format')
-  }
-
-  const models = data.data
-    .filter((m: any) => typeof m.id === 'string')
-    .map((m: any) => ({ id: m.id, name: m.id }))
-    .sort((a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id))
-
-  if (models.length === 0) {
-    throw new Error('No models found')
-  }
-
-  console.log(`[API Validator] Found ${models.length} models`)
-
-  return { models }
 }
 
 export interface ValidateApiParams {
@@ -164,7 +181,7 @@ export async function validateApiConnection(params: ValidateApiParams): Promise<
       message: 'Please select a model before testing the connection'
     }
   }
-  const testModel = model || AVAILABLE_MODELS[2].id
+  const testModel = model || DEFAULT_MODEL
 
   // Step 4: Get headless Electron path (same as agent module, used for executable fallback)
   const electronPath = getHeadlessElectronPath()

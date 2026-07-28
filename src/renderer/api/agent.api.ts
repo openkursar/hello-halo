@@ -5,6 +5,7 @@
 import {
   httpRequest,
   isElectron,
+  sendWsMessage,
   subscribeToConversation,
 } from './_shared'
 import type {
@@ -26,8 +27,8 @@ export const agentApi = {
       name?: string
       size?: number
     }>
-    aiBrowserEnabled?: boolean  // Enable AI Browser tools
     thinkingEnabled?: boolean  // Enable extended thinking mode
+    knowledgeBaseId?: string  // Chat-with-knowledge-base turn
     canvasContext?: {  // Canvas context for AI awareness
       isOpen: boolean
       tabCount: number
@@ -36,12 +37,14 @@ export const agentApi = {
         title: string
         url?: string
         path?: string
+        terminalSessionId?: string
       } | null
       tabs: Array<{
         type: string
         title: string
         url?: string
         path?: string
+        terminalSessionId?: string
         isActive: boolean
       }>
     }
@@ -131,6 +134,15 @@ export const agentApi = {
     return result as { success: boolean; servers: unknown[]; error?: string }
   },
 
+  // Probe a single installed MCP app (native handshake, updates agent:mcp-status)
+  probeMcpApp: async (appId: string): Promise<{ success: boolean; result?: unknown; error?: string }> => {
+    if (isElectron()) {
+      return window.halo.probeMcpApp(appId)
+    }
+    const result = await httpRequest('POST', '/api/agent/probe-mcp', { appId })
+    return result as { success: boolean; result?: unknown; error?: string }
+  },
+
   // Get the active engine's capability descriptor. Renderer caches this in
   // a Zustand store and uses the flags to drive engine-aware UI affordances.
   getEngineCapabilities: async (): Promise<ApiResponse> => {
@@ -138,6 +150,82 @@ export const agentApi = {
       return window.halo.getEngineCapabilities()
     }
     return httpRequest('GET', '/api/agent/engine-capabilities')
+  },
+
+  // ===== Toolset broker (on-demand MCP toolsets) =====
+  listToolsets: async (spaceId: string, conversationId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.listToolsets({ spaceId, conversationId })
+    }
+    return httpRequest('POST', '/api/agent/toolsets/list', { spaceId, conversationId })
+  },
+
+  openToolset: async (spaceId: string, conversationId: string, toolsetId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.openToolset({ spaceId, conversationId, toolsetId })
+    }
+    return httpRequest('POST', '/api/agent/toolsets/open', { spaceId, conversationId, toolsetId })
+  },
+
+  closeToolset: async (spaceId: string, conversationId: string, toolsetId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.closeToolset({ spaceId, conversationId, toolsetId })
+    }
+    return httpRequest('POST', '/api/agent/toolsets/close', { spaceId, conversationId, toolsetId })
+  },
+
+  // ===== Terminal (user-facing viewer operations) =====
+  listTerminals: async (): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.listTerminals()
+    return httpRequest('GET', '/api/terminal/list')
+  },
+
+  createTerminal: async (data: { spaceId: string; shell?: string; cwd?: string; title?: string }): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.createTerminal(data)
+    return httpRequest('POST', '/api/terminal/create', data)
+  },
+
+  terminalInput: async (sessionId: string, data: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.terminalInput({ sessionId, data })
+    return httpRequest('POST', '/api/terminal/input', { sessionId, data })
+  },
+
+  terminalResize: async (sessionId: string, cols: number, rows: number): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.terminalResize({ sessionId, cols, rows })
+    return httpRequest('POST', '/api/terminal/resize', { sessionId, cols, rows })
+  },
+
+  killTerminal: async (sessionId: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.killTerminal({ sessionId })
+    return httpRequest('POST', '/api/terminal/kill', { sessionId })
+  },
+
+  getTerminalReplay: async (sessionId: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.getTerminalReplay({ sessionId })
+    return httpRequest('POST', '/api/terminal/replay', { sessionId })
+  },
+
+  // Viewer flow control (ack model): attach/detach mark this client as a live
+  // consumer of terminal:data; ack reports rendered chars so main can pause a
+  // flooding pty. Remote clients go over the WS only — flow control is
+  // meaningless without the live WS stream, so there is no HTTP fallback (an
+  // unattached viewer simply isn't flow-controlled, same as before).
+  terminalAttach: async (sessionId: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.terminalAttach({ sessionId })
+    sendWsMessage('terminal-attach', { sessionId })
+    return { success: true }
+  },
+
+  terminalDetach: async (sessionId: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.terminalDetach({ sessionId })
+    sendWsMessage('terminal-detach', { sessionId })
+    return { success: true }
+  },
+
+  terminalAck: async (sessionId: string, charCount: number): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.terminalAck({ sessionId, charCount })
+    sendWsMessage('terminal-ack', { sessionId, charCount })
+    return { success: true }
   },
 
 }

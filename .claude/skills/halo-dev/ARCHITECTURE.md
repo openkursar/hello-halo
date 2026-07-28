@@ -98,25 +98,30 @@ src/
 │   ├── openai-compat-router/          # Anthropic <-> OpenAI bridge
 │   └── services/                      # Domain services — grouped by role:
 │       ├── agent/                     # Agent engine — largest subsystem. See agent/DESIGN.md
+│       │   └── toolsets/              #   Toolset Broker — on-demand in-process MCP loading. See toolsets/DESIGN.md
 │       ├── ai-browser/                # AI Browser + tools/
+│       ├── ai-terminal/              # AI Terminal (pty + xterm headless + MCP tools). See ai-terminal/DESIGN.md
 │       ├── ai-sources/                # Multi-provider auth + providers/
 │       ├── analytics/                 # Usage analytics
 │       ├── email-mcp/                 # Email-as-MCP tool server
+│       ├── git-bash/                   # Windows bash env for Claude Code CLI (detection + installer + mock fallback)
 │       ├── health/                    # Diagnostics & recovery
 │       ├── logging/                   # Logging subsystem: controller (Developer Mode toggle)
 │       │                              #   + transports (http-raw.log, halo-sdk.log) + redact utils.
 │       │                              #   Single subscriber for config.agent.developerMode;
 │       │                              #   transports expose setLevel/setEnabled only.
 │       ├── notify-channels/           # Outbound notification channels (Email/WeCom/DingTalk/Feishu/Webhook)
+│       ├── ocr/                       # On-device OCR (tesseract.js engine + ocr_image MCP server);
+│       │                              #   shared by tlon ingest, chat toolset, digital-human runtime
 │       ├── perf/                      # Performance monitoring
+│       ├── remote/                     # Remote Access: HTTP-server + Cloudflare tunnel coordination (service + tunnel + issuer-client)
 │       ├── stealth/                   # Anti-detection evasions
 │       ├── web-search/                # Web search MCP server
 │       └── *.service.ts + utilities   # Domain singletons: config, conversation, space,
-│                                      #   artifact, artifact-cache, search, remote, tunnel,
+│                                      #   artifact, artifact-cache, search,
 │                                      #   window, overlay, onboarding, updater, notification,
 │                                      #   protocol, api-validator, model-capabilities,
-│                                      #   secure-storage, git-bash, git-bash-installer,
-│                                      #   mock-bash, browser-view, browser-policy,
+│                                      #   secure-storage, browser-view, browser-policy,
 │                                      #   watcher-host
 │                                      #   (+ utilities: browser-login-pages, proxy-fetch)
 │
@@ -150,7 +155,7 @@ src/
     │   ├── chat/                      #   Chat stream + tool-result/
     │   ├── layout/                    #   Header, ModelSelector, SpaceSelector, etc.
     │   ├── settings/                  #   Settings sections
-    │   ├── setup/                     #   Sub-components: LoginSelector, ApiSetup, ServerConnect
+    │   ├── setup/                     #   Sub-components: LoginSelector, SetupProviderConfig, ServerConnect
     │   ├── store/                     #   App Store UI
     │   ├── ui/                        #   Cross-domain interaction primitives (ConfirmDialog,
     │   │                              #   ContextMenu, ...). Not shadcn-generated, but follows
@@ -216,7 +221,8 @@ All channels follow `module:action` format. Modules are organized by functional 
 | Area | IPC modules |
 |------|-------------|
 | Auth & config | `auth`, `config`, `cli-config`, `model-capabilities` |
-| Conversation & agent | `conversation`, `agent` |
+| Conversation & agent | `conversation`, `agent` (incl. `agent:toolsets-*` + `toolsets:changed` event) |
+| Terminal | `terminal` (`terminal:list/create/input/resize/kill/replay` + `terminal:data`/`terminal:lifecycle` events) |
 | Space & artifact | `space`, `artifact`, `search` |
 | Browser | `browser`, `browser-policy`, `ai-browser`, `overlay` |
 | Apps & store | `app`, `store`, `onboarding` |
@@ -452,6 +458,29 @@ src/renderer/assets/styles/
 
 Do not create new CSS files unless the above exceptions apply.
 
+### 12.1) Window Chrome & Top Overlays (Non-Negotiable)
+
+The desktop window is frameless: native controls are painted by the OS compositor
+*above* all page content and cannot be covered by z-index. macOS shows traffic
+lights top-left; Windows/Linux use `titleBarOverlay` top-right. The whole top
+strip is also the OS drag region.
+
+Any component fixed to the top of the window (headers, and full-width alert/
+notification banners such as `CredentialAlertBanner`) **must**:
+
+- **Reserve the native-control space** so its own interactive elements never sit
+  under the OS buttons (where clicks are swallowed). Mirror `Header`'s
+  convention, gated on `isElectron() && !isCapacitor()`:
+  - macOS → `pl-20 pr-4` (left traffic lights)
+  - Windows/Linux → `pl-4 pr-36` (right titleBarOverlay buttons)
+  - remote/browser/Capacitor → plain `px-4` (no overlay)
+- **Declare drag regions explicitly**: put `drag-region` on the container that
+  overlaps the title strip, and `no-drag` on every button/link inside it.
+  Without `no-drag`, clicks over the drag strip are consumed as window drags.
+
+Use `usePlatform()` (exported from `components/layout/Header.tsx`) for the mac/
+non-mac split rather than re-detecting the platform.
+
 ## 13) Responsive Design (Mandatory)
 
 **Web mode requires consideration of different platform displays.** This is non-negotiable for all UI changes.
@@ -607,6 +636,8 @@ See `quick.md §4` for the current list. Keep the two documents in sync when clo
 
 When touching a module, read its design doc first:
 - `src/main/services/agent/DESIGN.md` — Agent engine (largest subsystem, read this before any agent-related change)
+- `src/main/services/agent/toolsets/DESIGN.md` — Toolset Broker (on-demand in-process MCP loading; how tool capabilities enter a session)
+- `src/main/services/ai-terminal/DESIGN.md` — AI Terminal (pty + xterm headless, MCP tools, xterm.js viewer)
 - `src/main/apps/spec/DESIGN.md`
 - `src/main/apps/manager/DESIGN.md`
 - `src/main/apps/runtime/DESIGN.md`

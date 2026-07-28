@@ -18,6 +18,7 @@ import {
 } from './helpers'
 import { emitAgentBroadcast } from './events'
 import { getCleanUserEnv } from './sdk-config'
+import { resolveModelId } from '../../../shared/types/ai-sources'
 
 // ============================================
 // MCP Status Cache
@@ -73,10 +74,25 @@ export function groupToolsByMcpServer(tools: string[]): Record<string, string[]>
 // MCP Status Broadcasting
 // ============================================
 
+/** Emit the current cache to all clients (desktop IPC + remote WebSocket). */
+function emitMcpStatusBroadcast(): void {
+  lastMcpStatusUpdate = Date.now()
+  emitAgentBroadcast('agent:mcp-status', {
+    servers: cachedMcpStatus,
+    timestamp: lastMcpStatusUpdate
+  })
+  console.log(`[Agent] Broadcast MCP status: ${cachedMcpStatus.length} servers`)
+}
+
 /**
  * Broadcast MCP status to all renderers (global, not conversation-specific).
  * When allTools is provided, parses and groups them by server name.
  * When allTools is omitted, preserves previously cached tools (tools don't change within a session).
+ *
+ * Upsert semantics: a session init only reports the servers configured for
+ * that session's space, so entries produced elsewhere (probe results,
+ * other spaces' servers) must survive the merge. Removal is owned by the
+ * app-lifecycle listener (pause/uninstall) via removeServerStatus().
  */
 export function broadcastMcpStatus(
   mcpServers: Array<{ name: string; status: string }>,
@@ -84,33 +100,55 @@ export function broadcastMcpStatus(
 ): void {
   // Group tools by server name if provided
   const toolsByServer = allTools ? groupToolsByMcpServer(allTools) : null
+  const now = Date.now()
 
-  // Build previous tools lookup for cache preservation
-  const prevToolsMap = !toolsByServer
-    ? new Map(cachedMcpStatus.filter(s => s.tools).map(s => [s.name, s.tools!]))
-    : null
-
-  // Convert to our status type, merging tools
-  cachedMcpStatus = mcpServers.map(s => {
+  const byName = new Map(cachedMcpStatus.map(s => [s.name, s]))
+  for (const s of mcpServers) {
+    const prev = byName.get(s.name)
+    const status = s.status as McpServerStatusInfo['status']
     const tools = toolsByServer
       ? toolsByServer[s.name]    // new tools from SDK
-      : prevToolsMap?.get(s.name) // preserve cached tools
-    return {
+      : prev?.tools              // preserve cached tools
+    byName.set(s.name, {
       name: s.name,
-      status: s.status as McpServerStatusInfo['status'],
-      ...(tools ? { tools } : {})
-    }
-  })
-  lastMcpStatusUpdate = Date.now()
-
-  const eventData = {
-    servers: cachedMcpStatus,
-    timestamp: lastMcpStatusUpdate
+      status,
+      ...(tools ? { tools } : {}),
+      // SDK reports no failure reason — keep the last probe detail so the
+      // UI is not blanked out; a fresh probe will refresh or clear it.
+      ...(status !== 'connected' && prev?.errorDetail ? { errorDetail: prev.errorDetail } : {}),
+      lastCheckedAt: now
+    })
   }
+  cachedMcpStatus = Array.from(byName.values())
 
-  // Broadcast to all clients via event emitter
-  emitAgentBroadcast('agent:mcp-status', eventData)
-  console.log(`[Agent] Broadcast MCP status: ${cachedMcpStatus.length} servers`)
+  emitMcpStatusBroadcast()
+}
+
+/**
+ * Upsert a single server's status (probe results) and broadcast.
+ */
+export function updateServerStatus(
+  name: string,
+  patch: Omit<McpServerStatusInfo, 'name'>
+): void {
+  const idx = cachedMcpStatus.findIndex(s => s.name === name)
+  const entry: McpServerStatusInfo = { name, ...patch }
+  if (idx >= 0) cachedMcpStatus[idx] = entry
+  else cachedMcpStatus.push(entry)
+
+  emitMcpStatusBroadcast()
+}
+
+/**
+ * Drop a server from the status cache (paused/uninstalled app) and broadcast.
+ * Prevents stale "connection error" from surviving a reinstall.
+ */
+export function removeServerStatus(name: string): void {
+  const next = cachedMcpStatus.filter(s => s.name !== name)
+  if (next.length === cachedMcpStatus.length) return
+  cachedMcpStatus = next
+
+  emitMcpStatusBroadcast()
 }
 
 // ============================================
@@ -159,7 +197,7 @@ export async function testMcpConnections(): Promise<{ success: boolean; servers:
     // Route through OpenAI compat router for non-Anthropic providers
     let anthropicBaseUrl = credentials.baseUrl
     let anthropicApiKey = credentials.apiKey
-    let sdkModel = credentials.model || 'claude-sonnet-4-20250514'
+    let sdkModel = resolveModelId(credentials.model)
 
     // For non-Anthropic providers (openai or oauth), use the OpenAI compat router
     if (credentials.provider !== 'anthropic') {

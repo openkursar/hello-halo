@@ -19,6 +19,7 @@ import {
   getAllSpacePaths,
   touchSpaceActivity,
   flushSpaceActivity,
+  reorderSpaces,
   _resetSpaceRegistry,
   _resetActivityState
 } from '../../../src/main/services/space.service'
@@ -238,19 +239,20 @@ describe('Space Service', () => {
       expect(() => touchSpaceActivity('non-existent-id')).not.toThrow()
     })
 
-    it('should affect listSpaces sort order', () => {
+    it('does not override explicit sortOrder', () => {
       const spaceA = createSpace({ name: 'Space A', icon: 'folder' })
       const spaceB = createSpace({ name: 'Space B', icon: 'folder' })
 
       // Reset activity state to avoid throttle interference
       _resetActivityState()
 
-      // Touch A after B was created — A should appear first in the list
+      // B was created after A, so it sorts first (new-first). Touching A must
+      // not reorder the list — explicit sortOrder governs, not activity.
       touchSpaceActivity(spaceA.id)
 
       const spaces = listSpaces()
       expect(spaces.length).toBe(2)
-      expect(spaces[0].id).toBe(spaceA.id)
+      expect(spaces[0].id).toBe(spaceB.id)
     })
   })
 
@@ -377,6 +379,118 @@ describe('Space Service', () => {
 
     it('returns empty string for unknown spaceIds', () => {
       expect(getSpaceDir('does-not-exist')).toBe('')
+    })
+  })
+
+  describe('reorderSpaces + sortOrder', () => {
+    it('assigns a smaller sortOrder to newer spaces (new sorts first)', async () => {
+      const a = createSpace({ name: 'A', icon: 'folder' })
+      const b = createSpace({ name: 'B', icon: 'folder' })
+
+      expect(typeof a.sortOrder).toBe('number')
+      expect(typeof b.sortOrder).toBe('number')
+      expect(b.sortOrder!).toBeLessThan(a.sortOrder!)
+    })
+
+    it('sorts by sortOrder when all spaces have it', async () => {
+      const a = createSpace({ name: 'A', icon: 'folder' })
+      const b = createSpace({ name: 'B', icon: 'folder' })
+      const c = createSpace({ name: 'C', icon: 'folder' })
+
+      // Reverse the order via reorderSpaces
+      reorderSpaces([c.id, b.id, a.id])
+
+      const spaces = listSpaces()
+      expect(spaces.map(s => s.name)).toEqual(['C', 'B', 'A'])
+    })
+
+    it('persisted sortOrder survives a registry reload', async () => {
+      const a = createSpace({ name: 'A', icon: 'folder' })
+      const b = createSpace({ name: 'B', icon: 'folder' })
+
+      reorderSpaces([b.id, a.id])
+
+      _resetSpaceRegistry()
+      const spaces = listSpaces()
+      expect(spaces.map(s => s.name)).toEqual(['B', 'A'])
+    })
+
+    it('rejects partial lists and preserves existing order', async () => {
+      const a = createSpace({ name: 'A', icon: 'folder' })
+      const b = createSpace({ name: 'B', icon: 'folder' })
+
+      // Establish a known order first
+      reorderSpaces([a.id, b.id])
+
+      // Partial list (3 ids for 2 spaces, with an unknown id) — must be rejected
+      reorderSpaces([b.id, 'unknown-id', a.id])
+
+      // Order unchanged from the successful reorder above
+      const spaces = listSpaces()
+      expect(spaces.map(s => s.name)).toEqual(['A', 'B'])
+    })
+
+    it('rejects incomplete lists (fewer ids than spaces)', async () => {
+      const a = createSpace({ name: 'A', icon: 'folder' })
+      const b = createSpace({ name: 'B', icon: 'folder' })
+      const c = createSpace({ name: 'C', icon: 'folder' })
+
+      reorderSpaces([c.id, b.id, a.id])
+
+      // Only send 2 of 3 ids — must be rejected, order preserved
+      reorderSpaces([a.id, b.id])
+
+      const spaces = listSpaces()
+      expect(spaces.map(s => s.name)).toEqual(['C', 'B', 'A'])
+    })
+
+    it('new space created after reorder sorts first', async () => {
+      const a = createSpace({ name: 'A', icon: 'folder' })
+      const b = createSpace({ name: 'B', icon: 'folder' })
+
+      reorderSpaces([b.id, a.id])
+
+      const c = createSpace({ name: 'C', icon: 'folder' })
+      const spaces = listSpaces()
+      expect(spaces.map(s => s.name)).toEqual(['C', 'B', 'A'])
+    })
+
+    // Regression: legacy index (no sortOrder) + new space. backfill assigns
+    // sortOrder to the legacy entry at load; createSpace then gives the new
+    // space a smaller sortOrder so it sorts first, matching the store's
+    // prepend-on-create (no visual jump after re-sync).
+    it('new space on legacy index (no sortOrder) sorts first', async () => {
+      const haloDir = getHaloDir()
+      const indexPath = path.join(haloDir, 'spaces-index.json')
+      const idA = 'legacy-space-a'
+      const dirA = path.join(globalThis.__HALO_TEST_DIR__, 'legacy-a')
+      fs.mkdirSync(path.join(dirA, '.halo'), { recursive: true })
+      fs.writeFileSync(path.join(dirA, '.halo', 'meta.json'), JSON.stringify({
+        id: idA, name: 'Legacy A', icon: 'folder',
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z'
+      }))
+      fs.writeFileSync(indexPath, JSON.stringify({
+        version: 3,
+        spaces: {
+          [idA]: {
+            path: dirA, name: 'Legacy A', icon: 'folder',
+            createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z'
+          }
+        }
+      }, null, 2))
+
+      _resetSpaceRegistry()
+
+      // New space after legacy load — must sort first (matches store prepend)
+      const b = createSpace({ name: 'New B', icon: 'folder' })
+      const spaces = listSpaces()
+      expect(spaces.map(s => s.name)).toEqual(['New B', 'Legacy A'])
+
+      // Persisted sortOrder should now be present on both entries
+      const persisted = JSON.parse(fs.readFileSync(indexPath, 'utf-8'))
+      expect(typeof persisted.spaces[idA].sortOrder).toBe('number')
+      expect(typeof persisted.spaces[b.id].sortOrder).toBe('number')
+      expect(persisted.spaces[b.id].sortOrder).toBeLessThan(persisted.spaces[idA].sortOrder)
     })
   })
 })

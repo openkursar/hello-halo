@@ -8,7 +8,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Virtuoso } from 'react-virtuoso'
-import { X, EllipsisVertical, Pin, Pencil, Trash2 } from 'lucide-react'
+import { X, EllipsisVertical, Pin, Pencil, Trash2, History } from 'lucide-react'
 import type { ConversationMeta } from '../../types'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -421,14 +421,7 @@ export function ChatHistoryPanel() {
         `}
         title={t('Conversation history')}
       >
-        <svg
-          className={`w-4 h-4 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
+        <History className="w-4 h-4" />
         <span className="text-sm font-medium hidden sm:inline">
           {conversations.length > 0
             ? t('{{count}} conversations', { count: conversations.length })

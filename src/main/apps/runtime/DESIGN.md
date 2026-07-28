@@ -254,8 +254,9 @@ rules, security rules) lives in the channel's module, not in the assembler.
 src/main/apps/runtime/
 ├── prompt/
 │   ├── assembler.ts        — assembleAppChatPrompt(fragments) — joins layers
-│   ├── identity.ts         — buildIdentityFragments() — base + spec + memory + config
-│   └── entry-native.ts     — NATIVE_CHAT_ENTRY — native UI fallback
+│   ├── identity.ts         — buildIdentityFragments() — base + spec + memory + config + capability awareness
+│   ├── capabilities.ts     — disabled + awaiting-setup capability guidance (Identity layer)
+│   └── entry-native.ts     — NATIVE_CHAT_ENTRY — native UI entry (reply orientation only)
 └── im-channels/
     └── im-prompt.ts        — buildImEntry / buildImConstraints / ImSessionContext
 ```
@@ -264,8 +265,8 @@ src/main/apps/runtime/
 
 | Layer | Answers | Examples |
 |---|---|---|
-| Identity | Who am I, what do I do | Base Agent prompt, App spec, memory access, user config |
-| Entry | Where am I, how do I reply | IM group/direct session context, native UI notification tools |
+| Identity | Who am I, what do I do | Base Agent prompt, App spec, memory access, user config, capability awareness (disabled + awaiting-setup) |
+| Entry | Where am I, how do I reply | IM group/direct session context, native UI reply orientation |
 | Constraint | What I must not do | IM anti-impersonation rules when owners are configured |
 
 **Rationale**:
@@ -292,6 +293,118 @@ const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
 **Trade-off**: One extra layer of indirection between `app-chat.ts` and the
 final string. Acceptable: it caps the assembler's blast radius and prevents
 the file from re-acquiring channel knowledge over time.
+
+### 2.13 Native Multi-Sessions (Local Channel + Session Fork)
+
+**Decision**: A digital human's native client chat supports multiple named
+sessions, modeled as a new `'local'` session **source** in the existing
+`ImSessionRegistry` rather than a parallel store. The legacy single native
+session (`app-chat:{appId}`, runId `chat`) is untouched and remains the
+default; extra sessions are keyed `app-chat:{appId}:local:direct:{uuid}`.
+
+**Why reuse the IM session plumbing**:
+- The app-chat send path (`sendAppChatMessage`) already accepts an arbitrary
+  `conversationId`; IM sessions proved the multi-conversation model in
+  production. A `'local'` session is just another conversationId that flows
+  through the same `parseAppChatKey` → `deriveRunId` → JSONL / V2-session path.
+- `classifySessionSource` gains a `'local'` branch so local sessions are
+  **exempt from HTTP eviction bounds** (a user's chat must never be auto-pruned)
+  and are **excluded from pushable/proactive** results (no channel adapter).
+- Listing and renaming reuse the generic `im-sessions` RPC
+  (`getAllSessions` / `setCustomName`); only create / fork / delete need
+  dedicated lifecycle (`createNativeChatSession` / `forkNativeChatSession` /
+  `deleteNativeChatSession` in `app-chat.ts`).
+
+**Session fork ("continue in client")**: forking an IM/other session into a
+local one copies the source JSONL transcript (immediate history) and records
+the source SDK sessionId as `pendingResumeSessionId` on the new record. On the
+new session's **first** message, `sendAppChatMessage` resumes that source
+context with `sdkOptions.forkSession = true`, so the SDK branches to a **new**
+sessionId — the two windows evolve independently and the source is never
+polluted. The pending marker is peeked (not consumed) at send start and cleared
+only after the new forked sessionId is captured, so a failed first attempt can
+retry. Fork requires the engine's `sessionFork` capability (CC / Halo SDK:
+true; Codex `thread/resume` cannot branch: false); the UI gates the affordance
+on it.
+
+**Layer split in the renderer**: local sessions render in the interactive
+`AppChatView` (keyed by conversationId for a clean remount on switch); IM/HTTP
+sessions stay read-only in `ImChatView`. `AppChatContainer` branches on
+`session.source === 'local'`.
+
+### 2.14 Cross-Session Relay (Pending Relay Spool)
+
+**Problem**: `notify_bot` pushes are pure SDK transport. The target session's
+AI context records nothing — when the recipient later replies ("approved"),
+the AI has no idea what it is a reply to, and cannot re-address the origin
+contact. Cross-session workflows (employee requests → admin approves →
+report back to employee) were structurally impossible.
+
+**Decision**: A persistent spool (`pending-relays.ts`) records each successful
+push against its **target** sessionKey. On the target's next inbound message,
+`dispatch-inbound` **appends** a `<relay-context>` block to the message text —
+the only engine-agnostic route into an engine's history (a string on a real
+inbound message; rides into whatever history the engine keeps).
+
+**Key properties**:
+- **Deferred, not history writes**: engines own their history (anthropic /
+  halo / codex via resolved-sdk); no engine interface changes. Between push
+  and next inbound there is no live run, so nothing can consume the context
+  earlier anyway.
+- **Appended, never prefixed**: position 0 belongs to `<msg-sender>` — the IM
+  identity rules define authority by position — and a prefix would also break
+  slash commands and skills, which must start the message.
+- **Sender side needs nothing**: the notify_bot call + result already live in
+  the calling session's history.
+- **Peek/commit, not drain**: events are removed only when the engine accepts
+  the message (`onMessageAccepted`, fired on the first SDK message). Render
+  errors, session-creation failures, model errors and crashes all leave the
+  events queued, so relay context cannot be lost by a failed run. The reverse
+  failure (accepted but not committed) re-delivers, which the model tolerates.
+- **Event shape**: a `push` variant `{ id, at, source{key,appId,runId,label},
+  subject?, originContact?, sourceOwner, message?, file?, quote? }` and a
+  `collapsed` variant `{ id, at, count }` for bound overflow — deliberately
+  attribution-free, since a collapsed range has no single origin.
+  `source.key` reuses the conversationId system (no new ID namespace).
+  `originContact` is the exact `instanceId:chatId` the recipient AI needs to
+  report an outcome back.
+- **Paths are never persisted**: transcript locations resolve at render time
+  via `session-store.resolveTranscriptPath`, so directory rules stay private
+  to session-store and stale keys cannot outlive a layout change.
+- **Two-tier disclosure**: delivered content (`<pushed>`) always renders — it
+  was already sent to that chat. Origin facts (`from_session`, `subject_*`,
+  `reply_to`, `<quote>`) require the recipient to be an owner, matching the
+  trust model that already governs tool access. Transcript paths additionally
+  require an **explicitly configured** owner roster, not the permissive
+  default where every sender counts as an owner: a path grants bulk read
+  access to another session's history, so it is opt-in. Its absence costs
+  nothing structural — subject and quote carry the working context.
+- **Tag namespace is runtime-owned**: `sanitizeRuntimeTags` escapes runtime
+  tag openings (including `<msg-sender>`) out of inbound bodies and relayed
+  content, so no user or relayed text can forge or close a system tag.
+- **Contract lives in the prompt layers**: `<relay-context>` semantics are
+  declared in the IM Entry layer and its authority limits in the Constraint
+  layer (§2.12), not in the injected message text — instructions in message
+  text would compete with user input and repeat in history on every injection.
+- **Quote**: captured by the runtime from the **raw inbound body** (assembled
+  text carries runtime tags and, after a relay was consumed, the previous
+  hop's block), never copied by the AI.
+- **No TTL**: staleness is conveyed by the `at` timestamp and judged by the
+  model. Bounded instead: per-target cap (10) with oldest-event collapse.
+- **Durability**: `~/.halo/im-pending-relays.json`, versioned (unknown
+  versions rejected, never guessed), write-behind (im-session-registry
+  pattern) plus a synchronous flush at shutdown. Survives restarts —
+  notification-style pushes may wait weeks for consumption.
+- **Lifecycle**: cleared on `/halo-clear` (the conversation it belonged to is
+  gone) and cascaded on session removal, so a chat re-registered under the
+  same id never inherits stale relays.
+- **Self-target skip**: pushes to the invoking session itself are not spooled
+  (already in that session's tool history).
+
+**Trade-off**: The relay context arrives only with the next inbound message —
+acceptable because AI context is only ever consumed by a run, and runs are
+inbound-triggered. Deep history beyond the quote requires the AI to Read/Grep
+the source transcript, reusing existing tools instead of a new query API.
 
 ---
 
@@ -345,6 +458,7 @@ src/main/apps/runtime/
   prompt.ts                  -- buildAppSystemPrompt() for automation (headless) sessions
   report-tool.ts             -- report_to_user SDK MCP tool
   notify-tool.ts             -- halo-notify SDK MCP tool (notify_channel + notify_bot)
+  notify-availability.ts     -- resolveNotifyAvailability() — single source of truth for whether notify tools are actually loaded (mirrors notify-tool injection rules; consumed by chat + automation prompts)
   concurrency.ts              -- Counting semaphore
   execute.ts                 -- executeRun() core logic for automation runs
   service.ts                 -- AppRuntimeService implementation
@@ -356,6 +470,7 @@ src/main/apps/runtime/
   dispatch-inbound.ts        -- Route IM inbound messages into app-chat
   im-permission-registry.ts  -- Per-conversation owner/guest context for SDK gating
   im-session-registry.ts     -- Persistent IM session list (per app + channel + chatId)
+  pending-relays.ts          -- Cross-session relay spool + <relay-from> rendering (§2.14)
   progress-formatter.ts      -- Format streaming progress events for IM transports
   session-store.ts           -- JSONL persistence for chat history + SDK session IDs
   file-export-gate.ts        -- Filesystem boundary for AI-attached file delivery
@@ -364,6 +479,7 @@ src/main/apps/runtime/
   prompt/
     assembler.ts             -- assembleAppChatPrompt() — channel-agnostic joiner
     identity.ts              -- buildIdentityFragments() — identity layer
+    capabilities.ts          -- disabled + awaiting-setup capability guidance
     entry-native.ts          -- NATIVE_CHAT_ENTRY — native UI entry fragment
 
   -- IM channel providers and IM-specific prompt content:
