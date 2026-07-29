@@ -11,6 +11,8 @@
 import { create } from 'zustand'
 import { api } from '../api'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
+import { useNotificationStore } from './notification.store'
+import i18n from '../i18n'
 
 export interface TerminalInfo {
   id: string
@@ -116,18 +118,48 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       const res = await api.createTerminal({ spaceId })
       if (res.success && res.data) return res.data as TerminalInfo
       console.error('[Terminal Store] createSession failed:', res.error)
+      // Stable id collapses repeated failures (e.g. backend down, user
+      // retrying) into a single replaceable toast rather than stacking N.
+      useNotificationStore.getState().show({
+        id: 'terminal-create-error',
+        title: i18n.t('Failed to create terminal session'),
+        body: res.error || undefined,
+        variant: 'error',
+      })
       return null
     } catch (err) {
       console.error('[Terminal Store] createSession error:', err)
+      useNotificationStore.getState().show({
+        id: 'terminal-create-error',
+        title: i18n.t('Failed to create terminal session'),
+        body: err instanceof Error ? err.message : undefined,
+        variant: 'error',
+      })
       return null
     }
   },
 
   killSession: async (sessionId) => {
     try {
-      await api.killTerminal(sessionId)
+      const res = await api.killTerminal(sessionId)
+      if (!res.success) {
+        console.error('[Terminal Store] killSession failed:', res.error)
+        // Stable id — see createSession: collapses retries into one toast.
+        useNotificationStore.getState().show({
+          id: 'terminal-kill-error',
+          title: i18n.t('Failed to stop terminal session'),
+          body: res.error || undefined,
+          variant: 'error',
+        })
+      }
     } catch (err) {
-      console.error('[Terminal Store] killSession failed:', err)
+      console.error('[Terminal Store] killSession error:', err)
+      useNotificationStore.getState().show({
+        id: 'terminal-kill-error',
+        title: i18n.t('Failed to stop terminal session'),
+        body: err instanceof Error ? err.message : undefined,
+        variant: 'error',
+      })
     }
   },
 

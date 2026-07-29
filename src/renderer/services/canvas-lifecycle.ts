@@ -850,13 +850,25 @@ class CanvasLifecycle {
   async closeAll(): Promise<void> {
     console.log('[CanvasLifecycle] Closing all tabs')
 
+    // Snapshot the tab ids synchronously, before any await. The teardown below
+    // awaits browser-view destruction and bulk terminal disposal, which yields
+    // control; callers (notably useLiveSessions.open → enterSpace → closeAll)
+    // may then synchronously add a fresh tab to reveal. Deleting only the
+    // snapshotted ids preserves that new tab instead of wiping it via
+    // tabs.clear() — which would otherwise reproduce the #266 "click does
+    // nothing" symptom during a space-switching navigation.
+    const closingTabIds = Array.from(this.tabs.keys())
+    const closingActiveTabId = this.activeTabId
+
     // Tear down each tab's underlying resource. Browser/pdf views are destroyed
     // (their WebContents is tab-bound). Terminals defer to the bulk disposal
     // policy — non-interactive, so no per-tab prompts: the user's own terminals
     // are terminated, AI-operated ones are kept alive in the tray. Also drives
     // space-switch teardown (enterSpace → closeAll).
     const terminalDisposals: Promise<void>[] = []
-    for (const [, tab] of this.tabs) {
+    for (const tabId of closingTabIds) {
+      const tab = this.tabs.get(tabId)
+      if (!tab) continue
       const hasBrowserView = (tab.type === 'browser' || tab.type === 'pdf') && tab.browserViewId
       if (hasBrowserView) {
         await this.destroyBrowserView(tab.browserViewId!)
@@ -866,9 +878,26 @@ class CanvasLifecycle {
     }
     await Promise.all(terminalDisposals)
 
-    this.tabs.clear()
-    this.activeTabId = null
-    this.setOpen(false)
+    // Remove only the tabs this call was responsible for. A tab added after the
+    // snapshot above survives — see useLiveSessions.open for the motivating case.
+    for (const tabId of closingTabIds) {
+      this.tabs.delete(tabId)
+    }
+    // Clear the active tab only if it was among those closed. A tab added after
+    // the snapshot may already be the new active tab, and nulling it here would
+    // orphan it from the UI.
+    if (closingActiveTabId && closingTabIds.includes(closingActiveTabId)) {
+      const survivingActive = this.activeTabId && !closingTabIds.includes(this.activeTabId)
+      if (!survivingActive) {
+        this.activeTabId = null
+        this.setOpen(false)
+      }
+    }
+    // When nothing was active to begin with, preserve the no-tabs-is-closed
+    // invariant: ensure Canvas is closed if the Map is now empty.
+    if (this.tabs.size === 0) {
+      this.setOpen(false)
+    }
 
     this.notifyTabsChange()
     this.notifyActiveTabChange()

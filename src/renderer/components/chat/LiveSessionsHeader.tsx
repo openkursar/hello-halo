@@ -16,6 +16,8 @@ import { TerminalSquare, Globe, ArrowUpRight, X, ChevronDown, Zap } from 'lucide
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { useLiveSessions, type LiveSession } from '../../hooks/useLiveSessions'
+import { useAppStore } from '../../stores/app.store'
+import { useNotificationStore } from '../../stores/notification.store'
 import { useTranslation } from '../../i18n'
 
 /** Compact "3m" style age from a ms epoch. */
@@ -34,30 +36,42 @@ function KindIcon({ kind, size = 13, className }: { kind: LiveSession['kind']; s
 
 interface SessionRowProps {
   session: LiveSession
+  /** False when the current view isn't Space — opening will navigate to Space. */
+  isOnSpacePage: boolean
   onOpen: () => void
   onStop: () => void
 }
 
 /** One session line inside the popover list. */
-function SessionRow({ session, onOpen, onStop }: SessionRowProps) {
+function SessionRow({ session, isOnSpacePage, onOpen, onStop }: SessionRowProps) {
   const { t } = useTranslation()
+  // Same reveal affordance in both states; the icon stays ArrowUpRight so it
+  // never reads as "open externally". When the target isn't the current page,
+  // an inline caption carries that meaning visibly instead of burying it in
+  // the tooltip.
+  const openLabel = isOnSpacePage ? t('Open') : t('Open in Space')
   return (
     <div className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted/60 transition-colors">
       <KindIcon
         kind={session.kind}
         className={`shrink-0 ${session.busy ? 'text-primary animate-pulse' : 'text-muted-foreground'}`}
       />
-      <button onClick={onOpen} className="flex-1 min-w-0 flex items-center gap-2 text-left" title={t('Open')}>
+      <button onClick={onOpen} className="flex-1 min-w-0 flex items-center gap-2 text-left" title={openLabel}>
         <span className={`flex-1 min-w-0 truncate text-xs text-foreground/80 ${session.kind === 'terminal' ? 'font-mono' : ''}`}>
           {session.title}
         </span>
+        {!isOnSpacePage && (
+          <span className="shrink-0 text-[10px] text-primary/80">
+            {t('in Space')}
+          </span>
+        )}
         <span className="shrink-0 text-[11px] text-muted-foreground">
           {session.busy ? t('running') : ago(session.lastActivityAt)}
         </span>
       </button>
       <button
         onClick={onOpen}
-        title={t('Open')}
+        title={openLabel}
         className="shrink-0 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-background/60 transition-colors"
       >
         <ArrowUpRight size={13} />
@@ -76,8 +90,10 @@ function SessionRow({ session, onOpen, onStop }: SessionRowProps) {
 export function LiveSessionsHeader() {
   const { t } = useTranslation()
   const { sessions, busy, open, stop } = useLiveSessions()
+  const view = useAppStore(s => s.view)
   const [listOpen, setListOpen] = useState(false)
   const [pendingStop, setPendingStop] = useState<LiveSession | null>(null)
+  const isOnSpacePage = view === 'space'
 
   // Tick so the "· 3m" age stays fresh without event spam.
   const [, force] = useState(0)
@@ -137,9 +153,21 @@ export function LiveSessionsHeader() {
                 <SessionRow
                   key={session.id}
                   session={session}
+                  isOnSpacePage={isOnSpacePage}
                   onOpen={() => {
-                    open(session)
-                    setListOpen(false)
+                    // Close the popover only on success; if open() fails to
+                    // resolve a target space, surface a toast instead of
+                    // silently doing nothing (the original #266 symptom).
+                    const ok = open(session)
+                    if (ok) {
+                      setListOpen(false)
+                    } else {
+                      useNotificationStore.getState().show({
+                        title: t('Space unavailable'),
+                        body: t('Could not open this session. Try switching to a Space first.'),
+                        variant: 'warning',
+                      })
+                    }
                   }}
                   onStop={() => setPendingStop(session)}
                 />
