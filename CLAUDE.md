@@ -22,3 +22,13 @@ Always design with high maintainability and modularity, aligned with long-term a
 - do not use ask tool
 **tips.**
 This project is 100% AI-generated, so humans may not necessarily know more than you do. You need to proactively review documentation, manage documents, and examine code to confirm details and direction (for matters involving architecture and direction, actively discuss with users).
+
+**打包**
+
+- 开源 `Halo` 版本：`npm run build:win-x64` / `build:mac` / `build:linux`（用当前根目录 `product.json`）。
+- **WeBank 内网版本**（`Halo-WeBank Setup ...exe` / `Halo WeBank-*.dmg` 等）**必须**走 `halo-local/halo-webank/build/scripts/build-webank.sh`，两步：
+  1. `cd halo-local/halo-webank/build && npm install && npm run build`（先在 halo-webank 子仓 esbuild 打出 `build/dist/providers/*/index.js`）
+  2. `SKIP_UNIT_TESTS=1 SKIP_E2E_TESTS=1 ./halo-local/halo-webank/build/scripts/build-webank.sh [--mac] [--win] [--linux]`（脚本会临时切换 `product.json` 到 `product.webank.json`、附带 `halo-local/dist/**` 到 electron-builder 的 files、跑构建、恢复原 product.json）。
+  平台标不传则打全部；`SKIP_*_TESTS` 用于跳过测试环节。产物落在 `hello-halo/dist/`。
+- 不要用 `build:win` 之类的原生脚本去打 WeBank 版——名字、appId、更新源、内置 apps、provider bundle 都会错。
+- 如果 provider 侧改动（`halo-local/halo-webank/build/providers/*`）想生效，必须先跑步骤 1 重新 esbuild，然后再跑 build-webank.sh。

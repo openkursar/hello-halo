@@ -501,6 +501,9 @@ class AISourceManager {
     const availableModels: string[] = data._availableModels || []
     const modelNames: Record<string, string> = data._modelNames || {}
     const defaultModel = data._defaultModel || ''
+    const modelOverrides = data._modelOverrides as
+      | Record<string, Record<string, unknown>>
+      | undefined
 
     const builtin = getBuiltinProvider(providerType)
     const now = new Date().toISOString()
@@ -541,8 +544,9 @@ class AISourceManager {
             },
             model: defaultModel || s.model,
             availableModels: models.length > 0 ? models : s.availableModels,
+            modelOverrides: modelOverrides !== undefined ? modelOverrides : s.modelOverrides,
             updatedAt: now
-          }
+          } as AISource
         }
         return s
       })
@@ -565,6 +569,7 @@ class AISourceManager {
         },
         model: defaultModel,
         availableModels: models,
+        modelOverrides,
         createdAt: now,
         updatedAt: now
       }
@@ -773,14 +778,19 @@ class AISourceManager {
     const freshAiSources = this.getAiSourcesConfig()
     const now = new Date().toISOString()
 
+    const nextOverrides = providerData.modelOverrides as
+      | Record<string, Record<string, unknown>>
+      | undefined
+
     const updatedSources = freshAiSources.sources.map(s => {
       if (s.id !== sourceId) return s
       return {
         ...s,
         availableModels: models.length > 0 ? models : s.availableModels,
         model: providerData.model || s.model,
+        modelOverrides: nextOverrides !== undefined ? nextOverrides : s.modelOverrides,
         updatedAt: now
-      }
+      } as AISource
     })
 
     saveConfig({
