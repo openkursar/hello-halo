@@ -26,8 +26,8 @@ import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotoc
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { getAppManager } from '../app-bridge'
 import { appToSdkServerConfig } from './helpers'
-import { updateServerStatus, removeServerStatus } from './mcp-manager'
-import type { McpServerStatusInfo } from './types'
+import { purgeStaleMcpOAuth } from './mcp-auth-state'
+import { updateServerStatus, removeServerStatus, type McpProbeStatusPatch } from './mcp-manager'
 import type { McpAppChange } from '../app-bridge'
 
 // ============================================
@@ -163,7 +163,7 @@ const inflightProbes = new Map<string, Promise<McpProbeResult>>()
 // Cooldown ledger for automatic (non user-initiated) probes
 const lastAutoProbeAt = new Map<string, number>()
 
-function statusPatchFromResult(result: McpProbeResult): Omit<McpServerStatusInfo, 'name'> {
+function statusPatchFromResult(result: McpProbeResult): McpProbeStatusPatch {
   return {
     status: result.status,
     ...(result.tools ? { tools: result.tools } : {}),
@@ -202,6 +202,14 @@ export async function probeMcpApp(
 
   const result = await probe
   lastAutoProbeAt.set(specId, Date.now())
+
+  // A handshake that succeeds with the current config proves any CC OAuth
+  // record for it is leftover state, so drop it before the next session picks
+  // it up and refuses to connect.
+  if (result.status === 'connected') {
+    await purgeStaleMcpOAuth({ [specId]: config }, `probe:${specId}`)
+  }
+
   updateServerStatus(specId, statusPatchFromResult(result))
 
   console.log(
@@ -252,11 +260,13 @@ export function handleMcpAppsChangeForStatus(_spaceId: string | null, change?: M
 }
 
 /**
- * Follow up on SDK session-init reports: servers the SDK marked `failed`
- * get probed (with cooldown) to attach the failure reason the SDK never
- * provides. Called by stream-processor after broadcasting init status.
+ * Follow up on SDK session-init reports: servers the SDK marked `failed` or
+ * `needs-auth` get probed (with cooldown). For `failed` this attaches the
+ * reason the SDK never provides; for `needs-auth` it is also the recovery
+ * path, since a successful probe clears the CC auth record that produced that
+ * verdict. Called by stream-processor after broadcasting init status.
  */
-export function probeFailedServers(specIds: string[]): void {
+export function probeUnhealthyServers(specIds: string[]): void {
   const manager = getAppManager()
   if (!manager || specIds.length === 0) return
 
@@ -271,6 +281,6 @@ export function probeFailedServers(specIds: string[]): void {
     if (!app) continue
 
     lastAutoProbeAt.set(specId, now)
-    probeMcpAppSilently(app.id, 'sdk-reported-failure')
+    probeMcpAppSilently(app.id, 'sdk-reported-unhealthy')
   }
 }

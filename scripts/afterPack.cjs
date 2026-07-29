@@ -24,6 +24,7 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { ENGINE_RUNTIMES, VALID_ENGINES, entryCandidates } = require('./engine-runtimes.cjs');
 
 // electron-builder Arch enum: 0=ia32, 1=x64, 2=armv7l, 3=arm64, 4=universal
 const ARCH_NAMES = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64', 4: 'universal' };
@@ -75,17 +76,24 @@ const CODEX_TARGETS = {
 };
 
 /**
- * Resolve the app.asar.unpacked directory from electron-builder context.
+ * Resolve the app resources directory from electron-builder context.
  *
- * macOS:       <appOutDir>/<ProductName>.app/Contents/Resources/app.asar.unpacked
- * win32/linux: <appOutDir>/resources/app.asar.unpacked
+ * macOS:       <appOutDir>/<ProductName>.app/Contents/Resources
+ * win32/linux: <appOutDir>/resources
  */
-function getUnpackedDir(context) {
+function getResourcesDir(context) {
   if (context.electronPlatformName === 'darwin') {
     const appName = context.packager.appInfo.productFilename;
-    return path.join(context.appOutDir, `${appName}.app`, 'Contents', 'Resources', 'app.asar.unpacked');
+    return path.join(context.appOutDir, `${appName}.app`, 'Contents', 'Resources');
   }
-  return path.join(context.appOutDir, 'resources', 'app.asar.unpacked');
+  return path.join(context.appOutDir, 'resources');
+}
+
+/**
+ * Resolve the app.asar.unpacked directory from electron-builder context.
+ */
+function getUnpackedDir(context) {
+  return path.join(getResourcesDir(context), 'app.asar.unpacked');
 }
 
 /**
@@ -533,6 +541,168 @@ function ensureNativeBinaryPermissions(context) {
   }
 }
 
+// ============================================================================
+// Packaged artifact assertions
+//
+// Everything above operates on files the build machine happened to have. These
+// checks read the artifact itself and refuse to hand back a package that is
+// missing something the app needs at runtime — the only place that can catch a
+// dependency which was installed but excluded from the package, or never
+// installed at all because it was optional.
+// ============================================================================
+
+/**
+ * Reader over the packaged app, whether it was written as an asar archive or a
+ * plain directory. `exists` also consults app.asar.unpacked, since asarUnpack
+ * moves matching files out of the archive.
+ */
+function createPackageReader(context) {
+  const resourcesDir = getResourcesDir(context);
+  const asarPath = path.join(resourcesDir, 'app.asar');
+  const unpackedDir = path.join(resourcesDir, 'app.asar.unpacked');
+
+  if (!fs.existsSync(asarPath)) {
+    const appDir = path.join(resourcesDir, 'app');
+    if (!fs.existsSync(appDir)) {
+      throw new Error(`[afterPack] Packaged app not found (looked for ${asarPath} and ${appDir})`);
+    }
+    return {
+      exists: (relPath) => fs.existsSync(path.join(appDir, relPath)),
+      read: (relPath) => fs.readFileSync(path.join(appDir, relPath)),
+    };
+  }
+
+  const asar = require('@electron/asar');
+  // listPackage builds entries with path.join, so on Windows they use
+  // backslashes — normalize to forward slashes for lookups.
+  const entries = new Set(
+    asar.listPackage(asarPath).map(entry => entry.replace(/^[\\/]/, '').split(path.sep).join('/'))
+  );
+
+  return {
+    exists: (relPath) => {
+      const normalized = relPath.split(path.sep).join('/');
+      return entries.has(normalized) || fs.existsSync(path.join(unpackedDir, relPath));
+    },
+    read: (relPath) => {
+      const unpacked = path.join(unpackedDir, relPath);
+      if (fs.existsSync(unpacked)) return fs.readFileSync(unpacked);
+      // extractFile traverses the archive tree by splitting on path.sep, so it
+      // needs the platform-native relPath, not a forward-slash one.
+      return asar.extractFile(asarPath, relPath);
+    },
+  };
+}
+
+/**
+ * Engines the artifact must contain, from HALO_REQUIRE_ENGINES (comma
+ * separated). Release scripts set it; ad-hoc builds leave it unset and only get
+ * an inventory report.
+ */
+function getRequiredEngines() {
+  const raw = process.env.HALO_REQUIRE_ENGINES;
+  if (!raw) return [];
+  const requested = raw.split(',').map(e => e.trim()).filter(Boolean);
+  const unknown = requested.filter(e => !VALID_ENGINES.includes(e));
+  if (unknown.length > 0) {
+    throw new Error(
+      `[afterPack] HALO_REQUIRE_ENGINES names unknown engine(s): ${unknown.join(', ')}. ` +
+      `Valid engines: ${VALID_ENGINES.join(', ')}`
+    );
+  }
+  return requested;
+}
+
+function validateEngineRuntimes(pkg) {
+  const required = getRequiredEngines();
+  const missing = [];
+
+  for (const engineId of VALID_ENGINES) {
+    const { name, packageId, fix } = ENGINE_RUNTIMES[engineId];
+    const pkgDir = path.join('node_modules', ...packageId.split('/'));
+    const manifestPath = path.join(pkgDir, 'package.json');
+
+    let reason = null;
+    if (!pkg.exists(manifestPath)) {
+      reason = 'package not in the artifact';
+    } else {
+      const manifest = JSON.parse(pkg.read(manifestPath).toString('utf-8'));
+      const entry = entryCandidates(manifest).find(candidate => pkg.exists(path.join(pkgDir, candidate)));
+      if (!entry) {
+        reason = 'package present but its entry file was excluded';
+      } else {
+        console.log(`[afterPack] Engine bundled: ${name} v${manifest.version ?? 'unknown'}`);
+      }
+    }
+
+    if (!reason) continue;
+    if (required.includes(engineId)) {
+      missing.push(`${name} (${packageId}): ${reason}. Fix: ${fix}`);
+    } else {
+      console.log(`[afterPack] Engine not bundled: ${name} — ${reason} (not required by this build)`);
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      '[afterPack] Required agent engine(s) are missing from the packaged app:\n  ' +
+      missing.join('\n  ')
+    );
+  }
+}
+
+/**
+ * `app-update.yml` is written by electron-builder only when a publish target is
+ * configured. Without it electron-updater can check for updates but fails to
+ * download them, so a build that advertises updates must carry the file.
+ */
+function validateUpdaterConfig(context) {
+  const publish = context.packager.config && context.packager.config.publish;
+  const configured = Array.isArray(publish) ? publish.length > 0 : Boolean(publish);
+  if (!configured) {
+    console.log('[afterPack] No publish target configured — skipping app-update.yml check');
+    return;
+  }
+
+  const updateConfigPath = path.join(getResourcesDir(context), 'app-update.yml');
+  if (!fs.existsSync(updateConfigPath)) {
+    throw new Error(
+      '[afterPack] A publish target is configured but app-update.yml is missing from resources. ' +
+      'Auto-update would fail at download time with ENOENT.'
+    );
+  }
+  console.log('[afterPack] app-update.yml present');
+}
+
+/**
+ * product.json drives auth providers and data-folder isolation. When it is
+ * absent the app silently falls back to open-source defaults, which strips
+ * every enterprise login option from the setup screen.
+ */
+function validateProductConfig(pkg) {
+  if (!pkg.exists('product.json')) {
+    throw new Error('[afterPack] product.json is missing from the packaged app');
+  }
+
+  const product = JSON.parse(pkg.read('product.json').toString('utf-8'));
+  if (!Array.isArray(product.authProviders) || product.authProviders.length === 0) {
+    throw new Error('[afterPack] product.json in the packaged app declares no authProviders');
+  }
+  console.log(
+    `[afterPack] product.json present (dataFolderName=${product.dataFolderName ?? 'halo'}, ` +
+    `authProviders=${product.authProviders.length})`
+  );
+}
+
+function validatePackagedArtifact(context) {
+  console.log('[afterPack] Validating packaged artifact...');
+  const pkg = createPackageReader(context);
+  validateEngineRuntimes(pkg);
+  validateProductConfig(pkg);
+  validateUpdaterConfig(context);
+  console.log('[afterPack] Packaged artifact validation passed');
+}
+
 module.exports = async function(context) {
   // Clean non-target watcher packages from unpacked output
   cleanNonTargetWatchers(context);
@@ -556,6 +726,12 @@ module.exports = async function(context) {
   // Defends against upstream npm packages shipping broken permissions
   // (e.g. @anthropic-ai/claude-code v2.1.89 ripgrep EACCES bug).
   ensureNativeBinaryPermissions(context);
+
+  // Last gate before the artifact leaves the packer: assert it actually
+  // contains the engines, product config and updater metadata it needs.
+  // Throwing here fails the build, which is the point — a broken package must
+  // never reach a user.
+  validatePackagedArtifact(context);
 
   // macOS signing (other platforms skip)
   if (context.electronPlatformName !== 'darwin') {

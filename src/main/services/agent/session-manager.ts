@@ -27,6 +27,7 @@ import {
   getDbMcpServers
 } from './helpers'
 import { isImSessionKey } from '../../../shared/apps/im-keys'
+import { purgeStaleMcpOAuth } from './mcp-auth-state'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
 import { resolveCredentialsForSdk, buildBaseSdkOptions, computeCredentialsFingerprint, computeSessionInputsFingerprint } from './sdk-config'
@@ -789,6 +790,13 @@ async function getOrCreateV2SessionInner(
     }
   }
   assertMcpInstancesUnbound(conversationId, sdkOptions.mcpServers)
+
+  // A stale CC auth record makes the CLI skip a URL-based MCP server outright —
+  // no request is sent and only an `authenticate` tool is exposed. Clear those
+  // before the process spawns so the session starts with the full tool set.
+  // Chat supplies servers through buildMcpServers and automations set them on
+  // sdkOptions directly; both have converged by this point.
+  await purgeStaleMcpOAuth(sdkOptions.mcpServers, `session:${conversationId}`)
 
   if (resolveKnowledgeBases && typeof sdkOptions.systemPrompt === 'string') {
     sdkOptions.systemPrompt += buildKnowledgeSection(resolveKnowledgeBases())

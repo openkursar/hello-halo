@@ -152,6 +152,15 @@ export const agentApi = {
     return httpRequest('GET', '/api/agent/engine-capabilities')
   },
 
+  // Engines this build can run, the active one, and the configured engine when
+  // startup had to degrade away from it. Drives the Settings engine selector.
+  getEngineAvailability: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.getEngineAvailability()
+    }
+    return httpRequest('GET', '/api/agent/engine-availability')
+  },
+
   // ===== Toolset broker (on-demand MCP toolsets) =====
   listToolsets: async (spaceId: string, conversationId: string): Promise<ApiResponse> => {
     if (isElectron()) {

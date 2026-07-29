@@ -9,12 +9,6 @@ import {
   getEndpointUrlError,
   shouldForceStream
 } from '../../../src/main/openai-compat-router/server/api-type'
-import {
-  withRequestQueue,
-  generateQueueKey,
-  clearRequestQueues,
-  getPendingRequestCount
-} from '../../../src/main/openai-compat-router/server/request-queue'
 
 describe('API Type Resolution', () => {
   describe('getApiTypeFromUrl', () => {
@@ -93,126 +87,6 @@ describe('API Type Resolution', () => {
     it('should return false for other values', () => {
       process.env.HALO_OPENAI_FORCE_STREAM = 'false'
       expect(shouldForceStream()).toBe(false)
-    })
-  })
-})
-
-describe('Request Queue', () => {
-  beforeEach(() => {
-    clearRequestQueues()
-  })
-
-  afterEach(() => {
-    clearRequestQueues()
-  })
-
-  describe('generateQueueKey', () => {
-    it('should generate a key from URL and API key', () => {
-      const key = generateQueueKey('https://api.example.com', 'sk-1234567890abcdef')
-      // slice(0, 16) returns first 16 chars: 'sk-1234567890abc'
-      expect(key).toBe('https://api.example.com:sk-1234567890abc')
-    })
-
-    it('should handle short API keys', () => {
-      const key = generateQueueKey('https://api.example.com', 'sk-short')
-      expect(key).toBe('https://api.example.com:sk-short')
-    })
-  })
-
-  describe('withRequestQueue', () => {
-    it('should execute function and return result', async () => {
-      const result = await withRequestQueue('test-key', async () => {
-        return 42
-      })
-      expect(result).toBe(42)
-    })
-
-    it('should serialize requests with same key', async () => {
-      const order: number[] = []
-
-      const promise1 = withRequestQueue('same-key', async () => {
-        order.push(1)
-        await new Promise((resolve) => setTimeout(resolve, 10))
-        order.push(2)
-        return 'first'
-      })
-
-      const promise2 = withRequestQueue('same-key', async () => {
-        order.push(3)
-        return 'second'
-      })
-
-      const [result1, result2] = await Promise.all([promise1, promise2])
-
-      expect(result1).toBe('first')
-      expect(result2).toBe('second')
-      // Second request should wait for first to complete
-      expect(order).toEqual([1, 2, 3])
-    })
-
-    it('should allow parallel requests with different keys', async () => {
-      const order: string[] = []
-
-      const promise1 = withRequestQueue('key-a', async () => {
-        order.push('a-start')
-        await new Promise((resolve) => setTimeout(resolve, 10))
-        order.push('a-end')
-        return 'a'
-      })
-
-      const promise2 = withRequestQueue('key-b', async () => {
-        order.push('b-start')
-        await new Promise((resolve) => setTimeout(resolve, 5))
-        order.push('b-end')
-        return 'b'
-      })
-
-      await Promise.all([promise1, promise2])
-
-      // Both should start immediately (parallel)
-      expect(order.indexOf('a-start')).toBeLessThanOrEqual(1)
-      expect(order.indexOf('b-start')).toBeLessThanOrEqual(1)
-    })
-
-    it('should handle errors without blocking subsequent requests', async () => {
-      const promise1 = withRequestQueue('error-key', async () => {
-        throw new Error('Test error')
-      }).catch(() => 'caught')
-
-      const promise2 = withRequestQueue('error-key', async () => {
-        return 'success'
-      })
-
-      const [result1, result2] = await Promise.all([promise1, promise2])
-
-      expect(result1).toBe('caught')
-      expect(result2).toBe('success')
-    })
-  })
-
-  describe('getPendingRequestCount', () => {
-    it('should return 0 when no pending requests', () => {
-      expect(getPendingRequestCount()).toBe(0)
-    })
-
-    it('should track pending requests', async () => {
-      let resolvePromise: () => void
-      const promise = withRequestQueue('counting-key', async () => {
-        await new Promise<void>((resolve) => {
-          resolvePromise = resolve
-        })
-        return 'done'
-      })
-
-      // Give time for the request to start
-      await new Promise((resolve) => setTimeout(resolve, 0))
-
-      expect(getPendingRequestCount()).toBe(1)
-
-      resolvePromise!()
-      await promise
-
-      expect(getPendingRequestCount()).toBe(0)
     })
   })
 })

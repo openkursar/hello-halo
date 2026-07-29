@@ -20,6 +20,7 @@ import { useAppStore } from '../../stores/app.store'
 import { AppStatusDot } from './AppStatusDot'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
+import { isSessionOnlyFailure } from '../../utils/mcpStatus'
 import {
   internalMcpServerToJsonConfig,
   keyValueLinesToRecord,
@@ -178,6 +179,9 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
     }
   }
   const isError = displayStatus === 'error'
+  // Editing the token would not help here — Halo clears the leftover state and
+  // the next session picks the server up again.
+  const sessionOnlyFailure = isSessionOnlyFailure(sdkEntry)
 
   // Init edit state when entering edit mode
   const startEditing = useCallback(() => {
@@ -362,17 +366,25 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
 
       {/* ── Connection failure details + retry ── */}
       {(isError || displayStatus === 'needs_login') && (
-        <div className="px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-500/20 space-y-2">
+        <div className={`px-3 py-2.5 rounded-lg space-y-2 ${
+          sessionOnlyFailure
+            ? 'bg-amber-500/10 border border-amber-500/20'
+            : 'bg-red-500/10 border border-red-500/20'
+        }`}>
           <div className="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-2.5">
             <div className="flex items-start gap-2.5 min-w-0 flex-1">
-              <AlertTriangle className="w-3.5 h-3.5 text-red-400 flex-shrink-0 mt-0.5" />
+              <AlertTriangle className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${
+                sessionOnlyFailure ? 'text-amber-400' : 'text-red-400'
+              }`} />
               <div className="min-w-0 space-y-1">
-                <p className="text-xs text-red-400">
-                  {displayStatus === 'needs_login'
-                    ? t('Authentication was rejected by the MCP server. Update the token in the configuration below, then test again.')
-                    : t('The MCP server failed to connect.')}
+                <p className={`text-xs ${sessionOnlyFailure ? 'text-amber-400' : 'text-red-400'}`}>
+                  {sessionOnlyFailure
+                    ? t('This server connects fine, but the last agent session could not use it. Halo has cleared the leftover state — it will be picked up again on the next message.')
+                    : displayStatus === 'needs_login'
+                      ? t('Authentication was rejected by the MCP server. Update the token in the configuration below, then test again.')
+                      : t('The MCP server failed to connect.')}
                 </p>
-                {sdkEntry?.errorDetail && (
+                {!sessionOnlyFailure && sdkEntry?.errorDetail && (
                   <p className="text-[11px] font-mono text-red-400/80 break-all">
                     {sdkEntry.errorDetail}
                   </p>
@@ -382,9 +394,12 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
             <button
               onClick={handleTestConnection}
               disabled={testing}
-              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-red-400 hover:text-red-300
-                border border-red-400/30 hover:border-red-400/60 rounded-lg transition-colors
-                disabled:opacity-50 flex-shrink-0 self-start"
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg transition-colors
+                disabled:opacity-50 flex-shrink-0 self-start border ${
+                  sessionOnlyFailure
+                    ? 'text-amber-400 hover:text-amber-300 border-amber-400/30 hover:border-amber-400/60'
+                    : 'text-red-400 hover:text-red-300 border-red-400/30 hover:border-red-400/60'
+                }`}
             >
               {testing
                 ? <><Loader2 className="w-3 h-3 animate-spin" />{t('Testing...')}</>

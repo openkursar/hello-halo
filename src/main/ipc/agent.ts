@@ -21,7 +21,8 @@ import {
   onAgentEvent,
   onAgentBroadcast
 } from '../services/agent'
-import { getEngineCapabilities, getActiveEngine } from '../services/agent/resolved-sdk'
+import { getEngineCapabilities, getActiveEngine, getDegradedFromEngine } from '../services/agent/resolved-sdk'
+import { getEngineAvailability } from '../services/agent/engine-availability'
 import { defaultCapabilitiesFor } from '../services/agent/capabilities'
 import { resolveCodexPendingQuestion } from '../services/agent/codex'
 import { getMainWindow } from '../foundation/window.service'
@@ -197,6 +198,26 @@ export function registerAgentHandlers(): void {
         return { success: true, data: defaultCapabilitiesFor(engine) }
       } catch (error: unknown) {
         const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
+
+    // Which engines this build can actually run, plus the engine in use and the
+    // configured-but-unavailable one when startup had to degrade. Settings uses
+    // it to offer only runnable engines and to explain a degradation.
+    getEngineAvailability: async () => {
+      try {
+        return {
+          success: true,
+          data: {
+            engines: await getEngineAvailability(),
+            activeEngine: getActiveEngine(),
+            degradedFrom: getDegradedFromEngine(),
+          },
+        }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[IPC] agent:get-engine-availability error:', err)
         return { success: false, error: err.message }
       }
     },

@@ -191,6 +191,7 @@ export interface HaloAPI {
   answerQuestion: (data: { conversationId: string; id: string; answers: Record<string, string> }) => Promise<IpcResponse>
   injectMessage: (data: { conversationId: string; message: string }) => Promise<IpcResponse>
   getEngineCapabilities: () => Promise<IpcResponse>
+  getEngineAvailability: () => Promise<IpcResponse>
   listToolsets: (data: { spaceId: string; conversationId: string }) => Promise<IpcResponse>
   openToolset: (data: { spaceId: string; conversationId: string; toolsetId: string }) => Promise<IpcResponse>
   closeToolset: (data: { spaceId: string; conversationId: string; toolsetId: string }) => Promise<IpcResponse>

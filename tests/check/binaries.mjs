@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 
 /**
- * Binary Dependencies Checker
+ * Build Dependencies Checker
  *
- * Verifies that all required binary dependencies are present before packaging.
+ * Verifies that everything a release needs is present before packaging:
+ * native binaries, and the JavaScript runtimes behind the agent SDK engines.
  * This prevents shipping broken builds to users.
  *
- * Usage: node tests/check/binaries.mjs [--platform mac-arm64|mac-x64|win|linux|all]
+ * Usage:
+ *   node tests/check/binaries.mjs [--platform mac-arm64|mac-x64|win|linux|all]
+ *                                 [--require-engines anthropic,halo,codex]
  *
  * Platforms:
  *   mac-arm64 - Mac Apple Silicon (M1/M2/M3/M4)
@@ -15,6 +18,12 @@
  *   linux     - Linux x64
  *   all       - All platforms (default)
  *
+ * --require-engines turns a missing engine into a build failure. It is opt-in
+ * because engine packages are optional dependencies: a clean clone legitimately
+ * lacks `@hello-halo/agent-sdk` (its source directory is gitignored), and that
+ * must not break contributor builds. Release scripts pass the flag so an
+ * official artifact can never ship without the engines it advertises.
+ *
  * Exit codes:
  *   0 - All checks passed
  *   1 - One or more checks failed
@@ -22,8 +31,12 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import engineRuntimes from '../../scripts/engine-runtimes.cjs'
+
+const { ENGINE_RUNTIMES, VALID_ENGINES, resolveEngineEntry } = engineRuntimes
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '../..')
@@ -317,6 +330,60 @@ const BINARY_DEPENDENCIES = [
   }
 ]
 
+// ============================================================================
+// Agent SDK engine runtimes
+// ============================================================================
+
+/**
+ * Check one engine runtime. Reports version and a content fingerprint of the
+ * entry file: `@hello-halo/agent-sdk` carries a static version across rebuilds,
+ * so the fingerprint is the only way to tell two SDK builds apart in a log.
+ */
+function checkEngine(engineId) {
+  const engine = ENGINE_RUNTIMES[engineId]
+  const pkgDir = path.join(PROJECT_ROOT, 'node_modules', ...engine.packageId.split('/'))
+  const manifestPath = path.join(pkgDir, 'package.json')
+
+  if (!fs.existsSync(manifestPath)) {
+    return { engineId, name: engine.name, status: 'missing', path: engine.packageId, fix: engine.fix }
+  }
+
+  let manifest
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'))
+  } catch (error) {
+    return {
+      engineId,
+      name: engine.name,
+      status: 'invalid',
+      path: engine.packageId,
+      info: `unreadable package.json (${error.message})`,
+      fix: engine.fix
+    }
+  }
+
+  const entry = resolveEngineEntry(pkgDir, manifest)
+  if (!entry) {
+    return {
+      engineId,
+      name: engine.name,
+      status: 'invalid',
+      path: engine.packageId,
+      info: 'package present but has no loadable entry file',
+      fix: engine.fix
+    }
+  }
+
+  const fingerprint = createHash('sha256').update(fs.readFileSync(entry)).digest('hex').slice(0, 12)
+  return {
+    engineId,
+    name: engine.name,
+    status: 'ok',
+    path: engine.packageId,
+    info: `v${manifest.version ?? 'unknown'} #${fingerprint}`
+  }
+}
+
 /**
  * Check a single binary dependency
  */
@@ -360,9 +427,46 @@ function checkBinary(dep) {
 }
 
 /**
+ * Report every engine runtime. Engines named in `requiredEngines` fail the
+ * build when absent; the rest are informational, so a contributor clone
+ * without the optional engines still passes.
+ *
+ * Returns true when a required engine is missing or unusable.
+ */
+function runEngineChecks(requiredEngines) {
+  log.info('Checking agent SDK engine runtimes...\n')
+
+  let hasErrors = false
+
+  for (const engineId of VALID_ENGINES) {
+    const result = checkEngine(engineId)
+    const required = requiredEngines.includes(engineId)
+
+    if (result.status === 'ok') {
+      log.success(`${result.name} (${result.info})`)
+      continue
+    }
+
+    const detail = result.info ? ` - ${result.info}` : ''
+    if (!required) {
+      log.warn(`Not bundled: ${result.name}${detail} (not required by this build)`)
+      continue
+    }
+
+    log.error(`${result.status === 'missing' ? 'Missing' : 'Invalid'}: ${result.name}${detail}`)
+    console.log(`  Package: ${result.path}`)
+    console.log(`  Fix: ${result.fix}`)
+    hasErrors = true
+  }
+
+  console.log('')
+  return hasErrors
+}
+
+/**
  * Run all binary checks
  */
-function runChecks(targetPlatform = 'all') {
+function runChecks(targetPlatform = 'all', requiredEngines = []) {
   log.info('Checking binary dependencies...\n')
 
   const results = []
@@ -395,11 +499,15 @@ function runChecks(targetPlatform = 'all') {
 
   console.log('')
 
+  if (runEngineChecks(requiredEngines)) {
+    hasErrors = true
+  }
+
   if (hasErrors) {
-    log.error('Binary check failed! Fix the issues above before packaging.')
+    log.error('Build dependency check failed! Fix the issues above before packaging.')
     process.exit(1)
   } else {
-    log.success('All binary dependencies are present.')
+    log.success('All build dependencies are present.')
     process.exit(0)
   }
 }
@@ -408,6 +516,7 @@ function runChecks(targetPlatform = 'all') {
 function parseArgs() {
   const args = process.argv.slice(2)
   let platform = 'all'
+  let requiredEngines = []
 
   const validPlatforms = ['mac-arm64', 'mac-x64', 'win', 'linux', 'all']
 
@@ -420,11 +529,21 @@ function parseArgs() {
         process.exit(1)
       }
     }
+
+    if (args[i] === '--require-engines' && args[i + 1]) {
+      requiredEngines = args[i + 1].split(',').map(e => e.trim()).filter(Boolean)
+      const unknown = requiredEngines.filter(e => !VALID_ENGINES.includes(e))
+      if (unknown.length > 0) {
+        log.error(`Unknown engine(s): ${unknown.join(', ')}`)
+        console.log(`Valid engines: ${VALID_ENGINES.join(', ')}`)
+        process.exit(1)
+      }
+    }
   }
 
-  return { platform }
+  return { platform, requiredEngines }
 }
 
 // Main entry point
-const { platform } = parseArgs()
-runChecks(platform)
+const { platform, requiredEngines } = parseArgs()
+runChecks(platform, requiredEngines)
