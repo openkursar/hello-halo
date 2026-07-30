@@ -273,12 +273,27 @@ export interface V2SessionInfo {
 // MCP Types
 // ============================================
 
+/** Verdict of a native connection probe — is this configuration usable now. */
+export type McpProbeStatus = 'connected' | 'failed' | 'needs-auth'
+
 /**
- * MCP server status type (matches SDK)
+ * MCP server status.
+ *
+ * Two producers report on a server and they can legitimately disagree: the
+ * probe answers "is the configuration usable", an agent session answers "could
+ * that session actually use it". Collapsing both into one field let whichever
+ * wrote last hide the other, so a server the session could not use still
+ * showed as connected. They are kept apart; `status` is the derived value
+ * consumers should read.
  */
 export interface McpServerStatusInfo {
   name: string
+  /** Derived: the session verdict when one applies, otherwise the probe's. */
   status: 'connected' | 'failed' | 'needs-auth' | 'pending'
+  /** Last native probe verdict. Absent until a probe has run. */
+  probeStatus?: McpProbeStatus
+  /** Last agent session verdict. Cleared once a probe reconnects. */
+  sessionStatus?: 'connected' | 'failed' | 'needs-auth' | 'pending'
   serverInfo?: {
     name: string
     version: string

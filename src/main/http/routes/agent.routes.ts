@@ -96,6 +96,24 @@ export function registerAgentRoutes(app: Express): void {
     }
   })
 
+  // Engine availability — mirrors `agent:get-engine-availability` in ipc/agent.ts.
+  app.get('/api/agent/engine-availability', async (_req: Request, res: Response) => {
+    try {
+      const { getActiveEngine, getDegradedFromEngine } = await import('../../services/agent/resolved-sdk')
+      const { getEngineAvailability } = await import('../../services/agent/engine-availability')
+      res.json({
+        success: true,
+        data: {
+          engines: await getEngineAvailability(),
+          activeEngine: getActiveEngine(),
+          degradedFrom: getDegradedFromEngine(),
+        },
+      })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // ===== Toolset broker (on-demand MCP toolsets) — mirrors ipc/agent.ts =====
   app.post('/api/agent/toolsets/list', async (req: Request, res: Response) => {
     try {

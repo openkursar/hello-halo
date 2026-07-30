@@ -279,7 +279,33 @@ export interface ProductConfig {
    * opt-in per field.
    */
   telemetry?: {
+    /**
+     * Telemetry backend base URL (client sends POST {endpoint}/v1/events)
+     * and its Bearer token. Both ship inside the package and are readable
+     * by any user — they are per-variant configuration, not secrets, and
+     * live committed in the variant repo. Empty/omitted disables the
+     * provider. Real abuse protection belongs server-side.
+     */
+    endpoint?: string
+    apiKey?: string
     allowedSensitiveFields?: string[]
+  }
+
+  /**
+   * Public analytics providers (optional, brand builds only).
+   *
+   * Identifiers ship inside the package (user-readable) — configuration,
+   * not secrets. Open-source builds omit this block entirely, which
+   * disables every provider.
+   */
+  analytics?: {
+    ga?: {
+      measurementId?: string
+      apiSecret?: string
+    }
+    baidu?: {
+      siteId?: string
+    }
   }
 
   /**
@@ -429,6 +455,16 @@ export function getMarketplaceIdentityProvider(): string | undefined {
  */
 export function getTelemetryConfig(): ProductConfig['telemetry'] | undefined {
   return loadProductConfig().telemetry
+}
+
+/**
+ * Get the analytics config block from product.json.
+ *
+ * Returns undefined when not configured (open-source builds) — the
+ * analytics service treats missing/empty identifiers as provider-disabled.
+ */
+export function getAnalyticsConfig(): ProductConfig['analytics'] | undefined {
+  return loadProductConfig().analytics
 }
 
 /**

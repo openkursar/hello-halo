@@ -159,6 +159,7 @@
     "zustand": "^4.5.0"
   },
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
     "@electron/rebuild": "^3.7.1",
     "@playwright/test": "^1.57.0",
     "@types/better-sqlite3": "^7.6.13",

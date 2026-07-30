@@ -224,12 +224,22 @@ export type McpServerConfig = McpStdioServerConfig | McpHttpServerConfig | McpSs
 // MCP servers map (key is server name)
 export type McpServersConfig = Record<string, McpServerConfig>;
 
-// MCP server status (from SDK)
+// MCP server status
 export type McpServerStatusType = 'connected' | 'failed' | 'needs-auth' | 'pending';
 
+/**
+ * Mirrors main's McpServerStatusInfo. `status` is derived from the two
+ * producers below; read it for the overall verdict and compare the two when
+ * the difference matters (a configuration that probes fine but which the last
+ * agent session could not use).
+ */
 export interface McpServerStatus {
   name: string;
   status: McpServerStatusType;
+  /** Last native probe verdict — whether this configuration is usable now. */
+  probeStatus?: 'connected' | 'failed' | 'needs-auth';
+  /** Last agent session verdict. Cleared once a probe reconnects. */
+  sessionStatus?: McpServerStatusType;
   serverInfo?: {
     name: string;
     version: string;
@@ -422,6 +432,23 @@ export interface EngineCapabilities {
     sessionResume: boolean; sessionFork: boolean; interrupt: boolean;
     multimodalImage: boolean; contextCompaction: boolean; askUserQuestion: boolean;
   };
+}
+
+/** Whether one engine's runtime shipped in this build. Mirrors main's EngineAvailability. */
+export interface EngineAvailability {
+  engineId: EngineId;
+  available: boolean;
+  version: string;
+  fingerprint: string;
+}
+
+/** Payload of `agent:get-engine-availability`. */
+export interface EngineAvailabilityReport {
+  engines: EngineAvailability[];
+  /** Engine actually running; null when no engine could be loaded. */
+  activeEngine: EngineId | null;
+  /** Configured engine when startup degraded away from it; null otherwise. */
+  degradedFrom: EngineId | null;
 }
 
 // ============================================

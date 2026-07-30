@@ -175,12 +175,41 @@
     },
     "telemetry": {
       "type": "object",
-      "description": "Telemetry configuration (enterprise/custom builds only). Controls which user-authored / user-identifiable fields may be forwarded to the self-hosted telemetry backend. Omit for open-source builds — every sensitive field is dropped by default.",
+      "description": "Self-hosted telemetry configuration (enterprise/custom builds only). Endpoint and apiKey ship inside the package (user-readable) — per-variant configuration, not secrets; keep them committed in the variant repo. Omit the whole block for open-source builds — the provider stays disabled and every sensitive field is dropped by default.",
       "properties": {
+        "endpoint": {
+          "type": "string",
+          "description": "Base URL of the telemetry backend. Client sends POST {endpoint}/v1/events. Empty or omitted disables the provider."
+        },
+        "apiKey": {
+          "type": "string",
+          "description": "Bearer token sent with each batch. Spam filtering only — extractable from the shipped package, so real protection must be server-side (rate limiting, rotation)."
+        },
         "allowedSensitiveFields": {
           "type": "array",
           "items": { "type": "string" },
           "description": "Whitelist of SENSITIVE_KEYS property names permitted to be sent. Recognized keys: specId, spaceName, modelName, sourceName, mcpId, skillId, imBotName, inputTokens, outputTokens, errorCode."
+        }
+      }
+    },
+    "analytics": {
+      "type": "object",
+      "description": "Public analytics providers (brand builds only). Identifiers ship inside the package and are user-readable — configuration, not secrets. Omit the whole block for open-source builds to disable all providers.",
+      "properties": {
+        "ga": {
+          "type": "object",
+          "description": "Google Analytics 4 (Measurement Protocol). Both fields required for the provider to activate.",
+          "properties": {
+            "measurementId": { "type": "string" },
+            "apiSecret": { "type": "string" }
+          }
+        },
+        "baidu": {
+          "type": "object",
+          "description": "Baidu Analytics (China region).",
+          "properties": {
+            "siteId": { "type": "string" }
+          }
         }
       }
     },

@@ -7,8 +7,8 @@
  * error mapping (getUpstreamError formats + status mapping via sendError).
  *
  * Every leaf the handler dispatches to is mocked (kiro adapter, converters,
- * streams, interceptors, provider adapters, request queue, proxyFetch) so a
- * single call exercises exactly one path deterministically.
+ * streams, interceptors, provider adapters, proxyFetch) so a single call
+ * exercises exactly one path deterministically.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -57,11 +57,6 @@ vi.mock('../../../src/main/openai-compat-router/server/provider-adapters', () =>
 }))
 
 // Run the queued fn inline so conversion-path assertions stay synchronous.
-vi.mock('../../../src/main/openai-compat-router/server/request-queue', () => ({
-  withRequestQueue: (_key: string, fn: () => unknown) => fn(),
-  generateQueueKey: () => 'key',
-}))
-
 // api-type: real-ish behavior driven per test via mockReturnValue.
 const getApiTypeFromUrl = vi.fn(() => 'chat_completions')
 const isValidEndpointUrl = vi.fn(() => true)
@@ -102,9 +97,12 @@ interface CapturedRes {
   getHeader: (k: string) => string | undefined
   json: (b: unknown) => void
   end: (b?: string) => void
+  on: (event: string, cb: () => void) => void
+  emit: (event: string) => void
 }
 
 function makeRes(): CapturedRes {
+  const listeners: Record<string, Array<() => void>> = {}
   const res: CapturedRes = {
     statusCode: 200,
     headers: {},
@@ -125,6 +123,12 @@ function makeRes(): CapturedRes {
     },
     end(b) {
       this.ended = b
+    },
+    on(event, cb) {
+      ;(listeners[event] ??= []).push(cb)
+    },
+    emit(event) {
+      for (const cb of listeners[event] ?? []) cb()
     },
   }
   return res
@@ -274,6 +278,69 @@ describe('handleMessagesRequest dispatch', () => {
     const body = proxyFetch.mock.calls[0][1].body
     expect(Buffer.isBuffer(body)).toBe(false)
     expect(body).toBe(JSON.stringify(normalized))
+  })
+})
+
+describe('client disconnect propagation', () => {
+  it('aborts the upstream fetch signal when the client closes mid-stream', async () => {
+    const req = anthReq({ stream: true })
+    runInterceptors.mockResolvedValue({ intercepted: false, request: req })
+    proxyFetch.mockResolvedValue(fakeResponse({ ok: true, body: {} }))
+
+    // Keep the SSE conversion in flight until the test releases it.
+    let releaseStream!: () => void
+    streamOpenAIChatToAnthropic.mockImplementation(
+      () => new Promise<void>((resolve) => { releaseStream = resolve })
+    )
+
+    const res = makeRes()
+    const done = handleMessagesRequest(
+      req,
+      baseConfig({ apiType: 'chat_completions' }),
+      res as unknown as ExpressResponse,
+    )
+    // Let fetch resolve and streaming begin.
+    await vi.waitFor(() => expect(streamOpenAIChatToAnthropic).toHaveBeenCalledTimes(1))
+
+    const fetchSignal = proxyFetch.mock.calls[0][1].signal as AbortSignal
+    expect(fetchSignal.aborted).toBe(false)
+
+    res.emit('close')
+    expect(fetchSignal.aborted).toBe(true)
+
+    releaseStream()
+    await done
+    // clearAllMocks does not drop implementations — remove the pending-promise
+    // impl so later tests get the default resolved stream.
+    streamOpenAIChatToAnthropic.mockReset()
+  })
+
+  it('does not write an error response when the abort came from the client', async () => {
+    const req = anthReq()
+    runInterceptors.mockResolvedValue({ intercepted: false, request: req })
+    proxyFetch.mockImplementation(
+      (_url: string, init: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+          )
+        })
+    )
+
+    const res = makeRes()
+    const done = handleMessagesRequest(
+      req,
+      baseConfig({ apiType: 'chat_completions' }),
+      res as unknown as ExpressResponse,
+    )
+    await vi.waitFor(() => expect(proxyFetch).toHaveBeenCalledTimes(1))
+
+    res.emit('close')
+    await done
+
+    // Client is gone: no timeout_error / api_error must be written.
+    expect(res.jsonBody).toBeUndefined()
+    expect(res.statusCode).toBe(200)
   })
 })
 
