@@ -122,8 +122,13 @@ BrowserWindow + remote WebSocket clients:
 | gone | `ai-browser:view-gone` | AI's active view destroyed | store clears; live-session tray drops it |
 
 `gone` is emitted from `context.handleViewDestroyed(viewId)`, invoked by the
-`browser:destroy` IPC handler (covers canvas-tab close and the live-session tray
-"stop"). This keeps `activeViewId` from dangling on a dead WebContents.
+`browser:destroy` IPC handler. The only paths that call `browser:destroy` are
+the AI's own teardown and the live-session tray "stop"; closing the AI browser's
+canvas tab does **not** destroy it. The canvas tabs the AI's view attaches to are
+marked `browserViewOwned = false`, so `closeAll`/`closeTab` route them through
+`detachBrowserView` (hide only) — the AI singleton keeps its WebContents and the
+live session survives. This keeps `activeViewId` from dangling only when the AI
+itself destroys the view.
 
 The renderer reveals the AI's view by **viewId identity** (`attachAIBrowserView`),
 never by re-opening the URL — so the user sees and can take over the exact page

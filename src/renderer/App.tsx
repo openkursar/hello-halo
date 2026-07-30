@@ -30,6 +30,7 @@ import { OnboardingOverlay } from './components/onboarding'
 import { UpdateNotification } from './components/updater/UpdateNotification'
 import { NotificationToast } from './components/notification/NotificationToast'
 import { CredentialAlertBanner } from './components/settings/CredentialAlertBanner'
+import { TerminalCloseGuard } from './components/canvas/TerminalCloseGuard'
 import { useNotificationStore } from './stores/notification.store'
 import { api } from './api'
 import { syncStatusBarStyle } from './api/safe-area'
@@ -1002,6 +1003,14 @@ export default function App() {
         </div>
       )}
       {renderView()}
+      {/* Terminal pty close policy — mounted once at the app shell (not inside
+          SpacePage/TlonPage) so the policy is always registered BEFORE any
+          click-handler-driven closeAll. The guard's useEffect owns a single
+          shared field on canvasLifecycle; mounting it in pages meant the
+          in-flight open() path could reach closeAll with the policy still
+          null (page hadn't mounted yet), orphaning the user's own ptys.
+          Renders its prompt via a portal; no layout footprint. */}
+      <TerminalCloseGuard />
       {/* Search panel - full screen edit mode */}
       <SearchPanel isOpen={isSearchOpen} onClose={closeSearch} />
       {/* Search highlight bar - floating navigation mode */}

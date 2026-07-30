@@ -453,7 +453,9 @@ class CanvasLifecycle {
       this.artifactChangedUnsubscribe = null
     }
 
-    // Destroy all browser views
+    // Close all tabs: owned browser views are destroyed, AI-attached views are
+    // detached (hide only), and terminals are routed through the bulk close
+    // policy if one is registered.
     this.closeAll()
 
     console.log('[CanvasLifecycle] Destroyed')
@@ -916,10 +918,9 @@ class CanvasLifecycle {
     const previousTabId = this.activeTabId
     const previousTab = previousTabId ? this.tabs.get(previousTabId) : null
 
-    // Update activeTabId before any await so concurrent callers (e.g. closeAll
-    // resuming after its own awaits) observe the new active tab immediately,
-    // not the one being switched away from. The hide below targets previousTab
-    // by captured id, so reordering is safe.
+    // Update activeTabId before any await so concurrent callers observe the new
+    // active tab immediately, not the one being switched away from. The hide
+    // below targets previousTab by captured id, so reordering is safe.
     this.activeTabId = tabId
 
     // 1. Hide previous BrowserView if it exists (browser or pdf types)
@@ -1132,10 +1133,11 @@ class CanvasLifecycle {
   /**
    * Detach an externally-attached BrowserView — hide only, do not destroy.
    * The view's owner (the AI singleton) keeps its WebContents and lifecycle.
+   * Delegates to hideBrowserView so the hide path stays in one place.
    */
   private async detachBrowserView(viewId: string): Promise<void> {
     console.log(`[CanvasLifecycle] Detaching (hide only) BrowserView: ${viewId}`)
-    await api.hideBrowserView(viewId)
+    await this.hideBrowserView(viewId)
   }
 
   /**
@@ -1392,17 +1394,33 @@ class CanvasLifecycle {
 
   /**
    * Called when entering a space - clears tabs if switching to a different space.
-   * This is the single point of control for Space isolation of Canvas state.
-   * Awaits closeAll so callers can safely add new tabs afterward (the teardown
-   * completes before the new tab is created). Returns true if tabs were cleared.
+   * Publishes the new space id BEFORE awaiting closeAll, so a concurrent
+   * enterSpace(sameId) — e.g. SpacePage's mount effect firing while open()'s
+   * call is still awaiting teardown — sees previousSpaceId === spaceId and
+   * short-circuits, instead of re-entering the teardown branch and wiping the
+   * tab open() is about to create. Returns true if tabs were cleared.
    */
   async enterSpace(spaceId: string): Promise<boolean> {
     const previousSpaceId = this.currentSpaceId
 
     if (previousSpaceId && previousSpaceId !== spaceId && this.tabs.size > 0) {
       console.log(`[CanvasLifecycle] Space switch: clearing ${this.tabs.size} tabs`)
-      await this.closeAll()
+      // Publish first so the idempotence guard matches the new space during
+      // the await below; closeAll's tail clears the map unconditionally.
       this.currentSpaceId = spaceId
+      try {
+        await this.closeAll()
+      } catch (err) {
+        // closeAll clears the map in its own finally-less body; if an await
+        // rejects mid-loop the map may still hold tabs. Force-clear so the
+        // freshly-published id does not point at a stale tab set.
+        console.error('[CanvasLifecycle] closeAll rejected during space switch:', err)
+        this.tabs.clear()
+        this.activeTabId = null
+        this.setOpen(false)
+        this.notifyTabsChange()
+        this.notifyActiveTabChange()
+      }
       return true
     }
 

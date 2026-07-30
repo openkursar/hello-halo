@@ -15,9 +15,10 @@
  * funnels through one place: single-tab close (tab X, middle-click, ⌘W, context
  * menu) prompts; bulk teardown (closeAll, space switch) disposes silently —
  * terminate the user's own terminals, keep AI-operated ones alive in the tray.
- * Mounted once at the space level (SpacePage), not inside the canvas, so the
- * policy stays registered for space-switch teardown even when the canvas is
- * collapsed.
+ * Mounted once at the app shell (App.tsx), not inside the canvas or a page,
+ * so the policy is registered before any click-handler-driven closeAll — the
+ * live-sessions tray's open() lands in closeAll while no page has mounted
+ * yet, so the policy must outlive page lifecycle.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -71,12 +72,14 @@ export function TerminalCloseGuard() {
 
       // Bulk teardown (closeAll / space switch): no prompt. Terminate the user's
       // own terminals (their tab was the only handle); keep AI-operated ones
-      // running — they stay reachable in the live-sessions tray.
+      // running — they stay reachable in the live-sessions tray. Silent: a
+      // failure during teardown must not pop a toast over a navigation the user
+      // didn't directly request — the session is already going away.
       disposeOnBulkClose: async (sessionId) => {
         const store = useTerminalStore.getState()
         const info = store.sessions.get(sessionId)
         if (info && info.state === 'running' && !info.aiTouched) {
-          await store.killSession(sessionId)
+          await store.killSession(sessionId, { silent: true })
         }
       },
     })

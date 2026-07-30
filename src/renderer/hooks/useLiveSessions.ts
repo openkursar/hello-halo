@@ -64,9 +64,9 @@ export function useLiveSessions(): LiveSessionsApi {
 
   // The terminal registry is process-global (all spaces), but the tray belongs
   // to the space you're in: an AI terminal kept alive in another space must not
-  // leak into this one's tray — it reappears when you return. The AI browser is
-  // a single active view destroyed on space switch (see ai-browser DESIGN.md),
-  // so it needs no per-space filter.
+  // leak into this one's tray — it reappears when you return. The AI browser
+  // carries no spaceId anywhere (it is a single process-global view, detached
+  // rather than destroyed on space switch), so it needs no per-space filter.
   const currentSpaceId = useSpaceStore(s => s.currentSpace?.id)
 
   // AI browser: the interactive singleton drives one active view at a time.
@@ -124,14 +124,12 @@ export function useLiveSessions(): LiveSessionsApi {
       useAppStore.getState().setView('space')
     }
     // Reconcile the Canvas's space identity BEFORE creating the tab, and await
-    // it so any teardown from a prior space completes first. Without this,
-    // SpacePage's enterSpace effect would fire after the tab is opened and
-    // closeAll() it — reproducing the #266 "click does nothing" symptom. After
-    // this await, SpacePage's later enterSpace is a no-op (same space id), so
-    // the freshly opened tab survives.
+    // it so any teardown from a prior space completes first. enterSpace publishes
+    // its new id before the await, so the enterSpace call SpacePage fires on
+    // mount short-circuits (same id) and leaves the freshly opened tab alone.
     await canvasLifecycle.enterSpace(target.id)
     if (session.kind === 'terminal') {
-      openTerminalInCanvas(session.id, session.title)
+      await openTerminalInCanvas(session.id, session.title)
     } else {
       // Attach the exact AI-driven BrowserView (same WebContents).
       await canvasLifecycle.attachAIBrowserView(session.id, aiUrl || '', session.title)

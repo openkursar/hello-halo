@@ -46,10 +46,8 @@ interface SessionRowProps {
 function SessionRow({ session, isOnSpacePage, onOpen, onStop }: SessionRowProps) {
   const { t } = useTranslation()
   // Same reveal affordance in both states; the icon stays ArrowUpRight so it
-  // never reads as "open externally". When the target isn't the current page,
-  // an inline badge carries that meaning visibly instead of burying it in
-  // the tooltip. Uses the complete token t('Space') — a standalone noun that
-  // translates correctly in every locale, unlike a grammatical fragment.
+  // never reads as "open externally". The header carries the "opens in Space"
+  // hint once for the whole list, so a row never needs to repeat it.
   const openLabel = isOnSpacePage ? t('Open') : t('Open in Space')
   return (
     <div className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted/60 transition-colors">
@@ -61,11 +59,6 @@ function SessionRow({ session, isOnSpacePage, onOpen, onStop }: SessionRowProps)
         <span className={`flex-1 min-w-0 truncate text-xs text-foreground/80 ${session.kind === 'terminal' ? 'font-mono' : ''}`}>
           {session.title}
         </span>
-        {!isOnSpacePage && (
-          <span className="shrink-0 text-[10px] text-primary/80">
-            {t('Space')}
-          </span>
-        )}
         <span className="shrink-0 text-[11px] text-muted-foreground">
           {session.busy ? t('running') : ago(session.lastActivityAt)}
         </span>
@@ -148,6 +141,11 @@ export function LiveSessionsHeader() {
           >
             <div className="px-2 py-1 text-[11px] font-medium text-muted-foreground">
               {t('Active sessions')}
+              {!isOnSpacePage && (
+                <span className="ml-1.5 font-normal text-primary/80">
+                  {t('Opens in Space')}
+                </span>
+              )}
             </div>
             <div className="max-h-64 overflow-y-auto">
               {sessions.map(session => (
@@ -159,16 +157,21 @@ export function LiveSessionsHeader() {
                     // Close the popover only on success; if open() fails to
                     // resolve a target space, surface a toast instead of
                     // silently doing nothing (the original #266 symptom).
+                    // Stable id so a later failure replaces the same toast
+                    // rather than stacking.
                     void open(session).then(ok => {
                       if (ok) {
                         setListOpen(false)
                       } else {
                         useNotificationStore.getState().show({
+                          id: 'live-session-open-error',
                           title: t('Space unavailable'),
                           body: t('Could not open this session. Try switching to a Space first.'),
                           variant: 'error',
                         })
                       }
+                    }).catch(err => {
+                      console.error('[LiveSessionsHeader] open() rejected:', err)
                     })
                   }}
                   onStop={() => setPendingStop(session)}
