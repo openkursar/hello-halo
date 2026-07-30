@@ -75,11 +75,11 @@ export function StoreMine() {
 
   // Launch the identity provider's sign-in (system-browser OAuth) from the
   // not-signed-in notice, then reload once a token is available.
-  const handleSignIn = useCallback(async () => {
+  const handleSignIn = useCallback(async (force = false) => {
     if (signingIn) return
     setSigningIn(true)
     try {
-      const res = await api.storeEnsureSignedIn()
+      const res = await api.storeEnsureSignedIn(force)
       if (res.success && res.data) await load()
     } finally {
       setSigningIn(false)
@@ -141,6 +141,22 @@ export function StoreMine() {
               title={t('Sign-in is unavailable in this build')}
               desc={t('This store requires an account to view your publications, but this build has no identity provider configured. Contact your administrator to enable sign-in.')}
             />
+          ) : error === MARKETPLACE_NOT_SIGNED_IN && signInStatus === 'signed-in' ? (
+            <StoreNotice
+              icon={<AlertCircle className="w-6 h-6 text-amber-500" />}
+              title={t('Could not verify your account')}
+              desc={t('You are signed in, but the store could not verify your session. Sign in again, or ask your administrator to check the store server.')}
+              action={
+                <button
+                  onClick={() => handleSignIn(true)}
+                  disabled={signingIn}
+                  className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-60"
+                >
+                  {signingIn && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {t('Sign in again')}
+                </button>
+              }
+            />
           ) : error === MARKETPLACE_NOT_SIGNED_IN ? (
             <StoreNotice
               icon={<AlertCircle className="w-6 h-6 text-amber-500" />}
@@ -148,7 +164,7 @@ export function StoreMine() {
               desc={t('Your publications are tied to your account. Sign in to see and manage them.')}
               action={
                 <button
-                  onClick={handleSignIn}
+                  onClick={() => handleSignIn(false)}
                   disabled={signingIn}
                   className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-60"
                 >

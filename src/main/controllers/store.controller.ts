@@ -333,9 +333,9 @@ export async function getStoreDiscoverLayout(): Promise<StoreControllerResponse<
  * Ensure the creator identity is signed in, launching the OAuth flow when no
  * token is held. Returns whether a token is available afterwards.
  */
-export async function ensureStoreSignedIn(): Promise<StoreControllerResponse<boolean>> {
+export async function ensureStoreSignedIn(force = false): Promise<StoreControllerResponse<boolean>> {
   try {
-    return { success: true, data: await ensureMarketplaceIdentity() }
+    return { success: true, data: await ensureMarketplaceIdentity(force) }
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] ensureStoreSignedIn error:', err.message)

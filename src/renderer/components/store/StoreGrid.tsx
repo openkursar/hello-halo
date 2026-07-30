@@ -47,7 +47,7 @@ export function StoreGrid({ embedded = false }: { embedded?: boolean }) {
 
   return (
     <div className="flex flex-col">
-      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 ${embedded ? '' : 'p-4'}`}>
+      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 ${embedded ? '' : 'px-4 pb-4'}`}>
         {storeApps.map(entry => (
           <StoreCard
             key={entry.slug}

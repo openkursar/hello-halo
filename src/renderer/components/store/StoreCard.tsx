@@ -6,6 +6,7 @@
  * install/installed/update state and does not bubble to the card.
  */
 
+import { memo } from 'react'
 import { Star, Download, User, Check } from 'lucide-react'
 import { api } from '../../api'
 import type { RegistryEntry } from '../../../shared/store/store-types'
@@ -39,7 +40,7 @@ function formatCompact(value: number, locale: string): string {
   return fmt.format(value)
 }
 
-export function StoreCard({ entry, onClick, source }: StoreCardProps) {
+function StoreCardBase({ entry, onClick, source }: StoreCardProps) {
   const { t } = useTranslation()
   const locale = getCurrentLanguage()
   const { name, description } = resolveEntryI18n(entry, locale)
@@ -146,3 +147,12 @@ export function StoreCard({ entry, onClick, source }: StoreCardProps) {
     </>
   )
 }
+
+// Memoized so a card does not re-render when its grid parent re-renders (scroll,
+// sibling hover, list refresh) while its own data is unchanged — the main cost
+// being the per-card AppTypeIcon/AutomationAvatar. `onClick` is a fresh closure
+// each parent render but its behavior is fully derived from `entry` (it selects
+// entry.slug), so the comparator intentionally ignores it and compares only the
+// data that actually changes what's rendered. Install-state/caps updates still
+// re-render via the internal hooks.
+export const StoreCard = memo(StoreCardBase, (a, b) => a.entry === b.entry && a.source === b.source)

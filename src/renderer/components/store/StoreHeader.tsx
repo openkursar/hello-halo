@@ -172,7 +172,7 @@ export function StoreHeader() {
             <button
               key={tab}
               onClick={() => handleTabClick(tab)}
-              className={`flex-shrink-0 px-3 sm:px-4 py-2 text-sm border-b-2 -mb-px transition-colors ${
+              className={`flex-shrink-0 px-3 sm:px-4 py-2 text-[13px] border-b-2 -mb-px transition-colors ${
                 active
                   ? 'border-primary text-primary font-semibold'
                   : 'border-transparent text-muted-foreground hover:text-foreground'

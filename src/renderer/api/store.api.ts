@@ -185,9 +185,9 @@ export const storeApi = {
     return httpRequest('GET', '/api/store/discover-layout')
   },
 
-  storeEnsureSignedIn: async (): Promise<ApiResponse<boolean>> => {
+  storeEnsureSignedIn: async (force = false): Promise<ApiResponse<boolean>> => {
     if (isElectron()) {
-      return window.halo.storeEnsureSignedIn()
+      return window.halo.storeEnsureSignedIn({ force })
     }
     // Browser OAuth login is a desktop-only flow (system browser + loopback).
     return { success: true, data: false }

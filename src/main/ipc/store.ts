@@ -259,8 +259,8 @@ export function registerStoreHandlers(): void {
 
     // ── store:get-my-publications ──────────────────────────────────────────
     // ── store:ensure-signed-in ─────────────────────────────────────────────
-    storeEnsureSignedIn: async () => {
-      return storeController.ensureStoreSignedIn()
+    storeEnsureSignedIn: async (input?: { force?: boolean }) => {
+      return storeController.ensureStoreSignedIn(input?.force ?? false)
     },
 
     // ── store:get-identity ─────────────────────────────────────────────────

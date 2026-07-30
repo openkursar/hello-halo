@@ -35,7 +35,6 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
   const online = useOnlineStatus()
 
   // Spaces
-  const currentSpace = useSpaceStore(state => state.currentSpace)
   const haloSpace = useSpaceStore(state => state.haloSpace)
   const spaces = useSpaceStore(state => state.spaces)
 
@@ -46,15 +45,23 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
     return result
   }, [haloSpace, spaces])
 
-  // For MCP/Skill (showGlobalOption=true), default to global; otherwise default to current/first space
+  // The built-in Halo space is a default workspace, not one the user created —
+  // label it so the selector reads clearly.
+  const spaceLabel = (s: { id: string; name: string }) =>
+    s.id === haloSpace?.id ? `${s.name} (${t('Default space')})` : s.name
+
+  // Require an explicit choice. Only auto-select when there is a single space
+  // and no dropdown is shown (nothing for the user to pick).
   const [selectedSpaceId, setSelectedSpaceId] = useState(
-    showGlobalOption ? GLOBAL_SCOPE : (currentSpace?.id ?? allSpaces[0]?.id ?? '')
+    !showGlobalOption && allSpaces.length <= 1 ? (allSpaces[0]?.id ?? '') : ''
   )
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<StoreInstallProgress | null>(null)
   // Required config keys flagged by a failed install; cleared as each is filled.
   const [invalid, setInvalid] = useState<Set<string>>(new Set())
+  // Space selector flagged red when the user tries to advance without picking one.
+  const [spaceInvalid, setSpaceInvalid] = useState(false)
   const clearInvalid = useCallback((key: string) => {
     setInvalid(prev => {
       if (!prev.has(key)) return prev
@@ -68,6 +75,11 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
   // field.key and field.required are preserved unchanged by resolveSpecI18n.
   const configSchema = resolveSpecI18n(detail.spec, getCurrentLanguage()).config_schema ?? []
   const hasConfig = configSchema.length > 0
+  // Group by whether the user must act. Only split visually when both kinds are
+  // present — a lone header would add noise when every field is one kind.
+  const requiredFields = configSchema.filter(f => f.required)
+  const optionalFields = configSchema.filter(f => !f.required)
+  const groupFields = requiredFields.length > 0 && optionalFields.length > 0
 
   // Two-step flow: pick the install location first (with a note on what that
   // means), then configure. Apps without a config schema skip the second step.
@@ -90,6 +102,16 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
     setError(null)
   }, [clearInvalid])
 
+  const renderConfigField = (field: InputDef) => (
+    <ConfigField
+      key={field.key}
+      field={field}
+      value={configValues[field.key]}
+      invalid={invalid.has(field.key)}
+      onChange={val => updateConfigValue(field.key, val)}
+    />
+  )
+
   const handleInstall = useCallback(async () => {
     setError(null)
     setProgress(null)
@@ -97,7 +119,8 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
 
     try {
       if (!selectedSpaceId) {
-        setError(t('Please select a scope'))
+        setSpaceInvalid(true)
+        setStep('scope')
         setLoading(false)
         return
       }
@@ -158,7 +181,7 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div
-        className="relative w-full max-w-lg mx-4 bg-background border border-border/60 rounded-xl shadow-xl flex flex-col max-h-[85vh]"
+        className="relative w-full max-w-2xl mx-4 bg-background border border-border/60 rounded-xl shadow-xl flex flex-col max-h-[85vh]"
         onMouseDown={e => e.stopPropagation()}
       >
         {/* Header — app icon + name + step/context meta (matches the mockup) */}
@@ -194,20 +217,28 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
               </label>
               {!showGlobalOption && allSpaces.length <= 1 ? (
                 <p className="text-sm text-foreground">
-                  {allSpaces[0]?.name ?? t('No spaces available')}
+                  {allSpaces[0] ? spaceLabel(allSpaces[0]) : t('No spaces available')}
                 </p>
               ) : (
                 <select
                   value={selectedSpaceId}
-                  onChange={e => setSelectedSpaceId(e.target.value)}
-                  className="w-full px-3 py-2 text-sm bg-muted/40 border border-border/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+                  onChange={e => { setSelectedSpaceId(e.target.value); setSpaceInvalid(false); setError(null) }}
+                  className={`w-full px-3 py-2 text-sm bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary ${selectedSpaceId ? 'text-foreground' : 'text-muted-foreground/50'} ${spaceInvalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
                 >
+                  <option value="" disabled>{t('Select a space')}</option>
                   {showGlobalOption && (
-                    <option value={GLOBAL_SCOPE}>{t('Global (all spaces)')}</option>
+                    <option value={GLOBAL_SCOPE} className="text-foreground">{t('Global (all spaces)')}</option>
                   )}
-                  {allSpaces.map(s => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
+                  {haloSpace && (
+                    <option value={haloSpace.id} className="text-foreground">{spaceLabel(haloSpace)}</option>
+                  )}
+                  {spaces.length > 0 && (
+                    <optgroup label={t('Dedicated spaces')}>
+                      {spaces.map(s => (
+                        <option key={s.id} value={s.id} className="text-foreground">{s.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               )}
               {/* What the scope choice means */}
@@ -217,21 +248,24 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
                   : t('The app is installed into the selected space and runs and is managed within that space; other spaces are not affected.')}
               </div>
             </div>
-          ) : (
-            <div className="space-y-3">
-              <label className="block text-xs font-semibold text-muted-foreground">
-                {t('Configuration')}
-              </label>
-              {configSchema.map(field => (
-                <ConfigField
-                  key={field.key}
-                  field={field}
-                  value={configValues[field.key]}
-                  invalid={invalid.has(field.key)}
-                  onChange={val => updateConfigValue(field.key, val)}
-                />
-              ))}
-            </div>
+          ) : groupFields ? (
+              <div className="space-y-5">
+                <div className="space-y-3">
+                  <GroupHeader title={t('Required')} count={requiredFields.length} />
+                  {requiredFields.map(renderConfigField)}
+                </div>
+                <div className="space-y-3">
+                  <GroupHeader title={t('Optional')} count={optionalFields.length} muted />
+                  {optionalFields.map(renderConfigField)}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <label className="block text-xs font-semibold text-muted-foreground">
+                  {t('Configuration')}
+                </label>
+                {configSchema.map(renderConfigField)}
+              </div>
           )}
 
           {error && (
@@ -277,8 +311,10 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
           )}
           {step === 'scope' && hasConfig ? (
             <button
-              onClick={() => { setError(null); setStep('config') }}
-              disabled={!selectedSpaceId}
+              onClick={() => {
+                if (!selectedSpaceId) { setSpaceInvalid(true); return }
+                setError(null); setStep('config')
+              }}
               className="flex-1 flex items-center justify-center gap-1.5 px-5 py-2.5 text-[13px] font-semibold bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
             >
               {t('Next')}
@@ -286,7 +322,7 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
           ) : (
             <button
               onClick={handleInstall}
-              disabled={loading || !selectedSpaceId || !online}
+              disabled={loading || !online}
               title={online ? undefined : t('You are offline. Connect to the network to install.')}
               className="flex-1 flex items-center justify-center gap-1.5 px-5 py-2.5 text-[13px] font-semibold bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -296,6 +332,21 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ──────────────────────────────────────────────
+// Config field group header (title · count · rule)
+// ──────────────────────────────────────────────
+
+function GroupHeader({ title, count, muted }: { title: string; count: number; muted?: boolean }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className={`text-xs font-semibold ${muted ? 'text-muted-foreground/60' : 'text-muted-foreground'}`}>
+        {title}
+      </span>
+      <span className="text-[10.5px] leading-4 px-1.5 rounded-full bg-muted text-muted-foreground/70">{count}</span>
     </div>
   )
 }

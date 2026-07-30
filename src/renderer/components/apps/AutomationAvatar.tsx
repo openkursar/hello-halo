@@ -6,6 +6,7 @@
  * the same name always yields the same face.
  */
 
+import { memo } from 'react'
 import Avatar from 'boring-avatars'
 
 // Brand-aligned palette seeding the boring-avatars generator (algorithm input,
@@ -19,6 +20,10 @@ interface AutomationAvatarProps {
   size: number
 }
 
-export function AutomationAvatar({ name, size }: AutomationAvatarProps) {
+// Memoized: boring-avatars regenerates the SVG on every render, and a store
+// grid renders one per digital-human card, so re-rendering all of them on any
+// parent update (scroll, hover, list refresh) is a real cost. Props are
+// primitives, so the default shallow compare skips regeneration when unchanged.
+export const AutomationAvatar = memo(function AutomationAvatar({ name, size }: AutomationAvatarProps) {
   return <Avatar size={size} name={name} variant="beam" colors={AVATAR_COLORS} />
-}
+})

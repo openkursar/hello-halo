@@ -130,7 +130,7 @@ export function FileImportZone({
       <button
         type="button"
         onClick={() => folderInputRef.current?.click()}
-        className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground border border-border hover:border-muted-foreground/50 rounded-lg transition-colors"
+        className="flex items-center gap-2 w-full px-3 py-2 text-[13px] text-muted-foreground hover:text-foreground bg-muted/40 border border-border/60 hover:border-muted-foreground/50 rounded-lg transition-colors"
       >
         <FolderOpen className="w-4 h-4" />
         {folderLabel}

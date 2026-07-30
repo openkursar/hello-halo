@@ -735,7 +735,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId }: Share
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-7 py-5 space-y-4">
+        <div className="flex-1 overflow-y-auto flex flex-col px-7 py-5 space-y-4">
           {signedIn === null ? (
             <div className="flex justify-center py-16">
               <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -877,148 +877,159 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId }: Share
           )}
 
           {sourceSpec && !submitSuccess && (
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="publish-name" className="text-xs font-semibold text-muted-foreground">
-                {t('App name')} <span className="text-red-400">*</span>
-              </label>
-              <input
-                id="publish-name"
-                value={name}
-                onChange={e => { draftDirty.current = true; setName(e.target.value); clearInvalid('name'); setSubmitError(null) }}
-                className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground ${invalid.has('name') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
-              />
-            </div>
-          )}
-
+            <div className="-mx-7 -mb-5 flex-1 bg-muted/40 px-7 py-4 space-y-4">
           {sourceSpec && !submitSuccess && (
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="publish-category" className="text-xs font-semibold text-muted-foreground">
-                {t('Scene category')} <span className="text-red-400">*</span>
-              </label>
-              <select
-                id="publish-category"
-                value={category}
-                onChange={e => { draftDirty.current = true; setCategory(e.target.value); clearInvalid('category'); setSubmitError(null) }}
-                className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary ${category ? 'text-foreground' : 'text-muted-foreground/50'} ${invalid.has('category') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border'}`}
-              >
-                <option value="" disabled>{t('Select a scene category')}</option>
-                {categories.map(cat => (
-                  <option key={cat.id} value={cat.id}>{categoryDisplay(cat, t)}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {sourceSpec && !submitSuccess && (
-            <TagInput tags={tags} onChange={t2 => { draftDirty.current = true; setTags(t2); setSubmitError(null) }} />
-          )}
-
-          {sourceSpec && !submitSuccess && (
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="publish-desc" className="text-xs font-semibold text-muted-foreground">
-                {t('App description')}
-              </label>
-              <textarea
-                id="publish-desc"
-                value={description}
-                onChange={e => { draftDirty.current = true; setDescription(e.target.value) }}
-                rows={3}
-                className="w-full px-3 py-2 text-[13px] bg-muted/40 border border-border/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground resize-none"
-              />
-            </div>
-          )}
-
-          {sourceSpec && !submitSuccess && storeVersion && (
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="publish-changelog" className="text-xs font-semibold text-muted-foreground">
-                {t('Release notes')} <span className="text-muted-foreground/60">{t('(optional)')}</span>
-              </label>
-              <textarea
-                id="publish-changelog"
-                value={changelog}
-                onChange={e => { draftDirty.current = true; setChangelog(e.target.value) }}
-                rows={2}
-                placeholder={t("What's new in this version?")}
-                className="w-full px-3 py-2 text-[13px] bg-muted/40 border border-border/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground resize-none placeholder:text-muted-foreground/50"
-              />
-            </div>
-          )}
-
-          {/* Author + version — kept together at the bottom of the form. Gated on
-              a resolved source like the other fields, so they appear only once an
-              app is picked or imported. */}
-          {sourceSpec && !submitSuccess && (
-            <AuthorField
-              value={author}
-              onChange={v => { setAuthor(v); clearInvalid('author'); setSubmitError(null) }}
-              readOnly={isUmIdentity}
-              invalid={invalid.has('author')}
-            />
-          )}
-
-          {sourceSpec && !submitSuccess && (
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="publish-version" className="text-xs font-semibold text-muted-foreground">
-                {t('Version')} <span className="text-red-400">*</span>
-              </label>
-              {storeVersion ? (
-                // New-version publish: show the current published version on the
-                // left and the (higher) new version input on the right.
-                <div className="flex items-center gap-2.5">
-                  <div className="flex flex-col gap-0.5 flex-shrink-0">
-                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60">{t('Current')}</span>
-                    <span className="px-3 py-2 text-[13px] font-mono text-muted-foreground bg-muted/40 border border-border/60 rounded-lg">
-                      v{storeVersion}
-                    </span>
-                  </div>
-                  <ArrowRight className="w-4 h-4 text-muted-foreground/50 flex-shrink-0 mt-4" />
-                  <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60">{t('New')}</span>
-                    <input
-                      id="publish-version"
-                      value={version}
-                      onChange={e => { draftDirty.current = true; setVersion(e.target.value); setVersionTouched(true); clearInvalid('version'); setSubmitError(null) }}
-                      className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground font-mono ${invalid.has('version') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
-                    />
-                  </div>
+            <div className="space-y-2">
+              <div className="flex justify-center pt-1">
+                <div className="relative">
+                  <AppTypeIcon type={type} name={name} size="md" />
+                  <span className={`absolute -top-1 left-6 rounded ring-1 ring-background px-1 py-0.5 text-[8.5px] leading-none font-medium text-white whitespace-nowrap ${type === 'skill' ? 'bg-app-skill' : 'bg-primary'}`}>
+                    {type === 'automation' ? t('Digital Human') : t('Skill')}
+                  </span>
                 </div>
-              ) : (
+              </div>
+              <div className="rounded-xl bg-background p-4 space-y-4">
+
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="publish-name" className="text-xs font-semibold text-muted-foreground">
+                  {t('App name')} <span className="text-red-400">*</span>
+                </label>
                 <input
-                  id="publish-version"
-                  value={version}
-                  onChange={e => { draftDirty.current = true; setVersion(e.target.value); setVersionTouched(true); clearInvalid('version'); setSubmitError(null) }}
-                  className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground font-mono ${invalid.has('version') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
+                  id="publish-name"
+                  value={name}
+                  onChange={e => { draftDirty.current = true; setName(e.target.value); clearInvalid('name'); setSubmitError(null) }}
+                  className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground ${invalid.has('name') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
                 />
-              )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="publish-category" className="text-xs font-semibold text-muted-foreground">
+                  {t('Scene category')} <span className="text-red-400">*</span>
+                </label>
+                <select
+                  id="publish-category"
+                  value={category}
+                  onChange={e => { draftDirty.current = true; setCategory(e.target.value); clearInvalid('category'); setSubmitError(null) }}
+                  className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary ${category ? 'text-foreground' : 'text-muted-foreground/50'} ${invalid.has('category') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border'}`}
+                >
+                  <option value="" disabled>{t('Select a scene category')}</option>
+                  {categories.map(cat => (
+                    <option key={cat.id} value={cat.id} className="text-foreground">{categoryDisplay(cat, t)}</option>
+                  ))}
+                </select>
+              </div>
+
+              <TagInput tags={tags} onChange={t2 => { draftDirty.current = true; setTags(t2); setSubmitError(null) }} />
+
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="publish-desc" className="text-xs font-semibold text-muted-foreground">
+                  {t('App description')}
+                </label>
+                <textarea
+                  id="publish-desc"
+                  value={description}
+                  onChange={e => { draftDirty.current = true; setDescription(e.target.value) }}
+                  rows={3}
+                  className="w-full px-3 py-2 text-[13px] bg-muted/40 border border-border/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground resize-none"
+                />
+              </div>
+              </div>
+            </div>
+          )}
+
+          {sourceSpec && !submitSuccess && (
+            <div className="space-y-2">
+              <FormSection>{t('Release info')}</FormSection>
+              <div className="rounded-xl bg-background p-4 space-y-4">
+
               {storeVersion && (
-                <p className="text-[11px] text-muted-foreground/70">
-                  {t('The new version must be higher than v{{version}}.', { version: storeVersion })}
-                </p>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="publish-changelog" className="text-xs font-semibold text-muted-foreground">
+                    {t('Release notes')} <span className="text-muted-foreground/60">{t('(optional)')}</span>
+                  </label>
+                  <textarea
+                    id="publish-changelog"
+                    value={changelog}
+                    onChange={e => { draftDirty.current = true; setChangelog(e.target.value) }}
+                    rows={2}
+                    placeholder={t("What's new in this version?")}
+                    className="w-full px-3 py-2 text-[13px] bg-muted/40 border border-border/60 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground resize-none placeholder:text-muted-foreground/50"
+                  />
+                </div>
               )}
+
+              <AuthorField
+                value={author}
+                onChange={v => { setAuthor(v); clearInvalid('author'); setSubmitError(null) }}
+                readOnly={isUmIdentity}
+                invalid={invalid.has('author')}
+              />
+
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="publish-version" className="text-xs font-semibold text-muted-foreground">
+                  {t('Version')} <span className="text-red-400">*</span>
+                </label>
+                {storeVersion ? (
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex flex-col gap-0.5 flex-shrink-0">
+                      <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60">{t('Current')}</span>
+                      <span className="px-3 py-2 text-[13px] font-mono text-muted-foreground bg-muted/40 border border-border/60 rounded-lg">
+                        v{storeVersion}
+                      </span>
+                    </div>
+                    <ArrowRight className="w-4 h-4 text-muted-foreground/50 flex-shrink-0 mt-4" />
+                    <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                      <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60">{t('New')}</span>
+                      <input
+                        id="publish-version"
+                        value={version}
+                        onChange={e => { draftDirty.current = true; setVersion(e.target.value); setVersionTouched(true); clearInvalid('version'); setSubmitError(null) }}
+                        className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground font-mono ${invalid.has('version') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <input
+                    id="publish-version"
+                    value={version}
+                    onChange={e => { draftDirty.current = true; setVersion(e.target.value); setVersionTouched(true); clearInvalid('version'); setSubmitError(null) }}
+                    className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground font-mono ${invalid.has('version') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
+                  />
+                )}
+                {storeVersion && (
+                  <p className="text-[11px] text-muted-foreground/70">
+                    {t('The new version must be higher than v{{version}}.', { version: storeVersion })}
+                  </p>
+                )}
+              </div>
+              </div>
             </div>
           )}
 
           {/* Associated skills — always submitted with the digital human; only the
               "list separately" toggle is the creator's choice. */}
           {!submitSuccess && formSkills.length > 0 && (
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-muted-foreground">
-                {t('Associated Skills')}
-              </label>
-              <div className="flex flex-col divide-y divide-border/60 rounded-lg border border-border/60 overflow-hidden bg-background">
-                {formSkills.map(skill => (
-                  <BundledSkillItem
-                    key={skill.key}
-                    name={skill.name}
-                    published={skill.published}
-                    coListed={coPublishIds.includes(skill.key)}
-                    onToggle={on => setCoPublishIds(ids => on ? [...ids, skill.key] : ids.filter(x => x !== skill.key))}
-                  />
-                ))}
+            <div className="space-y-2">
+              <FormSection>{t('Associated Skills')}</FormSection>
+              <div className="rounded-xl bg-background p-4 space-y-4">
+
+              <div className="flex flex-col gap-1.5">
+                <div className="flex flex-col divide-y divide-border/60 rounded-lg border border-border/60 overflow-hidden bg-background">
+                  {formSkills.map(skill => (
+                    <BundledSkillItem
+                      key={skill.key}
+                      name={skill.name}
+                      published={skill.published}
+                      coListed={coPublishIds.includes(skill.key)}
+                      onToggle={on => setCoPublishIds(ids => on ? [...ids, skill.key] : ids.filter(x => x !== skill.key))}
+                    />
+                  ))}
+                </div>
+                <p className="rounded-lg border border-border/60 bg-muted/30 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
+                  {t('These skills are submitted together with this digital human. Turn on "List separately" to also publish the skill as its own entry in the store\'s Skill list; otherwise it stays a private capability of the digital human and is not listed on its own.')}
+                </p>
               </div>
-              <p className="rounded-lg border border-border/60 bg-muted/30 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
-                {t('These skills are submitted together with this digital human. Turn on "List separately" to also publish the skill as its own entry in the store\'s Skill list; otherwise it stays a private capability of the digital human and is not listed on its own.')}
-              </p>
+              </div>
             </div>
           )}
 
@@ -1058,6 +1069,8 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId }: Share
                   {t('Sign in and retry')}
                 </button>
               )}
+            </div>
+          )}
             </div>
           )}
           </>
@@ -1249,12 +1262,17 @@ function TagInput({ tags, onChange }: TagInputProps) {
             onBlur={() => commit(draft)}
             maxLength={MAX_TAG_LEN}
             placeholder={tags.length === 0 ? t('Add a tag and press Enter') : ''}
-            className="flex-1 min-w-[8rem] bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+            className="flex-1 min-w-[8rem] bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
           />
         )}
       </div>
     </div>
   )
+}
+
+/** Section header shown at the top of each publish-form group card. */
+function FormSection({ children }: { children: ReactNode }) {
+  return <div className="text-[13px] font-semibold text-foreground">{children}</div>
 }
 
 interface SourceSegProps {
@@ -1318,7 +1336,7 @@ function InstalledPicker({ apps, selectedId, onSelect, type, invalid }: Installe
           {type === 'automation' ? t('Select a digital human') : t('Select a skill')}
         </option>
         {apps.map(a => (
-          <option key={a.id} value={a.id}>
+          <option key={a.id} value={a.id} className="text-foreground">
             {a.spec.name} {a.spec.version ? `· v${a.spec.version}` : ''}
           </option>
         ))}

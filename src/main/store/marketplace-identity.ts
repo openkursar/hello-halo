@@ -50,12 +50,15 @@ export function getMarketplaceIdentity(): MarketplaceIdentity | null {
  * provider-less build cannot authenticate and must be refused rather than allowed
  * to submit anonymously.
  */
-export async function ensureMarketplaceIdentity(): Promise<boolean> {
+export async function ensureMarketplaceIdentity(force = false): Promise<boolean> {
   const providerType = getMarketplaceIdentityProvider() as ProviderId | undefined
   if (!providerType) return !(await serverRequiresIdentity())
 
   const manager = getAISourceManager()
-  if (await manager.getOAuthAccessToken(providerType)) return true
+  // `force` re-runs the browser OAuth even when a token is already held — used
+  // when the store rejected the current token (server 401), so the button
+  // actually mints a fresh token instead of silently returning the stale one.
+  if (!force && await manager.getOAuthAccessToken(providerType)) return true
 
   const start = await manager.startOAuthLogin(providerType)
   if (!start.success || !start.data) return false
