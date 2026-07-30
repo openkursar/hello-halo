@@ -195,17 +195,17 @@ function ModelList({ onDone }: { onDone: () => void }) {
         return (
           <div key={source.id}>
             <div
-              className={`px-3 py-2 text-xs font-medium flex items-center justify-between cursor-pointer hover:bg-secondary/50 transition-colors ${isActiveSource ? 'text-primary' : 'text-muted-foreground'}`}
+              className={`px-3 py-2 text-xs font-medium flex items-center justify-between gap-3 cursor-pointer hover:bg-secondary/50 transition-colors ${isActiveSource ? 'text-primary' : 'text-muted-foreground'}`}
               onClick={(e) => toggleSection(source.id, e)}
             >
-              <div className="flex items-center gap-2">
-                <ChevronDown className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                <span>{displayName}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <ChevronDown className={`w-3 h-3 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                <span className="truncate">{displayName}</span>
                 {source.authType === 'oauth' && source.user?.name && (
-                  <span className="text-xs text-muted-foreground">({source.user.name})</span>
+                  <span className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">({source.user.name})</span>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 {isActiveSource ? (
                   <span className="w-2.5 h-2.5 rounded-full bg-primary" title={t('Active')} />
                 ) : (
