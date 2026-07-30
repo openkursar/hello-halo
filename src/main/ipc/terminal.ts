@@ -117,7 +117,7 @@ export function registerTerminalHandlers(): void {
 
     getTerminalReplay: async (data: { sessionId: string }) => {
       const replay = await getTerminalReplay(data.sessionId)
-      return replay ? { success: true, data: replay } : { success: false, error: 'No such terminal session' }
+      return replay ? { success: true, data: replay } : { success: false, error: 'No such terminal session', code: 'TERMINAL_NOT_FOUND' }
     },
 
     // Desktop viewer flow control. The desktop app has a single window, so one

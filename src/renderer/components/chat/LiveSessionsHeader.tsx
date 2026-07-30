@@ -107,6 +107,18 @@ export function LiveSessionsHeader() {
     if (target) await stop(target)
   }
 
+  // Single source for the open-failure toast: reached both when open() resolves
+  // to false (no resolvable target space) and when it rejects. Stable id so a
+  // later failure replaces the same toast rather than stacking. Without this,
+  // the original #266 symptom returns silently on rejection.
+  const showOpenError = () =>
+    useNotificationStore.getState().show({
+      id: 'live-session-open-error',
+      title: t('Space unavailable'),
+      body: t('Could not open this session. Try switching to a Space first.'),
+      variant: 'error',
+    })
+
   return (
     <>
       {/* Block wrapper: left-aligns the tab and keeps its bottom flush to the card. */}
@@ -154,24 +166,15 @@ export function LiveSessionsHeader() {
                   session={session}
                   isOnSpacePage={isOnSpacePage}
                   onOpen={() => {
-                    // Close the popover only on success; if open() fails to
-                    // resolve a target space, surface a toast instead of
-                    // silently doing nothing (the original #266 symptom).
-                    // Stable id so a later failure replaces the same toast
-                    // rather than stacking.
+                    // Close the popover only on success; otherwise surface the
+                    // shared open-failure toast. Covers both the resolve-to-false
+                    // path (no target space) and the reject path.
                     void open(session).then(ok => {
-                      if (ok) {
-                        setListOpen(false)
-                      } else {
-                        useNotificationStore.getState().show({
-                          id: 'live-session-open-error',
-                          title: t('Space unavailable'),
-                          body: t('Could not open this session. Try switching to a Space first.'),
-                          variant: 'error',
-                        })
-                      }
+                      if (ok) setListOpen(false)
+                      else showOpenError()
                     }).catch(err => {
                       console.error('[LiveSessionsHeader] open() rejected:', err)
+                      showOpenError()
                     })
                   }}
                   onStop={() => setPendingStop(session)}

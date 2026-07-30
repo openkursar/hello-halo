@@ -47,7 +47,7 @@ interface TerminalState {
 
   refresh: () => Promise<void>
   applyLifecycle: (e: TerminalLifecycleEvent) => void
-  openInCanvas: (sessionId: string, title?: string) => Promise<void>
+  openInCanvas: (sessionId: string, title?: string) => Promise<string>
   /** User-initiated creation. The 'created' lifecycle event reconciles state (SSOT). */
   createSession: (spaceId: string) => Promise<TerminalInfo | null>
   /**
