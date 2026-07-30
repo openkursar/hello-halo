@@ -210,7 +210,10 @@
       "product.json",
       "halo-local/dist/**/*",
       "!node_modules/better-sqlite3/prebuilds",
-      "!node_modules/@capacitor/**"
+      "!node_modules/@capacitor/**",
+      "!node_modules/@hello-halo/agent-sdk/swe-bench-eval/**",
+      "!node_modules/@hello-halo/agent-sdk/docs/**",
+      "!node_modules/@hello-halo/agent-sdk/.claude/**"
     ],
     "extraResources": [
       {
