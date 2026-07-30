@@ -69,6 +69,9 @@ vi.mock('electron', () => {
       handle: vi.fn(),
       on: vi.fn()
     },
+    powerMonitor: {
+      on: vi.fn()
+    },
     shell: {
       openPath: vi.fn(),
       showItemInFolder: vi.fn()
