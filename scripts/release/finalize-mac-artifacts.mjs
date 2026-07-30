@@ -30,6 +30,7 @@ function parseArgs(argv) {
       case '--dist': args.dist = argv[++i]; break
       case '--version': args.version = argv[++i]; break
       case '--arm64-yml': args.arm64Yml = argv[++i]; break
+      case '--notes-file': args.notesFile = argv[++i]; break
       default:
         console.error(`unknown argument: ${argv[i]}`)
         process.exit(1)
@@ -37,7 +38,7 @@ function parseArgs(argv) {
   }
   for (const key of ['dist', 'version', 'arm64Yml']) {
     if (!args[key]) {
-      console.error('required: --dist <dir> --version <v> --arm64-yml <path>')
+      console.error('required: --dist <dir> --version <v> --arm64-yml <path> [--notes-file <path>]')
       process.exit(1)
     }
   }
@@ -50,7 +51,7 @@ function fail(message) {
 }
 
 function main() {
-  const { dist, version, arm64Yml } = parseArgs(process.argv)
+  const { dist, version, arm64Yml, notesFile } = parseArgs(process.argv)
   const ymlPath = path.join(dist, 'latest-mac.yml')
 
   if (!fs.existsSync(arm64Yml)) {
@@ -114,6 +115,19 @@ function main() {
     releaseDate: new Date().toISOString(),
   }
 
+  // electron-builder does not write releaseNotes into latest-mac.yml even when
+  // --releaseNotesFile is passed (only win/linux get it), so mac update
+  // notifications would otherwise fall back to the full GitHub release body.
+  // Inject the same summary here so all three platforms show identical text.
+  if (notesFile) {
+    if (!fs.existsSync(notesFile)) {
+      fail(`--notes-file not found: ${notesFile}`)
+    }
+    const notes = fs.readFileSync(notesFile, 'utf8').trim()
+    if (notes) merged.releaseNotes = notes + '\n'
+    else log.warn('notes file is empty — latest-mac.yml will have no releaseNotes')
+  }
+
   for (const f of merged.files) {
     if (!fs.existsSync(path.join(dist, f.url))) {
       fail(`latest-mac.yml would reference a missing file: ${f.url}`)
@@ -124,6 +138,7 @@ function main() {
   fs.rmSync(arm64Yml, { force: true })
 
   log.ok(`latest-mac.yml carries both arches (${merged.files.map((f) => f.url).join(', ')})`)
+  if (merged.releaseNotes) log.ok('latest-mac.yml carries releaseNotes for the update notification')
   log.info(`${c.green}finalize-mac-artifacts passed${c.reset}`)
 }
 
