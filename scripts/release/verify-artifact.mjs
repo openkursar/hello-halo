@@ -49,6 +49,14 @@ const ENGINE_PACKAGES = {
   codex: '@openai/codex-sdk',
 }
 
+/** Platform key → packaged-app dir label produced by electron-builder. */
+const PLATFORM_APP_LABELS = {
+  'mac-arm64': /^mac-arm64\//,
+  'mac-x64': /^mac\//,
+  win: /^win-unpacked$/,
+  linux: /^linux-unpacked$/,
+}
+
 /** Find every packaged app.asar under dist (mac .app bundles + *-unpacked). */
 function findPackagedApps(dist) {
   const found = []
@@ -138,17 +146,22 @@ function main() {
 
   const problems = []
 
+  const platformKeys = args.platforms === 'all'
+    ? Object.keys(manifest.expectedArtifacts)
+    : args.platforms.split(',').map((s) => s.trim()).filter(Boolean)
+
   // -- 1. Packaged apps: asar-level assertions -------------------------------
-  const apps = findPackagedApps(dist)
+  // dist/ accumulates unpacked dirs across builds; only assert the platforms
+  // built this run, or a stale dir from another platform fails a valid release.
+  const apps = findPackagedApps(dist).filter((app) =>
+    platformKeys.some((key) => PLATFORM_APP_LABELS[key]?.test(app.label))
+  )
   if (apps.length === 0) {
-    problems.push(`no packaged app found under ${dist} (expected mac*/…/app.asar or *-unpacked/resources/app.asar)`)
+    problems.push(`no packaged app found under ${dist} for platforms [${platformKeys.join(', ')}]`)
   }
   for (const app of apps) checkAsar(app, { manifest, record, problems })
 
   // -- 2. Expected artifact files for the built platforms --------------------
-  const platformKeys = args.platforms === 'all'
-    ? Object.keys(manifest.expectedArtifacts)
-    : args.platforms.split(',').map((s) => s.trim()).filter(Boolean)
 
   const artifactHashes = {}
   for (const key of platformKeys) {
