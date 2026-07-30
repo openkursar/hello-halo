@@ -76,6 +76,15 @@ export interface TabState {
   browserState?: BrowserState
   isEditMode?: boolean // For markdown tabs - switches between preview and editor
   terminalSessionId?: string // For terminal tabs - the pty session id
+  /**
+   * Whether the Canvas owns the underlying BrowserView lifecycle.
+   * true  — view created via createBrowserView (openUrl/openPdf): destroy on close.
+   * false — view attached via attachAIBrowserView (AI-driven singleton): detach on
+   *         close, leaving the WebContents and its live-session entry intact.
+   * Without this flag, closeAll/space-switch would destroy a view the Canvas does
+   * not own, irrecoverably killing the AI's active browser session.
+   */
+  browserViewOwned?: boolean
 }
 
 // Callback types
@@ -702,6 +711,7 @@ class CanvasLifecycle {
       isDirty: false,
       isLoading: false, // Already loaded by AI
       browserViewId: viewId, // Reference to existing view
+      browserViewOwned: false, // AI singleton — detach on close, do not destroy
       browserState: {
         isLoading: false,
         canGoBack: false,
@@ -820,10 +830,15 @@ class CanvasLifecycle {
       if (!proceed) return
     }
 
-    // Destroy BrowserView if this is a browser/pdf tab
+    // Tear down the tab's underlying view per ownership. AI-attached views are
+    // detached (hidden), not destroyed — the AI singleton keeps its WebContents.
     const hasBrowserView = (tab.type === 'browser' || tab.type === 'pdf') && tab.browserViewId
     if (hasBrowserView) {
-      await this.destroyBrowserView(tab.browserViewId!)
+      if (tab.browserViewOwned) {
+        await this.destroyBrowserView(tab.browserViewId!)
+      } else {
+        await this.detachBrowserView(tab.browserViewId!)
+      }
     }
 
     // Remove tab
@@ -845,59 +860,41 @@ class CanvasLifecycle {
   }
 
   /**
-   * Close all tabs
+   * Close all tabs.
+   *
+   * Teardown respects view ownership:
+   *  - Canvas-owned views (created via createBrowserView): destroyed.
+   *  - Externally-attached views (attachAIBrowserView): detached (hidden only)
+   *    so the AI singleton's WebContents and live-session entry survive.
+   * Terminals defer to the bulk disposal policy (no prompts): user terminals are
+   * terminated, AI-operated ones kept alive in the tray.
+   *
+   * Callers must await this before adding new tabs (enterSpace → open()), so the
+   * simple clear-all contract holds: no snapshot-delete race is needed.
    */
   async closeAll(): Promise<void> {
     console.log('[CanvasLifecycle] Closing all tabs')
 
-    // Snapshot the tab ids synchronously, before any await. The teardown below
-    // awaits browser-view destruction and bulk terminal disposal, which yields
-    // control; callers (notably useLiveSessions.open → enterSpace → closeAll)
-    // may then synchronously add a fresh tab to reveal. Deleting only the
-    // snapshotted ids preserves that new tab instead of wiping it via
-    // tabs.clear() — which would otherwise reproduce the #266 "click does
-    // nothing" symptom during a space-switching navigation.
-    const closingTabIds = Array.from(this.tabs.keys())
-    const closingActiveTabId = this.activeTabId
-
-    // Tear down each tab's underlying resource. Browser/pdf views are destroyed
-    // (their WebContents is tab-bound). Terminals defer to the bulk disposal
-    // policy — non-interactive, so no per-tab prompts: the user's own terminals
-    // are terminated, AI-operated ones are kept alive in the tray. Also drives
-    // space-switch teardown (enterSpace → closeAll).
     const terminalDisposals: Promise<void>[] = []
-    for (const tabId of closingTabIds) {
-      const tab = this.tabs.get(tabId)
-      if (!tab) continue
+    for (const [, tab] of this.tabs) {
       const hasBrowserView = (tab.type === 'browser' || tab.type === 'pdf') && tab.browserViewId
       if (hasBrowserView) {
-        await this.destroyBrowserView(tab.browserViewId!)
+        if (tab.browserViewOwned) {
+          await this.destroyBrowserView(tab.browserViewId!)
+        } else {
+          // AI singleton: hide only. Destroying it would clear the AI's active
+          // view and broadcast gone, killing the live browser session.
+          await this.detachBrowserView(tab.browserViewId!)
+        }
       } else if (tab.type === 'terminal' && tab.terminalSessionId && this.terminalClosePolicy) {
         terminalDisposals.push(this.terminalClosePolicy.disposeOnBulkClose(tab.terminalSessionId))
       }
     }
     await Promise.all(terminalDisposals)
 
-    // Remove only the tabs this call was responsible for. A tab added after the
-    // snapshot above survives — see useLiveSessions.open for the motivating case.
-    for (const tabId of closingTabIds) {
-      this.tabs.delete(tabId)
-    }
-    // Clear the active tab only if it was among those closed. A tab added after
-    // the snapshot may already be the new active tab, and nulling it here would
-    // orphan it from the UI.
-    if (closingActiveTabId && closingTabIds.includes(closingActiveTabId)) {
-      const survivingActive = this.activeTabId && !closingTabIds.includes(this.activeTabId)
-      if (!survivingActive) {
-        this.activeTabId = null
-        this.setOpen(false)
-      }
-    }
-    // When nothing was active to begin with, preserve the no-tabs-is-closed
-    // invariant: ensure Canvas is closed if the Map is now empty.
-    if (this.tabs.size === 0) {
-      this.setOpen(false)
-    }
+    this.tabs.clear()
+    this.activeTabId = null
+    this.setOpen(false)
 
     this.notifyTabsChange()
     this.notifyActiveTabChange()
@@ -919,6 +916,12 @@ class CanvasLifecycle {
     const previousTabId = this.activeTabId
     const previousTab = previousTabId ? this.tabs.get(previousTabId) : null
 
+    // Update activeTabId before any await so concurrent callers (e.g. closeAll
+    // resuming after its own awaits) observe the new active tab immediately,
+    // not the one being switched away from. The hide below targets previousTab
+    // by captured id, so reordering is safe.
+    this.activeTabId = tabId
+
     // 1. Hide previous BrowserView if it exists (browser or pdf types)
     const prevNeedsBrowserView = previousTab?.type === 'browser' || previousTab?.type === 'pdf'
     if (prevNeedsBrowserView && previousTab.browserViewId && previousTabId !== tabId) {
@@ -926,10 +929,7 @@ class CanvasLifecycle {
       await api.hideBrowserView(previousTab.browserViewId)
     }
 
-    // 2. Update activeTabId
-    this.activeTabId = tabId
-
-    // 3. For browser/pdf tabs, show/create BrowserView
+    // 2. For browser/pdf tabs, show/create BrowserView
     const needsBrowserView = tab.type === 'browser' || tab.type === 'pdf'
     if (needsBrowserView) {
       if (tab.browserViewId) {
@@ -946,7 +946,7 @@ class CanvasLifecycle {
       }
     }
 
-    // 4. Notify React
+    // 3. Notify React
     this.notifyActiveTabChange()
   }
 
@@ -1024,6 +1024,7 @@ class CanvasLifecycle {
 
       if (result.success) {
         tab.browserViewId = viewId
+        tab.browserViewOwned = true
         this.notifyTabsChange()
 
         // Show the view
@@ -1126,6 +1127,15 @@ class CanvasLifecycle {
     console.log(`[CanvasLifecycle] Destroying BrowserView: ${viewId}`)
     await api.hideBrowserView(viewId)
     await api.destroyBrowserView(viewId)
+  }
+
+  /**
+   * Detach an externally-attached BrowserView — hide only, do not destroy.
+   * The view's owner (the AI singleton) keeps its WebContents and lifecycle.
+   */
+  private async detachBrowserView(viewId: string): Promise<void> {
+    console.log(`[CanvasLifecycle] Detaching (hide only) BrowserView: ${viewId}`)
+    await api.hideBrowserView(viewId)
   }
 
   /**
@@ -1381,17 +1391,17 @@ class CanvasLifecycle {
   }
 
   /**
-   * Called when entering a space - clears tabs if switching to different space
+   * Called when entering a space - clears tabs if switching to a different space.
    * This is the single point of control for Space isolation of Canvas state.
-   * Returns true if tabs were cleared
+   * Awaits closeAll so callers can safely add new tabs afterward (the teardown
+   * completes before the new tab is created). Returns true if tabs were cleared.
    */
-  enterSpace(spaceId: string): boolean {
+  async enterSpace(spaceId: string): Promise<boolean> {
     const previousSpaceId = this.currentSpaceId
 
     if (previousSpaceId && previousSpaceId !== spaceId && this.tabs.size > 0) {
-      // Switching to different space with existing tabs - clear all
       console.log(`[CanvasLifecycle] Space switch: clearing ${this.tabs.size} tabs`)
-      this.closeAll()
+      await this.closeAll()
       this.currentSpaceId = spaceId
       return true
     }

@@ -56,7 +56,10 @@ function Toast({ toast }: { toast: ToastItem }) {
     dismiss(toast.id)
   }, [dismiss, toast.id])
 
-  // Auto-dismiss
+  // Auto-dismiss. createdAt is in the deps so a stable-id toast replaced via
+  // show() restarts its timer — otherwise React reuses the component (key=id)
+  // and the effect never re-runs, leaving a replaced toast visible for only
+  // the remainder of the original window.
   useEffect(() => {
     if (toast.duration > 0) {
       timerRef.current = setTimeout(handleDismiss, toast.duration)
@@ -64,7 +67,7 @@ function Toast({ toast }: { toast: ToastItem }) {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current)
     }
-  }, [toast.duration, handleDismiss])
+  }, [toast.duration, toast.createdAt, handleDismiss])
 
   const style = variantStyles[toast.variant]
 

@@ -41,12 +41,15 @@ export interface LiveSessionsApi {
   /** Whether any session is being actively driven right now. */
   busy: boolean
   /**
-   * Reveal a session's surface in the Canvas. Returns false when no target
+   * Reveal a session's surface in the Canvas. Resolves false when no target
    * space can be resolved — callers must surface that failure (e.g. a toast)
    * rather than silently swallowing it, otherwise the tray reproduces the
    * very symptom #266 was about: a click that does nothing visible.
+   *
+   * Awaits the Canvas space reconciliation and the tab attach, so a true result
+   * means the session's surface is actually open, not just scheduled.
    */
-  open: (session: LiveSession) => boolean
+  open: (session: LiveSession) => Promise<boolean>
   /** Stop the underlying resource (terminates the process/view). */
   stop: (session: LiveSession) => Promise<void>
 }
@@ -61,9 +64,9 @@ export function useLiveSessions(): LiveSessionsApi {
 
   // The terminal registry is process-global (all spaces), but the tray belongs
   // to the space you're in: an AI terminal kept alive in another space must not
-  // leak into this one's tray — it reappears when you return. The AI browser
-  // view is a process-global singleton (no per-space instances), so it needs no
-  // filter.
+  // leak into this one's tray — it reappears when you return. The AI browser is
+  // a single active view destroyed on space switch (see ai-browser DESIGN.md),
+  // so it needs no per-space filter.
   const currentSpaceId = useSpaceStore(s => s.currentSpace?.id)
 
   // AI browser: the interactive singleton drives one active view at a time.
@@ -106,11 +109,11 @@ export function useLiveSessions(): LiveSessionsApi {
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
   const busy = sessions.some(s => s.busy)
 
-  const open = (session: LiveSession): boolean => {
+  const open = async (session: LiveSession): Promise<boolean> => {
     // Resolve a target space before navigating. currentSpace is null on pages
-    // that never mount SpaceSelector (e.g. Apps) — nothing clears it on
-    // navigation, it's simply never set there. Without a target, landing in
-    // the Space shell would be a dead end, so we fail loudly instead.
+    // that never mount SpaceSelector (e.g. Apps); space deletion also nulls it.
+    // Without a target, landing in the Space shell would be a dead end — fail
+    // loudly so the caller can surface a toast.
     const spaceStore = useSpaceStore.getState()
     const target = spaceStore.currentSpace ?? spaceStore.haloSpace
     if (!target) return false
@@ -120,19 +123,18 @@ export function useLiveSessions(): LiveSessionsApi {
     if (useAppStore.getState().view !== 'space') {
       useAppStore.getState().setView('space')
     }
-    // Reconcile the Canvas's space identity BEFORE creating the tab. When the
-    // user is coming from a non-Space view whose last Canvas space differs from
-    // the target, SpacePage's enterSpace effect would otherwise fire after the
-    // tab is opened and closeAll() it — reproducing the "click does nothing"
-    // symptom #266 was about. Calling enterSpace here makes SpacePage's later
-    // call a no-op (previousSpaceId === spaceId), so the freshly opened tab
-    // survives the navigation.
-    canvasLifecycle.enterSpace(target.id)
+    // Reconcile the Canvas's space identity BEFORE creating the tab, and await
+    // it so any teardown from a prior space completes first. Without this,
+    // SpacePage's enterSpace effect would fire after the tab is opened and
+    // closeAll() it — reproducing the #266 "click does nothing" symptom. After
+    // this await, SpacePage's later enterSpace is a no-op (same space id), so
+    // the freshly opened tab survives.
+    await canvasLifecycle.enterSpace(target.id)
     if (session.kind === 'terminal') {
       openTerminalInCanvas(session.id, session.title)
     } else {
       // Attach the exact AI-driven BrowserView (same WebContents).
-      void canvasLifecycle.attachAIBrowserView(session.id, aiUrl || '', session.title)
+      await canvasLifecycle.attachAIBrowserView(session.id, aiUrl || '', session.title)
     }
     return true
   }

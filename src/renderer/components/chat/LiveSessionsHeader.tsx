@@ -47,8 +47,9 @@ function SessionRow({ session, isOnSpacePage, onOpen, onStop }: SessionRowProps)
   const { t } = useTranslation()
   // Same reveal affordance in both states; the icon stays ArrowUpRight so it
   // never reads as "open externally". When the target isn't the current page,
-  // an inline caption carries that meaning visibly instead of burying it in
-  // the tooltip.
+  // an inline badge carries that meaning visibly instead of burying it in
+  // the tooltip. Uses the complete token t('Space') — a standalone noun that
+  // translates correctly in every locale, unlike a grammatical fragment.
   const openLabel = isOnSpacePage ? t('Open') : t('Open in Space')
   return (
     <div className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted/60 transition-colors">
@@ -62,7 +63,7 @@ function SessionRow({ session, isOnSpacePage, onOpen, onStop }: SessionRowProps)
         </span>
         {!isOnSpacePage && (
           <span className="shrink-0 text-[10px] text-primary/80">
-            {t('in Space')}
+            {t('Space')}
           </span>
         )}
         <span className="shrink-0 text-[11px] text-muted-foreground">
@@ -158,16 +159,17 @@ export function LiveSessionsHeader() {
                     // Close the popover only on success; if open() fails to
                     // resolve a target space, surface a toast instead of
                     // silently doing nothing (the original #266 symptom).
-                    const ok = open(session)
-                    if (ok) {
-                      setListOpen(false)
-                    } else {
-                      useNotificationStore.getState().show({
-                        title: t('Space unavailable'),
-                        body: t('Could not open this session. Try switching to a Space first.'),
-                        variant: 'warning',
-                      })
-                    }
+                    void open(session).then(ok => {
+                      if (ok) {
+                        setListOpen(false)
+                      } else {
+                        useNotificationStore.getState().show({
+                          title: t('Space unavailable'),
+                          body: t('Could not open this session. Try switching to a Space first.'),
+                          variant: 'error',
+                        })
+                      }
+                    })
                   }}
                   onStop={() => setPendingStop(session)}
                 />
