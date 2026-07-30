@@ -15,13 +15,13 @@
  */
 
 import { useState, useEffect, useMemo } from 'react'
-import type React from 'react'
-import { Globe, ChevronDown, ChevronRight, MessageSquare, Wrench, Key, KeyRound, Cloud, Server, Shield, Lock, Zap, LogIn, User, Github, Brain, type LucideIcon } from 'lucide-react'
+import { Globe, ChevronDown, ChevronRight } from 'lucide-react'
 import { useTranslation, setLanguage, getCurrentLanguage, SUPPORTED_LOCALES, type LocaleCode } from '../../i18n'
 import { api } from '../../api'
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
-import { getApiKeyProviders } from '../../types'
-import { getBrandIcon } from '../icons/BrandIcons'
+import { getApiKeyProviders, type BuiltinProvider } from '../../types'
+import { getProviderIcon } from '../icons/BrandIcons'
+import { ProviderIconTile } from '../icons/ProviderIconTile'
 
 // Re-export so existing renderer imports (`from './LoginSelector'`) continue
 // to work without churn. The canonical definition lives in shared/types.
@@ -50,36 +50,6 @@ interface LoginSelectorProps {
   onSkip?: () => void
 }
 
-/**
- * Map icon names to Lucide components
- * Supported icons: log-in, user, globe, key, cloud, server, shield, lock, zap, message-square, wrench
- */
-const iconMap: Record<string, LucideIcon> = {
-  'log-in': LogIn,
-  'user': User,
-  'globe': Globe,
-  'key': Key,
-  'key-round': KeyRound,
-  'cloud': Cloud,
-  'server': Server,
-  'shield': Shield,
-  'lock': Lock,
-  'zap': Zap,
-  'message-square': MessageSquare,
-  'wrench': Wrench,
-  'github': Github,
-  'brain': Brain
-}
-
-/**
- * Convert hex color to RGBA with opacity
- */
-function hexToRgba(hex: string, alpha: number = 0.15): string {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
-  if (!result) return `rgba(128, 128, 128, ${alpha})`
-  return `rgba(${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}, ${alpha})`
-}
-
 /** Default fallback providers when the product.json fetch fails. */
 const FALLBACK_PROVIDERS: AuthProviderConfig[] = [
   {
@@ -92,8 +62,6 @@ const FALLBACK_PROVIDERS: AuthProviderConfig[] = [
     enabled: true
   }
 ]
-
-type IconComponent = React.ComponentType<{ className?: string; style?: React.CSSProperties }>
 
 /** Number of provider-name chips previewed under the collapsed Custom API row. */
 const CUSTOM_CHIP_COUNT = 5
@@ -133,11 +101,17 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom
 
   const catalog = useMemo(() => getApiKeyProviders(), [])
   const customChips = useMemo(() => {
-    const recommendedFirst = [...catalog].sort(
-      (a, b) => (b.recommended ? 1 : 0) - (a.recommended ? 1 : 0)
-    )
-    return recommendedFirst.slice(0, CUSTOM_CHIP_COUNT).map(p => t(p.name))
-  }, [catalog, t])
+    // Chinese UI puts cn-region vendors ahead of overseas ones: they are the
+    // reachable ones for those users, so previewing Claude/OpenAI first reads
+    // as unusable.
+    const preferCnRegion = currentLang === 'zh-CN'
+    const rank = (p: BuiltinProvider) =>
+      (p.recommended ? 2 : 0) + (preferCnRegion && p.region === 'cn' ? 1 : 0)
+    return [...catalog]
+      .sort((a, b) => rank(b) - rank(a))
+      .slice(0, CUSTOM_CHIP_COUNT)
+      .map(p => t(p.name))
+  }, [catalog, currentLang, t])
   const customExtra = Math.max(0, catalog.length - CUSTOM_CHIP_COUNT)
 
   // Handle language change
@@ -156,9 +130,6 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom
     onSelectProvider(provider.type)
   }
 
-  const getIconComponent = (provider: AuthProviderConfig): IconComponent =>
-    getBrandIcon(provider.type) || iconMap[provider.icon] || Wrench
-
   // Role assignment (config order preserved).
   const managedProviders = providers.filter(p => !isByokEntry(p))
   const byokEntry = providers.find(isByokEntry)
@@ -167,7 +138,7 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom
 
   // Hero: full-width primary button with an always-on docs link ("no key yet?").
   const renderHero = (provider: AuthProviderConfig) => {
-    const Icon = getIconComponent(provider)
+    const Icon = getProviderIcon(provider.type, provider.icon)
     // Preset entries carry their docs under `preset.docs` (the same link the
     // API-key form shows); fall back to it so the hero still surfaces a guide.
     const docs = provider.docs ?? provider.preset?.docs
@@ -205,7 +176,6 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom
   // Secondary: bordered navigate-on-click row, with the entry's optional docs
   // link below (kept outside the row button to avoid nesting interactives).
   const renderSecondary = (provider: AuthProviderConfig) => {
-    const Icon = getIconComponent(provider)
     const docs = provider.docs ?? provider.preset?.docs
     return (
       <div key={provider.type}>
@@ -213,12 +183,7 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom
           onClick={() => handleProviderSelect(provider)}
           className="w-full flex items-center gap-3 p-3 bg-card rounded-xl border border-border hover:border-primary/50 hover:bg-card/80 transition-all duration-200 group text-left"
         >
-          <div
-            className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-            style={{ backgroundColor: hexToRgba(provider.iconBgColor, 0.15) }}
-          >
-            <Icon className="w-5 h-5" style={{ color: provider.iconBgColor }} />
-          </div>
+          <ProviderIconTile provider={provider} />
           <div className="flex-1 min-w-0">
             <div className="text-sm font-medium">{getLocalizedText(provider.displayName)}</div>
             <div className="text-xs text-muted-foreground mt-0.5">{getLocalizedText(provider.description)}</div>
@@ -244,18 +209,12 @@ export function LoginSelector({ onSelectProvider, onSelectPreset, onSelectCustom
   // Custom API: navigate-on-click row that opens the key-first config panel
   // (mirrors the preset entry's step navigation rather than expanding inline).
   const renderCustom = (entry: AuthProviderConfig) => {
-    const Icon = getIconComponent(entry)
     return (
       <button
         onClick={() => onSelectCustom(entry)}
         className="w-full flex items-center gap-3 p-3 bg-card rounded-xl border border-border hover:border-primary/50 hover:bg-card/80 transition-all duration-200 group text-left"
       >
-        <div
-          className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-          style={{ backgroundColor: hexToRgba(entry.iconBgColor, 0.15) }}
-        >
-          <Icon className="w-5 h-5" style={{ color: entry.iconBgColor }} />
-        </div>
+        <ProviderIconTile provider={entry} />
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium">{getLocalizedText(entry.displayName)}</div>
           <div className="text-xs text-muted-foreground mt-0.5 truncate">{getLocalizedText(entry.description)}</div>
