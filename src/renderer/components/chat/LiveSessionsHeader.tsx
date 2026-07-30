@@ -107,15 +107,17 @@ export function LiveSessionsHeader() {
     if (target) await stop(target)
   }
 
-  // Single source for the open-failure toast: reached both when open() resolves
-  // to false (no resolvable target space) and when it rejects. Stable id so a
-  // later failure replaces the same toast rather than stacking. Without this,
-  // the original #266 symptom returns silently on rejection.
+  // Single source for the open-failure toast, reached both when open() resolves
+  // to false (space bootstrap never loaded — not "user hasn't picked a Space")
+  // and when it rejects (the view failed to mount after we already navigated).
+  // One honest pair covers all three trigger paths and never advises the user
+  // to do something impossible (e.g. "switch to a Space" while on a Space page).
+  // Stable id so a later failure replaces the same toast rather than stacking.
   const showOpenError = () =>
     useNotificationStore.getState().show({
       id: 'live-session-open-error',
-      title: t('Space unavailable'),
-      body: t('Could not open this session. Try switching to a Space first.'),
+      title: t('Could not open session'),
+      body: t('The session is still running, but its view could not be opened. Try again.'),
       variant: 'error',
     })
 
@@ -167,8 +169,7 @@ export function LiveSessionsHeader() {
                   isOnSpacePage={isOnSpacePage}
                   onOpen={() => {
                     // Close the popover only on success; otherwise surface the
-                    // shared open-failure toast. Covers both the resolve-to-false
-                    // path (no target space) and the reject path.
+                    // shared open-failure toast (resolve-to-false or reject).
                     void open(session).then(ok => {
                       if (ok) setListOpen(false)
                       else showOpenError()

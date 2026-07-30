@@ -688,6 +688,12 @@ class CanvasLifecycle {
     // Check if this view is already attached
     for (const [tabId, tab] of this.tabs) {
       if (tab.browserViewId === viewId) {
+        // Mirror openTerminal's dedup branch: the canvas may be collapsed
+        // (Escape / collapse button — tabs survive collapse), so setOpen is
+        // required to actually reveal the view. Without it showBrowserView
+        // bails on the unmounted viewer ref and open() still resolves true —
+        // the #266 symptom on the very row this PR fixes.
+        this.setOpen(true)
         await this.switchTab(tabId)
         return tabId
       }
