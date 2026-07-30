@@ -135,19 +135,30 @@ function RotatingDigitalHumanIcon() {
   return <AppTypeIcon type="automation" name={DIGITAL_HUMAN_SEEDS[i]} size="md" />
 }
 
+/** Which surface opened the publish dialog — recorded on publish telemetry so
+ * the metrics dashboard can attribute publishes by entry point. 'store' is the
+ * store header's Publish button, 'share' a detail page's Share action, 'mine'
+ * the "publish new version" action in My Publications. */
+export type PublishEntry = 'mine' | 'store' | 'share'
+
 export interface ShareToStoreDialogProps {
   onClose: () => void
   /** Open straight on the form with this installed app pre-selected (used when
    * a detail page's Share action routes into the unified publish flow). */
   initialType?: ShareType
   initialAppId?: string
+  /** Opening surface, for publish telemetry attribution. */
+  entry?: PublishEntry
+  /** True when re-publishing an already-listed app (the "publish new version"
+   * action in My Publications), vs a first-time publish. */
+  republish?: boolean
 }
 
 // ────────────────────────────────────────────────
 // Component
 // ────────────────────────────────────────────────
 
-export function ShareToStoreDialog({ onClose, initialType, initialAppId }: ShareToStoreDialogProps) {
+export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, republish }: ShareToStoreDialogProps) {
   const { t } = useTranslation()
   const apps = useAppsStore(s => s.apps)
   const showToast = useNotificationStore(s => s.show)
@@ -367,8 +378,8 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId }: Share
   useEffect(() => { setCoPublishIds([]) }, [source, selectedInstalledId, staged])
 
   useEffect(() => {
-    void api.trackEvent('mkt_publish_open', {})
-  }, [])
+    void api.trackEvent('mkt_publish_open', entry ? { entry } : {})
+  }, [entry])
 
   // Submit state
   const [submitting, setSubmitting] = useState(false)
@@ -664,7 +675,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId }: Share
         if (!res.success) coFailures.push({ name: s.name, reason: res.error as string | undefined })
       }
 
-      void api.trackEvent('mkt_publish_submit', { appType: type, result: 'success' })
+      void api.trackEvent('mkt_publish_submit', { appType: type, result: 'success', entry, isUpdate: republish ? 1 : 0 })
       saveAuthor(trimmedAuthor)
       // Published — discard the saved draft so it is not restored next time.
       clearPublishDraft(draftKey)
@@ -677,7 +688,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId }: Share
       // registry verdict string is intentionally not surfaced to the user.
       setSubmitSuccess('ok')
     } catch (err) {
-      void api.trackEvent('mkt_publish_submit', { appType: type, result: 'fail' })
+      void api.trackEvent('mkt_publish_submit', { appType: type, result: 'fail', entry, isUpdate: republish ? 1 : 0 })
       setSubmitError(err instanceof Error ? err.message : t('Share failed.'))
     } finally {
       // Tear down the staging workspace (cascades its staged apps + files), so
@@ -685,7 +696,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId }: Share
       if (stagingSpaceId) await api.deleteSpace(stagingSpaceId).catch(() => undefined)
       setSubmitting(false)
     }
-  }, [type, source, selectedInstalledId, staged, author, category, version, changelog, name, description, tags, formSkills, coPublishIds, hasBlockingIssue, draftKey, showToast, t])
+  }, [type, source, selectedInstalledId, staged, author, category, version, changelog, name, description, tags, formSkills, coPublishIds, hasBlockingIssue, draftKey, showToast, t, entry, republish])
 
   // Post-publish "View": close the dialog and open My Publications so the
   // creator lands on the freshly-listed entry.
@@ -833,7 +844,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId }: Share
           {/* Source segmented control */}
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold text-muted-foreground">{t('Publish source')}</label>
-            <div className="flex overflow-hidden rounded-lg border border-border/60 bg-muted/60">
+            <div className="flex gap-0.5 rounded-lg bg-muted/60 p-0.5">
               <SourceSeg active={source === 'installed'} onClick={() => setSource('installed')} label={t('From installed')} icon={<Package className="w-3.5 h-3.5" />} />
               <SourceSeg active={source === 'import'} onClick={() => setSource('import')} label={t('Import')} icon={<Upload className="w-3.5 h-3.5" />} />
             </div>
@@ -1286,9 +1297,9 @@ function SourceSeg({ active, onClick, label, icon }: SourceSegProps) {
   return (
     <button
       onClick={onClick}
-      className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-[12.5px] transition-colors ${
+      className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-[12.5px] rounded-md transition-colors ${
         active
-          ? 'bg-background text-foreground font-semibold'
+          ? 'bg-background text-foreground font-semibold shadow-sm'
           : 'text-muted-foreground hover:text-foreground'
       }`}
     >

@@ -232,7 +232,7 @@ export function StoreMine() {
       </div>
 
       {showPublish && (
-        <ShareToStoreDialog initialType={publishType} onClose={() => { setShowPublish(false); void load() }} />
+        <ShareToStoreDialog initialType={publishType} entry="mine" republish onClose={() => { setShowPublish(false); void load() }} />
       )}
     </div>
   )

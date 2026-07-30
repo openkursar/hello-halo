@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.13-rc.4",
+  "version": "2.1.13-rc.6",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.mjs",

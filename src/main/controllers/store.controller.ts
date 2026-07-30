@@ -178,7 +178,8 @@ export async function installStoreApp(
     // Fire-and-forget install signal that feeds the store's install-count rollup.
     // Fired here (the user-initiated entry point) rather than inside
     // installFromStore, which recurses for skill dependencies and would inflate counts.
-    void trackEvent('mkt_install_done', { appId: slug })
+    const appType = getAppManager().getApp(appId)?.spec.type
+    void trackEvent('mkt_install_done', appType ? { appId: slug, appType } : { appId: slug })
     return { success: true, data: { appId } }
   } catch (error: unknown) {
     const err = error as Error

@@ -146,8 +146,8 @@ const EVENT_WHITELIST: Record<string, readonly string[]> = {
   'mkt_update_overwrite':   ['appId', 'toVersion'],
   'mkt_update_keep_current': ['appId', 'toVersion'],
   'mkt_featured_view':      ['count'],
-  'mkt_publish_open':       ['appType'],
-  'mkt_publish_submit':     ['appType', 'result'],
+  'mkt_publish_open':       ['appType', 'entry'],
+  'mkt_publish_submit':     ['appType', 'result', 'entry', 'isUpdate'],
   'mkt_mine_view':          [],
   'mkt_unpublish':          ['appId'],
 
