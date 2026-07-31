@@ -65,13 +65,18 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
     openStorePublish(shareType, appId)
   }, [app, appId, onClose, openStorePublish])
 
-  const handleExportDhpkg = useCallback(async () => {
+  const handleExport = useCallback(async () => {
+    if (!app) return
     setExporting(true)
     setFeedback(null)
     try {
-      const res = await api.storeExportDhpkg(appId)
+      // Skills distribute as a `.zip` of their file tree; digital humans as a
+      // `.dhpkg` (spec.yaml package). Each type gets its own export format.
+      const res = app.spec.type === 'skill'
+        ? await api.storeExportSkill(appId)
+        : await api.storeExportDhpkg(appId)
       if (res.success && res.data?.path) {
-        setFeedback({ kind: 'success', text: t('Saved .dhpkg to {{path}}', { path: res.data.path }) })
+        setFeedback({ kind: 'success', text: t('Saved to {{path}}', { path: res.data.path }) })
       } else if (res.error && res.error !== 'User cancelled') {
         setFeedback({ kind: 'error', text: res.error })
       }
@@ -80,7 +85,7 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
     } finally {
       setExporting(false)
     }
-  }, [appId, t])
+  }, [app, appId, t])
 
   // App may have been uninstalled between mount and render — guard gracefully.
   if (!app) {
@@ -170,10 +175,10 @@ export function ShareCurrentAppDialog({ appId, onClose }: ShareCurrentAppDialogP
         <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border">
           {isElectron() && (
             <button
-              onClick={handleExportDhpkg}
+              onClick={handleExport}
               disabled={exporting}
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground border border-border rounded-lg transition-colors disabled:opacity-40"
-              title={t('Save a .dhpkg file you can share by hand')}
+              title={t('Save a package file you can share by hand')}
             >
               {exporting
                 ? <Loader2 className="w-3.5 h-3.5 animate-spin" />

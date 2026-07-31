@@ -11,6 +11,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('../../../src/main/store/publish', () => ({ resolvePublishTarget: vi.fn(() => null) }))
 vi.mock('../../../src/main/store/registry.service', () => ({ getOfficialRegistryUrl: vi.fn(() => null) }))
 vi.mock('../../../src/main/store/adapters/halo.adapter', () => ({ fetchWithTimeout: vi.fn() }))
+// A client identity provider must be present for server "um" binding to survive
+// the resolveIdentity intersection (server um ∩ client provider → um).
+vi.mock('../../../src/main/foundation/product-config', () => ({
+  getMarketplaceIdentityProvider: vi.fn(() => 'halo-cloud'),
+}))
 
 async function loadModules() {
   const publish = await import('../../../src/main/store/publish')
@@ -38,7 +43,6 @@ describe('marketplace-capabilities', () => {
     expect(await m.getMarketplaceCapabilities()).toEqual({
       catalog: true,
       installs: false,
-      discovery: false,
       publish: false,
       reviewWorkflow: false,
       identity: 'none',
@@ -56,7 +60,6 @@ describe('marketplace-capabilities', () => {
     const caps = await m.getMarketplaceCapabilities()
     expect(caps.publish).toBe(true)
     expect(caps.installs).toBe(false)
-    expect(caps.discovery).toBe(false)
     expect(caps.reviewWorkflow).toBe(false)
   })
 
@@ -74,7 +77,6 @@ describe('marketplace-capabilities', () => {
 
     const caps = await m.getMarketplaceCapabilities()
     expect(caps.installs).toBe(true)
-    expect(caps.discovery).toBe(true) // collections || featured
     expect(caps.reviewWorkflow).toBe(true)
     expect(caps.identity).toBe('um')
   })
@@ -87,7 +89,6 @@ describe('marketplace-capabilities', () => {
 
     const caps = await m.getMarketplaceCapabilities()
     expect(caps.installs).toBe(false)
-    expect(caps.discovery).toBe(false)
     expect(caps.reviewWorkflow).toBe(false)
     expect(caps.identity).toBe('none')
   })

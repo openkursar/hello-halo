@@ -1,5 +1,5 @@
 /**
- * Scene collections (场景专题) — curated cross-type app bundles served by the
+ * Scene collections — curated cross-type app bundles served by the
  * store backend's public `GET /collections` endpoint. Unauthenticated; absent
  * on static/community sources, in which case the discover page simply omits the
  * collections block.

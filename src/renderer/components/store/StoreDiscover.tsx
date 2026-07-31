@@ -8,11 +8,13 @@
  * kinds are skipped so a forward-dated config degrades rather than breaks.
  */
 
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
+import { api } from '../../api'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useStoreCollections } from '../../hooks/useStoreCollections'
 import { useDiscoverLayout } from '../../hooks/useDiscoverLayout'
+import { useCategoryLabel } from '../../hooks/useStoreCategories'
 import type { RegistryEntry, StoreCollection, DiscoverNode } from '../../../shared/store/store-types'
 import { StoreCard } from './StoreCard'
 import { StoreGrid } from './StoreGrid'
@@ -46,40 +48,47 @@ function CardGrid({ entries }: { entries: RegistryEntry[] }) {
 /** Compact "official picks" card (mockup .featured-card): icon + name + type tag
  * and a two-line description, no install button. */
 function FeaturedGrid({ entries }: { entries: RegistryEntry[] }) {
-  const { t } = useTranslation()
-  const locale = getCurrentLanguage()
   const selectStoreApp = useAppsPageStore(state => state.selectStoreApp)
+  // Funnel: the featured section becoming visible is a discovery impression.
+  useEffect(() => {
+    if (entries.length > 0) void api.trackEvent('mkt_featured_view', { count: entries.length })
+  }, [entries.length])
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-      {entries.map(entry => {
-        const { name, description } = resolveEntryI18n(entry, locale)
-        return (
-          <div
-            key={entry.slug}
-            role="button"
-            tabIndex={0}
-            onClick={() => selectStoreApp(entry.slug)}
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectStoreApp(entry.slug) } }}
-            className="flex flex-col gap-2.5 w-full p-4 rounded-[10px] border border-border/60 bg-background text-left cursor-pointer transition-all hover:border-border hover:shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
-          >
-            <div className="flex items-center gap-2.5 min-w-0">
-              <AppTypeIcon type={entry.type} icon={entry.icon} name={name} size="sm" />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="text-sm font-semibold text-foreground truncate min-w-0">{name}</span>
-                  <AppTypeTag type={entry.type} />
-                </div>
-                <p className="text-xs text-muted-foreground truncate mt-0.5">
-                  {entry.category && entry.category !== 'other' ? entry.category : t('Other')}
-                </p>
-              </div>
-            </div>
-            {description && (
-              <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">{description}</p>
-            )}
+      {entries.map(entry => (
+        <FeaturedCard key={entry.slug} entry={entry} onSelect={() => selectStoreApp(entry.slug)} />
+      ))}
+    </div>
+  )
+}
+
+function FeaturedCard({ entry, onSelect }: { entry: RegistryEntry; onSelect: () => void }) {
+  const { t } = useTranslation()
+  const { name, description } = resolveEntryI18n(entry, getCurrentLanguage())
+  const categoryLabel = useCategoryLabel(entry.type, entry.category)
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect() } }}
+      className="flex flex-col gap-2.5 w-full p-4 rounded-[10px] border border-border/60 bg-background text-left cursor-pointer transition-all hover:border-border hover:shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
+    >
+      <div className="flex items-center gap-2.5 min-w-0">
+        <AppTypeIcon type={entry.type} icon={entry.icon} name={name} size="sm" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-sm font-semibold text-foreground truncate min-w-0">{name}</span>
+            <AppTypeTag type={entry.type} />
           </div>
-        )
-      })}
+          <p className="text-xs text-muted-foreground truncate mt-0.5">
+            {entry.category && entry.category !== 'other' ? categoryLabel : t('Other')}
+          </p>
+        </div>
+      </div>
+      {description && (
+        <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">{description}</p>
+      )}
     </div>
   )
 }

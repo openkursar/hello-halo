@@ -31,6 +31,7 @@ import {
   getPublishPreview,
   collectFiles,
   packDhpkg,
+  packSkill,
   unpackDhpkg,
 } from '../store'
 import { getAppManager } from '../apps/manager'
@@ -197,6 +198,40 @@ export function registerStoreHandlers(): void {
       }
     },
 
+    // ── store:export-skill ─────────────────────────────────────────────────
+    storeExportSkill: async (input: { appId: string }) => {
+      try {
+        const manager = getAppManager()
+        if (!manager) return { success: false, error: 'App Manager not ready' }
+        const app = manager.getApp(input.appId)
+        if (!app) return { success: false, error: `App not found: ${input.appId}` }
+        if (app.spec.type !== 'skill') {
+          return { success: false, error: `Not a skill: ${input.appId}` }
+        }
+
+        const safeName = (app.spec.store?.slug ?? app.spec.name).replace(/[^a-z0-9-]/gi, '-').toLowerCase()
+        const dialogResult = await dialog.showSaveDialog({
+          title: 'Export skill',
+          defaultPath: `${safeName}-${app.spec.version ?? '0.0.0'}.zip`,
+          filters: [{ name: 'Skill Package', extensions: ['zip'] }],
+        })
+
+        if (dialogResult.canceled || !dialogResult.filePath) {
+          return { success: false, error: 'User cancelled' }
+        }
+
+        const buf = packSkill(app.spec)
+        await writeFile(dialogResult.filePath, buf)
+
+        console.log(`[StoreIPC] store:export-skill: appId=${input.appId} -> ${dialogResult.filePath}`)
+        return { success: true, data: { path: dialogResult.filePath } }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[StoreIPC] store:export-skill error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
     // ── store:import-dhpkg ─────────────────────────────────────────────────
     storeImportDhpkg: async (input?: { filePath?: string; spaceId?: string | null }) => {
       try {
@@ -357,5 +392,5 @@ export function registerStoreHandlers(): void {
     sendToRenderer('store:upgrade-available', event)
   })
 
-  console.log('[StoreIPC] Store handlers registered (18 channels + sync push + upgrade push)')
+  console.log('[StoreIPC] Store handlers registered (19 channels + sync push + upgrade push)')
 }

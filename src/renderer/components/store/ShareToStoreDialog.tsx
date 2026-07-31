@@ -19,6 +19,7 @@
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   X,
   Loader2,
@@ -32,6 +33,9 @@ import {
   LogIn,
   Package,
   Upload,
+  Search,
+  Check,
+  ChevronDown,
 } from 'lucide-react'
 import { Switch } from '../ui/Switch'
 import { parse as parseYaml } from 'yaml'
@@ -408,7 +412,11 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
   }, [type, source])
 
   // A category from one type's enum is not valid for another; clear on switch.
+  // Skip the initial mount so a restored draft category (seeded above) is not
+  // wiped — this effect must only react to an actual type change.
+  const typeSwitchGuard = useRef(true)
   useEffect(() => {
+    if (typeSwitchGuard.current) { typeSwitchGuard.current = false; return }
     setCategory('')
   }, [type])
 
@@ -712,7 +720,9 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     if (signingIn) return
     setSigningIn(true)
     try {
-      const res = await api.storeEnsureSignedIn()
+      // force: the current token was just rejected (401), so re-run OAuth to mint
+      // a fresh one instead of getting the stale token handed back.
+      const res = await api.storeEnsureSignedIn(true)
       if (res.success && res.data) {
         setAuthExpired(false)
         void handleSubmit()
@@ -1319,6 +1329,59 @@ interface InstalledPickerProps {
 
 function InstalledPicker({ apps, selectedId, onSelect, type, invalid }: InstalledPickerProps) {
   const { t } = useTranslation()
+  const selected = apps.find(a => a.id === selectedId) ?? null
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  // Anchor rect for the portaled dropdown — a plain absolute layer would be
+  // clipped by the dialog's scroll container, so the list floats in a portal.
+  const [anchor, setAnchor] = useState<{ top: number; left: number; width: number } | null>(null)
+  const fieldRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+
+  const openList = useCallback(() => {
+    const r = fieldRef.current?.getBoundingClientRect()
+    if (r) setAnchor({ top: r.bottom + 4, left: r.left, width: r.width })
+    setOpen(true)
+  }, [])
+
+  // The closed input mirrors the committed selection; typing (open) overrides it.
+  useEffect(() => {
+    if (!open) setQuery(selected ? selected.spec.name : '')
+  }, [open, selected])
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (fieldRef.current?.contains(target) || listRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    // The dropdown is fixed-positioned and cannot follow the dialog scrolling, so
+    // close it when an ancestor scrolls — but not when the list itself scrolls.
+    const onScroll = (e: Event) => {
+      if (listRef.current?.contains(e.target as Node)) return
+      setOpen(false)
+    }
+    const onResize = () => setOpen(false)
+    // Capture phase: the dialog panel stops mousedown propagation (to guard its
+    // own backdrop-close), which would otherwise hide this outside click.
+    document.addEventListener('mousedown', onDown, true)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onResize)
+    return () => {
+      document.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [open])
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    // A freshly opened input still shows the selection's name — treat that as "no
+    // filter" so the full list is browsable, not narrowed to the current pick.
+    if (!q || (selected && q === selected.spec.name.toLowerCase())) return apps
+    return apps.filter(a => a.spec.name.toLowerCase().includes(q))
+  }, [apps, query, selected])
 
   if (apps.length === 0) {
     return (
@@ -1338,20 +1401,46 @@ function InstalledPicker({ apps, selectedId, onSelect, type, invalid }: Installe
       <label className="block text-xs font-semibold text-muted-foreground mb-1.5">
         {type === 'automation' ? t('Pick a digital human to share') : t('Pick a skill to share')} <span className="text-red-400">*</span>
       </label>
-      <select
-        value={selectedId ?? ''}
-        onChange={e => onSelect(e.target.value)}
-        className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary ${selectedId ? 'text-foreground' : 'text-muted-foreground/50'} ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border'}`}
-      >
-        <option value="" disabled>
-          {type === 'automation' ? t('Select a digital human') : t('Select a skill')}
-        </option>
-        {apps.map(a => (
-          <option key={a.id} value={a.id} className="text-foreground">
-            {a.spec.name} {a.spec.version ? `· v${a.spec.version}` : ''}
-          </option>
-        ))}
-      </select>
+
+      <div ref={fieldRef} className="relative">
+        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/60" />
+        <input
+          value={query}
+          onChange={e => { setQuery(e.target.value); openList() }}
+          onFocus={openList}
+          placeholder={type === 'automation' ? t('Select a digital human') : t('Select a skill')}
+          className={`w-full pl-8 pr-8 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50 ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
+        />
+        <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/60 pointer-events-none" />
+      </div>
+
+      {open && anchor && createPortal(
+        <div
+          ref={listRef}
+          style={{ position: 'fixed', top: anchor.top, left: anchor.left, width: anchor.width }}
+          className="z-[60] max-h-44 overflow-y-auto rounded-lg border border-border/60 bg-background shadow-lg divide-y divide-border/60"
+        >
+          {filtered.length === 0 ? (
+            <p className="px-3 py-4 text-xs text-muted-foreground text-center">{t('No matches')}</p>
+          ) : (
+            filtered.map(a => (
+              <button
+                key={a.id}
+                type="button"
+                onClick={() => { onSelect(a.id); setOpen(false) }}
+                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] transition-colors ${
+                  selectedId === a.id ? 'bg-primary/10 font-medium text-foreground' : 'text-foreground hover:bg-secondary/50'
+                }`}
+              >
+                <span className="flex-1 min-w-0 truncate">{a.spec.name}</span>
+                {a.spec.version && <span className="flex-shrink-0 text-[11px] text-muted-foreground">v{a.spec.version}</span>}
+                {selectedId === a.id && <Check className="w-3.5 h-3.5 flex-shrink-0 text-primary" />}
+              </button>
+            ))
+          )}
+        </div>,
+        document.body,
+      )}
     </div>
   )
 }

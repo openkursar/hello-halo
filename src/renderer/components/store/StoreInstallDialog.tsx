@@ -5,8 +5,9 @@
  * Shows space selector and config_schema form fields.
  */
 
-import { useState, useMemo, useCallback } from 'react'
-import { X, Loader2 } from 'lucide-react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
+import { X, Loader2, Check, ChevronDown } from 'lucide-react'
 import { useSpaceStore } from '../../stores/space.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
@@ -55,6 +56,15 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
   const [selectedSpaceId, setSelectedSpaceId] = useState(
     !showGlobalOption && allSpaces.length <= 1 ? (allSpaces[0]?.id ?? '') : ''
   )
+  // Spaces can resolve after mount; when there is exactly one space (the selector
+  // is hidden and only a read-only label shows) adopt it, so Install is not left
+  // pointing at '' with no control to fix. The multi-space case still requires an
+  // explicit choice.
+  useEffect(() => {
+    if (!showGlobalOption && allSpaces.length === 1 && !selectedSpaceId) {
+      setSelectedSpaceId(allSpaces[0].id)
+    }
+  }, [showGlobalOption, allSpaces, selectedSpaceId])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<StoreInstallProgress | null>(null)
@@ -220,26 +230,14 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
                   {allSpaces[0] ? spaceLabel(allSpaces[0]) : t('No spaces available')}
                 </p>
               ) : (
-                <select
+                <SpaceSelect
                   value={selectedSpaceId}
-                  onChange={e => { setSelectedSpaceId(e.target.value); setSpaceInvalid(false); setError(null) }}
-                  className={`w-full px-3 py-2 text-sm bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary ${selectedSpaceId ? 'text-foreground' : 'text-muted-foreground/50'} ${spaceInvalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
-                >
-                  <option value="" disabled>{t('Select a space')}</option>
-                  {showGlobalOption && (
-                    <option value={GLOBAL_SCOPE} className="text-foreground">{t('Global (all spaces)')}</option>
-                  )}
-                  {haloSpace && (
-                    <option value={haloSpace.id} className="text-foreground">{spaceLabel(haloSpace)}</option>
-                  )}
-                  {spaces.length > 0 && (
-                    <optgroup label={t('Dedicated spaces')}>
-                      {spaces.map(s => (
-                        <option key={s.id} value={s.id} className="text-foreground">{s.name}</option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
+                  onChange={v => { setSelectedSpaceId(v); setSpaceInvalid(false); setError(null) }}
+                  haloSpace={haloSpace ?? null}
+                  spaces={spaces}
+                  showGlobalOption={showGlobalOption}
+                  invalid={spaceInvalid}
+                />
               )}
               {/* What the scope choice means */}
               <div className="rounded-lg border border-border/60 bg-muted/30 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
@@ -333,6 +331,112 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
         </div>
       </div>
     </div>
+  )
+}
+
+// ──────────────────────────────────────────────
+// Space selector — a floating combobox grouping Global / default / dedicated
+// spaces. Portaled so the dropdown is not clipped by the dialog's scroll area.
+// ──────────────────────────────────────────────
+
+interface SpaceSelectProps {
+  value: string
+  onChange: (v: string) => void
+  haloSpace: { id: string; name: string } | null
+  spaces: Array<{ id: string; name: string }>
+  showGlobalOption?: boolean
+  invalid?: boolean
+}
+
+function SpaceSelect({ value, onChange, haloSpace, spaces, showGlobalOption, invalid }: SpaceSelectProps) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [anchor, setAnchor] = useState<{ top: number; left: number; width: number } | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+
+  const openList = () => {
+    const r = triggerRef.current?.getBoundingClientRect()
+    if (r) setAnchor({ top: r.bottom + 4, left: r.left, width: r.width })
+    setOpen(true)
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (triggerRef.current?.contains(target) || listRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    const onScroll = (e: Event) => {
+      if (listRef.current?.contains(e.target as Node)) return
+      setOpen(false)
+    }
+    const onResize = () => setOpen(false)
+    document.addEventListener('mousedown', onDown, true)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onResize)
+    return () => {
+      document.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [open])
+
+  const haloLabel = haloSpace ? `${haloSpace.name} (${t('Default space')})` : ''
+  const currentLabel =
+    value === GLOBAL_SCOPE ? t('Global (all spaces)')
+    : value && value === haloSpace?.id ? haloLabel
+    : value ? (spaces.find(s => s.id === value)?.name ?? '')
+    : ''
+
+  const select = (v: string) => { onChange(v); setOpen(false) }
+
+  const Row = ({ id, label }: { id: string; label: string }) => (
+    <button
+      type="button"
+      onClick={() => select(id)}
+      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
+        value === id ? 'bg-primary/10 font-medium text-foreground' : 'text-foreground hover:bg-secondary/50'
+      }`}
+    >
+      <span className="flex-1 min-w-0 truncate">{label}</span>
+      {value === id && <Check className="w-3.5 h-3.5 flex-shrink-0 text-primary" />}
+    </button>
+  )
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={openList}
+        className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-sm bg-muted/40 border rounded-lg text-left focus:outline-none focus:ring-1 focus:ring-primary ${invalid ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
+      >
+        <span className={`truncate ${currentLabel ? 'text-foreground' : 'text-muted-foreground/50'}`}>
+          {currentLabel || t('Select a space')}
+        </span>
+        <ChevronDown className="w-4 h-4 flex-shrink-0 text-muted-foreground/60" />
+      </button>
+
+      {open && anchor && createPortal(
+        <div
+          ref={listRef}
+          style={{ position: 'fixed', top: anchor.top, left: anchor.left, width: anchor.width }}
+          className="z-[60] max-h-56 overflow-y-auto rounded-lg border border-border/60 bg-background shadow-lg py-1"
+        >
+          {showGlobalOption && <Row id={GLOBAL_SCOPE} label={t('Global (all spaces)')} />}
+          {haloSpace && <Row id={haloSpace.id} label={haloLabel} />}
+          {spaces.length > 0 && (
+            <>
+              <div className="px-3 pt-1.5 pb-1 text-[11px] font-medium text-muted-foreground/60">{t('Dedicated spaces')}</div>
+              {spaces.map(s => <Row key={s.id} id={s.id} label={s.name} />)}
+            </>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
   )
 }
 

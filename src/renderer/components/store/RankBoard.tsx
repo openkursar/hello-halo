@@ -10,10 +10,11 @@ import { useAppsPageStore } from '../../stores/apps-page.store'
 import { getEntryInstalls } from '../../../shared/store/store-meta'
 import { resolveEntryI18n } from '../../utils/spec-i18n'
 import { getCurrentLanguage } from '../../i18n'
+import { useCategoryLabel } from '../../hooks/useStoreCategories'
 import { AppTypeIcon } from './AppTypeIcon'
 import type { RegistryEntry } from '../../../shared/store/store-types'
 
-const RANK_COLORS = ['#f5b800', '#9aa6b8', '#c9803e'] // gold / silver / bronze for the top three
+const RANK_COLORS = ['text-amber-400', 'text-slate-400', 'text-orange-700'] // gold / silver / bronze for the top three
 
 /** Minimum number of apps with real installs before a leaderboard is shown. */
 export const MIN_RANK_ENTRIES = 3
@@ -31,10 +32,7 @@ function formatInstalls(value: number): string {
 function RankBadge({ index }: { index: number }) {
   const topThree = index < 3
   return (
-    <div
-      className={`w-7 flex-shrink-0 text-center text-[15px] text-muted-foreground ${topThree ? 'font-bold italic' : ''}`}
-      style={topThree ? { color: RANK_COLORS[index] } : undefined}
-    >
+    <div className={`w-7 flex-shrink-0 text-center text-[15px] ${topThree ? `font-bold italic ${RANK_COLORS[index]}` : 'text-muted-foreground'}`}>
       {index + 1}
     </div>
   )
@@ -42,6 +40,7 @@ function RankBadge({ index }: { index: number }) {
 
 function RankRow({ entry, index, onOpen }: { entry: RegistryEntry; index: number; onOpen: () => void }) {
   const name = resolveEntryI18n(entry, getCurrentLanguage()).name
+  const categoryLabel = useCategoryLabel(entry.type, entry.category)
   const installs = getEntryInstalls(entry)
   return (
     <button
@@ -54,7 +53,7 @@ function RankRow({ entry, index, onOpen }: { entry: RegistryEntry; index: number
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="text-[13.5px] font-semibold text-foreground truncate">{name}</span>
         </div>
-        {entry.category && <div className="text-[11.5px] text-muted-foreground truncate mt-0.5">{entry.category}</div>}
+        {categoryLabel && <div className="text-[11.5px] text-muted-foreground truncate mt-0.5">{categoryLabel}</div>}
       </div>
       <div className="flex-shrink-0 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
         <span className="inline-flex items-center gap-0.5 max-w-[72px] min-w-0">

@@ -193,8 +193,17 @@ export function registerStoreRoutes(app: Express): void {
   // GET /api/store/category-taxonomy — scene-category enum for chips + publish
   app.get('/api/store/category-taxonomy', async (req: Request, res: Response) => {
     try {
-      const result = storeController.getStoreCategoryTaxonomy()
+      const result = await storeController.getStoreCategoryTaxonomy()
       res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/store/discover-layout — config-driven discover page layout
+  app.get('/api/store/discover-layout', async (req: Request, res: Response) => {
+    try {
+      res.json(await storeController.getStoreDiscoverLayout())
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -213,6 +222,15 @@ export function registerStoreRoutes(app: Express): void {
   app.post('/api/store/unpublish', async (req: Request, res: Response) => {
     try {
       res.json(await storeController.unpublishStoreApp(req.body))
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/relist — bring back a self-takedown of the creator's own app
+  app.post('/api/store/relist', async (req: Request, res: Response) => {
+    try {
+      res.json(await storeController.relistStoreApp(req.body))
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -330,12 +348,21 @@ export function registerStoreRoutes(app: Express): void {
   // POST /api/store/publish — publish an installed app to the configured registry
   app.post('/api/store/publish', async (req: Request, res: Response) => {
     try {
-      const { appId, author, version } = req.body as { appId?: string; author?: string; version?: string }
+      const { appId, author, version, changelog, category, name, description, tags } = req.body as {
+        appId?: string
+        author?: string
+        version?: string
+        changelog?: string
+        category?: string
+        name?: string
+        description?: string
+        tags?: string[]
+      }
       if (!appId) {
         res.status(400).json({ success: false, error: 'Missing appId' })
         return
       }
-      const result = await publish(appId, author, version)
+      const result = await publish(appId, { author, version, changelog, category, name, description, tags })
       res.json({
         success: result.status !== 'error',
         data: result,

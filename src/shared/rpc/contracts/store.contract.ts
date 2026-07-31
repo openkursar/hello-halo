@@ -22,6 +22,7 @@ export const storeRpc = {
   storePublish: rawRpcMethod('store:publish'),
   storePublishPreview: rawRpcMethod('store:publish-preview'),
   storeExportDhpkg: rawRpcMethod('store:export-dhpkg'),
+  storeExportSkill: rawRpcMethod('store:export-skill'),
   storeImportDhpkg: rawRpcMethod('store:import-dhpkg'),
   storeGetCapabilities: rawRpcMethod('store:get-capabilities'),
   storeGetCategoryTaxonomy: rawRpcMethod('store:get-category-taxonomy'),

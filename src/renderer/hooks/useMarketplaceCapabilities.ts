@@ -3,9 +3,10 @@
  * marketplace capability flags.
  *
  * Capabilities are resolved in the main process from product.json plus the
- * store backend's advertised features. They are stable for a session, so the
- * hook fetches once and caches the result in a module-level promise shared by
- * all callers.
+ * store backend's advertised features, and shared across callers via a
+ * time-boxed cached resource. The cache is dropped on network recovery (the
+ * `online` event) so a probe that degraded while offline recovers without an
+ * app restart rather than staying frozen for the whole session.
  *
  * The gate is a UX layer, not a security boundary. It therefore fails
  * permissive: read capabilities (browse/search/install) never degrade, and
@@ -14,8 +15,8 @@
  * Any real restriction is enforced by the backend.
  */
 
-import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { createCachedResource } from '../lib/cached-resource'
 import type { MarketplaceCapabilities } from '../../shared/store/store-types'
 
 /**
@@ -31,7 +32,9 @@ const CONSERVATIVE_DEFAULT: MarketplaceCapabilities = {
   identity: 'none',
 }
 
-let cached: Promise<MarketplaceCapabilities> | null = null
+// Re-fetch on a fresh mount once the cache is older than this, so a degraded
+// result does not outlive the main-process probe's own retry cadence.
+const CAPABILITIES_TTL_MS = 60 * 1000
 
 function coerce(value: Partial<MarketplaceCapabilities> | undefined): MarketplaceCapabilities {
   if (!value || typeof value !== 'object') return CONSERVATIVE_DEFAULT
@@ -59,32 +62,23 @@ async function fetchCapabilities(): Promise<MarketplaceCapabilities> {
   }
 }
 
+const capabilitiesResource = createCachedResource(fetchCapabilities, { ttlMs: CAPABILITIES_TTL_MS })
+
+// Network recovery: drop the cache and re-fetch so identity/backend-gated
+// surfaces that went dark while offline come back without an app restart.
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => capabilitiesResource.invalidate())
+}
+
 /**
- * Returns the marketplace capabilities.
- *
- * `null` means "still loading on first call this session". Treat `null` as the
- * conservative default in render code — read surfaces on, gated surfaces off:
+ * Returns the marketplace capabilities, seeded with the conservative default
+ * (read surfaces on, gated surfaces off) until the first fetch resolves.
  *
  * ```tsx
  * const caps = useMarketplaceCapabilities()
- * if (caps?.publish) return <PublishButton />
+ * if (caps.publish) return <PublishButton />
  * ```
  */
-export function useMarketplaceCapabilities(): MarketplaceCapabilities | null {
-  const [capabilities, setCapabilities] = useState<MarketplaceCapabilities | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    if (!cached) {
-      cached = fetchCapabilities()
-    }
-    cached.then((value) => {
-      if (!cancelled) setCapabilities(value)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  return capabilities
+export function useMarketplaceCapabilities(): MarketplaceCapabilities {
+  return capabilitiesResource.useValue(CONSERVATIVE_DEFAULT)
 }

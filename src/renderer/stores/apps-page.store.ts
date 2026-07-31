@@ -15,9 +15,11 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { api } from '../api'
 import { getCurrentLanguage } from '../i18n'
-import { invalidateCategoryTaxonomyCache } from '../hooks/useStoreCategories'
-import { invalidateDiscoverLayoutCache } from '../hooks/useDiscoverLayout'
-import { invalidateStoreCollectionsCache } from '../hooks/useStoreCollections'
+import {
+  categoryTaxonomyResource,
+  discoverLayoutResource,
+  storeCollectionsResource,
+} from '../lib/store-resources'
 import type { RegistryEntry, StoreAppDetail, UpdateInfo, StoreQuery, StoreQueryResponse, StoreInstallProgress } from '../../shared/store/store-types'
 import type { AppType } from '../../shared/apps/spec-types'
 import type { ImSessionRecord } from '../../shared/types/im-channel'
@@ -499,9 +501,9 @@ export const useAppsPageStore = create<AppsPageState>()(
       }
       // Scene categories, collections and the discover layout are ops-managed
       // server-side; refetch them alongside the index.
-      invalidateCategoryTaxonomyCache()
-      invalidateDiscoverLayoutCache()
-      invalidateStoreCollectionsCache()
+      categoryTaxonomyResource.invalidate()
+      discoverLayoutResource.invalidate()
+      storeCollectionsResource.invalidate()
       // Reload store apps after refresh
       await get().loadStoreApps()
       await get().checkUpdates()

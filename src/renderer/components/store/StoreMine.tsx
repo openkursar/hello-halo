@@ -16,6 +16,8 @@ import { StoreUpdatable } from './StoreUpdatable'
 import { StoreNotice } from './StoreNotice'
 import { AppTypeIcon } from './AppTypeIcon'
 import { AppTypeTag } from './AppTypeTag'
+import { useConfirmDialog } from '../../hooks/useConfirmDialog'
+import { useNotificationStore } from '../../stores/notification.store'
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -59,6 +61,8 @@ export function StoreMine() {
   // the store requires an account yet this build ships no identity provider —
   // the latter must explain the situation, not offer a dead sign-in button.
   const [signInStatus, setSignInStatus] = useState<MarketplaceSignInStatus | null>(null)
+  const { showConfirm, DialogComponent: confirmDialog } = useConfirmDialog()
+  const showToast = useNotificationStore(s => s.show)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -106,12 +110,21 @@ export function StoreMine() {
   }, [])
 
   const handleUnpublish = useCallback(async (slug: string) => {
+    const ok = await showConfirm({
+      title: t('Take this app down?'),
+      message: t('It will be removed from the store and users can no longer find or install it. You can relist it later by publishing a new version.'),
+      confirmLabel: t('Take down'),
+      cancelLabel: t('Cancel'),
+      variant: 'danger',
+    })
+    if (!ok) return
     setBusySlug(slug)
     void api.trackEvent('mkt_unpublish', { appId: slug })
-    await api.storeUnpublish({ slug })
+    const res = await api.storeUnpublish({ slug })
     setBusySlug(null)
-    void load()
-  }, [load])
+    if (res.success) void load()
+    else showToast({ title: res.error || t('Take down failed. Please try again.'), variant: 'error', duration: 4000 })
+  }, [load, showConfirm, showToast, t])
 
   const openPublish = useCallback((type: MyPublication['type']) => {
     setPublishType(type === 'skill' || type === 'automation' ? type : undefined)
@@ -234,6 +247,7 @@ export function StoreMine() {
       {showPublish && (
         <ShareToStoreDialog initialType={publishType} entry="mine" republish onClose={() => { setShowPublish(false); void load() }} />
       )}
+      {confirmDialog}
     </div>
   )
 }

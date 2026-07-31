@@ -303,7 +303,7 @@ export interface CategoryDef {
  * for any type without its own entry (and by the community / no-server build).
  *
  * The authoritative source is per-deployment: an enterprise store server (ops
- * backend, FR-4.9) downloads a controlled enum; when none is present the client
+ * backend) downloads a controlled enum; when none is present the client
  * falls back to BUILTIN_CATEGORY_TAXONOMY so the community build is unchanged.
  */
 export type CategoryTaxonomy = Partial<Record<AppType, CategoryDef[]>> & {
@@ -407,10 +407,10 @@ export const BUILTIN_DISCOVER_LAYOUT: DiscoverLayout = {
 // Scene Collections
 // ============================================
 
-/** A curated cross-type app collection (场景专题) served by the ops backend. */
+/** A curated cross-type scene collection served by the ops backend. */
 export interface StoreCollection {
   id: string
-  /** Short tag shown on the collection card (e.g. "专题"). */
+  /** Short tag shown on the collection card. */
   label: string
   name: string
   description: string

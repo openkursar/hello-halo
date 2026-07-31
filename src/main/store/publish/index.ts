@@ -99,7 +99,6 @@ async function resolveStoreVersion(slug: string): Promise<string | null> {
   return findStoreEntry(slug)?.entry.version ?? null
 }
 
-/** Publish an installed App through the configured dispatcher. */
 /**
  * Publish-time edits applied to a one-time snapshot of the source spec.
  * They never touch the creator's local installed app — the snapshot is an
@@ -155,6 +154,7 @@ function alignSkillCommandName(spec: AppSpec): AppSpec {
   return spec
 }
 
+/** Publish an installed App through the configured dispatcher. */
 export async function publish(appId: string, overrides: PublishOverrides = {}): Promise<PublishResult> {
   const manager = getAppManager()
   if (!manager) {
@@ -256,24 +256,6 @@ export async function publish(appId: string, overrides: PublishOverrides = {}): 
 }
 
 /**
- * Collect the auxiliary files to upload alongside the spec.
- *
- * - For a skill: its own `skill_files` (name → content).
- * - For a digital human (or other non-skill app): the files of any BUNDLED
- *   skills, so the package stays self-contained. The DH spec only carries the
- *   `requires.skills[]` metadata — each bundled skill's content lives in its
- *   own installed skill app (materialized at install time), so it is read back
- *   from there and uploaded under `skills/<id>/<file>`, the layout the registry
- *   stores and `fetchBundledSkills()` reads on install.
- *
- * Bundled skills are looked up with the same effective-resolution semantics
- * the runtime uses (space-scoped overriding global), so a skill installed in
- * global scope satisfies the dependency. Skills still missing are returned in
- * `missingSkillIds` — the caller must fail the publish, because a bundled
- * declaration is a self-containment promise and a partial package is broken
- * for every installer.
- */
-/**
  * Declare each bundled skill's uploaded files in the wire spec's
  * requires.skills[] so the install adapter knows what to fetch. collectFiles
  * uploads them under `skills/<id>/<file>`; the declaration is the matching
@@ -294,6 +276,24 @@ function declareBundledSkillFiles(spec: AppSpec, files: Record<string, string>):
   return { ...spec, requires: { ...spec.requires, skills } }
 }
 
+/**
+ * Collect the auxiliary files to upload alongside the spec.
+ *
+ * - For a skill: its own `skill_files` (name → content).
+ * - For a digital human (or other non-skill app): the files of any BUNDLED
+ *   skills, so the package stays self-contained. The DH spec only carries the
+ *   `requires.skills[]` metadata — each bundled skill's content lives in its
+ *   own installed skill app (materialized at install time), so it is read back
+ *   from there and uploaded under `skills/<id>/<file>`, the layout the registry
+ *   stores and `fetchBundledSkills()` reads on install.
+ *
+ * Bundled skills are looked up with the same effective-resolution semantics
+ * the runtime uses (space-scoped overriding global), so a skill installed in
+ * global scope satisfies the dependency. Skills still missing are returned in
+ * `missingSkillIds` — the caller must fail the publish, because a bundled
+ * declaration is a self-containment promise and a partial package is broken
+ * for every installer.
+ */
 export function collectFiles(
   spec: AppSpec,
   manager: AppManagerService,

@@ -154,6 +154,13 @@ export const storeApi = {
     return { success: false, error: 'Not supported outside Electron' }
   },
 
+  storeExportSkill: async (appId: string): Promise<ApiResponse<{ path: string }>> => {
+    if (isElectron()) {
+      return window.halo.storeExportSkill({ appId })
+    }
+    return { success: false, error: 'Not supported outside Electron' }
+  },
+
   storeImportDhpkg: async (input?: { filePath?: string; spaceId?: string | null }): Promise<ApiResponse<{ appId: string }>> => {
     if (isElectron()) {
       return window.halo.storeImportDhpkg(input)
