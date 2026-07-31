@@ -37,7 +37,7 @@ import {
   getMarketplaceIdentity,
   getMarketplaceSignInStatus,
   fetchCollections,
-  openInstallOrder,
+  authorizeInstall,
 } from '../store'
 import type { MarketplaceIdentity } from '../store/marketplace-identity'
 import type { MarketplaceSignInStatus } from '../../shared/store/store-types'
@@ -174,13 +174,14 @@ export async function installStoreApp(
     if (!slug) {
       return { success: false, error: 'App slug is required' }
     }
-    // Order-first: open the install order in the registry's own ledger at the
-    // user-initiated entry point (installFromStore recurses for skill
-    // dependencies and would inflate the ledger). Never blocks the install;
-    // unreachable-server orders are queued and replayed on next start.
-    openInstallOrder(slug)
+    // The server authorises the install and returns where to download from.
+    // Done at the user-initiated entry point because installFromStore recurses
+    // for skill dependencies, which must not each open their own order.
+    // A registry without the endpoint returns nothing and the indexed path is
+    // used, which is how static and community registries keep working.
+    const grant = await authorizeInstall(slug)
     // spaceId may be null for global installs (MCP/Skill available across all spaces)
-    const appId = await installFromStore(slug, spaceId, userConfig, onProgress)
+    const appId = await installFromStore(slug, spaceId, userConfig, onProgress, grant?.path)
     // Fire-and-forget install signal that feeds the store's install-count rollup.
     // Fired here (the user-initiated entry point) rather than inside
     // installFromStore, which recurses for skill dependencies and would inflate counts.

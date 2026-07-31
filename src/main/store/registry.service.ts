@@ -458,6 +458,12 @@ export async function installFromStore(
   spaceId: string | null,
   userConfig?: Record<string, unknown>,
   onProgress?: (filesComplete: number, filesTotal: number, currentFile: string) => void,
+  /**
+   * Bundle location granted by the store server. When present it replaces the
+   * path carried in the local index, so the server — not the client — decides
+   * what an install may download.
+   */
+  authorizedPath?: string,
 ): Promise<string> {
   ensureInitialized()
 
@@ -486,7 +492,8 @@ export async function installFromStore(
     throw new Error(`Registry not found: ${registryId}`)
   }
   const adapter = getAdapter(registry)
-  const spec = await adapter.fetchSpec(registry, entry, onProgress)
+  const grantedEntry = authorizedPath ? { ...entry, path: authorizedPath } : entry
+  const spec = await adapter.fetchSpec(registry, grantedEntry, onProgress)
   const specWithStore = withInstallStoreMetadata(spec, entry.slug, registryId)
 
   // Delegate to App Manager

@@ -9,14 +9,15 @@
  */
 
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs'
 import { getHaloDir } from '../foundation/config.service'
 import { getOfficialRegistryUrl, findStoreEntry } from './registry.service'
 import { fetchWithTimeout } from './adapters/halo.adapter'
 import { getMarketplaceIdentityToken } from './marketplace-identity'
-import { analytics } from '../services/analytics'
 
 const PENDING_FILE = 'store-install-orders.pending.json'
+const INSTALL_ID_FILE = 'store-install-id'
 
 interface PendingOrder {
   slug: string
@@ -24,13 +25,33 @@ interface PendingOrder {
 }
 
 /**
- * Open an install order for a user-initiated install. Never throws and never
- * blocks the install: failures are persisted for replay.
+ * Ask the store server to authorise an install, and get back the bundle
+ * location to download from.
+ *
+ * The server decides — the client does not derive the download path itself.
+ * That keeps accounting on the install's critical path (an unreported install
+ * is structurally impossible) and leaves room for entitlement checks later
+ * without a protocol change.
+ *
+ * Returns null when the server has no install endpoint (a static or community
+ * registry), in which case the caller falls back to the indexed path.
  */
-export function openInstallOrder(slug: string): void {
+export async function authorizeInstall(slug: string): Promise<{ path: string } | null> {
   const version = findStoreEntry(slug)?.entry.version ?? ''
-  if (!version) return
-  void postOrder({ slug, version }, false).catch(() => enqueue({ slug, version }))
+  if (!version) return null
+  try {
+    const granted = await postOrder({ slug, version }, false)
+    if (granted?.path) {
+      console.log(`[InstallOrders] authorised ${slug}@${version}`)
+      return { path: granted.path }
+    }
+  } catch (err) {
+    // The bundle may still be reachable from cache, so an unreachable server
+    // does not fail the install; the order is replayed on the next start.
+    console.warn(`[InstallOrders] ${slug}@${version} queued for retry:`, (err as Error).message)
+    enqueue({ slug, version })
+  }
+  return null
 }
 
 /** Replay orders that could not reach the registry. Called once at startup. */
@@ -48,11 +69,42 @@ export async function flushPendingInstallOrders(): Promise<void> {
   writePending(failed)
 }
 
-async function postOrder(order: PendingOrder, backfill: boolean): Promise<void> {
+/**
+ * Stable per-installation identifier, owned by the store.
+ *
+ * Deliberately independent of the analytics subsystem: install counting is
+ * business data and must keep working when telemetry is disabled, fails to
+ * initialise, or is removed entirely.
+ */
+function installId(): string {
+  const path = join(getHaloDir(), INSTALL_ID_FILE)
+  try {
+    if (existsSync(path)) {
+      const existing = readFileSync(path, 'utf-8').trim()
+      if (existing) return existing
+    }
+  } catch {
+    // Fall through and mint a fresh one.
+  }
+  const fresh = randomUUID()
+  try {
+    writeFileSync(path, fresh)
+  } catch {
+    // An unwritable data dir only costs de-duplication across restarts.
+  }
+  return fresh
+}
+
+interface OrderGrant {
+  path?: string
+}
+
+async function postOrder(order: PendingOrder, backfill: boolean): Promise<OrderGrant | null> {
   const base = getOfficialRegistryUrl()
-  if (!base) return
-  const installId = analytics.getUserId()
-  if (!installId) return
+  if (!base) {
+    console.warn('[InstallOrders] no official registry configured; install not recorded')
+    return null
+  }
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   // Identity is optional: a signed-in install is attributed to the account,
@@ -69,11 +121,18 @@ async function postOrder(order: PendingOrder, backfill: boolean): Promise<void> 
   const res = await fetchWithTimeout(`${base}/apps/${path}/installs`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ installId, version: order.version, backfill }),
+    body: JSON.stringify({ installId: installId(), version: order.version, backfill }),
   })
   // 4xx = permanently rejected (unknown slug, bad payload): retrying cannot
   // succeed, so treat as done. Only transport/5xx failures reach the queue.
   if (res.status >= 500) throw new Error(`install order failed: ${res.status}`)
+  if (!res.ok) {
+    // 404 means a registry without the endpoint (static mirror / community
+    // build); anything else is a permanent rejection. Both leave the caller to
+    // fall back to the indexed path.
+    return null
+  }
+  return (await res.json()) as OrderGrant
 }
 
 function pendingPath(): string {
