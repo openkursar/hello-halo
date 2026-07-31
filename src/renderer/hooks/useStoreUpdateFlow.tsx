@@ -46,7 +46,7 @@ export function useStoreUpdateFlow(
 
   const overwrite = async () => {
     if (!updateInfo || busy) return
-    void api.trackEvent('mkt_update_overwrite', { appId: entry.slug, toVersion: updateInfo.latestVersion })
+    void api.trackEvent('mkt_update_overwrite', { appId: entry?.slug, toVersion: updateInfo.latestVersion })
     setBusy(true)
     try {
       const res = await api.storeApplyUpgrade(updateInfo.appId, 'force')
@@ -82,7 +82,7 @@ export function useStoreUpdateFlow(
   const installCopy = async () => {
     if (busy) return
     if (updateInfo) {
-      void api.trackEvent('mkt_update_keep_current', { appId: entry.slug, toVersion: updateInfo.latestVersion })
+      void api.trackEvent('mkt_update_keep_current', { appId: entry?.slug, toVersion: updateInfo.latestVersion })
     }
     let detail = providedDetail ?? null
     if (!detail && entry) {

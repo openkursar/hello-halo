@@ -14,6 +14,7 @@ import { getEntryInstalls, isEntryFeatured } from '../../../shared/store/store-m
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveEntryI18n } from '../../utils/spec-i18n'
 import { useMarketplaceCapabilities } from '../../hooks/useMarketplaceCapabilities'
+import { useCategoryLabel } from '../../hooks/useStoreCategories'
 import { useStoreEntryInstallState } from '../../hooks/useStoreEntryInstallState'
 import { AppTypeTag } from './AppTypeTag'
 import { AppTypeIcon } from './AppTypeIcon'
@@ -52,6 +53,7 @@ function StoreCardBase({ entry, onClick, source }: StoreCardProps) {
   const capabilities = useMarketplaceCapabilities()
   const showInstalls = capabilities?.installs === true
   const installsLabel = formatCompact(getEntryInstalls(entry) ?? 0, locale)
+  const categoryLabel = useCategoryLabel(entry.type, entry.category)
   const { installedApp } = useStoreEntryInstallState(entry, entry.registryId ?? null)
 
   const openDetail = () => {
@@ -95,7 +97,7 @@ function StoreCardBase({ entry, onClick, source }: StoreCardProps) {
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-[3px] truncate">
-            {entry.category && entry.category !== 'other' ? entry.category : t('Other')}
+            {entry.category && entry.category !== 'other' ? categoryLabel : t('Other')}
           </p>
         </div>
         <span className="flex-shrink-0 text-[11px] text-muted-foreground/70">v{entry.version}</span>

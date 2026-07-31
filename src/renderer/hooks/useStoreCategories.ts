@@ -3,16 +3,17 @@
  * type tab.
  *
  * The taxonomy is resolved in the main process (`server ?? product.json ?? built-in`,
- * see marketplace-taxonomy.ts) and fetched once per session, cached in a shared
- * module-level promise. Until it loads — or if it fails — the built-in set is
- * used, so chips render immediately without a flash of empty state.
+ * see marketplace-taxonomy.ts) and shared once per session (see lib/store-resources).
+ * Until it loads — or if it fails — the built-in set is used, so chips render
+ * immediately without a flash of empty state.
  *
- * The returned list always ends with the fixed "other" bucket (FR-2.2), so
- * callers render 「All」 + list without special-casing the catch-all.
+ * The returned list always ends with the fixed "other" bucket, so callers render
+ * "All" + list without special-casing the catch-all.
  */
 
-import { useEffect, useMemo, useState } from 'react'
-import { api } from '../api'
+import { useMemo } from 'react'
+import { useTranslation } from '../i18n'
+import { categoryTaxonomyResource } from '../lib/store-resources'
 import type { AppType } from '../../shared/apps/spec-types'
 import {
   BUILTIN_CATEGORY_TAXONOMY,
@@ -32,52 +33,24 @@ export function categoryDisplay(def: CategoryDef, t: (key: string) => string): s
   return def.icon ? `${def.icon} ${label}` : label
 }
 
-let cached: Promise<CategoryTaxonomy> | null = null
-const reloadListeners = new Set<() => void>()
-
 /**
- * Drop the session cache and re-fetch, pushing the fresh taxonomy into every
- * mounted consumer. Called after a store refresh so an operator's edit to the
- * server taxonomy reaches the chips/publish form without a client restart.
+ * Resolve an entry's category id to its localized display label (icon + label),
+ * falling back to the raw id for a legacy category absent from the taxonomy.
+ * Returns undefined when the entry has no category. Lets card surfaces show the
+ * same label as the chip bar instead of the raw id.
  */
-export function invalidateCategoryTaxonomyCache(): void {
-  cached = null
-  reloadListeners.forEach((reload) => reload())
+export function useCategoryLabel(type: AppType | null, category: string | undefined): string | undefined {
+  const categories = useStoreCategories(type)
+  const { t } = useTranslation()
+  return useMemo(() => {
+    if (!category) return undefined
+    const def = categories.find(c => c.id === category)
+    return def ? categoryDisplay(def, t) : category
+  }, [categories, category, t])
 }
 
 function useCategoryTaxonomy(): CategoryTaxonomy {
-  const [taxonomy, setTaxonomy] = useState<CategoryTaxonomy>(BUILTIN_CATEGORY_TAXONOMY)
-
-  useEffect(() => {
-    let cancelled = false
-    const reload = () => {
-      if (!cached) cached = fetchTaxonomy()
-      cached.then((value) => {
-        if (!cancelled) setTaxonomy(value)
-      })
-    }
-    reload()
-    reloadListeners.add(reload)
-    return () => {
-      cancelled = true
-      reloadListeners.delete(reload)
-    }
-  }, [])
-
-  return taxonomy
-}
-
-async function fetchTaxonomy(): Promise<CategoryTaxonomy> {
-  try {
-    const res = await api.storeGetCategoryTaxonomy()
-    if (res.success && res.data && Array.isArray((res.data as CategoryTaxonomy).default)) {
-      return res.data as CategoryTaxonomy
-    }
-    return BUILTIN_CATEGORY_TAXONOMY
-  } catch (error) {
-    console.error('[useStoreCategories] Fetch failed, using built-in taxonomy:', error)
-    return BUILTIN_CATEGORY_TAXONOMY
-  }
+  return categoryTaxonomyResource.useValue(BUILTIN_CATEGORY_TAXONOMY)
 }
 
 function resolveCategories(taxonomy: CategoryTaxonomy, type: AppType | null): CategoryDef[] {

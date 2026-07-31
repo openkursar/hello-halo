@@ -1,7 +1,7 @@
 /**
  * Per-type action verbs shared by the store card and detail page so the install
- * / installed / use labels stay consistent (数字人=安装, skill=添加, mcp=连接).
- * Literal t() calls per branch so the i18n extractor picks each verb up.
+ * / installed / use labels stay consistent (automation=install, skill=add,
+ * mcp=connect). Literal t() calls per branch so the i18n extractor picks each up.
  */
 
 import type { AppType } from '../../../shared/apps/spec-types'

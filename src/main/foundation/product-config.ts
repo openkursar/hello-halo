@@ -163,7 +163,7 @@ export interface ImChannelsProductConfig {
  * Marketplace section of product.json.
  *
  * `categories` is the no-server scene-category enumeration: a deployment
- * without a store server (which would otherwise own the enum, FR-4.9) can
+ * without a store server (which would otherwise own the enum) can
  * still customize categories here without forking. It is the middle tier of
  * the resolution chain `server ?? product.json ?? built-in`; a build that
  * omits it falls back to the built-in community set.

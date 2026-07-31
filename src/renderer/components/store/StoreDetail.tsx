@@ -144,6 +144,14 @@ export function StoreDetail() {
     }
   }, [storeSelectedDetail, isBundlePackage, installedApp, entry?.type, consumeStoreAutoInstall])
 
+  // Install-intent funnel step between detail-view and install-done: the dialog
+  // opening (from the detail button or a card's install-now intent) is the click.
+  useEffect(() => {
+    if (showInstallDialog && entry) {
+      void api.trackEvent('mkt_install_click', { appId: entry.slug, appType: entry.type, source: 'detail' })
+    }
+  }, [showInstallDialog, entry?.slug, entry?.type])
+
   // Resolve locale-specific display text
   const locale = getCurrentLanguage()
   const resolvedEntry = useMemo(
