@@ -231,8 +231,7 @@ export default function App() {
 
   // Theme switching
   useEffect(() => {
-    // Default to 'dark' before config loads, then use config value
-    const theme = config?.appearance?.theme || 'dark'
+    const theme = config?.appearance?.theme || 'system'
     applyTheme(theme)
 
     // Resolve effective dark/light for the status bar.

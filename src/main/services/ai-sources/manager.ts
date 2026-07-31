@@ -607,6 +607,7 @@ class AISourceManager {
     const availableModels: string[] = data._availableModels || []
     const modelNames: Record<string, string> = data._modelNames || {}
     const defaultModel = data._defaultModel || ''
+    const modelOverrides = data._modelOverrides as AISource['modelOverrides']
 
     const builtin = getBuiltinProvider(providerType)
     const now = new Date().toISOString()
@@ -650,6 +651,7 @@ class AISourceManager {
             user: { name: '', uid: acct.id },
             model: keepModel,
             availableModels: models.length > 0 ? models : s.availableModels,
+            modelOverrides: modelOverrides ?? s.modelOverrides,
             updatedAt: now
           } : s)
           if (!firstId) firstId = existing.id
@@ -667,6 +669,7 @@ class AISourceManager {
             user: { name: '', uid: acct.id },
             model: defaultModel,
             availableModels: models,
+            modelOverrides,
             createdAt: now,
             updatedAt: now
           })
@@ -703,6 +706,7 @@ class AISourceManager {
             },
             model: defaultModel || s.model,
             availableModels: models.length > 0 ? models : s.availableModels,
+            modelOverrides: modelOverrides ?? s.modelOverrides,
             updatedAt: now
           }
         }
@@ -727,6 +731,7 @@ class AISourceManager {
         },
         model: defaultModel,
         availableModels: models,
+        modelOverrides,
         createdAt: now,
         updatedAt: now
       }
@@ -885,8 +890,8 @@ class AISourceManager {
    * Delegates to the provider's refreshConfig() to fetch the latest model
    * list from the remote API, then merges the result back into stored config.
    *
-   * Only non-sensitive fields (availableModels, model, updatedAt) are written;
-   * encrypted tokens on disk are never touched.
+   * Only non-sensitive fields (availableModels, model, modelOverrides,
+   * updatedAt) are written; encrypted tokens on disk are never touched.
    */
   async refreshSourceConfig(sourceId: string): Promise<ProviderResult<void>> {
     await this.ensureInitialized()
@@ -935,12 +940,15 @@ class AISourceManager {
     const freshAiSources = this.getAiSourcesConfig()
     const now = new Date().toISOString()
 
+    const nextOverrides = providerData.modelOverrides as AISource['modelOverrides']
+
     const updatedSources = freshAiSources.sources.map(s => {
       if (s.id !== sourceId) return s
       return {
         ...s,
         availableModels: models.length > 0 ? models : s.availableModels,
         model: providerData.model || s.model,
+        modelOverrides: nextOverrides ?? s.modelOverrides,
         updatedAt: now
       }
     })

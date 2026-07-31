@@ -13,12 +13,10 @@
  * - Dynamic OAuth provider support (configured via product.json)
  */
 
-import { useState, useEffect, type ComponentType } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Plus, Check, ChevronDown, ChevronRight, Edit2, Trash2, LogOut, Loader2, Key, Globe,
-  LogIn, User, Cloud, Server, Shield, Lock, Zap, MessageSquare, Wrench, Github, Copy,
-  Brain, ExternalLink,
-  type LucideIcon
+  Copy, Brain, ExternalLink
 } from 'lucide-react'
 import type {
   AISource,
@@ -31,6 +29,7 @@ import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
 import { ProviderSelector } from './ProviderSelector'
 import { getBrandIcon } from '../icons/BrandIcons'
+import { ProviderIconTile } from '../icons/ProviderIconTile'
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
 
 // ============================================================================
@@ -39,41 +38,6 @@ import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } fro
 
 function getLocalizedText(value: LocalizedText): string {
   return resolveLocalizedText(value, getCurrentLanguage())
-}
-
-/**
- * Map icon names to Lucide components
- */
-const iconMap: Record<string, LucideIcon> = {
-  'log-in': LogIn,
-  'user': User,
-  'globe': Globe,
-  'key': Key,
-  'cloud': Cloud,
-  'server': Server,
-  'shield': Shield,
-  'lock': Lock,
-  'zap': Zap,
-  'message-square': MessageSquare,
-  'wrench': Wrench,
-  'github': Github,
-  'brain': Brain
-}
-
-/**
- * Get icon component by name
- */
-function getIconComponent(iconName: string): LucideIcon {
-  return iconMap[iconName] || Globe
-}
-
-/**
- * Convert hex color to RGBA with opacity
- */
-function hexToRgba(hex: string, alpha: number = 0.15): string {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
-  if (!result) return `rgba(128, 128, 128, ${alpha})`
-  return `rgba(${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}, ${alpha})`
 }
 
 interface AISourcesSectionProps {
@@ -820,8 +784,6 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           provider: AuthProviderConfig,
           onClick: () => void
         ) => {
-          // Brand mark by provider type takes precedence over the lucide icon.
-          const IconComponent = (getBrandIcon(provider.type) || getIconComponent(provider.icon)) as ComponentType<{ size?: number; className?: string }>
           return (
             <button
               key={provider.type}
@@ -829,12 +791,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
               className="flex items-center gap-3 w-full p-3 bg-surface-secondary hover:bg-surface-tertiary
                        border border-border-primary rounded-lg transition-colors"
             >
-              <div
-                className="w-10 h-10 rounded-lg flex items-center justify-center"
-                style={{ backgroundColor: provider.iconBgColor }}
-              >
-                <IconComponent size={20} className="text-white" />
-              </div>
+              <ProviderIconTile provider={provider} size="md" />
               <div className="flex-1 text-left">
                 <div className="font-medium text-text-primary">
                   {getLocalizedText(provider.displayName)}

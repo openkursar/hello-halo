@@ -111,6 +111,7 @@ npm run build
 echo "[build:mac-signed] 打包 + 签名 + 公证 (--publish never)..."
 # 用 target:arch 精确限定单架构 (仅 --arm64/--x64 会被 config 的 arch 数组覆盖成全架构)
 npx electron-builder --mac "dmg:$ARCH" "zip:$ARCH" \
+  --config electron-builder.cjs \
   -c.mac.hardenedRuntime=true -c.mac.notarize.teamId="$APPLE_TEAM_ID" \
   --publish never
 
