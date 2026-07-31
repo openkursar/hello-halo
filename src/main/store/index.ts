@@ -25,6 +25,7 @@ export { checkNow as checkUpgradesNow, startUpgradeScheduler, stopUpgradeSchedul
 
 export { publish, collectFiles, getPublishPreview } from './publish'
 export { pack as packDhpkg, unpack as unpackDhpkg } from './dhpkg'
+export { packSkill } from './skill-pkg'
 export { getMarketplaceCapabilities } from './marketplace-capabilities'
 export { getCategoryTaxonomy, invalidateServerTaxonomyCache } from './marketplace-taxonomy'
 export { getDiscoverLayout, invalidateDiscoverLayoutCache } from './marketplace-discover'

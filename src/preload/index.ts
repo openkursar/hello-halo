@@ -576,6 +576,7 @@ export interface HaloAPI {
   storePublish: (input: { appId: string; author?: string; version?: string; changelog?: string; category?: string; name?: string; description?: string; tags?: string[] }) => Promise<IpcResponse>
   storePublishPreview: (input: { appId: string; author?: string; name?: string }) => Promise<IpcResponse<{ slug: string; localVersion: string; storeVersion: string | null }>>
   storeExportDhpkg: (input: { appId: string }) => Promise<IpcResponse<{ path: string }>>
+  storeExportSkill: (input: { appId: string }) => Promise<IpcResponse<{ path: string }>>
   storeImportDhpkg: (input?: { filePath?: string; spaceId?: string | null }) => Promise<IpcResponse<{ appId: string }>>
   storeGetCapabilities: () => Promise<IpcResponse<MarketplaceCapabilities>>
   storeGetCategoryTaxonomy: () => Promise<IpcResponse<CategoryTaxonomy>>
