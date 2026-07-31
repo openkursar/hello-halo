@@ -37,6 +37,7 @@ import {
   getMarketplaceIdentity,
   getMarketplaceSignInStatus,
   fetchCollections,
+  openInstallOrder,
 } from '../store'
 import type { MarketplaceIdentity } from '../store/marketplace-identity'
 import type { MarketplaceSignInStatus } from '../../shared/store/store-types'
@@ -173,6 +174,11 @@ export async function installStoreApp(
     if (!slug) {
       return { success: false, error: 'App slug is required' }
     }
+    // Order-first: open the install order in the registry's own ledger at the
+    // user-initiated entry point (installFromStore recurses for skill
+    // dependencies and would inflate the ledger). Never blocks the install;
+    // unreachable-server orders are queued and replayed on next start.
+    openInstallOrder(slug)
     // spaceId may be null for global installs (MCP/Skill available across all spaces)
     const appId = await installFromStore(slug, spaceId, userConfig, onProgress)
     // Fire-and-forget install signal that feeds the store's install-count rollup.

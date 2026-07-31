@@ -32,3 +32,4 @@ export { getDiscoverLayout, invalidateDiscoverLayoutCache } from './marketplace-
 export { fetchMyPublications, unpublishApp, relistApp } from './marketplace-mine'
 export { ensureMarketplaceIdentity, getMarketplaceIdentity, getMarketplaceSignInStatus } from './marketplace-identity'
 export { fetchCollections } from './marketplace-collections'
+export { openInstallOrder, flushPendingInstallOrders } from './install-orders'
