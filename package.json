@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.13-rc.7",
+  "version": "2.1.13-rc.8",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.mjs",
@@ -194,8 +194,6 @@
     "@parcel/watcher-win32-x64": "^2.5.6"
   },
   "build": {
-    "appId": "com.halo.app",
-    "productName": "Halo",
     "npmRebuild": false,
     "beforePack": "./scripts/beforePack.cjs",
     "afterPack": "./scripts/afterPack.cjs",
@@ -230,12 +228,6 @@
       "node_modules/tesseract.js/**",
       "node_modules/tesseract.js-core/**"
     ],
-    "publish": {
-      "provider": "github",
-      "owner": "openkursar",
-      "repo": "hello-halo",
-      "releaseType": "release"
-    },
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "resources/icon.icns",
