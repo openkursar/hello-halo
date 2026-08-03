@@ -147,6 +147,7 @@ interface AppsPageState {
   setCurrentTab: (tab: AppsPageTab) => void
   loadStoreApps: (query?: StoreQuery) => Promise<void>
   seedStoreApps: (items: RegistryEntry[], hasMore: boolean) => void
+  clearStoreListCache: () => void
   loadMoreStoreApps: () => Promise<void>
   setStoreSearch: (query: string) => void
   setStoreCategory: (category: string | null) => void
@@ -296,6 +297,9 @@ export const useAppsPageStore = create<AppsPageState>()(
   // ── Store Actions ──────────────────────────
 
   setCurrentTab: (tab) => set({ currentTab: tab }),
+
+  /** Drop the per-query browse cache so the next read refetches. */
+  clearStoreListCache: () => storeListCache.clear(),
 
   /**
    * Adopt the catalog page carried by the discover payload so the grid and the

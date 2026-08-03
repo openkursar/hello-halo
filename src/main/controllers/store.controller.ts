@@ -205,6 +205,27 @@ export async function installStoreApp(
 /**
  * Refresh the registry index from remote sources.
  */
+/**
+ * Freshness check for when the user comes back to the store. Drops the
+ * server-config caches so the next read revalidates, and re-checks the index —
+ * both are conditional requests, so an unchanged store costs a few 304s.
+ *
+ * `changed` reports whether the index itself moved, letting the caller leave the
+ * browse list alone when only ops config could have shifted.
+ */
+export async function revalidateStore(): Promise<StoreControllerResponse<{ changed: boolean }>> {
+  try {
+    invalidateServerTaxonomyCache()
+    invalidateDiscoverLayoutCache()
+    const changed = await refreshIndex()
+    return { success: true, data: { changed } }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] revalidateStore error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
 export async function refreshStoreIndex(): Promise<StoreControllerResponse<void>> {
   try {
     invalidateServerTaxonomyCache()

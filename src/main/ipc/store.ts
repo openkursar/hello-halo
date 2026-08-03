@@ -287,6 +287,11 @@ export function registerStoreHandlers(): void {
       return storeController.getStoreCategoryTaxonomy()
     },
 
+    // ── store:revalidate ───────────────────────────────────────────────────
+    storeRevalidate: async () => {
+      return storeController.revalidateStore()
+    },
+
     // ── store:get-discover-page ────────────────────────────────────────────
     storeGetDiscoverPage: async (input?: { locale?: string; pageSize?: number }) => {
       return storeController.getStoreDiscoverPage(input)

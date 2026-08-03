@@ -27,6 +27,7 @@ export const storeRpc = {
   storeGetCapabilities: rawRpcMethod('store:get-capabilities'),
   storeGetCategoryTaxonomy: rawRpcMethod('store:get-category-taxonomy'),
   storeGetDiscoverPage: rawRpcMethod('store:get-discover-page'),
+  storeRevalidate: rawRpcMethod('store:revalidate'),
   storeEnsureSignedIn: rawRpcMethod('store:ensure-signed-in'),
   storeGetIdentity: rawRpcMethod('store:get-identity'),
   storeGetSignInStatus: rawRpcMethod('store:get-sign-in-status'),

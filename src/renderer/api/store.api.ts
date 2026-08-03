@@ -185,6 +185,13 @@ export const storeApi = {
     return httpRequest('GET', '/api/store/category-taxonomy')
   },
 
+  storeRevalidate: async (): Promise<ApiResponse<{ changed: boolean }>> => {
+    if (isElectron()) {
+      return window.halo.storeRevalidate()
+    }
+    return httpRequest('POST', '/api/store/revalidate')
+  },
+
   storeGetDiscoverPage: async (input?: { locale?: string; pageSize?: number }): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.storeGetDiscoverPage(input)

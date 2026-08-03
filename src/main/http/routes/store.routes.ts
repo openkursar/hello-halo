@@ -200,6 +200,15 @@ export function registerStoreRoutes(app: Express): void {
     }
   })
 
+  // POST /api/store/revalidate — cheap freshness check on returning to the store
+  app.post('/api/store/revalidate', async (_req: Request, res: Response) => {
+    try {
+      res.json(await storeController.revalidateStore())
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // GET /api/store/discover-page — layout with every section's data resolved
   app.get('/api/store/discover-page', async (req: Request, res: Response) => {
     try {

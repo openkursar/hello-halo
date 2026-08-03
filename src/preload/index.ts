@@ -581,6 +581,7 @@ export interface HaloAPI {
   storeGetCapabilities: () => Promise<IpcResponse<MarketplaceCapabilities>>
   storeGetCategoryTaxonomy: () => Promise<IpcResponse<CategoryTaxonomy>>
   storeGetDiscoverPage: (input?: { locale?: string; pageSize?: number }) => Promise<IpcResponse<ResolvedDiscover>>
+  storeRevalidate: () => Promise<IpcResponse<{ changed: boolean }>>
   storeEnsureSignedIn: (input?: { force?: boolean }) => Promise<IpcResponse<boolean>>
   storeGetIdentity: () => Promise<IpcResponse<{ uid: string; name: string } | null>>
   storeGetSignInStatus: () => Promise<IpcResponse<MarketplaceSignInStatus>>
