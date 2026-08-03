@@ -586,7 +586,6 @@ export interface HaloAPI {
   storeGetSignInStatus: () => Promise<IpcResponse<StoreSignInStatus>>
   storeGetMyPublications: () => Promise<IpcResponse<MyPublication[]>>
   storeUnpublish: (input: { slug: string }) => Promise<IpcResponse<null>>
-  storeRelist: (input: { slug: string }) => Promise<IpcResponse<null>>
   storeGetCollections: () => Promise<IpcResponse<StoreCollection[]>>
   storeIgnoreVersion: (input: { appId: string; version: string }) => Promise<IpcResponse<null>>
   onStoreSyncStatusChanged: (callback: (data: { registryId: string; status: string; appCount: number; error?: string }) => void) => () => void

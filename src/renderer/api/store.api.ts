@@ -229,13 +229,6 @@ export const storeApi = {
     return httpRequest('POST', '/api/store/unpublish', input)
   },
 
-  storeRelist: async (input: { slug: string }): Promise<ApiResponse> => {
-    if (isElectron()) {
-      return window.halo.storeRelist(input)
-    }
-    return httpRequest('POST', '/api/store/relist', input)
-  },
-
   storeGetCollections: async (): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.storeGetCollections()

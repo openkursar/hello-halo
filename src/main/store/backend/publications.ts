@@ -30,7 +30,7 @@ async function requireAuth(): Promise<RegistryAuth> {
  * implement these as methods, so it must not leave the adapter unbound.
  * Null when there is no enabled primary source or it has no such endpoint.
  */
-function primaryEndpoint<M extends 'fetchMyPublications' | 'unpublish' | 'relist'>(
+function primaryEndpoint<M extends 'fetchMyPublications' | 'unpublish'>(
   method: M,
 ): { source: RegistrySource; call: NonNullable<RegistryAdapter[M]> } | null {
   const source = getPrimaryRegistry()
@@ -50,20 +50,12 @@ export async function fetchMyPublications(): Promise<MyPublication[]> {
   return raw.map(mapPublication)
 }
 
-export async function unpublishApp(slug: string): Promise<void> {
-  await write('unpublish', slug)
-}
-
-export async function relistApp(slug: string): Promise<void> {
-  await write('relist', slug)
-}
-
 /**
  * A store with no creator-management backend must say so. Silently doing
  * nothing is the one outcome the user cannot distinguish from success.
  */
-async function write(method: 'unpublish' | 'relist', slug: string): Promise<void> {
-  const endpoint = primaryEndpoint(method)
+export async function unpublishApp(slug: string): Promise<void> {
+  const endpoint = primaryEndpoint('unpublish')
   if (!endpoint) throw new Error('This store does not support managing your publications')
   await endpoint.call(endpoint.source, slug, await requireAuth())
 }

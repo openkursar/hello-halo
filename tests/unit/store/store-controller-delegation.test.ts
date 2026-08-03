@@ -21,7 +21,6 @@ const storeMock = {
   fetchMyPublications: vi.fn(),
   fetchCollections: vi.fn(),
   unpublishApp: vi.fn(),
-  relistApp: vi.fn(),
   ensureStoreIdentity: vi.fn(),
   listApps: vi.fn(),
   queryStore: vi.fn(),

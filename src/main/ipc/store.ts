@@ -317,11 +317,6 @@ export function registerStoreHandlers(): void {
       return storeController.unpublishStoreApp(input)
     },
 
-    // ── store:relist ───────────────────────────────────────────────────────
-    storeRelist: async (input: { slug: string }) => {
-      return storeController.relistStoreApp(input)
-    },
-
     // ── store:get-collections ──────────────────────────────────────────────
     storeGetCollections: async () => {
       return storeController.getStoreCollections()

@@ -10,7 +10,6 @@
  *   GET  {url}/collections                                   curated bundles
  *   GET  {url}/my/publications                               creator's own listings
  *   POST {url}/my/publications/{author}/{id}/unpublish
- *   POST {url}/my/publications/{author}/{id}/relist
  *   GET  {url}/category-taxonomy.json                        ops-managed chips
  *   GET  {url}/discover-layout.json                          ops-managed page
  *
@@ -212,34 +211,21 @@ export class DhpV2Adapter implements RegistryAdapter {
     return body.publications ?? []
   }
 
-  unpublish(source: RegistrySource, slug: string, auth: RegistryAuth): Promise<void> {
-    return this.postPublicationAction(source, slug, 'unpublish', auth)
-  }
-
-  relist(source: RegistrySource, slug: string, auth: RegistryAuth): Promise<void> {
-    return this.postPublicationAction(source, slug, 'relist', auth)
-  }
-
-  private async postPublicationAction(
-    source: RegistrySource,
-    slug: string,
-    action: 'unpublish' | 'relist',
-    auth: RegistryAuth,
-  ): Promise<void> {
+  async unpublish(source: RegistrySource, slug: string, auth: RegistryAuth): Promise<void> {
     const [author, id] = splitScopedSlug(slug)
     // The route addresses author and id separately, so a flat slug has nothing
     // to put in the second segment and would post to an empty path element.
-    if (!id) throw new Error(`Cannot ${action} "${slug}": publications are addressed as "author/app-id"`)
+    if (!id) throw new Error(`Cannot unpublish "${slug}": publications are addressed as "author/app-id"`)
     const url =
       `${baseUrl(source)}/my/publications/` +
-      `${encodeURIComponent(author)}/${encodeURIComponent(id)}/${action}`
+      `${encodeURIComponent(author)}/${encodeURIComponent(id)}/unpublish`
     const res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${auth.token}` },
     })
     if (res.status === 401) throw new Error(STORE_NOT_SIGNED_IN)
-    if (res.status === 403) throw new Error(`You can only ${action} your own apps`)
-    if (!res.ok) throw new Error(`${action} failed: ${res.status}`)
+    if (res.status === 403) throw new Error('You can only unpublish your own apps')
+    if (!res.ok) throw new Error(`unpublish failed: ${res.status}`)
   }
 
   // ── Page-level documents ─────────────────────────────────────────────────
