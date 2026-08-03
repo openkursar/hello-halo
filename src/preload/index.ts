@@ -38,7 +38,7 @@ import type {
   HealthExportResponse,
   HealthCheckResponse
 } from '../shared/types'
-import type { StoreInstallProgress, MarketplaceCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, MarketplaceSignInStatus } from '../shared/store/store-types'
+import type { StoreInstallProgress, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, StoreSignInStatus } from '../shared/store/store-types'
 
 // Seed --display-scale before the renderer's first paint. The main process
 // passes the persisted scale via additionalArguments at window creation;
@@ -578,13 +578,13 @@ export interface HaloAPI {
   storeExportDhpkg: (input: { appId: string }) => Promise<IpcResponse<{ path: string }>>
   storeExportSkill: (input: { appId: string }) => Promise<IpcResponse<{ path: string }>>
   storeImportDhpkg: (input?: { filePath?: string; spaceId?: string | null }) => Promise<IpcResponse<{ appId: string }>>
-  storeGetCapabilities: () => Promise<IpcResponse<MarketplaceCapabilities>>
+  storeGetCapabilities: () => Promise<IpcResponse<StoreCapabilities>>
   storeGetCategoryTaxonomy: () => Promise<IpcResponse<CategoryTaxonomy>>
   storeGetDiscoverPage: (input?: { locale?: string; pageSize?: number }) => Promise<IpcResponse<ResolvedDiscover>>
   storeRevalidate: () => Promise<IpcResponse<{ changed: boolean }>>
   storeEnsureSignedIn: (input?: { force?: boolean }) => Promise<IpcResponse<boolean>>
   storeGetIdentity: () => Promise<IpcResponse<{ uid: string; name: string } | null>>
-  storeGetSignInStatus: () => Promise<IpcResponse<MarketplaceSignInStatus>>
+  storeGetSignInStatus: () => Promise<IpcResponse<StoreSignInStatus>>
   storeGetMyPublications: () => Promise<IpcResponse<MyPublication[]>>
   storeUnpublish: (input: { slug: string }) => Promise<IpcResponse<null>>
   storeRelist: (input: { slug: string }) => Promise<IpcResponse<null>>

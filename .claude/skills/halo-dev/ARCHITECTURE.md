@@ -642,6 +642,7 @@ When touching a module, read its design doc first:
 - `src/main/apps/manager/DESIGN.md`
 - `src/main/apps/runtime/DESIGN.md`
 - `src/main/apps/spec/PROTOCOL.md`
+- `src/main/store/DESIGN.md` — App Store (registry federation, source adapters, backend surfaces)
 - `src/main/platform/store/DESIGN.md`
 - `src/main/platform/scheduler/DESIGN.md`
 - `src/main/platform/memory/DESIGN.md`

@@ -170,7 +170,7 @@ class AISourceManager {
   /**
    * Return a valid OAuth access token for a provider type, or null when no such
    * source is signed in. Refreshes an expiring token first. Used by the
-   * marketplace to authenticate to an identity-bound store server.
+   * store to authenticate to an identity-bound registry server.
    */
   async getOAuthAccessToken(providerType: ProviderId): Promise<string | null> {
     const source = this.getDecryptedAiSources().sources.find(
@@ -607,9 +607,7 @@ class AISourceManager {
     const availableModels: string[] = data._availableModels || []
     const modelNames: Record<string, string> = data._modelNames || {}
     const defaultModel = data._defaultModel || ''
-    const modelOverrides = data._modelOverrides as
-      | Record<string, Record<string, unknown>>
-      | undefined
+    const modelOverrides = data._modelOverrides as AISource['modelOverrides']
 
     const builtin = getBuiltinProvider(providerType)
     const now = new Date().toISOString()
@@ -653,6 +651,7 @@ class AISourceManager {
             user: { name: '', uid: acct.id },
             model: keepModel,
             availableModels: models.length > 0 ? models : s.availableModels,
+            modelOverrides: modelOverrides ?? s.modelOverrides,
             updatedAt: now
           } : s)
           if (!firstId) firstId = existing.id
@@ -670,6 +669,7 @@ class AISourceManager {
             user: { name: '', uid: acct.id },
             model: defaultModel,
             availableModels: models,
+            modelOverrides,
             createdAt: now,
             updatedAt: now
           })
@@ -706,9 +706,9 @@ class AISourceManager {
             },
             model: defaultModel || s.model,
             availableModels: models.length > 0 ? models : s.availableModels,
-            modelOverrides: modelOverrides !== undefined ? modelOverrides : s.modelOverrides,
+            modelOverrides: modelOverrides ?? s.modelOverrides,
             updatedAt: now
-          } as AISource
+          }
         }
         return s
       })
@@ -890,8 +890,8 @@ class AISourceManager {
    * Delegates to the provider's refreshConfig() to fetch the latest model
    * list from the remote API, then merges the result back into stored config.
    *
-   * Only non-sensitive fields (availableModels, model, updatedAt) are written;
-   * encrypted tokens on disk are never touched.
+   * Only non-sensitive fields (availableModels, model, modelOverrides,
+   * updatedAt) are written; encrypted tokens on disk are never touched.
    */
   async refreshSourceConfig(sourceId: string): Promise<ProviderResult<void>> {
     await this.ensureInitialized()
@@ -940,9 +940,7 @@ class AISourceManager {
     const freshAiSources = this.getAiSourcesConfig()
     const now = new Date().toISOString()
 
-    const nextOverrides = providerData.modelOverrides as
-      | Record<string, Record<string, unknown>>
-      | undefined
+    const nextOverrides = providerData.modelOverrides as AISource['modelOverrides']
 
     const updatedSources = freshAiSources.sources.map(s => {
       if (s.id !== sourceId) return s
@@ -950,9 +948,9 @@ class AISourceManager {
         ...s,
         availableModels: models.length > 0 ? models : s.availableModels,
         model: providerData.model || s.model,
-        modelOverrides: nextOverrides !== undefined ? nextOverrides : s.modelOverrides,
+        modelOverrides: nextOverrides ?? s.modelOverrides,
         updatedAt: now
-      } as AISource
+      }
     })
 
     saveConfig({

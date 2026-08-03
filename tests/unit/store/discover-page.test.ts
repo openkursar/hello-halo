@@ -8,8 +8,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('../../../src/main/store/marketplace-discover', () => ({ getDiscoverLayout: vi.fn() }))
-vi.mock('../../../src/main/store/marketplace-collections', () => ({ fetchCollections: vi.fn() }))
+vi.mock('../../../src/main/store/backend/discover', () => ({ getDiscoverLayout: vi.fn() }))
+vi.mock('../../../src/main/store/backend/collections', () => ({ fetchCollections: vi.fn() }))
 vi.mock('../../../src/main/store/registry.service', () => ({ listApps: vi.fn(), queryStore: vi.fn() }))
 
 import type { DiscoverLayout, RegistryEntry } from '../../../src/shared/store/store-types'
@@ -33,8 +33,8 @@ async function load(layout: DiscoverLayout, opts?: {
   catalog?: { items: RegistryEntry[]; hasMore: boolean }
   collections?: unknown[]
 }) {
-  const discover = await import('../../../src/main/store/marketplace-discover')
-  const collections = await import('../../../src/main/store/marketplace-collections')
+  const discover = await import('../../../src/main/store/backend/discover')
+  const collections = await import('../../../src/main/store/backend/collections')
   const registry = await import('../../../src/main/store/registry.service')
   const page = await import('../../../src/main/store/discover-page')
 
@@ -145,10 +145,10 @@ describe('discover-page', () => {
   })
 
   it('keeps the page alive when one type\'s index query fails', async () => {
-    const discover = await import('../../../src/main/store/marketplace-discover')
+    const discover = await import('../../../src/main/store/backend/discover')
     const registry = await import('../../../src/main/store/registry.service')
     const page = await import('../../../src/main/store/discover-page')
-    const collections = await import('../../../src/main/store/marketplace-collections')
+    const collections = await import('../../../src/main/store/backend/collections')
 
     vi.mocked(discover.getDiscoverLayout).mockResolvedValue({
       version: 1,

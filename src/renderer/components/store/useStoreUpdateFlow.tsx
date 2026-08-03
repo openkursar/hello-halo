@@ -6,15 +6,15 @@
  */
 
 import { useMemo, useState } from 'react'
-import { useTranslation } from '../i18n'
-import { api } from '../api'
-import { useAppsStore } from '../stores/apps.store'
-import { useAppsPageStore } from '../stores/apps-page.store'
-import { useNotificationStore } from '../stores/notification.store'
-import { getEntryVersions } from '../../shared/store/store-meta'
-import { StoreUpdateDialog } from '../components/store/StoreUpdateDialog'
-import { StoreInstallDialog } from '../components/store/StoreInstallDialog'
-import type { RegistryEntry, UpdateInfo, StoreAppDetail } from '../../shared/store/store-types'
+import { useTranslation } from '../../i18n'
+import { api } from '../../api'
+import { useAppsStore } from '../../stores/apps.store'
+import { useAppsPageStore } from '../../stores/apps-page.store'
+import { useNotificationStore } from '../../stores/notification.store'
+import { getEntryVersions } from '../../../shared/store/store-meta'
+import { StoreUpdateDialog } from './StoreUpdateDialog'
+import { StoreInstallDialog } from './StoreInstallDialog'
+import type { RegistryEntry, UpdateInfo, StoreAppDetail } from '../../../shared/store/store-types'
 
 type Phase = 'idle' | 'confirm' | 'copy'
 
@@ -46,7 +46,7 @@ export function useStoreUpdateFlow(
 
   const overwrite = async () => {
     if (!updateInfo || busy) return
-    void api.trackEvent('mkt_update_overwrite', { appId: entry?.slug, toVersion: updateInfo.latestVersion })
+    void api.trackEvent('store.update.overwrite', { appId: entry?.slug, toVersion: updateInfo.latestVersion })
     setBusy(true)
     try {
       const res = await api.storeApplyUpgrade(updateInfo.appId, 'force')
@@ -82,7 +82,7 @@ export function useStoreUpdateFlow(
   const installCopy = async () => {
     if (busy) return
     if (updateInfo) {
-      void api.trackEvent('mkt_update_keep_current', { appId: entry?.slug, toVersion: updateInfo.latestVersion })
+      void api.trackEvent('store.update.keep_current', { appId: entry?.slug, toVersion: updateInfo.latestVersion })
     }
     let detail = providedDetail ?? null
     if (!detail && entry) {

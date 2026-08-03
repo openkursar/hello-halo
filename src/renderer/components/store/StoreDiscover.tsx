@@ -50,7 +50,7 @@ function FeaturedGrid({ entries }: { entries: RegistryEntry[] }) {
   const selectStoreApp = useAppsPageStore(state => state.selectStoreApp)
   // Funnel: the featured section becoming visible is a discovery impression.
   useEffect(() => {
-    if (entries.length > 0) void api.trackEvent('mkt_featured_view', { count: entries.length })
+    if (entries.length > 0) void api.trackEvent('store.featured.view', { count: entries.length })
   }, [entries.length])
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">

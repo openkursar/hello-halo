@@ -831,7 +831,7 @@ const DEFAULT_CONFIG: HaloConfig = {
     trustMode: false
   },
   appearance: {
-    theme: 'dark',
+    theme: 'system',
     displayScale: 1
   },
   system: {

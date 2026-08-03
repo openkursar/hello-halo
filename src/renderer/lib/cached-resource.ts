@@ -9,6 +9,10 @@
  * `ttlMs`, when set, re-fetches on the next mount once the cached value is older
  * than the TTL — so a value resolved while degraded (e.g. offline) is not frozen
  * for the whole session.
+ *
+ * There is no error channel: a fetcher that rejects leaves consumers on their
+ * `initial` value and the failure is not cached, so the next mount retries.
+ * A fetcher that wants a degraded value rendered must resolve to it itself.
  */
 
 import { useEffect, useState } from 'react'
@@ -37,10 +41,19 @@ export function createCachedResource<T>(
     if (!force && fresh) return cache!.promise
     const promise = fetcher()
     cache = { at: now, promise }
-    void promise.then((value) => {
-      // Ignore a resolution a newer load has already superseded.
-      if (cache?.promise === promise) listeners.forEach((notify) => notify(value))
-    })
+    void promise.then(
+      (value) => {
+        // Ignore a resolution a newer load has already superseded.
+        if (cache?.promise === promise) listeners.forEach((notify) => notify(value))
+      },
+      (error) => {
+        // A rejected fetch must not become the cached answer: without a TTL it
+        // would be re-served for the rest of the session, leaving every consumer
+        // stuck on `initial` with no way back. Drop it so the next mount retries.
+        if (cache?.promise === promise) cache = null
+        console.error('[cached-resource] fetch failed, cache dropped:', error)
+      },
+    )
     return promise
   }
 
@@ -56,7 +69,8 @@ export function createCachedResource<T>(
       let cancelled = false
       const apply = (next: T) => { if (!cancelled) setValue(next) }
       listeners.add(apply)
-      void load().then(apply)
+      // Rejections are logged and dropped by `load`; the consumer holds `initial`.
+      void load().then(apply, () => {})
       return () => {
         cancelled = true
         listeners.delete(apply)

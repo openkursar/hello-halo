@@ -11,8 +11,8 @@
  * uses for later pages, so page 1 and page 2 cannot disagree on ordering.
  */
 
-import { getDiscoverLayout } from './marketplace-discover'
-import { fetchCollections } from './marketplace-collections'
+import { getDiscoverLayout } from './backend/discover'
+import { fetchCollections } from './backend/collections'
 import { listApps, queryStore } from './registry.service'
 import { resolveSection } from '../../shared/store/discover-resolve'
 import { BUILTIN_DISCOVER_LAYOUT } from '../../shared/store/store-types'

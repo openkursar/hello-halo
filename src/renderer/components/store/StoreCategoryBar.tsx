@@ -54,7 +54,7 @@ export function StoreCategoryBar() {
   const handleCategoryClick = useCallback((categoryId: string | null) => {
     setStoreCategory(categoryId)
     const state = useAppsPageStore.getState()
-    void api.trackEvent('mkt_cat_filter', { cat: categoryId ?? 'all', appType: state.storeTypeFilter ?? 'discover' })
+    void api.trackEvent('store.category.filter', { cat: categoryId ?? 'all', appType: state.storeTypeFilter ?? 'discover' })
     loadStoreApps({
       search: state.storeSearchQuery || undefined,
       category: categoryId ?? undefined,

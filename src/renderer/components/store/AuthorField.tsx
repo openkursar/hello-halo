@@ -14,7 +14,7 @@ import { useTranslation } from '../../i18n'
 export interface AuthorFieldProps {
   value: string
   onChange: (value: string) => void
-  /** True when the author is fixed to the signed-in identity (um mode). */
+  /** True when the author is fixed to the signed-in account identity. */
   readOnly?: boolean
   /** Highlight red when a submit flagged this required field as empty. */
   invalid?: boolean

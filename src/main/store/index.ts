@@ -14,11 +14,12 @@ export {
   checkUpdates,
   applyUpgrade,
   getRegistries,
-  getOfficialRegistryUrl,
   addRegistry,
   removeRegistry,
   toggleRegistry,
   updateRegistryAdapterConfig,
+  getRegistryById,
+  getPrimaryRegistry,
 } from './registry.service'
 
 export { checkNow as checkUpgradesNow, startUpgradeScheduler, stopUpgradeScheduler } from './upgrade.service'
@@ -26,10 +27,11 @@ export { checkNow as checkUpgradesNow, startUpgradeScheduler, stopUpgradeSchedul
 export { publish, collectFiles, getPublishPreview } from './publish'
 export { pack as packDhpkg, unpack as unpackDhpkg } from './dhpkg'
 export { packSkill } from './skill-pkg'
-export { getMarketplaceCapabilities } from './marketplace-capabilities'
-export { getCategoryTaxonomy, invalidateServerTaxonomyCache } from './marketplace-taxonomy'
-export { invalidateDiscoverLayoutCache } from './marketplace-discover'
+export { getStoreCapabilities } from './backend/capabilities'
+export { getCategoryTaxonomy, invalidateServerTaxonomyCache } from './backend/taxonomy'
+export { getDiscoverLayout, invalidateDiscoverLayoutCache } from './backend/discover'
 export { getDiscoverPage } from './discover-page'
-export { fetchMyPublications, unpublishApp, relistApp } from './marketplace-mine'
-export { ensureMarketplaceIdentity, getMarketplaceIdentity, getMarketplaceSignInStatus } from './marketplace-identity'
-export { openInstallOrder, flushPendingInstallOrders } from './install-orders'
+export { fetchMyPublications, unpublishApp, relistApp } from './backend/publications'
+export { ensureStoreIdentity, getStoreIdentity, getStoreSignInStatus } from './backend/identity'
+export { fetchCollections } from './backend/collections'
+export { flushPendingInstallOrders } from './backend/install-orders'

@@ -10,7 +10,7 @@
  */
 
 import type { StoreQuery, StoreQueryParams, StoreQueryResponse } from '../../shared/store/store-types'
-import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource, MarketplaceCapabilities, CategoryTaxonomy, ResolvedDiscover, MyPublication } from '../../shared/store/store-types'
+import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection } from '../../shared/store/store-types'
 import { DISCOVER_CATALOG_PAGE_SIZE } from '../../shared/store/store-types'
 import type { AppType } from '../../shared/apps/spec-types'
 import {
@@ -26,7 +26,6 @@ import {
   removeRegistry,
   toggleRegistry,
   updateRegistryAdapterConfig,
-  getMarketplaceCapabilities,
   getCategoryTaxonomy,
   invalidateServerTaxonomyCache,
   getDiscoverPage,
@@ -34,17 +33,20 @@ import {
   fetchMyPublications,
   unpublishApp,
   relistApp,
-  ensureMarketplaceIdentity,
-  getMarketplaceIdentity,
-  getMarketplaceSignInStatus,
-  openInstallOrder,
+  ensureStoreIdentity,
+  fetchCollections,
+  // Aliased: this controller exports same-named wrappers, and an unaliased
+  // import would bind to the wrapper instead of the store function.
+  getStoreCapabilities as resolveStoreCapabilities,
+  getStoreIdentity as resolveStoreIdentity,
+  getStoreSignInStatus as resolveStoreSignInStatus,
 } from '../store'
-import type { MarketplaceIdentity } from '../store/marketplace-identity'
-import type { MarketplaceSignInStatus } from '../../shared/store/store-types'
+import type { StoreIdentity } from '../store/backend/identity'
+import type { StoreSignInStatus } from '../../shared/store/store-types'
 import { getAppManager } from '../apps/manager'
 import { McpCommandBlockedError } from '../apps/manager/errors'
 import { MCP_COMMAND_BLOCKED_MESSAGE } from '../services/security-policy'
-import { trackEvent } from '../services/analytics'
+import { trackEvent, AnalyticsEvents } from '../services/analytics'
 
 const ALLOWED_APP_TYPES: ReadonlySet<AppType> = new Set<AppType>(['automation', 'skill', 'mcp', 'extension'])
 
@@ -174,18 +176,13 @@ export async function installStoreApp(
     if (!slug) {
       return { success: false, error: 'App slug is required' }
     }
-    // Order-first: open the install order in the registry's own ledger at the
-    // user-initiated entry point (installFromStore recurses for skill
-    // dependencies and would inflate the ledger). Never blocks the install;
-    // unreachable-server orders are queued and replayed on next start.
-    openInstallOrder(slug)
     // spaceId may be null for global installs (MCP/Skill available across all spaces)
     const appId = await installFromStore(slug, spaceId, userConfig, onProgress)
-    // Fire-and-forget install signal that feeds the store's install-count rollup.
-    // Fired here (the user-initiated entry point) rather than inside
-    // installFromStore, which recurses for skill dependencies and would inflate counts.
+    // Analytics signal for the store funnel, distinct from the store's install
+    // ledger: this one marks the user-initiated action, so it stays at this
+    // entry point rather than following the download.
     const appType = getAppManager()?.getApp(appId)?.spec.type
-    void trackEvent('mkt_install_done', appType ? { appId: slug, appType } : { appId: slug })
+    void trackEvent(AnalyticsEvents.STORE_INSTALL_DONE, appType ? { appId: slug, appType } : { appId: slug })
     return { success: true, data: { appId } }
   } catch (error: unknown) {
     const err = error as Error
@@ -318,11 +315,11 @@ export function getStoreRegistries(): StoreControllerResponse<RegistrySource[]> 
 }
 
 /**
- * Resolve the renderer-safe marketplace capabilities used to gate UI surfaces.
+ * Resolve the renderer-safe store capabilities used to gate UI surfaces.
  */
-export async function getStoreCapabilities(): Promise<StoreControllerResponse<MarketplaceCapabilities>> {
+export async function getStoreCapabilities(): Promise<StoreControllerResponse<StoreCapabilities>> {
   try {
-    const capabilities = await getMarketplaceCapabilities()
+    const capabilities = await resolveStoreCapabilities()
     return { success: true, data: capabilities }
   } catch (error: unknown) {
     const err = error as Error
@@ -364,7 +361,7 @@ export async function getStoreDiscoverPage(
  */
 export async function ensureStoreSignedIn(force = false): Promise<StoreControllerResponse<boolean>> {
   try {
-    return { success: true, data: await ensureMarketplaceIdentity(force) }
+    return { success: true, data: await ensureStoreIdentity(force) }
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] ensureStoreSignedIn error:', err.message)
@@ -377,9 +374,9 @@ export async function ensureStoreSignedIn(force = false): Promise<StoreControlle
  * can explain a provider-less-but-identity-required misconfiguration instead of
  * offering a sign-in button that can never succeed.
  */
-export async function getStoreSignInStatus(): Promise<StoreControllerResponse<MarketplaceSignInStatus>> {
+export async function getStoreSignInStatus(): Promise<StoreControllerResponse<StoreSignInStatus>> {
   try {
-    return { success: true, data: await getMarketplaceSignInStatus() }
+    return { success: true, data: await resolveStoreSignInStatus() }
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] getStoreSignInStatus error:', err.message)
@@ -389,11 +386,11 @@ export async function getStoreSignInStatus(): Promise<StoreControllerResponse<Ma
 
 /**
  * Resolve the signed-in creator identity (uid/name) for prefilling the publish
- * author in um mode. Null when not signed in or no identity provider.
+ * author under account identity. Null when not signed in or no identity provider.
  */
-export async function getStoreIdentity(): Promise<StoreControllerResponse<MarketplaceIdentity | null>> {
+export async function getStoreIdentity(): Promise<StoreControllerResponse<StoreIdentity | null>> {
   try {
-    return { success: true, data: getMarketplaceIdentity() }
+    return { success: true, data: resolveStoreIdentity() }
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] getStoreIdentity error:', err.message)

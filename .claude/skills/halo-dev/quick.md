@@ -114,6 +114,7 @@
 | Change agent engine (session / stream / prompt / subagent / permissions / MCP) | **Read `src/main/services/agent/DESIGN.md` first**, then jump to named file | Co-edits depend on the exact concern — see DESIGN.md routing |
 | **Support a new IM platform** | New file: `src/main/apps/runtime/im-channels/<brand>.provider.ts` | Register in `runtime/index.ts`, extend `ImChannelType` in `shared/types/im-channel.ts`. **Do NOT touch `manager.ts` / `dispatch-inbound.ts`.** Only add `ipc/<brand>.ts` if the brand has unique setup/auth flow. |
 | Change generic IM channel lifecycle / session mgmt | `src/main/apps/runtime/im-channels/manager.ts` / `dispatch-inbound.ts` | `ipc/im-channels.ts`, `ipc/im-sessions.ts`, `shared/types/im-channel.ts`. Must remain provider-agnostic. |
+| **Support a new registry source protocol** | **Read `src/main/store/DESIGN.md` first**, then new file: `src/main/store/adapters/<protocol>.adapter.ts` | One `case` in `adapters/index.ts`, one entry in `STORE_SOURCE_TYPES` (`shared/store/store-types.ts` — the type and the config-validation enum both derive from it). **Do NOT branch on source id/name/type anywhere above `adapters/`** (two registered exceptions, see DESIGN.md §3.9). |
 
 ### Renderer / UI
 

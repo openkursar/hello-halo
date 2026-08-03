@@ -14,6 +14,24 @@ import type { AppType } from '../apps/spec-types'
 // Registry Source Configuration
 // ============================================
 
+/**
+ * Every source protocol the client can drive. Adding one means adding an
+ * adapter — this list and `adapters/index.ts` are the only places that
+ * enumerate protocols; runtime validation derives from here rather than
+ * restating it, so a new type cannot be accepted by the type checker and
+ * rejected by config validation.
+ */
+export const STORE_SOURCE_TYPES = [
+  'halo',
+  'dhp-v2',
+  'mcp-registry',
+  'smithery',
+  'claude-skills',
+  'skillhub',
+] as const
+
+export type StoreSourceType = (typeof STORE_SOURCE_TYPES)[number]
+
 /** A configured registry source */
 export interface RegistrySource {
   /** Unique identifier */
@@ -29,8 +47,12 @@ export interface RegistrySource {
   /**
    * Source type — determines which adapter is used to fetch and parse the index.
    * Defaults to 'halo' when absent (backward-compatible).
+   *
+   * 'halo' and 'dhp-v2' share the same directory protocol; 'dhp-v2' additionally
+   * declares that the source runs the DHP v2 backend (handshake, install ledger,
+   * collections, creator publications, ops-managed taxonomy/layout).
    */
-  sourceType?: 'halo' | 'mcp-registry' | 'smithery' | 'claude-skills' | 'skillhub'
+  sourceType?: StoreSourceType
   /**
    * Adapter-specific configuration (e.g. API keys).
    * Interpreted exclusively by the adapter for this sourceType.
@@ -459,11 +481,11 @@ export interface StoreCollection {
 // ============================================
 
 /**
- * Error sentinel meaning "no marketplace identity / signed out". Travels across
+ * Error sentinel meaning "no store identity / signed out". Travels across
  * IPC as an error string; the renderer maps it to a sign-in prompt instead of a
  * raw error. Kept here so main and renderer share one literal.
  */
-export const MARKETPLACE_NOT_SIGNED_IN = 'NOT_SIGNED_IN'
+export const STORE_NOT_SIGNED_IN = 'NOT_SIGNED_IN'
 
 /**
  * Whether a creator sign-in is possible for the current build+store pairing.
@@ -476,7 +498,7 @@ export const MARKETPLACE_NOT_SIGNED_IN = 'NOT_SIGNED_IN'
  *   - `unavailable`   — store requires identity but no provider is configured.
  *   - `not-required`  — the store does not bind identity.
  */
-export type MarketplaceSignInStatus = 'signed-in' | 'available' | 'unavailable' | 'not-required'
+export type StoreSignInStatus = 'signed-in' | 'available' | 'unavailable' | 'not-required'
 
 /** A creator's own published version and its current store status. */
 export interface MyPublication {
@@ -504,20 +526,62 @@ export interface MyPublication {
 }
 
 // ============================================
-// Marketplace Capabilities
+// Store Capabilities
 // ============================================
 
 /**
- * How creator identity is established for this build. Drives publish/"my
- * publications" semantics without exposing which provider supplies it.
- *   - 'um'    : authoritative identity from a configured provider (cross-device)
- *   - 'local' : weak, per-machine handle (no authoritative binding)
- *   - 'none'  : anonymous; publish identity unavailable
+ * Creator-identity strength, named after the capability rather than whichever
+ * provider happens to supply it — a self-hosted registry must be able to
+ * advertise account-level identity without adopting another vendor's vocabulary.
+ *   - 'account' : authoritative per-person identity, stable across devices
+ *   - 'shared'  : one credential shared by the whole deployment; no per-person binding
+ *   - 'none'    : anonymous; publish identity unavailable
  */
-export type MarketplaceIdentityMode = 'um' | 'local' | 'none'
+export type StoreIdentityMode = 'account' | 'shared' | 'none'
 
 /**
- * Renderer-safe marketplace capability flags. Every marketplace UI surface
+ * Feature advertisement returned by a DHP v2 backend's `GET /capabilities`.
+ * Absent (no such endpoint) means the source is catalog-only.
+ */
+export interface ServerFeatures {
+  /**
+   * Install-count data is present in the index (`meta.installs`) and may be
+   * displayed. This is the read/display side only — it says nothing about
+   * whether the server accepts install orders, which is a separate subsystem.
+   */
+  installs: boolean
+  /** Editorial "featured" flag is maintained on this backend. */
+  featured: boolean
+  /** Curated scene collections are served. */
+  collections: boolean
+  /** Submit → review → listed/rejected state machine runs on this backend. */
+  reviewWorkflow: boolean
+  /** Creator-identity strength this backend can establish. A driver downgrades
+   * any value it does not recognise, so this is already the closed vocabulary. */
+  identityBinding: StoreIdentityMode
+}
+
+/** An install the client asks a source to authorise and record. */
+export interface InstallOrder {
+  slug: string
+  version: string
+  /** Stable per-installation identifier, used server-side for de-duplication. */
+  installId: string
+  /**
+   * Identifies the install intent, and is what the server counts by. It is held
+   * across every retry of one intent and re-minted for a fresh one, so an app
+   * whose download keeps failing bills one install rather than one per attempt.
+   */
+  orderUuid: string
+}
+
+/** A granted install order: where the authorised bundle is downloaded from. */
+export interface InstallGrant {
+  path: string
+}
+
+/**
+ * Renderer-safe store capability flags. Every gated store UI surface
  * gates its visibility on this object, so a single build serves every edition
  * (community / enterprise / self-hosted) without per-edition branches.
  *
@@ -530,7 +594,7 @@ export type MarketplaceIdentityMode = 'um' | 'local' | 'none'
  * Closed shape (plain booleans + one enum), no passthrough: nothing here may
  * leak a URL, token, or deployment topology.
  */
-export interface MarketplaceCapabilities {
+export interface StoreCapabilities {
   /** Browse/search/install baseline. Always true — kept for explicit intent. */
   catalog: true
   /** Store-count board + per-card install counts. Requires install-count data. */
@@ -540,5 +604,5 @@ export interface MarketplaceCapabilities {
   /** Submit → review → online/rejected state machine on the backend. */
   reviewWorkflow: boolean
   /** Creator identity strength for publish / my-publications. */
-  identity: MarketplaceIdentityMode
+  identity: StoreIdentityMode
 }

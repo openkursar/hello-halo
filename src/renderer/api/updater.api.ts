@@ -41,6 +41,10 @@ export const updaterApi = {
     percent?: number
     message?: string
     releaseNotes?: string | { version: string; note: string }[]
+    /** How the downloaded update is applied — decided by the main process. */
+    installMode?: 'installer' | 'restart'
+    /** Download page to fall back to when the update cannot be applied. */
+    downloadUrl?: string
   }) => void) => {
     if (!isElectron()) {
       return () => { } // No-op in remote mode

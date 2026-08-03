@@ -77,7 +77,7 @@ export function RankBoard({ title, entries }: { title?: string; entries: Registr
   if (ranked.length < MIN_RANK_ENTRIES) return null
 
   const open = (entry: RegistryEntry) => {
-    void api.trackEvent('mkt_card_click', { appId: entry.slug, appType: entry.type, source: 'rank' })
+    void api.trackEvent('store.card.click', { appId: entry.slug, appType: entry.type, source: 'rank' })
     selectStoreApp(entry.slug)
   }
 

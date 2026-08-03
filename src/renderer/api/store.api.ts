@@ -10,7 +10,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
-import type { MarketplaceSignInStatus } from '../../shared/store/store-types'
+import type { StoreSignInStatus } from '../../shared/store/store-types'
 
 export const storeApi = {
   // ===== Store (App Registry) =====
@@ -218,7 +218,7 @@ export const storeApi = {
     return { success: true, data: null }
   },
 
-  storeGetSignInStatus: async (): Promise<ApiResponse<MarketplaceSignInStatus>> => {
+  storeGetSignInStatus: async (): Promise<ApiResponse<StoreSignInStatus>> => {
     if (isElectron()) {
       return window.halo.storeGetSignInStatus()
     }

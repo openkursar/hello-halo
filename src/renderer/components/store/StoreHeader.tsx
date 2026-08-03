@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Search, RefreshCw, Upload, ChevronRight } from 'lucide-react'
 import { api } from '../../api'
 import { useAppsPageStore } from '../../stores/apps-page.store'
-import { useMarketplaceCapabilities } from '../../hooks/useMarketplaceCapabilities'
+import { useStoreCapabilities } from '../../hooks/useStoreCapabilities'
 import { useTranslation } from '../../i18n'
 import type { AppType } from '../../../shared/apps/spec-types'
 import { ShareToStoreDialog } from './ShareToStoreDialog'
@@ -52,7 +52,7 @@ function PublishButton({ onClick }: { onClick: () => void }) {
 
 export function StoreHeader() {
   const { t } = useTranslation()
-  const capabilities = useMarketplaceCapabilities()
+  const capabilities = useStoreCapabilities()
   const storeSearchQuery = useAppsPageStore(state => state.storeSearchQuery)
   const storeTypeFilter = useAppsPageStore(state => state.storeTypeFilter)
   const storeLoading = useAppsPageStore(state => state.storeLoading)
@@ -98,7 +98,7 @@ export function StoreHeader() {
         loadStoreApps({ search: value || undefined, category: state.storeCategory ?? undefined, type: state.storeTypeFilter ?? undefined }),
       ).then(() => {
         if (value) {
-          void api.trackEvent('mkt_search', {
+          void api.trackEvent('store.search', {
             resultCount: useAppsPageStore.getState().storeApps.length,
             tabScope: state.storeTypeFilter ?? 'discover',
           })
@@ -151,7 +151,7 @@ export function StoreHeader() {
         {capabilities?.publish && (
           <PublishButton onClick={() => { setPublishPreselect(null); setShowShareDialog(true) }} />
         )}
-        {capabilities?.identity === 'um' && (
+        {capabilities?.identity === 'account' && (
           <button
             onClick={() => setStoreMineOpen(true)}
             className="flex flex-shrink-0 items-center gap-1 px-3.5 py-2 text-[13px] border border-border/60 bg-background text-muted-foreground hover:text-foreground hover:border-border rounded-lg transition-colors"

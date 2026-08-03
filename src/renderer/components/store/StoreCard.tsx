@@ -13,7 +13,7 @@ import type { RegistryEntry } from '../../../shared/store/store-types'
 import { getEntryInstalls, isEntryFeatured } from '../../../shared/store/store-meta'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveEntryI18n } from '../../utils/spec-i18n'
-import { useMarketplaceCapabilities } from '../../hooks/useMarketplaceCapabilities'
+import { useStoreCapabilities } from '../../hooks/useStoreCapabilities'
 import { useCategoryLabel } from '../../hooks/useStoreCategories'
 import { useStoreEntryInstallState } from '../../hooks/useStoreEntryInstallState'
 import { AppTypeTag } from './AppTypeTag'
@@ -50,14 +50,14 @@ function StoreCardBase({ entry, onClick, source }: StoreCardProps) {
   // The download stat only makes sense where the store tracks installs. When the
   // backend advertises that capability an app with none reads as 0; otherwise the
   // stat is hidden entirely rather than showing a misleading 0 on every card.
-  const capabilities = useMarketplaceCapabilities()
+  const capabilities = useStoreCapabilities()
   const showInstalls = capabilities?.installs === true
   const installsLabel = formatCompact(getEntryInstalls(entry) ?? 0, locale)
   const categoryLabel = useCategoryLabel(entry.type, entry.category)
   const { installedApp } = useStoreEntryInstallState(entry, entry.registryId ?? null)
 
   const openDetail = () => {
-    void api.trackEvent('mkt_card_click', { appId: entry.slug, appType: entry.type, source })
+    void api.trackEvent('store.card.click', { appId: entry.slug, appType: entry.type, source })
     onClick()
   }
 

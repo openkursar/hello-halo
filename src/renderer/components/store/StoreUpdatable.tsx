@@ -6,7 +6,7 @@
 
 import { Loader2 } from 'lucide-react'
 import { useAppsPageStore } from '../../stores/apps-page.store'
-import { useStoreUpdateFlow } from '../../hooks/useStoreUpdateFlow'
+import { useStoreUpdateFlow } from './useStoreUpdateFlow'
 import { resolveEntryI18n } from '../../utils/spec-i18n'
 import { getCurrentLanguage, useTranslation } from '../../i18n'
 import { AppTypeIcon } from './AppTypeIcon'
