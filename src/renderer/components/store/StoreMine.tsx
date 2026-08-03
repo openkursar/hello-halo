@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ArrowLeft, Loader2, AlertCircle } from 'lucide-react'
 import { api } from '../../api'
-import { MARKETPLACE_NOT_SIGNED_IN, type MyPublication, type MarketplaceSignInStatus } from '../../../shared/store/store-types'
+import { STORE_NOT_SIGNED_IN, type MyPublication, type StoreSignInStatus } from '../../../shared/store/store-types'
 import type { AppType } from '../../../shared/apps/spec-types'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { getCurrentLanguage, useTranslation } from '../../i18n'
@@ -60,7 +60,7 @@ export function StoreMine() {
   // Distinguishes "signed out but can sign in" from the misconfiguration where
   // the store requires an account yet this build ships no identity provider —
   // the latter must explain the situation, not offer a dead sign-in button.
-  const [signInStatus, setSignInStatus] = useState<MarketplaceSignInStatus | null>(null)
+  const [signInStatus, setSignInStatus] = useState<StoreSignInStatus | null>(null)
   const { showConfirm, DialogComponent: confirmDialog } = useConfirmDialog()
   const showToast = useNotificationStore(s => s.show)
 
@@ -97,7 +97,7 @@ export function StoreMine() {
   // Resolve why sign-in is blocked only when the not-signed-in notice is shown,
   // so the signed-in path pays no extra probe.
   useEffect(() => {
-    if (error !== MARKETPLACE_NOT_SIGNED_IN) return
+    if (error !== STORE_NOT_SIGNED_IN) return
     let cancelled = false
     void api.storeGetSignInStatus().then(res => {
       if (!cancelled && res.success) setSignInStatus(res.data ?? null)
@@ -106,7 +106,7 @@ export function StoreMine() {
   }, [error])
 
   useEffect(() => {
-    void api.trackEvent('mkt_mine_view', {})
+    void api.trackEvent('store.mine.view', {})
   }, [])
 
   const handleUnpublish = useCallback(async (slug: string) => {
@@ -119,7 +119,7 @@ export function StoreMine() {
     })
     if (!ok) return
     setBusySlug(slug)
-    void api.trackEvent('mkt_unpublish', { appId: slug })
+    void api.trackEvent('store.unpublish', { appId: slug })
     const res = await api.storeUnpublish({ slug })
     setBusySlug(null)
     if (res.success) void load()
@@ -148,13 +148,13 @@ export function StoreMine() {
             <div className="flex justify-center py-16">
               <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
             </div>
-          ) : error === MARKETPLACE_NOT_SIGNED_IN && signInStatus === 'unavailable' ? (
+          ) : error === STORE_NOT_SIGNED_IN && signInStatus === 'unavailable' ? (
             <StoreNotice
               icon={<AlertCircle className="w-6 h-6 text-amber-500" />}
               title={t('Sign-in is unavailable in this build')}
               desc={t('This store requires an account to view your publications, but this build has no identity provider configured. Contact your administrator to enable sign-in.')}
             />
-          ) : error === MARKETPLACE_NOT_SIGNED_IN && signInStatus === 'signed-in' ? (
+          ) : error === STORE_NOT_SIGNED_IN && signInStatus === 'signed-in' ? (
             <StoreNotice
               icon={<AlertCircle className="w-6 h-6 text-amber-500" />}
               title={t('Could not verify your account')}
@@ -170,7 +170,7 @@ export function StoreMine() {
                 </button>
               }
             />
-          ) : error === MARKETPLACE_NOT_SIGNED_IN ? (
+          ) : error === STORE_NOT_SIGNED_IN ? (
             <StoreNotice
               icon={<AlertCircle className="w-6 h-6 text-amber-500" />}
               title={t('Sign in to view your publications')}

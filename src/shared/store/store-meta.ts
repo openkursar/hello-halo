@@ -1,5 +1,5 @@
 /**
- * Typed accessors for the marketplace fields carried in the open
+ * Typed accessors for the store fields carried in the open
  * `RegistryEntry.meta` container. Sources that predate these fields (static
  * mirrors, third-party registries) simply omit them, so every accessor
  * degrades to an empty/absent result rather than throwing.

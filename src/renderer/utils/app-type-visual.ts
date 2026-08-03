@@ -7,7 +7,7 @@
 
 import type { AppType } from '../../shared/apps/spec-types'
 
-/** Hexagon outline for the MCP "connector" icon (matches the marketplace mock). */
+/** Hexagon outline for the MCP "connector" icon (matches the store mock). */
 export const APP_TYPE_HEXAGON_CLIP =
   'polygon(50% 0%, 93.3% 25%, 93.3% 75%, 50% 100%, 6.7% 75%, 6.7% 25%)'
 

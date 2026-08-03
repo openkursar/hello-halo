@@ -16,8 +16,8 @@ import { useChatStore } from '../../stores/chat.store'
 import { useStoreCategories, categoryDisplay } from '../../hooks/useStoreCategories'
 import { getEntryVersions, getEntryInstalls } from '../../../shared/store/store-meta'
 import { useStoreEntryInstallState } from '../../hooks/useStoreEntryInstallState'
-import { useStoreUpdateFlow } from '../../hooks/useStoreUpdateFlow'
-import { useMarketplaceCapabilities } from '../../hooks/useMarketplaceCapabilities'
+import { useStoreUpdateFlow } from './useStoreUpdateFlow'
+import { useStoreCapabilities } from '../../hooks/useStoreCapabilities'
 import { useOnlineStatus } from '../../hooks/useOnlineStatus'
 import { StoreInstallDialog } from './StoreInstallDialog'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
@@ -88,7 +88,7 @@ export function StoreDetail() {
   const [showVersions, setShowVersions] = useState(false)
   const [showInstallDialog, setShowInstallDialog] = useState(false)
 
-  const capabilities = useMarketplaceCapabilities()
+  const capabilities = useStoreCapabilities()
   const showInstalls = capabilities?.installs === true
   // Install/update fetch spec+files from the registry; when offline the button
   // must be disabled with a hint rather than left clickable and hanging.
@@ -103,10 +103,10 @@ export function StoreDetail() {
 
   const { installedApp, updateInfo } = useStoreEntryInstallState(entry, registryId)
 
-  // Marketplace funnel: a detail page opened, tagged with the install state.
+  // Store funnel: a detail page opened, tagged with the install state.
   useEffect(() => {
     if (!entry) return
-    void api.trackEvent('mkt_detail_view', {
+    void api.trackEvent('store.detail.view', {
       appId: entry.slug,
       appType: entry.type,
       installedState: updateInfo ? 'update' : installedApp ? 'installed' : 'new',
@@ -148,7 +148,7 @@ export function StoreDetail() {
   // opening (from the detail button or a card's install-now intent) is the click.
   useEffect(() => {
     if (showInstallDialog && entry) {
-      void api.trackEvent('mkt_install_click', { appId: entry.slug, appType: entry.type, source: 'detail' })
+      void api.trackEvent('store.install.click', { appId: entry.slug, appType: entry.type, source: 'detail' })
     }
   }, [showInstallDialog, entry?.slug, entry?.type])
 

@@ -1,6 +1,6 @@
 /**
- * useMarketplaceCapabilities — renderer-side accessor for the build's
- * marketplace capability flags.
+ * useStoreCapabilities — renderer-side accessor for the build's store
+ * capability flags.
  *
  * Capabilities are resolved in the main process from product.json plus the
  * store backend's advertised features, and shared across callers via a
@@ -17,14 +17,14 @@
 
 import { api } from '../api'
 import { createCachedResource } from '../lib/cached-resource'
-import type { MarketplaceCapabilities } from '../../shared/store/store-types'
+import type { StoreCapabilities } from '../../shared/store/store-types'
 
 /**
  * Default applied while capabilities are loading or on fetch failure. Read
  * capability stays on; every backend/identity-gated surface stays hidden until
  * proven available.
  */
-const CONSERVATIVE_DEFAULT: MarketplaceCapabilities = {
+const CONSERVATIVE_DEFAULT: StoreCapabilities = {
   catalog: true,
   installs: false,
   publish: false,
@@ -36,7 +36,7 @@ const CONSERVATIVE_DEFAULT: MarketplaceCapabilities = {
 // result does not outlive the main-process probe's own retry cadence.
 const CAPABILITIES_TTL_MS = 60 * 1000
 
-function coerce(value: Partial<MarketplaceCapabilities> | undefined): MarketplaceCapabilities {
+function coerce(value: Partial<StoreCapabilities> | undefined): StoreCapabilities {
   if (!value || typeof value !== 'object') return CONSERVATIVE_DEFAULT
   const identity = value.identity
   return {
@@ -44,20 +44,20 @@ function coerce(value: Partial<MarketplaceCapabilities> | undefined): Marketplac
     installs: value.installs === true,
     publish: value.publish === true,
     reviewWorkflow: value.reviewWorkflow === true,
-    identity: identity === 'um' || identity === 'local' ? identity : 'none',
+    identity: identity === 'account' || identity === 'shared' ? identity : 'none',
   }
 }
 
-async function fetchCapabilities(): Promise<MarketplaceCapabilities> {
+async function fetchCapabilities(): Promise<StoreCapabilities> {
   try {
     const res = await api.storeGetCapabilities()
     if (res.success && res.data && typeof res.data === 'object') {
-      return coerce(res.data as Partial<MarketplaceCapabilities>)
+      return coerce(res.data as Partial<StoreCapabilities>)
     }
-    console.warn('[useMarketplaceCapabilities] Empty/invalid response, using conservative default')
+    console.warn('[useStoreCapabilities] Empty/invalid response, using conservative default')
     return CONSERVATIVE_DEFAULT
   } catch (error) {
-    console.error('[useMarketplaceCapabilities] Fetch failed, using conservative default:', error)
+    console.error('[useStoreCapabilities] Fetch failed, using conservative default:', error)
     return CONSERVATIVE_DEFAULT
   }
 }
@@ -71,14 +71,14 @@ if (typeof window !== 'undefined') {
 }
 
 /**
- * Returns the marketplace capabilities, seeded with the conservative default
+ * Returns the store capabilities, seeded with the conservative default
  * (read surfaces on, gated surfaces off) until the first fetch resolves.
  *
  * ```tsx
- * const caps = useMarketplaceCapabilities()
+ * const caps = useStoreCapabilities()
  * if (caps.publish) return <PublishButton />
  * ```
  */
-export function useMarketplaceCapabilities(): MarketplaceCapabilities {
+export function useStoreCapabilities(): StoreCapabilities {
   return capabilitiesResource.useValue(CONSERVATIVE_DEFAULT)
 }

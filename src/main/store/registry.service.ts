@@ -33,12 +33,14 @@ import type {
   UpgradeAvailableEvent,
   UpgradeStrategy,
 } from '../../shared/store/store-types'
+import { STORE_SOURCE_TYPES } from '../../shared/store/store-types'
 import type { RegistryServiceConfig } from './registry.types'
 import type { DatabaseManager } from '../platform/store/types'
 import { SyncService } from './sync.service'
 import { QueryService } from './query.service'
 import { STORE_CACHE_NAMESPACE, storeCacheMigrations } from './store-cache.schema'
 import { getAdapter } from './adapters'
+import { authorizeInstall, completeInstallIntent } from './backend/install-orders'
 import { loadProductConfig } from '../foundation/product-config'
 
 // ============================================
@@ -108,7 +110,7 @@ const RegistrySourceSchema = z.object({
   url: z.string().url(),
   enabled: z.boolean(),
   isDefault: z.boolean().optional(),
-  sourceType: z.enum(['halo', 'mcp-registry', 'smithery', 'claude-skills', 'skillhub']).optional(),
+  sourceType: z.enum(STORE_SOURCE_TYPES).optional(),
   adapterConfig: z.record(z.string(), z.unknown()).optional(),
 })
 
@@ -214,6 +216,14 @@ export function initRegistryService(opts?: { db?: DatabaseManager; overrides?: P
 
   const duration = performance.now() - start
   console.log(`[RegistryService] Initialized in ${duration.toFixed(1)}ms (${config.registries.length} registries)`)
+  // A source whose declared protocol never reached the config silently falls
+  // back to the catalog-only driver and loses every backend surface.
+  console.log(
+    '[RegistryService] Source drivers: ' +
+    config.registries
+      .map(r => `${r.id}=${getAdapter(r).constructor.name}${r.enabled ? '' : ' (disabled)'}`)
+      .join(', ')
+  )
 }
 
 /**
@@ -443,6 +453,39 @@ export async function getAppDocument(slug: string): Promise<{ content: string | 
 // ============================================
 
 /**
+ * Download an app's full spec, recording the download in the source's ledger.
+ *
+ * Every install that transfers an app — first install, upgrade, skill
+ * dependency, an install an agent performs on the user's behalf — goes through
+ * here, so the accounting follows the transfer rather than any UI entry point
+ * and a new install path is counted without being told to be. Browsing is not
+ * installing: query.service fetches specs for the detail view without an order.
+ *
+ * A source with no ledger (static, community) issues no order and downloads
+ * from the indexed path; an unreachable ledger queues and never blocks the
+ * download.
+ */
+async function acquireSpec(
+  registry: RegistrySource,
+  entry: RegistryEntry,
+  onProgress?: (filesComplete: number, filesTotal: number, currentFile: string) => void,
+): Promise<AppSpec> {
+  const target = { slug: entry.slug, version: entry.version }
+  const grant = await authorizeInstall(registry, target)
+  // download_url is dropped along with the path: a driver that prefers it would
+  // otherwise fetch the spec from the index's location while the rest of the
+  // package came from the granted one, and the grant would stop being the thing
+  // that decides what an install may download.
+  const spec = await getAdapter(registry).fetchSpec(
+    registry,
+    grant ? { ...entry, path: grant.path, download_url: undefined } : entry,
+    onProgress,
+  )
+  completeInstallIntent(registry, target)
+  return spec
+}
+
+/**
  * Install an app from the store into a specific space.
  *
  * Uses QueryService to find the entry and fetch the spec,
@@ -458,12 +501,6 @@ export async function installFromStore(
   spaceId: string | null,
   userConfig?: Record<string, unknown>,
   onProgress?: (filesComplete: number, filesTotal: number, currentFile: string) => void,
-  /**
-   * Bundle location granted by the store server. When present it replaces the
-   * path carried in the local index, so the server — not the client — decides
-   * what an install may download.
-   */
-  authorizedPath?: string,
 ): Promise<string> {
   ensureInitialized()
 
@@ -491,9 +528,7 @@ export async function installFromStore(
   if (!registry) {
     throw new Error(`Registry not found: ${registryId}`)
   }
-  const adapter = getAdapter(registry)
-  const grantedEntry = authorizedPath ? { ...entry, path: authorizedPath } : entry
-  const spec = await adapter.fetchSpec(registry, grantedEntry, onProgress)
+  const spec = await acquireSpec(registry, entry, onProgress)
   const specWithStore = withInstallStoreMetadata(spec, entry.slug, registryId)
 
   // Delegate to App Manager
@@ -521,6 +556,7 @@ export async function installFromStore(
   if (specWithStore.type !== 'skill') {
     try {
       let bundledSkillSpecs: Map<string, SkillSpec> | undefined
+      const adapter = getAdapter(registry)
       if (typeof adapter.fetchBundledSkills === 'function') {
         const bundledDeps = (specWithStore.requires?.skills ?? [])
           .filter((dep): dep is { id: string; bundled: true; files?: string[] } => typeof dep !== 'string' && dep.bundled === true)
@@ -856,8 +892,7 @@ export async function applyUpgrade(
   const registry = config.registries.find(r => r.id === found.registryId)
   if (!registry) throw new Error(`Registry not found: ${found.registryId}`)
 
-  const adapter = getAdapter(registry)
-  const newSpec = await adapter.fetchSpec(registry, found.entry)
+  const newSpec = await acquireSpec(registry, found.entry)
   const newSpecWithStore = withInstallStoreMetadata(newSpec, found.entry.slug, found.registryId)
 
   // updateSpec preserves userConfig / userOverrides / permissions automatically
@@ -890,14 +925,27 @@ export function getRegistries(): RegistrySource[] {
 }
 
 /**
- * Base URL of the enabled official registry (trailing slash stripped), or null
- * when absent/disabled. Single source for marketplace calls targeting the
- * enterprise store server (capabilities probe, my-publications, collections).
+ * The enabled primary source, or null when it is absent/disabled.
+ *
+ * "Primary" is the source that decides the page-level documents there can only
+ * be one of (category chips, discover layout) and that identity-bound writes
+ * target. It is resolved from the `isDefault` flag, never from an id or a name,
+ * so a deployment that redirects the default source keeps working unchanged.
  */
-export function getOfficialRegistryUrl(): string | null {
+export function getPrimaryRegistry(): RegistrySource | null {
   ensureInitialized()
-  const official = config.registries.find(r => r.id === 'official' && r.enabled)
-  return official ? normalizeRegistryUrl(official.url) : null
+  return config.registries.find(r => r.enabled && isDefaultRegistry(r)) ?? null
+}
+
+/** Look up a configured source by id. Null when it is unknown (e.g. removed). */
+export function getRegistryById(registryId: string): RegistrySource | null {
+  ensureInitialized()
+  return config.registries.find(r => r.id === registryId) ?? null
+}
+
+/** True when a source ships with the build; users may not remove these. */
+function isBuiltinRegistry(registry: RegistrySource): boolean {
+  return BUILTIN_REGISTRIES.some(b => b.id === registry.id)
 }
 
 /**
@@ -1249,10 +1297,6 @@ function isDefaultRegistry(registry: RegistrySource): boolean {
   return registry.id === DEFAULT_REGISTRY.id || registry.isDefault === true
 }
 
-function isBuiltinRegistry(registry: RegistrySource): boolean {
-  return BUILTIN_REGISTRIES.some(b => b.id === registry.id)
-}
-
 /**
  * Ensure all built-in registries are present in the config.
  *
@@ -1265,7 +1309,7 @@ function isBuiltinRegistry(registry: RegistrySource): boolean {
  *    preserve the user's `enabled` toggle and `adapterConfig` (e.g. API keys).
  *  - If absent: insert it at the correct position.
  *
- * The official registry is always first.
+ * The default registry is always first.
  *
  * @returns Object with `changed` (triggers config save) and `purgeRegistryIds`
  *          (registry IDs whose cached data must be cleared after SyncService creation).
@@ -1297,12 +1341,15 @@ function ensureBuiltinRegistries(): { changed: boolean; purgeRegistryIds: string
       continue
     }
 
-    // Merge: builtin defaults ← product.json override (only declared fields win)
+    // Merge: builtin defaults ← product.json override (only declared fields win).
+    // `sourceType` selects the protocol driver: a redirected source that cannot
+    // declare it stays on the built-in driver with no backend surface.
     const effective = {
       ...builtin,
-      ...(override.url     !== undefined ? { url:     override.url     } : {}),
-      ...(override.name    !== undefined ? { name:    override.name    } : {}),
-      ...(override.enabled !== undefined ? { enabled: override.enabled } : {}),
+      ...(override.url        !== undefined ? { url:        override.url        } : {}),
+      ...(override.name       !== undefined ? { name:       override.name       } : {}),
+      ...(override.sourceType !== undefined ? { sourceType: override.sourceType } : {}),
+      ...(override.enabled    !== undefined ? { enabled:    override.enabled    } : {}),
     }
 
     const existing = config.registries.find(r => r.id === builtin.id)
@@ -1341,15 +1388,13 @@ function ensureBuiltinRegistries(): { changed: boolean; purgeRegistryIds: string
     }
   }
 
-  // Ensure official registry is first
-  const officialIndex = config.registries.findIndex(r => r.id === DEFAULT_REGISTRY.id)
-  if (officialIndex > 0) {
-    const [official] = config.registries.splice(officialIndex, 1)
-    config.registries.unshift(official)
+  const defaultIndex = config.registries.findIndex(r => r.id === DEFAULT_REGISTRY.id)
+  if (defaultIndex > 0) {
+    const [primary] = config.registries.splice(defaultIndex, 1)
+    config.registries.unshift(primary)
     changed = true
   }
 
-  // Ensure only the official registry has isDefault=true
   for (const registry of config.registries) {
     const shouldBeDefault = registry.id === DEFAULT_REGISTRY.id
     if (registry.isDefault !== shouldBeDefault) {

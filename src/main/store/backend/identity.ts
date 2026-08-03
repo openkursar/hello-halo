@@ -1,5 +1,5 @@
 /**
- * Marketplace creator-identity token resolution.
+ * Store creator-identity token resolution.
  *
  * Bridges the product-config declaration (`identityProvider`) to the signed-in
  * OAuth token held by the AI-source manager, so publish attribution and "my
@@ -7,33 +7,33 @@
  * core names no specific provider — it forwards whatever product.json declares.
  */
 
-import { getMarketplaceIdentityProvider } from '../foundation/product-config'
-import { getAISourceManager } from '../services/ai-sources'
-import { serverRequiresIdentity } from './marketplace-capabilities'
-import type { ProviderId } from '../../shared/types/ai-sources'
-import type { MarketplaceSignInStatus } from '../../shared/store/store-types'
+import { getStoreIdentityProvider } from '../../foundation/product-config'
+import { getAISourceManager } from '../../services/ai-sources'
+import { serverRequiresIdentity } from './capabilities'
+import type { ProviderId } from '../../../shared/types/ai-sources'
+import type { StoreSignInStatus } from '../../../shared/store/store-types'
 
 /**
- * Resolve the marketplace identity token, or null when no identity provider is
+ * Resolve the store identity token, or null when no identity provider is
  * configured or its provider is not signed in (identity-bound calls then
  * degrade to anonymous rather than failing).
  */
-export async function getMarketplaceIdentityToken(): Promise<string | null> {
-  const providerType = getMarketplaceIdentityProvider()
+export async function getStoreIdentityToken(): Promise<string | null> {
+  const providerType = getStoreIdentityProvider()
   if (!providerType) return null
   return getAISourceManager().getOAuthAccessToken(providerType as ProviderId)
 }
 
-/** Creator identity used to prefill the publish author in um mode. `uid` is the
+/** Creator identity used to prefill the publish author under account identity. `uid` is the
  * stable ASCII-safe id (drives the slug, matches server ownership); `name` is
  * the display label. Null when no provider is configured or it is not signed in. */
-export interface MarketplaceIdentity {
+export interface StoreIdentity {
   uid: string
   name: string
 }
 
-export function getMarketplaceIdentity(): MarketplaceIdentity | null {
-  const providerType = getMarketplaceIdentityProvider() as ProviderId | undefined
+export function getStoreIdentity(): StoreIdentity | null {
+  const providerType = getStoreIdentityProvider() as ProviderId | undefined
   if (!providerType) return null
   const user = getAISourceManager().getOAuthIdentity(providerType)
   if (!user) return null
@@ -50,8 +50,8 @@ export function getMarketplaceIdentity(): MarketplaceIdentity | null {
  * provider-less build cannot authenticate and must be refused rather than allowed
  * to submit anonymously.
  */
-export async function ensureMarketplaceIdentity(force = false): Promise<boolean> {
-  const providerType = getMarketplaceIdentityProvider() as ProviderId | undefined
+export async function ensureStoreIdentity(force = false): Promise<boolean> {
+  const providerType = getStoreIdentityProvider() as ProviderId | undefined
   if (!providerType) return !(await serverRequiresIdentity())
 
   const manager = getAISourceManager()
@@ -71,8 +71,8 @@ export async function ensureMarketplaceIdentity(force = false): Promise<boolean>
  * misconfiguration explanation instead of a dead sign-in button when the store
  * requires an account but this build declares no identity provider.
  */
-export async function getMarketplaceSignInStatus(): Promise<MarketplaceSignInStatus> {
-  const providerType = getMarketplaceIdentityProvider() as ProviderId | undefined
+export async function getStoreSignInStatus(): Promise<StoreSignInStatus> {
+  const providerType = getStoreIdentityProvider() as ProviderId | undefined
   if (providerType) {
     const token = await getAISourceManager().getOAuthAccessToken(providerType)
     return token ? 'signed-in' : 'available'

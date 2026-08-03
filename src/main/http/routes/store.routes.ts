@@ -180,7 +180,7 @@ export function registerStoreRoutes(app: Express): void {
     }
   })
 
-  // GET /api/store/capabilities — renderer-safe marketplace capability flags
+  // GET /api/store/capabilities — renderer-safe store capability flags
   app.get('/api/store/capabilities', async (req: Request, res: Response) => {
     try {
       const result = await storeController.getStoreCapabilities()

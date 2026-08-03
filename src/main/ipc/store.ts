@@ -16,7 +16,7 @@
  *   store:remove-registry                Remove a registry source
  *   store:toggle-registry                Enable or disable a registry source
  *   store:update-registry-adapter-config Update adapter config (e.g. API keys) for a registry
- *   store:get-capabilities               Resolve renderer-safe marketplace capability flags
+ *   store:get-capabilities               Resolve renderer-safe store capability flags
  */
 
 import { ipcMain, dialog } from 'electron'

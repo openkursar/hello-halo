@@ -3,7 +3,7 @@
  * type tab.
  *
  * The taxonomy is resolved in the main process (`server ?? product.json ?? built-in`,
- * see marketplace-taxonomy.ts) and shared once per session (see lib/store-resources).
+ * see store/backend/taxonomy.ts) and shared once per session (see lib/store-resources).
  * Until it loads — or if it fails — the built-in set is used, so chips render
  * immediately without a flash of empty state.
  *

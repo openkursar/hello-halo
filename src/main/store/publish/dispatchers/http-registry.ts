@@ -41,19 +41,19 @@ export async function dispatch(
     }
   }
 
-  // In um mode the caller authenticates with their own identity token; the
-  // shared product.json token applies only when no identity provider is set.
+  // With an identity provider the caller authenticates as themselves; the
+  // shared product.json token applies only when no provider is set.
   // Loaded lazily so the (heavier) identity/ai-sources graph is not pulled into
   // the publish module's load path.
   let authToken = config.token
-  const { getMarketplaceIdentityProvider } = await import('../../../foundation/product-config')
-  if (getMarketplaceIdentityProvider()) {
-    const { getMarketplaceIdentityToken } = await import('../../marketplace-identity')
-    const umToken = await getMarketplaceIdentityToken()
-    if (!umToken) {
+  const { getStoreIdentityProvider } = await import('../../../foundation/product-config')
+  if (getStoreIdentityProvider()) {
+    const { getStoreIdentityToken } = await import('../../backend/identity')
+    const identityToken = await getStoreIdentityToken()
+    if (!identityToken) {
       return { status: 'error', target: 'http-registry', details: 'Sign in to publish to the store.' }
     }
-    authToken = umToken
+    authToken = identityToken
   }
   if (!authToken || authToken === 'REPLACE_AT_DEPLOY_TIME') {
     return {

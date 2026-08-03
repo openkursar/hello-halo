@@ -74,7 +74,13 @@ import { registerWeixinIlinkHandlers } from '../ipc/weixin-ilink'
 import { registerTlonHandlers } from '../ipc/tlon'
 import { initTlonWatchers, shutdownTlon, migrateKBsToTextIndex } from '../services/tlon'
 import { shutdownOcr } from '../services/ocr'
-import { initRegistryService, shutdownRegistryService, flushPendingInstallOrders } from '../store'
+import {
+  initRegistryService,
+  shutdownRegistryService,
+  flushPendingInstallOrders,
+  getRegistryById,
+  getPrimaryRegistry,
+} from '../store'
 import { startUpgradeScheduler, stopUpgradeScheduler } from '../store/upgrade.service'
 import { cleanupImChannelTempFiles } from '../apps/runtime/im-channels'
 import { registerIdleTask, startIdleDrain } from './idle-queue'
@@ -170,7 +176,7 @@ async function initPlatformAndApps(): Promise<void> {
 
   // Replay install orders that could not reach the store server (offline
   // installs, server outage). Idempotent server-side, safe to fire and forget.
-  void flushPendingInstallOrders().catch(err =>
+  void flushPendingInstallOrders({ byId: getRegistryById, primary: getPrimaryRegistry }).catch(err =>
     console.warn('[Bootstrap] install-order replay failed:', err)
   )
 

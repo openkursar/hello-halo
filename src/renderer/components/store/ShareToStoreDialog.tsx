@@ -69,7 +69,7 @@ import { AuthorField } from './AuthorField'
 import { loadStoredAuthor, saveAuthor } from './publish-author'
 import { publishDraftKey, loadPublishDraft, savePublishDraft, clearPublishDraft } from './publish-draft'
 import { useStoreCategories, categoryDisplay } from '../../hooks/useStoreCategories'
-import { useMarketplaceCapabilities } from '../../hooks/useMarketplaceCapabilities'
+import { useStoreCapabilities } from '../../hooks/useStoreCapabilities'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 import { compareDotVersions, suggestNextVersion } from '../../../shared/store/version-compare'
 import { useAssociatedSkills } from '../../hooks/useAssociatedSkills'
@@ -216,17 +216,17 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
   // does not fire an IPC preview per keystroke.
   const debouncedAuthor = useDebouncedValue(author)
 
-  // In um mode the author is the signed-in identity, not free text — prefill it
-  // from the creator's uid (ASCII-safe, drives the slug and matches ownership)
-  // and lock the field.
-  const capabilities = useMarketplaceCapabilities()
-  const isUmIdentity = capabilities?.identity === 'um'
+  // Under account-level identity the author is the signed-in creator, not free
+  // text — prefill it from the uid (ASCII-safe, drives the slug and matches
+  // ownership) and lock the field.
+  const capabilities = useStoreCapabilities()
+  const isAccountIdentity = capabilities?.identity === 'account'
   // Sign-in gate: null = still checking, false = must sign in first, true = ready.
-  // Non-um builds need no creator identity, so they start ready.
-  const [signedIn, setSignedIn] = useState<boolean | null>(isUmIdentity ? null : true)
+  // Weaker identity modes need no creator account, so they start ready.
+  const [signedIn, setSignedIn] = useState<boolean | null>(isAccountIdentity ? null : true)
   const [signingIn, setSigningIn] = useState(false)
   useEffect(() => {
-    if (!isUmIdentity) { setSignedIn(true); return }
+    if (!isAccountIdentity) { setSignedIn(true); return }
     let cancelled = false
     api.storeGetIdentity().then(res => {
       const uid = res.success ? res.data?.uid : undefined
@@ -235,7 +235,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
       if (uid) setAuthor(uid)
     })
     return () => { cancelled = true }
-  }, [isUmIdentity])
+  }, [isAccountIdentity])
 
   // Sign in from inside the dialog (system-browser OAuth), then reveal the form.
   const handleSignIn = useCallback(async () => {
@@ -382,7 +382,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
   useEffect(() => { setCoPublishIds([]) }, [source, selectedInstalledId, staged])
 
   useEffect(() => {
-    void api.trackEvent('mkt_publish_open', entry ? { entry } : {})
+    void api.trackEvent('store.publish.open', entry ? { entry } : {})
   }, [entry])
 
   // Submit state
@@ -683,7 +683,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
         if (!res.success) coFailures.push({ name: s.name, reason: res.error as string | undefined })
       }
 
-      void api.trackEvent('mkt_publish_submit', { appType: type, result: 'success', entry, isUpdate: republish ? 1 : 0 })
+      void api.trackEvent('store.publish.submit', { appType: type, result: 'success', entry, isUpdate: republish ? 1 : 0 })
       saveAuthor(trimmedAuthor)
       // Published — discard the saved draft so it is not restored next time.
       clearPublishDraft(draftKey)
@@ -696,7 +696,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
       // registry verdict string is intentionally not surfaced to the user.
       setSubmitSuccess('ok')
     } catch (err) {
-      void api.trackEvent('mkt_publish_submit', { appType: type, result: 'fail', entry, isUpdate: republish ? 1 : 0 })
+      void api.trackEvent('store.publish.submit', { appType: type, result: 'fail', entry, isUpdate: republish ? 1 : 0 })
       setSubmitError(err instanceof Error ? err.message : t('Share failed.'))
     } finally {
       // Tear down the staging workspace (cascades its staged apps + files), so
@@ -982,7 +982,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
               <AuthorField
                 value={author}
                 onChange={v => { setAuthor(v); clearInvalid('author'); setSubmitError(null) }}
-                readOnly={isUmIdentity}
+                readOnly={isAccountIdentity}
                 invalid={invalid.has('author')}
               />
 

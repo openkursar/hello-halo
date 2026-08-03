@@ -31,9 +31,9 @@ export function StoreView() {
   const checkUpdates = useAppsPageStore(state => state.checkUpdates)
   const didInitRef = useRef(false)
 
-  // Marketplace funnel: entering the store and every tab switch.
+  // Store funnel: entering the store and every tab switch.
   useEffect(() => {
-    void api.trackEvent('mkt_market_view', { tab: storeTypeFilter ?? 'discover' })
+    void api.trackEvent('store.view', { tab: storeTypeFilter ?? 'discover' })
   }, [storeTypeFilter])
 
   // Load store apps and update badges on mount.

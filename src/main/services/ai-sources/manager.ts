@@ -170,7 +170,7 @@ class AISourceManager {
   /**
    * Return a valid OAuth access token for a provider type, or null when no such
    * source is signed in. Refreshes an expiring token first. Used by the
-   * marketplace to authenticate to an identity-bound store server.
+   * store to authenticate to an identity-bound registry server.
    */
   async getOAuthAccessToken(providerType: ProviderId): Promise<string | null> {
     const source = this.getDecryptedAiSources().sources.find(

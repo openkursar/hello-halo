@@ -31,7 +31,7 @@ export function StoreGrid({ embedded = false }: { embedded?: boolean }) {
   const isEmpty = storeApps.length === 0
   useEffect(() => {
     if (isEmpty) {
-      void api.trackEvent('mkt_empty_state', { scene: storeSearchQuery ? 'search_no_result' : 'list_empty' })
+      void api.trackEvent('store.empty_state', { scene: storeSearchQuery ? 'search_no_result' : 'list_empty' })
     }
   }, [isEmpty, storeSearchQuery])
 
