@@ -122,10 +122,12 @@ export function StoreView() {
           <StoreDiscover />
         </div>
       ) : (
-        // Category bar stays fixed; only the grid scrolls beneath it.
+        // Category bar stays fixed; only the grid scrolls beneath it. Searching
+        // from Discover leaves the type filter null, so the bar renders nothing
+        // and the scroll area has to supply the gap it would have provided.
         <div className="flex-1 flex flex-col overflow-hidden bg-muted/20">
           <StoreCategoryBar />
-          <div className="flex-1 overflow-y-auto">
+          <div className={`flex-1 overflow-y-auto ${storeTypeFilter === null ? 'pt-3' : ''}`}>
             <StoreGrid />
           </div>
         </div>

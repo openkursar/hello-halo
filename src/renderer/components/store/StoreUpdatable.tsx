@@ -1,7 +1,7 @@
 /**
- * My Installs · Updatable — the second block of the store's "My" view: every
- * installed app that has an available update, with an in-place update action.
- * Reuses the shared update flow (overwrite / install-as-copy / ignore).
+ * The second block of the store's "My" view: every installed app that has an
+ * available update, with an in-place update action. Reuses the shared update
+ * flow (overwrite / install-as-copy / ignore).
  */
 
 import { Loader2 } from 'lucide-react'
@@ -19,7 +19,7 @@ export function StoreUpdatable() {
   return (
     <section className="mt-6">
       <div className="mb-3">
-        <h2 className="text-[13px] font-semibold tracking-[0.5px] text-foreground">{t('My installs · Updatable')}</h2>
+        <h2 className="text-[13px] font-semibold tracking-[0.5px] text-foreground">{t('Apps to update')}</h2>
       </div>
       <div className="overflow-x-auto rounded-[10px] border border-border/60 bg-background">
         <table className="w-full text-sm">
@@ -35,7 +35,7 @@ export function StoreUpdatable() {
             {availableUpdates.length === 0 ? (
               <tr>
                 <td colSpan={4} className="py-12 text-center text-[13px] text-muted-foreground">
-                  {t('No data')}
+                  {t('No updates available')}
                 </td>
               </tr>
             ) : (
