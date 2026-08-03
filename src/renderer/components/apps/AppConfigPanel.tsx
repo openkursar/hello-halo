@@ -30,6 +30,7 @@ import { AppCapabilitiesSection } from './AppCapabilitiesSection'
 import { AppMcpDepsSection } from './AppMcpDepsSection'
 import { AppSkillsSection } from './AppSkillsSection'
 import { appTypeLabel } from './appTypeUtils'
+import { sanitizeCommandName } from './skill-import-utils'
 import { SystemPromptEditor } from './SystemPromptEditor'
 import { Switch } from '../ui/Switch'
 import { SchedulePicker } from './SchedulePicker'
@@ -38,6 +39,15 @@ import {
   applyScheduleValue,
   type ScheduleValue,
 } from './schedule-utils'
+
+/** Mirrors the identifier rule enforced when a skill is installed. */
+const COMMAND_NAME_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
+
+/** The editable "name": for a skill that is `display_name`, since its `name`
+ * field holds the command identifier. */
+function displayNameOf(spec: AppSpec): string {
+  return spec.display_name ?? spec.name
+}
 
 // Lazy-load CodeMirrorEditor to keep initial bundle small
 const CodeMirrorEditor = lazy(() =>
@@ -340,7 +350,11 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
   const specSubscriptions = isAutomation ? (app.spec.subscriptions ?? []) : []
   const specRecommendedModel = isAutomation ? app.spec.recommended_model : undefined
   // ── Spec fields (name, description, system_prompt) ──
-  const [specName, setSpecName] = useState(app.spec.name)
+  // A skill's spec.name is its command identifier, so the editable "name" is the
+  // display name and the identifier gets its own field.
+  const isSkill = app.spec.type === 'skill'
+  const [specName, setSpecName] = useState(displayNameOf(app.spec))
+  const [specCommandName, setSpecCommandName] = useState(app.spec.name)
   const [specDescription, setSpecDescription] = useState(app.spec.description)
   const [specSystemPrompt, setSpecSystemPrompt] = useState(specSystemPromptValue)
   const [specSaving, setSpecSaving] = useState(false)
@@ -365,14 +379,15 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
 
   // Sync from app data
   useEffect(() => {
-    setSpecName(app.spec.name)
+    setSpecName(displayNameOf(app.spec))
+    setSpecCommandName(app.spec.name)
     setSpecDescription(app.spec.description)
     setSpecSystemPrompt(specSystemPromptValue)
     setSpecSaveSuccess(false)
     setSpecError(null)
     setFormValues({ ...app.userConfig })
     setConfigSaveSuccess(false)
-  }, [app.id, app.spec.name, app.spec.description, specSystemPromptValue, app.userConfig])
+  }, [app.id, app.spec.name, app.spec.display_name, app.spec.description, specSystemPromptValue, app.userConfig])
 
   const handleFieldChange = useCallback((key: string, value: unknown) => {
     setFormValues(prev => ({ ...prev, [key]: value }))
@@ -387,7 +402,8 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
 
   // Spec fields change detection
   const specHasChanges =
-    specName !== app.spec.name ||
+    specName !== displayNameOf(app.spec) ||
+    specCommandName !== app.spec.name ||
     specDescription !== app.spec.description ||
     specSystemPrompt !== specSystemPromptValue
 
@@ -400,6 +416,10 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
       setSpecError(t('App name is required'))
       return
     }
+    if (isSkill && !COMMAND_NAME_RE.test(specCommandName.trim())) {
+      setSpecError(t('Command name must be lowercase letters, digits and hyphens'))
+      return
+    }
     if (!specDescription.trim()) {
       setSpecError(t('Description is required'))
       return
@@ -407,7 +427,13 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
 
     setSpecSaving(true)
     const patch: Record<string, unknown> = {}
-    if (specName !== app.spec.name) patch.name = specName.trim()
+    if (specName !== displayNameOf(app.spec)) {
+      // Once the display name matches the identifier there is nothing left to
+      // override; null drops the field so the spec stays minimal.
+      if (isSkill) patch.display_name = specName.trim() === specCommandName.trim() ? null : specName.trim()
+      else patch.name = specName.trim()
+    }
+    if (isSkill && specCommandName !== app.spec.name) patch.name = specCommandName.trim()
     if (specDescription !== app.spec.description) patch.description = specDescription.trim()
     const promptChanged = specSystemPrompt !== specSystemPromptValue
     if (promptChanged) {
@@ -429,7 +455,8 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
   }
 
   function handleSpecReset() {
-    setSpecName(app.spec.name)
+    setSpecName(displayNameOf(app.spec))
+    setSpecCommandName(app.spec.name)
     setSpecDescription(app.spec.description)
     setSpecSystemPrompt(specSystemPromptValue)
     setSpecSaveSuccess(false)
@@ -714,6 +741,25 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
               className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
             />
           </div>
+
+          {/* Command name — a skill's identifier: directory, frontmatter, slash command */}
+          {isSkill && (
+            <div className="space-y-1.5">
+              <label className="text-sm text-foreground">{t('Command Name')}</label>
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm text-muted-foreground font-mono">/</span>
+                <input
+                  type="text"
+                  value={specCommandName}
+                  onChange={e => { setSpecCommandName(sanitizeCommandName(e.target.value)); setSpecSaveSuccess(false); setSpecError(null) }}
+                  className="flex-1 px-3 py-2 text-sm font-mono bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t('Renaming this moves the skill folder and changes how it is invoked.')}
+              </p>
+            </div>
+          )}
 
           {/* Description */}
           <div className="space-y-1.5">

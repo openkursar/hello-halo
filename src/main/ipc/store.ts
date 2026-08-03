@@ -322,11 +322,6 @@ export function registerStoreHandlers(): void {
       return storeController.unpublishStoreApp(input)
     },
 
-    // ── store:relist ───────────────────────────────────────────────────────
-    storeRelist: async (input: { slug: string }) => {
-      return storeController.relistStoreApp(input)
-    },
-
     // ── store:ignore-version ───────────────────────────────────────────────
     storeIgnoreVersion: async (input: { appId: string; version: string }) => {
       return storeController.ignoreStoreVersion(input)

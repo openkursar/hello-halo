@@ -263,8 +263,9 @@ interface MineRowProps {
 function MineRow({ pub, busy, onOpen, onUnpublish, onPublishVersion }: MineRowProps) {
   const { t } = useTranslation()
   const isHidden = pub.status === 'hidden'
-  // Only the creator's own takedown can be relisted; an admin takedown offers no
-  // creator action. Legacy hidden records have no source and count as admin.
+  // Only the creator's own takedown can be undone by the creator; an admin
+  // takedown is a moderation decision and offers no creator action. Legacy
+  // hidden records carry no source and count as admin.
   const isSelfTakedown = isHidden && pub.takedownBy === 'self'
   const primaryLabel = pub.status === 'rejected' ? t('Resubmit') : t('Publish new version')
   const appType = pub.type as AppType | undefined
@@ -299,8 +300,9 @@ function MineRow({ pub, busy, onOpen, onUnpublish, onPublishVersion }: MineRowPr
       <td className="py-2.5 px-3">
         <div className="flex items-center justify-end gap-3 whitespace-nowrap">
           {isHidden ? (
-            // Relisting a self-takedown means republishing (no one-click relist);
-            // an admin takedown gives the creator no action.
+            // Coming back is a republish, not a visibility toggle: a hidden app
+            // leaves the public index, which frees its skill name for another
+            // author, and only the publish path re-runs that uniqueness check.
             isSelfTakedown && (
               <button onClick={onPublishVersion} className="text-xs font-medium text-halo-success hover:text-halo-success/80 transition-colors">
                 {t('Relist')}

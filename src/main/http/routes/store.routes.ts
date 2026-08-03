@@ -241,15 +241,6 @@ export function registerStoreRoutes(app: Express): void {
     }
   })
 
-  // POST /api/store/relist — bring back a self-takedown of the creator's own app
-  app.post('/api/store/relist', async (req: Request, res: Response) => {
-    try {
-      res.json(await storeController.relistStoreApp(req.body))
-    } catch (error) {
-      res.json({ success: false, error: (error as Error).message })
-    }
-  })
-
   // POST /api/store/ignore-version — skip an available update version for an app
   app.post('/api/store/ignore-version', async (req: Request, res: Response) => {
     try {

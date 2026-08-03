@@ -32,7 +32,6 @@ import {
   invalidateDiscoverLayoutCache,
   fetchMyPublications,
   unpublishApp,
-  relistApp,
   ensureStoreIdentity,
   // Aliased: this controller exports same-named wrappers, and an unaliased
   // import would bind to the wrapper instead of the store function.
@@ -420,23 +419,6 @@ export async function unpublishStoreApp(input: { slug: string }): Promise<StoreC
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] unpublishStoreApp error:', err.message)
-    return { success: false, error: err.message }
-  }
-}
-
-/**
- * Re-list a previously taken-down app the caller owns (clears the hidden flag).
- */
-export async function relistStoreApp(input: { slug: string }): Promise<StoreControllerResponse<null>> {
-  try {
-    if (!input?.slug) {
-      return { success: false, error: 'slug is required' }
-    }
-    await relistApp(input.slug)
-    return { success: true, data: null }
-  } catch (error: unknown) {
-    const err = error as Error
-    console.error('[StoreController] relistStoreApp error:', err.message)
     return { success: false, error: err.message }
   }
 }

@@ -40,7 +40,7 @@ optional     fetchDocument, fetchBundledSkills
 catalog
 
 optional     serverFeatures, openInstallOrder, fetchCollections,
-backend      fetchMyPublications, unpublish, relist      (per source)
+backend      fetchMyPublications, unpublish              (per source)
              fetchPageTaxonomy, fetchPageLayout          (primary source only)
 ```
 
@@ -62,7 +62,7 @@ stays in the domain module that owns the resulting shape.
 | capabilities handshake | per source | each backend advertises itself |
 | install ledger | per source | an install belongs to the source it came from |
 | collections | per source | curated bundles merge |
-| my publications / unpublish / relist | **primary only** | one identity token ⇒ one attributing store (§3.4) |
+| my publications / unpublish | **primary only** | one identity token ⇒ one attributing store (§3.4) |
 | category taxonomy | **primary only** | there is one chip row |
 | discover layout | **primary only** | there is one discover page |
 
@@ -164,8 +164,8 @@ baseline in for an hour.
 
 A build mints one identity token from the one provider declared in
 `product.json.identityProvider`, so exactly one store can attribute a
-publication to this user. "My publications" therefore reads, unpublishes and
-relists against the primary source — reads included.
+publication to this user. "My publications" therefore reads and unpublishes
+against the primary source — reads included.
 
 Federating the read while writing to the primary would be incoherent twice
 over: the user could act on a row the write path cannot address, and the
@@ -370,7 +370,7 @@ adapters/                 source drivers — the only polymorphic layer
   index.ts                sourceType → driver (the discoverable catalogue)
   halo.adapter.ts         DHP static source (GitHub Pages / mirror), catalog only
   dhp-v2.adapter.ts       DHP v2 full protocol: catalog (delegated to Halo)
-                          + 8 backend endpoints + handshake + wire vocabulary
+                          + 7 backend endpoints + handshake + wire vocabulary
   mcp-registry / smithery / skillhub / claude-skills
 
 backend/                  consumers of the backend surface

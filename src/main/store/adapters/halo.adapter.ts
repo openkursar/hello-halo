@@ -38,6 +38,7 @@ const RegistryEntrySchema = z.object({
     { message: 'slug must be either a flat id (e.g. "xhs-search") or scoped "<author>/<id>"' }
   ),
   name: z.string().trim().min(1),
+  display_name: z.string().trim().min(1).optional(),
   version: z.string().trim().min(1),
   author: z.string().trim().min(1),
   description: z.string().trim().min(1),

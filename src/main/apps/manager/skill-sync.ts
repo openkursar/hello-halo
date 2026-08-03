@@ -17,7 +17,7 @@ import { app } from 'electron'
 import type { InstalledApp } from './types'
 import type { SkillSpec } from '../../apps/spec/schema'
 import { resolveClaudeConfigDir } from '../../foundation/config.service'
-import { normalizeSkillMd } from '../../../shared/skill-frontmatter'
+import { normalizeSkillMd, alignSkillMdName } from '../../../shared/skill-frontmatter'
 import { toSkillDirName } from '../../../shared/skill-naming'
 
 /**
@@ -132,7 +132,9 @@ export function syncSkillToFilesystem(
     }
     // Normalize SKILL.md frontmatter for CC SDK compatibility before writing.
     // Other files are written as-is.
-    const fileContent = filename === 'SKILL.md' ? normalizeSkillMd(content) : content
+    const fileContent = filename === 'SKILL.md'
+      ? alignSkillMdName(normalizeSkillMd(content), spec)
+      : content
     writeFileSync(target, fileContent, 'utf-8')
   }
 

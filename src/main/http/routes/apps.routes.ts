@@ -21,6 +21,7 @@ import {
   isAppChatConversationGenerating,
   isMcpAppSpec,
   listAvailableSkills,
+  deriveSkillCommandName,
   loadAppChatMessages,
   loadImChatMessages,
   loadChatMessagesForConversation,
@@ -170,6 +171,13 @@ export function registerAppsRoutes(app: Express): void {
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
+  })
+
+  // GET /api/skills/command-name — preview the identifier a skill would install
+  // under. Kept off the /api/apps/:appId branch so it is not shadowed by it.
+  app.get('/api/skills/command-name', async (req: Request, res: Response) => {
+    const name = typeof req.query.name === 'string' ? req.query.name.trim() : ''
+    res.json({ success: true, data: name ? deriveSkillCommandName(name) : '' })
   })
 
   // DELETE /api/apps/:appId — uninstall (soft-delete) an App

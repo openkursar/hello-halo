@@ -167,9 +167,6 @@ export interface RegistryAdapter {
   /** Take down one of the caller's own published apps. */
   unpublish?(source: RegistrySource, slug: string, auth: RegistryAuth): Promise<void>
 
-  /** Re-list one of the caller's own taken-down apps. */
-  relist?(source: RegistrySource, slug: string, auth: RegistryAuth): Promise<void>
-
   // ── Page-level documents (optional) ──────────────────────────────────────
   // One chip row, one discover page: merging N answers has no meaning, so only
   // the primary source's document is adopted. See DESIGN.md §2.1.

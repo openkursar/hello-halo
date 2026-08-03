@@ -15,7 +15,7 @@ import { dispatch as dispatchHttpRegistry } from './dispatchers/http-registry'
 import { dispatch as dispatchLocalDhpkg } from './dispatchers/local-dhpkg'
 import { enrichSpecForPublish } from './spec-enrich'
 import { bundledSkillDeps } from '../../../shared/apps/bundled-skills'
-import { setSkillMdName } from '../../../shared/skill-frontmatter'
+import { withSkillMdName } from '../../../shared/skill-frontmatter'
 import type { PublishResult, PublishContext } from './types'
 import type { AppSpec, SkillSpec } from '../../apps/spec'
 
@@ -56,6 +56,8 @@ export async function getPublishPreview(appId: string, authorOverride?: string, 
   // Derive the slug from the final (possibly renamed) name so the previewed
   // store version matches the slug publish will actually target — a rename must
   // preview the new slug (typically unpublished ⇒ no version bump), not the old.
+  // Skills are exempt: their name is the command identifier, so a rename edits
+  // only the display name and keeps the listing in place.
   const spec = enrichSpecForPublish(applyDisplayOverride(app.spec, 'name', nameOverride), authorOverride)
   const slug = spec.store!.slug!
   return {
@@ -127,31 +129,26 @@ function stripI18nField(i18n: Record<string, Record<string, unknown>>, field: st
 }
 
 /** Apply a snapshot edit to a display field, also stripping the field's per-locale
- * i18n overrides so the edited value is what installers see. */
+ * i18n overrides so the edited value is what installers see. A skill's `name` is
+ * its command identifier rather than a display string, so a name edit lands on
+ * `display_name` — renaming a listing must not repoint the slash command. */
 function applyDisplayOverride(spec: AppSpec, field: 'name' | 'description', value: string | undefined): AppSpec {
   const trimmed = value?.trim()
   if (!trimmed) return spec
-  let next: AppSpec = { ...spec, [field]: trimmed }
+  const target = field === 'name' && spec.type === 'skill' ? 'display_name' : field
+  let next: AppSpec = { ...spec, [target]: trimmed }
   if (next.i18n) {
     next = { ...next, i18n: stripI18nField(next.i18n as unknown as Record<string, Record<string, unknown>>, field) as typeof next.i18n }
   }
   return next
 }
 
-/** For a skill, write the final spec name into its SKILL.md frontmatter so the
- * runtime slash command (derived from that name) matches the store listing —
- * without this, renaming a skill to clear a name collision leaves the package's
- * command unchanged and it collides at install. */
+/** Ship the package with the same frontmatter name the local install writes, so
+ * an installer's slash command matches the one the author sees. */
 function alignSkillCommandName(spec: AppSpec): AppSpec {
-  if (spec.type !== 'skill' || !spec.name) return spec
+  if (spec.type !== 'skill') return spec
   const s = spec as SkillSpec
-  if (s.skill_files?.['SKILL.md'] !== undefined) {
-    return { ...s, skill_files: { ...s.skill_files, 'SKILL.md': setSkillMdName(s.skill_files['SKILL.md'], spec.name) } }
-  }
-  if (s.skill_content !== undefined) {
-    return { ...s, skill_content: setSkillMdName(s.skill_content, spec.name) }
-  }
-  return spec
+  return s.display_name ? withSkillMdName(s, s.name) : spec
 }
 
 /** Publish an installed App through the configured dispatcher. */
@@ -185,6 +182,7 @@ export async function publish(appId: string, overrides: PublishOverrides = {}): 
     // final store name. A renamed app must map to a fresh slug — otherwise it
     // still targets the original slug and collides with its already-published
     // version, making a genuine rename indistinguishable from a re-publish.
+    // (Skills excepted — see applyDisplayOverride.)
     spec = enrichSpecForPublish(applyDisplayOverride(app.spec, 'name', overrides.name), overrides.author)
     const version = overrides.version?.trim()
     if (version) spec = { ...spec, version }

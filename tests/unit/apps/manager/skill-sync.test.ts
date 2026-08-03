@@ -156,3 +156,41 @@ describe('reconcileGlobalSkillsLocation', () => {
     expect(existsSync(join(legacySkillsDir(), 'space-skill', 'SKILL.md'))).toBe(true)
   })
 })
+
+describe('syncSkillToFilesystem frontmatter name', () => {
+  beforeEach(() => {
+    setAgentConfig({ configDirMode: undefined, customConfigDir: undefined })
+  })
+
+  function writtenSkillMd(dirName: string): string {
+    return readFileSync(join(resolveGlobalSkillsDir(), dirName, 'SKILL.md'), 'utf-8')
+  }
+
+  it('leaves an authored frontmatter name alone', () => {
+    syncSkillToFilesystem(globalSkillApp(), noSpace)
+
+    // spec.name is "My Skill" while the frontmatter says "my-skill": a spec the
+    // author wrote themselves keeps its own command, exactly as before.
+    expect(writtenSkillMd('my-skill')).toContain('name: my-skill')
+  })
+
+  it('pins the frontmatter to a derived name so it matches the directory', () => {
+    const app = globalSkillApp({
+      specId: 'ai-xie-zuo',
+      spec: {
+        spec_version: '1',
+        name: 'ai-xie-zuo',
+        display_name: 'AI写作',
+        version: '1.0.0',
+        author: 'Test',
+        description: 'A test skill',
+        type: 'skill',
+        skill_content: SKILL_MD,
+      } as AppSpec,
+    })
+
+    syncSkillToFilesystem(app, noSpace)
+
+    expect(writtenSkillMd('ai-xie-zuo')).toContain('name: ai-xie-zuo')
+  })
+})

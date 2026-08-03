@@ -240,13 +240,6 @@ export const storeApi = {
     return httpRequest('POST', '/api/store/unpublish', input)
   },
 
-  storeRelist: async (input: { slug: string }): Promise<ApiResponse> => {
-    if (isElectron()) {
-      return window.halo.storeRelist(input)
-    }
-    return httpRequest('POST', '/api/store/relist', input)
-  },
-
   storeIgnoreVersion: async (input: { appId: string; version: string }): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.storeIgnoreVersion(input)

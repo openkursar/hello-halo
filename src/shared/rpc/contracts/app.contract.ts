@@ -35,6 +35,8 @@ export const appRpc = {
   appExportSpec: rawRpcMethod('app:export-spec'),
   appImportSpec: rawRpcMethod('app:import-spec'),
   appOpenSkillFolder: rawRpcMethod('app:open-skill-folder'),
+  // Romanization lives in main so its dictionary stays out of the renderer bundle.
+  appDeriveSkillCommandName: rawRpcMethod('app:derive-skill-command-name'),
   appListAvailableSkills: rawRpcMethod('app:list-available-skills'),
   appGetDataPath: rawRpcMethod('app:get-data-path'),
   appOpenDataFolder: rawRpcMethod('app:open-data-folder'),

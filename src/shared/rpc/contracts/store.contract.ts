@@ -33,6 +33,5 @@ export const storeRpc = {
   storeGetSignInStatus: rawRpcMethod('store:get-sign-in-status'),
   storeGetMyPublications: rawRpcMethod('store:get-my-publications'),
   storeUnpublish: rawRpcMethod('store:unpublish'),
-  storeRelist: rawRpcMethod('store:relist'),
   storeIgnoreVersion: rawRpcMethod('store:ignore-version'),
 }

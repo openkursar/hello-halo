@@ -255,8 +255,8 @@ describe('DhpV2Adapter — creator publications', () => {
     const adapter = new DhpV2Adapter()
     fetchMock.mockResolvedValue(reply(403))
 
-    await expect(adapter.relist(SRC, 'bob/app', { token: 'tok' })).rejects.toThrow(
-      'You can only relist your own apps',
+    await expect(adapter.unpublish(SRC, 'bob/app', { token: 'tok' })).rejects.toThrow(
+      'You can only unpublish your own apps',
     )
   })
 
