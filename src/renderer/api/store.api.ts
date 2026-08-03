@@ -185,11 +185,22 @@ export const storeApi = {
     return httpRequest('GET', '/api/store/category-taxonomy')
   },
 
-  storeGetDiscoverLayout: async (): Promise<ApiResponse> => {
+  storeRevalidate: async (): Promise<ApiResponse<{ changed: boolean }>> => {
     if (isElectron()) {
-      return window.halo.storeGetDiscoverLayout()
+      return window.halo.storeRevalidate()
     }
-    return httpRequest('GET', '/api/store/discover-layout')
+    return httpRequest('POST', '/api/store/revalidate')
+  },
+
+  storeGetDiscoverPage: async (input?: { locale?: string; pageSize?: number }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.storeGetDiscoverPage(input)
+    }
+    const qs = new URLSearchParams()
+    if (input?.locale) qs.set('locale', input.locale)
+    if (input?.pageSize) qs.set('pageSize', String(input.pageSize))
+    const suffix = qs.toString() ? `?${qs}` : ''
+    return httpRequest('GET', `/api/store/discover-page${suffix}`)
   },
 
   storeEnsureSignedIn: async (force = false): Promise<ApiResponse<boolean>> => {
@@ -227,13 +238,6 @@ export const storeApi = {
       return window.halo.storeUnpublish(input)
     }
     return httpRequest('POST', '/api/store/unpublish', input)
-  },
-
-  storeGetCollections: async (): Promise<ApiResponse> => {
-    if (isElectron()) {
-      return window.halo.storeGetCollections()
-    }
-    return httpRequest('GET', '/api/store/collections')
   },
 
   storeIgnoreVersion: async (input: { appId: string; version: string }): Promise<ApiResponse> => {

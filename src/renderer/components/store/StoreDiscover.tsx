@@ -1,27 +1,26 @@
 /**
  * Store Discover
  *
- * Generic renderer for the config-driven discover page. Walks the layout tree
- * (server-supplied or the built-in catalog-only default) and renders each node
- * from a fixed set of primitives; a section's entries are resolved locally from
- * the synced index. Sections with no entries hide themselves; unknown node
- * kinds are skipped so a forward-dated config degrades rather than breaks.
+ * Generic renderer for the config-driven discover page. The main process
+ * resolves the layout and every section's entries against the full index and
+ * sends them in one payload; this file only maps each node to a primitive.
+ * Empty and hidden nodes are already dropped upstream, so a section that
+ * renders here always has something to show.
  */
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { api } from '../../api'
 import { useAppsPageStore } from '../../stores/apps-page.store'
-import { useStoreCollections } from '../../hooks/useStoreCollections'
-import { useDiscoverLayout } from '../../hooks/useDiscoverLayout'
+import { useDiscoverPage } from '../../hooks/useDiscoverPage'
 import { useCategoryLabel } from '../../hooks/useStoreCategories'
-import type { RegistryEntry, StoreCollection, DiscoverNode } from '../../../shared/store/store-types'
+import type { RegistryEntry, StoreCollection, ResolvedDiscoverNode } from '../../../shared/store/store-types'
 import { StoreCard } from './StoreCard'
 import { StoreGrid } from './StoreGrid'
 import { RankBoard, rankBoardEntries, MIN_RANK_ENTRIES } from './RankBoard'
 import { AppTypeIcon } from './AppTypeIcon'
 import { AppTypeTag } from './AppTypeTag'
-import { resolveSection, resolveLocaleText } from './discover/resolve'
+import { resolveLocaleText } from './discover/resolve'
 import { resolveEntryI18n } from '../../utils/spec-i18n'
 import { getCurrentLanguage, useTranslation } from '../../i18n'
 
@@ -203,33 +202,28 @@ function CollectionDialog({
   )
 }
 
-/** True when a source-based section resolves to no entries (catalog and
- * collections are decided at render time, not here). */
-function isSourceSectionEmpty(node: DiscoverNode, storeApps: RegistryEntry[]): boolean {
-  if (node.type !== 'section' || node.layout === 'collections') return false
-  const entries = resolveSection(node.source, storeApps)
-  if (node.layout === 'rank_board') return rankBoardEntries(entries).length < MIN_RANK_ENTRIES
-  return entries.length === 0
-}
-
 /**
  * A leaf node's content (label + primitive). `padded` wraps it in the page
  * section band for top-level use; row children pass it unwrapped. Returns null
  * (no wrapper, no stray heading) when the node has nothing to show.
  */
-function SectionBody({ node, padded }: { node: DiscoverNode; padded?: boolean }) {
+function SectionBody({ node, padded }: { node: ResolvedDiscoverNode; padded?: boolean }) {
   const { t } = useTranslation()
   const locale = getCurrentLanguage()
   const storeApps = useAppsPageStore(state => state.storeApps)
-  const isCollections = node.type === 'section' && node.layout === 'collections'
-  const collections = useStoreCollections(isCollections)
+  const seedStoreApps = useAppsPageStore(state => state.seedStoreApps)
+  const collections = node.collections ?? []
   const title = resolveLocaleText(node.title, locale)
   const subtitle = resolveLocaleText(node.subtitle, locale)
-  const entries = useMemo(
-    () => (node.type === 'section' && node.layout !== 'collections' ? resolveSection(node.source, storeApps) : []),
-    [node, storeApps],
-  )
+  const entries = node.entries ?? []
   const bySlug = useMemo(() => new Map(storeApps.map(e => [e.slug, e])), [storeApps])
+
+  // Keep the browse list in step with the catalog page that travelled with the
+  // payload, so the grid and the curated sections describe the same snapshot.
+  const isCatalog = node.type === 'catalog'
+  useEffect(() => {
+    if (isCatalog && node.entries) seedStoreApps(node.entries, node.hasMore ?? false)
+  }, [isCatalog, node.entries, node.hasMore, seedStoreApps])
 
   const wrap = (content: ReactNode) =>
     padded ? <section className="px-4 pt-4">{content}</section> : <>{content}</>
@@ -243,7 +237,7 @@ function SectionBody({ node, padded }: { node: DiscoverNode; padded?: boolean })
     )
   }
 
-  if (isCollections) {
+  if (node.layout === 'collections') {
     if (collections.length === 0) return null
     return wrap(
       <>
@@ -277,13 +271,12 @@ const ROW_COLS: Record<number, string> = {
   3: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3',
 }
 
-function DiscoverRow({ node }: { node: DiscoverNode }) {
-  const storeApps = useAppsPageStore(state => state.storeApps)
+function DiscoverRow({ node }: { node: ResolvedDiscoverNode }) {
   const locale = getCurrentLanguage()
   const title = resolveLocaleText(node.title, locale)
   const subtitle = resolveLocaleText(node.subtitle, locale)
   const cols = ROW_COLS[node.columns ?? 2] ?? ROW_COLS[2]
-  const children = (node.children ?? []).filter(c => !c.hidden && !isSourceSectionEmpty(c, storeApps))
+  const children = node.children ?? []
   if (children.length === 0) return null
   return (
     <section className="px-4 pt-4">
@@ -296,16 +289,27 @@ function DiscoverRow({ node }: { node: DiscoverNode }) {
 }
 
 export function StoreDiscover() {
-  const layout = useDiscoverLayout()
+  const { t } = useTranslation()
+  const page = useDiscoverPage()
+  // Until the curated layout resolves — or if it never does — the catalog still
+  // carries the store, so entering it never lands on a blank page.
+  if (!page) {
+    return (
+      <div className="flex flex-col pb-8">
+        <section className="px-4 pt-4">
+          <SectionLabel>{t('All Apps')}</SectionLabel>
+          <StoreGrid embedded />
+        </section>
+      </div>
+    )
+  }
   return (
     <div className="flex flex-col pb-8">
-      {layout.nodes
-        .filter(node => !node.hidden)
-        .map((node, i) =>
-          node.type === 'row'
-            ? <DiscoverRow key={i} node={node} />
-            : <SectionBody key={i} node={node} padded />,
-        )}
+      {page.nodes.map((node, i) =>
+        node.type === 'row'
+          ? <DiscoverRow key={i} node={node} />
+          : <SectionBody key={i} node={node} padded />,
+      )}
     </div>
   )
 }

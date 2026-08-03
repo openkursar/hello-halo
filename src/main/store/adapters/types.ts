@@ -30,6 +30,30 @@ import type {
 } from '../../../shared/store/store-types'
 import type { AppSpec, SkillSpec } from '../../apps/spec/schema'
 
+/**
+ * Opaque per-adapter cache validators (e.g. one ETag per index file), persisted
+ * between syncs so an unchanged source costs a 304 instead of a full download.
+ */
+export type IndexValidators = Record<string, string>
+
+export interface FetchIndexResult {
+  /** Null when the source revalidated unchanged — leave stored data as-is. */
+  index: RegistryIndex | null
+  /** Validators to persist for the next fetch. */
+  validators: IndexValidators
+}
+
+/**
+ * A page document has three outcomes the caller must tell apart: the source
+ * serves none (fall through the resolution chain), it serves one, or it
+ * revalidated the one already held. Collapsing any two of them would either
+ * drop an ops-managed document on a 304 or mistake absence for staleness.
+ */
+export type PageDocumentResult =
+  | { status: 'absent' }
+  | { status: 'unchanged' }
+  | { status: 'ok'; document: unknown; validator?: string }
+
 /** Result of a proxy query to a remote API source */
 export interface AdapterQueryResult {
   items: RegistryEntry[]
@@ -53,8 +77,12 @@ export interface RegistryAdapter {
   /**
    * Mirror mode: download the full index from the source.
    * Only required when strategy = 'mirror'.
+   *
+   * `validators` carries whatever this adapter returned last time. Adapters that
+   * speak HTTP validators use them to revalidate, and report `index: null` when
+   * the source is unchanged so the caller can leave storage alone.
    */
-  fetchIndex?(source: RegistrySource): Promise<RegistryIndex>
+  fetchIndex?(source: RegistrySource, validators?: IndexValidators): Promise<FetchIndexResult>
 
   /**
    * Proxy mode: query the source API with pagination.
@@ -144,8 +172,8 @@ export interface RegistryAdapter {
   // the primary source's document is adopted. See DESIGN.md §2.1.
 
   /** Ops-managed category taxonomy. Payload validated by the caller. */
-  fetchPageTaxonomy?(source: RegistrySource): Promise<unknown | null>
+  fetchPageTaxonomy?(source: RegistrySource, validator?: string): Promise<PageDocumentResult>
 
   /** Ops-managed discover-page layout. Payload validated by the caller. */
-  fetchPageLayout?(source: RegistrySource): Promise<unknown | null>
+  fetchPageLayout?(source: RegistrySource, validator?: string): Promise<PageDocumentResult>
 }

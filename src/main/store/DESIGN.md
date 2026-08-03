@@ -82,6 +82,36 @@ if (!adapter.unpublish) throw new Error('This store does not support …')
 A user pressing "Unpublish" on a store with no backend must be told so.
 Nothing happening is the worst possible outcome.
 
+### 2.3 `fetchIndex` is a conditional request
+
+```ts
+fetchIndex(source, validators?: IndexValidators): Promise<FetchIndexResult>
+// FetchIndexResult = { index: RegistryIndex | null, validators: IndexValidators }
+```
+
+`index: null` is not "empty" and not "failed" — it means **revalidated,
+unchanged**, and the caller must leave the mirror alone. A driver that cannot
+revalidate simply always returns an index; the caller needs no branch for it.
+
+`validators` is an opaque map keyed by whatever the driver splits its index
+into (the DHP source fetches one file per app type, so it keys by file). The
+driver only echoes what the server gave it — `sync.service.ts` persists the map
+in `registry_sync_state.etag` and hands it back on the next fetch, without ever
+interpreting it. A driver may therefore switch from `ETag` to any other
+validator without touching the sync layer.
+
+A mixed response (some files 304, some 200) yields an index: the unchanged
+files are re-read from the mirror so the result is always a whole index, never
+a partial one.
+
+Page documents revalidate the same way, but with three outcomes rather than
+two — `absent | unchanged | ok` (`PageDocumentResult`). Absence and "unchanged"
+must stay distinct: a source that stops serving a layout falls the caller
+through to the built-in, while a 304 means keep the one already held. The
+resolver keeps the held document and its validator across `invalidate`, which
+expires only the TTL — dropping the validator would make every forced re-read a
+full download, which is the opposite of what invalidating is for.
+
 ## 3. Invariants (non-negotiable)
 
 ### 3.1 The handshake does not decide whether a driver method exists
@@ -226,13 +256,11 @@ oversight, and not a counter-example to §1.
 
 ### 3.8 Known deferral: the collections error state is not rendered
 
-`backend/collections.ts` distinguishes "no collections" from "load failed" and
-the IPC response carries `success: false` on failure. That distinction stops at
-the renderer: `lib/store-resources.ts` maps a failed fetch to `[]`, so the
-discover page shows an empty section either way. `createCachedResource` now
-drops (rather than caches) a rejection, so the retry path is correct — but a
-consumer still only ever receives a value, never a failure, so rendering the
-difference needs a UI-level error state and is left as a separate change.
+`backend/collections.ts` distinguishes "no collections" from "load failed" by
+throwing. That distinction stops at `discover-page.ts`, whose per-task
+tolerance (§3.10) drops the failed section, so the page reads the same either
+way. Rendering the difference needs a UI-level error state and a payload that
+can carry it, and is left as a separate change.
 
 ### 3.9 Known deferral: two `sourceType` branches survive above `adapters/`
 
@@ -246,7 +274,52 @@ branches outright. That is a behaviour-preserving refactor of the catalog read
 path and is deliberately out of scope here; until it lands, these two are the
 registered exceptions to §1, like `publish/index.ts` is to §3.7.
 
-## 4. Vocabulary
+### 3.10 The discover page is resolved here, in one payload
+
+`discover-page.ts` returns the operator's layout with every section's entries
+already resolved (`storeGetDiscoverPage`). The renderer neither fetches the
+layout nor filters, sorts or ranks — those IPC endpoints do not exist.
+
+This is not a transport optimisation. Sections are ranked and filtered against
+the **full index mirror**, which only this process holds; the renderer's browse
+list is paginated and its "All" tab is a per-type preview, so a ranking
+resolved there would silently score over a fraction of the catalog. The catalog
+node deliberately goes through the same browse query the renderer uses for
+later pages, so page 1 and page 2 cannot disagree on ordering.
+
+Assembly is per-task tolerant, one step beyond §3.6: layout, index, collections
+and catalog each fall back independently, and a layout that resolves to nothing
+still renders the catalog. No single failure may blank the store.
+
+`discover-resolve.ts` holds the section semantics (filter → sort → limit, or a
+curated slug list that is authoritative for both membership and order). It is
+deliberately **not** in `shared/`: nothing outside this process resolves
+sections, and putting it in `shared/` would invite a renderer to try.
+
+### 3.11 Freshness is triggered by the user arriving, not by a timer
+
+Everything the store shows is cached — the index in SQLite, the page documents
+per TTL, the renderer's resources for the session. Nothing re-reads on a timer,
+so a client left running all day would otherwise never see a newly published
+app or an operator's layout change.
+
+`revalidateStore` is the one entry point: it re-runs the conditional index
+fetch (§2.3) and drops **every** page-document cache. The invariant is that it
+drops *all* of them — `backend/` exports exactly two invalidators
+(`taxonomy.ts`, `discover.ts`) and both are called; a third cache added there
+must be added here in the same change, or it silently goes stale.
+
+It is triggered on **every arrival at a store tab** — the tab row, entering the
+store, and the window regaining focus. The floor is 2 s, which swallows a
+double-click and nothing else: the check is conditional requests end to end, so
+an unchanged store costs only 304s and running it per tab switch is the intended
+price of never showing a withdrawn app.
+
+`changed: true` reloads the visible list, not just the cache behind it. An
+operator hiding an app has to disappear from the grid the user is looking at;
+dropping the cache alone would defer that to their next navigation. The page
+documents are re-read either way, because ops config can change without the
+index moving.
 
 Identity values name a **capability**, never a provider. A third party running
 its own registry must be able to advertise account-level identity without
@@ -311,9 +384,12 @@ backend/                  consumers of the backend surface
   discover.ts             server ?? built-in
   identity.ts             identity-token resolution (product.json → AI-source OAuth)
 
+discover-page.ts          the discover page, resolved in one payload (§3.10)
+discover-resolve.ts       section semantics: filter → sort → limit / slug list
+
 registry.service.ts       source config, CRUD, install/upgrade orchestration
 query.service.ts          catalog aggregation (already federated)
-sync.service.ts           mirror sync → SQLite
+sync.service.ts           mirror sync → SQLite, validator round-trip (§2.3)
 registry.cache.ts, store-cache.schema.ts, upgrade.service.ts, registry.types.ts
 
 publish/                  publish dispatchers (see §3.7)
@@ -338,6 +414,12 @@ it.
   and `registry.service.ts` are the registered exceptions of §3.9.
 - The protocol list is written once, in `STORE_SOURCE_TYPES`
   (`shared/store/store-types.ts`); the config schema derives its enum from it.
+- `resolveSection` has no consumer outside `src/main/store/` (§3.10).
+- A driver that delegates `fetchIndex` forwards its validators (§2.3). Dropping
+  them compiles, runs, and returns a usable index — it just never revalidates,
+  so only a test catches it.
+- Every `invalidate*Cache` exported from `backend/` is called by
+  `revalidateStore` (§3.11).
 - No file above `adapters/` reads an HTTP status code. (Each driver reads its
   own protocol's codes; `publish/dispatchers/*` read their upload responses.
   The rule is about the composition layer, not about a single file.)

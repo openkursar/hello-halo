@@ -14,7 +14,7 @@ import { z } from 'zod'
 import { AppSpecSchema } from '../../apps/spec/schema'
 import type { AppSpec, SkillSpec } from '../../apps/spec/schema'
 import type { RegistrySource, RegistryIndex, RegistryEntry } from '../../../shared/store/store-types'
-import type { RegistryAdapter } from './types'
+import type { RegistryAdapter, IndexValidators, FetchIndexResult } from './types'
 
 const FETCH_TIMEOUT_MS = 300_000 // 5 min — large indexes (e.g. claude-skills ~21 MB) need headroom
 
@@ -79,7 +79,7 @@ const RegistryIndexSchema = z.object({
 export class HaloAdapter implements RegistryAdapter {
   readonly strategy = 'mirror' as const
 
-  async fetchIndex(source: RegistrySource): Promise<RegistryIndex> {
+  async fetchIndex(source: RegistrySource, validators: IndexValidators = {}): Promise<FetchIndexResult> {
     const baseUrl = source.url.replace(/\/+$/, '')
     const t0 = performance.now()
 
@@ -87,25 +87,54 @@ export class HaloAdapter implements RegistryAdapter {
     // fall back to the legacy single `index.json` if any split file is missing.
     const splitFiles = ['digital-humans.json', 'skills.json', 'mcps.json'] as const
 
+    const nextValidators: IndexValidators = {}
+    let anyChanged = false
+
     const splitResults = await Promise.allSettled(
       splitFiles.map(async (file) => {
         const url = `${baseUrl}/${file}`
+        const previous = validators[file]
         const res = await fetchWithTimeout(url, {
-          headers: { 'Accept': 'application/json', 'User-Agent': 'Halo-Store/1.0' },
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'Halo-Store/1.0',
+            ...(previous ? { 'If-None-Match': previous } : {}),
+          },
         })
+        if (res.status === 304) {
+          nextValidators[file] = previous!
+          return null
+        }
         if (!res.ok) {
           throw new Error(`HTTP ${res.status} for ${file}`)
         }
+        const etag = res.headers.get('ETag')
+        if (etag) nextValidators[file] = etag
+        anyChanged = true
         return await res.json() as unknown
       })
     )
 
     const allSplitOk = splitResults.every(r => r.status === 'fulfilled')
+
+    // Every part revalidated — the stored index is still current.
+    if (allSplitOk && !anyChanged && Object.keys(validators).length > 0) {
+      console.log(`[HaloAdapter] Index unchanged (${splitFiles.length}x 304, ${(performance.now() - t0).toFixed(0)}ms)`)
+      return { index: null, validators: nextValidators }
+    }
     if (allSplitOk) {
       const parts: RegistryIndex[] = []
       for (let i = 0; i < splitResults.length; i++) {
         const result = splitResults[i]
         if (result.status !== 'fulfilled') continue
+        if (result.value === null) {
+          // A part revalidated while a sibling changed; we have no body for it,
+          // so refetch this one unconditionally rather than merge a partial index.
+          const refetched = await this.fetchSplitFile(baseUrl, splitFiles[i], nextValidators)
+          if (!refetched) return this.legacyResult(baseUrl, t0)
+          parts.push(refetched)
+          continue
+        }
         const parsed = RegistryIndexSchema.safeParse(result.value)
         if (!parsed.success) {
           // If any split file has invalid schema, fall back to legacy below
@@ -113,7 +142,7 @@ export class HaloAdapter implements RegistryAdapter {
             `[HaloAdapter] Split index "${splitFiles[i]}" failed validation, falling back to index.json: ` +
               parsed.error.issues.map(issue => issue.path.join('.')).join(', ')
           )
-          return this.fetchLegacyIndex(baseUrl, t0)
+          return this.legacyResult(baseUrl, t0)
         }
         parts.push(parsed.data as RegistryIndex)
       }
@@ -140,7 +169,7 @@ export class HaloAdapter implements RegistryAdapter {
       if (duplicates.length > 0) {
         throw new Error(`Invalid index: duplicate slug(s): ${duplicates.join(', ')}`)
       }
-      return merged
+      return { index: merged, validators: nextValidators }
     }
 
     // Fallback: any split file missing → use legacy index.json
@@ -151,7 +180,28 @@ export class HaloAdapter implements RegistryAdapter {
         .join(', ') +
       `), falling back to index.json`
     )
-    return this.fetchLegacyIndex(baseUrl, t0)
+    return this.legacyResult(baseUrl, t0)
+  }
+
+  /** Refetch one split file unconditionally, returning null when it is unusable. */
+  private async fetchSplitFile(
+    baseUrl: string,
+    file: string,
+    nextValidators: IndexValidators,
+  ): Promise<RegistryIndex | null> {
+    const res = await fetchWithTimeout(`${baseUrl}/${file}`, {
+      headers: { 'Accept': 'application/json', 'User-Agent': 'Halo-Store/1.0' },
+    })
+    if (!res.ok) return null
+    const etag = res.headers.get('ETag')
+    if (etag) nextValidators[file] = etag
+    const parsed = RegistryIndexSchema.safeParse(await res.json())
+    return parsed.success ? (parsed.data as RegistryIndex) : null
+  }
+
+  /** Legacy path carries no validators, so it always reports a fresh index. */
+  private async legacyResult(baseUrl: string, t0: number): Promise<FetchIndexResult> {
+    return { index: await this.fetchLegacyIndex(baseUrl, t0), validators: {} }
   }
 
   /** Legacy single-file `index.json` loader, retained for unmigrated registries. */

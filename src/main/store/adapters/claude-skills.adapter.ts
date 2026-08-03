@@ -22,7 +22,7 @@ import { fetchWithTimeout } from './halo.adapter'
 import { sanitizeSlug } from './mcp-registry.adapter'
 import type { AppSpec, SkillSpec } from '../../apps/spec/schema'
 import type { RegistrySource, RegistryIndex, RegistryEntry } from '../../../shared/store/store-types'
-import type { RegistryAdapter } from './types'
+import type { RegistryAdapter, FetchIndexResult } from './types'
 
 // ── External API types ─────────────────────────────────────────────────────
 
@@ -228,7 +228,8 @@ async function collectSkillFilesLegacy(
 export class ClaudeSkillsAdapter implements RegistryAdapter {
   readonly strategy = 'mirror' as const
 
-  async fetchIndex(source: RegistrySource): Promise<RegistryIndex> {
+  /** This source serves no validators, so every fetch reports a fresh index. */
+  async fetchIndex(source: RegistrySource): Promise<FetchIndexResult> {
     const baseUrl = source.url.replace(/\/+$/, '')
     const url = `${baseUrl}/featured.json`
     const t0 = performance.now()
@@ -282,10 +283,13 @@ export class ClaudeSkillsAdapter implements RegistryAdapter {
     console.log(`[ClaudeSkillsAdapter] Loaded ${apps.length} featured skills (${dt.toFixed(0)}ms)`)
 
     return {
-      version: 1,
-      generated_at: new Date().toISOString(),
-      source: source.url,
-      apps,
+      index: {
+        version: 1,
+        generated_at: new Date().toISOString(),
+        source: source.url,
+        apps,
+      },
+      validators: {},
     }
   }
 

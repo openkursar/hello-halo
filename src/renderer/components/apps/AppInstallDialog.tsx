@@ -5,7 +5,7 @@
  * Three modes:
  *   - Visual (default): structured form for the common case (type=automation)
  *   - YAML: full CodeMirror editor with a complete example template
- *   - Import: unified drop zone for .yaml, .zip, or folder — all handled inline
+ *   - Import: unified drop zone for .yaml, .zip/.dhpkg, or folder — all handled inline
  *
  * Import tab state machine:
  *   idle → loading → error | yaml-preview | bundle-preview → installing → success | partial | failed
@@ -393,7 +393,7 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
     }
   }, [])
 
-  // ── Import: process a .zip file ──
+  // ── Import: process a .zip / .dhpkg archive ──
   const processZipFile = useCallback(async (file: File) => {
     setImportState({ phase: 'loading' })
     const outcome = await parseDigitalHumanZip(file)
@@ -455,7 +455,7 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
   // ── Import: file handler (routes by extension) ──
   const handleImportFile = useCallback(async (file: File) => {
     const name = file.name.toLowerCase()
-    if (name.endsWith('.zip')) {
+    if (name.endsWith('.zip') || name.endsWith('.dhpkg')) {
       await processZipFile(file)
     } else {
       await processYamlFile(file)
@@ -1017,7 +1017,7 @@ function ImportTab({
     <>
       {/* Description */}
       <p className="text-xs text-muted-foreground">
-        {t('Drop a .yaml spec file, .zip bundle, or folder to import a digital human.')}
+        {t('Drop a .yaml spec file, .zip / .dhpkg bundle, or folder to import a digital human.')}
       </p>
 
       {phase === 'idle' && (
@@ -1025,8 +1025,8 @@ function ImportTab({
           onFile={onFile}
           onDirectoryEntry={onDirectoryEntry}
           onFolderFileList={onFolderFileList}
-          fileAccept=".yaml,.yml,.zip"
-          dropLabel={t('Drop .yaml, .zip, or folder here')}
+          fileAccept=".yaml,.yml,.zip,.dhpkg"
+          dropLabel={t('Drop .yaml, .zip, .dhpkg, or folder here')}
           dropHint={t('or click to browse a file')}
           folderLabel={t('Browse folder...')}
         >

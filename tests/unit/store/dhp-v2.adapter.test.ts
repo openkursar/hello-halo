@@ -18,7 +18,7 @@ vi.mock('../../../src/main/store/adapters/halo.adapter', async () => {
   return { ...actual, fetchWithTimeout: vi.fn() }
 })
 
-const { fetchWithTimeout } = await import('../../../src/main/store/adapters/halo.adapter')
+const { fetchWithTimeout, HaloAdapter } = await import('../../../src/main/store/adapters/halo.adapter')
 const { DhpV2Adapter } = await import('../../../src/main/store/adapters/dhp-v2.adapter')
 const { STORE_NOT_SIGNED_IN } = await import('../../../src/shared/store/store-types')
 
@@ -29,8 +29,13 @@ function source(id: string, url: string): RegistrySource {
 }
 
 /** Minimal Response stand-in: only what the driver actually reads. */
-function reply(status: number, body?: unknown): Response {
-  return { ok: status >= 200 && status < 300, status, json: async () => body } as Response
+function reply(status: number, body?: unknown, headers?: Record<string, string>): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+    headers: new Headers(headers),
+  } as Response
 }
 
 const SRC = source('official', 'http://reg.test/')
@@ -188,17 +193,50 @@ describe('DhpV2Adapter — collections and page documents', () => {
     await expect(adapter.fetchCollections(SRC)).rejects.toThrow('collections failed: 500')
   })
 
-  it('returns null for an absent page document and throws on a fault', async () => {
+  it('separates an absent page document from a fault', async () => {
     const adapter = new DhpV2Adapter()
 
     fetchMock.mockResolvedValueOnce(reply(404))
-    await expect(adapter.fetchPageTaxonomy(SRC)).resolves.toBeNull()
+    await expect(adapter.fetchPageTaxonomy(SRC)).resolves.toEqual({ status: 'absent' })
 
-    fetchMock.mockResolvedValueOnce(reply(200, { default: [{ id: 'news' }] }))
-    await expect(adapter.fetchPageLayout(SRC)).resolves.toEqual({ default: [{ id: 'news' }] })
+    fetchMock.mockResolvedValueOnce(reply(200, { default: [{ id: 'news' }] }, { ETag: '"v1"' }))
+    await expect(adapter.fetchPageLayout(SRC)).resolves.toEqual({
+      status: 'ok',
+      document: { default: [{ id: 'news' }] },
+      validator: '"v1"',
+    })
 
     fetchMock.mockResolvedValueOnce(reply(502))
     await expect(adapter.fetchPageLayout(SRC)).rejects.toThrow('HTTP 502')
+  })
+
+  it('revalidates a page document with its validator and reports it unchanged', async () => {
+    const adapter = new DhpV2Adapter()
+
+    fetchMock.mockResolvedValueOnce(reply(304))
+    await expect(adapter.fetchPageLayout(SRC, '"v1"')).resolves.toEqual({ status: 'unchanged' })
+
+    const headers = (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>
+    expect(headers['If-None-Match']).toBe('"v1"')
+  })
+})
+
+/**
+ * This driver delegates its catalog to Halo, and a delegation that quietly drops
+ * an argument still compiles, still runs, and still returns a usable index — it
+ * just never revalidates. Since the enterprise build ships this source type,
+ * that failure would cost a full index download on every freshness check.
+ */
+describe('DhpV2Adapter — catalog delegation', () => {
+  it('forwards index validators to the delegated catalog driver', async () => {
+    const delegate = vi
+      .spyOn(HaloAdapter.prototype, 'fetchIndex')
+      .mockResolvedValue({ index: null, validators: {} })
+
+    await new DhpV2Adapter().fetchIndex(SRC, { 'skills.json': '"v1"' })
+
+    expect(delegate).toHaveBeenCalledWith(SRC, { 'skills.json': '"v1"' })
+    delegate.mockRestore()
   })
 })
 

@@ -3,14 +3,14 @@
  *
  * Pure utility module for Digital Human bundle import.
  * Supports two input modes:
- *   1. ZIP file  → parseDigitalHumanZip(file)
- *   2. Folder    → parseDigitalHumanFolder(files)
+ *   1. Archive (.zip / .dhpkg) → parseDigitalHumanZip(file)
+ *   2. Folder                  → parseDigitalHumanFolder(files)
  *
  * Both converge on the same Layer 2 (structure) → Layer 3 (schema)
  * validation pipeline. Layer 4 (Zod) runs on the backend at install time.
  *
  * Bundle Format:
- *   my-digital-human/            (or .zip)
+ *   my-digital-human/            (or .zip / .dhpkg)
  *   ├── spec.yaml            ← required, the automation spec
  *   └── skills/              ← optional, bundled skills
  *       ├── skill-a/
@@ -32,6 +32,9 @@ import { parse as parseYaml } from 'yaml'
 
 /** Maximum allowed ZIP file size in bytes (10 MB) */
 const MAX_ZIP_SIZE = 10 * 1024 * 1024
+
+/** `.dhpkg` is a zip under another name (see main/store/dhpkg), so it parses here too. */
+const ARCHIVE_EXTENSIONS = ['.zip', '.dhpkg']
 
 /** macOS metadata path segments to ignore */
 const MACOS_IGNORED = (path: string): boolean =>
@@ -101,12 +104,13 @@ function validateFileLayer(file: File): ZipValidationError[] {
   const errors: ZipValidationError[] = []
 
   // Check extension
-  if (!file.name.toLowerCase().endsWith('.zip')) {
+  const lowerName = file.name.toLowerCase()
+  if (!ARCHIVE_EXTENSIONS.some(ext => lowerName.endsWith(ext))) {
     errors.push({
       location: file.name,
-      expected: '.zip',
+      expected: '.zip or .dhpkg',
       actual: file.name.split('.').pop() || '(none)',
-      suggestion: 'Please select a .zip archive file.',
+      suggestion: 'Please select a .zip or .dhpkg archive file.',
     })
   }
 

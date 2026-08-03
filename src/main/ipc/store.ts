@@ -287,9 +287,14 @@ export function registerStoreHandlers(): void {
       return storeController.getStoreCategoryTaxonomy()
     },
 
-    // ── store:get-discover-layout ──────────────────────────────────────────
-    storeGetDiscoverLayout: async () => {
-      return storeController.getStoreDiscoverLayout()
+    // ── store:revalidate ───────────────────────────────────────────────────
+    storeRevalidate: async () => {
+      return storeController.revalidateStore()
+    },
+
+    // ── store:get-discover-page ────────────────────────────────────────────
+    storeGetDiscoverPage: async (input?: { locale?: string; pageSize?: number }) => {
+      return storeController.getStoreDiscoverPage(input)
     },
 
     // ── store:get-my-publications ──────────────────────────────────────────
@@ -315,11 +320,6 @@ export function registerStoreHandlers(): void {
     // ── store:unpublish ────────────────────────────────────────────────────
     storeUnpublish: async (input: { slug: string }) => {
       return storeController.unpublishStoreApp(input)
-    },
-
-    // ── store:get-collections ──────────────────────────────────────────────
-    storeGetCollections: async () => {
-      return storeController.getStoreCollections()
     },
 
     // ── store:ignore-version ───────────────────────────────────────────────
@@ -387,5 +387,5 @@ export function registerStoreHandlers(): void {
     sendToRenderer('store:upgrade-available', event)
   })
 
-  console.log('[StoreIPC] Store handlers registered (19 channels + sync push + upgrade push)')
+  console.log('[StoreIPC] Store handlers registered (27 channels + sync push + upgrade push)')
 }

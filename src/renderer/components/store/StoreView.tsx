@@ -9,6 +9,7 @@ import { useEffect, useRef } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { api } from '../../api'
 import { useAppsPageStore } from '../../stores/apps-page.store'
+import { useStoreRevalidation } from '../../hooks/useStoreRevalidation'
 import { StoreHeader } from './StoreHeader'
 import { StoreCategoryBar } from './StoreCategoryBar'
 import { StoreGrid } from './StoreGrid'
@@ -30,6 +31,10 @@ export function StoreView() {
   const loadStoreApps = useAppsPageStore(state => state.loadStoreApps)
   const checkUpdates = useAppsPageStore(state => state.checkUpdates)
   const didInitRef = useRef(false)
+
+  // Only while the store is the view in front of the user — a background tab has
+  // nothing to keep fresh.
+  useStoreRevalidation(!storeSelectedSlug && !storeMineOpen)
 
   // Store funnel: entering the store and every tab switch.
   useEffect(() => {
@@ -117,10 +122,12 @@ export function StoreView() {
           <StoreDiscover />
         </div>
       ) : (
-        // Category bar stays fixed; only the grid scrolls beneath it.
+        // Category bar stays fixed; only the grid scrolls beneath it. Searching
+        // from Discover leaves the type filter null, so the bar renders nothing
+        // and the scroll area has to supply the gap it would have provided.
         <div className="flex-1 flex flex-col overflow-hidden bg-muted/20">
           <StoreCategoryBar />
-          <div className="flex-1 overflow-y-auto">
+          <div className={`flex-1 overflow-y-auto ${storeTypeFilter === null ? 'pt-3' : ''}`}>
             <StoreGrid />
           </div>
         </div>

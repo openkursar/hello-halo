@@ -106,7 +106,7 @@ describe('SyncService', () => {
 
     getAdapterMock.mockReturnValue({
       strategy: 'mirror',
-      fetchIndex: vi.fn().mockResolvedValue({ apps: entries }),
+      fetchIndex: vi.fn().mockResolvedValue({ index: { apps: entries }, validators: {} }),
     })
 
     const svc = new SyncService(makeManager(db))
@@ -128,7 +128,7 @@ describe('SyncService', () => {
     const reg = mirrorRegistry()
     getAdapterMock.mockReturnValue({
       strategy: 'mirror',
-      fetchIndex: vi.fn().mockResolvedValue({ apps: [entry('searchable')] }),
+      fetchIndex: vi.fn().mockResolvedValue({ index: { apps: [entry('searchable')] }, validators: {} }),
     })
 
     const svc = new SyncService(makeManager(db))

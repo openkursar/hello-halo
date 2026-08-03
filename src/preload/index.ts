@@ -38,7 +38,7 @@ import type {
   HealthExportResponse,
   HealthCheckResponse
 } from '../shared/types'
-import type { StoreInstallProgress, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, MyPublication, StoreCollection, StoreSignInStatus } from '../shared/store/store-types'
+import type { StoreInstallProgress, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, StoreSignInStatus } from '../shared/store/store-types'
 
 // Seed --display-scale before the renderer's first paint. The main process
 // passes the persisted scale via additionalArguments at window creation;
@@ -581,13 +581,13 @@ export interface HaloAPI {
   storeImportDhpkg: (input?: { filePath?: string; spaceId?: string | null }) => Promise<IpcResponse<{ appId: string }>>
   storeGetCapabilities: () => Promise<IpcResponse<StoreCapabilities>>
   storeGetCategoryTaxonomy: () => Promise<IpcResponse<CategoryTaxonomy>>
-  storeGetDiscoverLayout: () => Promise<IpcResponse<DiscoverLayout>>
+  storeGetDiscoverPage: (input?: { locale?: string; pageSize?: number }) => Promise<IpcResponse<ResolvedDiscover>>
+  storeRevalidate: () => Promise<IpcResponse<{ changed: boolean }>>
   storeEnsureSignedIn: (input?: { force?: boolean }) => Promise<IpcResponse<boolean>>
   storeGetIdentity: () => Promise<IpcResponse<{ uid: string; name: string } | null>>
   storeGetSignInStatus: () => Promise<IpcResponse<StoreSignInStatus>>
   storeGetMyPublications: () => Promise<IpcResponse<MyPublication[]>>
   storeUnpublish: (input: { slug: string }) => Promise<IpcResponse<null>>
-  storeGetCollections: () => Promise<IpcResponse<StoreCollection[]>>
   storeIgnoreVersion: (input: { appId: string; version: string }) => Promise<IpcResponse<null>>
   onStoreSyncStatusChanged: (callback: (data: { registryId: string; status: string; appCount: number; error?: string }) => void) => () => void
   onStoreUpgradeAvailable: (callback: (data: { appId: string; currentVersion: string; latestVersion: string; strategy: 'auto' | 'notify' | 'manual'; severity: 'patch' | 'minor' | 'major' }) => void) => () => void

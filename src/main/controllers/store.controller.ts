@@ -10,7 +10,8 @@
  */
 
 import type { StoreQuery, StoreQueryParams, StoreQueryResponse } from '../../shared/store/store-types'
-import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, MyPublication, StoreCollection } from '../../shared/store/store-types'
+import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection } from '../../shared/store/store-types'
+import { DISCOVER_CATALOG_PAGE_SIZE } from '../../shared/store/store-types'
 import type { AppType } from '../../shared/apps/spec-types'
 import {
   listApps,
@@ -27,12 +28,11 @@ import {
   updateRegistryAdapterConfig,
   getCategoryTaxonomy,
   invalidateServerTaxonomyCache,
-  getDiscoverLayout,
+  getDiscoverPage,
   invalidateDiscoverLayoutCache,
   fetchMyPublications,
   unpublishApp,
   ensureStoreIdentity,
-  fetchCollections,
   // Aliased: this controller exports same-named wrappers, and an unaliased
   // import would bind to the wrapper instead of the store function.
   getStoreCapabilities as resolveStoreCapabilities,
@@ -179,7 +179,7 @@ export async function installStoreApp(
     // Analytics signal for the store funnel, distinct from the store's install
     // ledger: this one marks the user-initiated action, so it stays at this
     // entry point rather than following the download.
-    const appType = getAppManager().getApp(appId)?.spec.type
+    const appType = getAppManager()?.getApp(appId)?.spec.type
     void trackEvent(AnalyticsEvents.STORE_INSTALL_DONE, appType ? { appId: slug, appType } : { appId: slug })
     return { success: true, data: { appId } }
   } catch (error: unknown) {
@@ -198,8 +198,26 @@ export async function installStoreApp(
 // ============================================================================
 
 /**
- * Refresh the registry index from remote sources.
+ * Freshness check for when the user comes back to the store. Drops the
+ * server-config caches so the next read revalidates, and re-checks the index —
+ * both are conditional requests, so an unchanged store costs a few 304s.
+ *
+ * `changed` reports whether the index itself moved, letting the caller leave the
+ * browse list alone when only ops config could have shifted.
  */
+export async function revalidateStore(): Promise<StoreControllerResponse<{ changed: boolean }>> {
+  try {
+    invalidateServerTaxonomyCache()
+    invalidateDiscoverLayoutCache()
+    const changed = await refreshIndex()
+    return { success: true, data: { changed } }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] revalidateStore error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
 export async function refreshStoreIndex(): Promise<StoreControllerResponse<void>> {
   try {
     invalidateServerTaxonomyCache()
@@ -318,15 +336,16 @@ export async function getStoreCategoryTaxonomy(): Promise<StoreControllerRespons
   }
 }
 
-/**
- * Resolve the config-driven discover-page layout (server ?? built-in catalog).
- */
-export async function getStoreDiscoverLayout(): Promise<StoreControllerResponse<DiscoverLayout>> {
+/** The discover page with every section's data resolved against the full index. */
+export async function getStoreDiscoverPage(
+  input?: { locale?: string; pageSize?: number }
+): Promise<StoreControllerResponse<ResolvedDiscover>> {
   try {
-    return { success: true, data: await getDiscoverLayout() }
+    const pageSize = input?.pageSize && input.pageSize > 0 ? input.pageSize : DISCOVER_CATALOG_PAGE_SIZE
+    return { success: true, data: await getDiscoverPage(input?.locale ?? '', pageSize) }
   } catch (error: unknown) {
     const err = error as Error
-    console.error('[StoreController] getStoreDiscoverLayout error:', err.message)
+    console.error('[StoreController] getStoreDiscoverPage error:', err.message)
     return { success: false, error: err.message }
   }
 }
@@ -383,19 +402,6 @@ export async function getStoreMyPublications(): Promise<StoreControllerResponse<
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] getStoreMyPublications error:', err.message)
-    return { success: false, error: err.message }
-  }
-}
-
-/**
- * Fetch curated scene collections from the store server (empty when none).
- */
-export async function getStoreCollections(): Promise<StoreControllerResponse<StoreCollection[]>> {
-  try {
-    return { success: true, data: await fetchCollections() }
-  } catch (error: unknown) {
-    const err = error as Error
-    console.error('[StoreController] getStoreCollections error:', err.message)
     return { success: false, error: err.message }
   }
 }

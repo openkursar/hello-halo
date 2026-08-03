@@ -10,20 +10,23 @@
 
 import { createCachedResource } from './cached-resource'
 import { api } from '../api'
-import { BUILTIN_DISCOVER_LAYOUT, BUILTIN_CATEGORY_TAXONOMY } from '../../shared/store/store-types'
-import type { DiscoverLayout, CategoryTaxonomy, StoreCollection } from '../../shared/store/store-types'
+import i18n, { getCurrentLanguage } from '../i18n'
+import { BUILTIN_CATEGORY_TAXONOMY } from '../../shared/store/store-types'
+import type { CategoryTaxonomy, ResolvedDiscover } from '../../shared/store/store-types'
 
-async function fetchLayout(): Promise<DiscoverLayout> {
+/**
+ * The whole discover page in one call: the main process resolves every
+ * section against the full index mirror, so rankings are not scored over the
+ * browse list's current page. Null when it cannot be resolved, which leaves the
+ * page to render nothing rather than a half-built layout.
+ */
+async function fetchDiscoverPage(): Promise<ResolvedDiscover | null> {
   try {
-    const res = await api.storeGetDiscoverLayout()
-    if (res.success && res.data && Array.isArray((res.data as DiscoverLayout).nodes)) {
-      const layout = res.data as DiscoverLayout
-      if (layout.nodes.length > 0) return layout
-    }
-    return BUILTIN_DISCOVER_LAYOUT
+    const res = await api.storeGetDiscoverPage({ locale: getCurrentLanguage() })
+    return res.success && res.data ? (res.data as ResolvedDiscover) : null
   } catch (error) {
-    console.error('[store-resources] discover layout fetch failed, using built-in:', error)
-    return BUILTIN_DISCOVER_LAYOUT
+    console.error('[store-resources] discover page fetch failed:', error)
+    return null
   }
 }
 
@@ -40,15 +43,8 @@ async function fetchTaxonomy(): Promise<CategoryTaxonomy> {
   }
 }
 
-async function fetchCollections(): Promise<StoreCollection[]> {
-  try {
-    const res = await api.storeGetCollections()
-    return res.success ? ((res.data as StoreCollection[]) ?? []) : []
-  } catch {
-    return []
-  }
-}
+export const discoverPageResource = createCachedResource<ResolvedDiscover | null | undefined>(fetchDiscoverPage)
 
-export const discoverLayoutResource = createCachedResource(fetchLayout)
+// Entries are localized by the request, so a language switch invalidates them.
+i18n.on('languageChanged', () => discoverPageResource.invalidate())
 export const categoryTaxonomyResource = createCachedResource(fetchTaxonomy)
-export const storeCollectionsResource = createCachedResource(fetchCollections)

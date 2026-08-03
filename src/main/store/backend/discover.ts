@@ -6,9 +6,9 @@
  *   - server   : an ops-managed layout served by the primary source.
  *   - built-in : a single paginated catalog (community/no-config fallback).
  *
- * The layout only carries composition + queries; the actual entries are
- * resolved client-side against the already-synced index. The payload is
- * untrusted, so its shape is validated here before use.
+ * The layout only carries composition + queries — `discover-page.ts` resolves
+ * it into entries. The payload is untrusted, so its shape is validated here
+ * before use.
  */
 
 import { createPageDocumentResolver } from './sources'

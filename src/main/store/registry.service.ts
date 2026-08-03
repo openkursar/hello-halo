@@ -263,25 +263,28 @@ export function shutdownRegistryService(): void {
  *
  * @param force - If true, clears all caches and re-syncs from scratch.
  */
-export async function refreshIndex(force = false): Promise<void> {
+/** Returns whether any source actually changed, so callers can skip redrawing. */
+export async function refreshIndex(force = false): Promise<boolean> {
   ensureInitialized()
 
   if (!syncService) {
     console.warn('[RegistryService] refreshIndex: no SyncService (db not provided)')
-    return
+    return false
   }
 
   const t0 = performance.now()
   console.log(`[RegistryService] refreshIndex: ${force ? 'force' : 'normal'} refresh`)
 
+  let changed = true
   if (force) {
     await syncService.forceSyncAll(config.registries)
   } else {
-    await syncService.syncAll(config.registries, 0) // TTL=0 forces re-check
+    changed = await syncService.syncAll(config.registries, 0) // TTL=0 forces re-check
   }
 
   const dt = performance.now() - t0
-  console.log(`[RegistryService] refreshIndex: completed in ${dt.toFixed(0)}ms`)
+  console.log(`[RegistryService] refreshIndex: completed in ${dt.toFixed(0)}ms (changed=${changed})`)
+  return changed
 }
 
 /**
