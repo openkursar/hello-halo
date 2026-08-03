@@ -43,6 +43,7 @@ import { getAppManager } from '../apps/manager'
 import { AppAlreadyInstalledError, McpCommandBlockedError } from '../apps/manager/errors'
 import { MCP_COMMAND_BLOCKED_MESSAGE } from '../services/security-policy'
 import { getSkillDir } from '../apps/manager/skill-sync'
+import { deriveSkillCommandName } from '../apps/spec/skill-identity'
 import { listAvailableSkills } from '../apps/skill-discovery'
 import {
   getAppRuntime,
@@ -826,6 +827,15 @@ export function registerAppHandlers(): void {
         console.error('[AppIPC] app:open-skill-folder error:', err.message)
         return { success: false, error: err.message }
       }
+    },
+
+    // ── app:derive-skill-command-name ──────────────────────────────────────
+    // Lets the skill form preview the identifier install will actually assign,
+    // without shipping the romanization dictionary to the renderer.
+    appDeriveSkillCommandName: async (name: string) => {
+      const trimmed = name?.trim()
+      if (!trimmed) return { success: true, data: '' }
+      return { success: true, data: deriveSkillCommandName(trimmed) }
     },
 
     // ── app:list-available-skills ──────────────────────────────────────────

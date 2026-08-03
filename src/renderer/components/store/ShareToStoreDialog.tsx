@@ -293,7 +293,9 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
       setTags(draft.tags)
       if (draft.category) setCategory(draft.category)
     } else {
-      setName(sourceSpec?.name ?? '')
+      // Seed from the presentable name: for a skill the canonical name is its
+      // command identifier, which is not what the listing should show.
+      setName(sourceSpec?.display_name ?? sourceSpec?.name ?? '')
       setChangelog('')
       setDescription(sourceSpec?.description ?? '')
       setTags(sourceTags ?? [])
@@ -303,7 +305,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     }
     // Re-seeding a fresh target is not a user edit.
     draftDirty.current = false
-  }, [sourceSpec?.name, sourceSpec?.description, sourceTags, sourceCategory, draft])
+  }, [sourceSpec?.name, sourceSpec?.display_name, sourceSpec?.description, sourceTags, sourceCategory, draft])
 
   // Store version of the target slug — needed for the pre-flight version-
   // monotonicity check. Only resolvable for an installed source (import has no
@@ -921,6 +923,11 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
                   onChange={e => { draftDirty.current = true; setName(e.target.value); clearInvalid('name'); setSubmitError(null) }}
                   className={`w-full px-3 py-2 text-[13px] bg-muted/40 border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground ${invalid.has('name') ? 'border-red-400 ring-1 ring-red-400/40' : 'border-border/60'}`}
                 />
+                {type === 'skill' && sourceSpec?.name && (
+                  <p className="text-[11px] text-muted-foreground">
+                    {t('Command')} <span className="font-mono">/{sourceSpec.name}</span>
+                  </p>
+                )}
               </div>
 
               <div className="flex flex-col gap-1.5">

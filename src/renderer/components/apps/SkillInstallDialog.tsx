@@ -17,16 +17,21 @@ import {
   useState,
   useMemo,
   useCallback,
+  useEffect,
+  useRef,
   lazy,
   Suspense,
 } from 'react'
-import { X, Loader2, FolderOpen, FileText, Archive, AlertCircle } from 'lucide-react'
+import { X, Loader2, FolderOpen, FileText, Archive, AlertCircle, Pencil } from 'lucide-react'
+import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
 import type { SkillSpec } from '../../../shared/apps/spec-types'
 import {
   toSlug,
+  sanitizeCommandName,
+  finalizeCommandName,
   buildMdFromForm,
   parseMd,
   processMdFile,
@@ -49,7 +54,10 @@ const CodeMirrorEditor = lazy(() =>
 type SkillMode = 'visual' | 'md' | 'import'
 
 interface VisualForm {
+  /** Authored name, any script. Shown in Halo's UI. */
   name: string
+  /** ASCII identifier: skill directory, frontmatter name, slash command. */
+  commandName: string
   description: string
   /** Markdown content body — everything after the frontmatter */
   bodyContent: string
@@ -57,6 +65,7 @@ interface VisualForm {
 
 const INITIAL_FORM: VisualForm = {
   name: '',
+  commandName: '',
   description: '',
   bodyContent: '',
 }
@@ -270,11 +279,37 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
+  // Once the user edits the command name it stops tracking the authored name —
+  // otherwise their choice would be overwritten on the next keystroke.
+  const commandNameEdited = useRef(false)
+  const [editingCommandName, setEditingCommandName] = useState(false)
+
   // ── Form field helper ──
   const updateField = useCallback(<K extends keyof VisualForm>(key: K, val: VisualForm[K]) => {
     setForm(prev => ({ ...prev, [key]: val }))
     setError(null)
   }, [])
+
+  // Romanization runs in main (its dictionary would bloat the renderer bundle),
+  // so the preview trails the input by a debounce interval.
+  useEffect(() => {
+    if (mode !== 'visual') return
+    const authored = form.name.trim()
+    if (!authored) {
+      // Clearing the name is starting over, so tracking resumes.
+      commandNameEdited.current = false
+      setForm(prev => (prev.commandName ? { ...prev, commandName: '' } : prev))
+      return
+    }
+    if (commandNameEdited.current) return
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      const res = await api.appDeriveSkillCommandName(authored)
+      if (cancelled || !res.success || !res.data) return
+      setForm(prev => (prev.commandName === res.data ? prev : { ...prev, commandName: res.data! }))
+    }, 250)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [form.name, mode])
 
   // ── Mode switching ──
   const handleSwitchToMd = useCallback(() => {
@@ -288,15 +323,19 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
 
   const handleSwitchToVisual = useCallback(() => {
     setError(null)
-    // Try to parse MD back into form fields
+    // The MD frontmatter only carries the command name, so an authored name
+    // typed in the form survives the round trip while the command name follows
+    // whatever the editor now says.
     const { name, description, bodyContent } = parseMd(mdContent)
-    setForm({
-      name: name || form.name,
-      description: description || form.description,
-      bodyContent: bodyContent || form.bodyContent,
-    })
+    if (name) commandNameEdited.current = true
+    setForm(prev => ({
+      name: prev.name || name,
+      commandName: name || prev.commandName,
+      description: description || prev.description,
+      bodyContent: bodyContent || prev.bodyContent,
+    }))
     setMode('visual')
-  }, [mdContent, form])
+  }, [mdContent])
 
   // ── Build spec and install ──
   async function handleInstall() {
@@ -327,6 +366,7 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
       } else {
         // Visual or MD mode
         let name: string
+        let displayName: string | undefined
         let description: string
         let skillContent: string
 
@@ -337,14 +377,18 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
           skillContent = mdContent
         } else {
           // Visual mode — build MD from form
-          if (!form.name.trim()) {
+          const authored = form.name.trim()
+          if (!authored) {
             setError(t('Skill name is required'))
             setLoading(false)
             return
           }
-          name = toSlug(form.name)
-          description = form.description.trim() || `Skill: ${name}`
-          skillContent = buildMdFromForm(form)
+          // The derived command name may still be in flight on a fast submit;
+          // fall back to the synchronous slug so the install is never blocked.
+          name = finalizeCommandName(form.commandName) || toSlug(authored)
+          displayName = authored === name ? undefined : authored
+          description = form.description.trim() || `Skill: ${authored}`
+          skillContent = buildMdFromForm({ ...form, commandName: name })
         }
 
         if (!name) {
@@ -355,6 +399,7 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
 
         spec = {
           name,
+          display_name: displayName,
           description: description || `Skill: ${name}`,
           type: 'skill',
           skill_content: skillContent,
@@ -460,14 +505,36 @@ export function SkillInstallDialog({ onClose }: SkillInstallDialogProps) {
                   type="text"
                   value={form.name}
                   onChange={e => updateField('name', e.target.value)}
-                  placeholder={t('e.g. code-review-guidelines')}
+                  placeholder={t('e.g. Code Review Guidelines')}
                   className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground placeholder:text-muted-foreground/50"
                   autoFocus
                 />
-                {form.name && (
-                  <p className="text-xs text-muted-foreground font-mono">
-                    /{toSlug(form.name)}
-                  </p>
+                {form.name.trim() && (
+                  editingCommandName ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-muted-foreground font-mono">/</span>
+                      <input
+                        type="text"
+                        value={form.commandName}
+                        onChange={e => {
+                          commandNameEdited.current = true
+                          updateField('commandName', sanitizeCommandName(e.target.value))
+                        }}
+                        onBlur={() => setEditingCommandName(false)}
+                        className="flex-1 px-2 py-1 text-xs font-mono bg-secondary border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+                        autoFocus
+                      />
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setEditingCommandName(true)}
+                      className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <span className="font-mono">/{form.commandName || toSlug(form.name)}</span>
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                  )
                 )}
               </div>
 

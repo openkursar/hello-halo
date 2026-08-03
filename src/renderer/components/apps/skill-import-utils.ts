@@ -38,6 +38,11 @@ export interface ParsedSkill {
 /**
  * Derive a slug-friendly name from an arbitrary string.
  * "My Cool Skill" → "my-cool-skill"
+ *
+ * ASCII-only, so non-Latin scripts reduce to an empty string. Callers that need
+ * a usable identifier for any input go through `api.appDeriveSkillCommandName`,
+ * which romanizes in the main process; this stays as the synchronous fallback
+ * while that result is in flight.
  */
 export function toSlug(raw: string): string {
   return raw
@@ -48,10 +53,28 @@ export function toSlug(raw: string): string {
 }
 
 /**
- * Build a SKILL.md string from explicit fields (used by the Visual form).
+ * Constrain typed input to what a skill directory and slash command accept.
+ * Leaves a trailing hyphen alone so the user can keep typing past a separator;
+ * `finalizeCommandName` removes it once the value is committed.
  */
-export function buildMdFromForm(form: { name: string; description: string; bodyContent: string }): string {
-  const slug = toSlug(form.name) || 'my-skill'
+export function sanitizeCommandName(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+/, '')
+}
+
+/** The committed form: no edge hyphens. Empty when nothing usable remains. */
+export function finalizeCommandName(raw: string): string {
+  return sanitizeCommandName(raw).replace(/-+$/, '')
+}
+
+/**
+ * Build a SKILL.md string from explicit fields (used by the Visual form).
+ * The frontmatter carries the command name — the SDK reads the slash command
+ * from it — while the authored name only shapes the body headline.
+ */
+export function buildMdFromForm(
+  form: { name: string; commandName?: string; description: string; bodyContent: string }
+): string {
+  const slug = form.commandName?.trim() || toSlug(form.name) || 'my-skill'
   const desc = form.description.trim() || 'My skill description'
   const headline = form.name.trim() || 'My Skill'
   const body = form.bodyContent.trim()

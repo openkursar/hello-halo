@@ -44,6 +44,7 @@ import type { ActivityQueryOptions, EscalationResponse, AppChatRequest } from '.
 import { readSessionMessages } from '../../apps/runtime/session-store'
 import { getImSessionRegistry } from '../../apps/runtime/im-session-registry'
 import { listAvailableSkills } from '../../apps/skill-discovery'
+import { deriveSkillCommandName } from '../../apps/spec/skill-identity'
 import { analytics } from '../../services/analytics/analytics.service'
 import { broadcastToAll } from '../websocket'
 import * as appController from '../../controllers/app.controller'
@@ -252,6 +253,7 @@ export {
   getAppChatSessionState,
   getAppManager,
   listAvailableSkills,
+  deriveSkillCommandName,
   getAppRuntime,
   getEnabledAuthProviderConfigs,
   getImChannelManager,

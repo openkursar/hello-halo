@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../src/main/platform/store/types'
@@ -1350,4 +1350,122 @@ describe('AppManager', () => {
       expect(() => service.setUpgradeStrategy('missing', 'auto')).toThrow(AppNotFoundError)
     })
   })
+
+  // ===========================================================================
+  // Skill identity (derived command names)
+  // ===========================================================================
+
+  describe('skill command names', () => {
+    function skillSpec(name: string, extra?: Record<string, unknown>): AppSpec {
+      return {
+        spec_version: '1',
+        name,
+        version: '1.0.0',
+        description: 'A test skill',
+        type: 'skill',
+        skill_content: `---\nname: ${name}\ndescription: A test skill\n---\nBody`,
+        ...extra,
+      } as unknown as AppSpec
+    }
+
+    it('installs a non-ASCII name under its derived identifier', async () => {
+      const appId = await service.install(null, skillSpec('AI写作'))
+
+      const app = service.getApp(appId)!
+      expect(app.specId).toBe('ai-xie-zuo')
+      expect(app.spec.name).toBe('ai-xie-zuo')
+      expect(app.spec.display_name).toBe('AI写作')
+    })
+
+    it('separates two authored names that derive the same identifier', async () => {
+      const first = await service.install(null, skillSpec('AI写作'))
+      const second = await service.install(null, skillSpec('Ai 写作'))
+
+      expect(first).not.toBe(second)
+      expect(service.getApp(first)!.specId).toBe('ai-xie-zuo')
+      expect(service.getApp(second)!.specId).toBe('ai-xie-zuo-2')
+    })
+
+    it('refreshes in place when the same skill is installed again', async () => {
+      const first = await service.install(null, skillSpec('AI写作'))
+      const second = await service.install(null, skillSpec('AI写作', { description: 'Updated' }))
+
+      expect(second).toBe(first)
+      expect(service.listApps({ spaceId: null, type: 'skill' })).toHaveLength(1)
+      expect(service.getApp(first)!.spec.description).toBe('Updated')
+    })
+
+    it('keeps an ASCII name as its own identifier', async () => {
+      const appId = await service.install(null, skillSpec('code-commit'))
+
+      const app = service.getApp(appId)!
+      expect(app.specId).toBe('code-commit')
+      expect(app.spec.display_name).toBeUndefined()
+    })
+
+    it('moves the skill directory when the command name changes', async () => {
+      const appId = await service.install(TEST_SPACE_ID, skillSpec('AI写作'))
+      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.claude', 'skills')
+      expect(existsSync(join(skillsDir, 'ai-xie-zuo'))).toBe(true)
+
+      service.updateSpec(appId, { name: 'my-writer' })
+
+      expect(existsSync(join(skillsDir, 'my-writer', 'SKILL.md'))).toBe(true)
+      expect(existsSync(join(skillsDir, 'ai-xie-zuo'))).toBe(false)
+      expect(service.getApp(appId)!.specId).toBe('my-writer')
+    })
+
+    it('rewrites the SKILL.md frontmatter when an author-named skill is renamed', async () => {
+      const appId = await service.install(TEST_SPACE_ID, skillSpec('code-review'))
+      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.claude', 'skills')
+
+      service.updateSpec(appId, { name: 'code-audit' })
+
+      // The SDK reads the slash command from the frontmatter, so a rename that
+      // only moved the directory would leave the old command answering.
+      const written = readFileSync(join(skillsDir, 'code-audit', 'SKILL.md'), 'utf-8')
+      expect(written).toContain('name: code-audit')
+      expect(written).not.toContain('name: code-review')
+      expect(existsSync(join(skillsDir, 'code-review'))).toBe(false)
+    })
+
+    it('refuses a rename onto a name already taken in the same scope', async () => {
+      const appId = await service.install(TEST_SPACE_ID, skillSpec('code-review'))
+      await service.install(TEST_SPACE_ID, skillSpec('code-audit'))
+      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.claude', 'skills')
+
+      expect(() => service.updateSpec(appId, { name: 'code-audit' })).toThrow(AppAlreadyInstalledError)
+
+      // Neither record moved: the occupant keeps its files, the renamer keeps its name.
+      expect(existsSync(join(skillsDir, 'code-review', 'SKILL.md'))).toBe(true)
+      expect(existsSync(join(skillsDir, 'code-audit', 'SKILL.md'))).toBe(true)
+      expect(service.getApp(appId)!.specId).toBe('code-review')
+    })
+
+    it('does not treat a same-named app of another type as the same skill', async () => {
+      // An automation occupying the derived identifier, and presenting the same
+      // authored name — the one shape that could pass an identity check based on
+      // display text alone.
+      const automationId = await service.install(
+        null,
+        createTestSpec({ name: 'ai-xie-zuo', display_name: 'AI写作' } as Partial<AppSpec>)
+      )
+
+      const skillId = await service.install(null, skillSpec('AI写作'))
+
+      expect(service.getApp(skillId)!.specId).toBe('ai-xie-zuo-2')
+      expect(service.getApp(automationId)!.spec.type).toBe('automation')
+    })
+
+    it('leaves the directory in place when only the display name changes', async () => {
+      const appId = await service.install(TEST_SPACE_ID, skillSpec('AI写作'))
+      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.claude', 'skills')
+
+      service.updateSpec(appId, { display_name: '写作助手' })
+
+      expect(existsSync(join(skillsDir, 'ai-xie-zuo', 'SKILL.md'))).toBe(true)
+      expect(service.getApp(appId)!.spec.display_name).toBe('写作助手')
+    })
+  })
+
 })

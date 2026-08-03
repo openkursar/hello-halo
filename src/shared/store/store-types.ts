@@ -83,8 +83,11 @@ export interface RegistryEntry {
   slug: string
   /** Source registry id — populated on list results so a card can resolve install state by slug+registry. */
   registryId?: string
-  /** Display name */
+  /** Canonical name — for skills the ASCII command name, not a display string */
   name: string
+  /** Display name published alongside `name`; absent on entries whose canonical
+   * name is already presentable. `i18n` overrides it. */
+  display_name?: string
   /** Current version (semver) */
   version: string
   /** Author name */
