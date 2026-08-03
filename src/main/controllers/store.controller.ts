@@ -200,7 +200,9 @@ export async function installStoreApp(
 /**
  * Freshness check for when the user comes back to the store. Drops the
  * server-config caches so the next read revalidates, and re-checks the index —
- * both are conditional requests, so an unchanged store costs a few 304s.
+ * both are conditional requests, so an unchanged store costs a few 304s. A
+ * source that cannot revalidate is left on its TTL, since re-reading it would
+ * mean downloading its whole index on every arrival.
  *
  * `changed` reports whether the index itself moved, letting the caller leave the
  * browse list alone when only ops config could have shifted.
@@ -209,7 +211,7 @@ export async function revalidateStore(): Promise<StoreControllerResponse<{ chang
   try {
     invalidateServerTaxonomyCache()
     invalidateDiscoverLayoutCache()
-    const changed = await refreshIndex()
+    const changed = await refreshIndex('conditional')
     return { success: true, data: { changed } }
   } catch (error: unknown) {
     const err = error as Error

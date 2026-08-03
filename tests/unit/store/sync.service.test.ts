@@ -139,4 +139,58 @@ describe('SyncService', () => {
       .get('searchable') as { n: number }
     expect(fts.n).toBe(1)
   })
+
+  /**
+   * The freshness check runs on every arrival at a store tab, and its whole
+   * premise is that an unchanged source answers 304. A source that stores no
+   * validators cannot, so re-reading it downloads the entire mirror — the cost
+   * the zero TTL was assumed not to have.
+   */
+  describe('conditionalOnly', () => {
+    function seedState(id: string, syncedAt: number, etag: string | null): void {
+      db.prepare(
+        `INSERT INTO registry_sync_state (registry_id, strategy, status, last_synced_at, app_count, etag)
+         VALUES (?, 'mirror', 'idle', ?, 1, ?)`,
+      ).run(id, syncedAt, etag)
+    }
+
+    it('holds a validator-less source to its normal TTL', async () => {
+      const reg = mirrorRegistry()
+      seedState(reg.id, Date.now() - 60_000, null)
+
+      const fetchIndex = vi.fn()
+      getAdapterMock.mockReturnValue({ strategy: 'mirror', fetchIndex })
+
+      const svc = new SyncService(makeManager(db))
+      await svc.syncAll([reg], 0, true)
+
+      expect(fetchIndex).not.toHaveBeenCalled()
+    })
+
+    it('re-checks a source that can revalidate', async () => {
+      const reg = mirrorRegistry()
+      seedState(reg.id, Date.now() - 60_000, JSON.stringify({ 'skills.json': '"v1"' }))
+
+      const fetchIndex = vi.fn().mockResolvedValue({ index: null, validators: {} })
+      getAdapterMock.mockReturnValue({ strategy: 'mirror', fetchIndex })
+
+      const svc = new SyncService(makeManager(db))
+      await svc.syncAll([reg], 0, true)
+
+      expect(fetchIndex).toHaveBeenCalledWith(reg, { 'skills.json': '"v1"' })
+    })
+
+    it('still re-reads a validator-less source on an explicit refresh', async () => {
+      const reg = mirrorRegistry()
+      seedState(reg.id, Date.now() - 60_000, null)
+
+      const fetchIndex = vi.fn().mockResolvedValue({ index: { apps: [entry('a')] }, validators: {} })
+      getAdapterMock.mockReturnValue({ strategy: 'mirror', fetchIndex })
+
+      const svc = new SyncService(makeManager(db))
+      await svc.syncAll([reg], 0)
+
+      expect(fetchIndex).toHaveBeenCalled()
+    })
+  })
 })

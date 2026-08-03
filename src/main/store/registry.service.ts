@@ -256,15 +256,23 @@ export function shutdownRegistryService(): void {
 // ============================================
 
 /**
+ *   force       — clear all caches and re-sync from scratch.
+ *   full        — re-check every source, downloading from those that cannot
+ *                 revalidate.
+ *   conditional — re-check only sources that can answer a conditional request;
+ *                 the rest keep their TTL.
+ */
+export type RefreshMode = 'force' | 'full' | 'conditional'
+
+/**
  * Refresh store data.
  *
  * Mirror sources: triggers SyncService re-sync.
  * Proxy sources: clears query cache so next query fetches fresh data.
  *
- * @param force - If true, clears all caches and re-syncs from scratch.
+ * Returns whether any source actually changed, so callers can skip redrawing.
  */
-/** Returns whether any source actually changed, so callers can skip redrawing. */
-export async function refreshIndex(force = false): Promise<boolean> {
+export async function refreshIndex(mode: RefreshMode = 'full'): Promise<boolean> {
   ensureInitialized()
 
   if (!syncService) {
@@ -273,13 +281,13 @@ export async function refreshIndex(force = false): Promise<boolean> {
   }
 
   const t0 = performance.now()
-  console.log(`[RegistryService] refreshIndex: ${force ? 'force' : 'normal'} refresh`)
+  console.log(`[RegistryService] refreshIndex: ${mode} refresh`)
 
   let changed = true
-  if (force) {
+  if (mode === 'force') {
     await syncService.forceSyncAll(config.registries)
   } else {
-    changed = await syncService.syncAll(config.registries, 0) // TTL=0 forces re-check
+    changed = await syncService.syncAll(config.registries, 0, mode === 'conditional')
   }
 
   const dt = performance.now() - t0

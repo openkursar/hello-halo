@@ -72,8 +72,15 @@ export class SyncService {
 
   /**
    * Sync all enabled Mirror sources that are past their TTL.
+   *
+   * `conditionalOnly` bounds what a zero-TTL pass may cost, so the caller can
+   * run one whenever the user arrives at the store.
    */
-  async syncAll(registries: RegistrySource[], ttlMs = DEFAULT_MIRROR_TTL_MS): Promise<boolean> {
+  async syncAll(
+    registries: RegistrySource[],
+    ttlMs = DEFAULT_MIRROR_TTL_MS,
+    conditionalOnly = false,
+  ): Promise<boolean> {
     const mirrorRegistries = registries.filter(r => {
       if (!r.enabled) return false
       const adapter = getAdapter(r)
@@ -82,6 +89,7 @@ export class SyncService {
 
     console.log('[SyncService] syncAll:start', {
       ttlMs,
+      conditionalOnly,
       totalRegistries: registries.length,
       mirrorRegistries: mirrorRegistries.length,
     })
@@ -89,7 +97,7 @@ export class SyncService {
     const startedAt = performance.now()
     // Sync in parallel (each source is independent)
     const results = await Promise.allSettled(
-      mirrorRegistries.map(r => this.syncOne(r, ttlMs))
+      mirrorRegistries.map(r => this.syncOne(r, this.affordableTtl(r.id, ttlMs, conditionalOnly)))
     )
     const changed = results.some(r => r.status === 'fulfilled' && r.value)
 
@@ -100,6 +108,18 @@ export class SyncService {
       durationMs: Math.round(performance.now() - startedAt),
     })
     return changed
+  }
+
+  /**
+   * A source that stored no validators cannot answer a conditional request, so
+   * re-checking it downloads its whole index. Under `conditionalOnly` those
+   * sources keep the normal TTL rather than the caller's shorter one — without
+   * this, a check meant to cost a few 304s costs a full mirror download.
+   */
+  private affordableTtl(registryId: string, ttlMs: number, conditionalOnly: boolean): number {
+    if (!conditionalOnly) return ttlMs
+    const canRevalidate = Object.keys(this.readValidators(registryId)).length > 0
+    return canRevalidate ? ttlMs : Math.max(ttlMs, DEFAULT_MIRROR_TTL_MS)
   }
 
   /**

@@ -387,5 +387,5 @@ export function registerStoreHandlers(): void {
     sendToRenderer('store:upgrade-available', event)
   })
 
-  console.log('[StoreIPC] Store handlers registered (27 channels + sync push + upgrade push)')
+  console.log('[StoreIPC] Store handlers registered (sync push + upgrade push)')
 }
