@@ -61,6 +61,7 @@ export function loadManifest(manifestPath) {
     requiredProductFields: m.requiredProductFields ?? [],
     sensitiveFields: m.sensitiveFields ?? [],
     expectedArtifacts: m.expectedArtifacts ?? {},
+    requireReleaseNotesIn: m.requireReleaseNotesIn ?? [],
   }
 }
 

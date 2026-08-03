@@ -16,8 +16,9 @@ resources/builtin-apps/
 # Portable Git archive for Windows builds (downloaded by scripts/prepare-binaries.mjs)
 resources/git-bash/
 
-# Release notes temp file
+# Release notes temp files
 .release-notes-current.md
+.release-notes-summary.md
 
 # Local environment variables (secrets)
 .env.local

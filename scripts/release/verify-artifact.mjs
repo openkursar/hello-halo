@@ -17,6 +17,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { load } from 'js-yaml'
 import {
   c, log, loadManifest, sha256File, sha256Buffer, getByPath, isEmptyValue,
   asarList, asarRead, readRecord, writeRecord,
@@ -181,10 +182,23 @@ function main() {
         continue
       }
       if (name.endsWith('.yml')) {
-        const ymlVersion = (fs.readFileSync(file, 'utf8').match(/^version:\s*(.+)$/m) ?? [])[1]?.trim()
+        const raw = fs.readFileSync(file, 'utf8')
+        const ymlVersion = (raw.match(/^version:\s*(.+)$/m) ?? [])[1]?.trim()
         if (ymlVersion !== version) {
           problems.push(`${name}: version "${ymlVersion}" ≠ package.json "${version}" — auto-update would point at the wrong version`)
           continue
+        }
+        // The releaseNotes field is what the in-app update notification shows.
+        // A dropped --releaseNotesFile flag silently ships an empty notification
+        // (regression seen in 2.1.13), so assert it for every yml the manifest
+        // marks as user-facing.
+        if (manifest.requireReleaseNotesIn.includes(name)) {
+          const notes = load(raw)?.releaseNotes
+          if (isEmptyValue(notes)) {
+            problems.push(`${name}: releaseNotes is missing or empty — the update notification would show nothing (check -c.releaseInfo.releaseNotesFile in the deploy script)`)
+            continue
+          }
+          log.ok(`${name}: releaseNotes present (${String(notes).trim().split('\n')[0].slice(0, 40)}…)`)
         }
       }
       artifactHashes[name] = sha256File(file)
