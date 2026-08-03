@@ -1,6 +1,6 @@
 {
   "name": "halo",
-  "version": "2.1.13-rc.6",
+  "version": "2.1.14",
   "description": "AI that gets things done",
   "type": "module",
   "main": "./out/main/index.mjs",
@@ -210,7 +210,10 @@
       "product.json",
       "halo-local/dist/**/*",
       "!node_modules/better-sqlite3/prebuilds",
-      "!node_modules/@capacitor/**"
+      "!node_modules/@capacitor/**",
+      "!node_modules/@hello-halo/agent-sdk/swe-bench-eval/**",
+      "!node_modules/@hello-halo/agent-sdk/docs/**",
+      "!node_modules/@hello-halo/agent-sdk/.claude/**"
     ],
     "extraResources": [
       {
@@ -307,7 +310,8 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "deleteAppDataOnUninstall": false,
-      "include": "resources/installer.nsh"
+      "include": "resources/installer.nsh",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "linux": {
       "icon": "resources/linux",

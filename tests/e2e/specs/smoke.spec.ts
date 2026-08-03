@@ -189,20 +189,17 @@ test.describe('Core Features', () => {
     const tunnelButton = await window.waitForSelector('button:has-text("启动隧道"), button:has-text("Start Tunnel")', { timeout: 10000 })
     await tunnelButton.click()
 
-    // Wait for public URL (supports both EN and CN)
-    const publicUrl = await window.waitForSelector(
-      'text=/\\.trycloudflare\\.com|公网地址|Public URL/i',
-      { timeout: 30000 }
-    ).catch(() => null)
+    // The public address is the only https:// code block here (local and LAN
+    // addresses are http://), so this matches both the permanent named tunnel
+    // and a quick trycloudflare tunnel without pinning either domain.
+    const urlCode = await window.waitForSelector('code:has-text("https://")', { timeout: 30000 }).catch(() => null)
 
-    if (publicUrl) {
-      const urlCode = await window.waitForSelector('code:has-text("trycloudflare.com")', { timeout: 15000 }).catch(() => null)
-      expect(urlCode).toBeTruthy()
+    if (urlCode) {
       await window.screenshot({ path: 'tests/e2e/results/smoke-tunnel-enabled.png' })
     } else {
-      // Check for error state (network issue is acceptable)
+      // No address at all is only acceptable when the tunnel reported a failure.
       const errorMsg = await window.$('text=/隧道连接失败|Tunnel.*fail|error/i')
-      expect(publicUrl || errorMsg).toBeTruthy()
+      expect(errorMsg).toBeTruthy()
       await window.screenshot({ path: 'tests/e2e/results/smoke-tunnel-error.png' })
     }
   })
