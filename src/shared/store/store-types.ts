@@ -393,6 +393,42 @@ export interface DiscoverLayout {
 }
 
 /**
+ * A layout node with its data already resolved by the main process, which holds
+ * the full index mirror. The renderer receives entries rather than the query
+ * that produced them — a section's ranking is therefore computed over every
+ * entry, not just the page the browse list happens to have loaded.
+ *
+ * Hidden nodes and sections that resolve to nothing are dropped before sending.
+ */
+export interface ResolvedDiscoverNode {
+  type: DiscoverNodeType
+  layout?: DiscoverLayoutKind
+  title?: LocaleText
+  subtitle?: LocaleText
+  /** For `row`: column count and child nodes. */
+  columns?: number
+  children?: ResolvedDiscoverNode[]
+  /** Resolved entries for a section, or the first catalog page. */
+  entries?: RegistryEntry[]
+  /** Only for the `collections` layout. */
+  collections?: StoreCollection[]
+  /** Only for `catalog`: whether further pages exist behind the browse query. */
+  hasMore?: boolean
+}
+
+export interface ResolvedDiscover {
+  version: number
+  nodes: ResolvedDiscoverNode[]
+}
+
+/**
+ * Page size for the catalog node. Shared because the main process returns page
+ * 1 and the renderer requests page 2 onwards — a mismatch would repeat or skip
+ * entries at the boundary.
+ */
+export const DISCOVER_CATALOG_PAGE_SIZE = 30
+
+/**
  * Zero-config fallback: a single paginated catalog. Used by the community build
  * and whenever the server layout is absent/empty/malformed, so the discover
  * page always renders the full app grid. The catalog title is resolved in the

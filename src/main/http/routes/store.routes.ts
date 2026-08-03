@@ -200,10 +200,15 @@ export function registerStoreRoutes(app: Express): void {
     }
   })
 
-  // GET /api/store/discover-layout — config-driven discover page layout
-  app.get('/api/store/discover-layout', async (req: Request, res: Response) => {
+  // GET /api/store/discover-page — layout with every section's data resolved
+  app.get('/api/store/discover-page', async (req: Request, res: Response) => {
     try {
-      res.json(await storeController.getStoreDiscoverLayout())
+      const locale = typeof req.query.locale === 'string' ? req.query.locale : undefined
+      const pageSize = Number(req.query.pageSize)
+      res.json(await storeController.getStoreDiscoverPage({
+        locale,
+        pageSize: Number.isFinite(pageSize) && pageSize > 0 ? pageSize : undefined,
+      }))
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -231,15 +236,6 @@ export function registerStoreRoutes(app: Express): void {
   app.post('/api/store/relist', async (req: Request, res: Response) => {
     try {
       res.json(await storeController.relistStoreApp(req.body))
-    } catch (error) {
-      res.json({ success: false, error: (error as Error).message })
-    }
-  })
-
-  // GET /api/store/collections — curated scene collections for the discover page
-  app.get('/api/store/collections', async (req: Request, res: Response) => {
-    try {
-      res.json(await storeController.getStoreCollections())
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

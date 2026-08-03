@@ -10,7 +10,8 @@
  */
 
 import type { StoreQuery, StoreQueryParams, StoreQueryResponse } from '../../shared/store/store-types'
-import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource, MarketplaceCapabilities, CategoryTaxonomy, DiscoverLayout, MyPublication, StoreCollection } from '../../shared/store/store-types'
+import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource, MarketplaceCapabilities, CategoryTaxonomy, ResolvedDiscover, MyPublication } from '../../shared/store/store-types'
+import { DISCOVER_CATALOG_PAGE_SIZE } from '../../shared/store/store-types'
 import type { AppType } from '../../shared/apps/spec-types'
 import {
   listApps,
@@ -28,7 +29,7 @@ import {
   getMarketplaceCapabilities,
   getCategoryTaxonomy,
   invalidateServerTaxonomyCache,
-  getDiscoverLayout,
+  getDiscoverPage,
   invalidateDiscoverLayoutCache,
   fetchMyPublications,
   unpublishApp,
@@ -36,7 +37,6 @@ import {
   ensureMarketplaceIdentity,
   getMarketplaceIdentity,
   getMarketplaceSignInStatus,
-  fetchCollections,
 } from '../store'
 import type { MarketplaceIdentity } from '../store/marketplace-identity'
 import type { MarketplaceSignInStatus } from '../../shared/store/store-types'
@@ -178,7 +178,7 @@ export async function installStoreApp(
     // Fire-and-forget install signal that feeds the store's install-count rollup.
     // Fired here (the user-initiated entry point) rather than inside
     // installFromStore, which recurses for skill dependencies and would inflate counts.
-    const appType = getAppManager().getApp(appId)?.spec.type
+    const appType = getAppManager()?.getApp(appId)?.spec.type
     void trackEvent('mkt_install_done', appType ? { appId: slug, appType } : { appId: slug })
     return { success: true, data: { appId } }
   } catch (error: unknown) {
@@ -317,15 +317,16 @@ export async function getStoreCategoryTaxonomy(): Promise<StoreControllerRespons
   }
 }
 
-/**
- * Resolve the config-driven discover-page layout (server ?? built-in catalog).
- */
-export async function getStoreDiscoverLayout(): Promise<StoreControllerResponse<DiscoverLayout>> {
+/** The discover page with every section's data resolved against the full index. */
+export async function getStoreDiscoverPage(
+  input?: { locale?: string; pageSize?: number }
+): Promise<StoreControllerResponse<ResolvedDiscover>> {
   try {
-    return { success: true, data: await getDiscoverLayout() }
+    const pageSize = input?.pageSize && input.pageSize > 0 ? input.pageSize : DISCOVER_CATALOG_PAGE_SIZE
+    return { success: true, data: await getDiscoverPage(input?.locale ?? '', pageSize) }
   } catch (error: unknown) {
     const err = error as Error
-    console.error('[StoreController] getStoreDiscoverLayout error:', err.message)
+    console.error('[StoreController] getStoreDiscoverPage error:', err.message)
     return { success: false, error: err.message }
   }
 }
@@ -382,19 +383,6 @@ export async function getStoreMyPublications(): Promise<StoreControllerResponse<
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] getStoreMyPublications error:', err.message)
-    return { success: false, error: err.message }
-  }
-}
-
-/**
- * Fetch curated scene collections from the store server (empty when none).
- */
-export async function getStoreCollections(): Promise<StoreControllerResponse<StoreCollection[]>> {
-  try {
-    return { success: true, data: await fetchCollections() }
-  } catch (error: unknown) {
-    const err = error as Error
-    console.error('[StoreController] getStoreCollections error:', err.message)
     return { success: false, error: err.message }
   }
 }
