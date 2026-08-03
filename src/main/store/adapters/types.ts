@@ -43,6 +43,17 @@ export interface FetchIndexResult {
   validators: IndexValidators
 }
 
+/**
+ * A page document has three outcomes the caller must tell apart: the source
+ * serves none (fall through the resolution chain), it serves one, or it
+ * revalidated the one already held. Collapsing any two of them would either
+ * drop an ops-managed document on a 304 or mistake absence for staleness.
+ */
+export type PageDocumentResult =
+  | { status: 'absent' }
+  | { status: 'unchanged' }
+  | { status: 'ok'; document: unknown; validator?: string }
+
 /** Result of a proxy query to a remote API source */
 export interface AdapterQueryResult {
   items: RegistryEntry[]
@@ -164,8 +175,8 @@ export interface RegistryAdapter {
   // the primary source's document is adopted. See DESIGN.md §2.1.
 
   /** Ops-managed category taxonomy. Payload validated by the caller. */
-  fetchPageTaxonomy?(source: RegistrySource): Promise<unknown | null>
+  fetchPageTaxonomy?(source: RegistrySource, validator?: string): Promise<PageDocumentResult>
 
   /** Ops-managed discover-page layout. Payload validated by the caller. */
-  fetchPageLayout?(source: RegistrySource): Promise<unknown | null>
+  fetchPageLayout?(source: RegistrySource, validator?: string): Promise<PageDocumentResult>
 }

@@ -60,6 +60,7 @@ export function StoreHeader() {
   const setStoreCategory = useAppsPageStore(state => state.setStoreCategory)
   const setStoreTypeFilter = useAppsPageStore(state => state.setStoreTypeFilter)
   const loadStoreApps = useAppsPageStore(state => state.loadStoreApps)
+  const revalidateStore = useAppsPageStore(state => state.revalidateStore)
   const refreshStore = useAppsPageStore(state => state.refreshStore)
   const setStoreMineOpen = useAppsPageStore(state => state.setStoreMineOpen)
 
@@ -123,8 +124,11 @@ export function StoreHeader() {
     setStoreTypeFilter(nextType)
     setStoreCategory(null)
     setStoreSearch('')
+    // Paint from the local mirror first, then check the server. The check only
+    // repaints when the index actually moved, so switching tabs stays instant.
     loadStoreApps({ type: nextType ?? undefined })
-  }, [setStoreTypeFilter, setStoreCategory, setStoreSearch, loadStoreApps])
+    void revalidateStore()
+  }, [setStoreTypeFilter, setStoreCategory, setStoreSearch, loadStoreApps, revalidateStore])
 
   return (
     <div className="flex flex-col gap-3 px-4 pt-3 flex-shrink-0 border-b border-border/60">

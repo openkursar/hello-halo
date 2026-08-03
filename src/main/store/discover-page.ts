@@ -14,7 +14,7 @@
 import { getDiscoverLayout } from './backend/discover'
 import { fetchCollections } from './backend/collections'
 import { listApps, queryStore } from './registry.service'
-import { resolveSection } from '../../shared/store/discover-resolve'
+import { resolveSection } from './discover-resolve'
 import { BUILTIN_DISCOVER_LAYOUT } from '../../shared/store/store-types'
 import type {
   DiscoverNode,

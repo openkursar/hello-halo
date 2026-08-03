@@ -80,26 +80,40 @@ export function createPageDocumentResolver<T>(
   document: PageDocument,
   validate: (raw: unknown) => T | null,
 ): PageDocumentResolver<T> {
-  let cache: { value: T | null; expiresAt: number } | null = null
+  // The held document and its validator outlive `invalidate`, which only expires
+  // the TTL: dropping the validator would turn every forced re-read into a full
+  // download, which is the opposite of what invalidating is for.
+  let held: { value: T | null; validator?: string } | null = null
+  let expiresAt = 0
 
   return {
     invalidate() {
-      cache = null
+      expiresAt = 0
     },
     async get() {
       const now = Date.now()
-      if (cache && cache.expiresAt > now) return cache.value
+      if (held && expiresAt > now) return held.value
 
       const primary = getPrimaryRegistry()
       try {
-        const raw = primary ? (await getAdapter(primary)[document]?.(primary)) ?? null : null
-        const value = raw === null ? null : validate(raw)
-        cache = { value, expiresAt: now + PAGE_DOCUMENT_TTL_MS }
-        return value
+        const result = primary
+          ? await getAdapter(primary)[document]?.(primary, held?.validator)
+          : undefined
+        if (!result || result.status === 'absent') {
+          held = { value: null }
+        } else if (result.status === 'ok') {
+          held = { value: validate(result.document), validator: result.validator }
+        }
+        expiresAt = now + PAGE_DOCUMENT_TTL_MS
+        return held?.value ?? null
       } catch (error) {
         console.warn(`[${logTag}] server fetch failed, using cached/fallback: ${(error as Error).message}`)
-        cache = { value: cache?.value ?? null, expiresAt: now + PAGE_DOCUMENT_ERROR_TTL_MS }
-        return cache.value
+        // A first fetch that faults still has to record something, or the
+        // `held &&` guard above never passes and the error window buys nothing —
+        // an unreachable source would be re-fetched on every single read.
+        held ??= { value: null }
+        expiresAt = now + PAGE_DOCUMENT_ERROR_TTL_MS
+        return held.value
       }
     },
   }

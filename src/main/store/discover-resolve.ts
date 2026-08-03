@@ -2,13 +2,12 @@
  * Pure resolution of a discover section's declarative `source` (filter + sort +
  * limit, or an explicit curated slug list) to the entries it displays.
  *
- * Lives in shared because the main process resolves sections against the full
- * local index mirror, while the renderer only renders the result — keeping one
- * implementation of these semantics rather than letting the two drift.
+ * Resolution belongs to this process because only it holds the full index
+ * mirror; the renderer receives sections already resolved.
  */
 
-import { getEntryInstalls, isEntryFeatured } from './store-meta'
-import type { RegistryEntry, DiscoverSource, DiscoverSortKind } from './store-types'
+import { getEntryInstalls, isEntryFeatured } from '../../shared/store/store-meta'
+import type { RegistryEntry, DiscoverSource, DiscoverSortKind } from '../../shared/store/store-types'
 
 /** Filter → sort → limit the index for a section. Empty source ⇒ all apps. */
 export function resolveSection(source: DiscoverSource | undefined, apps: RegistryEntry[]): RegistryEntry[] {

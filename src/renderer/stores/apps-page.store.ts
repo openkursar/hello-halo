@@ -24,6 +24,15 @@ let storeListRequestSeq = 0
 let storeDetailRequestSeq = 0
 
 /**
+ * Guards for the freshness check. The floor only swallows double-clicks on the
+ * tab row — the check itself is conditional requests, so running it on every
+ * arrival at a tab is the intended cost.
+ */
+const REVALIDATE_MIN_INTERVAL_MS = 2_000
+let lastRevalidateAt = 0
+let revalidateInFlight = false
+
+/**
  * Last results per browse query, so returning to a tab paints immediately while
  * the refetch runs instead of blanking. Dropped on refresh, when the server
  * index itself has changed.
@@ -147,7 +156,7 @@ interface AppsPageState {
   setCurrentTab: (tab: AppsPageTab) => void
   loadStoreApps: (query?: StoreQuery) => Promise<void>
   seedStoreApps: (items: RegistryEntry[], hasMore: boolean) => void
-  clearStoreListCache: () => void
+  revalidateStore: () => Promise<void>
   loadMoreStoreApps: () => Promise<void>
   setStoreSearch: (query: string) => void
   setStoreCategory: (category: string | null) => void
@@ -298,8 +307,36 @@ export const useAppsPageStore = create<AppsPageState>()(
 
   setCurrentTab: (tab) => set({ currentTab: tab }),
 
-  /** Drop the per-query browse cache so the next read refetches. */
-  clearStoreListCache: () => storeListCache.clear(),
+  /**
+   * Freshness check for every arrival at a store tab. The index is revalidated
+   * with the validators it was fetched with, so an unchanged store answers 304
+   * and costs nothing but the round trip.
+   *
+   * A changed index reloads the visible list rather than only dropping the
+   * cache: an operator hiding an app must disappear from the grid the user is
+   * looking at, not on their next navigation. The ops-managed page documents
+   * are re-read either way, because they can change while the index does not.
+   */
+  revalidateStore: async () => {
+    const now = Date.now()
+    if (revalidateInFlight || now - lastRevalidateAt < REVALIDATE_MIN_INTERVAL_MS) return
+    revalidateInFlight = true
+    lastRevalidateAt = now
+    try {
+      const res = await api.storeRevalidate()
+      if (!res.success) return
+      discoverPageResource.invalidate()
+      categoryTaxonomyResource.invalidate()
+      if (res.data?.changed) {
+        storeListCache.clear()
+        await get().loadStoreApps()
+      }
+    } catch (err) {
+      console.warn('[AppsPageStore] revalidateStore failed:', err)
+    } finally {
+      revalidateInFlight = false
+    }
+  },
 
   /**
    * Adopt the catalog page carried by the discover payload so the grid and the

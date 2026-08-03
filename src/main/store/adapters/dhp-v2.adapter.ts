@@ -27,7 +27,6 @@ import { HaloAdapter, fetchWithTimeout } from './halo.adapter'
 import { STORE_NOT_SIGNED_IN } from '../../../shared/store/store-types'
 import type {
   RegistrySource,
-  RegistryIndex,
   RegistryEntry,
   ServerFeatures,
   StoreIdentityMode,
@@ -35,7 +34,13 @@ import type {
   InstallGrant,
 } from '../../../shared/store/store-types'
 import type { AppSpec, SkillSpec } from '../../apps/spec/schema'
-import type { RegistryAdapter, RegistryAuth } from './types'
+import type {
+  RegistryAdapter,
+  RegistryAuth,
+  PageDocumentResult,
+  FetchIndexResult,
+  IndexValidators,
+} from './types'
 
 const JSON_HEADERS = { Accept: 'application/json', 'User-Agent': 'Halo-Store/1.0' } as const
 
@@ -84,8 +89,11 @@ export class DhpV2Adapter implements RegistryAdapter {
 
   // ── Catalog ──────────────────────────────────────────────────────────────
 
-  fetchIndex(source: RegistrySource): Promise<RegistryIndex> {
-    return this.catalog.fetchIndex(source)
+  // Validators must be forwarded, not dropped: this driver delegates its catalog
+  // to Halo, so swallowing them would silently turn every revalidation into a
+  // full index download for the one source type an enterprise build ships.
+  fetchIndex(source: RegistrySource, validators?: IndexValidators): Promise<FetchIndexResult> {
+    return this.catalog.fetchIndex(source, validators)
   }
 
   // No onProgress parameter: a DHP bundle's spec is a single fetch, so the
@@ -244,24 +252,34 @@ export class DhpV2Adapter implements RegistryAdapter {
 
   // ── Page-level documents ─────────────────────────────────────────────────
 
-  fetchPageTaxonomy(source: RegistrySource): Promise<unknown | null> {
-    return this.fetchPageDocument(source, '/category-taxonomy.json')
+  fetchPageTaxonomy(source: RegistrySource, validator?: string): Promise<PageDocumentResult> {
+    return this.fetchPageDocument(source, '/category-taxonomy.json', validator)
   }
 
-  fetchPageLayout(source: RegistrySource): Promise<unknown | null> {
-    return this.fetchPageDocument(source, '/discover-layout.json')
+  fetchPageLayout(source: RegistrySource, validator?: string): Promise<PageDocumentResult> {
+    return this.fetchPageDocument(source, '/discover-layout.json', validator)
   }
 
   /**
-   * Absent → null, so the caller falls through its resolution chain. Any other
-   * non-2xx is a fault the caller must be able to tell apart from absence, so it
-   * is thrown rather than flattened into null.
+   * Any non-2xx other than absence is a fault the caller must be able to tell
+   * apart from absence, so it is thrown rather than flattened.
    */
-  private async fetchPageDocument(source: RegistrySource, path: string): Promise<unknown | null> {
-    const res = await fetchWithTimeout(`${baseUrl(source)}${path}`, { headers: { ...JSON_HEADERS } })
-    if (res.status === 404 || res.status === 501) return null
+  private async fetchPageDocument(
+    source: RegistrySource,
+    path: string,
+    validator?: string,
+  ): Promise<PageDocumentResult> {
+    const res = await fetchWithTimeout(`${baseUrl(source)}${path}`, {
+      headers: { ...JSON_HEADERS, ...(validator ? { 'If-None-Match': validator } : {}) },
+    })
+    if (res.status === 404 || res.status === 501) return { status: 'absent' }
+    if (res.status === 304) return { status: 'unchanged' }
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return (await res.json()) as unknown
+    return {
+      status: 'ok',
+      document: (await res.json()) as unknown,
+      validator: res.headers.get('ETag') ?? undefined,
+    }
   }
 }
 

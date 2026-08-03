@@ -34,7 +34,6 @@ import {
   unpublishApp,
   relistApp,
   ensureStoreIdentity,
-  fetchCollections,
   // Aliased: this controller exports same-named wrappers, and an unaliased
   // import would bind to the wrapper instead of the store function.
   getStoreCapabilities as resolveStoreCapabilities,
@@ -199,9 +198,6 @@ export async function installStoreApp(
 // Refresh Index
 // ============================================================================
 
-/**
- * Refresh the registry index from remote sources.
- */
 /**
  * Freshness check for when the user comes back to the store. Drops the
  * server-config caches so the next read revalidates, and re-checks the index —
