@@ -79,3 +79,6 @@ src/sdk/
 /wiki/
 # Personal marketing/intro drafts (not product code)
 /intro-doc/
+
+# Local git worktrees created for isolated work
+.claude/worktrees/
