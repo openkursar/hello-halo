@@ -2,8 +2,8 @@
  * Store Update Dialog
  *
  * Confirmation shown before receiving an update, so an overwrite never happens
- * silently. Offers three paths: install the new version as a separate copy,
- * overwrite in place, or skip this version.
+ * silently. Offers three paths: overwrite in place, install the new version as
+ * a separate copy, or skip this version.
  */
 
 import { createPortal } from 'react-dom'
@@ -28,7 +28,7 @@ interface UpdateOption {
   description: string
   onClick: () => void
   recommended?: boolean
-  accent: 'primary' | 'warning' | 'muted'
+  accent: 'primary' | 'muted'
 }
 
 function OptionRow({ option, busy }: { option: UpdateOption; busy?: boolean }) {
@@ -36,11 +36,8 @@ function OptionRow({ option, busy }: { option: UpdateOption; busy?: boolean }) {
   const accent =
     option.accent === 'primary'
       ? 'border-primary/40 hover:border-primary hover:bg-primary/5'
-      : option.accent === 'warning'
-        ? 'border-border/60 hover:border-amber-600/50 hover:bg-amber-600/5'
-        : 'border-border/60 hover:border-border/60 hover:bg-secondary/50'
-  const iconColor =
-    option.accent === 'primary' ? 'text-primary' : option.accent === 'warning' ? 'text-amber-600' : 'text-muted-foreground'
+      : 'border-border/60 hover:border-border/60 hover:bg-secondary/50'
+  const iconColor = option.accent === 'primary' ? 'text-primary' : 'text-muted-foreground'
 
   return (
     <button
@@ -79,19 +76,19 @@ export function StoreUpdateDialog({
 
   const options: UpdateOption[] = [
     {
-      Icon: Copy,
-      title: t('Keep current, install as a new copy'),
-      description: t('Installs the new version as a separate instance — pick a different space so the current one is left untouched.'),
-      onClick: onInstallCopy,
+      Icon: RefreshCw,
+      title: t('Overwrite upgrade'),
+      description: t('Upgrades in place and keeps your settings and data. Local edits to the app content are replaced.'),
+      onClick: onOverwrite,
       recommended: true,
       accent: 'primary',
     },
     {
-      Icon: RefreshCw,
-      title: t('Overwrite upgrade'),
-      description: t('Replaces the current install in place. Local changes are lost, a running session may be interrupted, and it cannot be undone.'),
-      onClick: onOverwrite,
-      accent: 'warning',
+      Icon: Copy,
+      title: t('Keep current, install as a new copy'),
+      description: t('Installs the new version as a separate instance — pick a different space so the current one is left untouched.'),
+      onClick: onInstallCopy,
+      accent: 'muted',
     },
     {
       Icon: BellOff,
