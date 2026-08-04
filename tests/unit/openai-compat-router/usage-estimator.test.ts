@@ -164,6 +164,14 @@ describe('fillResponseUsageFallback', () => {
     expect(response.usage.input_tokens).toBe(123)
     expect(response.usage.output_tokens).toBe(456)
   })
+
+  it('creates the usage object when the upstream omitted it entirely', () => {
+    const response = makeResponse({ input_tokens: 0, output_tokens: 0 })
+    delete (response as Partial<AnthropicMessageResponse>).usage
+    fillResponseUsageFallback(response, makeRequest())
+    expect(response.usage.input_tokens).toBeGreaterThan(0)
+    expect(response.usage.output_tokens).toBe(estimateResponseOutputTokens(response.content))
+  })
 })
 
 describe('stream usage fallback (OpenAIChatStreamHandler)', () => {

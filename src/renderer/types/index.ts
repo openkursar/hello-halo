@@ -72,7 +72,7 @@ export {
 } from '../../shared/constants/providers';
 
 // Re-export model capabilities
-export { supportsVision } from '../../shared/constants/model-capabilities';
+export { resolveModelVision } from '../../shared/constants/model-capabilities';
 
 // Permission Level
 export type PermissionLevel = 'allow' | 'ask' | 'deny';

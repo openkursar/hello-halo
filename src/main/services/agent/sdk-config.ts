@@ -333,6 +333,11 @@ export function computeCredentialsFingerprint(sdkOptions: Record<string, any>): 
         backend.apiType ?? '',
         backend.adapterId ?? '',
         backend.profileArn ?? '',
+        // Vision capability is frozen in the session's encoded key, while the
+        // image fallback re-resolves it per turn. Without it here, flipping the
+        // Vision setting mid-conversation makes the two disagree: the turn
+        // keeps image blocks the session is still configured to strip.
+        String(backend.visionOverride ?? ''),
       ].join('|')
     : rawKey  // Direct Anthropic: plain key, stable as-is
 

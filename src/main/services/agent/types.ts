@@ -46,10 +46,12 @@ export interface ApiCredentials {
   /** Provider adapter ID for request/response transformations */
   adapterId?: string
   /**
-   * Explicit per-model vision override (Settings > Provider > Model Config).
-   * Forwarded to the OpenAI-compat converter so a user-enabled "Vision" flag
-   * keeps image content for models the name heuristic would otherwise treat as
-   * text-only (e.g. `minimax-*`). `undefined` = no override.
+   * The source's effective vision capability for this model (per-model override
+   * → provider declaration → id heuristic), resolved by AISourceManager and
+   * forwarded to the OpenAI-compat converter. Keeping this authoritative is what
+   * makes the input-area hint and the actual request agree.
+   * `undefined` = credentials not built from a source; downstream falls back to
+   * its own heuristic.
    */
   visionOverride?: boolean
   /**
@@ -267,6 +269,11 @@ export interface V2SessionInfo {
   // undefined for main chat, which builds MCP servers lazily and handles toolset
   // changes via requestSessionRebuild.
   inputsFingerprint?: string
+  // Detaches this session's process-exit listener. Must be called on cleanup:
+  // session.close() never calls transport.close(), so the listener would
+  // otherwise outlive the session and fire against a successor registered
+  // under the same conversationId.
+  exitUnsubscribe?: () => void
 }
 
 // ============================================

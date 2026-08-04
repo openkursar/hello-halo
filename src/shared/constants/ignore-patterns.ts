@@ -1,28 +1,41 @@
 /**
  * Ignore patterns for file watching and scanning.
  *
- * Three layers, always stacked (not either/or):
+ * Watching and tree visibility use different rule sets:
  *
- *   1. ALWAYS_IGNORE_DIRS      C++ watcher level — zero JS overhead
- *   2. BASELINE_IGNORE_PATTERNS  JS level — always active
- *   3. .gitignore                JS level — additive, project-specific
+ *   0. TREE_HIDDEN_DIRS          tree only
+ *   1. ALWAYS_IGNORE_DIRS        watching only (also enforced natively — CPP_LEVEL_IGNORE_DIRS)
+ *   2. BASELINE_IGNORE_PATTERNS  both
+ *   3. .gitignore                watching only — additive, project-specific
+ *
+ * Within each consumer the rule sets stack, they are not either/or.
  *
  * Duplicate rules are harmless (the `ignore` library deduplicates).
  * Sources: github/gitignore templates, each language's official .gitignore.
  */
 
-// ─── Layer 1: C++ level ──────────────────────────────────────────────────────
-// VCS and app metadata directories. Excluded via @parcel/watcher's native
-// `ignore` option — events from these paths never reach JavaScript.
+// ─── Layer 0: tree visibility ────────────────────────────────────────────────
+// VCS metadata, matching VS Code's default `files.exclude`.
+// Display only — adding here never changes what the watcher sees.
 
-export const ALWAYS_IGNORE_DIRS = [
-  // Version control
+export const TREE_HIDDEN_DIRS = [
   '.git',
   '.hg',
   '.svn',
   'CVS',
   '.bzr',
-  // App metadata
+]
+
+// ─── Layer 1: C++ level ──────────────────────────────────────────────────────
+// VCS and app metadata directories. Excluded via @parcel/watcher's native
+// `ignore` option — events from these paths never reach JavaScript.
+// `.halo` is watcher-only: every chat turn writes into .halo/conversations,
+// which would otherwise trigger a tree refresh per message. Consequence: .halo
+// is visible in the tree but never auto-updates — it refreshes on window focus
+// or manual reconcile only.
+
+export const ALWAYS_IGNORE_DIRS = [
+  ...TREE_HIDDEN_DIRS,
   '.halo',
 ]
 

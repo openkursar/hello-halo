@@ -529,7 +529,7 @@ export interface HaloAPI {
   // App Chat
   // conversationId addresses a specific native/local session; omit for the app's
   // native default session.
-  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean; conversationId?: string }) => Promise<IpcResponse<{ conversationId: string }>>
+  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; mediaType: string; data: string; name?: string }>; thinkingEnabled?: boolean; conversationId?: string }) => Promise<IpcResponse<{ conversationId: string }>>
   appChatStop: (appId: string, conversationId?: string) => Promise<IpcResponse>
   appChatStatus: (appId: string, conversationId?: string) => Promise<IpcResponse<{ isGenerating: boolean; conversationId: string }>>
   appChatMessages: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>

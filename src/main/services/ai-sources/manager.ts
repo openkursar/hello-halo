@@ -39,7 +39,12 @@ import {
   type ProviderId,
   type AuthQuotaSnapshot
 } from '../../../shared/types'
-import { getBuiltinProvider, isAnthropicProvider, isBuiltinProvider } from '../../../shared/constants'
+import {
+  getBuiltinProvider,
+  isAnthropicProvider,
+  isBuiltinProvider,
+  resolveModelVision
+} from '../../../shared/constants'
 import { getConfig, saveConfig } from '../../foundation/config.service'
 import { getCustomProvider } from './providers/custom.provider'
 import { getGitHubCopilotProvider } from './providers/github-copilot.provider'
@@ -229,6 +234,7 @@ class AISourceManager {
       const legacyConfig = this.buildLegacyOAuthConfig(source)
       const result = provider.getBackendConfig(legacyConfig)
       console.log(`[AISourceManager] OAuth provider returned adapterId: ${result?.adapterId || 'none'}`)
+      this.stampVisionCapability(source, result)
       return result
     }
 
@@ -266,10 +272,7 @@ class AISourceManager {
       config.apiType = source.apiType
     }
 
-    const visionOverride = this.resolveVisionOverride(source, config.model)
-    if (visionOverride !== undefined) {
-      config.visionOverride = visionOverride
-    }
+    this.stampVisionCapability(source, config)
 
     console.log('[AISourceManager] getBackendConfig result:', {
       url: config.url,
@@ -397,7 +400,9 @@ class AISourceManager {
       // rationale; a post-call `config.model = modelId` patch (the previous
       // behaviour) is unsafe because it leaves derived headers stale.
       const legacyConfig = this.buildLegacyOAuthConfig(source, modelId)
-      return provider.getBackendConfig(legacyConfig)
+      const result = provider.getBackendConfig(legacyConfig)
+      this.stampVisionCapability(source, result)
+      return result
     }
 
     // API Key: build config directly. See getBackendConfig() for the rationale
@@ -425,26 +430,23 @@ class AISourceManager {
       config.apiType = source.apiType
     }
 
-    const visionOverride = this.resolveVisionOverride(source, config.model)
-    if (visionOverride !== undefined) {
-      config.visionOverride = visionOverride
-    }
+    this.stampVisionCapability(source, config)
 
     return config
   }
 
   /**
-   * Read the user's explicit per-model vision override for `model`.
+   * Stamp the source's effective vision capability onto a resolved backend
+   * config, so the request pipeline (image fallback, image stripping) decides
+   * from the same answer the input UI shows the user.
    *
-   * Returns the stored boolean only when the user has set it in Model Config;
-   * `undefined` otherwise so downstream image-stripping keeps its name-based
-   * heuristic fallback. Keyed by the wire model id — the same key Model Config
-   * writes — so proxy-prefixed/friendly names never accidentally match.
+   * Applies to OAuth and API-key sources alike: the OAuth branches delegate
+   * config building to the provider, which knows nothing about per-model
+   * capability, so the value has to be attached here or it is lost.
    */
-  private resolveVisionOverride(source: AISource, model: string | undefined): boolean | undefined {
-    if (!model) return undefined
-    const v = source.modelOverrides?.[model]?.vision
-    return typeof v === 'boolean' ? v : undefined
+  private stampVisionCapability(source: AISource, config: BackendRequestConfig | null): void {
+    if (!config) return
+    config.visionOverride = resolveModelVision(source, config.model)
   }
 
   // ========== Source CRUD Operations ==========

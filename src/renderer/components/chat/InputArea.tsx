@@ -32,7 +32,7 @@ import { ImageAttachmentPreview } from './ImageAttachmentPreview'
 import { KnowledgeBaseButton } from './KnowledgeBaseButton'
 import { processImage, isValidImageType, formatFileSize } from '../../utils/imageProcessor'
 import type { ImageAttachment, Artifact } from '../../types'
-import { getCurrentSource, supportsVision } from '../../types'
+import { getCurrentSource, resolveModelVision } from '../../types'
 import { useTranslation } from '../../i18n'
 import { SlashCommandMenu, filterSlashCommands } from './SlashCommandMenu'
 import type { SlashCommandItem } from '../../types/slash-command'
@@ -120,19 +120,17 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
-  // Vision support detection — block image input for non-multimodal models.
-  // An explicit per-model "Vision" override (Model Config) wins over the name
-  // heuristic, using the same key as the backend converter so the upload gate
-  // matches the backend's keep/strip decision for the selected model.
+  // Vision support detection — images are always accepted; for non-vision
+  // models the backend persists them to files and routes them through the
+  // on-device OCR tool, so this flag only drives the informational hint.
+  // Shares `resolveModelVision` with the backend so the hint can never claim
+  // OCR while the request still ships image blocks.
   const aiSources = useAppStore(state => state.config?.aiSources)
   const visionEnabled = useMemo(() => {
     if (!aiSources) return true
     const source = getCurrentSource(aiSources)
     if (!source) return true
-    const override = source.modelOverrides?.[source.model]?.vision
-    if (typeof override === 'boolean') return override
-    const model = source.availableModels.find(m => m.id === source.model)
-    return model ? supportsVision(model) : true
+    return resolveModelVision(source, source.model)
   }, [aiSources])
   const [content, setContent] = useState('')
   const [isFocused, setIsFocused] = useState(false)
@@ -271,10 +269,6 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
     if (imageFiles.length > 0) {
       e.preventDefault()  // Prevent default only if we're handling images
-      if (!visionEnabled) {
-        showError(t('Current model does not support image input'))
-        return
-      }
       await addImages(imageFiles)
     }
   }
@@ -329,10 +323,6 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     const files = Array.from(e.dataTransfer.files).filter(file => isValidImageType(file))
 
     if (files.length > 0) {
-      if (!visionEnabled) {
-        showError(t('Current model does not support image input'))
-        return
-      }
       await addImages(files)
     }
   }
@@ -351,11 +341,6 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
   // Handle image button click (from attachment menu)
   const handleImageButtonClick = () => {
-    if (!visionEnabled) {
-      showError(t('Current model does not support image input'))
-      setShowAttachMenu(false)
-      return
-    }
     setShowAttachMenu(false)
     fileInputRef.current?.click()
   }
@@ -709,10 +694,17 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
           )}
           {/* Image preview area */}
           {hasImages && (
-            <ImageAttachmentPreview
-              images={images}
-              onRemove={removeImage}
-            />
+            <>
+              <ImageAttachmentPreview
+                images={images}
+                onRemove={removeImage}
+              />
+              {!visionEnabled && (
+                <div className="px-4 py-1.5 text-xs text-muted-foreground border-b border-border/30">
+                  {t('Current model has no vision — images will be read via local OCR (text only)')}
+                </div>
+              )}
+            </>
           )}
 
           {/* Image processing indicator */}
@@ -894,24 +886,24 @@ function InputToolbar({
             <PopoverContent side="top" align="start" sideOffset={8} className="py-1.5 rounded-xl min-w-[160px]">
               <button
                 onClick={onImageClick}
-                disabled={!visionEnabled || imageCount >= maxImages}
+                disabled={imageCount >= maxImages}
                 className={`w-full px-3 py-2 flex items-center gap-3 text-sm
                   transition-colors duration-150
-                  ${!visionEnabled || imageCount >= maxImages
+                  ${imageCount >= maxImages
                     ? 'text-muted-foreground/40 cursor-not-allowed'
                     : 'text-foreground hover:bg-muted/50'
                   }
                 `}
-                title={!visionEnabled ? t('Current model does not support image input') : undefined}
+                title={!visionEnabled ? t('Current model has no vision — images will be read via local OCR (text only)') : undefined}
               >
                 <ImagePlus size={16} className="text-muted-foreground" />
                 <span>{t('Add image')}</span>
-                {!visionEnabled && (
+                {!visionEnabled && imageCount === 0 && (
                   <span className="ml-auto text-xs text-muted-foreground/60">
-                    {t('Not supported')}
+                    {t('via OCR')}
                   </span>
                 )}
-                {visionEnabled && imageCount > 0 && (
+                {imageCount > 0 && (
                   <span className="ml-auto text-xs text-muted-foreground">
                     {imageCount}/{maxImages}
                   </span>

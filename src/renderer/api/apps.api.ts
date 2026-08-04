@@ -264,7 +264,7 @@ export const appsApi = {
   // App Chat
   // conversationId addresses a specific native/local session; omit for the app's
   // native default session.
-  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean; conversationId?: string }): Promise<ApiResponse<{ conversationId: string }>> => {
+  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; mediaType: string; data: string; name?: string }>; thinkingEnabled?: boolean; conversationId?: string }): Promise<ApiResponse<{ conversationId: string }>> => {
     // Subscribe to agent events so remote/Capacitor clients receive streaming updates.
     // The view also subscribes on mount (via useRemoteSubscription), but the API-level
     // subscription mirrors sendMessage's pattern and ensures coverage if the API is

@@ -23,7 +23,7 @@ export interface ToolsetsChangedEvent {
   spaceId: string
   toolsetId?: string
   action?: 'open' | 'close'
-  openedBy?: 'user' | 'ai' | 'restore'
+  openedBy?: 'user' | 'ai' | 'restore' | 'system'
   open: string[]
 }
 

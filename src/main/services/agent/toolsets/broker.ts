@@ -13,7 +13,8 @@
  * one uniform mechanism across all engines (creation-time seed + rebuild-on-change)
  * keeps the agent hot path free of mid-turn MCP machinery. The AI never opens a
  * toolset itself — it asks the user to enable one (request_toolset), which the user
- * grants via the same toggle.
+ * grants via the same toggle. The runtime may open one automatically (opener
+ * 'system', e.g. the non-vision image fallback opening OCR before session creation).
  */
 
 import { getConfig, saveConfig } from '../../../foundation/config.service'
@@ -112,8 +113,8 @@ export interface OpenToolsetResult {
 /**
  * Open a toolset for a conversation: persist the change, schedule a session
  * rebuild (the new set is seeded at the next creation), and notify UI surfaces.
- * Called by the user toggle (opener='user'); automation seeds toolsets from its
- * app spec instead of calling this.
+ * Called by the user toggle (opener='user') and by runtime auto-opens
+ * (opener='system'); automation seeds toolsets from its app spec instead.
  */
 export function openToolset(
   scope: ToolsetScope,
