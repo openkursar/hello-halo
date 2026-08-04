@@ -11,7 +11,7 @@ import { STORE_NOT_SIGNED_IN, type MyPublication, type StoreSignInStatus } from 
 import type { AppType } from '../../../shared/apps/spec-types'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { getCurrentLanguage, useTranslation } from '../../i18n'
-import { ShareToStoreDialog } from './ShareToStoreDialog'
+import { ShareToStoreDialog, type RepublishTarget } from './ShareToStoreDialog'
 import { StoreUpdatable } from './StoreUpdatable'
 import { StoreNotice } from './StoreNotice'
 import { AppTypeIcon } from './AppTypeIcon'
@@ -56,9 +56,10 @@ export function StoreMine() {
   const [showPublish, setShowPublish] = useState(false)
   // Republishing a known publication skips the type step — its type is fixed.
   const [publishType, setPublishType] = useState<'automation' | 'skill' | undefined>(undefined)
-  // The listing the publish dialog was opened for, so it can point at the local
-  // app that would update it.
-  const [publishSlug, setPublishSlug] = useState<string | undefined>(undefined)
+  // The listing the publish dialog was opened for: it points the dialog at the
+  // local app that would update it, and supplies the version to increment from
+  // when the update arrives as a re-imported package instead.
+  const [publishTarget, setPublishTarget] = useState<RepublishTarget | undefined>(undefined)
   const [signingIn, setSigningIn] = useState(false)
   // Distinguishes "signed out but can sign in" from the misconfiguration where
   // the store requires an account yet this build ships no identity provider —
@@ -131,7 +132,14 @@ export function StoreMine() {
 
   const openPublish = useCallback((pub: MyPublication) => {
     setPublishType(pub.type === 'skill' || pub.type === 'automation' ? pub.type : undefined)
-    setPublishSlug(pub.slug)
+    setPublishTarget({
+      slug: pub.slug,
+      version: pub.version,
+      name: pub.displayName ?? pub.name ?? '',
+      // The index's canonical name is the command identifier for a skill; for
+      // any other type it is the presentable name `name` already carries.
+      commandName: pub.type === 'skill' ? pub.name : undefined,
+    })
     setShowPublish(true)
   }, [])
 
@@ -249,7 +257,7 @@ export function StoreMine() {
       </div>
 
       {showPublish && (
-        <ShareToStoreDialog initialType={publishType} entry="mine" republishSlug={publishSlug} onClose={() => { setShowPublish(false); void load() }} />
+        <ShareToStoreDialog initialType={publishType} entry="mine" republishTarget={publishTarget} onClose={() => { setShowPublish(false); void load() }} />
       )}
       {confirmDialog}
     </div>

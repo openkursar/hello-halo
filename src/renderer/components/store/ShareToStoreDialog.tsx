@@ -157,17 +157,40 @@ export interface ShareToStoreDialogProps {
   initialAppId?: string
   /** Opening surface, for publish telemetry attribution. */
   entry?: PublishEntry
-  /** The store listing being re-published (the "publish new version" / relist /
-   * resubmit actions in My Publications). Marks the publish as an update for
-   * telemetry, and points the installed picker at the app that would update it. */
-  republishSlug?: string
+  /** The listing being updated, when the dialog was opened from an existing
+   * publication (the "publish new version" / relist / resubmit actions in My
+   * Publications). It carries what only that record knows — the slug publish
+   * targets and the version to increment from — which is otherwise reachable
+   * only by probing an installed app. A package re-imported to update a listing
+   * has no local app to probe, so without this the form would treat an update
+   * as a first-time publish. */
+  republishTarget?: RepublishTarget
+}
+
+export interface RepublishTarget {
+  slug: string
+  /** The published version, i.e. the one to increment from. */
+  version: string
+  /** The listing's presentable name, used to detect a retarget (see below). */
+  name: string
+  /** A skill's command identifier, which is what its slug derives from. Absent
+   * for a digital human, whose slug derives from the presentable name. */
+  commandName?: string
 }
 
 // ────────────────────────────────────────────────
 // Component
 // ────────────────────────────────────────────────
 
-export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, republishSlug }: ShareToStoreDialogProps) {
+export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, republishTarget }: ShareToStoreDialogProps) {
+  const republish = !!republishTarget
+  // Read as values, not as an object: the freshness effect below would otherwise
+  // key on the prop's identity and re-request on every render of a caller that
+  // builds it inline.
+  const targetSlug = republishTarget?.slug
+  const targetVersion = republishTarget?.version
+  const targetName = republishTarget?.name
+  const targetCommandName = republishTarget?.commandName
   const { t } = useTranslation()
   const apps = useAppsStore(s => s.apps)
   const showToast = useNotificationStore(s => s.show)
@@ -320,40 +343,64 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
   const [pinnedAppId, setPinnedAppId] = useState<string | null>(null)
   useEffect(() => {
     setPinnedAppId(null)
-    if (!republishSlug) return
+    if (!targetSlug) return
     let cancelled = false
-    void api.storeFindAppByPublishSlug(republishSlug, type, debouncedAuthor.trim() || undefined)
+    void api.storeFindAppByPublishSlug(targetSlug, type, debouncedAuthor.trim() || undefined)
       .then(res => { if (!cancelled && res.success) setPinnedAppId(res.data?.appId ?? null) })
     return () => { cancelled = true }
-  }, [republishSlug, type, debouncedAuthor])
+  }, [targetSlug, type, debouncedAuthor])
 
-  // Store version of the target slug — needed for the pre-flight version-
-  // monotonicity check. Only resolvable for an installed source (import has no
-  // appId until submit); null leaves the check dormant.
+  // Store version of the target slug — the base the suggested version increments
+  // from, and what the pre-flight monotonicity check compares against. Null
+  // leaves both dormant, which reads as a first-time publish.
   const [storeVersion, setStoreVersion] = useState<string | null>(null)
   useEffect(() => {
-    const appId = source === 'installed' ? selectedInstalledId : null
-    if (!appId) { setStoreVersion(null); return }
     let cancelled = false
+
+    // On an update the scene category and tags live on the published registry
+    // entry and are never written back to the local spec, so the store is the
+    // only place to read them. Only fields the user left blank are filled.
+    const backfillFromListing = async (slug: string) => {
+      const detail = await api.storeGetAppDetail(slug)
+      if (cancelled || !detail.success) return
+      const listing = (detail.data as StoreAppDetail | undefined)?.entry
+      if (!listing) return
+      if (listing.category) setCategory(prev => prev || listing.category)
+      if (listing.tags?.length) setTags(prev => prev.length ? prev : listing.tags)
+    }
+
+    const appId = source === 'installed' ? selectedInstalledId : null
+    if (!appId) {
+      // Whether the package being imported still lands on the listing this
+      // dialog was opened for — only then does its version speak for the one
+      // about to be published. Each type is asked about whatever its slug
+      // derives from: a digital human's presentable name, so renaming retargets
+      // a fresh slug and the record stops applying; a skill's command
+      // identifier, which a rename leaves alone because the edit lands on
+      // display_name instead (see publish's applyDisplayOverride).
+      const stillOnListing = type === 'skill'
+        ? !!targetCommandName && staged?.spec.name === targetCommandName
+        : !!targetName && debouncedName.trim() === targetName
+      if (stillOnListing && targetVersion && targetSlug) {
+        setStoreVersion(targetVersion)
+        void backfillFromListing(targetSlug)
+      } else {
+        setStoreVersion(null)
+      }
+      return () => { cancelled = true }
+    }
+
     api.storePublishPreview(appId, debouncedAuthor.trim() || undefined, debouncedName.trim() || undefined)
       .then(async res => {
         if (cancelled) return
         const preview = res.success ? res.data : null
         setStoreVersion(preview?.storeVersion ?? null)
-        // On an update the scene category and tags live on the published
-        // registry entry (never written back to the local spec), so pull them
-        // from the store and backfill only fields the user left blank.
         if (!preview?.slug || !preview.storeVersion) return
-        const detail = await api.storeGetAppDetail(preview.slug)
-        if (cancelled || !detail.success) return
-        const entry = (detail.data as StoreAppDetail | undefined)?.entry
-        if (!entry) return
-        if (entry.category) setCategory(prev => prev || entry.category)
-        if (entry.tags?.length) setTags(prev => prev.length ? prev : entry.tags)
+        await backfillFromListing(preview.slug)
       })
       .catch(() => { if (!cancelled) setStoreVersion(null) })
     return () => { cancelled = true }
-  }, [source, selectedInstalledId, debouncedAuthor, debouncedName])
+  }, [source, selectedInstalledId, debouncedAuthor, debouncedName, type, targetSlug, targetVersion, targetName])
 
   // Publish version — defaults to an auto-incremented value the user may raise
   // but not drop below the published version (enforced by the pre-flight). When
@@ -722,7 +769,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
         if (!res.success) coFailures.push({ name: s.name, reason: res.error as string | undefined })
       }
 
-      void api.trackEvent('store.publish.submit', { appType: type, result: 'success', entry, isUpdate: republishSlug ? 1 : 0 })
+      void api.trackEvent('store.publish.submit', { appType: type, result: 'success', entry, isUpdate: republish ? 1 : 0 })
       saveAuthor(trimmedAuthor)
       // Published — discard the saved draft so it is not restored next time.
       clearPublishDraft(draftKey)
@@ -735,7 +782,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
       // registry verdict string is intentionally not surfaced to the user.
       setSubmitSuccess('ok')
     } catch (err) {
-      void api.trackEvent('store.publish.submit', { appType: type, result: 'fail', entry, isUpdate: republishSlug ? 1 : 0 })
+      void api.trackEvent('store.publish.submit', { appType: type, result: 'fail', entry, isUpdate: republish ? 1 : 0 })
       setSubmitError(err instanceof Error ? err.message : t('Share failed.'))
     } finally {
       // Tear down the staging workspace (cascades its staged apps + files), so
@@ -743,7 +790,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
       if (stagingSpaceId) await api.deleteSpace(stagingSpaceId).catch(() => undefined)
       setSubmitting(false)
     }
-  }, [type, source, selectedInstalledId, staged, author, category, version, changelog, name, description, tags, formSkills, coPublishIds, hasBlockingIssue, draftKey, showToast, t, entry, republishSlug])
+  }, [type, source, selectedInstalledId, staged, author, category, version, changelog, name, description, tags, formSkills, coPublishIds, hasBlockingIssue, draftKey, showToast, t, entry, republish])
 
   // Post-publish "View": close the dialog and open My Publications so the
   // creator lands on the freshly-listed entry.
@@ -907,7 +954,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
               onSelect={id => { setSelectedInstalledId(id); clearInvalid('source') }}
               type={type}
               invalid={invalid.has('source')}
-              pinned={pinnedAppId && republishSlug ? { appId: pinnedAppId, slug: republishSlug } : undefined}
+              pinned={pinnedAppId && targetSlug ? { appId: pinnedAppId, slug: targetSlug } : undefined}
             />
           ) : staged ? (
             <StagedPreview staged={staged} onClear={() => { setStaged(null); setParseError(null) }} />
