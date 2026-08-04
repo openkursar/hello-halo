@@ -507,8 +507,10 @@ export type StoreSignInStatus = 'signed-in' | 'available' | 'unavailable' | 'not
 export interface MyPublication {
   /** Scoped slug "author/app-id". */
   slug: string
-  /** Display name from the index (absent on legacy records). */
+  /** Canonical name from the index — for skills the ASCII command name. */
   name?: string
+  /** Authored display name, when the canonical one is an identifier. */
+  displayName?: string
   /** App type from the index vocabulary (automation | skill | mcp). */
   type?: string
   version: string

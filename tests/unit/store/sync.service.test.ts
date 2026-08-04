@@ -23,7 +23,9 @@ import type { RegistrySource, RegistryEntry } from '../../../src/shared/store/st
 
 function makeDb(): Database.Database {
   const db = new Database(':memory:')
-  storeCacheMigrations[0].up(db)
+  // Every migration, not just the first: the service writes against the current
+  // schema, so pinning this to the initial one makes later columns look absent.
+  for (const migration of storeCacheMigrations) migration.up(db)
   return db
 }
 
@@ -47,6 +49,12 @@ function entry(slug: string): RegistryEntry {
     format: 'bundle',
     path: `pkg/${slug}`,
   } as RegistryEntry
+}
+
+/** An entry whose canonical name is an identifier and whose authored name
+ * lives in display_name — the shape a romanized skill takes. */
+function skillEntry(slug: string, displayName: string): RegistryEntry {
+  return { ...entry(slug), type: 'skill', display_name: displayName } as RegistryEntry
 }
 
 describe('SyncService', () => {
@@ -192,5 +200,29 @@ describe('SyncService', () => {
 
       expect(fetchIndex).toHaveBeenCalled()
     })
+  })
+
+  // The cache is a column projection of RegistryEntry: a field with no column
+  // is dropped between sync and render, which is invisible for an app whose
+  // canonical name already reads well and wrong for every other one.
+  it('preserves display_name across the cache projection', async () => {
+    const reg = mirrorRegistry()
+    getAdapterMock.mockReturnValue({
+      strategy: 'mirror',
+      fetchIndex: vi.fn().mockResolvedValue({
+        index: { apps: [skillEntry('taste', '测试中文'), entry('plain')] },
+        validators: {},
+      }),
+    })
+
+    await new SyncService(makeManager(db)).syncOne(reg, 0, true)
+
+    const rows = db
+      .prepare(`SELECT slug, name, display_name FROM registry_items ORDER BY slug`)
+      .all() as Array<{ slug: string; name: string; display_name: string | null }>
+    expect(rows).toEqual([
+      { slug: 'plain', name: 'plain', display_name: null },
+      { slug: 'taste', name: 'taste', display_name: '测试中文' },
+    ])
   })
 })

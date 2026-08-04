@@ -329,13 +329,13 @@ export class SyncService {
 
     const insert = this.db.prepare(`
       INSERT OR REPLACE INTO registry_items (
-        pk, slug, registry_id, name, description, author, tags,
+        pk, slug, registry_id, name, display_name, description, author, tags,
         type, category, rank, version, icon, locale,
         format, path, download_url, size_bytes, checksum,
         requires_mcps, requires_skills,
         created_at, updated_at, i18n, meta, indexed_at
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?,
@@ -354,6 +354,7 @@ export class SyncService {
             e.slug,
             registryId,
             e.name,
+            e.display_name ?? null,
             e.description,
             e.author,
             JSON.stringify(e.tags ?? []),

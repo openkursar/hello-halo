@@ -67,6 +67,7 @@ function mapPublication(raw: unknown): MyPublication {
   return {
     slug: String(p.slug ?? ''),
     name: typeof p.name === 'string' ? p.name : undefined,
+    displayName: typeof p.display_name === 'string' ? p.display_name : undefined,
     type: typeof p.type === 'string' ? p.type : undefined,
     version: String(p.version ?? ''),
     status,

@@ -268,6 +268,8 @@ function MineRow({ pub, busy, onOpen, onUnpublish, onPublishVersion }: MineRowPr
   // hidden records carry no source and count as admin.
   const isSelfTakedown = isHidden && pub.takedownBy === 'self'
   const primaryLabel = pub.status === 'rejected' ? t('Resubmit') : t('Publish new version')
+  // A skill's index name is its command identifier, so prefer the authored one.
+  const pubLabel = pub.displayName || pub.name || pub.slug
   const appType = pub.type as AppType | undefined
   const installs = pub.installs && pub.installs > 0
     ? new Intl.NumberFormat(getCurrentLanguage(), { notation: 'compact', maximumFractionDigits: 1 }).format(pub.installs)
@@ -277,12 +279,12 @@ function MineRow({ pub, busy, onOpen, onUnpublish, onPublishVersion }: MineRowPr
     <tr className="border-b border-border/60 last:border-0 align-middle">
       <td className="py-2.5 px-3">
         <div className="flex items-center gap-2 min-w-0">
-          {appType && <AppTypeIcon type={appType} name={pub.name || pub.slug} size="sm" />}
+          {appType && <AppTypeIcon type={appType} name={pubLabel} size="sm" />}
           <button
             onClick={onOpen}
             className="min-w-0 truncate font-medium text-foreground text-left hover:text-primary transition-colors"
           >
-            {pub.name || pub.slug}
+            {pubLabel}
           </button>
         </div>
       </td>

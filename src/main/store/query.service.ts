@@ -34,6 +34,7 @@ interface ItemRow {
   slug: string
   registry_id: string
   name: string
+  display_name: string | null
   description: string
   author: string
   tags: string
@@ -60,6 +61,7 @@ function rowToEntry(row: ItemRow): RegistryEntry & { _registryId: string } {
   return {
     slug: row.slug,
     name: row.name,
+    display_name: row.display_name ?? undefined,
     version: row.version,
     author: row.author,
     description: row.description,
