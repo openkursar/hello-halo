@@ -17,7 +17,9 @@ import { enrichSpecForPublish } from './spec-enrich'
 import { bundledSkillDeps } from '../../../shared/apps/bundled-skills'
 import { withSkillMdName } from '../../../shared/skill-frontmatter'
 import type { PublishResult, PublishContext } from './types'
-import type { AppSpec, AppType, SkillSpec } from '../../apps/spec'
+import type { AppSpec, SkillSpec } from '../../apps/spec'
+
+export { findAppByPublishSlug } from './find-app'
 
 /**
  * Resolve the publish target for the official registry from product config.
@@ -65,45 +67,6 @@ export async function getPublishPreview(appId: string, authorOverride?: string, 
     localVersion: spec.version ?? '0.0.0',
     storeVersion: await resolveStoreVersion(slug),
   }
-}
-
-/**
- * The installed app a publish by `author` would land on `slug`, or null when
- * that app is not uniquely determined.
- *
- * This inverts the slug derivation rather than matching names: every candidate
- * is run through the same `enrichSpecForPublish` publish itself uses, and kept
- * only when it lands on exactly this slug — author scope included, so a listing
- * owned by someone else never resolves to a local app. The answer therefore
- * states a fact about what publishing would do, and cannot drift from the
- * derivation rules.
- *
- * Zero or several matches return null. A near-miss must stay silent: the caller
- * surfaces this as a hint next to a listing, and a wrong hint is worse than
- * none.
- */
-export function findAppByPublishSlug(slug: string, type?: AppType, author?: string): string | null {
-  const manager = getAppManager()
-  if (!manager) return null
-
-  const matches = manager.listApps(type ? { type } : undefined).filter(app => {
-    if (app.status === 'uninstalled') return false
-    try {
-      return enrichSpecForPublish(app.spec, author).store!.slug === slug
-    } catch {
-      // No derivable slug (no author, unslugifiable name) — cannot be this one.
-      return false
-    }
-  })
-
-  if (matches.length > 1) {
-    console.warn(
-      `[publish] ${matches.length} installed apps derive slug "${slug}" ` +
-      `(${matches.map(a => a.id).join(', ')}) — reporting none`
-    )
-    return null
-  }
-  return matches[0]?.id ?? null
 }
 
 // Coalesce the burst of preview probes a single publish form fires (the app

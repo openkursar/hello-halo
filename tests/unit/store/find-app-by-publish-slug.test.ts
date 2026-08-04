@@ -9,20 +9,25 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// publish/index.ts wires the publish() entry point to app-manager bootstrap,
-// product config and the registry — none of which load in plain Node.
+// Only the app manager is stubbed. That the registry needs no stubbing is why
+// this query lives outside the publish barrel, which reaches the network.
 const listApps = vi.fn()
 vi.mock('../../../src/main/apps/manager', () => ({ getAppManager: () => ({ listApps }) }))
-vi.mock('../../../src/main/store/registry.service', () => ({ getRegistries: () => [], findStoreEntry: () => null }))
 
-import { findAppByPublishSlug } from '../../../src/main/store/publish'
+import { findAppByPublishSlug } from '../../../src/main/store/publish/find-app'
 import type { InstalledApp } from '../../../src/main/apps/manager'
 import type { AppSpec } from '../../../src/main/apps/spec/schema'
 
-function app(id: string, spec: Partial<AppSpec>, status = 'idle'): InstalledApp {
+function app(
+  id: string,
+  spec: Partial<AppSpec>,
+  status = 'idle',
+  spaceId: string | null = null,
+): InstalledApp {
   return {
     id,
     status,
+    spaceId,
     spec: {
       spec_version: '1',
       version: '1.0.0',
@@ -77,6 +82,27 @@ describe('store/findAppByPublishSlug', () => {
     listApps.mockReturnValue([
       app('a1', { name: 'weekly report' }),
       app('a2', { name: 'Weekly-Report' }),
+    ])
+    expect(findAppByPublishSlug('fly/weekly-report', 'skill', 'fly')).toBeNull()
+  })
+
+  it('still answers when the same release is installed globally and in a space', () => {
+    // Installs are unique per spec *and scope*, so this pair is one app the user
+    // happens to hold twice. Both publish the same bytes — there is no choice to
+    // abstain over, and abstaining here reads as the hint randomly vanishing.
+    listApps.mockReturnValue([
+      app('a-space', { name: 'weekly-report' }, 'idle', 'space-1'),
+      app('a-global', { name: 'weekly-report' }, 'idle', null),
+    ])
+    expect(findAppByPublishSlug('fly/weekly-report', 'skill', 'fly')).toBe('a-global')
+  })
+
+  it('returns null when duplicate installs have drifted apart', () => {
+    // Same app, but the two copies would publish different releases: a real
+    // choice, so the lookup must abstain.
+    listApps.mockReturnValue([
+      app('a-space', { name: 'weekly-report', version: '1.0.0' }, 'idle', 'space-1'),
+      app('a-global', { name: 'weekly-report', version: '2.0.0' }, 'idle', null),
     ])
     expect(findAppByPublishSlug('fly/weekly-report', 'skill', 'fly')).toBeNull()
   })
