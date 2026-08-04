@@ -153,16 +153,35 @@ export interface ShareToStoreDialogProps {
   initialAppId?: string
   /** Opening surface, for publish telemetry attribution. */
   entry?: PublishEntry
-  /** True when re-publishing an already-listed app (the "publish new version"
-   * action in My Publications), vs a first-time publish. */
-  republish?: boolean
+  /** The listing being updated, when the dialog was opened from an existing
+   * publication. It carries what only that record knows — the slug publish
+   * targets and the version to increment from — which is otherwise reachable
+   * only by probing an installed app. A package re-imported to update a listing
+   * has no local app to probe, so without this the form would treat an update
+   * as a first-time publish. */
+  republishTarget?: RepublishTarget
+}
+
+export interface RepublishTarget {
+  slug: string
+  /** The published version, i.e. the one to increment from. */
+  version: string
+  /** The listing's presentable name, used to detect a retarget (see below). */
+  name: string
 }
 
 // ────────────────────────────────────────────────
 // Component
 // ────────────────────────────────────────────────
 
-export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, republish }: ShareToStoreDialogProps) {
+export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, republishTarget }: ShareToStoreDialogProps) {
+  const republish = !!republishTarget
+  // Read as values, not as an object: the freshness effect below would otherwise
+  // key on the prop's identity and re-request on every render of a caller that
+  // builds it inline.
+  const targetSlug = republishTarget?.slug
+  const targetVersion = republishTarget?.version
+  const targetName = republishTarget?.name
   const { t } = useTranslation()
   const apps = useAppsStore(s => s.apps)
   const showToast = useNotificationStore(s => s.show)
@@ -307,33 +326,57 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     draftDirty.current = false
   }, [sourceSpec?.name, sourceSpec?.display_name, sourceSpec?.description, sourceTags, sourceCategory, draft])
 
-  // Store version of the target slug — needed for the pre-flight version-
-  // monotonicity check. Only resolvable for an installed source (import has no
-  // appId until submit); null leaves the check dormant.
+  // Store version of the target slug — the base the suggested version increments
+  // from, and what the pre-flight monotonicity check compares against. Null
+  // leaves both dormant, which reads as a first-time publish.
   const [storeVersion, setStoreVersion] = useState<string | null>(null)
   useEffect(() => {
-    const appId = source === 'installed' ? selectedInstalledId : null
-    if (!appId) { setStoreVersion(null); return }
     let cancelled = false
+
+    // On an update the scene category and tags live on the published registry
+    // entry and are never written back to the local spec, so the store is the
+    // only place to read them. Only fields the user left blank are filled.
+    const backfillFromListing = async (slug: string) => {
+      const detail = await api.storeGetAppDetail(slug)
+      if (cancelled || !detail.success) return
+      const listing = (detail.data as StoreAppDetail | undefined)?.entry
+      if (!listing) return
+      if (listing.category) setCategory(prev => prev || listing.category)
+      if (listing.tags?.length) setTags(prev => prev.length ? prev : listing.tags)
+    }
+
+    const appId = source === 'installed' ? selectedInstalledId : null
+    if (!appId) {
+      // Renaming a digital human retargets a fresh slug, which has no published
+      // version to increment from, so the record stops speaking for it. A skill
+      // is exempt: its name is the command identifier, so an edit lands on
+      // display_name and the listing stays put (see publish's
+      // applyDisplayOverride). An unnamed record can never match — guarding on
+      // it would make the empty form look like the listing before a package is
+      // even chosen.
+      const stillOnListing = targetName
+        ? type === 'skill' || debouncedName.trim() === targetName
+        : false
+      if (stillOnListing && targetVersion && targetSlug) {
+        setStoreVersion(targetVersion)
+        void backfillFromListing(targetSlug)
+      } else {
+        setStoreVersion(null)
+      }
+      return () => { cancelled = true }
+    }
+
     api.storePublishPreview(appId, debouncedAuthor.trim() || undefined, debouncedName.trim() || undefined)
       .then(async res => {
         if (cancelled) return
         const preview = res.success ? res.data : null
         setStoreVersion(preview?.storeVersion ?? null)
-        // On an update the scene category and tags live on the published
-        // registry entry (never written back to the local spec), so pull them
-        // from the store and backfill only fields the user left blank.
         if (!preview?.slug || !preview.storeVersion) return
-        const detail = await api.storeGetAppDetail(preview.slug)
-        if (cancelled || !detail.success) return
-        const entry = (detail.data as StoreAppDetail | undefined)?.entry
-        if (!entry) return
-        if (entry.category) setCategory(prev => prev || entry.category)
-        if (entry.tags?.length) setTags(prev => prev.length ? prev : entry.tags)
+        await backfillFromListing(preview.slug)
       })
       .catch(() => { if (!cancelled) setStoreVersion(null) })
     return () => { cancelled = true }
-  }, [source, selectedInstalledId, debouncedAuthor, debouncedName])
+  }, [source, selectedInstalledId, debouncedAuthor, debouncedName, type, targetSlug, targetVersion, targetName])
 
   // Publish version — defaults to an auto-incremented value the user may raise
   // but not drop below the published version (enforced by the pre-flight). When

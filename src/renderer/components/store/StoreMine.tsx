@@ -11,7 +11,7 @@ import { STORE_NOT_SIGNED_IN, type MyPublication, type StoreSignInStatus } from 
 import type { AppType } from '../../../shared/apps/spec-types'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { getCurrentLanguage, useTranslation } from '../../i18n'
-import { ShareToStoreDialog } from './ShareToStoreDialog'
+import { ShareToStoreDialog, type RepublishTarget } from './ShareToStoreDialog'
 import { StoreUpdatable } from './StoreUpdatable'
 import { StoreNotice } from './StoreNotice'
 import { AppTypeIcon } from './AppTypeIcon'
@@ -56,6 +56,7 @@ export function StoreMine() {
   const [showPublish, setShowPublish] = useState(false)
   // Republishing a known publication skips the type step — its type is fixed.
   const [publishType, setPublishType] = useState<'automation' | 'skill' | undefined>(undefined)
+  const [publishTarget, setPublishTarget] = useState<RepublishTarget | undefined>(undefined)
   const [signingIn, setSigningIn] = useState(false)
   // Distinguishes "signed out but can sign in" from the misconfiguration where
   // the store requires an account yet this build ships no identity provider —
@@ -126,8 +127,9 @@ export function StoreMine() {
     else showToast({ title: res.error || t('Take down failed. Please try again.'), variant: 'error', duration: 4000 })
   }, [load, showConfirm, showToast, t])
 
-  const openPublish = useCallback((type: MyPublication['type']) => {
-    setPublishType(type === 'skill' || type === 'automation' ? type : undefined)
+  const openPublish = useCallback((pub: MyPublication) => {
+    setPublishType(pub.type === 'skill' || pub.type === 'automation' ? pub.type : undefined)
+    setPublishTarget({ slug: pub.slug, version: pub.version, name: pub.displayName ?? pub.name ?? '' })
     setShowPublish(true)
   }, [])
 
@@ -230,7 +232,7 @@ export function StoreMine() {
                           busy={busySlug === pub.slug}
                           onOpen={() => void selectStoreApp(pub.slug)}
                           onUnpublish={() => handleUnpublish(pub.slug)}
-                          onPublishVersion={() => openPublish(pub.type)}
+                          onPublishVersion={() => openPublish(pub)}
                         />
                       ))
                     )}
@@ -245,7 +247,7 @@ export function StoreMine() {
       </div>
 
       {showPublish && (
-        <ShareToStoreDialog initialType={publishType} entry="mine" republish onClose={() => { setShowPublish(false); void load() }} />
+        <ShareToStoreDialog initialType={publishType} entry="mine" republishTarget={publishTarget} onClose={() => { setShowPublish(false); void load() }} />
       )}
       {confirmDialog}
     </div>
