@@ -29,6 +29,7 @@ import { AppNotifyChannelsSection } from './AppNotifyChannelsSection'
 import { AppCapabilitiesSection } from './AppCapabilitiesSection'
 import { AppMcpDepsSection } from './AppMcpDepsSection'
 import { AppSkillsSection } from './AppSkillsSection'
+import { AppKnowledgeSection } from './AppKnowledgeSection'
 import { appTypeLabel } from './appTypeUtils'
 import { sanitizeCommandName } from './skill-import-utils'
 import { SystemPromptEditor } from './SystemPromptEditor'
@@ -581,6 +582,7 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
           <AppCapabilitiesSection app={app} appId={appId} onRequireRestart={onRequireRestart} />
           <AppMcpDepsSection app={app} appId={appId} onRequireRestart={onRequireRestart} />
           <AppSkillsSection appId={appId} spaceId={app.spaceId} />
+          <AppKnowledgeSection appId={appId} />
         </>
       )}
 

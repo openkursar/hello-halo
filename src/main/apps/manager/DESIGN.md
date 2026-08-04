@@ -245,6 +245,36 @@ controlled disable) with zero changes to those callers.
 (N = number of bundled apps, typically ≤10). For unchanged builds this is
 ~10–20ms total, all of which runs in the idle queue and never blocks the UI.
 
+### 2.12 Knowledge Base Seeding: Once Per App, Ever
+
+**Decision**: An automation app's knowledge-base bindings (space-bound KBs +
+the default KB) are seeded exactly once in its lifetime, gated by the
+`knowledge_seeded` column. `moveToSpace` and non-automation app types never
+seed. Three paths can perform that one seed: `install()`'s fresh-install
+branch, `install()`'s reinstall branch, and `ensureKnowledgeSeeded(appId)`.
+
+**Rationale**: Seeding on every `moveToSpace` would silently swap a user's
+curated KB bindings whenever an app moves between spaces; re-seeding on
+`reinstall` would re-add bindings the user deliberately removed. The
+one-shot flag makes "have we ever seeded this app" explicit and queryable,
+instead of inferring it from `appIds.length === 0` (which can't distinguish
+"never seeded" from "user unbound everything"). Because every path is gated
+by the same flag, "which path ran the seed" carries no meaning — only
+whether one already did.
+
+**Why reinstall seeds too**: the startup backfill deliberately skips
+uninstalled records (binding them would leave dangling `appIds` on the KB
+for an app the user removed), so for a pre-feature app that sat uninstalled
+across the upgrade, reinstall is its first moment back in the live
+population. Without this the app would run with no knowledge until some
+later launch caught it. The flag makes it safe: an app that was already
+seeded reinstalls as a no-op.
+
+**Backfill scope**: `knowledge-backfill.ts` (Tier-3 idle task, sibling to
+`seed.ts` and `builtin-loader.ts`) covers every live status, not just
+`active` — a paused or errored app resumes into a normal run, and filtering
+to `active` would strand it.
+
 ---
 
 ## 3. SQLite Schema
@@ -264,6 +294,7 @@ CREATE TABLE installed_apps (
   last_run_at INTEGER,
   last_run_outcome TEXT,                  -- 'useful'|'noop'|'error'|'skipped'|null
   error_message TEXT,
+  knowledge_seeded INTEGER NOT NULL DEFAULT 0, -- 1 once install() has seeded KB bindings (see 2.12)
   UNIQUE(spec_id, space_id)
 );
 CREATE INDEX idx_installed_apps_space ON installed_apps(space_id);
@@ -285,6 +316,7 @@ src/main/apps/manager/
   skill-sync.ts       -- Filesystem sync for skill apps (SDK-discoverable .md files)
   seed.ts             -- One-shot "Halo 助手" placeholder when no apps exist
   builtin-loader.ts   -- Built-in (bundled) digital human loader; runs as Tier-3 idle task
+  knowledge-backfill.ts -- One-shot KB seed for apps predating knowledge_seeded; Tier-3 idle task
 ```
 
 ---
@@ -303,6 +335,7 @@ interface AppManagerService {
   updateLastRun(appId: string, outcome: RunOutcome, errorMessage?: string): void
   getApp(appId: string): InstalledApp | null
   listApps(filter?: AppListFilter): InstalledApp[]
+  ensureKnowledgeSeeded(appId: string): void
   getAppWorkDir(appId: string): string
   clearAppMemory(appId: string): number
   grantPermission(appId: string, permission: string): void

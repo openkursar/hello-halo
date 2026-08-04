@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdirSync, readFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../src/main/platform/store/types'
@@ -32,6 +32,29 @@ import {
   SpaceNotFoundError,
 } from '../../../../src/main/apps/manager/errors'
 import type { AppSpec } from '../../../../src/main/apps/spec/schema'
+import {
+  _resetTlonRegistry,
+  createKB,
+  getKB,
+  setDefaultKB,
+  bindToSpace,
+  listKBsForApp,
+} from '../../../../src/main/services/tlon/service'
+
+// createKB fires a fire-and-forget dynamic import of ./watcher (native
+// @parcel/watcher); stub it so knowledge-seeding tests never touch real
+// filesystem watchers (mirrors tests/unit/services/tlon/service.test.ts).
+vi.mock('../../../../src/main/services/tlon/watcher', () => ({
+  startWatchersForKB: vi.fn(async () => {}),
+  stopWatchersForKB: vi.fn(async () => {}),
+  startLinkedDirWatch: vi.fn(async () => {}),
+  stopLinkedDirWatch: vi.fn(async () => {}),
+}))
+vi.mock('@parcel/watcher', () => ({
+  default: {
+    subscribe: vi.fn(async () => ({ unsubscribe: vi.fn(async () => {}) })),
+  },
+}))
 
 // ============================================
 // Test Fixtures
@@ -1145,6 +1168,151 @@ describe('AppManager', () => {
       expect(app.status).toBe('paused')
       expect(app.userConfig).toEqual({ key: 'value' })
       expect(app.spaceId).toBe(TEST_SPACE_ID_2)
+    })
+  })
+
+  // ===========================================================================
+  // Knowledge Base Seeding
+  // ===========================================================================
+
+  describe('knowledge base seeding', () => {
+    beforeEach(() => {
+      _resetTlonRegistry()
+    })
+
+    afterEach(async () => {
+      await vi.dynamicImportSettled()
+      _resetTlonRegistry()
+    })
+
+    it('seeds the default knowledge base on a fresh automation install', async () => {
+      const kb = createKB({ name: 'Default KB' })
+      setDefaultKB(kb.id)
+
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+
+      expect(service.getApp(appId)!.knowledgeSeeded).toBe(true)
+      expect(listKBsForApp(appId).map(k => k.id)).toEqual([kb.id])
+    })
+
+    it('marks knowledgeSeeded true even when there is nothing to seed', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+
+      expect(service.getApp(appId)!.knowledgeSeeded).toBe(true)
+      expect(listKBsForApp(appId)).toEqual([])
+    })
+
+    it('does not reseed when reinstalling a previously-uninstalled app', async () => {
+      const spec = createTestSpec({ name: 'reinstall-kb-app' })
+      const appId = await service.install(TEST_SPACE_ID, spec)
+      expect(listKBsForApp(appId)).toEqual([])
+
+      await service.uninstall(appId)
+
+      // A KB becomes available only after the original install/uninstall.
+      const kb = createKB({ name: 'Late KB' })
+      setDefaultKB(kb.id)
+
+      const reinstalledId = await service.install(TEST_SPACE_ID, spec)
+
+      expect(reinstalledId).toBe(appId)
+      expect(service.getApp(appId)!.knowledgeSeeded).toBe(true)
+      expect(listKBsForApp(appId)).toEqual([]) // already seeded -> reinstall is a no-op
+    })
+
+    it('seeds a never-seeded app on reinstall, since the backfill skips uninstalled records', async () => {
+      const spec = createTestSpec({ name: 'pre-feature-app' })
+      const appId = await service.install(TEST_SPACE_ID, spec)
+      await service.uninstall(appId)
+
+      // Simulate a record that predates the knowledge-base feature.
+      dbManager
+        .getAppDatabase()
+        .prepare('UPDATE installed_apps SET knowledge_seeded = 0 WHERE id = ?')
+        .run(appId)
+
+      const kb = createKB({ name: 'Backfilled KB' })
+      setDefaultKB(kb.id)
+
+      await service.install(TEST_SPACE_ID, spec)
+
+      expect(service.getApp(appId)!.knowledgeSeeded).toBe(true)
+      expect(listKBsForApp(appId).map(k => k.id)).toEqual([kb.id])
+    })
+
+    it('leaves no binding behind when the install rolls back', async () => {
+      const kb = createKB({ name: 'Rollback KB' })
+      setDefaultKB(kb.id)
+      // A file where the work-directory tree must go: mkdirSync fails with
+      // ENOTDIR, which triggers the install's DB rollback.
+      writeFileSync(join(spacePaths[TEST_SPACE_ID], '.halo'), 'not a directory')
+
+      await expect(service.install(TEST_SPACE_ID, createTestSpec())).rejects.toThrow()
+
+      expect(getKB(kb.id)!.appIds).toEqual([])
+    })
+
+    it('reports the post-seed flag in the install event payload', async () => {
+      const kb = createKB({ name: 'Event KB' })
+      setDefaultKB(kb.id)
+      const seen: boolean[] = []
+      const unsubscribe = service.onAppInstalled(app => { seen.push(app.knowledgeSeeded) })
+
+      await service.install(TEST_SPACE_ID, createTestSpec())
+      unsubscribe()
+
+      expect(seen).toEqual([true])
+    })
+
+    it('does not reseed on moveToSpace', async () => {
+      const originKb = createKB({ name: 'Origin Space KB' })
+      bindToSpace(originKb.id, TEST_SPACE_ID)
+
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      expect(listKBsForApp(appId).map(k => k.id)).toEqual([originKb.id])
+
+      const targetKb = createKB({ name: 'Target Space KB' })
+      bindToSpace(targetKb.id, TEST_SPACE_ID_2)
+
+      await service.moveToSpace(appId, TEST_SPACE_ID_2)
+
+      // Bindings from the original seed persist; the new space's KB is not auto-bound.
+      expect(listKBsForApp(appId).map(k => k.id)).toEqual([originKb.id])
+    })
+
+    it('never seeds non-automation app types', async () => {
+      const kb = createKB({ name: 'Skill KB' })
+      setDefaultKB(kb.id)
+
+      const spec = {
+        spec_version: '1',
+        name: 'a-skill',
+        version: '1.0.0',
+        description: 'a skill',
+        type: 'skill',
+        skill_content: 'content',
+      } as unknown as AppSpec
+
+      const appId = await service.install(TEST_SPACE_ID, spec)
+
+      expect(service.getApp(appId)!.knowledgeSeeded).toBe(false)
+      expect(listKBsForApp(appId)).toEqual([])
+    })
+
+    it('ensureKnowledgeSeeded is idempotent for an already-seeded app', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      expect(service.getApp(appId)!.knowledgeSeeded).toBe(true)
+
+      const kb = createKB({ name: 'Too Late' })
+      setDefaultKB(kb.id)
+      service.ensureKnowledgeSeeded(appId)
+
+      // Already seeded at install time (before this KB existed) — no retroactive bind.
+      expect(listKBsForApp(appId)).toEqual([])
+    })
+
+    it('ensureKnowledgeSeeded throws AppNotFoundError for an unknown app', () => {
+      expect(() => service.ensureKnowledgeSeeded('missing')).toThrow(AppNotFoundError)
     })
   })
 

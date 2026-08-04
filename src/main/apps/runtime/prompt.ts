@@ -19,6 +19,7 @@ import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../services/agent/system-prompt'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../../services/ai-browser'
 import { AI_TERMINAL_SYSTEM_PROMPT } from '../../services/ai-terminal'
+import { getKBReferencesForApp } from '../../services/tlon'
 
 // ============================================
 // Automation Context Overlay
@@ -189,6 +190,8 @@ audience-facing artifact of this run.
 // ============================================
 
 export interface AppPromptOptions {
+  /** ID of the installed App (used to look up bound knowledge bases) */
+  appId: string
   /** The App's specification (must be automation type) */
   appSpec: AutomationSpec
   /** Memory instructions (from memory.getPromptInstructions()) */
@@ -250,7 +253,11 @@ export function buildAppSystemPrompt(options: AppPromptOptions): string {
   // 1. Full main Agent system prompt — gives the automation agent
   //    100% of the same capabilities as the interactive agent
   //    When AI Browser is enabled, append full browser tool workflow guide
-  const promptCtx = { workDir: options.workDir, modelInfo: options.modelInfo }
+  const promptCtx = {
+    workDir: options.workDir,
+    modelInfo: options.modelInfo,
+    knowledgeBases: getKBReferencesForApp(options.appId),
+  }
   let basePrompt = options.usesAIBrowser
     ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)
     : buildSystemPrompt(promptCtx)

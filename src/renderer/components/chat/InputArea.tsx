@@ -97,6 +97,13 @@ interface InputAreaProps {
    * panel, not the broker, so the control would be inert and misleading here.
    */
   hideToolsetControls?: boolean
+  /**
+   * Hide the knowledge base loader button. Digital-human chat sets this: an
+   * app's knowledge bases are bound via its config panel (AppKnowledgeSection),
+   * not per-conversation attach — the button's space-conversation logic would
+   * silently no-op here.
+   */
+  hideKnowledgeControls?: boolean
 }
 
 // Image constraints
@@ -109,7 +116,7 @@ interface ImageError {
   message: string
 }
 
-export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [], mentionArtifacts = [], hideToolsetControls = false }: InputAreaProps) {
+export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [], mentionArtifacts = [], hideToolsetControls = false, hideKnowledgeControls = false }: InputAreaProps) {
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
@@ -802,6 +809,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             sendKeyMode={sendKeyMode}
             visionEnabled={visionEnabled}
             hideToolsetControls={hideToolsetControls}
+            hideKnowledgeControls={hideKnowledgeControls}
           />
         </div>
       </div>
@@ -832,6 +840,7 @@ interface InputToolbarProps {
   sendKeyMode: 'enter' | 'ctrl-enter'
   visionEnabled: boolean
   hideToolsetControls: boolean
+  hideKnowledgeControls: boolean
 }
 
 function InputToolbar({
@@ -850,7 +859,8 @@ function InputToolbar({
   onStop,
   sendKeyMode,
   visionEnabled,
-  hideToolsetControls
+  hideToolsetControls,
+  hideKnowledgeControls
 }: InputToolbarProps) {
   const { t } = useTranslation()
   return (
@@ -933,7 +943,7 @@ function InputToolbar({
         )}
 
         {/* Knowledge base loader */}
-        {!isGenerating && !isOnboarding && <KnowledgeBaseButton />}
+        {!isGenerating && !isOnboarding && !hideKnowledgeControls && <KnowledgeBaseButton />}
       </div>
 
       {/* Right section: Stop (when generating) + Send — fixed, never scrolls */}

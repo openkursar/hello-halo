@@ -41,6 +41,7 @@ import {
   McpCommandBlockedError,
 } from './errors'
 import { isMcpCommandBlocked } from '../../services/security-policy'
+import { seedAppKnowledgeBases } from '../../services/tlon'
 import type { McpAppChange } from '../../services/app-bridge'
 import { syncSkillToFilesystem, removeSkillFromFilesystem } from './skill-sync'
 import { withSkillMdName } from '../../../shared/skill-frontmatter'
@@ -235,6 +236,25 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
   }
 
   /**
+   * One-time knowledge-base seed for an already-loaded App record.
+   * No-op for non-automation types and apps already seeded. Failures are
+   * logged only -- seeding must never block install or startup.
+   */
+  function seedKnowledgeIfNeeded(app: InstalledApp): void {
+    if (app.knowledgeSeeded) return
+    if (app.spec.type !== 'automation') return
+    try {
+      seedAppKnowledgeBases(app.id, app.spaceId)
+      store.markKnowledgeSeeded(app.id)
+      // The caller's record outlives this call (install emits it as the
+      // install-event payload), so it must not keep reporting `false`.
+      app.knowledgeSeeded = true
+    } catch (err) {
+      console.error(`[AppManager] Knowledge base seeding failed for ${app.id}:`, err)
+    }
+  }
+
+  /**
    * Recursively delete all contents of a directory without removing the directory itself.
    * Returns the number of files removed.
    */
@@ -366,6 +386,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
           // a fresh install (the app re-enters the active population).
           const reinstalled = store.getById(existing.id)
           if (reinstalled) {
+            // Catches Apps that predate the knowledge-base feature: the
+            // startup backfill skips uninstalled records, so this is their
+            // first moment back in the live population. Already-seeded Apps
+            // no-op, so a user's manual unbind is never overwritten.
+            seedKnowledgeIfNeeded(reinstalled)
             notifyInstalled(reinstalled)
           }
           return existing.id
@@ -414,6 +439,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         },
         installedAt: Date.now(),
         upgradeStrategy: 'auto',
+        knowledgeSeeded: false,
       }
 
       // Persist to SQLite first (atomic: if this fails, no filesystem side effects).
@@ -439,6 +465,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         try { store.delete(appId) } catch { /* best-effort rollback */ }
         throw dirError
       }
+
+      // Seeding writes into knowledge-base metadata, which the rollback above
+      // cannot undo -- so it runs only once the install can no longer fail.
+      seedKnowledgeIfNeeded(app)
 
       const scope = spaceId ? `space ${spaceId}` : 'global'
       console.log(
@@ -879,9 +909,19 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         emitMcpChange(newSpaceId, { appId, specId: app.specId, action: 'moved' })
       }
 
+      // Knowledge base bindings are deliberately NOT reseeded on move: the
+      // binding set became the user's own after the initial seed, and a
+      // cross-space move is a relocation, not a re-birth of the app.
       const fromScope = oldSpaceId === null ? 'global' : `space ${oldSpaceId}`
       const toScope   = newSpaceId === null ? 'global' : `space ${newSpaceId}`
       console.log(`[AppManager] Moved app ${appId} from ${fromScope} to ${toScope}`)
+    },
+
+    // ── Knowledge Base ────────────────────────
+
+    ensureKnowledgeSeeded(appId: string): void {
+      const app = requireApp(appId)
+      seedKnowledgeIfNeeded(app)
     },
 
     // ── Run Tracking ──────────────────────────

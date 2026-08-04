@@ -111,6 +111,15 @@ export interface InstalledApp {
 
   /** Versions the user chose to skip; they no longer surface as available updates. */
   ignoredVersions?: string[]
+
+  /**
+   * Whether the one-time knowledge-base seed (space bindings + default KB
+   * snapshotted into each KB's `appIds`, see tlon `seedAppKnowledgeBases`)
+   * has already run for this App. Prevents reinstall / restart from
+   * re-seeding over a user's manual unbind. Always `false` for non-automation
+   * apps (they are never seeded).
+   */
+  knowledgeSeeded: boolean
 }
 
 /**
@@ -385,6 +394,26 @@ export interface AppManagerService {
    * @throws AppAlreadyInstalledError if target scope already has the same specId
    */
   moveToSpace(appId: string, newSpaceId: string | null): Promise<void>
+
+  // ── Knowledge Base ─────────────────────────────
+
+  /**
+   * Ensure the one-time knowledge-base seed has run for an App.
+   *
+   * No-op if `knowledgeSeeded` is already true or the App is not an
+   * automation (only digital humans get knowledge base bindings). On first
+   * qualifying call, snapshots the space-bound + default knowledge bases
+   * into the App's `appIds` binding (see `services/tlon`'s
+   * `seedAppKnowledgeBases`) and persists the `knowledgeSeeded` flag.
+   *
+   * Called from the new-install path in `install()`, and from
+   * `apps/runtime`'s startup backfill for pre-existing apps that predate
+   * this feature. Seeding failures are logged, never thrown — they must not
+   * block installation or startup.
+   *
+   * @throws AppNotFoundError if the App does not exist
+   */
+  ensureKnowledgeSeeded(appId: string): void
 
   // ── Run Tracking ───────────────────────────────
 

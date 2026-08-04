@@ -86,6 +86,7 @@ import { cleanupImChannelTempFiles } from '../apps/runtime/im-channels'
 import { registerIdleTask, startIdleDrain } from './idle-queue'
 import { seedDefaultAppIfNeeded } from '../apps/manager/seed'
 import { loadBuiltinApps } from '../apps/manager/builtin-loader'
+import { backfillKnowledgeSeeds } from '../apps/manager/knowledge-backfill'
 
 // Module-level reference to db for cleanup
 let platformDb: DatabaseManager | null = null
@@ -201,6 +202,7 @@ async function initPlatformAndApps(): Promise<void> {
   registerIdleTask('load-builtin-apps', () => loadBuiltinApps(appManager))
   registerIdleTask('seed-default-app', () => seedDefaultAppIfNeeded(appManager))
   registerIdleTask('startup-snapshot', () => runStartupSnapshot(appManager, runtime))
+  registerIdleTask('backfill-knowledge-seeds', () => backfillKnowledgeSeeds(appManager))
   startIdleDrain()
 
   const dt = performance.now() - t0

@@ -292,6 +292,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
             isGenerating={false}
             placeholder={t('Chat with this App...')}
             hideToolsetControls
+            hideKnowledgeControls
           />
         </div>
       </div>
@@ -316,6 +317,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
             isGenerating={false}
             placeholder={t('Chat with this App...')}
             hideToolsetControls
+            hideKnowledgeControls
           />
         </div>
       </div>
@@ -402,6 +404,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
           isGenerating={isGenerating}
           placeholder={t('Chat with this App...')}
           hideToolsetControls
+          hideKnowledgeControls
           slashCommands={slashCommands}
           mentionArtifacts={mentionArtifacts}
         />

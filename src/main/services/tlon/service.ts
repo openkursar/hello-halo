@@ -776,6 +776,33 @@ export function getSeedKBIds(spaceId: string): string[] {
 }
 
 /**
+ * One-time seed of an app's `appIds` binding at install/backfill time: the
+ * space-bound KBs plus the global default, same computation as `getSeedKBIds`
+ * (conversation seeding) applied to `bindToApp` instead of a snapshot array.
+ * `spaceId === null` (global apps) seeds only the default KB. Idempotent via
+ * `bindToApp`'s addToList dedupe, so callers do not need to pre-check.
+ */
+export function seedAppKnowledgeBases(appId: string, spaceId: string | null): void {
+  const ids = new Set<string>()
+  if (spaceId) {
+    for (const kb of getRegistry().values()) {
+      if (kb.spaceIds.includes(spaceId)) ids.add(kb.id)
+    }
+  }
+  const def = getDefaultKB()
+  if (def) ids.add(def.id)
+
+  const seeded: string[] = []
+  for (const id of ids) {
+    if (bindToApp(id, appId)) seeded.push(id)
+  }
+  if (seeded.length > 0) {
+    const names = seeded.map(id => getRegistry().get(id)?.name || id)
+    console.log(`[Tlon] Seeded ${seeded.length} knowledge base(s) for app ${appId}: [${names.join(', ')}]`)
+  }
+}
+
+/**
  * Context for a direct "chat with this knowledge base" turn: the text/ dir to
  * use as the agent's working directory (so Read/Glob/Grep search the extracted
  * document corpus — agentic search) and the KB reference to inject into the

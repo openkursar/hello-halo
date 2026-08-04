@@ -35,6 +35,7 @@ interface AppRow {
   uninstalled_at: number | null
   upgrade_strategy: string
   ignored_versions: string
+  knowledge_seeded: number
 }
 
 // ============================================
@@ -62,6 +63,7 @@ function rowToInstalledApp(row: AppRow): InstalledApp {
     uninstalledAt: row.uninstalled_at ?? undefined,
     upgradeStrategy: (row.upgrade_strategy as UpgradeStrategy) ?? 'auto',
     ignoredVersions: row.ignored_versions ? (JSON.parse(row.ignored_versions) as string[]) : [],
+    knowledgeSeeded: row.knowledge_seeded === 1,
   }
 }
 
@@ -93,6 +95,7 @@ export class AppManagerStore {
   private readonly stmtUpdateUninstalledAt: Database.Statement
   private readonly stmtUpdateUpgradeStrategy: Database.Statement
   private readonly stmtUpdateIgnoredVersions: Database.Statement
+  private readonly stmtUpdateKnowledgeSeeded: Database.Statement
 
   constructor(private readonly db: Database.Database) {
     // ── INSERT ────────────────────────────────────
@@ -101,12 +104,12 @@ export class AppManagerStore {
         id, spec_id, space_id, spec_json, status,
         pending_escalation_id, user_config_json, user_overrides_json,
         permissions_json, installed_at, last_run_at, last_run_outcome, error_message,
-        upgrade_strategy, ignored_versions
+        upgrade_strategy, ignored_versions, knowledge_seeded
       ) VALUES (
         @id, @spec_id, @space_id, @spec_json, @status,
         @pending_escalation_id, @user_config_json, @user_overrides_json,
         @permissions_json, @installed_at, @last_run_at, @last_run_outcome, @error_message,
-        @upgrade_strategy, @ignored_versions
+        @upgrade_strategy, @ignored_versions, @knowledge_seeded
       )
     `)
 
@@ -197,6 +200,12 @@ export class AppManagerStore {
       SET ignored_versions = @ignored_versions
       WHERE id = @id
     `)
+
+    this.stmtUpdateKnowledgeSeeded = db.prepare(`
+      UPDATE installed_apps
+      SET knowledge_seeded = 1
+      WHERE id = @id
+    `)
   }
 
   // ── Create ─────────────────────────────────────
@@ -223,6 +232,7 @@ export class AppManagerStore {
       error_message: app.errorMessage ?? null,
       upgrade_strategy: app.upgradeStrategy ?? 'auto',
       ignored_versions: JSON.stringify(app.ignoredVersions ?? []),
+      knowledge_seeded: app.knowledgeSeeded ? 1 : 0,
     })
   }
 
@@ -242,6 +252,11 @@ export class AppManagerStore {
       id: appId,
       ignored_versions: JSON.stringify(versions),
     })
+  }
+
+  /** One-way flag: marks that the one-time knowledge-base seed has run for this App. */
+  markKnowledgeSeeded(appId: string): void {
+    this.stmtUpdateKnowledgeSeeded.run({ id: appId })
   }
 
   // ── Read ───────────────────────────────────────
