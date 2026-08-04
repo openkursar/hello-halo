@@ -29,6 +29,7 @@ import {
   checkUpgradesNow,
   publish,
   getPublishPreview,
+  findAppByPublishSlug,
   collectFiles,
   packDhpkg,
   packSkill,
@@ -38,6 +39,7 @@ import { getAppManager } from '../apps/manager'
 import { getAppRuntime } from '../apps/runtime'
 import { sendToRenderer } from '../foundation/window.service'
 import type { StoreInstallProgress } from '../../shared/store/store-types'
+import type { AppType } from '../../shared/apps/spec-types'
 import { storeRpc } from '../../shared/rpc/contracts/store.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -125,6 +127,17 @@ export function registerStoreHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[StoreIPC] store:publish-preview error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── store:find-app-by-publish-slug ─────────────────────────────────────
+    storeFindAppByPublishSlug: async (input: { slug: string; type?: AppType; author?: string }) => {
+      try {
+        return { success: true, data: { appId: findAppByPublishSlug(input.slug, input.type, input.author) } }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[StoreIPC] store:find-app-by-publish-slug error:', err.message)
         return { success: false, error: err.message }
       }
     },

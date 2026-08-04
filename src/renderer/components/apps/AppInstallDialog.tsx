@@ -1017,7 +1017,7 @@ function ImportTab({
     <>
       {/* Description */}
       <p className="text-xs text-muted-foreground">
-        {t('Drop a .yaml spec file, .zip / .dhpkg bundle, or folder to import a digital human.')}
+        {t('Import a digital human from a .yaml spec, a .zip / .dhpkg bundle, or a folder.')}
       </p>
 
       {phase === 'idle' && (
@@ -1026,8 +1026,8 @@ function ImportTab({
           onDirectoryEntry={onDirectoryEntry}
           onFolderFileList={onFolderFileList}
           fileAccept=".yaml,.yml,.zip,.dhpkg"
-          dropLabel={t('Drop .yaml, .zip, .dhpkg, or folder here')}
-          dropHint={t('or click to browse a file')}
+          dropLabel={t('Drop a digital human file here')}
+          dropHint={t('Or click to choose · .zip · .dhpkg · .yaml')}
           folderLabel={t('Browse folder...')}
         >
           {/* Format hint */}

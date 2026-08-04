@@ -49,19 +49,18 @@ import type { AppSpec, AutomationSpec, SkillSpec } from '../../../shared/apps/sp
 import type { StoreAppDetail } from '../../../shared/store/store-types'
 import {
   processMdFile,
-  processDirectoryEntry,
-  processFileListAsFolder,
   processZipFile,
+  parseSkillFiles,
   parseMd,
   type ParsedSkill,
 } from '../apps/skill-import-utils'
 import {
   parseDigitalHumanZip,
   parseDigitalHumanFolder,
-  detectZipAppType,
   type ZipParseResult,
   type BundledSkill,
 } from '../apps/zip-import-utils'
+import { detectAppType, detectArchiveAppType, type DetectedAppType } from '../apps/app-type-detect'
 import { readDirectoryEntryToMap, readFileListToMap } from '../apps/file-read-utils'
 import { FileImportZone } from '../apps/FileImportZone'
 import { AppTypeIcon } from './AppTypeIcon'
@@ -124,6 +123,11 @@ interface ReviewFinding {
   message: string
 }
 
+/** Thrown when the dropped file's extension is not one the selected type can
+ * take at all. It carries no message: the failure describer replaces it with
+ * the accepted-format copy, which is translated and names every format. */
+class UnsupportedImport extends Error {}
+
 // Seeds the digital-human chooser card cycles through — each renders a distinct
 // generated avatar (same style as the home page), one per second.
 const DIGITAL_HUMAN_SEEDS = ['aria', 'nova', 'sol', 'iris', 'max', 'echo', 'luna', 'pip']
@@ -153,16 +157,17 @@ export interface ShareToStoreDialogProps {
   initialAppId?: string
   /** Opening surface, for publish telemetry attribution. */
   entry?: PublishEntry
-  /** True when re-publishing an already-listed app (the "publish new version"
-   * action in My Publications), vs a first-time publish. */
-  republish?: boolean
+  /** The store listing being re-published (the "publish new version" / relist /
+   * resubmit actions in My Publications). Marks the publish as an update for
+   * telemetry, and points the installed picker at the app that would update it. */
+  republishSlug?: string
 }
 
 // ────────────────────────────────────────────────
 // Component
 // ────────────────────────────────────────────────
 
-export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, republish }: ShareToStoreDialogProps) {
+export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, republishSlug }: ShareToStoreDialogProps) {
   const { t } = useTranslation()
   const apps = useAppsStore(s => s.apps)
   const showToast = useNotificationStore(s => s.show)
@@ -307,6 +312,21 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     draftDirty.current = false
   }, [sourceSpec?.name, sourceSpec?.display_name, sourceSpec?.description, sourceTags, sourceCategory, draft])
 
+  // Updating an existing listing: which installed app a publish would actually
+  // land on that slug. It runs the same derivation publish does, so the answer
+  // is exact or absent — never a guess. Shown only as a hint in the picker;
+  // committing the choice stays with the user, who alone knows whether that app
+  // holds the work they mean to release.
+  const [pinnedAppId, setPinnedAppId] = useState<string | null>(null)
+  useEffect(() => {
+    setPinnedAppId(null)
+    if (!republishSlug) return
+    let cancelled = false
+    void api.storeFindAppByPublishSlug(republishSlug, type, debouncedAuthor.trim() || undefined)
+      .then(res => { if (!cancelled && res.success) setPinnedAppId(res.data?.appId ?? null) })
+    return () => { cancelled = true }
+  }, [republishSlug, type, debouncedAuthor])
+
   // Store version of the target slug — needed for the pre-flight version-
   // monotonicity check. Only resolvable for an installed source (import has no
   // appId until submit); null leaves the check dormant.
@@ -434,17 +454,6 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     stageSkill(parsed, file.name, 'file')
   }, [])
 
-  const parseSkillFromDirEntry = useCallback(async (entry: FileSystemDirectoryEntry) => {
-    const parsed = await processDirectoryEntry(entry)
-    stageSkill(parsed, entry.name, 'folder')
-  }, [])
-
-  const parseSkillFromFileList = useCallback(async (fileList: FileList) => {
-    const parsed = await processFileListAsFolder(fileList)
-    const folderName = fileList[0]?.webkitRelativePath.split('/')[0] ?? 'folder'
-    stageSkill(parsed, folderName, 'folder')
-  }, [])
-
   function stageSkill(parsed: ParsedSkill, label: string, origin: 'file' | 'folder') {
     const spec: SkillSpec = {
       spec_version: '1.0',
@@ -499,6 +508,44 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     setStaged({ spec, label, origin, bundledSkills: result.bundledSkills })
   }
 
+  // ── Import failure messages ──────────────────
+
+  /** The format the selected type accepts, or — when the package is plainly of
+   * the other type — an invitation to switch the type. The type is never
+   * switched for the user: a silent switch moves the app they are publishing
+   * out from under them. */
+  const describeRejection = useCallback((detected: DetectedAppType | null): string => {
+    if (type === 'skill') {
+      return detected === 'automation'
+        ? t('This looks like a digital human package, but the app type is set to Skill. Switch the app type to Digital Human, or choose a skill package.')
+        : t('Not a skill package. A skill must contain SKILL.md at its root. Accepted: a .md file, a folder containing SKILL.md, or a .zip containing SKILL.md.')
+    }
+    return detected === 'skill'
+      ? t('This looks like a skill package, but the app type is set to Digital Human. Switch the app type to Skill, or choose a digital human package.')
+      : t('Not a digital human package. A digital human must contain spec.yaml at its root. Accepted: .zip, .dhpkg, .yaml, or a folder containing spec.yaml.')
+  }, [type, t])
+
+  /** Only a package positively identified as the *other* type is worth
+   * overriding the parser with — that diagnosis is about the wrong question.
+   * A null detection means unknown, never "wrong type", so it must leave the
+   * parser's own reason standing: it names the offending field, and an archive
+   * refused for its size or read as corrupt reports through it. */
+  const describeFailure = useCallback((detected: DetectedAppType | null, err: unknown): string => {
+    if (detected && detected !== type) return describeRejection(detected)
+    return err instanceof Error && err.message ? err.message : describeRejection(detected)
+  }, [type, describeRejection])
+
+  /** What the file actually holds, consulted only to explain a failure. Only a
+   * .zip is ambiguous enough to be worth reading; the read refuses an oversized
+   * archive on its own, which lands as "unknown". */
+  const probeFile = useCallback(async (file: File): Promise<DetectedAppType | null> => {
+    const lower = file.name.toLowerCase()
+    if (lower.endsWith('.md')) return 'skill'
+    if (lower.endsWith('.yaml') || lower.endsWith('.yml') || lower.endsWith('.dhpkg')) return 'automation'
+    if (lower.endsWith('.zip')) return detectArchiveAppType(file)
+    return null
+  }, [])
+
   // ── File handlers ────────────────────────────
 
   const handleFile = useCallback(async (file: File) => {
@@ -507,68 +554,58 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     setParsing(true)
     try {
       const lower = file.name.toLowerCase()
-      // Detect the real app type from the file so a mismatched type selection
-      // auto-corrects instead of erroring. Extensions are decisive except .zip,
-      // which we peek inside (a skill zip imported under "Digital Human" would
-      // otherwise fail on the missing spec.yaml).
-      const detected: ShareType | null = lower.endsWith('.md')
-        ? 'skill'
-        : lower.endsWith('.yaml') || lower.endsWith('.yml') || lower.endsWith('.dhpkg')
-          ? 'automation'
-          : lower.endsWith('.zip')
-            ? await detectZipAppType(file)
-            : null
-      if (detected && detected !== type) setType(detected)
-      const effective = detected ?? type
-      if (effective === 'skill') {
+      if (type === 'skill') {
         if (lower.endsWith('.md')) await parseSkillFromMd(file)
         else if (lower.endsWith('.zip')) await parseSkillFromZip(file)
-        else throw new Error(t('Unsupported file. Drop a .md or .zip for a skill.'))
+        else throw new UnsupportedImport()
       } else {
         if (lower.endsWith('.zip') || lower.endsWith('.dhpkg')) await parseAutomationZip(file)
         else if (lower.endsWith('.yaml') || lower.endsWith('.yml')) await parseAutomationYaml(file)
-        else throw new Error(t('Unsupported file. Drop a .zip, .dhpkg, or .yaml for a digital human.'))
+        else throw new UnsupportedImport()
       }
     } catch (err) {
-      setParseError(err instanceof Error ? err.message : t('Failed to parse file.'))
+      setParseError(describeFailure(await probeFile(file), err))
     } finally {
       setParsing(false)
     }
-  }, [type, parseSkillFromMd, parseSkillFromZip, parseAutomationZip, parseAutomationYaml, t])
+  }, [type, parseSkillFromMd, parseSkillFromZip, parseAutomationZip, parseAutomationYaml, probeFile, describeFailure])
+
+  const stageFolder = useCallback(async (files: Record<string, string>, folderName: string) => {
+    if (type === 'skill') stageSkill(parseSkillFiles(files, folderName), folderName, 'folder')
+    else await parseAutomationFolder(files, folderName)
+  }, [type, parseAutomationFolder])
 
   const handleFolder = useCallback(async (entry: FileSystemDirectoryEntry) => {
     setParseError(null)
     setStaged(null)
     setParsing(true)
+    // Held outside the try so a failure mid-parse can still be classified.
+    let files: Record<string, string> = {}
     try {
-      const flat = await readDirectoryEntryToMap(entry)
-      const detected = detectFolderType(flat)
-      if (detected !== type) setType(detected)
-      if (detected === 'skill') await parseSkillFromDirEntry(entry)
-      else await parseAutomationFolder(flat, entry.name)
+      files = await readDirectoryEntryToMap(entry)
+      await stageFolder(files, entry.name)
     } catch (err) {
-      setParseError(err instanceof Error ? err.message : t('Failed to parse folder.'))
+      setParseError(describeFailure(detectAppType(Object.keys(files)), err))
     } finally {
       setParsing(false)
     }
-  }, [type, parseSkillFromDirEntry, parseAutomationFolder, t])
+  }, [stageFolder, describeFailure])
 
-  const handleFolderList = useCallback(async (files: FileList) => {
+  const handleFolderList = useCallback(async (fileList: FileList) => {
     setParseError(null)
     setStaged(null)
     setParsing(true)
+    let files: Record<string, string> = {}
     try {
-      const { files: map, folderName } = await readFileListToMap(files)
-      const detected = detectFolderType(map)
-      if (detected !== type) setType(detected)
-      if (detected === 'skill') await parseSkillFromFileList(files)
-      else await parseAutomationFolder(map, folderName || t('Folder'))
+      const read = await readFileListToMap(fileList)
+      files = read.files
+      await stageFolder(files, read.folderName || t('Folder'))
     } catch (err) {
-      setParseError(err instanceof Error ? err.message : t('Failed to parse folder.'))
+      setParseError(describeFailure(detectAppType(Object.keys(files)), err))
     } finally {
       setParsing(false)
     }
-  }, [type, parseSkillFromFileList, parseAutomationFolder, t])
+  }, [stageFolder, describeFailure, t])
 
   // ── Submit ───────────────────────────────────
 
@@ -685,7 +722,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
         if (!res.success) coFailures.push({ name: s.name, reason: res.error as string | undefined })
       }
 
-      void api.trackEvent('store.publish.submit', { appType: type, result: 'success', entry, isUpdate: republish ? 1 : 0 })
+      void api.trackEvent('store.publish.submit', { appType: type, result: 'success', entry, isUpdate: republishSlug ? 1 : 0 })
       saveAuthor(trimmedAuthor)
       // Published — discard the saved draft so it is not restored next time.
       clearPublishDraft(draftKey)
@@ -698,7 +735,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
       // registry verdict string is intentionally not surfaced to the user.
       setSubmitSuccess('ok')
     } catch (err) {
-      void api.trackEvent('store.publish.submit', { appType: type, result: 'fail', entry, isUpdate: republish ? 1 : 0 })
+      void api.trackEvent('store.publish.submit', { appType: type, result: 'fail', entry, isUpdate: republishSlug ? 1 : 0 })
       setSubmitError(err instanceof Error ? err.message : t('Share failed.'))
     } finally {
       // Tear down the staging workspace (cascades its staged apps + files), so
@@ -706,7 +743,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
       if (stagingSpaceId) await api.deleteSpace(stagingSpaceId).catch(() => undefined)
       setSubmitting(false)
     }
-  }, [type, source, selectedInstalledId, staged, author, category, version, changelog, name, description, tags, formSkills, coPublishIds, hasBlockingIssue, draftKey, showToast, t, entry, republish])
+  }, [type, source, selectedInstalledId, staged, author, category, version, changelog, name, description, tags, formSkills, coPublishIds, hasBlockingIssue, draftKey, showToast, t, entry, republishSlug])
 
   // Post-publish "View": close the dialog and open My Publications so the
   // creator lands on the freshly-listed entry.
@@ -870,6 +907,7 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
               onSelect={id => { setSelectedInstalledId(id); clearInvalid('source') }}
               type={type}
               invalid={invalid.has('source')}
+              pinned={pinnedAppId && republishSlug ? { appId: pinnedAppId, slug: republishSlug } : undefined}
             />
           ) : staged ? (
             <StagedPreview staged={staged} onClear={() => { setStaged(null); setParseError(null) }} />
@@ -880,11 +918,11 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
               onFolderFileList={handleFolderList}
               fileAccept={type === 'skill' ? '.md,.zip' : '.zip,.dhpkg,.yaml,.yml'}
               dropLabel={type === 'skill'
-                ? t('Drop a skill file or folder here')
-                : t('Drop a digital human file or folder here')}
+                ? t('Drop a skill file here')
+                : t('Drop a digital human file here')}
               dropHint={type === 'skill'
-                ? t('.md file · skill folder · .zip archive')
-                : t('.zip · .dhpkg · .yaml · folder')}
+                ? t('Or click to choose · .md · .zip')
+                : t('Or click to choose · .zip · .dhpkg · .yaml')}
               folderLabel={type === 'skill'
                 ? t('Browse skill folder...')
                 : t('Browse digital human folder...')}
@@ -1142,17 +1180,6 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
 // Helpers
 // ────────────────────────────────────────────────
 
-/** Infer the app type of an imported folder from its contents. A digital human
- * bundles its skills (which carry SKILL.md), so a spec.yaml is the decisive
- * marker for a digital human; a SKILL.md with no spec.yaml marks a lone skill.
- * Mirrors detectZipAppType so folder and .zip imports classify the same way. */
-function detectFolderType(files: Record<string, string>): ShareType {
-  const hasBasename = (name: string) =>
-    Object.keys(files).some(path => (path.split('/').pop() ?? '').toLowerCase() === name)
-  if (hasBasename('spec.yaml') || hasBasename('spec.yml')) return 'automation'
-  return hasBasename('skill.md') ? 'skill' : 'automation'
-}
-
 /** Build a localized, user-facing reason from a rejected publish's review
  * findings. Only blocking (fail) findings are surfaced; returns null when there
  * is nothing actionable, so the caller can fall back to the raw error. */
@@ -1332,9 +1359,14 @@ interface InstalledPickerProps {
   onSelect: (id: string) => void
   type: ShareType
   invalid?: boolean
+  /** The app whose publish would land on `slug`, when updating an existing
+   * listing. Sorted to the top of the list and annotated with the slug, so the
+   * user can recognise it among same-looking names — the local app's name is
+   * often not the one the listing shows. Deliberately not pre-selected. */
+  pinned?: { appId: string; slug: string }
 }
 
-function InstalledPicker({ apps, selectedId, onSelect, type, invalid }: InstalledPickerProps) {
+function InstalledPicker({ apps, selectedId, onSelect, type, invalid, pinned }: InstalledPickerProps) {
   const { t } = useTranslation()
   const selected = apps.find(a => a.id === selectedId) ?? null
   const [query, setQuery] = useState('')
@@ -1390,6 +1422,14 @@ function InstalledPicker({ apps, selectedId, onSelect, type, invalid }: Installe
     return apps.filter(a => a.spec.name.toLowerCase().includes(q))
   }, [apps, query, selected])
 
+  // Lift the pinned app to the top so the annotated row is the first thing read.
+  const ordered = useMemo(() => {
+    if (!pinned) return filtered
+    const i = filtered.findIndex(a => a.id === pinned.appId)
+    if (i <= 0) return filtered
+    return [filtered[i], ...filtered.slice(0, i), ...filtered.slice(i + 1)]
+  }, [filtered, pinned])
+
   if (apps.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-8 text-center bg-secondary/30 border border-dashed border-border rounded-lg">
@@ -1427,21 +1467,28 @@ function InstalledPicker({ apps, selectedId, onSelect, type, invalid }: Installe
           style={{ position: 'fixed', top: anchor.top, left: anchor.left, width: anchor.width }}
           className="z-[60] max-h-44 overflow-y-auto rounded-lg border border-border/60 bg-background shadow-lg divide-y divide-border/60"
         >
-          {filtered.length === 0 ? (
+          {ordered.length === 0 ? (
             <p className="px-3 py-4 text-xs text-muted-foreground text-center">{t('No matches')}</p>
           ) : (
-            filtered.map(a => (
+            ordered.map(a => (
               <button
                 key={a.id}
                 type="button"
                 onClick={() => { onSelect(a.id); setOpen(false) }}
-                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] transition-colors ${
+                className={`flex w-full flex-col gap-0.5 px-3 py-2 text-left text-[13px] transition-colors ${
                   selectedId === a.id ? 'bg-primary/10 font-medium text-foreground' : 'text-foreground hover:bg-secondary/50'
                 }`}
               >
-                <span className="flex-1 min-w-0 truncate">{a.spec.name}</span>
-                {a.spec.version && <span className="flex-shrink-0 text-[11px] text-muted-foreground">v{a.spec.version}</span>}
-                {selectedId === a.id && <Check className="w-3.5 h-3.5 flex-shrink-0 text-primary" />}
+                <span className="flex w-full items-center gap-2">
+                  <span className="flex-1 min-w-0 truncate">{a.spec.name}</span>
+                  {a.spec.version && <span className="flex-shrink-0 text-[11px] text-muted-foreground">v{a.spec.version}</span>}
+                  {selectedId === a.id && <Check className="w-3.5 h-3.5 flex-shrink-0 text-primary" />}
+                </span>
+                {pinned?.appId === a.id && (
+                  <span className="w-full truncate text-[11px] font-normal text-muted-foreground">
+                    {t('Publishing this app updates {{slug}}', { slug: pinned.slug })}
+                  </span>
+                )}
               </button>
             ))
           )}

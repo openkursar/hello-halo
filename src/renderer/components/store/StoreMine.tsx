@@ -56,6 +56,9 @@ export function StoreMine() {
   const [showPublish, setShowPublish] = useState(false)
   // Republishing a known publication skips the type step — its type is fixed.
   const [publishType, setPublishType] = useState<'automation' | 'skill' | undefined>(undefined)
+  // The listing the publish dialog was opened for, so it can point at the local
+  // app that would update it.
+  const [publishSlug, setPublishSlug] = useState<string | undefined>(undefined)
   const [signingIn, setSigningIn] = useState(false)
   // Distinguishes "signed out but can sign in" from the misconfiguration where
   // the store requires an account yet this build ships no identity provider —
@@ -126,8 +129,9 @@ export function StoreMine() {
     else showToast({ title: res.error || t('Take down failed. Please try again.'), variant: 'error', duration: 4000 })
   }, [load, showConfirm, showToast, t])
 
-  const openPublish = useCallback((type: MyPublication['type']) => {
-    setPublishType(type === 'skill' || type === 'automation' ? type : undefined)
+  const openPublish = useCallback((pub: MyPublication) => {
+    setPublishType(pub.type === 'skill' || pub.type === 'automation' ? pub.type : undefined)
+    setPublishSlug(pub.slug)
     setShowPublish(true)
   }, [])
 
@@ -230,7 +234,7 @@ export function StoreMine() {
                           busy={busySlug === pub.slug}
                           onOpen={() => void selectStoreApp(pub.slug)}
                           onUnpublish={() => handleUnpublish(pub.slug)}
-                          onPublishVersion={() => openPublish(pub.type)}
+                          onPublishVersion={() => openPublish(pub)}
                         />
                       ))
                     )}
@@ -245,7 +249,7 @@ export function StoreMine() {
       </div>
 
       {showPublish && (
-        <ShareToStoreDialog initialType={publishType} entry="mine" republish onClose={() => { setShowPublish(false); void load() }} />
+        <ShareToStoreDialog initialType={publishType} entry="mine" republishSlug={publishSlug} onClose={() => { setShowPublish(false); void load() }} />
       )}
       {confirmDialog}
     </div>

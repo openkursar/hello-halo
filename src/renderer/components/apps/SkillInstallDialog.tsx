@@ -203,8 +203,8 @@ function ImportDropZone({ imported, onImported, onClear, onError }: ImportDropZo
       onDirectoryEntry={handleDirEntry}
       onFolderFileList={handleFolderList}
       fileAccept=".md,.zip"
-      dropLabel={t('Drop a skill file or folder here')}
-      dropHint={t('.md file · skill folder · .zip archive')}
+      dropLabel={t('Drop a skill file here')}
+      dropHint={t('Or click to choose · .md · .zip')}
       folderLabel={t('Browse skill folder...')}
       processing={processing}
     >

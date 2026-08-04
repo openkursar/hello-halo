@@ -15,10 +15,12 @@ import {
   checkUpgradesNow,
   publish,
   getPublishPreview,
+  findAppByPublishSlug,
   unpackDhpkg,
 } from '../../store'
 import { getAppManager } from '../../apps/manager'
 import { getAppRuntime } from '../../apps/runtime'
+import type { AppType } from '../../../shared/apps/spec-types'
 
 export function registerStoreRoutes(app: Express): void {
   // ===== Store (App Registry) Routes =====
@@ -336,6 +338,21 @@ export function registerStoreRoutes(app: Express): void {
         return
       }
       res.json({ success: true, data: await getPublishPreview(appId, author, name) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/publish/find-app — the installed app a publish would land
+  // on this slug (null when not uniquely determined)
+  app.post('/api/store/publish/find-app', async (req: Request, res: Response) => {
+    try {
+      const { slug, type, author } = req.body as { slug?: string; type?: AppType; author?: string }
+      if (!slug) {
+        res.status(400).json({ success: false, error: 'Missing slug' })
+        return
+      }
+      res.json({ success: true, data: { appId: findAppByPublishSlug(slug, type, author) } })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

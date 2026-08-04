@@ -11,6 +11,7 @@ import type {
   ApiResponse,
 } from './_shared'
 import type { StoreSignInStatus } from '../../shared/store/store-types'
+import type { AppType } from '../../shared/apps/spec-types'
 
 export const storeApi = {
   // ===== Store (App Registry) =====
@@ -145,6 +146,13 @@ export const storeApi = {
       return window.halo.storePublishPreview({ appId, author, name })
     }
     return httpRequest('POST', `/api/store/publish/preview`, { appId, author, name })
+  },
+
+  storeFindAppByPublishSlug: async (slug: string, type?: AppType, author?: string): Promise<ApiResponse<{ appId: string | null }>> => {
+    if (isElectron()) {
+      return window.halo.storeFindAppByPublishSlug({ slug, type, author })
+    }
+    return httpRequest('POST', `/api/store/publish/find-app`, { slug, type, author })
   },
 
   storeExportDhpkg: async (appId: string): Promise<ApiResponse<{ path: string }>> => {

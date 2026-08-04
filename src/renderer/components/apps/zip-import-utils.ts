@@ -25,21 +25,15 @@
  */
 
 import { parse as parseYaml } from 'yaml'
+import { isIgnoredPackagePath, unwrapPackageFolder, canonicalizePackageEntry } from './package-paths'
+import { readArchiveEntries, MAX_ARCHIVE_BYTES } from './package-archive'
 
 // ─────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────
 
-/** Maximum allowed ZIP file size in bytes (10 MB) */
-const MAX_ZIP_SIZE = 10 * 1024 * 1024
-
 /** `.dhpkg` is a zip under another name (see main/store/dhpkg), so it parses here too. */
 const ARCHIVE_EXTENSIONS = ['.zip', '.dhpkg']
-
-/** macOS metadata path segments to ignore */
-const MACOS_IGNORED = (path: string): boolean =>
-  path.startsWith('__MACOSX/') ||
-  path.split('/').some(seg => seg === '.DS_Store' || seg.startsWith('._'))
 
 // ─────────────────────────────────────────────────────────
 // Public types
@@ -115,7 +109,7 @@ function validateFileLayer(file: File): ZipValidationError[] {
   }
 
   // Check size
-  if (file.size > MAX_ZIP_SIZE) {
+  if (file.size > MAX_ARCHIVE_BYTES) {
     const sizeMB = (file.size / (1024 * 1024)).toFixed(1)
     errors.push({
       location: file.name,
@@ -159,11 +153,9 @@ function validateStructureLayer(
   const errors: ZipValidationError[] = []
   const warnings: ZipValidationWarning[] = []
 
-  // Filter out macOS metadata
   const cleanFiles: Record<string, string> = {}
   for (const [path, content] of Object.entries(rawFiles)) {
-    if (path.endsWith('/')) continue // directory entry
-    if (MACOS_IGNORED(path)) continue
+    if (isIgnoredPackagePath(path)) continue
     cleanFiles[path] = content
   }
 
@@ -190,27 +182,7 @@ function validateStructureLayer(
   }
   if (errors.length > 0) return { ok: false, errors }
 
-  // Detect wrapped format (single top-level folder)
-  let normalizedFiles = cleanFiles
-  const topDirs = new Set(
-    Object.keys(cleanFiles)
-      .map(p => p.split('/')[0])
-      .filter(Boolean)
-  )
-
-  if (topDirs.size === 1) {
-    const prefix = Array.from(topDirs)[0] + '/'
-    const allInPrefix = Object.keys(cleanFiles).every(p => p.startsWith(prefix))
-    if (allInPrefix) {
-      // Wrapped format — strip the top-level folder
-      const stripped: Record<string, string> = {}
-      for (const [path, content] of Object.entries(cleanFiles)) {
-        const rest = path.slice(prefix.length)
-        if (rest) stripped[rest] = content
-      }
-      normalizedFiles = stripped
-    }
-  }
+  const normalizedFiles = unwrapPackageFolder(cleanFiles)
 
   // Locate spec.yaml
   const specPaths = Object.keys(normalizedFiles).filter(
@@ -257,13 +229,14 @@ function validateStructureLayer(
 
   for (const dirName of Array.from(skillDirs)) {
     const prefix = `skills/${dirName}/`
-    const files: Record<string, string> = {}
+    const collected: Record<string, string> = {}
     for (const [path, content] of Object.entries(normalizedFiles)) {
       if (path.startsWith(prefix)) {
-        files[path.slice(prefix.length)] = content
+        collected[path.slice(prefix.length)] = content
       }
     }
 
+    const files = canonicalizePackageEntry(collected, 'SKILL.md')
     if (!files['SKILL.md']) {
       warnings.push({
         location: `skills/${dirName}/`,
@@ -473,12 +446,11 @@ export async function parseDigitalHumanZip(file: File): Promise<ZipParseOutcome>
     return { ok: false, errors: fileErrors }
   }
 
-  // Extract ZIP
-  const { unzipSync } = await import('fflate')
+  // Extract ZIP — Layer 1 already refused an oversized archive, so the read's
+  // own ceiling cannot fire here.
   let entries: Record<string, Uint8Array>
   try {
-    const buffer = await file.arrayBuffer()
-    entries = unzipSync(new Uint8Array(buffer))
+    entries = await readArchiveEntries(file)
   } catch {
     return {
       ok: false,
@@ -495,34 +467,11 @@ export async function parseDigitalHumanZip(file: File): Promise<ZipParseOutcome>
   const decoder = new TextDecoder('utf-8')
   const rawFiles: Record<string, string> = {}
   for (const [path, bytes] of Object.entries(entries)) {
-    if (path.endsWith('/')) continue // directory entry
+    if (isIgnoredPackagePath(path)) continue
     rawFiles[path] = decoder.decode(bytes)
   }
 
   return validateAndBuildResult(rawFiles, file.name)
-}
-
-/**
- * Peek a .zip to decide whether it holds a digital human or a skill, so an
- * import can auto-correct a mismatched type selection. A digital human package
- * bundles its skills (which carry SKILL.md), so a root spec.yaml is the decisive
- * marker for a digital human; a SKILL.md with no spec.yaml marks a lone skill.
- * Returns null when neither is present (caller keeps the selected type).
- */
-export async function detectZipAppType(file: File): Promise<'automation' | 'skill' | null> {
-  try {
-    const { unzipSync } = await import('fflate')
-    const entries = unzipSync(new Uint8Array(await file.arrayBuffer()))
-    let hasSkillMd = false
-    for (const path of Object.keys(entries)) {
-      const base = (path.split('/').pop() ?? '').toLowerCase()
-      if (base === 'spec.yaml') return 'automation'
-      if (base === 'skill.md') hasSkillMd = true
-    }
-    return hasSkillMd ? 'skill' : null
-  } catch {
-    return null
-  }
 }
 
 /**
