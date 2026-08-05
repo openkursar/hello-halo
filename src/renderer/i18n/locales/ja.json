@@ -528,8 +528,6 @@
   "Download": "ダウンロード",
   "Download and install manually": "手動でダウンロードしてインストール",
   "Downloading {{version}}… {{percent}}%": "{{version}} をダウンロードしています… {{percent}}%",
-  "Downloading in the background…": "バックグラウンドでダウンロードしています…",
-  "Downloading… {{percent}}%": "ダウンロードしています… {{percent}}%",
   "Draft a reusable weekly report template": "再利用可能な週次レポートテンプレートを作成します",
   "Drag to resize": "ドラッグしてサイズ変更",
   "Drag to resize width": "ドラッグして幅を変更",

@@ -120,6 +120,8 @@ src/
 │       └── *.service.ts + utilities   # Domain singletons: config, conversation, space,
 │                                      #   artifact, artifact-cache, search,
 │                                      #   window, overlay, onboarding, updater, notification,
+│                                      #   announcement (static-feed poll → toast; the only
+│                                      #     server→client push that is not version-coupled),
 │                                      #   protocol, api-validator, model-capabilities,
 │                                      #   secure-storage, browser-view, browser-policy,
 │                                      #   watcher-host
@@ -158,9 +160,11 @@ src/
     │   ├── setup/                     #   Sub-components: LoginSelector, SetupProviderConfig, ServerConnect
     │   ├── store/                     #   App Store UI
     │   ├── ui/                        #   Cross-domain interaction primitives (ConfirmDialog,
-    │   │                              #   ContextMenu, ...). Not shadcn-generated, but follows
-    │   │                              #   the same theme-token pattern. Home for any future
-    │   │                              #   generic primitive (Toast, Popover, Tooltip, ...)
+    │   │                              #   ContextMenu, RichText, ...). Not shadcn-generated,
+    │   │                              #   but follows the same theme-token pattern. Home for
+    │   │                              #   any future generic primitive (Popover, Tooltip, ...)
+    │   │                              #   RichText renders server-authored copy under a hard
+    │   │                              #   element whitelist — never enable raw HTML in it
     │   ├── brand/, icons/, tool/, updater/, notification/
     │   ├── diff/, search/, pulse/, onboarding/, artifact/
     │   └── ErrorBoundary.tsx
