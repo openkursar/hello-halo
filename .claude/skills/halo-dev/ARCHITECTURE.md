@@ -110,21 +110,24 @@ src/
 │       ├── ai-sources/                # Multi-provider auth + providers/
 │       ├── analytics/                 # Usage analytics
 │       ├── email-mcp/                 # Email-as-MCP tool server
+│       ├── git-bash/                   # Windows bash env for Claude Code CLI (detection + installer + mock fallback)
 │       ├── health/                    # Diagnostics & recovery
 │       ├── logging/                   # Logging subsystem: controller (Developer Mode toggle)
 │       │                              #   + transports (http-raw.log, halo-sdk.log) + redact utils.
 │       │                              #   Single subscriber for config.agent.developerMode;
 │       │                              #   transports expose setLevel/setEnabled only.
 │       ├── notify-channels/           # Outbound notification channels (Email/WeCom/DingTalk/Feishu/Webhook)
+│       ├── ocr/                       # On-device OCR (tesseract.js engine + ocr_image MCP server);
+│       │                              #   shared by tlon ingest, chat toolset, digital-human runtime
 │       ├── perf/                      # Performance monitoring
+│       ├── remote/                     # Remote Access: HTTP-server + Cloudflare tunnel coordination (service + tunnel + issuer-client)
 │       ├── stealth/                   # Anti-detection evasions
 │       ├── web-search/                # Web search MCP server
 │       └── *.service.ts + utilities   # Domain singletons: config, conversation, space,
-│                                      #   artifact, artifact-cache, search, remote, tunnel,
+│                                      #   artifact, artifact-cache, search,
 │                                      #   window, overlay, onboarding, updater, notification,
 │                                      #   protocol, api-validator, model-capabilities,
-│                                      #   secure-storage, git-bash, git-bash-installer,
-│                                      #   mock-bash, browser-view, browser-policy,
+│                                      #   secure-storage, browser-view, browser-policy,
 │                                      #   watcher-host
 │                                      #   (+ utilities: browser-login-pages, proxy-fetch)
 │
@@ -466,6 +469,29 @@ src/renderer/assets/styles/
 ```
 
 Do not create new CSS files unless the above exceptions apply.
+
+### 12.1) Window Chrome & Top Overlays (Non-Negotiable)
+
+The desktop window is frameless: native controls are painted by the OS compositor
+*above* all page content and cannot be covered by z-index. macOS shows traffic
+lights top-left; Windows/Linux use `titleBarOverlay` top-right. The whole top
+strip is also the OS drag region.
+
+Any component fixed to the top of the window (headers, and full-width alert/
+notification banners such as `CredentialAlertBanner`) **must**:
+
+- **Reserve the native-control space** so its own interactive elements never sit
+  under the OS buttons (where clicks are swallowed). Mirror `Header`'s
+  convention, gated on `isElectron() && !isCapacitor()`:
+  - macOS → `pl-20 pr-4` (left traffic lights)
+  - Windows/Linux → `pl-4 pr-36` (right titleBarOverlay buttons)
+  - remote/browser/Capacitor → plain `px-4` (no overlay)
+- **Declare drag regions explicitly**: put `drag-region` on the container that
+  overlaps the title strip, and `no-drag` on every button/link inside it.
+  Without `no-drag`, clicks over the drag strip are consumed as window drags.
+
+Use `usePlatform()` (exported from `components/layout/Header.tsx`) for the mac/
+non-mac split rather than re-detecting the platform.
 
 ## 13) Responsive Design (Mandatory)
 

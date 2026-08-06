@@ -27,8 +27,9 @@ import { registerOnboardingHandlers } from '../ipc/onboarding'
 import { registerRemoteHandlers } from '../ipc/remote'
 import { powerMonitor } from 'electron'
 import { registerSecurityHandlers } from '../ipc/security'
-import { enableRemoteAccess, enableTunnel } from '../services/remote.service'
+import { enableRemoteAccess, enableTunnel } from '../services/remote'
 import { getConfig, getFederationGatewayUrl, migrateCredentialEncryption, setCredentialFailureNotifier } from '../foundation/config.service'
+import { broadcastToAll } from '../http/websocket'
 import { isServerMode } from '../foundation/runtime-mode'
 import { registerBrowserHandlers } from '../ipc/browser'
 import { registerBrowserPolicyHandlers } from '../ipc/browser-policy'
@@ -66,7 +67,7 @@ import { initIdentity, getLocalIdentity, getLocalPublicKeyPem, signWithLocalKey 
 import { verifyOfficeCredential } from '../http/auth'
 import { setFederationInbound, sendFederationFrameToClient, listOfficeClientIds, broadcastToAll, getSessionIdentity } from '../http/websocket'
 import { createFederationManager, setFederationManager, getFederationManager, makeLocationAwareSessionDeps, withOwnerResolvedSpace, createRelayCapture, createLocationAwareBlackboard, WsFederationClient, classifyArtifactFetchFailure } from '../apps/runtime/federation'
-import { getRemoteAccessStatus } from '../services/remote.service'
+import { getRemoteAccessStatus } from '../services/remote'
 import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtime/federation'
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
 import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamUpdatedEvent, TeamEpoch } from '../../shared/apps/team-types'
@@ -92,6 +93,7 @@ import { registerModelCapabilitiesHandlers } from '../ipc/model-capabilities'
 import { registerWeixinIlinkHandlers } from '../ipc/weixin-ilink'
 import { registerTlonHandlers } from '../ipc/tlon'
 import { initTlonWatchers, shutdownTlon, migrateKBsToTextIndex } from '../services/tlon'
+import { shutdownOcr } from '../services/ocr'
 import { initRegistryService, shutdownRegistryService } from '../store'
 import { startUpgradeScheduler, stopUpgradeScheduler } from '../store/upgrade.service'
 import { cleanupImChannelTempFiles, getActiveImChannelManager } from '../apps/runtime/im-channels'
@@ -1199,6 +1201,9 @@ export async function cleanupExtendedServices(): Promise<void> {
 
   // Tlon: Unsubscribe all KB watchers and clear timers
   await shutdownTlon().catch(err => console.error('[Bootstrap] Tlon shutdown error:', err))
+
+  // OCR: Terminate the shared tesseract worker (used by tlon, chat toolset, automation)
+  await shutdownOcr().catch(err => console.error('[Bootstrap] OCR shutdown error:', err))
 
   console.log('[Bootstrap] Extended services cleaned up')
 }

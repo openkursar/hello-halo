@@ -116,17 +116,10 @@ extract the price from the product listing, and return it as JSON: { price: numb
 const NOTIFICATION_INSTRUCTIONS = `
 ## Notifications (MCP server: halo-notify)
 
-You can send targeted notifications to external channels and IM contacts.
-Use these tools ONLY when there is genuinely noteworthy information — not for routine reports.
-
-### Tools
-
-- \`mcp__halo-notify__notify_channel\` — Send to external notification channels (email, webhook, etc.).
-  Only available if channels are configured. Check the tool's channel parameter for available options.
-
-- \`mcp__halo-notify__notify_bot\` — Send a message or file directly to an IM contact (person or group).
-  Only available if IM push is enabled and contacts exist.
-  Check the tool's "to" parameter description for the full contact directory.
+You have notification tools loaded (notify_channel and/or notify_bot). Their
+exact parameters — available channels, the contact directory — live in each
+tool's own schema. Use them ONLY when there is genuinely noteworthy information,
+not for routine reports.
 
 ### When to Use
 
@@ -213,6 +206,25 @@ export interface AppPromptOptions {
   /** Display model name (passed to base system prompt) */
   modelInfo?: string
   /**
+   * Pre-rendered "disabled capabilities" guidance (buildDisabledCapabilitiesGuidance).
+   * Present only when the user has turned a toggleable capability off; the caller
+   * owns the computation because it has the full InstalledApp. Undefined = omit.
+   */
+  disabledCapabilities?: string
+  /**
+   * Pre-rendered "capabilities awaiting setup" guidance
+   * (buildUnconfiguredCapabilitiesGuidance). Present only when a capability is
+   * toggled ON but its channel/contact is not configured yet. Undefined = omit.
+   */
+  unconfiguredCapabilities?: string
+  /**
+   * Whether at least one notify tool (notify_channel / notify_bot) is actually
+   * loaded for this run. Gates the NOTIFICATION_INSTRUCTIONS block: when no
+   * notify tool exists, the guidance is pure noise and is omitted — the setup
+   * gap is instead surfaced by unconfiguredCapabilities.
+   */
+  notifyToolsAvailable?: boolean
+  /**
    * IM sessions for this app that have the proactive flag enabled.
    * When non-empty, an awareness section is injected so the AI knows
    * its final text will be auto-pushed to these contacts and avoids
@@ -238,7 +250,7 @@ export function buildAppSystemPrompt(options: AppPromptOptions): string {
   // 1. Full main Agent system prompt — gives the automation agent
   //    100% of the same capabilities as the interactive agent
   //    When AI Browser is enabled, append full browser tool workflow guide
-  const promptCtx = { workDir: options.workDir, modelInfo: options.modelInfo, aiBrowserEnabled: options.usesAIBrowser }
+  const promptCtx = { workDir: options.workDir, modelInfo: options.modelInfo }
   let basePrompt = options.usesAIBrowser
     ? buildSystemPromptWithAIBrowser(promptCtx, AI_BROWSER_SYSTEM_PROMPT)
     : buildSystemPrompt(promptCtx)
@@ -247,6 +259,20 @@ export function buildAppSystemPrompt(options: AppPromptOptions): string {
     basePrompt += '\n\n' + AI_TERMINAL_SYSTEM_PROMPT.trim()
   }
   sections.push(basePrompt)
+
+  // 1b. Capability awareness — name the capabilities the user turned off and
+  //     where to re-enable them, so a disabled tool is reported rather than
+  //     silently missing. Rendered by the caller (has the full InstalledApp).
+  if (options.disabledCapabilities) {
+    sections.push(options.disabledCapabilities)
+  }
+
+  // 1c. Capability awareness (setup gap) — capabilities toggled ON but tool-less
+  //     until a channel/contact is configured. Without this a scheduled run can
+  //     "believe" it notified when no channel exists and falsely report success.
+  if (options.unconfiguredCapabilities) {
+    sections.push(options.unconfiguredCapabilities)
+  }
 
   // 2. Automation context overlay — establishes headless mode,
   //    overrides interaction patterns (escalation vs AskUserQuestion)
@@ -265,8 +291,12 @@ export function buildAppSystemPrompt(options: AppPromptOptions): string {
   // 5. Reporting rules
   sections.push(REPORTING_RULES)
 
-  // 6. Notification instructions (always included — the AI can check availability)
-  sections.push(NOTIFICATION_INSTRUCTIONS)
+  // 6. Notification instructions — only when a notify tool is actually loaded.
+  //    When none is, the block is omitted and unconfiguredCapabilities (1c)
+  //    explains the setup gap instead.
+  if (options.notifyToolsAvailable) {
+    sections.push(NOTIFICATION_INSTRUCTIONS)
+  }
 
   // 6b. Auto-sync awareness (only when subscribed IM contacts exist for
   //     this app — keeps the prompt minimal otherwise)

@@ -54,6 +54,11 @@
   --halo-success: 142 71% 45%;
   --halo-warning: 38 92% 50%;
   --halo-error: 0 62% 50%;
+
+  /* Onboarding hero accent gradient endpoints (blue → violet). Hue is shared by
+     both themes; the light theme applies them at low opacity (see .login-hero). */
+  --hero-from: 217 91% 60%;
+  --hero-to: 262 83% 64%;
 }
 
 /* Light theme */
@@ -725,6 +730,47 @@ body {
 
 .tool-waiting {
   border-color: hsl(var(--halo-warning));
+}
+
+/* ============================================
+   Onboarding login hero
+   ============================================ */
+
+/* The recommended sign-in method on the first-run login selector. Theme-aware so
+   the accent stays premium in dark and soft in light: dark (default) is a
+   saturated blue→violet gradient with light text; light collapses to a pale
+   tint of the same hues with foreground text, avoiding a garish saturated block
+   (the reason the flat-blue hero read as "off" in light mode). */
+.login-hero {
+  background: linear-gradient(135deg, hsl(var(--hero-from)), hsl(var(--hero-to)));
+  border: 1px solid hsl(var(--hero-to) / 0.6);
+  color: hsl(0 0% 100%);
+  transition: filter 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.login-hero:hover {
+  filter: brightness(1.06);
+  box-shadow: 0 10px 26px -8px hsl(var(--hero-to) / 0.5);
+}
+
+.login-hero-sub {
+  color: hsl(0 0% 100% / 0.82);
+}
+
+.light .login-hero {
+  background: linear-gradient(135deg, hsl(var(--hero-from) / 0.12), hsl(var(--hero-to) / 0.14));
+  border-color: hsl(var(--hero-from) / 0.35);
+  color: hsl(var(--foreground));
+}
+
+.light .login-hero:hover {
+  filter: none;
+  background: linear-gradient(135deg, hsl(var(--hero-from) / 0.18), hsl(var(--hero-to) / 0.2));
+  box-shadow: none;
+}
+
+.light .login-hero-sub {
+  color: hsl(var(--muted-foreground));
 }
 
 /* ============================================

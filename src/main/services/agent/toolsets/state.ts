@@ -11,9 +11,6 @@ import { getConversation, updateConversation } from '../../conversation.service'
 /** conversationId -> open toolset ids */
 const openSets = new Map<string, Set<string>>()
 
-/** conversationId -> cached MCP server instances (name -> instance) */
-const serverCaches = new Map<string, Map<string, unknown>>()
-
 /**
  * Get the open set for a conversation, lazily hydrating from the persisted
  * conversation record. Persisted ids are kept as-is — including toolsets that
@@ -57,18 +54,7 @@ function persist(spaceId: string, conversationId: string, set: Set<string>): voi
   }
 }
 
-/** Per-conversation MCP server instance cache (name-stable across applies) */
-export function getServerCache(conversationId: string): Map<string, unknown> {
-  let cache = serverCaches.get(conversationId)
-  if (!cache) {
-    cache = new Map()
-    serverCaches.set(conversationId, cache)
-  }
-  return cache
-}
-
 /** Drop all in-memory state for a conversation (persisted record remains) */
 export function dropConversationState(conversationId: string): void {
   openSets.delete(conversationId)
-  serverCaches.delete(conversationId)
 }

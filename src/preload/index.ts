@@ -50,6 +50,23 @@ import type {
 } from '../shared/types'
 import type { StoreInstallProgress } from '../shared/store/store-types'
 
+// Seed --display-scale before the renderer's first paint. The main process
+// passes the persisted scale via additionalArguments at window creation;
+// waiting for the async display:get-scale IPC instead would leave the native
+// window-chrome inset compensation wrong for one visible frame.
+{
+  const arg = process.argv.find((a) => a.startsWith('--halo-display-scale='))
+  const scale = arg ? Number(arg.slice(arg.indexOf('=') + 1)) : NaN
+  if (Number.isFinite(scale) && scale > 0) {
+    const seed = () => document.documentElement.style.setProperty('--display-scale', String(scale))
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', seed, { once: true })
+    } else {
+      seed()
+    }
+  }
+}
+
 // Type definitions for exposed API
 export interface HaloAPI {
   // Generic Auth (provider-agnostic)
@@ -61,6 +78,7 @@ export interface HaloAPI {
   authRefreshToken: (sourceId: string) => Promise<IpcResponse>
   authCheckToken: (sourceId: string) => Promise<IpcResponse>
   authLogout: (sourceId: string) => Promise<IpcResponse>
+  authGetQuota: (sourceId: string) => Promise<IpcResponse>
   onAuthLoginProgress: (callback: (data: { provider: string; status: string }) => void) => () => void
 
   // Config
@@ -194,6 +212,9 @@ export interface HaloAPI {
   terminalResize: (data: { sessionId: string; cols: number; rows: number }) => Promise<IpcResponse>
   killTerminal: (data: { sessionId: string }) => Promise<IpcResponse>
   getTerminalReplay: (data: { sessionId: string }) => Promise<IpcResponse>
+  terminalAttach: (data: { sessionId: string }) => Promise<IpcResponse>
+  terminalDetach: (data: { sessionId: string }) => Promise<IpcResponse>
+  terminalAck: (data: { sessionId: string; charCount: number }) => Promise<IpcResponse>
   onTerminalData: (callback: (data: unknown) => void) => () => void
   onTerminalLifecycle: (callback: (data: unknown) => void) => () => void
 
@@ -338,6 +359,11 @@ export interface HaloAPI {
   installUpdate: () => Promise<IpcResponse>
   getVersion: () => Promise<IpcResponse>
   onUpdaterStatus: (callback: (data: unknown) => void) => () => void
+
+  // Display scale (persistent UI zoom)
+  getDisplayScale: () => Promise<IpcResponse>
+  setDisplayScale: (factor: number) => Promise<IpcResponse>
+  onDisplayScale: (callback: (factor: number) => void) => () => void
 
   // Browser (embedded browser for Content Canvas)
   getBrowserHomepage: () => Promise<IpcResponse>
@@ -501,6 +527,7 @@ export interface HaloAPI {
   appExportSpec: (appId: string) => Promise<IpcResponse<{ yaml: string; filename: string }>>
   appImportSpec: (input: { spaceId: string; yamlContent: string; userConfig?: Record<string, unknown> }) => Promise<IpcResponse>
   appOpenSkillFolder: (appId: string) => Promise<IpcResponse>
+  appListAvailableSkills: (appId: string) => Promise<IpcResponse<import('../shared/apps/app-types').AvailableSkill[]>>
   appGetDataPath: (appId: string) => Promise<IpcResponse<{ path: string }>>
   appOpenDataFolder: (appId: string) => Promise<IpcResponse>
   appClearMemory: (appId: string) => Promise<IpcResponse<{ filesRemoved: number }>>
@@ -518,6 +545,7 @@ export interface HaloAPI {
   appChatRestart: (appId: string) => Promise<IpcResponse<{ sessionsClosed: number }>>
   appImChatMessages: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
   appImChatClear: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
+  appImChatStop: (input: { appId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
 
   // Native multi-session lifecycle. Listing/renaming reuse imSessionsList /
   // imSessionsSetCustomName (local sessions surface there with source==='local').
@@ -800,6 +828,9 @@ const api: HaloAPI = {
   // NOTE: these preload methods PACK positional args into the object shape the
   // main handlers destructure (e.g. (viewId, url) -> { viewId, url }), so they
   // are kept hand-written — bindRpc's positional passthrough would break them.
+  getDisplayScale: () => ipcRenderer.invoke('display:get-scale'),
+  setDisplayScale: (factor) => ipcRenderer.invoke('display:set-scale', factor),
+  onDisplayScale: (callback) => createEventListener('display:scale-changed', callback),
   getBrowserHomepage: () => ipcRenderer.invoke('browser:get-homepage'),
   createBrowserView: (viewId, url) => ipcRenderer.invoke('browser:create', { viewId, url }),
   destroyBrowserView: (viewId) => ipcRenderer.invoke('browser:destroy', { viewId }),

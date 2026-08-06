@@ -10,7 +10,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { Eraser, User, Users, MessageSquare, Pencil, Trash2, Check, X } from 'lucide-react'
+import { Eraser, Square, User, Users, MessageSquare, Pencil, Trash2, Check, X } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
@@ -27,6 +27,8 @@ interface ImSessionItemProps {
   onRenameConfirm?: (session: ImSessionRecord, name: string) => void
   /** Called when the user confirms deleting this session (native local sessions) */
   onDeleteConfirm?: (session: ImSessionRecord) => void
+  /** Called when the user confirms stopping this session's active generation */
+  onStopConfirm?: (session: ImSessionRecord) => void
 }
 
 /** Format relative time from epoch ms — all strings go through t() for i18n. */
@@ -41,10 +43,12 @@ function formatRelativeTime(epochMs: number, t: (key: string, options?: Record<s
   return t('{{count}}d', { count: days })
 }
 
-export function ImSessionItem({ session, isSelected, onClick, onClearConfirm, onRenameConfirm, onDeleteConfirm }: ImSessionItemProps) {
+export function ImSessionItem({ session, isSelected, onClick, onClearConfirm, onRenameConfirm, onDeleteConfirm, onStopConfirm }: ImSessionItemProps) {
   const { t } = useTranslation()
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [showStopConfirm, setShowStopConfirm] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const renameInputRef = useRef<HTMLInputElement>(null)
@@ -107,6 +111,28 @@ export function ImSessionItem({ session, isSelected, onClick, onClearConfirm, on
     onDeleteConfirm?.(session)
     setShowDeleteConfirm(false)
   }, [session, onDeleteConfirm])
+
+  const handleStopClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    setShowStopConfirm(true)
+  }, [])
+
+  const handleStopConfirm = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (isStopping) return
+    setIsStopping(true)
+    try {
+      await onStopConfirm?.(session)
+    } finally {
+      setIsStopping(false)
+      setShowStopConfirm(false)
+    }
+  }, [session, onStopConfirm, isStopping])
+
+  const handleStopCancel = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    setShowStopConfirm(false)
+  }, [])
 
   // Inline rename editor replaces the row content while active.
   if (isRenaming) {
@@ -192,7 +218,24 @@ export function ImSessionItem({ session, isSelected, onClick, onClearConfirm, on
 
         {/* Time + actions / inline confirmation */}
         <div className="flex flex-col items-end gap-1 flex-shrink-0 self-start mt-0.5">
-          {showClearConfirm || showDeleteConfirm ? (
+          {showStopConfirm ? (
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={handleStopConfirm}
+                disabled={isStopping}
+                className="px-1.5 py-0.5 text-[11px] text-destructive hover:bg-destructive/10 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isStopping ? t('Stopping...') : t('Confirm')}
+              </button>
+              <button
+                onClick={handleStopCancel}
+                disabled={isStopping}
+                className="px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-secondary rounded transition-colors disabled:opacity-50"
+              >
+                {t('Cancel')}
+              </button>
+            </div>
+          ) : showClearConfirm || showDeleteConfirm ? (
             <div className="flex items-center gap-1.5">
               <button
                 onClick={showDeleteConfirm ? handleDeleteConfirm : handleConfirm}
@@ -213,6 +256,15 @@ export function ImSessionItem({ session, isSelected, onClick, onClearConfirm, on
                 {formatRelativeTime(session.lastActiveAt, t)}
               </span>
               <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-all">
+                {onStopConfirm && isGenerating && (
+                  <button
+                    onClick={handleStopClick}
+                    className="p-0.5 rounded hover:bg-background transition-all"
+                    title={t('Stop generation')}
+                  >
+                    <Square className="w-3 h-3 text-destructive/80 hover:text-destructive" fill="currentColor" />
+                  </button>
+                )}
                 {onRenameConfirm && (
                   <button
                     onClick={handleRenameClick}

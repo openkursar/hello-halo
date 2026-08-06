@@ -57,6 +57,7 @@ import {
 import { stopGeneration } from '../../services/agent/control'
 import { assembleAppChatPrompt } from './prompt/assembler'
 import { buildIdentityFragments } from './prompt/identity'
+import { buildDisabledCapabilitiesGuidance, buildUnconfiguredCapabilitiesGuidance } from './prompt/capabilities'
 import { NATIVE_CHAT_ENTRY } from './prompt/entry-native'
 import { buildImEntry, buildImConstraints, type ImSessionContext } from './im-channels/im-prompt'
 import { buildTeamEntry, buildTeamConstraints, buildTeamImBridge } from './team/team-prompt'
@@ -68,11 +69,14 @@ import { createFileSendMcpServer } from './im-channels/file-send-mcp'
 import { mergeConfigWithDefaults } from './config-defaults'
 import { tmpdir as osTmpdir } from 'os'
 import { createNotifyToolServer } from './notify-tool'
+import { buildQuoteFromMessage } from './pending-relays'
+import { resolveNotifyAvailability } from './notify-availability'
 import { FileExportGate } from './file-export-gate'
 import { truncateUtf16Safe } from './text-truncate'
 import { getImSessionRegistry } from './im-session-registry'
 import { createHaloAppsMcpServer } from '../conversation-mcp'
 import { createWebSearchMcpServer } from '../../services/web-search'
+import { createOcrMcpServer } from '../../services/ocr'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { getSpace, getSpaceDir } from '../../services/space.service'
 import { openSessionWriter, readSessionMessages, saveChatSessionId, loadChatSessionId, deleteChatSessionId, copySessionJsonl } from './session-store'
@@ -90,7 +94,8 @@ import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../services/agent/types'
 import { ProgressEventParser } from './progress-formatter'
 import { ReplyTextAccumulator } from './reply-accumulator'
-import { flushSupplementBuffer } from './dispatch-inbound'
+import { flushSupplementBuffer, clearSupplementBuffer } from './dispatch-inbound'
+import { getImStreamHandle, clearImStreamHandle } from './im-stream-registry'
 export { getAppChatConversationId, buildImSessionKey }
 
 // ============================================
@@ -133,8 +138,10 @@ const ALL_BUILTIN_TOOLS = [
 ]
 
 /**
- * Halo MCP servers that are always safe for guests (read-only, no side effects).
- * These are injected into guest sessions regardless of GuestPolicy.
+ * Halo MCP servers that are always safe for guests (read-only, no side effects,
+ * no local-filesystem reach). These are injected into guest sessions regardless
+ * of GuestPolicy. OCR is deliberately NOT here: it reads arbitrary local file
+ * paths, so it is host-controlled via GUEST_TOGGLEABLE_MCP below.
  */
 const GUEST_SAFE_MCP = new Set(['web-search', 'halo-memory'])
 
@@ -149,6 +156,7 @@ const GUEST_TOGGLEABLE_MCP: Record<string, keyof GuestPolicy> = {
   'halo-notify':  'allowNotify',
   'halo-apps':    'allowApps',
   'im-file-send': 'allowFileSend',
+  'ocr':          'allowOcr',
 }
 
 /**
@@ -164,7 +172,7 @@ const GUEST_TOGGLEABLE_MCP: Record<string, keyof GuestPolicy> = {
  * @param dbMcpServers - User-installed MCP servers from database (null if none)
  * @param policy - Guest policy from channel instance config
  */
-function buildGuestMcpServers(
+export function buildGuestMcpServers(
   allMcpServers: Record<string, any>,
   dbMcpServers: Record<string, unknown> | null,
   policy?: GuestPolicy
@@ -261,6 +269,26 @@ export interface AppChatRequest {
   imSession?: ImSessionContext
   /** Callers MUST set conversationId = buildTeamSessionKey(appId, teamId). */
   teamContext?: TeamTriggerContext
+  /**
+   * Origin facts recorded against any notify_bot push this run makes, so the
+   * target session can later attribute the push and report an outcome back.
+   *
+   * Supplied by the caller because only it has the raw inbound message: the
+   * assembled `message` carries runtime tags and possibly a consumed relay
+   * block, neither of which belongs in a quote. Absent for native chat, where
+   * `message` is the user's own text.
+   */
+  relayOrigin?: {
+    subject?: { id: string; name: string }
+    quote?: string
+  }
+  /**
+   * Invoked once the engine has accepted this message, i.e. the text is now
+   * part of its conversation history. Callers use it to commit at-most-once
+   * context they attached to the message; it never fires if the run fails
+   * before reaching the engine.
+   */
+  onMessageAccepted?: () => void
 }
 
 // ============================================
@@ -353,7 +381,10 @@ function registerExternalChatSession(
 export async function sendAppChatMessage(
   request: AppChatRequest
 ): Promise<void> {
-  const { appId, spaceId, message, images, thinkingEnabled, onReply, onProgress, imFileSend, senderIdentity, imSession, teamContext } = request
+  const {
+    appId, spaceId, message, images, thinkingEnabled, onReply, onProgress,
+    imFileSend, senderIdentity, imSession, teamContext, relayOrigin, onMessageAccepted,
+  } = request
   const conversationId = request.conversationId ?? getAppChatConversationId(appId)
 
   console.log(`[AppChat][${appId}] sendMessage: "${message.substring(0, 100)}"`)
@@ -396,9 +427,18 @@ export async function sendAppChatMessage(
   // ── 3. Build system prompt for interactive chat ──────
   const memoryInstructions = memory.getPromptInstructions()
   const usesAIBrowser = resolvePermission(app, 'ai-browser')
-  const usesTerminal = resolvePermission(app, 'ai-terminal', false) && isTerminalAvailable() // default off
-  const usesEmail = resolvePermission(app, 'email', false) // default false — higher trust
-  const usesImPush = resolvePermission(app, 'im-push') // default true — AI-driven IM push
+  const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
+  const usesEmail = resolvePermission(app, 'email') // gated on channel config downstream
+  const usesImPush = resolvePermission(app, 'im-push') // AI-driven IM push
+
+  // Runtime facts a capability toggle cannot convey: a capability can be ON yet
+  // still tool-less until its channel/contact exists. Computed once here and
+  // reused for the notify MCP server, the capability-awareness prompt, and the
+  // IM entry's notify_bot constraints.
+  const imSessions = usesImPush
+    ? (getImSessionRegistry()?.getPushableSessions(app.id) ?? [])
+    : []
+  const notifyAvail = resolveNotifyAvailability(app, config.notificationChannels, imSessions)
 
   // ── Merge config_schema defaults into userConfig ────
   const mergedConfig = mergeConfigWithDefaults(app.userConfig, app.spec.config_schema)
@@ -420,6 +460,11 @@ export async function sendAppChatMessage(
     usesTerminal,
     workDir,
     modelInfo: resolvedCreds.displayModel,
+    disabledCapabilities: buildDisabledCapabilitiesGuidance(app) ?? undefined,
+    unconfiguredCapabilities: buildUnconfiguredCapabilitiesGuidance(app, {
+      emailChannelConfigured: notifyAvail.emailChannelConfigured,
+      imContactsAvailable: notifyAvail.imContactsAvailable,
+    }) ?? undefined,
   })
   // Team turns take precedence over IM (trusted member, no guest restrictions).
   // When a team turn ALSO arrives over an IM channel (a team-backed IM instance),
@@ -447,7 +492,10 @@ export async function sendAppChatMessage(
       : buildTeamEntry(teamPromptCtx)
     constraints = buildTeamConstraints(teamPromptCtx)
   } else if (imSession) {
-    entry = buildImEntry(imSession, permCtx?.ownerIds)
+    entry = buildImEntry(imSession, permCtx?.ownerIds, {
+      channelsConfigured: notifyAvail.channelsConfigured,
+      notifyBotAvailable: notifyAvail.notifyBotAvailable,
+    })
     constraints = buildImConstraints(imSession, permCtx?.ownerIds)
   } else {
     entry = NATIVE_CHAT_ENTRY
@@ -458,8 +506,18 @@ export async function sendAppChatMessage(
   // ── 4. Build MCP servers ─────────────────────────────
   const memoryMcpServer = createMemoryStatusMcpServer(memoryScope)
 
-  // Include user-installed external MCPs (same as regular space chat)
-  const dbMcpServers = getDbMcpServers(spaceId)
+  // Include user-installed external MCPs (same as regular space chat), minus
+  // any this digital human has explicitly disabled (requires.mcps[].enabled ===
+  // false) so the per-app switch is consistent between chat and automation runs.
+  const disabledMcpIds = new Set(
+    (app.spec.requires?.mcps ?? [])
+      .filter(d => d.enabled === false)
+      .map(d => d.id)
+  )
+  const dbMcpServersRaw = getDbMcpServers(spaceId)
+  const dbMcpServers = dbMcpServersRaw && disabledMcpIds.size > 0
+    ? Object.fromEntries(Object.entries(dbMcpServersRaw).filter(([id]) => !disabledMcpIds.has(id)))
+    : dbMcpServersRaw
 
   // Get or create scoped browser context for this chat session
   let scopedBrowserCtx: BrowserContext | undefined
@@ -477,9 +535,6 @@ export async function sendAppChatMessage(
   // cwd) + tmpdir. Not the same as memoryScope.spacePath, which targets
   // space.path (internal storage) — see getSpaceDir().
   const exportGate = new FileExportGate([getSpaceDir(app.spaceId!), osTmpdir()])
-  const imSessions = usesImPush
-    ? (getImSessionRegistry()?.getPushableSessions(app.id) ?? [])
-    : []
   const notifyMcpServer = createNotifyToolServer({
     appId: app.id,
     appName: app.spec.name,
@@ -487,6 +542,16 @@ export async function sendAppChatMessage(
     imSessions,
     usesImPush,
     exportGate,
+    // Relay provenance: pushes from this chat are recorded against their
+    // target sessions with this run as the traceable origin. Native chat has
+    // no permCtx and counts as owner (the desktop user).
+    relay: {
+      sessionKey: conversationId,
+      contact: imSession?.sessionId,
+      subject: relayOrigin?.subject ?? senderIdentity,
+      isOwner: permCtx ? permCtx.isOwner : true,
+      quote: relayOrigin?.quote ?? buildQuoteFromMessage(message, senderIdentity?.name),
+    },
   })
   // report_to_user is injected ONLY for team turns (escalation routing to the
   // lead / user). It is deliberately NOT injected in plain chat/IM: it writes to
@@ -504,12 +569,14 @@ export async function sendAppChatMessage(
     ...(teamContext ? { teamContext } : {}),
   }
 
+  // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
   const mcpServers: Record<string, any> = {
     ...(dbMcpServers ?? {}),
     'halo-memory': memoryMcpServer,
     'halo-notify': notifyMcpServer,
     ...(digitalHumansEnabled ? { 'halo-apps': createHaloAppsMcpServer(spaceId) } : {}),
     'web-search': createWebSearchMcpServer(),
+    'ocr': createOcrMcpServer(),
     ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
     ...(usesTerminal
       ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId, workDir }) }
@@ -699,6 +766,19 @@ export async function sendAppChatMessage(
     // text across delta events, emits complete ProgressEvents on block_stop.
     const progressParser = onProgress ? new ProgressEventParser() : null
 
+    // The first SDK message is the earliest proof the engine accepted our
+    // message — before it, nothing entered the engine's history.
+    let messageAccepted = false
+    const acceptMessage = () => {
+      if (messageAccepted || !onMessageAccepted) return
+      messageAccepted = true
+      try {
+        onMessageAccepted()
+      } catch (acceptErr) {
+        console.error(`[AppChat][${appId}] onMessageAccepted callback error:`, acceptErr)
+      }
+    }
+
     await processStream({
       v2Session,
       sessionState,
@@ -750,6 +830,8 @@ export async function sendAppChatMessage(
           }
         },
         onRawMessage: (sdkMessage) => {
+          acceptMessage()
+
           // Persist SDK messages to JSONL for "View process" / reload recovery.
           //
           // We skip `stream_event` for both engines: token-level deltas are
@@ -826,6 +908,11 @@ export async function sendAppChatMessage(
     // but IM sessions can accumulate unboundedly — clean up to prevent memory leaks.
     const defaultConvId = getAppChatConversationId(appId)
     if (conversationId !== defaultConvId) {
+      // Round is over — drop the streaming handle registered by dispatch-inbound
+      // so stopImSession can no longer reach it. Stale handles left from a prior
+      // round would let stop() finish/dispose a stream that's already complete.
+      clearImStreamHandle(conversationId)
+
       const ctx = scopedContexts.get(conversationId)
       if (ctx) {
         ctx.destroy()
@@ -866,10 +953,46 @@ export async function sendAppChatMessage(
 }
 
 /**
+ * Abort one conversation's turn and release the resources that would otherwise
+ * outlive it. The single stop path for every caller — every entry point below
+ * delegates here so no route can forget a step.
+ *
+ * Three things must happen together, in this order:
+ *   1. Drop buffered supplements. `sendAppChatMessage`'s finally block flushes
+ *      them, so leaving them queued restarts a round right after the stop.
+ *   2. Dispose (not finish) the IM stream. Stop means "send nothing"; finish()
+ *      would push a final message into the chat.
+ *   3. Abort the generation.
+ *
+ * Steps 1–2 run even when nothing is generating: a crashed round can leave a
+ * buffer entry or stream handle behind, and the next inbound message would pick
+ * it up. Both are no-ops for native conversations, which never register either.
+ *
+ * @returns whether a generation was actually running
+ */
+async function stopConversation(conversationId: string): Promise<boolean> {
+  const wasActive = activeSessions.has(conversationId)
+
+  clearSupplementBuffer(conversationId)
+
+  const streamHandle = getImStreamHandle(conversationId)
+  if (streamHandle) {
+    try {
+      streamHandle.dispose?.()
+    } catch (err) {
+      console.error(`[AppChat] Stream dispose failed: ${conversationId}`, err)
+    }
+  }
+  clearImStreamHandle(conversationId)
+
+  if (wasActive) await stopGeneration(conversationId)
+  return wasActive
+}
+
+/**
  * Stop an active app chat generation.
  *
  * Stops the native Halo chat session AND all IM channel sessions for this app.
- * Uses the same stop mechanism as the main agent (V2 session interrupt + drain).
  *
  * @param appId - App ID to stop chat for
  */
@@ -882,7 +1005,7 @@ export async function stopAppChat(appId: string): Promise<void> {
     k => k === prefix || k.startsWith(prefix + ':')
   )
   for (const convId of toStop) {
-    await stopGeneration(convId)
+    await stopConversation(convId)
   }
   console.log(`[AppChat][${appId}] Generation stopped (${toStop.length} session(s))`)
 }
@@ -895,8 +1018,8 @@ export async function stopAppChat(appId: string): Promise<void> {
  * @param conversationId - The specific session to stop
  */
 export async function stopAppChatConversation(conversationId: string): Promise<void> {
-  await stopGeneration(conversationId)
-  console.log(`[AppChat] Generation stopped for conversation: ${conversationId}`)
+  const wasActive = await stopConversation(conversationId)
+  console.log(`[AppChat] Generation stopped for conversation: ${conversationId} (active=${wasActive})`)
 }
 
 /**
@@ -1065,6 +1188,10 @@ async function clearSessionByConversationId(
     await stopGeneration(conversationId)
   }
 
+  // Drop the IM stream handle so subsequent stop() calls are idempotent;
+  // the stream itself is finalized by clearImSession's tear-down below.
+  clearImStreamHandle(conversationId)
+
   // 2. Close V2 session to force fresh session on next message
   closeV2Session(conversationId)
 
@@ -1142,15 +1269,27 @@ export async function clearAppChat(appId: string, spaceId: string, conversationI
  * the next message resumes the conversation context via SDK session resume.
  * Only the in-process CC subprocess + cached V2 session are reset.
  *
- * In-flight generations are aborted first via `stopGeneration()`, then the
- * V2 session is closed and any per-session browser context is destroyed.
+ * In-flight handling depends on `interruptActive`:
+ *   - false (default, all automatic config-change restarts): a mid-generation
+ *     session is LEFT ALONE — the reply is not dropped. Its session-inputs
+ *     fingerprint (systemPrompt + MCP set + guest permission envelope) has
+ *     changed, so the very next message rebuilds it with the new wiring. Only
+ *     idle sessions are torn down eagerly.
+ *   - true (manual "Restart agent" only): a mid-generation session is aborted
+ *     via `stopGeneration()` first — the UI banner warns that work in progress
+ *     is stopped.
  *
  * Idempotent: returns `sessionsClosed: 0` when nothing is active.
  *
  * @param appId - App ID
+ * @param options.interruptActive - Abort in-flight turns (manual restart only). Default false.
  * @returns Count of sessions that were closed
  */
-export async function restartAppChat(appId: string): Promise<{ sessionsClosed: number }> {
+export async function restartAppChat(
+  appId: string,
+  options: { interruptActive?: boolean } = {}
+): Promise<{ sessionsClosed: number }> {
+  const { interruptActive = false } = options
   const prefix = getAppChatConversationId(appId)
 
   // Collect all session keys belonging to this app from both maps:
@@ -1166,10 +1305,20 @@ export async function restartAppChat(appId: string): Promise<{ sessionsClosed: n
   }
 
   let closed = 0
+  let deferred = 0
   for (const convId of sessionIds) {
     try {
+      const isActive = activeSessions.has(convId)
+
+      // Mid-generation + non-interrupting edit: leave the live turn to finish.
+      // The fingerprint rebuilds this session on its next message.
+      if (isActive && !interruptActive) {
+        deferred++
+        continue
+      }
+
       // 1. Abort any in-flight generation before closing the underlying session.
-      if (activeSessions.has(convId)) {
+      if (isActive) {
         await stopGeneration(convId)
       }
 
@@ -1194,8 +1343,39 @@ export async function restartAppChat(appId: string): Promise<{ sessionsClosed: n
     }
   }
 
-  console.log(`[AppChat][${appId}] Restart complete: ${closed} session(s) closed (history preserved)`)
+  console.log(
+    `[AppChat][${appId}] Restart complete: ${closed} session(s) closed` +
+    `${deferred > 0 ? `, ${deferred} deferred to next message` : ''} (history preserved)`
+  )
   return { sessionsClosed: closed }
+}
+
+/**
+ * Stop an active IM session's generation without clearing history.
+ *
+ * Aborts the current agent turn for the given IM session and discards any
+ * buffered supplement messages, but keeps the V2 session and JSONL transcript
+ * intact so the next inbound message resumes the conversation context. This
+ * contrasts with {@link clearImSession}, which tears down the V2 session and
+ * wipes history.
+ *
+ * Idempotent: returns `stopped: false` when no generation is active.
+ */
+export async function stopImSession(
+  appId: string,
+  channel: string,
+  chatType: 'direct' | 'group',
+  chatId: string
+): Promise<{ stopped: boolean }> {
+  const conversationId = buildImSessionKey(appId, channel, chatType, chatId)
+  const stopped = await stopConversation(conversationId)
+
+  console.log(
+    stopped
+      ? `[AppChat][${appId}] IM session stopped: ${conversationId}`
+      : `[AppChat][${appId}] IM session stop requested but not active: ${conversationId}`
+  )
+  return { stopped }
 }
 
 /**

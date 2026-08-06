@@ -7,7 +7,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import fs from 'fs'
 import path from 'path'
-import { resolveGitBashAvailability } from '../../../src/main/services/git-bash.service'
+import { resolveGitBashAvailability } from '../../../src/main/services/git-bash'
 
 function withWindowsPlatform(test: () => void) {
   const originalEnv = { ...process.env }

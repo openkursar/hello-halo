@@ -11,7 +11,7 @@
  * Traffic light vertical center formula: y = height/2 - 7 = 13
  */
 
-import { ReactNode } from 'react'
+import { ReactNode, CSSProperties } from 'react'
 import { Monitor } from 'lucide-react'
 import { isElectron, isCapacitor } from '../../api/transport'
 import { useAppStore } from '../../stores/app.store'
@@ -54,13 +54,24 @@ export function Header({ left, right, className = '' }: HeaderProps) {
   // Windows/Linux: titleBarOverlay buttons overlay on the right
   // Capacitor: safe area left/right padding, no drag region
   // Browser/Mobile: no overlay, use normal padding
+  //
+  // The overlay-side inset clears native window chrome (traffic lights /
+  // titleBarOverlay buttons) that does NOT scale with the persistent display
+  // zoom. Dividing by --display-scale keeps the reserved space constant in real
+  // pixels so content never slides under the buttons when zoomed out.
   const platformPadding = isInElectron
     ? platform.isMac
-      ? 'pl-20 pr-4'   // Electron macOS: 80px left for traffic lights
-      : 'pl-4 pr-36'   // Electron Windows/Linux: 140px right for titleBarOverlay buttons
+      ? 'pr-4'
+      : 'pl-4'
     : isInCapacitor
       ? 'pl-4 pr-4'    // Capacitor: standard padding, safe area handled by globals.css
       : 'pl-4 pr-4'    // Browser/Mobile: normal padding
+
+  const chromeInset: CSSProperties = isInElectron
+    ? platform.isMac
+      ? { paddingLeft: 'calc(5rem / var(--display-scale, 1))' }   // 80px for traffic lights
+      : { paddingRight: 'calc(9rem / var(--display-scale, 1))' }  // 144px for titleBarOverlay buttons
+    : {}
 
   // Capacitor: disable drag region (no window chrome)
   const dragClass = isInCapacitor ? '' : 'drag-region'
@@ -68,6 +79,7 @@ export function Header({ left, right, className = '' }: HeaderProps) {
   // Header height: 40px, trafficLightPosition.y should be 40/2 - 7 = 13
   return (
     <header
+      style={chromeInset}
       className={`
         flex items-center justify-between h-10
         border-b border-border ${dragClass}

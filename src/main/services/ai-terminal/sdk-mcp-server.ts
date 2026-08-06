@@ -54,7 +54,7 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
     },
     async (args: { shell?: string; cwd?: string; title?: string }) => {
       try {
-        const session = ctx.create({
+        const session = await ctx.create({
           shell: args.shell,
           cwd: args.cwd ?? scope.workDir,
           title: args.title,
@@ -131,6 +131,7 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
     async (args: { session: string; input: string; submit?: boolean; timeout?: number }) => {
       const session = getScoped(args.session)
       if (!session) return errorText(`No such terminal session: ${args.session}`)
+      ctx.markAiTouched(args.session)
       ctx.markAiActivity(args.session, true)
       try {
         const result = await session.write(args.input, clampSeconds(args.timeout, 10) * 1000, args.submit ?? true)
@@ -172,7 +173,8 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
     }) => {
       const session = getScoped(args.session)
       if (!session) return errorText(`No such terminal session: ${args.session}`)
-      const result = session.read(args.mode ?? 'new', { lines: args.lines, offset: args.offset })
+      ctx.markAiTouched(args.session)
+      const result = await session.read(args.mode ?? 'new', { lines: args.lines, offset: args.offset })
       const header =
         result.mode === 'screen' && result.cursor
           ? `[screen ${session.info.cols}x${session.info.rows}, cursor ${result.cursor.row},${result.cursor.col}]\n`
@@ -199,7 +201,8 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
     async (args: { session: string; pattern: string; context?: number }) => {
       const session = getScoped(args.session)
       if (!session) return errorText(`No such terminal session: ${args.session}`)
-      const result = session.search(args.pattern, args.context)
+      ctx.markAiTouched(args.session)
+      const result = await session.search(args.pattern, args.context)
       if (result.totalMatches === 0) return text(`No lines match /${args.pattern}/.`)
       const header = `[${result.totalMatches} matching line${result.totalMatches === 1 ? '' : 's'}` +
         `${result.truncated ? ' — showing the most recent; narrow the pattern to see fewer' : ''}]\n`
@@ -221,17 +224,17 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
     async (args: { session: string; text: string; timeout?: number }) => {
       const session = getScoped(args.session)
       if (!session) return errorText(`No such terminal session: ${args.session}`)
-      const outcome = await waitForText(session, args.text, clampSeconds(args.timeout, 60) * 1000)
+      ctx.markAiTouched(args.session)
+      // One worker-side RPC: the poll loop runs next to the buffer (baseline
+      // snapshot + since-diff, see worker session.waitFor), never over IPC.
+      const { outcome, content } = await session.waitFor(args.text, clampSeconds(args.timeout, 60) * 1000)
       if (outcome === 'found') {
-        const screen = session.read('screen')
-        return text(`Found "${args.text}".\n${screen.content}`)
+        return text(`Found "${args.text}".\n${content}`)
       }
       if (outcome === 'exited') {
-        const recent = session.read('scrollback', { lines: 40 })
-        return text(`Session exited before "${args.text}" appeared. Final output:\n${recent.content}`)
+        return text(`Session exited before "${args.text}" appeared. Final output:\n${content}`)
       }
-      const recent = session.read('new')
-      return text(`Timed out waiting for "${args.text}". Recent output:\n${recent.content}`)
+      return text(`Timed out waiting for "${args.text}". Recent output:\n${content}`)
     }
   )
 
@@ -251,38 +254,5 @@ export function createTerminalMcpServer(ctx: TerminalContext, scope: TerminalToo
     name: 'ai-terminal',
     version: '1.0.0',
     tools: [createTool, listTool, writeTool, readTool, searchTool, waitForTool, killTool]
-  })
-}
-
-type WaitOutcome = 'found' | 'timeout' | 'exited'
-
-/**
- * Poll for `needle` in output produced AFTER this call began, until it appears,
- * the session exits, or the timeout elapses. Anchoring on a baseline snapshot
- * (rather than scanning the whole buffer) prevents a stale match: text already
- * present from an earlier run — or the command echo itself — must not satisfy
- * the wait. It still catches matches that scroll off-screen between ticks, since
- * the "since baseline" diff covers the full interpreted buffer, not just the
- * viewport.
- */
-function waitForText(
-  session: {
-    snapshotBuffer: () => string
-    includesSince: (needle: string, baseline: string) => boolean
-    state: 'running' | 'exited'
-  },
-  needle: string,
-  timeoutMs: number
-): Promise<WaitOutcome> {
-  return new Promise((resolve) => {
-    const start = Date.now()
-    const baseline = session.snapshotBuffer()
-    const tick = () => {
-      if (session.includesSince(needle, baseline)) return resolve('found')
-      if (session.state === 'exited') return resolve('exited')
-      if (Date.now() - start >= timeoutMs) return resolve('timeout')
-      setTimeout(tick, 250)
-    }
-    tick()
   })
 }

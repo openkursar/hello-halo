@@ -66,10 +66,10 @@ export async function generateTeamInvite(teamId: string, ttlMs?: number, scope?:
 
   let serverUrl = gatewayUrl ? gatewayUrl.replace(/\/+$/, '') : null
   if (!serverUrl) {
-    // Lazy import: remote.service pulls electron at load; keeping it out of this
-    // controller's static graph lets the team routes (which import this file) load
-    // in non-electron contexts (tests, web) without dragging BrowserWindow in.
-    const { getRemoteAccessStatus } = await import('../services/remote.service')
+    // Lazy import: the remote service pulls electron at load; keeping it out of
+    // this controller's static graph lets the team routes (which import this file)
+    // load in non-electron contexts (tests, web) without dragging BrowserWindow in.
+    const { getRemoteAccessStatus } = await import('../services/remote')
     const status = getRemoteAccessStatus()
     if (!status.server.running || !status.server.lanUrl) {
       return { success: false, error: 'REMOTE_ACCESS_OFF' }

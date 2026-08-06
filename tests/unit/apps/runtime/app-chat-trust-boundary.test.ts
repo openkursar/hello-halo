@@ -145,7 +145,9 @@ import {
   clearAppChat,
   forkNativeChatSession,
   getAppChatConversationId,
+  buildGuestMcpServers,
 } from '../../../../src/main/apps/runtime/app-chat'
+import type { GuestPolicy } from '../../../../src/shared/types/im-channel'
 
 const APP = 'target-app'
 const OTHER = 'other-app'
@@ -227,5 +229,39 @@ describe('forkNativeChatSession trust boundary', () => {
     const result = forkNativeChatSession(APP, 'space-1', imKey)
     expect(result.conversationId).toMatch(new RegExp(`^app-chat:${APP}:local:direct:`))
     expect(createLocalSession).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('buildGuestMcpServers guest MCP injection', () => {
+  // The full owner MCP set as app-chat builds it before guest filtering.
+  const ALL = {
+    'web-search': { _: 1 },
+    'halo-memory': { _: 1 },
+    'ocr': { _: 1 },
+    'ai-browser': { _: 1 },
+    'halo-email': { _: 1 },
+  }
+
+  it('always injects filesystem-free safe MCPs (web-search, halo-memory)', () => {
+    const out = buildGuestMcpServers(ALL, null, {})
+    expect(out).toHaveProperty('web-search')
+    expect(out).toHaveProperty('halo-memory')
+  })
+
+  it('does NOT inject OCR for a guest without allowOcr (reads local files)', () => {
+    expect(buildGuestMcpServers(ALL, null, {})).not.toHaveProperty('ocr')
+    expect(buildGuestMcpServers(ALL, null, undefined)).not.toHaveProperty('ocr')
+    expect(buildGuestMcpServers(ALL, null, { allowOcr: false })).not.toHaveProperty('ocr')
+  })
+
+  it('injects OCR only when the host enables allowOcr', () => {
+    const out = buildGuestMcpServers(ALL, null, { allowOcr: true } as GuestPolicy)
+    expect(out).toHaveProperty('ocr')
+  })
+
+  it('keeps OCR gated independently of other capability toggles', () => {
+    const out = buildGuestMcpServers(ALL, null, { allowAiBrowser: true } as GuestPolicy)
+    expect(out).toHaveProperty('ai-browser')
+    expect(out).not.toHaveProperty('ocr')
   })
 })

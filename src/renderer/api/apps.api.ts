@@ -12,6 +12,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import type { AvailableSkill } from '../../shared/apps/app-types'
 
 export const appsApi = {
   // ===== Apps =====
@@ -224,6 +225,13 @@ export const appsApi = {
     return { success: false, error: 'Not supported outside Electron' }
   },
 
+  appListAvailableSkills: async (appId: string): Promise<ApiResponse<AvailableSkill[]>> => {
+    if (isElectron()) {
+      return window.halo.appListAvailableSkills(appId)
+    }
+    return httpRequest('GET', `/api/apps/${appId}/available-skills`)
+  },
+
   appOpenDataFolder: async (appId: string): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.appOpenDataFolder(appId)
@@ -321,6 +329,13 @@ export const appsApi = {
       return window.halo.appImChatClear({ appId, spaceId, channel, chatType, chatId })
     }
     return httpRequest('POST', `/api/apps/${appId}/im-chat/clear`, { spaceId, channel, chatType, chatId })
+  },
+
+  appImChatStop: async (appId: string, spaceId: string, channel: string, chatType: 'direct' | 'group', chatId: string): Promise<ApiResponse<{ stopped: boolean }>> => {
+    if (isElectron()) {
+      return window.halo.appImChatStop({ appId, channel, chatType, chatId })
+    }
+    return httpRequest('POST', `/api/apps/${appId}/im-chat/stop`, { spaceId, channel, chatType, chatId })
   },
 
   // ── Native multi-session lifecycle ──

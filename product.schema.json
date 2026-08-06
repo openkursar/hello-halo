@@ -82,6 +82,10 @@
           "enabled": {
             "type": "boolean"
           },
+          "setupHidden": {
+            "type": "boolean",
+            "description": "When true, the provider is hidden from the first-run login selector but remains available in the in-app AI source settings. Use for valid providers that should not lead onboarding. Orthogonal to `enabled` (which removes the provider everywhere)."
+          },
           "docs": {
             "type": "object",
             "description": "Optional documentation link shown on the login selector card (e.g. how to apply for an account).",

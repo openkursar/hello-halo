@@ -648,7 +648,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     // ── Configuration ─────────────────────────
 
     updateConfig(appId: string, config: Record<string, unknown>): void {
-      requireApp(appId) // Throws if not found
+      const app = requireApp(appId) // Throws if not found
+      // Skip the write when nothing actually changed. Compare by value; a key
+      // reorder at worst falls through to a harmless no-op write.
+      if (JSON.stringify(app.userConfig ?? {}) === JSON.stringify(config)) return
       store.updateConfig(appId, config)
     },
 
@@ -836,14 +839,17 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
     grantPermission(appId: string, permission: string): void {
       const app = requireApp(appId)
-      const permissions = { ...app.permissions }
 
-      // Add to granted if not already there
+      // Skip the write when the permission is already in the target state.
+      if (app.permissions.granted.includes(permission) &&
+          !app.permissions.denied.includes(permission)) {
+        return
+      }
+
+      const permissions = { ...app.permissions }
       if (!permissions.granted.includes(permission)) {
         permissions.granted = [...permissions.granted, permission]
       }
-
-      // Remove from denied if present
       permissions.denied = permissions.denied.filter(p => p !== permission)
 
       store.updatePermissions(appId, permissions)
@@ -851,12 +857,15 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
     revokePermission(appId: string, permission: string): void {
       const app = requireApp(appId)
+
+      // Skip the write when the permission is already in the target state.
+      if (app.permissions.denied.includes(permission) &&
+          !app.permissions.granted.includes(permission)) {
+        return
+      }
+
       const permissions = { ...app.permissions }
-
-      // Remove from granted
       permissions.granted = permissions.granted.filter(p => p !== permission)
-
-      // Add to denied if not already there
       if (!permissions.denied.includes(permission)) {
         permissions.denied = [...permissions.denied, permission]
       }

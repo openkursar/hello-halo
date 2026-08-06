@@ -830,6 +830,7 @@ const HALO_MCP_TOGGLES: { key: keyof GuestPolicy; labelKey: string }[] = [
   { key: 'allowNotify',    labelKey: 'Notifications' },
   { key: 'allowApps',      labelKey: 'Digital Humans' },
   { key: 'allowFileSend',  labelKey: 'File Send' },
+  { key: 'allowOcr',       labelKey: 'Text Extraction (OCR)' },
 ]
 
 interface PermissionSectionProps {

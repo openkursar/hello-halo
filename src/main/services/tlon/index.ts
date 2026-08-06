@@ -11,7 +11,7 @@
  * Tlon public surface.
  *
  * Cross-module integration (agent/app prompts, bootstrap):
- *   getKBReferencesForSpace, getKBReferencesForApp, initTlonWatchers,
+ *   getSeedKBIds, getKBReferencesForApp, initTlonWatchers,
  *   shutdownTlon
  *
  * Controller-facing CRUD / file ops / ingest are re-exported for the
@@ -44,9 +44,10 @@ export {
   removeRawFile,
   readIndexMd,
   // conversation integration (hot path)
-  getKBReferencesForSpace,
+  getSeedKBIds,
   getKBReferencesForApp,
   getKBReferenceById,
+  isKBIndexReady,
   getKBChatContext,
   // stats / status
   refreshStats,

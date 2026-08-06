@@ -69,10 +69,9 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     models: [
       { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
       { id: 'claude-fable-5', name: 'Claude Fable 5' },
+      { id: 'claude-opus-5', name: 'Claude Opus 5' },
       { id: 'claude-opus-4-8', name: 'Claude Opus 4.8' },
-      { id: 'claude-opus-4-7', name: 'Claude Opus 4.7' },
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
-      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5' }
     ],
     description: 'Official and compatible proxies',
@@ -352,6 +351,22 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     notes: 'Requires HTTP-Referer and X-Title headers. Supports model array for failover'
   },
   {
+    id: 'atlascloud',
+    name: 'Atlas Cloud',
+    authType: 'api-key',
+    apiUrl: 'https://api.atlascloud.ai/v1',
+    modelsUrl: 'https://api.atlascloud.ai/v1/models',
+    models: [
+      { id: 'deepseek-ai/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+      { id: 'deepseek-ai/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+      { id: 'qwen/qwen3.5-27b', name: 'Qwen3.5 27B' }
+    ],
+    description: 'Atlas Cloud OpenAI-compatible model API',
+    website: 'https://www.atlascloud.ai/',
+    region: 'global',
+    icon: 'cloud'
+  },
+  {
     id: 'requesty',
     name: 'Requesty',
     authType: 'api-key',
@@ -509,10 +524,9 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     models: [
       { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
       { id: 'claude-fable-5', name: 'Claude Fable 5' },
+      { id: 'claude-opus-5', name: 'Claude Opus 5' },
       { id: 'claude-opus-4-8', name: 'Claude Opus 4.8' },
-      { id: 'claude-opus-4-7', name: 'Claude Opus 4.7' },
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
-      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
       { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5' }
     ],
     description: 'Login with Claude.ai account (Pro/Max subscription)',

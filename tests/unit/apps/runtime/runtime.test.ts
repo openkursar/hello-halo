@@ -1294,6 +1294,44 @@ describe('Prompt Builder', () => {
       expect(prompt).toContain('automation App')
       expect(prompt).toContain('Reporting')
     })
+
+    it('omits notification guidance when no notify tool is available', () => {
+      const prompt = buildAppSystemPrompt({
+        appSpec: createTestSpec(),
+        memoryInstructions: '',
+        triggerContext: 'Manual',
+        workDir: '/tmp/test',
+        // notifyToolsAvailable omitted → falsy
+      })
+
+      expect(prompt).not.toContain('halo-notify')
+    })
+
+    it('includes notification guidance only when a notify tool is loaded', () => {
+      const prompt = buildAppSystemPrompt({
+        appSpec: createTestSpec(),
+        memoryInstructions: '',
+        triggerContext: 'Manual',
+        workDir: '/tmp/test',
+        notifyToolsAvailable: true,
+      })
+
+      expect(prompt).toContain('halo-notify')
+      expect(prompt).toContain('When NOT to Use')
+    })
+
+    it('renders the awaiting-setup capability guidance when provided', () => {
+      const prompt = buildAppSystemPrompt({
+        appSpec: createTestSpec(),
+        memoryInstructions: '',
+        triggerContext: 'Manual',
+        workDir: '/tmp/test',
+        unconfiguredCapabilities: '## Capabilities awaiting setup\n\n- Email — enabled, but no email channel is configured.',
+      })
+
+      expect(prompt).toContain('Capabilities awaiting setup')
+      expect(prompt).toContain('no email channel is configured')
+    })
   })
 
   describe('buildInitialMessage', () => {

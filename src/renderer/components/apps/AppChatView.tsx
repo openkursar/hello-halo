@@ -62,6 +62,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
   const session = useChatStore(s => s.getSession(conversationId))
   const sessionInitInfo = useChatStore(s => s.sessionInitInfo)
   const resetSession = useChatStore(s => s.resetSession)
+  const markSessionStopped = useChatStore(s => s.markSessionStopped)
   const answerQuestion = useChatStore(s => s.answerQuestion)
   const {
     isGenerating,
@@ -260,33 +261,14 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
     }
   }, [appId, spaceId, conversationId, resetSession, t])
 
-  // ── Stop generation ──
-  // Must eagerly clear frontend session state (isGenerating/isThinking) in addition
-  // to sending the backend stop IPC. Without this, the UI stays stuck in "thinking"
-  // because agent:complete may arrive late (backend drain) or not at all (drain race).
-  // This mirrors the pattern in chat.store.ts stopGeneration() for space conversations.
   const handleStop = useCallback(async () => {
     try {
       await api.appChatStop(appId, conversationId)
-      useChatStore.setState((state) => {
-        const newSessions = new Map(state.sessions)
-        const session = newSessions.get(conversationId)
-        if (session) {
-          newSessions.set(conversationId, {
-            ...session,
-            isGenerating: false,
-            isThinking: false,
-            pendingQuestion: session.pendingQuestion?.status === 'active'
-              ? { ...session.pendingQuestion, status: 'cancelled' as const }
-              : session.pendingQuestion
-          })
-        }
-        return { sessions: newSessions }
-      })
+      markSessionStopped(conversationId)
     } catch (err) {
       console.error('[AppChatView] Stop error:', err)
     }
-  }, [appId, conversationId])
+  }, [appId, conversationId, markSessionStopped])
 
   // ── Answer question from AskUserQuestionCard ──
   const handleAnswerQuestion = useCallback((answers: Record<string, string>) => {
@@ -309,6 +291,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
             onStop={handleStop}
             isGenerating={false}
             placeholder={t('Chat with this App...')}
+            hideToolsetControls
           />
         </div>
       </div>
@@ -332,6 +315,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
             onStop={handleStop}
             isGenerating={false}
             placeholder={t('Chat with this App...')}
+            hideToolsetControls
           />
         </div>
       </div>
@@ -417,6 +401,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
           onStop={handleStop}
           isGenerating={isGenerating}
           placeholder={t('Chat with this App...')}
+          hideToolsetControls
           slashCommands={slashCommands}
           mentionArtifacts={mentionArtifacts}
         />

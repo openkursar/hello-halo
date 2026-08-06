@@ -8,7 +8,7 @@ import type { Thought } from './internal'
 // Store-level timer for pulseReadAt cleanup (independent of UI components)
 let _pulseCleanupTimer: ReturnType<typeof setTimeout> | null = null
 
-export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThoughts' | 'cleanupPulseReadAt' | 'resetSession' | 'setSessionError' | 'reset' | 'resetSpace'> = (set, get) => ({
+export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThoughts' | 'cleanupPulseReadAt' | 'resetSession' | 'setSessionError' | 'markSessionStopped' | 'reset' | 'resetSpace'> = (set, get) => ({
   answerQuestion: async (conversationId: string, answers: Record<string, string>) => {
     const session = get().sessions.get(conversationId)
     if (!session?.pendingQuestion) {
@@ -130,6 +130,28 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
         error,
         isGenerating: false,
         isThinking: false,
+      })
+      return { sessions: newSessions }
+    })
+  },
+
+  // Settle a session's generating state after a stop was requested, keeping
+  // messages and thoughts intact. Callers must not wait for agent:complete to
+  // do this: the backend swallows the abort on several paths (team mode kills
+  // the subprocess, so the stream rejects and no event is emitted at all), and
+  // even on the normal path the event may only arrive after the drain timeout.
+  markSessionStopped: (conversationId: string) => {
+    set((state) => {
+      const session = state.sessions.get(conversationId)
+      if (!session) return state
+      const newSessions = new Map(state.sessions)
+      newSessions.set(conversationId, {
+        ...session,
+        isGenerating: false,
+        isThinking: false,
+        pendingQuestion: session.pendingQuestion?.status === 'active'
+          ? { ...session.pendingQuestion, status: 'cancelled' as const }
+          : session.pendingQuestion,
       })
       return { sessions: newSessions }
     })

@@ -37,12 +37,13 @@ import { getSpace, getAllSpacePaths } from '../../services/space.service'
 import { getTlonRoot } from '../../services/tlon'
 import { getAppManager } from '../../apps/manager'
 import { AppAlreadyInstalledError, McpCommandBlockedError } from '../../apps/manager/errors'
-import { getAppRuntime, getImChannelManager, sendAppChatMessage, stopAppChat, stopAppChatConversation, isAppChatGenerating, isAppChatConversationGenerating, loadAppChatMessages, loadImChatMessages, loadChatMessagesForConversation, getAppChatSessionState, getAppChatConversationId, clearAppChat, clearImSession, restartAppChat, createNativeChatSession, forkNativeChatSession, deleteNativeChatSession, dispatchInboundMessage } from '../../apps/runtime'
+import { getAppRuntime, getImChannelManager, sendAppChatMessage, stopAppChat, stopAppChatConversation, isAppChatGenerating, isAppChatConversationGenerating, loadAppChatMessages, loadImChatMessages, loadChatMessagesForConversation, getAppChatSessionState, getAppChatConversationId, clearAppChat, clearImSession, stopImSession, restartAppChat, createNativeChatSession, forkNativeChatSession, deleteNativeChatSession, dispatchInboundMessage } from '../../apps/runtime'
 import { buildDefaultAssistantSpec } from '../../apps/runtime/im-channels/wecom-bot-default-spec'
 import type { AppListFilter, UninstallOptions, InstalledApp } from '../../apps/manager'
 import type { ActivityQueryOptions, EscalationResponse, AppChatRequest } from '../../apps/runtime'
 import { readSessionMessages } from '../../apps/runtime/session-store'
 import { getImSessionRegistry } from '../../apps/runtime/im-session-registry'
+import { listAvailableSkills } from '../../apps/skill-discovery'
 import { analytics } from '../../services/analytics/analytics.service'
 import { broadcastToAll } from '../websocket'
 import * as appController from '../../controllers/app.controller'
@@ -231,6 +232,7 @@ export {
   deleteNativeChatSession,
   loadChatMessagesForConversation,
   stopAppChatConversation,
+  stopImSession,
   configController,
   configTouchesMcp,
   conversationController,
@@ -249,6 +251,7 @@ export {
   getAppChatConversationId,
   getAppChatSessionState,
   getAppManager,
+  listAvailableSkills,
   getAppRuntime,
   getEnabledAuthProviderConfigs,
   getImChannelManager,

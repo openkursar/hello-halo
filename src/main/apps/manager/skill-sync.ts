@@ -16,15 +16,27 @@ import { join, resolve, dirname, normalize, sep } from 'path'
 import { app } from 'electron'
 import type { InstalledApp } from './types'
 import type { SkillSpec } from '../../apps/spec/schema'
+import { resolveClaudeConfigDir } from '../../foundation/config.service'
 import { normalizeSkillMd } from '../../../shared/skill-frontmatter'
+import { toSkillDirName } from '../../../shared/skill-naming'
+
+/**
+ * Resolve the global skills directory without touching the disk.
+ *
+ * Must follow the user's configDirMode setting: the SDK loads global skills
+ * from resolveClaudeConfigDir()/skills, so writing anywhere else (e.g. a
+ * fixed userData path) produces skills the agent never sees.
+ */
+export function resolveGlobalSkillsDir(): string {
+  return join(resolveClaudeConfigDir(), 'skills')
+}
 
 /**
  * Get the global Claude config skills directory.
  * Creates it if it doesn't exist.
  */
 function getGlobalSkillsDir(): string {
-  const configDir = join(app.getPath('userData'), 'claude-config')
-  const skillsDir = join(configDir, 'skills')
+  const skillsDir = resolveGlobalSkillsDir()
   if (!existsSync(skillsDir)) {
     mkdirSync(skillsDir, { recursive: true })
   }
@@ -44,14 +56,6 @@ function getSpaceSkillsDir(spacePath: string): string {
 }
 
 /**
- * Sanitize specId into a safe filename.
- * Replaces non-alphanumeric chars (except dash/underscore) with underscores.
- */
-function toSafeFilename(specId: string): string {
-  return specId.replace(/[^a-zA-Z0-9_-]/g, '_')
-}
-
-/**
  * Resolve the on-disk directory for a skill app without performing any I/O.
  * Returns null if the space cannot be resolved.
  *
@@ -63,7 +67,7 @@ export function getSkillDir(
 ): string | null {
   if (appRecord.spec.type !== 'skill') return null
 
-  const dirName = toSafeFilename(appRecord.specId)
+  const dirName = toSkillDirName(appRecord.specId)
 
   if (appRecord.spaceId === null) {
     return join(getGlobalSkillsDir(), dirName)
@@ -95,7 +99,7 @@ export function syncSkillToFilesystem(
     return
   }
 
-  const dirName = toSafeFilename(appRecord.specId)
+  const dirName = toSkillDirName(appRecord.specId)
 
   const skillDir = appRecord.spaceId === null
     ? join(getGlobalSkillsDir(), dirName)
@@ -146,7 +150,7 @@ export function removeSkillFromFilesystem(
 ): void {
   if (appRecord.spec.type !== 'skill') return
 
-  const dirName = toSafeFilename(appRecord.specId)
+  const dirName = toSkillDirName(appRecord.specId)
 
   if (appRecord.spaceId === null) {
     // Global skill
@@ -164,5 +168,42 @@ export function removeSkillFromFilesystem(
       rmSync(skillDir, { recursive: true, force: true })
       console.log(`[SkillSync] Removed space skill: ${skillDir}`)
     }
+  }
+}
+
+/**
+ * Move installed global skills to the directory the SDK actually reads.
+ *
+ * Earlier versions always wrote global skills to the fixed
+ * userData/claude-config/skills path, so under 'cc'/'custom' configDirMode
+ * they landed where the SDK never looks. Re-writes each installed global
+ * skill from its DB record (source of truth) into the resolved directory and
+ * removes the stale copy from the legacy path. No-op in the default mode
+ * where both paths coincide. Called once at App Manager startup.
+ */
+export function reconcileGlobalSkillsLocation(
+  apps: InstalledApp[],
+  getSpacePath: (spaceId: string) => string | null
+): void {
+  const legacyDir = join(app.getPath('userData'), 'claude-config', 'skills')
+  const resolvedDir = resolveGlobalSkillsDir()
+  if (resolve(resolvedDir) === resolve(legacyDir)) return
+
+  let migrated = 0
+  for (const record of apps) {
+    if (record.spec.type !== 'skill' || record.spaceId !== null) continue
+    if (record.status === 'uninstalled') continue
+
+    syncSkillToFilesystem(record, getSpacePath)
+
+    const staleDir = join(legacyDir, toSkillDirName(record.specId))
+    if (existsSync(staleDir)) {
+      rmSync(staleDir, { recursive: true, force: true })
+      migrated++
+    }
+  }
+
+  if (migrated > 0) {
+    console.log(`[SkillSync] Relocated ${migrated} global skills from legacy dir to ${resolvedDir}`)
   }
 }

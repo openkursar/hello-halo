@@ -21,7 +21,7 @@
 # 用法:
 #   ./scripts/build-mac-signed.sh            # 默认 arm64 (Apple Silicon)
 #   ./scripts/build-mac-signed.sh x64        # Intel
-#   多架构分发请用 deploy_local_M4.sh (它会处理 x64 的 cloudflared 替换)。
+#   多架构分发请依次构建各架构即可 (cloudflared 等平台二进制由 afterPack 自动按目标选择)。
 # ============================================================================
 
 set -euo pipefail
@@ -97,6 +97,14 @@ else
 fi
 
 echo "[build:mac-signed] 架构=$ARCH  签名源=$SIGN_SRC  TeamID=$APPLE_TEAM_ID"
+
+# ── 准备目标架构的平台二进制 ──────────────────────────────────────────────────
+# afterPack 会校验 cloudflared / better-sqlite3 / codex 等原生二进制, 缺失即 throw
+# 中断打包。build:mac / release 都在打包前跑 prepare, 签名构建同样必须。只备目标
+# 架构 (mac-$ARCH) 而非 all, 与本脚本的单架构产物一致, 更快。
+echo "[build:mac-signed] 准备平台二进制 (mac-$ARCH)..."
+node scripts/prepare-binaries.mjs --platform "mac-$ARCH"
+
 echo "[build:mac-signed] 编译源代码..."
 npm run build
 

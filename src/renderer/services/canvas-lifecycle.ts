@@ -333,6 +333,23 @@ class CanvasLifecycle {
   private browserStateChangeCallbacks: Set<BrowserStateChangeCallback> = new Set()
   private openStateChangeCallbacks: Set<OpenStateChangeCallback> = new Set()
 
+  /**
+   * Policy for disposing a terminal's pty when its tab goes away. This manager
+   * owns tabs, not ptys, so it delegates the pty decision to the terminal domain
+   * (which can read session state and prompt the user):
+   *  - `confirmSingleClose` — a deliberate single-tab close: prompt keep vs
+   *    terminate for an AI-operated session, resolve false to cancel the close.
+   *  - `disposeOnBulkClose` — a non-interactive bulk teardown (closeAll / space
+   *    switch): silently terminate the user's own terminals, keep AI-operated
+   *    ones alive (they remain reachable in the live-sessions tray).
+   * Absent a policy (host not mounted) tabs are removed and ptys left running —
+   * the pre-existing decoupled behavior.
+   */
+  private terminalClosePolicy: {
+    confirmSingleClose: (sessionId: string) => Promise<boolean>
+    disposeOnBulkClose: (sessionId: string) => Promise<void>
+  } | null = null
+
   // ============================================
   // Initialization
   // ============================================
@@ -773,6 +790,21 @@ class CanvasLifecycle {
   }
 
   /**
+   * Register the terminal close policy. Returns an unsubscribe function.
+   * Provided by TerminalCloseGuard, which can read session state and prompt the
+   * user. Only one policy is active at a time.
+   */
+  setTerminalClosePolicy(policy: {
+    confirmSingleClose: (sessionId: string) => Promise<boolean>
+    disposeOnBulkClose: (sessionId: string) => Promise<void>
+  }): () => void {
+    this.terminalClosePolicy = policy
+    return () => {
+      if (this.terminalClosePolicy === policy) this.terminalClosePolicy = null
+    }
+  }
+
+  /**
    * Close a tab
    */
   async closeTab(tabId: string): Promise<void> {
@@ -780,6 +812,13 @@ class CanvasLifecycle {
     if (!tab) return
 
     console.log(`[CanvasLifecycle] Closing tab: ${tabId}`)
+
+    // Terminal tabs: defer to the close policy for the underlying pty (keep in
+    // background / terminate / cancel). A cancel aborts the whole close.
+    if (tab.type === 'terminal' && tab.terminalSessionId && this.terminalClosePolicy) {
+      const proceed = await this.terminalClosePolicy.confirmSingleClose(tab.terminalSessionId)
+      if (!proceed) return
+    }
 
     // Destroy BrowserView if this is a browser/pdf tab
     const hasBrowserView = (tab.type === 'browser' || tab.type === 'pdf') && tab.browserViewId
@@ -811,13 +850,21 @@ class CanvasLifecycle {
   async closeAll(): Promise<void> {
     console.log('[CanvasLifecycle] Closing all tabs')
 
-    // Destroy all browser views (browser and pdf types)
+    // Tear down each tab's underlying resource. Browser/pdf views are destroyed
+    // (their WebContents is tab-bound). Terminals defer to the bulk disposal
+    // policy — non-interactive, so no per-tab prompts: the user's own terminals
+    // are terminated, AI-operated ones are kept alive in the tray. Also drives
+    // space-switch teardown (enterSpace → closeAll).
+    const terminalDisposals: Promise<void>[] = []
     for (const [, tab] of this.tabs) {
       const hasBrowserView = (tab.type === 'browser' || tab.type === 'pdf') && tab.browserViewId
       if (hasBrowserView) {
         await this.destroyBrowserView(tab.browserViewId!)
+      } else if (tab.type === 'terminal' && tab.terminalSessionId && this.terminalClosePolicy) {
+        terminalDisposals.push(this.terminalClosePolicy.disposeOnBulkClose(tab.terminalSessionId))
       }
     }
+    await Promise.all(terminalDisposals)
 
     this.tabs.clear()
     this.activeTabId = null

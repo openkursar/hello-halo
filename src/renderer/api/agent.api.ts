@@ -5,6 +5,7 @@
 import {
   httpRequest,
   isElectron,
+  sendWsMessage,
   subscribeToConversation,
 } from './_shared'
 import type {
@@ -202,6 +203,29 @@ export const agentApi = {
   getTerminalReplay: async (sessionId: string): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.getTerminalReplay({ sessionId })
     return httpRequest('POST', '/api/terminal/replay', { sessionId })
+  },
+
+  // Viewer flow control (ack model): attach/detach mark this client as a live
+  // consumer of terminal:data; ack reports rendered chars so main can pause a
+  // flooding pty. Remote clients go over the WS only — flow control is
+  // meaningless without the live WS stream, so there is no HTTP fallback (an
+  // unattached viewer simply isn't flow-controlled, same as before).
+  terminalAttach: async (sessionId: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.terminalAttach({ sessionId })
+    sendWsMessage('terminal-attach', { sessionId })
+    return { success: true }
+  },
+
+  terminalDetach: async (sessionId: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.terminalDetach({ sessionId })
+    sendWsMessage('terminal-detach', { sessionId })
+    return { success: true }
+  },
+
+  terminalAck: async (sessionId: string, charCount: number): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.terminalAck({ sessionId, charCount })
+    sendWsMessage('terminal-ack', { sessionId, charCount })
+    return { success: true }
   },
 
 }

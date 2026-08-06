@@ -46,7 +46,7 @@ const remoteStatus = {
     server: { running: true, lanUrl: 'http://192.168.1.50:3017' as string | null },
   },
 }
-vi.mock('../../../../../src/main/services/remote.service', () => ({
+vi.mock('../../../../../src/main/services/remote', () => ({
   getRemoteAccessStatus: () => remoteStatus.value,
 }))
 

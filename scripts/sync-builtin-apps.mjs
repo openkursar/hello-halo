@@ -38,6 +38,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, cpSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { syncProductJson } from './product-source.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -189,7 +190,12 @@ function writeManifest(entries, sourceRoot, intentionalEmpty) {
   renameSync(tmpPath, finalPath)
 }
 
-function main() {
+async function main() {
+  // Bring product.json in line with the machine-local variant choice before
+  // anything reads it. `--interactive` (dev entry only) allows a first-run
+  // picker when no variant has been selected yet.
+  await syncProductJson({ interactive: process.argv.includes('--interactive') })
+
   const product = loadProductConfig()
   const builtinConfig = product?.builtinApps
 
@@ -251,9 +257,7 @@ function main() {
   log.ok(`Bundled ${entries.length} built-in digital human(s).`)
 }
 
-try {
-  main()
-} catch (err) {
+main().catch((err) => {
   log.err(err.message)
   process.exit(1)
-}
+})

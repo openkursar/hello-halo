@@ -123,9 +123,9 @@ function metaToEntry(meta: SpaceMeta, spacePath: string): SpaceIndexEntry {
 /**
  * Backfill missing sortOrder on persisted entries using the activity-sort
  * order. Eliminates the mixed-state window where some entries have sortOrder
- * and others don't — that window caused createSpace's `max+1` to land at 0
- * on a fully-legacy index, which then sorted the new space first under the
- * activity fallback while the store appended it last (visual jump).
+ * and others don't — that window would force listSpaces() onto its activity
+ * fallback and let a newly created space's position diverge between the
+ * backend index and the in-memory store.
  *
  * Runs once at load; persisted entries stay stable across restarts. Entries
  * keep the order they would have had under the legacy activity sort, so users
@@ -498,14 +498,17 @@ export function createSpace(input: { name: string; icon: string; customPath?: st
 
   writeFileSync(join(spacePath, '.halo', 'meta.json'), JSON.stringify(meta, null, 2))
 
-  // Register in index (memory + disk). New spaces sort last; compute the
-  // next sortOrder as max(existing) + 1 so ordering stays stable.
-  let nextSortOrder = 0
+  // Register in index (memory + disk). New spaces sort first: give the new
+  // space a sortOrder smaller than every existing space so it lands at the
+  // top of the list immediately after creation (a created space must be
+  // visible without scrolling). reorderSpaces() re-normalizes to 0..n on the
+  // next drag, so the negative values here never accumulate unbounded.
+  let minSortOrder = Infinity
   for (const [, existing] of getRegistry()) {
-    if (typeof existing.sortOrder === 'number' && existing.sortOrder >= nextSortOrder) {
-      nextSortOrder = existing.sortOrder + 1
-    }
+    if (existing.isTemp || typeof existing.sortOrder !== 'number') continue
+    if (existing.sortOrder < minSortOrder) minSortOrder = existing.sortOrder
   }
+  const sortOrder = minSortOrder === Infinity ? 0 : minSortOrder - 1
   const entry: SpaceIndexEntry = {
     path: spacePath,
     name: input.name,
@@ -513,7 +516,7 @@ export function createSpace(input: { name: string; icon: string; customPath?: st
     createdAt: now,
     updatedAt: now,
     workingDir,
-    sortOrder: nextSortOrder
+    sortOrder
   }
   getRegistry().set(id, entry)
   persistIndex(getRegistry())

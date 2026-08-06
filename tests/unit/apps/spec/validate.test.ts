@@ -107,6 +107,15 @@ describe('validateAppSpec - minimal valid specs', () => {
     expect(result.system_prompt).toBe('You are a monitoring agent.')
   })
 
+  it('preserves the per-app requires.mcps[].enabled flag through validation', () => {
+    const result = validateAppSpec({
+      ...minimalAutomationSpec,
+      requires: { mcps: [{ id: 'postgres', enabled: false }, { id: 'jira' }] },
+    })
+    const mcps = (result as { requires?: { mcps?: unknown } }).requires?.mcps
+    expect(mcps).toEqual([{ id: 'postgres', enabled: false }, { id: 'jira' }])
+  })
+
   it('should accept minimal Extension spec', () => {
     const result = validateAppSpec(minimalExtensionSpec)
     expect(result.type).toBe('extension')

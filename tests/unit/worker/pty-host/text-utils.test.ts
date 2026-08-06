@@ -21,7 +21,7 @@ import {
   toPtyInput,
   toPtyWrites,
   MAX_RETURN_LINES,
-} from '../../../../src/main/services/ai-terminal/text-utils'
+} from '../../../../src/worker/pty-host/text-utils'
 
 describe('defaultTitle', () => {
   it('derives a clean name from a shell path', () => {

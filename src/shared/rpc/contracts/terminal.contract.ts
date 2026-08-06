@@ -13,4 +13,9 @@ export const terminalRpc = {
   terminalResize: rawRpcMethod('terminal:resize'),
   killTerminal: rawRpcMethod('terminal:kill'),
   getTerminalReplay: rawRpcMethod('terminal:replay'),
+  // Viewer flow control: attach/detach mark a live consumer of terminal:data;
+  // ack reports rendered chars so a flooding pty can be paused.
+  terminalAttach: rawRpcMethod('terminal:attach'),
+  terminalDetach: rawRpcMethod('terminal:detach'),
+  terminalAck: rawRpcMethod('terminal:ack'),
 }

@@ -41,7 +41,7 @@ SDK path is no longer used.
 |---|---|
 | `types.ts` | `ToolsetDefinition`, scope, status, event types |
 | `registry.ts` | The catalog. **Adding a toolset = one entry here** |
-| `state.ts` | Per-conversation open-set; write-through persisted on the conversation record; per-conversation MCP server instance cache |
+| `state.ts` | Per-conversation open-set; write-through persisted on the conversation record |
 | `broker.ts` | Builds the creation-time MCP record (`buildCreationTimeServers`); `openToolset`/`closeToolset` (user toggle → persist + schedule rebuild); `requestToolset` (AI → user, emits `toolsets:requested`); emits `toolsets:changed`. Rebuild via an injected invalidator (DI seam, avoids a cycle with session-manager) |
 | `meta-server.ts` | The resident `request_toolset` MCP server (disabled-toolset awareness lives in its tool description) |
 | `capability-index.ts` | `buildToolsetSection`: enabled-toolset usage guides for the system prompt |
@@ -49,20 +49,25 @@ SDK path is no longer used.
 
 ## 4) Seeding & rebuild
 
-- `send-message.ts` / `ensureSessionWarm` build creation-time options as
-  `{ ...dbMcpServers, ...buildCreationTimeServers(scope) }` (all engines).
-  `buildBaseSdkOptions` attaches them to `sdkOptions.mcpServers`; the SDK/codex
-  bridge delivers the in-process servers at thread creation.
+- `send-message.ts` / `ensureSessionWarm` pass a deferred builder
+  (`buildMcpServers: () => ({ ...dbMcpServers, ...buildCreationTimeServers(scope) })`)
+  to `getOrCreateV2Session`, which invokes it only when a session is actually
+  created — after any cleanup of the previous one. **Instances must be born at
+  session creation**: an in-process MCP server binds to exactly one session
+  transport, and seeding an instance that was bound to a torn-down session fails
+  as a swallowed SDK rejection (server registered but dead, tools silently
+  unavailable). The SDK/codex bridge delivers the in-process servers at thread
+  creation; a reused session skips instantiation entirely.
 - A toolset toggle (`openToolset`/`closeToolset`, `opener='user'`) persists the
   open-set to the conversation record (`state.ts`) and calls the injected
-  `invalidateSessionForRebuild` → `invalidateSessionForToolsetChange`
+  `invalidateSessionForRebuild` → `requestSessionRebuild`
   (session-manager), which rebuilds now or defers to the turn boundary
   (`pendingConsumerRebuilds` + `consumePendingRebuild`, shared with credentials
   rebuild). The next `sendMessage` re-seeds the new set.
-- Server instances are cached per conversation (`getServerCache`) so a rebuild
-  keeps name-stable identities. Exception: the `capabilities` meta server is
-  recreated on every build — its `request_toolset` description bakes in the
-  current disabled list, so caching it would go stale after a toggle.
+- Server instances are NEVER cached across builds — every build creates fresh
+  instances via the registry factories. (A per-conversation instance cache
+  existed briefly and caused rebuilt sessions to receive already-bound
+  instances; see the invariant above.)
 - Persisted open-sets are hydrated as-is (`getOpenToolsets`), including ids that
   are currently unavailable on this platform; availability is gated at use time
   (registry), so a user's selection survives availability transitions.
@@ -79,6 +84,10 @@ to the model-pin stamp. Only user toggles update the seed (AI requests never ope
 toolset; a restore must not rewrite it). Seeding happens **only at creation** — never
 in `getOpenToolsets` hydration — so reopening an old (empty) conversation stays empty.
 Unknown ids in the seed are dropped on hydrate, so no filtering is needed at stamp time.
+On first run, before any user toggle has written `config.lastToolsets`, `createConversation`
+seeds `FIRST_RUN_DEFAULT_TOOLSETS` (currently `['ai-browser']`) so the browser is on out of
+the box; once the user toggles anything, `config.lastToolsets` (including an empty set = all
+off) is authoritative.
 
 ## 5) `request_toolset` UX
 
@@ -90,12 +99,13 @@ returns guidance so the AI tells the user which toolset to enable, then stops.
 ## 6) Automation (digital humans)
 
 Automation does NOT use this broker or the meta server. Enabled toolsets are
-**app permissions** resolved via `resolvePermission(app, '<id>', default)` in
+**app permissions** resolved via `resolvePermission(app, '<id>')` in
 `apps/runtime/execute.ts` + `app-chat.ts`, seeded into the run's static MCP set at
 creation, and their usage guides appended in `prompt.ts` / `prompt/identity.ts`.
-`ai-terminal` / `ai-browser` are toggled in `AppConfigPanel.tsx`
-(grant/revoke-permission). `ai-terminal` defaults OFF and is excluded for guests
-(conservative default in `app-chat.ts` `buildGuestMcpServers`).
+Capabilities are toggled in `AppCapabilitiesSection.tsx` (grant/revoke-permission).
+All built-in capabilities default ON (only an explicit user deny turns one off —
+see PROTOCOL.md §13); `ai-terminal` is still excluded for guests
+(conservative allowlist in `app-chat.ts` `buildGuestMcpServers`).
 
 ## 7) Session rebuild contract
 

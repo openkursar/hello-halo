@@ -153,9 +153,16 @@ export function AppsPage() {
     prevTabRef.current = currentTab
     // Only clear when switching between the two list tabs (not to/from store)
     if (prev !== currentTab && prev !== 'store' && currentTab !== 'store') {
-      clearSelection()
+      // Preserve the selection when it already belongs to the new tab. This is
+      // the case for programmatic cross-tab navigation (e.g. opening an MCP or
+      // skill detail from a digital human's settings), which sets the tab and
+      // the selection together — clearing here would wipe the just-opened
+      // detail and auto-select the first app instead.
+      const sel = apps.find(a => a.id === selectedAppId)
+      const belongsToNewTab = sel ? tabForAppType(sel.spec.type) === currentTab : false
+      if (!belongsToNewTab) clearSelection()
     }
-  }, [currentTab, clearSelection])
+  }, [currentTab, clearSelection, apps, selectedAppId])
 
   // Auto-select first app for the current tab if nothing selected (desktop only —
   // on mobile the user should see the full-width list first and tap to select)

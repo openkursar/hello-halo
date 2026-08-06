@@ -27,6 +27,9 @@
  *   app:chat-messages      Load persisted chat messages for an app
  *   app:chat-session-state Get session state for recovery after refresh
  *   app:chat-restart       Restart an app's chat agent (reload prompt/config)
+ *   app:im-chat-messages   Load persisted IM session chat messages
+ *   app:im-chat-clear      Clear an IM session's chat history (wipes history)
+ *   app:im-chat-stop       Stop an IM session's active generation (keeps history)
  *   app:export-spec        Export an app's spec as a YAML string
  *   app:import-spec        Install an app from a YAML spec string
  *   app:open-skill-folder  Reveal a skill's on-disk directory in the OS file manager
@@ -40,6 +43,7 @@ import { getAppManager } from '../apps/manager'
 import { AppAlreadyInstalledError, McpCommandBlockedError } from '../apps/manager/errors'
 import { MCP_COMMAND_BLOCKED_MESSAGE } from '../services/security-policy'
 import { getSkillDir } from '../apps/manager/skill-sync'
+import { listAvailableSkills } from '../apps/skill-discovery'
 import {
   getAppRuntime,
   sendAppChatMessage,
@@ -54,6 +58,7 @@ import {
   getAppChatConversationId,
   clearAppChat,
   clearImSession,
+  stopImSession,
   restartAppChat,
   createNativeChatSession,
   forkNativeChatSession,
@@ -655,7 +660,9 @@ export function registerAppHandlers(): void {
     // prompt and config. Conversation history is preserved via saved sessionId.
     appChatRestart: async (appId: string) => {
       try {
-        const result = await restartAppChat(appId)
+        // Manual restart: the user clicked "Restart agent" (its banner warns work
+        // in progress is stopped), so interrupt any in-flight turn.
+        const result = await restartAppChat(appId, { interruptActive: true })
         console.log(`[AppIPC] app:chat-restart: appId=${appId}, closed=${result.sessionsClosed}`)
         return { success: true, data: result }
       } catch (error: unknown) {
@@ -690,6 +697,25 @@ export function registerAppHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:im-chat-clear error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:im-chat-stop ────────────────────────────────────────────────
+    // Aborts the current generation for a single IM session while preserving
+    // V2 session and JSONL history. Contrast with appImChatClear which wipes
+    // history and tears down the V2 session.
+    appImChatStop: async (input: { appId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => {
+      try {
+        const result = await stopImSession(input.appId, input.channel, input.chatType, input.chatId)
+        console.log(
+          `[AppIPC] app:im-chat-stop: appId=${input.appId} channel=${input.channel} ` +
+          `chatId=${input.chatId} stopped=${result.stopped}`
+        )
+        return { success: true, data: result }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:im-chat-stop error:', err.message)
         return { success: false, error: err.message }
       }
     },
@@ -798,6 +824,26 @@ export function registerAppHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:open-skill-folder error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:list-available-skills ──────────────────────────────────────────
+    appListAvailableSkills: async (appId: string) => {
+      try {
+        const r = requireManager()
+        if (!r.success) return r
+
+        const app = r.manager.getApp(appId)
+        if (!app || !app.spaceId) {
+          return { success: false, error: 'App not found or has no space' }
+        }
+
+        const skills = listAvailableSkills(app.spaceId)
+        return { success: true, data: skills }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:list-available-skills error:', err.message)
         return { success: false, error: err.message }
       }
     },
@@ -919,5 +965,5 @@ export function registerAppHandlers(): void {
     },
   })
 
-  console.log('[AppIPC] App management handlers registered (30 channels)')
+  console.log('[AppIPC] App management handlers registered (42 channels)')
 }

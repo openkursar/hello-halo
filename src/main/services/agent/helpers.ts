@@ -536,7 +536,7 @@ export function getDbMcpServers(spaceId: string): Record<string, unknown> | null
  * @returns SDK-compatible mcpServers config, keyed by specId
  */
 export function getMcpServersForRequires(
-  requiredMcps: Array<{ id: string; reason?: string; bundled?: boolean }> | undefined,
+  requiredMcps: Array<{ id: string; reason?: string; bundled?: boolean; enabled?: boolean }> | undefined,
   spaceId: string
 ): Record<string, unknown> {
   if (!requiredMcps || requiredMcps.length === 0) return {}
@@ -550,6 +550,13 @@ export function getMcpServersForRequires(
   const result: Record<string, unknown> = {}
 
   for (const dep of requiredMcps) {
+    // Per-digital-human switch: an explicitly disabled dependency is skipped
+    // for this app only. The shared MCP server's own status is untouched.
+    if (dep.enabled === false) {
+      console.log(`[Agent] Required MCP "${dep.id}" disabled for this digital human (spaceId=${spaceId})`)
+      continue
+    }
+
     const app = allMcpApps.find(
       (a) => a.specId === dep.id && a.status === 'active'
     )

@@ -38,7 +38,6 @@ function describePolicyFailure(codes: PasswordPolicyCode[], t: TranslateFn): str
   if (codes.includes('MISSING_UPPER')) fragments.push(t('uppercase letter'))
   if (codes.includes('MISSING_LOWER')) fragments.push(t('lowercase letter'))
   if (codes.includes('MISSING_DIGIT')) fragments.push(t('digit'))
-  if (codes.includes('MISSING_SPECIAL')) fragments.push(t('special character'))
   return t('Password must include: {{items}}', { items: fragments.join(', ') })
 }
 
@@ -349,7 +348,7 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
                           setCustomPassword(e.target.value)
                           setPasswordError(null)
                         }}
-                        placeholder={t('8-64 chars, mixed case + digit + symbol')}
+                        placeholder={t('8-64 chars, mixed case + digit')}
                         maxLength={PASSWORD_MAX_LENGTH}
                         className="w-56 px-2 py-1 text-sm bg-input rounded border border-border focus:border-primary focus:outline-none"
                       />

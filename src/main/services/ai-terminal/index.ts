@@ -22,7 +22,11 @@ export {
   terminalResize,
   killTerminal,
   getTerminalReplay,
-  createTerminalForUser
+  createTerminalForUser,
+  terminalViewerAttach,
+  terminalViewerDetach,
+  terminalViewerAck,
+  terminalViewerDisconnected
 } from './service'
 export {
   onTerminalData,
@@ -34,7 +38,7 @@ export type {
   TerminalDataEvent,
   TerminalLifecycleEvent,
   CreateTerminalOptions
-} from './types'
+} from '../../../shared/types/terminal'
 
 export const AI_TERMINAL_SYSTEM_PROMPT = `
 ## AI Terminal

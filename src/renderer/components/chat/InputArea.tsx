@@ -90,6 +90,12 @@ interface InputAreaProps {
   slashCommands?: SlashCommandItem[]
   /** Artifacts available for @ mention suggestions */
   mentionArtifacts?: Artifact[]
+  /**
+   * Hide the on-demand toolset broker control ("Tools" button). Digital-human
+   * chat sets this: a digital human's tools are governed by its Capabilities
+   * panel, not the broker, so the control would be inert and misleading here.
+   */
+  hideToolsetControls?: boolean
 }
 
 // Image constraints
@@ -102,7 +108,7 @@ interface ImageError {
   message: string
 }
 
-export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [], mentionArtifacts = [] }: InputAreaProps) {
+export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [], mentionArtifacts = [], hideToolsetControls = false }: InputAreaProps) {
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
@@ -774,6 +780,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             onStop={onStop}
             sendKeyMode={sendKeyMode}
             visionEnabled={visionEnabled}
+            hideToolsetControls={hideToolsetControls}
           />
         </div>
       </div>
@@ -803,6 +810,7 @@ interface InputToolbarProps {
   onStop?: () => void
   sendKeyMode: 'enter' | 'ctrl-enter'
   visionEnabled: boolean
+  hideToolsetControls: boolean
 }
 
 function InputToolbar({
@@ -820,7 +828,8 @@ function InputToolbar({
   onSend,
   onStop,
   sendKeyMode,
-  visionEnabled
+  visionEnabled,
+  hideToolsetControls
 }: InputToolbarProps) {
   const { t } = useTranslation()
   return (
@@ -882,7 +891,7 @@ function InputToolbar({
         )}
 
         {/* On-demand toolsets (catalog menu + activation pills) */}
-        {!isGenerating && !isOnboarding && <ToolsetControls />}
+        {!isGenerating && !isOnboarding && !hideToolsetControls && <ToolsetControls />}
 
         {/* Thinking mode toggle - always show full label, no expansion */}
         {!isGenerating && !isOnboarding && (

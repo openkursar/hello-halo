@@ -22,7 +22,8 @@ import { buildCreationTimeServers } from './toolsets/broker'
 import { buildToolsetSection } from './toolsets/capability-index'
 // The toolset broker (above) supplies AI Browser / web-search / apps as
 // on-demand toolsets; only the knowledge-base helpers are still called directly.
-import { getKBReferencesForSpace, getKBReferenceById, getKBChatContext } from '../tlon'
+import { getKBChatContext } from '../tlon'
+import { resolveConversationKnowledgeBases, resolveConversationKnowledgeBaseIds } from './knowledge-context'
 import type {
   AgentRequest,
 } from './types'
@@ -37,6 +38,7 @@ import {
   getOrCreateV2Session,
   closeV2Session,
   updateConsumerDisplayModel,
+  markTurnDispatched,
 } from './session-manager'
 import {
   formatCanvasContext,
@@ -120,26 +122,31 @@ export async function sendMessage(
 
     // Creation-time MCP servers: external process-based servers (user-installed
     // apps) plus the complete in-process set (always-on web-search / halo-apps,
-    // broker meta tools, and currently-enabled toolsets). All engines seed at
-    // creation; a toolset toggle rebuilds the session so the new set is picked up.
-    const dbMcpServers = getDbMcpServers(spaceId)
-    const mcpServers: Record<string, any> = dbMcpServers ? { ...dbMcpServers } : {}
-    Object.assign(mcpServers, buildCreationTimeServers({ spaceId, conversationId, workDir }))
-
-    // Knowledge bases injected into the system prompt so the agent can Grep/Read
-    // the listed document corpus. For a KB-chat turn it's just the targeted KB;
-    // otherwise it's the union of KBs bound to this space and KBs loaded into
-    // THIS conversation (deduped by id).
-    let knowledgeBases = kbChatCtx ? [kbChatCtx.reference] : getKBReferencesForSpace(spaceId)
-    if (!kbChatCtx && conversation?.knowledgeBaseIds?.length) {
-      const byId = new Map(knowledgeBases.map(ref => [ref.id, ref]))
-      for (const kbId of conversation.knowledgeBaseIds) {
-        if (byId.has(kbId)) continue
-        const ref = getKBReferenceById(kbId)
-        if (ref) byId.set(kbId, ref)
-      }
-      knowledgeBases = Array.from(byId.values())
+    // broker meta tools, and currently-enabled toolsets). Assembled lazily by
+    // getOrCreateV2Session only when a session is actually created — in-process
+    // instances bind to one session, so instantiating them before the
+    // reuse/rebuild decision would hand a rebuilt session dead instances.
+    const buildMcpServers = (): Record<string, unknown> | null => {
+      const dbMcpServers = getDbMcpServers(spaceId)
+      const record: Record<string, unknown> = dbMcpServers ? { ...dbMcpServers } : {}
+      Object.assign(record, buildCreationTimeServers({ spaceId, conversationId, workDir }))
+      return Object.keys(record).length > 0 ? record : null
     }
+
+    // Knowledge context for the session. A KB-chat turn targets just its KB; a
+    // normal turn uses the conversation's own knowledge set — snapshotted at
+    // creation from the space's bindings plus the default KB
+    // (conversation.service), then user-editable per conversation. Must match
+    // ensureSessionWarm exactly so a warmed session isn't reused without the
+    // Knowledge section on the first turn. Ids are resolved cheaply for the
+    // per-message fingerprint; the index.md reads happen only if a session is
+    // actually created (resolveKnowledgeBases, invoked by getOrCreateV2Session).
+    const resolvedKbIds = kbChatCtx
+      ? [kbChatCtx.reference.id]
+      : resolveConversationKnowledgeBaseIds(conversation)
+    const resolveKnowledgeBases = () => kbChatCtx
+      ? [kbChatCtx.reference]
+      : resolveConversationKnowledgeBases(conversation)
 
     // Build base SDK options
     const sdkOptions = buildBaseSdkOptions({
@@ -148,12 +155,10 @@ export async function sendMessage(
       electronPath,
       spaceId,
       conversationId,
-      knowledgeBases,
       stderrHandler: (data: string) => {
         console.error(`[Agent][${conversationId}] CLI stderr:`, data)
         stderrBuffer += data
       },
-      mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : null,
       maxTurns: config.agent?.maxTurns,
       promptProfile: config.agent?.promptProfile,
       configDirMode: config.agent?.configDirMode,
@@ -176,7 +181,10 @@ export async function sendMessage(
     const v2Session = await getOrCreateV2Session(
       spaceId, conversationId, sdkOptions, sessionId, workDir,
       resolvedCredentials.displayModel,  // Passed to consumer for thought parsing
-      resolvedCredentials.capabilities?.contextWindow
+      resolvedCredentials.capabilities?.contextWindow,
+      resolvedKbIds,
+      buildMcpServers,
+      resolveKnowledgeBases
     )
 
     sessionObtained = true
@@ -206,7 +214,10 @@ export async function sendMessage(
     const messageWithContext = canvasPrefix + message
     const messageContent = buildMessageContent(messageWithContext, images)
 
-    // Send to CC's REPL — consumer handles the response
+    // Send to CC's REPL — consumer handles the response. Mark the dispatch
+    // BEFORE send: from here until system:init the consumer looks idle, and an
+    // unguarded rebuild in that window would destroy this message.
+    markTurnDispatched(conversationId)
     if (typeof messageContent === 'string') {
       v2Session.send(messageContent)
     } else {
@@ -242,7 +253,7 @@ export async function sendMessage(
                           errorMessage.includes('ENOENT')
 
       if (isExitCode1 || isBashError) {
-        const { detectGitBash } = require('../git-bash.service')
+        const { detectGitBash } = require('../git-bash')
         const gitBashStatus = detectGitBash()
         errorMessage = !gitBashStatus.found
           ? 'Command execution environment not installed. Please restart the app and complete setup, or install manually in settings.'

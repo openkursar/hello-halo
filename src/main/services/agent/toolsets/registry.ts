@@ -15,6 +15,7 @@ import {
   isTerminalAvailable,
   AI_TERMINAL_SYSTEM_PROMPT
 } from '../../ai-terminal'
+import { createOcrMcpServer } from '../../ocr'
 import type { ToolsetDefinition, ToolsetScope } from './types'
 
 const definitions: ToolsetDefinition[] = []
@@ -63,4 +64,19 @@ registerToolset({
       spaceId: scope.spaceId,
       workDir: scope.workDir
     })
+})
+
+registerToolset({
+  id: 'ocr',
+  displayName: 'Text Extraction (OCR)',
+  summary: 'Extract text from local images on-device (zero token): batch screenshots/scans, verbatim extraction, or reading images when the model has no vision.',
+  usageGuide:
+    'The `ocr_image` tool extracts text from local image files by path using an on-device engine ' +
+    '(English + Simplified Chinese), consuming zero model tokens and never uploading image content. ' +
+    'Prefer it over attaching images when the task is reading text — especially for many images at once, ' +
+    'for verbatim/character-accurate extraction, or when the current model lacks vision. ' +
+    'It extracts text only; to interpret what an image depicts, attach the image to a vision model instead. ' +
+    'Chinese recognition is serviceable but not exact.',
+  isAvailable: () => true,
+  createServer: () => createOcrMcpServer()
 })

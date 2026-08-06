@@ -49,8 +49,10 @@ import { FileWatcherSource } from './sources/file-watcher.source'
 import { WebhookSource, type WebhookSecretResolver } from './sources/webhook.source'
 import { ImChannelManager, WecomBotProvider, WeixinIlinkBotProvider, setActiveImChannelManager } from './im-channels'
 import { ImSessionRegistry, setImSessionRegistry } from './im-session-registry'
+import { PendingRelayStore, setPendingRelayStore, getPendingRelayStore } from './pending-relays'
 import { dispatchInboundMessage, clearSupplementBuffersForInstance } from './dispatch-inbound'
 import { clearAllImPermissionContexts } from './im-permission-registry'
+import { clearAllImStreamHandles } from './im-stream-registry'
 import { getConfig } from '../../foundation/config.service'
 import { getDataFolderName } from '../../foundation/product-config'
 import { getAppManager } from '../manager'
@@ -106,6 +108,7 @@ export {
   cleanupAppChatBrowserContext,
   clearAppChat,
   clearImSession,
+  stopImSession,
   restartAppChat,
   createNativeChatSession,
   forkNativeChatSession,
@@ -124,6 +127,14 @@ export {
   clearAllImPermissionContexts,
 } from './im-permission-registry'
 export type { ImPermissionContext } from './im-permission-registry'
+
+// Re-export IM stream registry
+export {
+  setImStreamHandle,
+  getImStreamHandle,
+  clearImStreamHandle,
+  clearAllImStreamHandles,
+} from './im-stream-registry'
 
 // Re-export IM session registry accessor
 export { getImSessionRegistry } from './im-session-registry'
@@ -262,6 +273,12 @@ export async function initAppRuntime(
   const registry = new ImSessionRegistry(registryPath)
   setImSessionRegistry(registry)
   imSessionRegistryInstance = registry
+
+  // ── Pending Relay Spool ─────────────────────────────────────────────
+  // Records notify_bot pushes against their target sessions so the target's
+  // AI regains awareness of them on its next inbound message.
+  const relaySpoolPath = join(homedir(), `.${getDataFolderName()}`, 'im-pending-relays.json')
+  setPendingRelayStore(new PendingRelayStore(relaySpoolPath))
 
   // ── IM Channel Manager (multi-instance) ─────────────────────────────
   // Manages all IM channel instances (WeCom Bot, Feishu Bot, DingTalk Bot, etc.)
@@ -412,8 +429,17 @@ export async function shutdownAppRuntime(): Promise<void> {
   activityStoreRef = null
   setImSessionRegistry(null as any)
 
+  // Flush synchronously: a relay recorded seconds before exit must survive,
+  // since its target may not send another message for weeks.
+  getPendingRelayStore()?.flush()
+  setPendingRelayStore(null)
+
   // Clear all IM permission contexts (in-memory only, no persistence needed)
   clearAllImPermissionContexts()
+
+  // Drop any in-flight IM stream handles so a post-shutdown stopImSession
+  // call cannot reach a disposed WecomStreamSession.
+  clearAllImStreamHandles()
 
   console.log('[Runtime] App Runtime shutdown complete')
 }

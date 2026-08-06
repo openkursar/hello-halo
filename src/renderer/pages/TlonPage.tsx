@@ -17,7 +17,7 @@ import { KBList } from '../components/tlon/KBList'
 import { KBDetail } from '../components/tlon/KBDetail'
 import { CreateKBDialog } from '../components/tlon/CreateKBDialog'
 import { EmptyState } from '../components/tlon/EmptyState'
-import { ContentCanvas } from '../components/canvas'
+import { ContentCanvas, TerminalCloseGuard } from '../components/canvas'
 import { useCanvasIsOpen } from '../stores/canvas.store'
 
 export function TlonPage() {
@@ -212,6 +212,11 @@ export function TlonPage() {
           <ContentCanvas className="h-full" />
         </div>
       )}
+
+      {/* Terminal close policy for canvas terminals opened from KB chat — same
+          guard SpacePage mounts; without it a terminal tab close here would
+          bypass the keep-vs-terminate decision. */}
+      <TerminalCloseGuard />
     </div>
   )
 }

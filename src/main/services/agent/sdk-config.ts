@@ -25,7 +25,6 @@ import {
   CONTEXT_WINDOW_HARD_MIN,
   CONTEXT_WINDOW_HARD_CAP,
 } from '../../../shared/constants/model-runtime-limits'
-import type { KBReference } from '../../../shared/types/tlon'
 
 // ============================================
 // Configuration
@@ -212,8 +211,6 @@ export interface BaseSdkOptionsParams {
    * override systemPrompt entirely after this builder returns.
    */
   toolsetIndex?: string
-  /** Knowledge bases bound to this session's space (Tlon) */
-  knowledgeBases?: KBReference[]
 }
 
 // ============================================
@@ -344,6 +341,48 @@ export function computeCredentialsFingerprint(sdkOptions: Record<string, any>): 
     String(env.ANTHROPIC_BASE_URL ?? ''),
     keyIdentity,
   ].join('|')
+  return createHash('sha256').update(material).digest('hex').slice(0, 16)
+}
+
+/**
+ * Fingerprint the session-defining inputs a caller bakes into sdkOptions up
+ * front: the system prompt plus the set of MCP server names. These are frozen at
+ * session creation and are NOT covered by the credentials or knowledge
+ * fingerprints, so without this a live session whose tool set / prompt changed
+ * (e.g. the user toggled a digital human's AI Browser permission, edited its
+ * prompt, or changed a config value) would be silently reused with the stale
+ * wiring — the change would appear to "not take effect" until a manual restart.
+ *
+ * The MCP set is fingerprinted by server NAME only: the in-process SDK server
+ * objects are rebuilt on every call, so their identity is meaningless; only which
+ * servers are present matters. Callers that build MCP servers lazily (main chat)
+ * must not use this — they have no eager mcpServers here and drive toolset changes
+ * through their own rebuild path.
+ *
+ * The guest permission envelope (permissionMode, the disallowedTools blacklist,
+ * and the dangerously-skip-permissions extra arg) is part of the fingerprint so
+ * that on a shared conversationId that alternates owner and guest senders, a
+ * guest turn cannot reuse the owner's bypassPermissions session: the differing
+ * permission fields force a rebuild with the guest's restricted wiring.
+ *
+ * INVARIANT: every fingerprinted input must be stable across consecutive sends.
+ * The system prompt currently varies only by calendar day (one rebuild per day
+ * is acceptable); injecting anything higher-frequency into it — precise
+ * timestamps, live memory content, per-message state — would degrade this into
+ * a session rebuild on EVERY message. Keep such content out of the prompt, or
+ * exclude it here.
+ */
+export function computeSessionInputsFingerprint(sdkOptions: Record<string, any>): string {
+  const mcpKeys = Object.keys(sdkOptions.mcpServers ?? {}).sort().join(',')
+  const prompt = typeof sdkOptions.systemPrompt === 'string' ? sdkOptions.systemPrompt : ''
+  const permissionMode = String(sdkOptions.permissionMode ?? '')
+  const disallowed = Array.isArray(sdkOptions.disallowedTools)
+    ? [...sdkOptions.disallowedTools].sort().join(',')
+    : ''
+  const skipPermissions = sdkOptions.extraArgs
+    ? String(sdkOptions.extraArgs['dangerously-skip-permissions'] ?? '')
+    : ''
+  const material = [mcpKeys, prompt, permissionMode, disallowed, skipPermissions].join('\u0000')
   return createHash('sha256').update(material).digest('hex').slice(0, 16)
 }
 
@@ -546,7 +585,7 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
       return injected
     })(),
 
-    // Windows: pass through Git Bash path (set by git-bash.service during startup)
+    // Windows: pass through Git Bash path (set by the git-bash module during startup)
     // This was stripped by getCleanUserEnv() along with all CLAUDE_* vars
     ...(process.env.CLAUDE_CODE_GIT_BASH_PATH
       ? { CLAUDE_CODE_GIT_BASH_PATH: process.env.CLAUDE_CODE_GIT_BASH_PATH }
@@ -709,15 +748,15 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
     // The capability index advertises optional toolsets (agent/toolsets) the AI
     // can ask the user to enable; full tool schemas enter context only once the
     // toolset is enabled and the session is rebuilt. AI Browser is one such
-    // on-demand toolset here, so no aiBrowserEnabled branch. Knowledge bases are
-    // injected into the same prompt.
+    // on-demand toolset here, so no aiBrowserEnabled branch. The Knowledge
+    // section is appended at actual session creation (getOrCreateV2Session's
+    // resolveKnowledgeBases) so a reused session never pays the index reads.
     systemPrompt: buildSystemPrompt({
       workDir,
       modelInfo: credentials.displayModel,
       promptProfile: params.promptProfile,
       digitalHumansEnabled: params.digitalHumansEnabled,
-      toolsetIndex: params.toolsetIndex,
-      knowledgeBases: params.knowledgeBases
+      toolsetIndex: params.toolsetIndex
     }),
     maxTurns: params.maxTurns ?? 50,
     allowedTools: [...DEFAULT_ALLOWED_TOOLS],

@@ -1,17 +1,16 @@
 /**
  * ToolsetControls — input-toolbar surface for the on-demand toolset broker.
  *
- * Two coordinated pieces (ChatGPT-style):
- *  - Activation pills: one per OPEN toolset, click to close. AI-opened toolsets
- *    pulse briefly so the user notices the model turned a capability on.
- *  - Catalog menu: a "Tools" button opening the full toolset list with plain
- *    switches. Default (closed) reads "AI turns this on when needed" — there is
- *    no third "disabled" state; the switch is a simple on/off status + manual
- *    override, and the user can always instruct the AI in plain language.
+ * A single "Tools" button opens a catalog of toolsets, each a plain on/off
+ * switch with a one-line capability description. Enabled toolsets are surfaced
+ * on the button itself (tinted + their icons inline) instead of separate pills,
+ * so the toolbar stays compact as toolsets grow. The AI cannot flip a switch
+ * itself; when it needs a capability it calls request_toolset, which pulse-
+ * highlights that switch (aiRequested) and pops this menu open.
  */
 
 import { useEffect, useState } from 'react'
-import { SlidersHorizontal, Globe, TerminalSquare, X } from 'lucide-react'
+import { SlidersHorizontal, Globe, TerminalSquare, ScanText } from 'lucide-react'
 import { useToolsetsStore, type ToolsetStatus } from '../../stores/toolsets.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useSpaceStore } from '../../stores/space.store'
@@ -25,6 +24,8 @@ function toolsetIcon(id: string, size = 15) {
       return <Globe size={size} />
     case 'ai-terminal':
       return <TerminalSquare size={size} />
+    case 'ocr':
+      return <ScanText size={size} />
     default:
       return <SlidersHorizontal size={size} />
   }
@@ -41,8 +42,28 @@ function toolsetLabel(t: (key: string) => string, ts: ToolsetStatus): string {
       return t('Web Control')
     case 'ai-terminal':
       return t('Terminal')
+    case 'ocr':
+      return t('Text Extraction (OCR)')
     default:
       return ts.displayName
+  }
+}
+
+/**
+ * One-line capability description shown under each switch. Describes what
+ * enabling grants the AI (literal t('...') so the extractor sees the keys);
+ * falls back to the registry summary for any toolset not listed here.
+ */
+function toolsetDescription(t: (key: string) => string, ts: ToolsetStatus): string {
+  switch (ts.id) {
+    case 'ai-browser':
+      return t('Let AI control your browser')
+    case 'ai-terminal':
+      return t('Let AI use interactive terminals')
+    case 'ocr':
+      return t('Let AI read text from images')
+    default:
+      return ts.summary
   }
 }
 
@@ -116,14 +137,25 @@ export function ToolsetControls() {
       <Popover open={menuOpen} onOpenChange={setMenuOpen}>
         <PopoverTrigger
           title={t('Tools')}
-          className={`h-8 shrink-0 items-center gap-1.5 px-2.5 rounded-lg cursor-pointer transition-colors duration-200
-            ${menuOpen
+          className={`h-8 shrink-0 flex items-center gap-1.5 px-2.5 rounded-lg cursor-pointer transition-colors duration-200
+            ${menuOpen || openList.length > 0
               ? 'bg-primary/10 text-primary'
               : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50'
             }`}
         >
           <SlidersHorizontal size={15} />
           <span className="text-xs">{t('Tools')}</span>
+          {/* Enabled toolsets surfaced inline (icons only) — keeps the toolbar
+              compact instead of rendering a separate pill per open toolset. */}
+          {openList.length > 0 && (
+            <span className="flex items-center gap-1 pl-1.5 ml-0.5 border-l border-primary/25">
+              {openList.map((ts) => (
+                <span key={ts.id} className="inline-flex" title={toolsetLabel(t, ts)}>
+                  {toolsetIcon(ts.id, 14)}
+                </span>
+              ))}
+            </span>
+          )}
         </PopoverTrigger>
 
         <PopoverContent side="top" align="start" sideOffset={8} className="py-1.5 rounded-xl min-w-[260px]">
@@ -138,7 +170,7 @@ export function ToolsetControls() {
               <span className="flex-1 min-w-0">
                 <span className="block text-sm text-foreground">{toolsetLabel(t, ts)}</span>
                 <span className="block text-xs text-muted-foreground/70 truncate">
-                  {ts.open ? t('On') : t('AI turns this on when needed')}
+                  {toolsetDescription(t, ts)}
                 </span>
               </span>
               {/* Switch */}
@@ -155,23 +187,6 @@ export function ToolsetControls() {
           ))}
         </PopoverContent>
       </Popover>
-
-      {/* Activation pills for open toolsets */}
-      {openList.map((ts) => {
-        return (
-          <button
-            key={ts.id}
-            onClick={() => void closeToolset(spaceId, conversationId, ts.id)}
-            className="h-8 shrink-0 flex items-center gap-1.5 pl-2.5 pr-2 rounded-lg bg-primary/10 text-primary
-              transition-colors duration-200 hover:bg-primary/20 group relative"
-            title={t('Click to turn off')}
-          >
-            {toolsetIcon(ts.id)}
-            <span className="text-xs">{toolsetLabel(t, ts)}</span>
-            <X size={13} className="opacity-60 group-hover:opacity-100" />
-          </button>
-        )
-      })}
     </div>
   )
 }

@@ -116,6 +116,24 @@ connection probe on `installed`/`reinstalled`/`resumed`/`updated`/`status`
 `service.ts` must pass the change details; `change` stays optional only so
 space-level handlers can ignore it.
 
+### 2.6b Applying an App's Own Config Changes to Its Chat
+
+**Decision**: The manager emits no event for this. Changing permissions, user
+config, or a spec field is a plain store write.
+
+**Rationale**: A chat session's defining inputs (system prompt, MCP server set,
+guest permission envelope) are fingerprinted at creation and re-checked on every
+send (`computeSessionInputsFingerprint`, `services/agent/session-manager.ts`).
+A session whose inputs no longer match is torn down and rebuilt before the
+message is dispatched, so a config change lands on the next message with nobody
+notifying anybody. That path is declarative and self-healing; a parallel
+manager→runtime notification would be a second, weaker answer to the same
+question, able only to duplicate what the fingerprint already guarantees.
+
+Interrupting an in-flight turn is a separate and explicitly manual concern —
+`restartAppChat(appId, { interruptActive: true })`, reachable only from the
+"Restart agent" IPC/HTTP path.
+
 ### 2.7 Migration Namespace
 
 **Decision**: Use `'app_manager'` as the migration namespace.

@@ -11,6 +11,7 @@
 
 import { useTerminalStore } from '../stores/terminal.store'
 import { useAIBrowserStore } from '../stores/ai-browser.store'
+import { useSpaceStore } from '../stores/space.store'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
 import { api } from '../api'
 import { useTranslation } from '../i18n'
@@ -45,6 +46,12 @@ export function useLiveSessions(): LiveSessionsApi {
   const openTerminalInCanvas = useTerminalStore(s => s.openInCanvas)
   const killTerminalSession = useTerminalStore(s => s.killSession)
 
+  // The terminal registry is process-global (all spaces), but the tray belongs
+  // to the space you're in — an AI terminal kept alive in another space must not
+  // leak into this one's tray (it reappears when you return). Browser stays as
+  // the single active view (destroyed on space switch), so it needs no filter.
+  const currentSpaceId = useSpaceStore(s => s.currentSpace?.id)
+
   // AI browser: the interactive singleton drives one active view at a time.
   // Its lifecycle (active-view / view-gone) is reflected in the store, keyed to
   // the exact viewId — the same identity used to reveal the live view.
@@ -54,11 +61,13 @@ export function useLiveSessions(): LiveSessionsApi {
   const aiOperating = useAIBrowserStore(s => s.isOperating)
   const aiLastActivityAt = useAIBrowserStore(s => s.lastActivityAt)
 
-  // Terminal source: AI-owned running sessions only. User-opened terminals are
-  // already represented by their own Canvas tab; the tray surfaces autonomous
-  // AI work, not the user's own sessions.
+  // Terminal source: every running session the AI has operated (aiTouched),
+  // whoever opened it. A user terminal the AI later drove can outlive its
+  // closed tab, so the tray is where it stays perceivable and stoppable. A pure
+  // user terminal the AI never touched is closed with its tab and never lands
+  // here.
   const terminalSessions: LiveSession[] = [...terminalSessionsMap.values()]
-    .filter(s => s.state === 'running' && s.owner === 'ai')
+    .filter(s => s.state === 'running' && s.aiTouched && s.spaceId === currentSpaceId)
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
     .map(s => ({
       id: s.id,

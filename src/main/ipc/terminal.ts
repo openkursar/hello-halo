@@ -17,16 +17,23 @@ import {
   killTerminal,
   getTerminalReplay,
   createTerminalForUser,
+  terminalViewerAttach,
+  terminalViewerDetach,
+  terminalViewerAck,
+  terminalViewerDisconnected,
   onTerminalData,
   onTerminalLifecycle
 } from '../services/ai-terminal'
 import { getWorkingDir } from '../services/agent'
-import { getMainWindow } from '../foundation/window.service'
+import { getMainWindow, onMainWindowChange } from '../foundation/window.service'
 import { broadcastToAll } from '../http/websocket'
 import { terminalRpc } from '../../shared/rpc/contracts/terminal.contract'
 import { registerRawRpcHandlers } from './rpc'
 
 const subscriptions: Array<() => void> = []
+
+/** Flow-control viewer id for the (single) desktop window's terminal tabs. */
+const DESKTOP_VIEWER_ID = 'desktop'
 
 export function registerTerminalHandlers(): void {
   // ============================================
@@ -56,6 +63,20 @@ export function registerTerminalHandlers(): void {
     forward('terminal:lifecycle', e as unknown as Record<string, unknown>)
   }))
 
+  // A renderer that reloads or crashes never runs its React cleanups, so its
+  // viewer attachments leak and keep gating flow control — a paused pty would
+  // then stay paused forever (no viewer left to ack). Force-detach the desktop
+  // viewer whenever its webContents goes away, mirroring the WS client
+  // disconnect handling in http/websocket.ts.
+  const releaseDesktopViewer = (): void => terminalViewerDisconnected(DESKTOP_VIEWER_ID)
+  subscriptions.push(onMainWindowChange((window) => {
+    // Window replaced or cleared: any attachments of the old renderer are dead.
+    releaseDesktopViewer()
+    if (!window) return
+    window.webContents.on('did-navigate', releaseDesktopViewer)
+    window.webContents.on('render-process-gone', releaseDesktopViewer)
+  }))
+
   // ============================================
   // Request/Response
   // ============================================
@@ -72,7 +93,7 @@ export function registerTerminalHandlers(): void {
     createTerminal: async (data: { spaceId: string; shell?: string; cwd?: string; title?: string }) => {
       try {
         const workDir = getWorkingDir(data.spaceId)
-        const result = createTerminalForUser(data.spaceId, workDir, { shell: data.shell, cwd: data.cwd, title: data.title })
+        const result = await createTerminalForUser(data.spaceId, workDir, { shell: data.shell, cwd: data.cwd, title: data.title })
         return result.ok ? { success: true, data: result.info } : { success: false, error: result.error }
       } catch (error) {
         return { success: false, error: (error as Error).message }
@@ -95,8 +116,26 @@ export function registerTerminalHandlers(): void {
     },
 
     getTerminalReplay: async (data: { sessionId: string }) => {
-      const replay = getTerminalReplay(data.sessionId)
+      const replay = await getTerminalReplay(data.sessionId)
       return replay ? { success: true, data: replay } : { success: false, error: 'No such terminal session' }
+    },
+
+    // Desktop viewer flow control. The desktop app has a single window, so one
+    // fixed viewer id suffices; remote WS clients register per-client ids in
+    // http/websocket.ts.
+    terminalAttach: async (data: { sessionId: string }) => {
+      const ok = terminalViewerAttach(data.sessionId, DESKTOP_VIEWER_ID)
+      return ok ? { success: true } : { success: false, error: 'No such terminal session' }
+    },
+
+    terminalDetach: async (data: { sessionId: string }) => {
+      terminalViewerDetach(data.sessionId, DESKTOP_VIEWER_ID)
+      return { success: true }
+    },
+
+    terminalAck: async (data: { sessionId: string; charCount: number }) => {
+      terminalViewerAck(data.sessionId, DESKTOP_VIEWER_ID, Number(data.charCount))
+      return { success: true }
     },
   })
 }
