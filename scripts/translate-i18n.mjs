@@ -191,10 +191,19 @@ ${JSON.stringify(texts, null, 2)}
 \`\`\`
 `
 
+  // HALO_TEST_API_URL may be either an origin/base or an already-complete
+  // endpoint (e.g. Zhipu's .../paas/v4/chat/completions, whose path segment is
+  // not /v1). Only append the default path when it is a base, otherwise the
+  // request 404s on a doubled path.
+  const endpointFor = (defaultPath) =>
+    /\/(chat\/completions|messages)\/?$/.test(apiUrl)
+      ? apiUrl.replace(/\/$/, '')
+      : `${apiUrl.replace(/\/$/, '')}${defaultPath}`
+
   let response
   if (apiFormat === 'anthropic') {
     // Anthropic Messages API
-    response = await fetch(`${apiUrl}/v1/messages`, {
+    response = await fetch(endpointFor('/v1/messages'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -209,7 +218,7 @@ ${JSON.stringify(texts, null, 2)}
     })
   } else {
     // OpenAI Chat Completions API (compatible with OpenAI, DeepSeek, Moonshot, etc.)
-    response = await fetch(`${apiUrl}/v1/chat/completions`, {
+    response = await fetch(endpointFor('/v1/chat/completions'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

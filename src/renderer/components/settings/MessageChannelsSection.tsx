@@ -930,7 +930,7 @@ function PermissionSection({ instance, onChange, onDebouncedChange, permissionDe
       )}
       {!permissionDefaults?.defaultEnabled && permissionEnabled && (
         <p className="text-xs text-muted-foreground/70 pl-0.5">
-          {t('Permission control is off by default in this build — you have turned it on. Make sure an Owner is set below, otherwise all users are chat-only.')}
+          {t('Permission control is off by default in this build — you have turned it on. Set an Owner below; until one is set, the first user to direct-message this bot is bound as the owner.')}
         </p>
       )}
 
@@ -949,7 +949,7 @@ function PermissionSection({ instance, onChange, onDebouncedChange, permissionDe
               value={ownersDisplay}
               onChange={(e) => handleOwnersChange(e.target.value)}
               onBlur={handleOwnersBlur}
-              placeholder={permissionDefaults?.ownerIdHint || t('e.g. flywang, johndoe — ask the bot "what is my user ID" to look it up')}
+              placeholder={permissionDefaults?.ownerIdHint || t('e.g. zhangsan, johndoe — ask the bot "what is my user ID" to look it up')}
               rows={2}
               className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
             />
@@ -966,7 +966,7 @@ function PermissionSection({ instance, onChange, onDebouncedChange, permissionDe
             <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2">
               <MessageSquare className="w-4 h-4 text-amber-500 shrink-0" />
               <p className="text-xs text-amber-600 dark:text-amber-400">
-                {t('No Owner IDs set. Send any direct message to this bot and your user ID will be registered as the owner automatically. Until then, all users are non-owners and can only chat — no tool access.')}
+                {t('No Owner IDs set. The first user to send this bot a direct message is bound as the owner automatically — enter your own ID above to claim it first. Until then, all users are non-owners and can only chat — no tool access.')}
               </p>
             </div>
           )}
