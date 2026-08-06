@@ -207,19 +207,27 @@ func (h *Hub) handleFederation(s *session.Session, env *wire.Envelope) {
 		s.SendGwError(wire.CodeMalformed, "officeId does not match session office")
 		return
 	}
-	// Edge assertion (§9.1): a frame carrying fromNode must match the proven
+	r := h.roomFor(s.OfficeID())
+	isHost := r.isHost(s)
+
+	// Edge assertion (§9.1): a MEMBER frame carrying fromNode must match the proven
 	// session identity; violations are dropped and counted. Many frame kinds
-	// (join-grant, stream-frames, turn-complete, roster, ...) carry no
-	// fromNode — absence skips the assertion.
-	if hdr.FromNode != "" && hdr.FromNode != s.IdentityID() {
+	// (join-grant, stream-frames, turn-complete, roster, ...) carry no fromNode —
+	// absence skips the assertion.
+	//
+	// The HOST is the office's trusted relay hub (the star centre) and is exempt: it
+	// legitimately forwards frames on behalf of members whose payload keeps the
+	// ORIGINAL requester's fromNode (history/artifact fetch preserves it for the
+	// scope seam), which is never the host's own identity. One pinned host identity
+	// per room means this exemption widens no member's authority.
+	if !isHost && hdr.FromNode != "" && hdr.FromNode != s.IdentityID() {
 		h.metrics.FramesRejectedTotal.Add(1)
 		h.log.Warn("dropping frame with spoofed fromNode",
 			"session", s.IdentityID(), "claimed", hdr.FromNode)
 		return
 	}
 
-	r := h.roomFor(s.OfficeID())
-	if r.isHost(s) {
+	if isHost {
 		r.routeFromHost(s, &hdr, env)
 	} else {
 		r.routeFromMember(s, &hdr, env)

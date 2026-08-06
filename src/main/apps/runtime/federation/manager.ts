@@ -51,7 +51,7 @@ import {
 import { createCtrlFeed, type CtrlFeed } from './ctrl-feed'
 import { createSessionFeed, historyCacheKey, isSessionFeedFrame, type SessionFeed } from './session-feed'
 import { isFeedSyncFrame, type FeedSyncFrame } from './log/types'
-import { getFeedStore, type AuthorityStore } from '../../federation'
+import { getFeedStore, type AuthorityStore, type FeedStore } from '../../federation'
 import { SELF_NODE_ID, type TeamMemberRuntimeStatus } from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 import type {
@@ -228,6 +228,13 @@ export interface FederationManagerDeps {
   // ── M2 authority/replication/resilience (all optional; absent → M1b behaviour) ──
   /** Durable replication log + tenure water marks (app_federation). Enables M2. */
   authorityStore?: AuthorityStore
+  /**
+   * Per-node feed store backing the ctrl/session feed planes. Injected like its
+   * sibling stores; absent → the process-global `getFeedStore()` singleton (the
+   * production wiring). A multi-node in-process bench injects one store per node
+   * so each node's feed outbox/cursors stay isolated.
+   */
+  feedStore?: FeedStore
   /** Apply an admitted member write through the authority's kernel blackboard. */
   applyMemberWrite?: (record: MemberWriteRecord) => void
   /** The office's open run epoch, for post-handover reconciliation. */
@@ -599,6 +606,8 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   // Viewer-side replay: re-fires received activity frames as local agent events
   // (renderer zero-change). Shared across offices; dedup is keyed per-sessionKey.
   const streamReplay: StreamReplay = createStreamReplay()
+  // Feed store: injected per-node (bench) or the process-global singleton (prod).
+  const resolveFeedStore = (): FeedStore | null => deps.feedStore ?? getFeedStore()
   // Transport re-form seam: how a survivor reaches a newly-elected authority.
   const peerDialer: PeerDialer = deps.peerDialer ?? NO_PEER_DIALER
   // Live dialed-peer connections per office (from redialToAuthority). Disposed
@@ -948,7 +957,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
    * are never intercepted by the link's ctrl shim).
    */
   function buildCtrlFeed(officeId: string, link: LanMeshLink): CtrlFeed | undefined {
-    const feedStore = getFeedStore()
+    const feedStore = resolveFeedStore()
     if (!feedStore) return undefined
     const cf = createCtrlFeed({
       officeId,
@@ -987,7 +996,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     link: LanMeshLink,
     servesMirror: () => boolean
   ): SessionFeed | undefined {
-    const feedStore = getFeedStore()
+    const feedStore = resolveFeedStore()
     const readOwnedTranscript = deps.readOwnedTranscript
     if (!feedStore || !readOwnedTranscript) return undefined
     const sf = createSessionFeed({
@@ -1352,6 +1361,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // Reliable ctrl-plane: subscribe to this peer's ctrl feed so its turn-completes
     // are consumed reliably (idempotent — a re-subscribe just replays from cursor).
     entry.ctrlFeed?.subscribePeer(fromNode)
+    // …and the reverse direction: ensure this peer subscribes to OUR ctrl feed so
+    // our wakes reach it even if its one-shot subscribe was lost in transit. Any
+    // inbound frame (a heartbeat suffices) heals it — the always-on primary self-heal.
+    entry.ctrlFeed?.ensurePeerSubscribed(fromNode)
 
     // The host link's inbound entrypoint forwards to the coordinator's handler.
     ;(entry.federation.link as LanMeshLink).deliver(fromNode, frame)
@@ -1396,6 +1409,9 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // Without this, a gateway member's outbox is never served — its replies sit
     // undelivered forever while everything else looks connected.
     entry.ctrlFeed?.subscribePeer(fromNode)
+    // Reverse direction: ensure this relayed peer subscribes to OUR ctrl feed so our
+    // wakes reach it even if its subscribe was lost — heartbeat-driven primary heal.
+    entry.ctrlFeed?.ensurePeerSubscribed(fromNode)
     ;(entry.federation.link as LanMeshLink).deliver(fromNode, frame)
   }
 
@@ -1435,6 +1451,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       }
       // Reliable ctrl-plane from this peer (mirrors the hosted inbound path).
       entry.ctrlFeed?.subscribePeer(peer)
+      // Reverse direction: ensure this peer subscribes to OUR ctrl feed too, so a
+      // wake we author (as elected authority) reaches it even if its subscribe was
+      // lost — mirrors the hosted/gateway inbound heal.
+      entry.ctrlFeed?.ensurePeerSubscribed(peer)
     }
     // Frames without a payload source (feed-sync et al) are attributed to the
     // proven session identity, so feed cursors key on the real peer node.
@@ -2445,7 +2465,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
 
   /** Cached transcript rows above afterSeq, oldest first; corrupt rows skipped. */
   function readHistoryCache(officeId: string, cacheKey: string, afterSeq: number): SerializedHistoryMessage[] {
-    const feedStore = getFeedStore()
+    const feedStore = resolveFeedStore()
     if (!feedStore) return []
     const out: SerializedHistoryMessage[] = []
     for (const row of feedStore.listCache(officeId, cacheKey, afterSeq, 50_000)) {
@@ -2488,7 +2508,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // from the local cache and ask the owner only for the tail beyond it — after
     // an app restart history opens instantly and the network carries a delta.
     const wantSince = params.sinceSeq ?? 0
-    const feedStore = getFeedStore()
+    const feedStore = resolveFeedStore()
     const cacheKey = historyCacheKey(params.ownerNodeId, params.appId, params.epochId)
     const cachedMax = feedStore ? feedStore.getCacheMaxSeq(params.officeId, cacheKey) : 0
     const expectedSpan = cachedMax > wantSince ? cachedMax - wantSince : 0
@@ -2542,7 +2562,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
 
   /** Persist fetched transcript rows into the local replica cache (upsert-idempotent). */
   function writeHistoryCache(officeId: string, cacheKey: string, rows: SerializedHistoryMessage[]): void {
-    const feedStore = getFeedStore()
+    const feedStore = resolveFeedStore()
     if (!feedStore) return
     for (const m of rows) {
       try {

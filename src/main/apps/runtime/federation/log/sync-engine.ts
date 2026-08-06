@@ -47,6 +47,16 @@ export interface FeedProducerDeps {
 export interface FeedProducer {
   /** Register live-push interest and replay the tail from the peer's declared floor. */
   onSubscribe(peer: string, feedKey: string, afterSeq: number): void
+  /**
+   * Register `peer` as a live subscriber of `feedKey` WITHOUT an explicit
+   * feed-subscribe from it — self-heals a subscription whose subscribe frame was
+   * lost while the peer stayed connected (its heartbeat, not its subscribe, is the
+   * trigger). Idempotent: a peer already subscribed is left untouched (the
+   * retransmit backstop owns its catch-up); a newly added peer is streamed the tail
+   * from its persisted cursor, never moved backward. Returns true iff it added a
+   * new subscription (so the caller can log the heal once).
+   */
+  ensureSubscribed(peer: string, feedKey: string): boolean
   /** Advance a peer's delivery watermark and stream the next window. */
   onAck(peer: string, feedKey: string, ackedSeq: number): void
   /** Resend explicit missing ranges. */
@@ -112,6 +122,22 @@ export function createFeedProducer(deps: FeedProducerDeps): FeedProducer {
     // its cursor recovers.
     deps.setPeerCursor(feedKey, peer, afterSeq)
     pushBatch(peer, feedKey, afterSeq)
+  }
+
+  function ensureSubscribed(peer: string, feedKey: string): boolean {
+    let set = subs.get(feedKey)
+    if (!set) {
+      set = new Set()
+      subs.set(feedKey, set)
+    }
+    if (set.has(peer)) return false
+    set.add(peer)
+    // Trust the persisted cursor as the floor (never rewind it) — the peer applies
+    // idempotently by seq, so streaming the tail from what it last acked is safe and
+    // avoids resending an already-applied prefix. A peer with no cursor gets the
+    // full feed from 0.
+    pushBatch(peer, feedKey, deps.getPeerCursor(feedKey, peer))
+    return true
   }
 
   function onAck(peer: string, feedKey: string, ackedSeq: number): void {
@@ -190,6 +216,7 @@ export function createFeedProducer(deps: FeedProducerDeps): FeedProducer {
 
   return {
     onSubscribe,
+    ensureSubscribed,
     onAck,
     onNack,
     notifyAppended,
@@ -222,12 +249,32 @@ export interface FeedConsumer {
   subscribe(feedKey: string): void
   /** Handle a received batch: order, dedup, apply, ack, and nack any gap. */
   onEntries(frame: FeedEntriesFrame): void
+  /**
+   * Re-send a bounded burst of feed-subscribe frames for feeds subscribed but
+   * from which no batch has yet arrived — self-heals a lost subscribe (the
+   * producer never registered us, so it will never push nor retransmit). Called
+   * off the retransmit tick. Returns the feedKeys re-driven this pass (for the
+   * caller to log the first heal per feed). Stops once a batch arrives OR the
+   * attempt budget is spent (a legitimately-empty feed is not re-driven forever).
+   */
+  resubscribeStale(): string[]
 }
+
+// A lost subscribe is re-driven at most this many ticks before giving up — long
+// enough to ride out a burst of loss, short enough that a feed that is simply
+// empty (author has published nothing) stops re-asking. The producer-side
+// implicit-subscribe (heartbeat-driven) is the always-on primary heal; this is
+// the joiner-side fast secondary.
+const RESUBSCRIBE_MAX_ATTEMPTS = 6
 
 export function createFeedConsumer(deps: FeedConsumerDeps): FeedConsumer {
   const pendingMax = deps.pendingMax ?? 8192
   // feedKey -> out-of-order buffer (seq -> entry) awaiting a contiguous run.
   const pending = new Map<string, Map<number, FeedEntry>>()
+  // feedKey -> remaining re-drive attempts. Present only while a subscribed feed
+  // has yet to yield its first batch; cleared on the first onEntries or when the
+  // budget is exhausted.
+  const awaitingFirstBatch = new Map<string, number>()
 
   function bufferFor(feedKey: string): Map<number, FeedEntry> {
     let m = pending.get(feedKey)
@@ -238,13 +285,35 @@ export function createFeedConsumer(deps: FeedConsumerDeps): FeedConsumer {
     return m
   }
 
-  function subscribe(feedKey: string): void {
+  function sendSubscribe(feedKey: string): void {
     deps.send({
       kind: 'feed-subscribe',
       officeId: deps.officeId,
       feedKey,
       afterSeq: deps.getLocalCursor(feedKey),
     })
+  }
+
+  function subscribe(feedKey: string): void {
+    // Arm the re-drive budget: if this subscribe (or the producer's registration)
+    // is lost, the retransmit tick re-asks until a batch arrives or the budget is
+    // spent. Re-arming on every subscribe() means a reconnect restarts the window.
+    awaitingFirstBatch.set(feedKey, RESUBSCRIBE_MAX_ATTEMPTS)
+    sendSubscribe(feedKey)
+  }
+
+  function resubscribeStale(): string[] {
+    const redriven: string[] = []
+    for (const [feedKey, remaining] of awaitingFirstBatch) {
+      if (remaining <= 0) {
+        awaitingFirstBatch.delete(feedKey)
+        continue
+      }
+      awaitingFirstBatch.set(feedKey, remaining - 1)
+      sendSubscribe(feedKey)
+      redriven.push(feedKey)
+    }
+    return redriven
   }
 
   /** Missing seq ranges below upToSeq, given the current cursor + buffered seqs. */
@@ -262,6 +331,8 @@ export function createFeedConsumer(deps: FeedConsumerDeps): FeedConsumer {
 
   function onEntries(frame: FeedEntriesFrame): void {
     const { feedKey, upToSeq, more } = frame
+    // A batch arrived ⇒ the producer has us registered; stop the re-drive burst.
+    awaitingFirstBatch.delete(feedKey)
     const buf = bufferFor(feedKey)
     let cursor = deps.getLocalCursor(feedKey)
 
@@ -319,5 +390,5 @@ export function createFeedConsumer(deps: FeedConsumerDeps): FeedConsumer {
     }
   }
 
-  return { subscribe, onEntries }
+  return { subscribe, onEntries, resubscribeStale }
 }

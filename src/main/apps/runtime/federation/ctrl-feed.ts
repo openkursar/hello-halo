@@ -93,6 +93,15 @@ export interface CtrlFeed {
   publishTurnComplete(target: NodeId, correlationId: string, outcome: TurnCompletion): { seq: number }
   /** Start consuming a peer's ctrl feed (subscribe from our persisted watermark). */
   subscribePeer(author: NodeId): void
+  /**
+   * Register `peer` as a subscriber of THIS node's ctrl feed without an explicit
+   * subscribe from it — the producer-side self-heal for a lost subscription,
+   * driven by any inbound frame from an admitted peer (a heartbeat suffices). This
+   * closes the window where a wake sits undelivered forever because the target's
+   * one-shot subscribe never registered while the transport otherwise looked
+   * healthy. Idempotent.
+   */
+  ensurePeerSubscribed(peer: NodeId): void
   /** Route one inbound feed-sync frame from a peer. */
   handleFrame(from: NodeId, frame: FeedSyncFrame): void
   /** Forget a disconnected peer's producer subscriptions. */
@@ -222,10 +231,24 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
     return feedStore.getPeerCursor(officeId, ownFeedKey, peer)
   }
 
+  // Peers whose producer-side self-heal has already been logged (once per peer).
+  const loggedEnsured = new Set<NodeId>()
+
+  function ensurePeerSubscribed(peer: NodeId): void {
+    const added = feed.ensurePeerSubscribed(CTRL_KIND, peer)
+    if (added && !loggedEnsured.has(peer)) {
+      loggedEnsured.add(peer)
+      console.log(
+        `[CtrlFeed] healed subscription office=${officeId} peer=${peer} deliveredUpTo=${deliveredUpTo(peer)}`
+      )
+    }
+  }
+
   return {
     publishWake,
     publishTurnComplete,
     subscribePeer,
+    ensurePeerSubscribed,
     handleFrame: (from, frame) => feed.handleInbound(from, frame),
     dropPeer: (peer) => feed.dropPeer(peer),
     deliveredUpTo,

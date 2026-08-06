@@ -267,6 +267,72 @@ describe.skipIf(!hasGo())('gateway interop (real Go binary)', () => {
     host.close()
   }, 30_000)
 
+  it('forwards a HOST-relayed frame that carries another node fromNode (relay exemption)', async () => {
+    // Regression for the field bug: history/artifact fetch is relayed by the host
+    // one hop to the true owner and PRESERVES the original requester's fromNode
+    // (needed for the scope seam), which is never the host's own identity. The
+    // edge assertion must exempt the trusted host hub, or these relayed frames are
+    // dropped and cross-member history/artifact reads hang. A member is still
+    // constrained (proven by the spoof test above).
+    const officeId = 'office-interop-relay-exempt'
+    const hostId = makeIdentity()
+    const memberId = makeIdentity()
+    const requesterId = makeIdentity() // the original requester, a third node
+
+    const hostInbound: FederationMessage[] = []
+    const host = new GatewayAttachClient({
+      gatewayUrl: baseUrl,
+      officeId,
+      makeAuthProof: (nonce) => makeProof(hostId, nonce),
+      onFrame: (frame) => hostInbound.push(frame),
+      getIdentityId: () => hostId.id,
+      getEndpoints: () => [],
+    })
+    await waitFor(() => host.isAttached())
+
+    const memberInbound: FederationMessage[] = []
+    let memberState = ''
+    const member = new WsFederationClient({
+      serverUrl: baseUrl,
+      credentialToken: 'opaque-invite-token',
+      officeId,
+      makeAuthProof: (nonce) => makeProof(memberId, nonce),
+      onFrame: (frame) => memberInbound.push(frame),
+      onStateChange: (state) => {
+        memberState = state
+      },
+    })
+    await waitFor(() => memberState === 'open')
+
+    member.send({
+      kind: 'join-request',
+      officeId,
+      fromNode: memberId.id,
+      identityId: memberId.id,
+      credentialToken: 'opaque-invite-token',
+      bringMembers: [],
+    })
+    await waitFor(() => hostInbound.some((f) => f.kind === 'join-request'))
+    host.send(memberId.id, { kind: 'join-grant', officeId, assignedNodeId: memberId.id })
+    await waitFor(() => memberInbound.some((f) => f.kind === 'join-grant'))
+
+    // Host relays a frame to the member on behalf of a THIRD node: fromNode is the
+    // requester's, not the host's. (heartbeat is a payload-agnostic stand-in for a
+    // relayed history-request — the gateway only reads kind + fromNode + officeId.)
+    host.send(memberId.id, {
+      kind: 'heartbeat',
+      officeId,
+      fromNode: requesterId.id,
+      ts: Date.now(),
+    })
+    await waitFor(() => memberInbound.some((f) => f.kind === 'heartbeat'))
+    const relayed = memberInbound.find((f) => f.kind === 'heartbeat')!
+    expect((relayed as { fromNode?: string }).fromNode).toBe(requesterId.id)
+
+    member.close()
+    host.close()
+  }, 30_000)
+
   it('presence stays mutually ONLINE across the relay (reproduces the two-machine field test)', async () => {
     // Two REAL federation managers — a host and a joiner — talk exclusively
     // through the real Go gateway, exactly like the two-machine setup. After

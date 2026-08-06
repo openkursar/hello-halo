@@ -58,6 +58,13 @@ export interface FeedService {
   appendLocal(kind: FeedKind, type: string, payload: unknown): FeedEntry
   /** Start consuming a remote author's feed (sends subscribe from our watermark). */
   subscribeRemote(author: NodeId, kind: FeedKind): void
+  /**
+   * Register `peer` as a subscriber of THIS node's own feed of `kind` without an
+   * explicit subscribe from it — the producer-side self-heal for a lost
+   * subscription (driven by any inbound frame, e.g. a heartbeat). Returns true iff
+   * a new subscription was added.
+   */
+  ensurePeerSubscribed(kind: FeedKind, peer: NodeId): boolean
   /** Route one inbound sync frame from a peer. */
   handleInbound(fromNode: NodeId, frame: FeedSyncFrame): void
   /** Forget a disconnected peer's producer subscriptions. */
@@ -103,6 +110,9 @@ export function createFeedService(deps: FeedServiceDeps): FeedService {
   })
 
   let timer: ReturnType<typeof setInterval> | null = null
+  // Feeds whose lost-subscribe self-heal has already been logged (once per feed,
+  // so a persistently-empty feed re-driving its budget does not flood the log).
+  const loggedResubscribe = new Set<string>()
 
   function ownFeedKey(kind: FeedKind): string {
     return feedIdKey({ officeId, author: selfNodeId, kind })
@@ -117,6 +127,10 @@ export function createFeedService(deps: FeedServiceDeps): FeedService {
 
   function subscribeRemote(author: NodeId, kind: FeedKind): void {
     consumer.subscribe(feedIdKey({ officeId, author, kind }))
+  }
+
+  function ensurePeerSubscribed(kind: FeedKind, peer: NodeId): boolean {
+    return producer.ensureSubscribed(peer, ownFeedKey(kind))
   }
 
   function handleInbound(fromNode: NodeId, frame: FeedSyncFrame): void {
@@ -142,6 +156,13 @@ export function createFeedService(deps: FeedServiceDeps): FeedService {
 
   function retransmitTick(): void {
     producer.retransmitTick()
+    // Consumer-side self-heal: re-drive any subscribe that has not yet yielded a
+    // batch (a lost subscribe the producer never registered). Bounded per feed.
+    for (const feedKey of consumer.resubscribeStale()) {
+      if (loggedResubscribe.has(feedKey)) continue
+      loggedResubscribe.add(feedKey)
+      console.log(`[FeedService] re-driving lost subscribe office=${officeId} feed=${feedKey}`)
+    }
     // Bound outbox growth: drop each feed's prefix already acked by every live
     // subscriber. Safe because prune never trims below any subscriber's cursor.
     producer.prune((feedKey, floor) => durableLog.truncate(feedKey, floor))
@@ -165,6 +186,7 @@ export function createFeedService(deps: FeedServiceDeps): FeedService {
   return {
     appendLocal,
     subscribeRemote,
+    ensurePeerSubscribed,
     handleInbound,
     dropPeer,
     retransmitTick,

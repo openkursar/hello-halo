@@ -61,6 +61,17 @@ Persistence lives one tier down in `apps/federation` (`FeedStore` +
   lagging peer is never left with an unfillable gap; seq allocation is anchored to
   the retention floor, so a fully-pruned feed never reuses seq 1. A fully-acked
   outbox shrinks — no unbounded `feed_log` growth.
+- **Subscription self-heal**: a subscription is not a one-shot handshake. If a
+  consumer's `feed-subscribe` is lost while the transport stays up, the producer
+  would never register it and would push/retransmit to no one (the feed's tail
+  sits undelivered while presence/replication look healthy). Two independent heals
+  close this: (1) **producer-side, primary** — `FeedProducer.ensureSubscribed`
+  registers a peer and streams the tail from any inbound signal (the manager wires
+  it to every admitted-peer frame, so a heartbeat suffices), never rewinding the
+  peer cursor; (2) **consumer-side, secondary** — `FeedConsumer.resubscribeStale`
+  re-drives a subscribe that has yielded no batch, bounded per feed so an
+  empty feed is not re-asked forever. Both are idempotent and observable (a
+  one-shot log per peer/feed).
 - **Give-up (ctrl plane)**: a directed wake that its target never acks is not
   retransmitted forever silently. `ctrl-feed` tracks each published wake and
   resolves it either *delivered* (target acked past its seq) or *undeliverable*

@@ -138,6 +138,37 @@ describe('FeedService end-to-end', () => {
     expect(bus.applied.map((e) => e.payload)).toEqual([{ n: 1 }, { n: 2 }, { n: 3 }])
   })
 
+  it('producer heals a lost subscribe via ensurePeerSubscribed (heartbeat-driven)', () => {
+    // Reader subscribes but the subscribe frame is lost — the author never
+    // registers it, so appends are neither pushed nor retransmitted (the exact
+    // production stall: a member joined mid-run, its wakes sat undelivered).
+    bus.dropOnce(AUTHOR, (f) => f.kind === 'feed-subscribe')
+    bus.readerSvc.subscribeRemote(AUTHOR, 'ctrl')
+    bus.authorSvc.appendLocal('ctrl', 'msg', { n: 1 })
+    bus.authorSvc.appendLocal('ctrl', 'msg', { n: 2 })
+    expect(bus.applied).toHaveLength(0)
+
+    // An inbound frame from the reader (a heartbeat, in production) drives the
+    // author to register it and stream the backlog — no subscribe needed.
+    const added = bus.authorSvc.ensurePeerSubscribed('ctrl', READER)
+    expect(added).toBe(true)
+    expect(bus.applied.map((e) => e.payload)).toEqual([{ n: 1 }, { n: 2 }])
+    // Idempotent on later heartbeats.
+    expect(bus.authorSvc.ensurePeerSubscribed('ctrl', READER)).toBe(false)
+  })
+
+  it('consumer heals a lost subscribe via the retransmit tick (resubscribeStale)', () => {
+    bus.dropOnce(AUTHOR, (f) => f.kind === 'feed-subscribe')
+    bus.readerSvc.subscribeRemote(AUTHOR, 'ctrl') // subscribe #1 lost
+    bus.authorSvc.appendLocal('ctrl', 'msg', { n: 1 })
+    expect(bus.applied).toHaveLength(0)
+
+    // The reader's own tick re-drives the subscribe; it now reaches the author,
+    // which registers the reader and streams the backlog.
+    bus.readerSvc.retransmitTick()
+    expect(bus.applied.map((e) => e.payload)).toEqual([{ n: 1 }])
+  })
+
   it('keeps distinct feed kinds independent', () => {
     bus.readerSvc.subscribeRemote(AUTHOR, 'ctrl')
     bus.readerSvc.subscribeRemote(AUTHOR, 'act')

@@ -34,6 +34,8 @@ interface Harness {
   /** Drop the next producer→consumer entries frame whose predicate returns true. */
   dropProducerFrame: (pred: (f: FeedEntriesFrame) => boolean) => void
   failApplyForSeq: (seq: number | null) => void
+  /** Drop the next N consumer→producer feed-subscribe frames (simulate lost subscribe). */
+  dropNextSubscribes: (n: number) => void
 }
 
 function makeHarness(batchMax = 64, pendingMax?: number): Harness {
@@ -42,6 +44,7 @@ function makeHarness(batchMax = 64, pendingMax?: number): Harness {
   const localCursor = new Map<string, number>()
   const applied: FeedEntry[] = []
   let dropPred: ((f: FeedEntriesFrame) => boolean) | null = null
+  let dropSubscribes = 0
   let failSeq: number | null = null
 
   const key = (feedKey: string, peer: string): string => `${feedKey}|${peer}`
@@ -74,8 +77,13 @@ function makeHarness(batchMax = 64, pendingMax?: number): Harness {
     },
     send: (frame) => {
       // Route consumer control frames back to the producer (author = READER's peer).
-      if (frame.kind === 'feed-subscribe') producer.onSubscribe(READER, frame.feedKey, frame.afterSeq)
-      else if (frame.kind === 'feed-ack') producer.onAck(READER, frame.feedKey, frame.ackedSeq)
+      if (frame.kind === 'feed-subscribe') {
+        if (dropSubscribes > 0) {
+          dropSubscribes -= 1 // simulate a lost subscribe the producer never sees
+          return
+        }
+        producer.onSubscribe(READER, frame.feedKey, frame.afterSeq)
+      } else if (frame.kind === 'feed-ack') producer.onAck(READER, frame.feedKey, frame.ackedSeq)
       else if (frame.kind === 'feed-nack') producer.onNack(READER, frame.feedKey, frame.missing)
     },
   })
@@ -102,6 +110,9 @@ function makeHarness(batchMax = 64, pendingMax?: number): Harness {
     },
     failApplyForSeq: (seq) => {
       failSeq = seq
+    },
+    dropNextSubscribes: (n) => {
+      dropSubscribes = n
     },
   }
 }
@@ -265,5 +276,88 @@ describe('feed sync — deferred apply', () => {
     h.producer.retransmitTick() // resend from ack (1) → 2 retries, then 3 flows
     h.appendAuthor({ n: 3 })
     expect(h.applied.map((e) => e.seq)).toEqual([1, 2, 3])
+  })
+})
+
+describe('feed sync — lost-subscribe self-heal', () => {
+  // Regression for the production incident: a member joined mid-run, its one-shot
+  // feed-subscribe never registered at the producer, and every directed entry sat
+  // undelivered for hours while presence/replication/activity all looked healthy.
+  // The two heals below each recover it independently.
+
+  it('producer.ensureSubscribed registers a peer that never sent a subscribe', () => {
+    const h = makeHarness()
+    // Author holds a backlog; the reader never subscribed (its frame was lost), so
+    // nothing has been pushed and the retransmit backstop has no one to resend to.
+    h.appendAuthor({ n: 1 })
+    h.appendAuthor({ n: 2 })
+    expect(h.applied).toHaveLength(0)
+
+    // The always-on primary heal: an inbound frame (e.g. a heartbeat) drives the
+    // producer to register the peer and stream the tail — no subscribe required.
+    const added = h.producer.ensureSubscribed(READER, FEED)
+    expect(added).toBe(true)
+    expect(h.applied.map((e) => e.seq)).toEqual([1, 2])
+
+    // Idempotent: a second call is a no-op (retransmit owns any later catch-up).
+    expect(h.producer.ensureSubscribed(READER, FEED)).toBe(false)
+    // A later append still flows to the healed subscriber.
+    h.appendAuthor({ n: 3 })
+    expect(h.applied.map((e) => e.seq)).toEqual([1, 2, 3])
+  })
+
+  it('ensureSubscribed streams only the tail above a persisted cursor (no rewind)', () => {
+    const h = makeHarness()
+    for (let i = 1; i <= 3; i++) h.seedFeedOnly({ n: i })
+    // The peer previously acked up to seq 2 (persisted), then its subscription was
+    // dropped. Healing must resend only seq 3, never replay 1..2.
+    h.producer.onAck(READER, FEED, 2)
+    h.producer.dropPeer(READER)
+    h.presetLocalCursor(FEED, 2)
+
+    const added = h.producer.ensureSubscribed(READER, FEED)
+    expect(added).toBe(true)
+    expect(h.applied.map((e) => e.seq)).toEqual([3])
+  })
+
+  it('consumer.resubscribeStale re-drives a lost subscribe until a batch arrives', () => {
+    const h = makeHarness()
+    h.appendAuthor({ n: 1 }) // backlog the reader should eventually get
+    h.dropNextSubscribes(2) // the first two subscribe attempts are lost
+
+    h.consumer.subscribe(FEED) // attempt #1 — dropped, producer never registers us
+    expect(h.applied).toHaveLength(0)
+
+    h.consumer.resubscribeStale() // attempt #2 — dropped
+    expect(h.applied).toHaveLength(0)
+
+    h.consumer.resubscribeStale() // attempt #3 — gets through → producer registers + pushes
+    expect(h.applied.map((e) => e.seq)).toEqual([1])
+  })
+
+  it('resubscribeStale stops once a batch has arrived (no unbounded re-drive)', () => {
+    const h = makeHarness()
+    h.appendAuthor({ n: 1 })
+    h.consumer.subscribe(FEED) // succeeds immediately → batch delivered
+    expect(h.applied.map((e) => e.seq)).toEqual([1])
+
+    // With the feed already flowing, the tick has nothing to re-drive.
+    expect(h.consumer.resubscribeStale()).toEqual([])
+  })
+
+  it('resubscribeStale gives up after the attempt budget for a genuinely empty feed', () => {
+    const h = makeHarness()
+    // A subscribed feed the author has never written to yields no batch. The
+    // consumer must not re-ask forever — the budget bounds it.
+    h.dropNextSubscribes(1) // lose the initial subscribe so we enter the re-drive path
+    h.consumer.subscribe(FEED)
+    let redriveTicks = 0
+    for (let i = 0; i < 20; i++) {
+      if (h.consumer.resubscribeStale().length === 0) break
+      redriveTicks += 1
+    }
+    // Bounded: RESUBSCRIBE_MAX_ATTEMPTS (6) re-drives, then it stops.
+    expect(redriveTicks).toBe(6)
+    expect(h.consumer.resubscribeStale()).toEqual([])
   })
 })

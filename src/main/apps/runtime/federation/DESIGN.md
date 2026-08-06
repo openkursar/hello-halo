@@ -195,6 +195,14 @@ WS) or `nodeToGateway` (via relay), kept **mutually exclusive** per node —
 whichever path a node's frames last arrived on is its return path. Absent gateway
 config → pure-LAN behaviour, unchanged.
 
+Edge assertion + host exemption: a **member** frame carrying `fromNode` must
+match its proven session identity (anti-spoof, §9.1). The **host** — the room's
+single pinned relay hub — is exempt, because it legitimately forwards frames on
+behalf of members whose payload preserves the ORIGINAL requester's `fromNode`
+(history/artifact fetch keeps it for the scope seam), which is never the host's
+own id. Without the exemption those relayed frames are dropped and cross-member
+history/artifact reads hang while everything else looks connected.
+
 v2-gw resilience (wire version negotiated on auth, explicit reject on
 incompatibility): `gw:host-attach` carries the authority **term** — the gateway
 compares it monotonically only, admitting a higher tenure immediately (election
