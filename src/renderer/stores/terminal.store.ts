@@ -11,6 +11,8 @@
 import { create } from 'zustand'
 import { api } from '../api'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
+import { useNotificationStore } from './notification.store'
+import i18n from '../i18n'
 
 export interface TerminalInfo {
   id: string
@@ -45,11 +47,17 @@ interface TerminalState {
 
   refresh: () => Promise<void>
   applyLifecycle: (e: TerminalLifecycleEvent) => void
-  openInCanvas: (sessionId: string, title?: string) => void
+  openInCanvas: (sessionId: string, title?: string) => Promise<string>
   /** User-initiated creation. The 'created' lifecycle event reconciles state (SSOT). */
   createSession: (spaceId: string) => Promise<TerminalInfo | null>
-  /** User-initiated stop. The 'exited' lifecycle event reconciles state (SSOT). */
-  killSession: (sessionId: string) => Promise<void>
+  /**
+   * Stop a terminal session. The 'exited' lifecycle event reconciles state (SSOT).
+   * Pass `{ silent: true }` from bulk/teardown paths (space switch, closeAll) —
+   * those failures must not toast: the session is already going away, and a
+   * surprise error pop during a navigation the user didn't ask about is worse
+   * than a no-op.
+   */
+  killSession: (sessionId: string, opts?: { silent?: boolean }) => Promise<void>
 
   /** Running sessions, most-recently-active first (for chip + lists). */
   runningSessions: () => TerminalInfo[]
@@ -108,7 +116,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   openInCanvas: (sessionId, title) => {
-    void canvasLifecycle.openTerminal(sessionId, title)
+    return canvasLifecycle.openTerminal(sessionId, title)
   },
 
   createSession: async (spaceId) => {
@@ -123,11 +131,34 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }
   },
 
-  killSession: async (sessionId) => {
+  killSession: async (sessionId, opts) => {
+    const silent = opts?.silent === true
     try {
-      await api.killTerminal(sessionId)
+      const res = await api.killTerminal(sessionId)
+      if (!res.success) {
+        // A missing session is the outcome the user asked for (it's already
+        // gone) — treat it as success, not a failure. Also reached from the
+        // bulk close path (disposeOnBulkClose), which is documented silent.
+        // Branch on the stable code rather than the localized error string.
+        if (res.code === 'TERMINAL_NOT_FOUND') return
+        console.error('[Terminal Store] killSession failed:', res.error)
+        if (silent) return
+        useNotificationStore.getState().show({
+          id: 'terminal-kill-error',
+          title: i18n.t('Failed to stop terminal session'),
+          body: res.error || undefined,
+          variant: 'error',
+        })
+      }
     } catch (err) {
-      console.error('[Terminal Store] killSession failed:', err)
+      console.error('[Terminal Store] killSession error:', err)
+      if (silent) return
+      useNotificationStore.getState().show({
+        id: 'terminal-kill-error',
+        title: i18n.t('Failed to stop terminal session'),
+        body: err instanceof Error ? err.message : undefined,
+        variant: 'error',
+      })
     }
   },
 

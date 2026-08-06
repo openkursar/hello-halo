@@ -297,28 +297,34 @@ flag on `TerminalInfo` (worker-authoritative, mirrored in the proxy):
 Two surfaces key off it, replacing the old `owner === 'ai'` checks:
 
 - **Tab close** (`TerminalCloseGuard` registers a two-method policy via
-  `canvasLifecycle.setTerminalClosePolicy`, mounted at **SpacePage** so it stays
-  active even when the canvas is collapsed):
+  `canvasLifecycle.setTerminalClosePolicy`, mounted once at the **app shell**
+  (`App.tsx`) — not inside a page — so the policy is registered before any
+  click-handler-driven `closeAll` (the live-sessions tray's `open()` lands in
+  `closeAll` before any page has mounted):
   - `confirmSingleClose` — deliberate single-tab close (tab X, middle-click, ⌘W,
     context menu): a not-running session just closes; a running non-`aiTouched`
     session (the user's own) is terminated with its tab; a running `aiTouched`
     session prompts keep-in-background vs terminate (killing a pty is
     irreversible, so keep is the safe default).
   - `disposeOnBulkClose` — non-interactive bulk teardown (`closeAll`, and
-    `enterSpace` → `closeAll` on space switch): **no prompt**; terminate the
-    user's own terminals (the tab was their only handle), keep `aiTouched` ones
-    running (they remain in the tray). This holds the invariant *every live pty
-    is reachable via a tab or the tray* on every tab-removal path.
+    `enterSpace` → `closeAll` on space switch): **no prompt, silent**; terminate
+    the user's own terminals (the tab was their only handle), keep `aiTouched`
+    ones running (they remain in the tray). Failures here must not toast — the
+    session is already going away — so `killSession` is called with
+    `{ silent: true }`. This holds the invariant *every live pty is reachable
+    via a tab or the tray* on every tab-removal path.
 - **Live-sessions tray** (`useLiveSessions`): shows every running `aiTouched`
   terminal **scoped to the current space** (`spaceId === currentSpaceId`), so a
   user terminal the AI drove stays perceivable and stoppable after its tab is
   closed, without leaking another space's sessions into this one (it reappears on
-  return). The AI browser is a single active view destroyed on space switch, so
-  it needs no such filter.
+  return). The AI browser is a single active view detached (not destroyed) on
+  space switch, so it needs no such filter.
 
 Contrast with the AI browser (`services/ai-browser`): its WebContents is
-**tab-bound** (the canvas tab's `browserViewId` *is* the AI's `activeViewId`), so
-closing the tab / `closeAll` / space switch destroys it — a page is cheap to
-re-open. A pty's running process and state are not recreatable, so the terminal
+**attached, not owned, by the tab** (the canvas tab's `browserViewId` is the AI's
+`activeViewId`, with `browserViewOwned = false`). Closing the tab or `closeAll`
+**detaches** it (hide only) so the AI singleton keeps its WebContents and the
+live session survives; only the AI's own `browser:destroy` truly destroys it. A
+pty's running process and state are likewise not recreatable, so the terminal
 deliberately decouples and keeps `aiTouched` work alive with the tray as the
 reclaim path.

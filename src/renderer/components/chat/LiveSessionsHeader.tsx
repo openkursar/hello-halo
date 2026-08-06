@@ -16,6 +16,8 @@ import { TerminalSquare, Globe, ArrowUpRight, X, ChevronDown, Zap } from 'lucide
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { useLiveSessions, type LiveSession } from '../../hooks/useLiveSessions'
+import { useAppStore } from '../../stores/app.store'
+import { useNotificationStore } from '../../stores/notification.store'
 import { useTranslation } from '../../i18n'
 
 /** Compact "3m" style age from a ms epoch. */
@@ -34,20 +36,26 @@ function KindIcon({ kind, size = 13, className }: { kind: LiveSession['kind']; s
 
 interface SessionRowProps {
   session: LiveSession
+  /** False when the current view isn't Space — opening will navigate to Space. */
+  isOnSpacePage: boolean
   onOpen: () => void
   onStop: () => void
 }
 
 /** One session line inside the popover list. */
-function SessionRow({ session, onOpen, onStop }: SessionRowProps) {
+function SessionRow({ session, isOnSpacePage, onOpen, onStop }: SessionRowProps) {
   const { t } = useTranslation()
+  // Same reveal affordance in both states; the icon stays ArrowUpRight so it
+  // never reads as "open externally". The header carries the "opens in Space"
+  // hint once for the whole list, so a row never needs to repeat it.
+  const openLabel = isOnSpacePage ? t('Open') : t('Open in Space')
   return (
     <div className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted/60 transition-colors">
       <KindIcon
         kind={session.kind}
         className={`shrink-0 ${session.busy ? 'text-primary animate-pulse' : 'text-muted-foreground'}`}
       />
-      <button onClick={onOpen} className="flex-1 min-w-0 flex items-center gap-2 text-left" title={t('Open')}>
+      <button onClick={onOpen} className="flex-1 min-w-0 flex items-center gap-2 text-left" title={openLabel}>
         <span className={`flex-1 min-w-0 truncate text-xs text-foreground/80 ${session.kind === 'terminal' ? 'font-mono' : ''}`}>
           {session.title}
         </span>
@@ -57,7 +65,7 @@ function SessionRow({ session, onOpen, onStop }: SessionRowProps) {
       </button>
       <button
         onClick={onOpen}
-        title={t('Open')}
+        title={openLabel}
         className="shrink-0 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-background/60 transition-colors"
       >
         <ArrowUpRight size={13} />
@@ -76,8 +84,10 @@ function SessionRow({ session, onOpen, onStop }: SessionRowProps) {
 export function LiveSessionsHeader() {
   const { t } = useTranslation()
   const { sessions, busy, open, stop } = useLiveSessions()
+  const view = useAppStore(s => s.view)
   const [listOpen, setListOpen] = useState(false)
   const [pendingStop, setPendingStop] = useState<LiveSession | null>(null)
+  const isOnSpacePage = view === 'space'
 
   // Tick so the "· 3m" age stays fresh without event spam.
   const [, force] = useState(0)
@@ -96,6 +106,20 @@ export function LiveSessionsHeader() {
     setPendingStop(null)
     if (target) await stop(target)
   }
+
+  // Single source for the open-failure toast, reached both when open() resolves
+  // to false (space bootstrap never loaded — not "user hasn't picked a Space")
+  // and when it rejects (the view failed to mount after we already navigated).
+  // One honest pair covers all three trigger paths and never advises the user
+  // to do something impossible (e.g. "switch to a Space" while on a Space page).
+  // Stable id so a later failure replaces the same toast rather than stacking.
+  const showOpenError = () =>
+    useNotificationStore.getState().show({
+      id: 'live-session-open-error',
+      title: t('Could not open session'),
+      body: t('The session is still running, but its view could not be opened. Try again.'),
+      variant: 'error',
+    })
 
   return (
     <>
@@ -131,15 +155,28 @@ export function LiveSessionsHeader() {
           >
             <div className="px-2 py-1 text-[11px] font-medium text-muted-foreground">
               {t('Active sessions')}
+              {!isOnSpacePage && (
+                <span className="ml-1.5 font-normal text-primary/80">
+                  {t('Opens in Space')}
+                </span>
+              )}
             </div>
             <div className="max-h-64 overflow-y-auto">
               {sessions.map(session => (
                 <SessionRow
                   key={session.id}
                   session={session}
+                  isOnSpacePage={isOnSpacePage}
                   onOpen={() => {
-                    open(session)
-                    setListOpen(false)
+                    // Close the popover only on success; otherwise surface the
+                    // shared open-failure toast (resolve-to-false or reject).
+                    void open(session).then(ok => {
+                      if (ok) setListOpen(false)
+                      else showOpenError()
+                    }).catch(err => {
+                      console.error('[LiveSessionsHeader] open() rejected:', err)
+                      showOpenError()
+                    })
                   }}
                   onStop={() => setPendingStop(session)}
                 />

@@ -7,7 +7,8 @@
 // Main canvas component
 export { ContentCanvas, CollapsibleCanvas, CanvasToggleButton } from './ContentCanvas'
 
-// Terminal pty close policy (mounted once at the space level, always active)
+// Terminal pty close policy — mounted once at the app shell (App.tsx), so the
+// policy is registered before any click-handler-driven closeAll.
 export { TerminalCloseGuard } from './TerminalCloseGuard'
 
 // Tab bar

@@ -54,10 +54,18 @@ export interface ToastItem {
   createdAt: number
 }
 
-/** Payload accepted by the `show` action — id and createdAt are auto-generated */
-export type ToastInput = Omit<ToastItem, 'id' | 'createdAt'> & {
-  id?: string
-}
+/**
+ * Payload accepted by the `show` action — id, createdAt, and duration are
+ * auto-generated/handled internally. duration is optional here so callers
+ * can omit it and receive the documented default; ToastItem.duration stays
+ * required (a non-optional number) so NotificationToast's `duration > 0`
+ * auto-dismiss guard remains sound.
+ */
+export type ToastInput =
+  Omit<ToastItem, 'id' | 'createdAt' | 'duration'> & {
+    id?: string
+    duration?: number
+  }
 
 // ============================================
 // Store Interface
@@ -83,6 +91,7 @@ export const useNotificationStore = create<NotificationState>((set) => ({
     const id = input.id ?? `toast-${++toastCounter}-${Date.now()}`
     const toast: ToastItem = {
       ...input,
+      duration: input.duration ?? 6000,
       id,
       createdAt: Date.now(),
     }
