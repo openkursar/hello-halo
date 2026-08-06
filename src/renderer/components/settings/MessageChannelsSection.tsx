@@ -16,7 +16,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Mail, MessageSquare, Bell, Webhook, Loader2,
   CheckCircle, XCircle, ChevronDown, RefreshCw, Bot,
-  Plus, Trash2, MoreVertical, Smartphone, Info,
+  Plus, Trash2, MoreVertical, Smartphone,
   QrCode,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
@@ -897,7 +897,7 @@ function PermissionSection({ instance, onChange, onDebouncedChange, permissionDe
           <p className="text-sm text-muted-foreground">{t('Permission Control')}</p>
           <p className="text-xs text-muted-foreground/70">
             {permissionEnabled
-              ? t('Restrict access by owner/guest roles')
+              ? t('Restrict access: owners have full control; everyone else follows the default permissions below')
               : t('Everyone has full access')}
           </p>
         </div>
@@ -918,6 +918,22 @@ function PermissionSection({ instance, onChange, onDebouncedChange, permissionDe
         </label>
       </div>
 
+      {/* Product-default hint — shown only when the current toggle state
+          deviates from the build's product-default. permissionDefaults is
+          null for open-source builds (which default to off), and
+          defaultEnabled=true for internal/enterprise builds (which default
+          to on). Both toggles remain user-editable. */}
+      {permissionDefaults?.defaultEnabled && !permissionEnabled && (
+        <p className="text-xs text-amber-500 pl-0.5">
+          {t('Permission control is on by default in this build — you have turned it off, so everyone has full access.')}
+        </p>
+      )}
+      {!permissionDefaults?.defaultEnabled && permissionEnabled && (
+        <p className="text-xs text-muted-foreground/70 pl-0.5">
+          {t('Permission control is off by default in this build — you have turned it on. Make sure an Owner is set below, otherwise all users are chat-only.')}
+        </p>
+      )}
+
       {/* Permission details (only when enabled) */}
       {permissionEnabled && (
         <div className="space-y-3 pl-1 animate-in slide-in-from-top-1 duration-150">
@@ -926,51 +942,56 @@ function PermissionSection({ instance, onChange, onDebouncedChange, permissionDe
             <label className="text-sm text-muted-foreground">
               {t('Owner User IDs')}
             </label>
+            <p className="text-xs text-muted-foreground/80">
+              {t('Enter your own WeCom user ID here. Owners have full tool execution permissions. Multiple IDs can be separated by commas or new lines.')}
+            </p>
             <textarea
               value={ownersDisplay}
               onChange={(e) => handleOwnersChange(e.target.value)}
               onBlur={handleOwnersBlur}
-              placeholder={permissionDefaults?.ownerIdHint || t('Fill in your own user ID. Ask the bot "what is my user ID" to get it.')}
+              placeholder={permissionDefaults?.ownerIdHint || t('e.g. flywang, johndoe — ask the bot "what is my user ID" to look it up')}
               rows={2}
               className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-none"
             />
             <p className="text-xs text-muted-foreground">
-              {t('Owners always have full access and are not restricted by the guest settings below.')}
+              {t('Owners always have full access and are not restricted by the default permissions below.')}
             </p>
           </div>
 
-          {/* No owners yet — auto-claim is active, so this is an expected
-              interim state rather than a misconfiguration. */}
+          {/* No-owner warning — auto-claim is channel-agnostic (see
+              owner-claim.ts): when permissionEnabled is on and owners is
+              empty, the first direct-message sender is bound as owner
+              automatically. Until then everyone is chat-only. */}
           {!hasOwners && (
-            <div className="flex items-center gap-2 rounded-lg bg-primary/10 border border-primary/30 px-3 py-2">
-              <Info className="w-4 h-4 text-primary shrink-0" />
-              <p className="text-xs text-foreground/80">
-                {t('No owner bound yet. The first user to send this bot a direct message will be bound as the owner automatically. Until then, all users are deny-all guests.')}
+            <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2">
+              <MessageSquare className="w-4 h-4 text-amber-500 shrink-0" />
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                {t('No Owner IDs set. Send any direct message to this bot and your user ID will be registered as the owner automatically. Until then, all users are non-owners and can only chat — no tool access.')}
               </p>
             </div>
           )}
 
-          {/* Guest section divider — makes the owner/guest boundary visually explicit */}
+          {/* Default permissions section divider — makes the owner/everyone-else boundary visually explicit */}
           {hasOwners && (
             <div className="flex items-center gap-2 pt-1">
               <div className="flex-1 border-t border-border/60" />
               <span className="text-[10px] uppercase tracking-widest text-muted-foreground/50 px-1">
-                {t('Guest Permissions')}
+                {t('Default Permissions (Non-Owners)')}
               </span>
               <div className="flex-1 border-t border-border/60" />
             </div>
           )}
 
-          {/* Guest access toggle (only when owners are set) */}
+          {/* Default access toggle (only when owners are set) */}
           {hasOwners && (
             <>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
-                  <p className="text-sm text-muted-foreground">{t('Guest Access')}</p>
+                  <p className="text-sm text-muted-foreground">{t('Default Access')}</p>
                   <p className="text-xs text-muted-foreground/70">
                     {guestAccessEnabled
-                      ? t('Guests have limited access to selected tools below')
-                      : t('Guests have no tool access — chat only')}
+                      ? t('Non-owners have limited access to selected tools below')
+                      : t('Non-owners have no tool access — chat only')}
                   </p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
@@ -994,7 +1015,7 @@ function PermissionSection({ instance, onChange, onDebouncedChange, permissionDe
               {guestAccessEnabled && (
                 <div className="space-y-2">
                   <label className="text-sm text-muted-foreground">
-                    {t('Guest Allowed Tools')}
+                    {t('Default Allowed Tools')}
                   </label>
 
                   {/* Built-in tool tags grouped — unchanged from original */}
