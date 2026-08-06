@@ -139,5 +139,25 @@ export const migrations: Migration[] = [
         ADD COLUMN upgrade_strategy TEXT NOT NULL DEFAULT 'auto'
       `)
     }
+  },
+  {
+    version: 5,
+    description: 'Add ignored_versions column for per-app skipped update versions',
+    up(db) {
+      db.exec(`
+        ALTER TABLE installed_apps
+        ADD COLUMN ignored_versions TEXT NOT NULL DEFAULT '[]'
+      `)
+    }
+  },
+  {
+    version: 6,
+    description: 'Add knowledge_seeded flag for one-time knowledge-base seeding',
+    up(db) {
+      db.exec(`
+        ALTER TABLE installed_apps
+        ADD COLUMN knowledge_seeded INTEGER NOT NULL DEFAULT 0
+      `)
+    }
   }
 ]

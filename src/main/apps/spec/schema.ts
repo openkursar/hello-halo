@@ -13,6 +13,7 @@
 
 import { z } from 'zod'
 import { Cron } from 'croner'
+import { deriveSkillCommandName, needsCommandNameDerivation } from './skill-identity'
 
 // ============================================
 // Primitives and Reusable Schemas
@@ -430,8 +431,19 @@ const I18nLocaleBlockSchema = z.object({
 const AppSpecCommonSchema = z.object({
   /** Spec format version (default "1", for forward compatibility) */
   spec_version: z.string().default('1'),
-  /** App display name */
+  /**
+   * Canonical name. For skills this is the ecosystem identifier — it becomes
+   * the skill directory, the SKILL.md frontmatter `name` and therefore the
+   * slash command — so it is normalized to ASCII at parse time. For every
+   * other type it doubles as the display name.
+   */
   name: nonEmptyString,
+  /**
+   * Display name shown in the UI when `name` is not presentable, i.e. a skill
+   * whose author wrote it in a non-ASCII script. Per-locale `i18n` entries
+   * take precedence over it.
+   */
+  display_name: z.string().optional(),
   /** App version */
   version: versionString,
   /** App author */
@@ -507,17 +519,34 @@ export const ExtensionSpecSchema = AppSpecCommonSchema.extend({
   type: z.literal('extension'),
 })
 
+const AppSpecUnionSchema = z.discriminatedUnion('type', [
+  AutomationSpecSchema,
+  McpSpecSchema,
+  SkillSpecSchema,
+  ExtensionSpecSchema,
+])
+
+/**
+ * Move a non-ASCII skill name into `display_name` and replace it with a derived
+ * command name. Applied at the schema boundary so every entry point — store
+ * install, folder/file import, AI-authored spec, builtin load — converges on a
+ * single identifier rule. Idempotent: a derived name never re-triggers.
+ */
+function normalizeSkillIdentity(spec: z.infer<typeof AppSpecUnionSchema>): z.infer<typeof AppSpecUnionSchema> {
+  if (spec.type !== 'skill' || !needsCommandNameDerivation(spec.name)) return spec
+  return {
+    ...spec,
+    name: deriveSkillCommandName(spec.name),
+    display_name: spec.display_name ?? spec.name,
+  }
+}
+
 /**
  * Full AppSpec schema — discriminated union by `type` field.
  * Each type has its own required/optional fields.
  * Cross-field refinements for automation are applied via superRefine.
  */
-export const AppSpecSchema = z.discriminatedUnion('type', [
-  AutomationSpecSchema,
-  McpSpecSchema,
-  SkillSpecSchema,
-  ExtensionSpecSchema,
-]).superRefine((data, ctx) => {
+export const AppSpecSchema = AppSpecUnionSchema.superRefine((data, ctx) => {
   // Automation-specific cross-field validations
   if (data.type === 'automation') {
     // Validate subscription IDs are unique
@@ -552,7 +581,7 @@ export const AppSpecSchema = z.discriminatedUnion('type', [
       }
     }
   }
-})
+}).transform(normalizeSkillIdentity)
 
 // ============================================
 // Derived TypeScript Types

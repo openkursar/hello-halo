@@ -132,3 +132,63 @@ export function getSkillMdContent(
 ): string {
   return spec.skill_files?.['SKILL.md'] ?? spec.skill_content ?? ''
 }
+
+/** Quote a value for a YAML `key: value` line only when it would otherwise be
+ * mis-parsed (colon, comment marker, indicator chars, edge whitespace). */
+function yamlScalar(value: string): string {
+  const needsQuote = /[:#[\]{}&*!|>'"%@`,]/.test(value) || /^[\s?-]/.test(value) || /\s$/.test(value)
+  return needsQuote ? `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : value
+}
+
+/**
+ * Pin the frontmatter `name` to the spec's name, but only when that name is a
+ * derived identifier (signalled by `display_name`). The SDK resolves a skill's
+ * slash command from this field, falling back to the directory name — which is
+ * itself derived from the spec name — so a derived name must appear in both or
+ * the command and the directory disagree. A name the author wrote themselves is
+ * left alone, along with whatever frontmatter shipped with it.
+ */
+export function alignSkillMdName(
+  content: string,
+  spec: { name: string; display_name?: string }
+): string {
+  return spec.display_name ? setSkillMdName(content, spec.name) : content
+}
+
+/**
+ * Return a copy of `spec` whose SKILL.md frontmatter declares `name`, reaching
+ * into whichever field carries it. Used where the name is authoritative by
+ * intent — an explicit rename, or a publish snapshot — as opposed to the
+ * passive sync `alignSkillMdName` guards.
+ */
+export function withSkillMdName<T extends { skill_files?: Record<string, string>; skill_content?: string }>(
+  spec: T,
+  name: string
+): T {
+  const skillMd = spec.skill_files?.['SKILL.md']
+  if (skillMd !== undefined) {
+    return { ...spec, skill_files: { ...spec.skill_files, 'SKILL.md': setSkillMdName(skillMd, name) } }
+  }
+  if (spec.skill_content !== undefined) {
+    return { ...spec, skill_content: setSkillMdName(spec.skill_content, name) }
+  }
+  return spec
+}
+
+/**
+ * Set (or insert) the `name` field in SKILL.md frontmatter, returning the full
+ * file. No-op when the content has no frontmatter block.
+ */
+export function setSkillMdName(content: string, name: string): string {
+  const fmRegex = /^(---[ \t]*\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/
+  const match = content.match(fmRegex)
+  if (!match) return content
+
+  const [fullMatch, opening, fmBody, closing] = match
+  const line = `name: ${yamlScalar(name)}`
+  const nameRe = /^name[ \t]*:.*$/m
+  const nextBody = nameRe.test(fmBody) ? fmBody.replace(nameRe, line) : `${line}\n${fmBody}`
+  if (nextBody === fmBody) return content
+
+  return opening + nextBody + closing + content.slice(fullMatch.length)
+}

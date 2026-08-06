@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { createDatabaseManager } from '../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../src/main/platform/store/types'
@@ -32,6 +32,29 @@ import {
   SpaceNotFoundError,
 } from '../../../../src/main/apps/manager/errors'
 import type { AppSpec } from '../../../../src/main/apps/spec/schema'
+import {
+  _resetTlonRegistry,
+  createKB,
+  getKB,
+  setDefaultKB,
+  bindToSpace,
+  listKBsForApp,
+} from '../../../../src/main/services/tlon/service'
+
+// createKB fires a fire-and-forget dynamic import of ./watcher (native
+// @parcel/watcher); stub it so knowledge-seeding tests never touch real
+// filesystem watchers (mirrors tests/unit/services/tlon/service.test.ts).
+vi.mock('../../../../src/main/services/tlon/watcher', () => ({
+  startWatchersForKB: vi.fn(async () => {}),
+  stopWatchersForKB: vi.fn(async () => {}),
+  startLinkedDirWatch: vi.fn(async () => {}),
+  stopLinkedDirWatch: vi.fn(async () => {}),
+}))
+vi.mock('@parcel/watcher', () => ({
+  default: {
+    subscribe: vi.fn(async () => ({ unsubscribe: vi.fn(async () => {}) })),
+  },
+}))
 
 // ============================================
 // Test Fixtures
@@ -710,6 +733,30 @@ describe('AppManager', () => {
     })
   })
 
+  describe('addIgnoredVersion', () => {
+    it('records and persists an ignored version', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      expect(service.getApp(appId)!.ignoredVersions ?? []).toEqual([])
+
+      service.addIgnoredVersion(appId, '2.0.0')
+      expect(service.getApp(appId)!.ignoredVersions).toEqual(['2.0.0'])
+    })
+
+    it('is idempotent for a version already ignored', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      service.addIgnoredVersion(appId, '2.0.0')
+      service.addIgnoredVersion(appId, '2.0.0')
+      expect(service.getApp(appId)!.ignoredVersions).toEqual(['2.0.0'])
+    })
+
+    it('accumulates distinct ignored versions', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      service.addIgnoredVersion(appId, '2.0.0')
+      service.addIgnoredVersion(appId, '2.1.0')
+      expect(service.getApp(appId)!.ignoredVersions).toEqual(['2.0.0', '2.1.0'])
+    })
+  })
+
   // ===========================================================================
   // Queries
   // ===========================================================================
@@ -1125,6 +1172,151 @@ describe('AppManager', () => {
   })
 
   // ===========================================================================
+  // Knowledge Base Seeding
+  // ===========================================================================
+
+  describe('knowledge base seeding', () => {
+    beforeEach(() => {
+      _resetTlonRegistry()
+    })
+
+    afterEach(async () => {
+      await vi.dynamicImportSettled()
+      _resetTlonRegistry()
+    })
+
+    it('seeds the default knowledge base on a fresh automation install', async () => {
+      const kb = createKB({ name: 'Default KB' })
+      setDefaultKB(kb.id)
+
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+
+      expect(service.getApp(appId)!.knowledgeSeeded).toBe(true)
+      expect(listKBsForApp(appId).map(k => k.id)).toEqual([kb.id])
+    })
+
+    it('marks knowledgeSeeded true even when there is nothing to seed', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+
+      expect(service.getApp(appId)!.knowledgeSeeded).toBe(true)
+      expect(listKBsForApp(appId)).toEqual([])
+    })
+
+    it('does not reseed when reinstalling a previously-uninstalled app', async () => {
+      const spec = createTestSpec({ name: 'reinstall-kb-app' })
+      const appId = await service.install(TEST_SPACE_ID, spec)
+      expect(listKBsForApp(appId)).toEqual([])
+
+      await service.uninstall(appId)
+
+      // A KB becomes available only after the original install/uninstall.
+      const kb = createKB({ name: 'Late KB' })
+      setDefaultKB(kb.id)
+
+      const reinstalledId = await service.install(TEST_SPACE_ID, spec)
+
+      expect(reinstalledId).toBe(appId)
+      expect(service.getApp(appId)!.knowledgeSeeded).toBe(true)
+      expect(listKBsForApp(appId)).toEqual([]) // already seeded -> reinstall is a no-op
+    })
+
+    it('seeds a never-seeded app on reinstall, since the backfill skips uninstalled records', async () => {
+      const spec = createTestSpec({ name: 'pre-feature-app' })
+      const appId = await service.install(TEST_SPACE_ID, spec)
+      await service.uninstall(appId)
+
+      // Simulate a record that predates the knowledge-base feature.
+      dbManager
+        .getAppDatabase()
+        .prepare('UPDATE installed_apps SET knowledge_seeded = 0 WHERE id = ?')
+        .run(appId)
+
+      const kb = createKB({ name: 'Backfilled KB' })
+      setDefaultKB(kb.id)
+
+      await service.install(TEST_SPACE_ID, spec)
+
+      expect(service.getApp(appId)!.knowledgeSeeded).toBe(true)
+      expect(listKBsForApp(appId).map(k => k.id)).toEqual([kb.id])
+    })
+
+    it('leaves no binding behind when the install rolls back', async () => {
+      const kb = createKB({ name: 'Rollback KB' })
+      setDefaultKB(kb.id)
+      // A file where the work-directory tree must go: mkdirSync fails with
+      // ENOTDIR, which triggers the install's DB rollback.
+      writeFileSync(join(spacePaths[TEST_SPACE_ID], '.halo'), 'not a directory')
+
+      await expect(service.install(TEST_SPACE_ID, createTestSpec())).rejects.toThrow()
+
+      expect(getKB(kb.id)!.appIds).toEqual([])
+    })
+
+    it('reports the post-seed flag in the install event payload', async () => {
+      const kb = createKB({ name: 'Event KB' })
+      setDefaultKB(kb.id)
+      const seen: boolean[] = []
+      const unsubscribe = service.onAppInstalled(app => { seen.push(app.knowledgeSeeded) })
+
+      await service.install(TEST_SPACE_ID, createTestSpec())
+      unsubscribe()
+
+      expect(seen).toEqual([true])
+    })
+
+    it('does not reseed on moveToSpace', async () => {
+      const originKb = createKB({ name: 'Origin Space KB' })
+      bindToSpace(originKb.id, TEST_SPACE_ID)
+
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      expect(listKBsForApp(appId).map(k => k.id)).toEqual([originKb.id])
+
+      const targetKb = createKB({ name: 'Target Space KB' })
+      bindToSpace(targetKb.id, TEST_SPACE_ID_2)
+
+      await service.moveToSpace(appId, TEST_SPACE_ID_2)
+
+      // Bindings from the original seed persist; the new space's KB is not auto-bound.
+      expect(listKBsForApp(appId).map(k => k.id)).toEqual([originKb.id])
+    })
+
+    it('never seeds non-automation app types', async () => {
+      const kb = createKB({ name: 'Skill KB' })
+      setDefaultKB(kb.id)
+
+      const spec = {
+        spec_version: '1',
+        name: 'a-skill',
+        version: '1.0.0',
+        description: 'a skill',
+        type: 'skill',
+        skill_content: 'content',
+      } as unknown as AppSpec
+
+      const appId = await service.install(TEST_SPACE_ID, spec)
+
+      expect(service.getApp(appId)!.knowledgeSeeded).toBe(false)
+      expect(listKBsForApp(appId)).toEqual([])
+    })
+
+    it('ensureKnowledgeSeeded is idempotent for an already-seeded app', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      expect(service.getApp(appId)!.knowledgeSeeded).toBe(true)
+
+      const kb = createKB({ name: 'Too Late' })
+      setDefaultKB(kb.id)
+      service.ensureKnowledgeSeeded(appId)
+
+      // Already seeded at install time (before this KB existed) — no retroactive bind.
+      expect(listKBsForApp(appId)).toEqual([])
+    })
+
+    it('ensureKnowledgeSeeded throws AppNotFoundError for an unknown app', () => {
+      expect(() => service.ensureKnowledgeSeeded('missing')).toThrow(AppNotFoundError)
+    })
+  })
+
+  // ===========================================================================
   // Error Types
   // ===========================================================================
 
@@ -1269,6 +1461,33 @@ describe('AppManager', () => {
 
       newManager.closeAll()
     })
+
+    it('migration v5 adds ignored_versions=[] and preserves existing rows (zero data loss)', () => {
+      const newManager = createDatabaseManager(':memory:')
+      const db = newManager.getAppDatabase()
+
+      // Run migrations 1..4 to simulate a pre-v5 database that already holds data
+      newManager.runMigrations(db, MIGRATION_NAMESPACE, migrations.slice(0, 4))
+      const now = Date.now()
+      db.prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run('legacy-app', 'legacy-spec', null, '{"name":"legacy"}', 'active', now)
+
+      // Apply v5 — must add the column without disturbing existing data
+      newManager.runMigrations(db, MIGRATION_NAMESPACE, migrations)
+
+      const row = db.prepare(
+        `SELECT spec_id, status, spec_json, installed_at, ignored_versions FROM installed_apps WHERE id = ?`
+      ).get('legacy-app') as { spec_id: string; status: string; spec_json: string; installed_at: number; ignored_versions: string }
+      expect(row.spec_id).toBe('legacy-spec')
+      expect(row.status).toBe('active')
+      expect(row.spec_json).toBe('{"name":"legacy"}')
+      expect(row.installed_at).toBe(now)
+      expect(row.ignored_versions).toBe('[]')
+
+      newManager.closeAll()
+    })
   })
 
   // ===========================================================================
@@ -1299,4 +1518,122 @@ describe('AppManager', () => {
       expect(() => service.setUpgradeStrategy('missing', 'auto')).toThrow(AppNotFoundError)
     })
   })
+
+  // ===========================================================================
+  // Skill identity (derived command names)
+  // ===========================================================================
+
+  describe('skill command names', () => {
+    function skillSpec(name: string, extra?: Record<string, unknown>): AppSpec {
+      return {
+        spec_version: '1',
+        name,
+        version: '1.0.0',
+        description: 'A test skill',
+        type: 'skill',
+        skill_content: `---\nname: ${name}\ndescription: A test skill\n---\nBody`,
+        ...extra,
+      } as unknown as AppSpec
+    }
+
+    it('installs a non-ASCII name under its derived identifier', async () => {
+      const appId = await service.install(null, skillSpec('AI写作'))
+
+      const app = service.getApp(appId)!
+      expect(app.specId).toBe('ai-xie-zuo')
+      expect(app.spec.name).toBe('ai-xie-zuo')
+      expect(app.spec.display_name).toBe('AI写作')
+    })
+
+    it('separates two authored names that derive the same identifier', async () => {
+      const first = await service.install(null, skillSpec('AI写作'))
+      const second = await service.install(null, skillSpec('Ai 写作'))
+
+      expect(first).not.toBe(second)
+      expect(service.getApp(first)!.specId).toBe('ai-xie-zuo')
+      expect(service.getApp(second)!.specId).toBe('ai-xie-zuo-2')
+    })
+
+    it('refreshes in place when the same skill is installed again', async () => {
+      const first = await service.install(null, skillSpec('AI写作'))
+      const second = await service.install(null, skillSpec('AI写作', { description: 'Updated' }))
+
+      expect(second).toBe(first)
+      expect(service.listApps({ spaceId: null, type: 'skill' })).toHaveLength(1)
+      expect(service.getApp(first)!.spec.description).toBe('Updated')
+    })
+
+    it('keeps an ASCII name as its own identifier', async () => {
+      const appId = await service.install(null, skillSpec('code-commit'))
+
+      const app = service.getApp(appId)!
+      expect(app.specId).toBe('code-commit')
+      expect(app.spec.display_name).toBeUndefined()
+    })
+
+    it('moves the skill directory when the command name changes', async () => {
+      const appId = await service.install(TEST_SPACE_ID, skillSpec('AI写作'))
+      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.claude', 'skills')
+      expect(existsSync(join(skillsDir, 'ai-xie-zuo'))).toBe(true)
+
+      service.updateSpec(appId, { name: 'my-writer' })
+
+      expect(existsSync(join(skillsDir, 'my-writer', 'SKILL.md'))).toBe(true)
+      expect(existsSync(join(skillsDir, 'ai-xie-zuo'))).toBe(false)
+      expect(service.getApp(appId)!.specId).toBe('my-writer')
+    })
+
+    it('rewrites the SKILL.md frontmatter when an author-named skill is renamed', async () => {
+      const appId = await service.install(TEST_SPACE_ID, skillSpec('code-review'))
+      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.claude', 'skills')
+
+      service.updateSpec(appId, { name: 'code-audit' })
+
+      // The SDK reads the slash command from the frontmatter, so a rename that
+      // only moved the directory would leave the old command answering.
+      const written = readFileSync(join(skillsDir, 'code-audit', 'SKILL.md'), 'utf-8')
+      expect(written).toContain('name: code-audit')
+      expect(written).not.toContain('name: code-review')
+      expect(existsSync(join(skillsDir, 'code-review'))).toBe(false)
+    })
+
+    it('refuses a rename onto a name already taken in the same scope', async () => {
+      const appId = await service.install(TEST_SPACE_ID, skillSpec('code-review'))
+      await service.install(TEST_SPACE_ID, skillSpec('code-audit'))
+      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.claude', 'skills')
+
+      expect(() => service.updateSpec(appId, { name: 'code-audit' })).toThrow(AppAlreadyInstalledError)
+
+      // Neither record moved: the occupant keeps its files, the renamer keeps its name.
+      expect(existsSync(join(skillsDir, 'code-review', 'SKILL.md'))).toBe(true)
+      expect(existsSync(join(skillsDir, 'code-audit', 'SKILL.md'))).toBe(true)
+      expect(service.getApp(appId)!.specId).toBe('code-review')
+    })
+
+    it('does not treat a same-named app of another type as the same skill', async () => {
+      // An automation occupying the derived identifier, and presenting the same
+      // authored name — the one shape that could pass an identity check based on
+      // display text alone.
+      const automationId = await service.install(
+        null,
+        createTestSpec({ name: 'ai-xie-zuo', display_name: 'AI写作' } as Partial<AppSpec>)
+      )
+
+      const skillId = await service.install(null, skillSpec('AI写作'))
+
+      expect(service.getApp(skillId)!.specId).toBe('ai-xie-zuo-2')
+      expect(service.getApp(automationId)!.spec.type).toBe('automation')
+    })
+
+    it('leaves the directory in place when only the display name changes', async () => {
+      const appId = await service.install(TEST_SPACE_ID, skillSpec('AI写作'))
+      const skillsDir = join(spacePaths[TEST_SPACE_ID], '.claude', 'skills')
+
+      service.updateSpec(appId, { display_name: '写作助手' })
+
+      expect(existsSync(join(skillsDir, 'ai-xie-zuo', 'SKILL.md'))).toBe(true)
+      expect(service.getApp(appId)!.spec.display_name).toBe('写作助手')
+    })
+  })
+
 })

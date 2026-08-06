@@ -42,6 +42,7 @@ import { useTranslation } from './i18n'
 import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, Question, McpServerStatus } from './types'
 import type { SessionInitInfo } from './types/slash-command'
 import type { IngestProgressEvent } from '../shared/types/tlon'
+import type { ToastPayload } from '../shared/types/notification'
 import { hasAnyAISource } from './types'
 
 // Lazy load heavy page components for better initial load performance
@@ -233,8 +234,7 @@ export default function App() {
 
   // Theme switching
   useEffect(() => {
-    // Default to 'dark' before config loads, then use config value
-    const theme = config?.appearance?.theme || 'dark'
+    const theme = config?.appearance?.theme || 'system'
     applyTheme(theme)
 
     // Resolve effective dark/light for the status bar.
@@ -777,24 +777,30 @@ export default function App() {
   const showToast = useNotificationStore((s) => s.show)
   useEffect(() => {
     const unsub = api.onNotificationToast((data) => {
-      const { title, body, variant, duration, appId } = data as {
-        title: string; body?: string; variant?: 'default' | 'success' | 'warning' | 'error'; duration?: number; appId?: string
-      }
-      showToast({
-        title,
-        body,
-        variant: variant ?? 'default',
-        duration: duration ?? 6000,
-        // If appId is provided, add a "View" action for deep navigation
-        ...(appId ? {
-          action: {
+      const { id, title, body, bodyFormat, variant, duration, appId, action } = data as ToastPayload
+
+      // A declared link action wins over app deep-navigation: the sender asked
+      // for a specific destination, which appId can only approximate.
+      const resolvedAction = action
+        ? { label: action.label, onClick: () => { window.open(action.url, '_blank') } }
+        : appId
+          ? {
             label: t('View'),
             onClick: () => {
               setInitialAppId(appId)
               setView('apps')
             },
-          },
-        } : {}),
+          }
+          : undefined
+
+      showToast({
+        ...(id ? { id } : {}),
+        title,
+        body,
+        bodyFormat,
+        variant: variant ?? 'default',
+        duration: duration ?? 6000,
+        ...(resolvedAction ? { action: resolvedAction } : {}),
       })
     })
     return () => { unsub() }

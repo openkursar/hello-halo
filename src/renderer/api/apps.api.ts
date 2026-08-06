@@ -218,6 +218,13 @@ export const appsApi = {
     return { success: false, error: 'Not supported outside Electron' }
   },
 
+  appDeriveSkillCommandName: async (name: string): Promise<ApiResponse<string>> => {
+    if (isElectron()) {
+      return window.halo.appDeriveSkillCommandName(name)
+    }
+    return httpRequest('GET', `/api/skills/command-name?name=${encodeURIComponent(name)}`)
+  },
+
   appGetDataPath: async (appId: string): Promise<ApiResponse<{ path: string }>> => {
     if (isElectron()) {
       return window.halo.appGetDataPath(appId)

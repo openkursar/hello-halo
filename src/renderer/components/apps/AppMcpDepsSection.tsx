@@ -33,6 +33,7 @@ import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore, tabForAppType } from '../../stores/apps-page.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
+import { isSessionOnlyFailure } from '../../utils/mcpStatus'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import { BUILTIN_MCP_SERVER_IDS } from '../../../shared/apps/builtin-mcp'
 import type { McpSpec, McpDependency } from '../../../shared/apps/spec-types'
@@ -47,7 +48,15 @@ interface AppMcpDepsSectionProps {
 
 // ── Health resolution ────────────────────────────────────────────────────────
 
-type Health = 'connected' | 'disabled' | 'not-installed' | 'failed' | 'needs-login' | 'unprobed'
+type Health =
+  | 'connected'
+  | 'disabled'
+  | 'not-installed'
+  | 'failed'
+  | 'needs-login'
+  /** Configuration connects, but the last agent session could not use it. */
+  | 'session-stale'
+  | 'unprobed'
 
 interface ResolvedDep {
   /** Declared dependency spec id */
@@ -73,6 +82,7 @@ function resolveHealth(mcpApp: InstalledApp | null, sdkEntry?: McpServerStatus):
   if (mcpApp.status === 'error') return 'failed'
   if (mcpApp.status === 'needs_login') return 'needs-login'
   if (sdkEntry) {
+    if (isSessionOnlyFailure(sdkEntry)) return 'session-stale'
     if (sdkEntry.status === 'failed') return 'failed'
     if (sdkEntry.status === 'needs-auth') return 'needs-login'
     if (sdkEntry.status === 'connected') return 'connected'
@@ -85,6 +95,7 @@ function healthDotClass(health: Health): string {
     case 'connected':    return 'bg-green-500'
     case 'failed':       return 'bg-red-500'
     case 'needs-login':  return 'bg-amber-500'
+    case 'session-stale':return 'bg-amber-500'
     case 'not-installed':return 'bg-amber-500'
     case 'disabled':     return 'bg-muted-foreground/40'
     default:             return 'bg-muted-foreground/40'
@@ -194,6 +205,7 @@ function DepRow({
       case 'disabled':     return t('MCP server globally disabled')
       case 'failed':       return t('Connection failed')
       case 'needs-login':  return t('Needs login')
+      case 'session-stale':return t('Retrying on next message')
       case 'not-installed':return t('Not installed')
       default:             return ''
     }
@@ -244,7 +256,7 @@ function DepRow({
             !enabled ? 'text-muted-foreground/50'
             : health === 'connected' ? 'text-green-600 dark:text-green-400'
             : health === 'failed' ? 'text-red-500'
-            : (health === 'needs-login' || health === 'not-installed') ? 'text-amber-500'
+            : (health === 'needs-login' || health === 'not-installed' || health === 'session-stale') ? 'text-amber-500'
             : 'text-muted-foreground'
           }`}>
             {statusText}
@@ -347,6 +359,12 @@ function DepRow({
 
               {(health === 'failed' || health === 'needs-login') && sdkEntry?.errorDetail && (
                 <p className="text-[11px] font-mono text-red-500/80 break-all">{sdkEntry.errorDetail}</p>
+              )}
+
+              {health === 'session-stale' && (
+                <p className="text-[11px] text-amber-500/90">
+                  {t('This server connects fine. The last agent session could not use it; Halo has cleared the leftover state.')}
+                </p>
               )}
 
               <div className="flex items-center gap-2 flex-wrap">

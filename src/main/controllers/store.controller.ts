@@ -10,7 +10,8 @@
  */
 
 import type { StoreQuery, StoreQueryParams, StoreQueryResponse } from '../../shared/store/store-types'
-import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource } from '../../shared/store/store-types'
+import type { RegistryEntry, StoreAppDetail, UpdateInfo, RegistrySource, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection } from '../../shared/store/store-types'
+import { DISCOVER_CATALOG_PAGE_SIZE } from '../../shared/store/store-types'
 import type { AppType } from '../../shared/apps/spec-types'
 import {
   listApps,
@@ -25,10 +26,25 @@ import {
   removeRegistry,
   toggleRegistry,
   updateRegistryAdapterConfig,
+  getCategoryTaxonomy,
+  invalidateServerTaxonomyCache,
+  getDiscoverPage,
+  invalidateDiscoverLayoutCache,
+  fetchMyPublications,
+  unpublishApp,
+  ensureStoreIdentity,
+  // Aliased: this controller exports same-named wrappers, and an unaliased
+  // import would bind to the wrapper instead of the store function.
+  getStoreCapabilities as resolveStoreCapabilities,
+  getStoreIdentity as resolveStoreIdentity,
+  getStoreSignInStatus as resolveStoreSignInStatus,
 } from '../store'
+import type { StoreIdentity } from '../store/backend/identity'
+import type { StoreSignInStatus } from '../../shared/store/store-types'
 import { getAppManager } from '../apps/manager'
 import { McpCommandBlockedError } from '../apps/manager/errors'
 import { MCP_COMMAND_BLOCKED_MESSAGE } from '../services/security-policy'
+import { trackEvent, AnalyticsEvents } from '../services/analytics'
 
 const ALLOWED_APP_TYPES: ReadonlySet<AppType> = new Set<AppType>(['automation', 'skill', 'mcp', 'extension'])
 
@@ -160,6 +176,11 @@ export async function installStoreApp(
     }
     // spaceId may be null for global installs (MCP/Skill available across all spaces)
     const appId = await installFromStore(slug, spaceId, userConfig, onProgress)
+    // Analytics signal for the store funnel, distinct from the store's install
+    // ledger: this one marks the user-initiated action, so it stays at this
+    // entry point rather than following the download.
+    const appType = getAppManager()?.getApp(appId)?.spec.type
+    void trackEvent(AnalyticsEvents.STORE_INSTALL_DONE, appType ? { appId: slug, appType } : { appId: slug })
     return { success: true, data: { appId } }
   } catch (error: unknown) {
     const err = error as Error
@@ -177,10 +198,32 @@ export async function installStoreApp(
 // ============================================================================
 
 /**
- * Refresh the registry index from remote sources.
+ * Freshness check for when the user comes back to the store. Drops the
+ * server-config caches so the next read revalidates, and re-checks the index —
+ * both are conditional requests, so an unchanged store costs a few 304s. A
+ * source that cannot revalidate is left on its TTL, since re-reading it would
+ * mean downloading its whole index on every arrival.
+ *
+ * `changed` reports whether the index itself moved, letting the caller leave the
+ * browse list alone when only ops config could have shifted.
  */
+export async function revalidateStore(): Promise<StoreControllerResponse<{ changed: boolean }>> {
+  try {
+    invalidateServerTaxonomyCache()
+    invalidateDiscoverLayoutCache()
+    const changed = await refreshIndex('conditional')
+    return { success: true, data: { changed } }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] revalidateStore error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
 export async function refreshStoreIndex(): Promise<StoreControllerResponse<void>> {
   try {
+    invalidateServerTaxonomyCache()
+    invalidateDiscoverLayoutCache()
     await refreshIndex()
     return { success: true, data: undefined }
   } catch (error: unknown) {
@@ -210,6 +253,8 @@ export async function checkStoreUpdates(): Promise<StoreControllerResponse<Updat
     const installedApps = manager.listApps().filter(app => app.status !== 'uninstalled')
     const appsWithStore = installedApps.map(app => ({
       id: app.id,
+      upgradeStrategy: app.upgradeStrategy,
+      ignoredVersions: app.ignoredVersions,
       spec: {
         name: app.spec.name,
         version: app.spec.version,
@@ -222,6 +267,28 @@ export async function checkStoreUpdates(): Promise<StoreControllerResponse<Updat
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] checkStoreUpdates error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Record a version the user chose to skip for an installed app, so it no longer
+ * surfaces as an available update.
+ */
+export function ignoreStoreVersion(input: { appId: string; version: string }): StoreControllerResponse<null> {
+  try {
+    const manager = getAppManager()
+    if (!manager) {
+      return { success: false, error: 'App Manager is not yet initialized. Please try again shortly.' }
+    }
+    if (!input.appId || !input.version) {
+      return { success: false, error: 'appId and version are required' }
+    }
+    manager.addIgnoredVersion(input.appId, input.version)
+    return { success: true, data: null }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] ignoreStoreVersion error:', err.message)
     return { success: false, error: err.message }
   }
 }
@@ -240,6 +307,120 @@ export function getStoreRegistries(): StoreControllerResponse<RegistrySource[]> 
   } catch (error: unknown) {
     const err = error as Error
     console.error('[StoreController] getStoreRegistries error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Resolve the renderer-safe store capabilities used to gate UI surfaces.
+ */
+export async function getStoreCapabilities(): Promise<StoreControllerResponse<StoreCapabilities>> {
+  try {
+    const capabilities = await resolveStoreCapabilities()
+    return { success: true, data: capabilities }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreCapabilities error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Resolve the scene-category taxonomy used for store chips and the publish form.
+ */
+export async function getStoreCategoryTaxonomy(): Promise<StoreControllerResponse<CategoryTaxonomy>> {
+  try {
+    return { success: true, data: await getCategoryTaxonomy() }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreCategoryTaxonomy error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/** The discover page with every section's data resolved against the full index. */
+export async function getStoreDiscoverPage(
+  input?: { locale?: string; pageSize?: number }
+): Promise<StoreControllerResponse<ResolvedDiscover>> {
+  try {
+    const pageSize = input?.pageSize && input.pageSize > 0 ? input.pageSize : DISCOVER_CATALOG_PAGE_SIZE
+    return { success: true, data: await getDiscoverPage(input?.locale ?? '', pageSize) }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreDiscoverPage error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Ensure the creator identity is signed in, launching the OAuth flow when no
+ * token is held. Returns whether a token is available afterwards.
+ */
+export async function ensureStoreSignedIn(force = false): Promise<StoreControllerResponse<boolean>> {
+  try {
+    return { success: true, data: await ensureStoreIdentity(force) }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] ensureStoreSignedIn error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Classify whether a creator sign-in is possible, so the "not signed in" notice
+ * can explain a provider-less-but-identity-required misconfiguration instead of
+ * offering a sign-in button that can never succeed.
+ */
+export async function getStoreSignInStatus(): Promise<StoreControllerResponse<StoreSignInStatus>> {
+  try {
+    return { success: true, data: await resolveStoreSignInStatus() }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreSignInStatus error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Resolve the signed-in creator identity (uid/name) for prefilling the publish
+ * author under account identity. Null when not signed in or no identity provider.
+ */
+export async function getStoreIdentity(): Promise<StoreControllerResponse<StoreIdentity | null>> {
+  try {
+    return { success: true, data: resolveStoreIdentity() }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreIdentity error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Fetch the signed-in creator's own publications from the store server.
+ */
+export async function getStoreMyPublications(): Promise<StoreControllerResponse<MyPublication[]>> {
+  try {
+    return { success: true, data: await fetchMyPublications() }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] getStoreMyPublications error:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * Take down one of the creator's own published apps.
+ */
+export async function unpublishStoreApp(input: { slug: string }): Promise<StoreControllerResponse<null>> {
+  try {
+    if (!input?.slug) {
+      return { success: false, error: 'slug is required' }
+    }
+    await unpublishApp(input.slug)
+    return { success: true, data: null }
+  } catch (error: unknown) {
+    const err = error as Error
+    console.error('[StoreController] unpublishStoreApp error:', err.message)
     return { success: false, error: err.message }
   }
 }

@@ -106,11 +106,17 @@ export interface HealthReport {
 }
 
 /**
+ * Outcome of the update check shown next to the version number.
+ * 'downloading' covers the window between finding an update and it being
+ * ready to apply, so the row never looks idle while work is in flight.
+ */
+export type UpdateCheckPhase = 'idle' | 'checking' | 'downloading' | 'ready' | 'up-to-date' | 'failed'
+
+/**
  * Update status state
  */
 export interface UpdateStatus {
-  checking: boolean
-  hasUpdate: boolean
-  upToDate: boolean
+  phase: UpdateCheckPhase
   version?: string
+  percent?: number
 }

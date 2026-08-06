@@ -46,10 +46,12 @@ export interface ApiCredentials {
   /** Provider adapter ID for request/response transformations */
   adapterId?: string
   /**
-   * Explicit per-model vision override (Settings > Provider > Model Config).
-   * Forwarded to the OpenAI-compat converter so a user-enabled "Vision" flag
-   * keeps image content for models the name heuristic would otherwise treat as
-   * text-only (e.g. `minimax-*`). `undefined` = no override.
+   * The source's effective vision capability for this model (per-model override
+   * → provider declaration → id heuristic), resolved by AISourceManager and
+   * forwarded to the OpenAI-compat converter. Keeping this authoritative is what
+   * makes the input-area hint and the actual request agree.
+   * `undefined` = credentials not built from a source; downstream falls back to
+   * its own heuristic.
    */
   visionOverride?: boolean
   /**
@@ -72,16 +74,9 @@ export interface ApiCredentials {
 // Image Attachments
 // ============================================
 
-export type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
-
-export interface ImageAttachment {
-  id: string
-  type: 'image'
-  mediaType: ImageMediaType
-  data: string  // Base64 encoded
-  name?: string
-  size?: number
-}
+// The payload is the same object the renderer built and the transport carried,
+// so it is declared once in shared and re-exported here for agent-internal use.
+export type { ImageAttachment, ImageMediaType } from '../../../shared/types/image-attachment'
 
 // ============================================
 // Canvas Context
@@ -267,18 +262,38 @@ export interface V2SessionInfo {
   // undefined for main chat, which builds MCP servers lazily and handles toolset
   // changes via requestSessionRebuild.
   inputsFingerprint?: string
+  // Detaches this session's process-exit listener. Must be called on cleanup:
+  // session.close() never calls transport.close(), so the listener would
+  // otherwise outlive the session and fire against a successor registered
+  // under the same conversationId.
+  exitUnsubscribe?: () => void
 }
 
 // ============================================
 // MCP Types
 // ============================================
 
+/** Verdict of a native connection probe — is this configuration usable now. */
+export type McpProbeStatus = 'connected' | 'failed' | 'needs-auth'
+
 /**
- * MCP server status type (matches SDK)
+ * MCP server status.
+ *
+ * Two producers report on a server and they can legitimately disagree: the
+ * probe answers "is the configuration usable", an agent session answers "could
+ * that session actually use it". Collapsing both into one field let whichever
+ * wrote last hide the other, so a server the session could not use still
+ * showed as connected. They are kept apart; `status` is the derived value
+ * consumers should read.
  */
 export interface McpServerStatusInfo {
   name: string
+  /** Derived: the session verdict when one applies, otherwise the probe's. */
   status: 'connected' | 'failed' | 'needs-auth' | 'pending'
+  /** Last native probe verdict. Absent until a probe has run. */
+  probeStatus?: McpProbeStatus
+  /** Last agent session verdict. Cleared once a probe reconnects. */
+  sessionStatus?: 'connected' | 'failed' | 'needs-auth' | 'pending'
   serverInfo?: {
     name: string
     version: string

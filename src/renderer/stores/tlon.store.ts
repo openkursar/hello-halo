@@ -117,6 +117,8 @@ interface TlonState {
   // ── Binding ───────────────────────────────
   bindSpace: (kbId: string, spaceId: string) => Promise<boolean>
   unbindSpace: (kbId: string, spaceId: string) => Promise<boolean>
+  bindApp: (kbId: string, appId: string) => Promise<boolean>
+  unbindApp: (kbId: string, appId: string) => Promise<boolean>
 
   // ── Linked dirs ───────────────────────────
   addLinkedDir: (kbId: string, dir: { path: string; label: string }) => Promise<boolean>
@@ -297,6 +299,34 @@ export const useTlonStore = create<TlonState>((set, get) => ({
       return false
     } catch (err) {
       console.error('[TlonStore] unbindSpace error:', err)
+      return false
+    }
+  },
+
+  bindApp: async (kbId, appId) => {
+    try {
+      const res = await api.tlon.bindApp(kbId, appId)
+      if (res.success) {
+        await get().refreshKB(kbId)
+        return true
+      }
+      return false
+    } catch (err) {
+      console.error('[TlonStore] bindApp error:', err)
+      return false
+    }
+  },
+
+  unbindApp: async (kbId, appId) => {
+    try {
+      const res = await api.tlon.unbindApp(kbId, appId)
+      if (res.success) {
+        await get().refreshKB(kbId)
+        return true
+      }
+      return false
+    } catch (err) {
+      console.error('[TlonStore] unbindApp error:', err)
       return false
     }
   },

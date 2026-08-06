@@ -13,16 +13,7 @@ import {
   probeMcpApp as agentProbeMcpApp,
   resolveQuestion
 } from '../services/agent'
-
-// Image attachment type for multi-modal messages
-interface ImageAttachment {
-  id: string
-  type: 'image'
-  mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
-  data: string  // Base64 encoded
-  name?: string
-  size?: number
-}
+import type { ImageAttachment } from '../../shared/types/image-attachment'
 
 export interface SendMessageRequest {
   spaceId: string

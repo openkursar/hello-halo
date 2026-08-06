@@ -12,7 +12,7 @@
  */
 
 import type { Response as ExpressResponse } from 'express'
-import type { AnthropicRequest, BackendConfig } from '../types'
+import type { AnthropicMessageResponse, AnthropicRequest, BackendConfig } from '../types'
 import {
   convertAnthropicToOpenAIChat,
   convertAnthropicToOpenAIResponses,
@@ -25,10 +25,9 @@ import {
   streamAnthropicPassthrough,
   pipeAnthropicPassthrough
 } from '../stream'
-import { isNativeAnthropicHost, normalizeSystemPrompt } from '../utils'
+import { isNativeAnthropicHost, normalizeSystemPrompt, safeJsonParse } from '../utils'
 import { proxyFetch } from '../../services/proxy-fetch'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
-import { withRequestQueue, generateQueueKey } from './request-queue'
 import { runInterceptors } from '../interceptors'
 import { applyProviderAdapter, type AdapterContext } from './provider-adapters'
 import { handleKiroRequest } from '../adapters/kiro.adapter'
@@ -139,6 +138,24 @@ function sendError(
 // ============================================================================
 
 /**
+ * Link a caller-provided abort signal into a fetch controller.
+ *
+ * fetch ties its signal to the response body as well, so an abort fired after
+ * headers arrive still cancels body streaming — that is exactly what lets a
+ * client disconnect release the upstream SSE. The listener intentionally stays
+ * registered after fetch resolves; both objects are per-request, so nothing
+ * leaks across requests.
+ */
+function linkAbortSignal(controller: AbortController, signal?: AbortSignal): void {
+  if (!signal) return
+  if (signal.aborted) {
+    controller.abort()
+    return
+  }
+  signal.addEventListener('abort', () => controller.abort(), { once: true })
+}
+
+/**
  * Make upstream request with OpenAI-style Authorization header
  */
 async function fetchUpstream(
@@ -150,10 +167,14 @@ async function fetchUpstream(
   customHeaders?: Record<string, string>
 ): Promise<globalThis.Response> {
   const controller = new AbortController()
+  // The timeout guards connect + response headers only (cleared when fetch
+  // resolves). Body streaming has no time limit — long reasoning turns are
+  // legitimate — and is bounded by the caller's signal instead.
   const timeout = setTimeout(() => {
     console.log('[RequestHandler] Request timeout, aborting...')
     controller.abort()
   }, timeoutMs)
+  linkAbortSignal(controller, signal)
 
   try {
     // Build headers: start with custom headers, then add defaults
@@ -179,7 +200,7 @@ async function fetchUpstream(
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: signal ?? controller.signal
+      signal: controller.signal
     })
   } finally {
     clearTimeout(timeout)
@@ -202,13 +223,15 @@ async function fetchAnthropicUpstream(
   bodyOrBuffer: Buffer | unknown,
   timeoutMs: number,
   sdkHeaders?: Record<string, string>,
-  customHeaders?: Record<string, string>
+  customHeaders?: Record<string, string>,
+  signal?: AbortSignal
 ): Promise<globalThis.Response> {
   const controller = new AbortController()
   const timeout = setTimeout(() => {
     console.log('[RequestHandler] Anthropic passthrough timeout, aborting...')
     controller.abort()
   }, timeoutMs)
+  linkAbortSignal(controller, signal)
 
   try {
     const hasAuthHeader = Object.keys(customHeaders || {}).some(
@@ -299,6 +322,29 @@ function forwardResponseHeaders(upstreamResp: globalThis.Response, res: ExpressR
 }
 
 /**
+ * Fill absent/zero usage on a non-streaming passthrough body.
+ *
+ * Passthrough bodies are the upstream's own JSON, so nothing guarantees the
+ * `usage` object our converters always build. Consumers read
+ * `usage.input_tokens` unconditionally — the Claude Code SDK aborts the turn
+ * when it is missing, observed on third-party Anthropic-compatible gateways.
+ * The streaming branch already applies this fallback via BaseStreamHandler.
+ *
+ * Bodies that are not a parseable message response, and well-formed ones, are
+ * returned untouched so the passthrough stays byte-exact.
+ */
+function repairPassthroughUsage(body: string, request: AnthropicRequest): string {
+  const parsed = safeJsonParse<AnthropicMessageResponse>(body)
+  if (!parsed || parsed.type !== 'message' || !Array.isArray(parsed.content)) return body
+
+  const usage = parsed.usage
+  if (usage && usage.input_tokens && usage.output_tokens) return body
+
+  fillResponseUsageFallback(parsed, request)
+  return JSON.stringify(parsed)
+}
+
+/**
  * Handle Anthropic passthrough request — zero format conversion.
  *
  * Proxies the Anthropic request directly to the upstream Anthropic API.
@@ -375,10 +421,16 @@ async function handleAnthropicPassthrough(
     console.log(`[RequestHandler] Raw body forwarding: ${canUseRawBody ? 'yes' : 'no (modified)'}`)
   }
 
+  // Abort upstream work (including body streaming) when the client goes away.
+  // `close` also fires after normal completion; aborting a fully-consumed
+  // response is a no-op, so no distinction is needed.
+  const clientAbort = new AbortController()
+  res.on('close', () => clientAbort.abort())
+
   const anthUpstreamStartTs = Date.now()
   try {
     const upstreamResp = await fetchAnthropicUpstream(
-      targetUrl, apiKey, fetchBody, timeoutMs, sdkHeaders, customHeaders
+      targetUrl, apiKey, fetchBody, timeoutMs, sdkHeaders, customHeaders, clientAbort.signal
     )
     console.log(`[RequestHandler] Anthropic upstream response: ${upstreamResp.status}`)
     console.log(`[RequestHandler] upstream_ok wire=anthropic status=${upstreamResp.status} duration_ms=${Date.now() - anthUpstreamStartTs} url=${targetUrl}`)
@@ -410,33 +462,38 @@ async function handleAnthropicPassthrough(
         // bypassed for well-formed native streams.
         console.log('[RequestHandler] Anthropic passthrough (raw pipe)')
         await pipeAnthropicPassthrough(upstreamResp.body, res)
-        return
+      } else {
+        // Third-party Anthropic-compatible providers: re-serialize through the
+        // BaseStreamHandler repair pipeline (empty text block, tool JSON, etc.).
+        // The deferred estimate backs the usage fallback for providers that
+        // omit usage; it computes in the background while the model generates.
+        await streamAnthropicPassthrough(
+          upstreamResp.body,
+          res,
+          anthropicRequest.model,
+          debug,
+          deferInputTokensEstimate(anthropicRequest)
+        )
       }
-
-      // Third-party Anthropic-compatible providers: re-serialize through the
-      // BaseStreamHandler repair pipeline (empty text block, tool JSON, etc.).
-      // The deferred estimate backs the usage fallback for providers that
-      // omit usage; it computes in the background while the model generates.
-      await streamAnthropicPassthrough(
-        upstreamResp.body,
-        res,
-        anthropicRequest.model,
-        debug,
-        deferInputTokensEstimate(anthropicRequest)
-      )
+      console.log(`[RequestHandler] stream_end wire=anthropic status=${upstreamResp.status} duration_ms=${Date.now() - anthUpstreamStartTs} client_aborted=${clientAbort.signal.aborted} url=${targetUrl}`)
       return
     }
 
-    // Non-streaming: forward JSON response as-is
+    // Non-streaming: forward the JSON response, repairing absent usage only
+    // (see repairPassthroughUsage)
     const body = await upstreamResp.text()
     if (debug) {
       console.log(`[RequestHandler] Anthropic response:\n${body.slice(0, 2000)}`)
     }
     forwardResponseHeaders(upstreamResp, res)
-    res.end(body)
+    res.end(repairPassthroughUsage(body, anthropicRequest))
   } catch (error: any) {
     if (error?.name === 'AbortError') {
-      console.error('[RequestHandler] Anthropic passthrough AbortError (timeout or client disconnect)')
+      if (clientAbort.signal.aborted) {
+        console.log(`[RequestHandler] client_disconnected wire=anthropic duration_ms=${Date.now() - anthUpstreamStartTs} url=${targetUrl} — upstream aborted`)
+        return
+      }
+      console.error('[RequestHandler] Anthropic passthrough AbortError (timeout)')
       return sendError(res, 'timeout_error', 'Request timed out')
     }
     console.error('[RequestHandler] Anthropic passthrough error:', error?.message || error)
@@ -477,129 +534,140 @@ async function handleOpenAIConversion(
 
   console.log(`[RequestHandler] model=${anthropicRequest.model} apiKey=${apiKey ? apiKey.slice(0, 8) + '...' : 'none'}`)
 
-  // Use request queue to prevent concurrent requests
-  const queueKey = generateQueueKey(backendUrl, apiKey)
+  // Requests are deliberately NOT serialized per backend: a single slow stream
+  // (e.g. a multi-minute reasoning turn) must never block other sessions.
+  // Upstream rate limiting is the SDK's concern — it already retries 429 with
+  // backoff.
+  //
+  // Abort upstream work (including body streaming) when the client goes away.
+  // `close` also fires after normal completion; aborting a fully-consumed
+  // response is a no-op, so no distinction is needed.
+  const clientAbort = new AbortController()
+  res.on('close', () => clientAbort.abort())
 
-  await withRequestQueue(queueKey, async () => {
-    try {
-      // Determine stream mode
-      const forceEnvStream = shouldForceStream()
-      const preferStreamByWire = apiType === 'responses' && anthropicRequest.stream === undefined
-      let wantStream = forceEnvStream || config.forceStream || preferStreamByWire || anthropicRequest.stream
+  const oaiUpstreamStartTs = Date.now()
+  try {
+    // Determine stream mode
+    const forceEnvStream = shouldForceStream()
+    const preferStreamByWire = apiType === 'responses' && anthropicRequest.stream === undefined
+    let wantStream = forceEnvStream || config.forceStream || preferStreamByWire || anthropicRequest.stream
 
-      // Convert request
-      const requestToSend = { ...anthropicRequest, stream: wantStream }
-      const convertOptions = { visionOverride: config.visionOverride }
-      const openaiRequest = apiType === 'responses'
-        ? convertAnthropicToOpenAIResponses(requestToSend, convertOptions).request
-        : convertAnthropicToOpenAIChat(requestToSend, convertOptions).request
+    // Convert request
+    const requestToSend = { ...anthropicRequest, stream: wantStream }
+    const convertOptions = { visionOverride: config.visionOverride }
+    const openaiRequest = apiType === 'responses'
+      ? convertAnthropicToOpenAIResponses(requestToSend, convertOptions).request
+      : convertAnthropicToOpenAIChat(requestToSend, convertOptions).request
 
-      const toolCount = (openaiRequest as any).tools?.length ?? 0
-      console.log(`[RequestHandler] wire=${apiType} tools=${toolCount}`)
-      console.log(`[RequestHandler] POST ${backendUrl} (stream=${wantStream ?? false})`)
+    const toolCount = (openaiRequest as any).tools?.length ?? 0
+    console.log(`[RequestHandler] wire=${apiType} tools=${toolCount}`)
+    console.log(`[RequestHandler] POST ${backendUrl} (stream=${wantStream ?? false})`)
 
-      // Build headers: start with custom headers from config
-      const requestHeaders: Record<string, string> = { ...(customHeaders || {}) }
+    // Build headers: start with custom headers from config
+    const requestHeaders: Record<string, string> = { ...(customHeaders || {}) }
 
-      // Apply provider-specific transformations (e.g., Groq temperature fix, OpenRouter headers)
-      const adapterContext: AdapterContext = { originalRequest: requestToSend }
-      const adapter = applyProviderAdapter(
-        backendUrl,
-        openaiRequest as Record<string, unknown>,
-        requestHeaders,
-        adapterId,
-        adapterContext
-      )
-      if (adapter) {
-        console.log(`[RequestHandler] Applied provider adapter: ${adapter.name}`)
-      }
+    // Apply provider-specific transformations (e.g., Groq temperature fix, OpenRouter headers)
+    const adapterContext: AdapterContext = { originalRequest: requestToSend }
+    const adapter = applyProviderAdapter(
+      backendUrl,
+      openaiRequest as Record<string, unknown>,
+      requestHeaders,
+      adapterId,
+      adapterContext
+    )
+    if (adapter) {
+      console.log(`[RequestHandler] Applied provider adapter: ${adapter.name}`)
+    }
 
-      const oaiUpstreamStartTs = Date.now()
-      // Make upstream request - URL is used directly, no modification
-      let upstreamResp = await fetchUpstream(backendUrl, apiKey, openaiRequest, timeoutMs, undefined, requestHeaders)
-      console.log(`[RequestHandler] Upstream response: ${upstreamResp.status}`)
-      console.log(`[RequestHandler] upstream_ok wire=openai api_type=${apiType} status=${upstreamResp.status} duration_ms=${Date.now() - oaiUpstreamStartTs} url=${backendUrl}`)
+    // Make upstream request - URL is used directly, no modification
+    let upstreamResp = await fetchUpstream(backendUrl, apiKey, openaiRequest, timeoutMs, clientAbort.signal, requestHeaders)
+    console.log(`[RequestHandler] Upstream response: ${upstreamResp.status}`)
+    console.log(`[RequestHandler] upstream_ok wire=openai api_type=${apiType} status=${upstreamResp.status} duration_ms=${Date.now() - oaiUpstreamStartTs} url=${backendUrl}`)
 
-      // Handle errors - use upstream error type if available, else map from status
-      if (!upstreamResp.ok) {
-        const errorText = await upstreamResp.text().catch(() => '')
-        const { type: errorType, message: errorMessage } = getUpstreamError(upstreamResp.status, errorText)
-        console.error(`[RequestHandler] Provider error ${upstreamResp.status}: ${errorText.slice(0, 200)}`)
-        console.log(`[RequestHandler] upstream_error_detail wire=openai api_type=${apiType} status=${upstreamResp.status} duration_ms=${Date.now() - oaiUpstreamStartTs} content_type=${upstreamResp.headers.get('content-type') || ''} www_authenticate=${upstreamResp.headers.get('www-authenticate') || ''} url=${backendUrl} body_head="${errorText.slice(0, 500).replace(/"/g, "'")}"`)
+    // Handle errors - use upstream error type if available, else map from status
+    if (!upstreamResp.ok) {
+      const errorText = await upstreamResp.text().catch(() => '')
+      const { type: errorType, message: errorMessage } = getUpstreamError(upstreamResp.status, errorText)
+      console.error(`[RequestHandler] Provider error ${upstreamResp.status}: ${errorText.slice(0, 200)}`)
+      console.log(`[RequestHandler] upstream_error_detail wire=openai api_type=${apiType} status=${upstreamResp.status} duration_ms=${Date.now() - oaiUpstreamStartTs} content_type=${upstreamResp.headers.get('content-type') || ''} www_authenticate=${upstreamResp.headers.get('www-authenticate') || ''} url=${backendUrl} body_head="${errorText.slice(0, 500).replace(/"/g, "'")}"`)
 
-        // Check if upstream requires stream=true, retry if needed
-        const errorLower = errorText?.toLowerCase() || ''
-        const requiresStream = errorLower.includes('stream must be set to true') ||
-                               (errorLower.includes('non-stream') && errorLower.includes('not supported'))
+      // Check if upstream requires stream=true, retry if needed
+      const errorLower = errorText?.toLowerCase() || ''
+      const requiresStream = errorLower.includes('stream must be set to true') ||
+                             (errorLower.includes('non-stream') && errorLower.includes('not supported'))
 
-        if (requiresStream && !wantStream) {
-          console.warn('[RequestHandler] Upstream requires stream=true, retrying...')
+      if (requiresStream && !wantStream) {
+        console.warn('[RequestHandler] Upstream requires stream=true, retrying...')
 
-          // Retry with stream enabled
-          wantStream = true
-          const retryRequest = apiType === 'responses'
-            ? convertAnthropicToOpenAIResponses({ ...anthropicRequest, stream: true }, convertOptions).request
-            : convertAnthropicToOpenAIChat({ ...anthropicRequest, stream: true }, convertOptions).request
+        // Retry with stream enabled
+        wantStream = true
+        const retryRequest = apiType === 'responses'
+          ? convertAnthropicToOpenAIResponses({ ...anthropicRequest, stream: true }, convertOptions).request
+          : convertAnthropicToOpenAIChat({ ...anthropicRequest, stream: true }, convertOptions).request
 
-          // Re-apply provider adapter to retry request (reuse same headers and context)
-          applyProviderAdapter(backendUrl, retryRequest as Record<string, unknown>, requestHeaders, adapterId, adapterContext)
+        // Re-apply provider adapter to retry request (reuse same headers and context)
+        applyProviderAdapter(backendUrl, retryRequest as Record<string, unknown>, requestHeaders, adapterId, adapterContext)
 
-          const oaiRetryStartTs = Date.now()
-          upstreamResp = await fetchUpstream(backendUrl, apiKey, retryRequest, timeoutMs, undefined, requestHeaders)
-          console.log(`[RequestHandler] upstream_ok wire=openai api_type=${apiType} retry=true status=${upstreamResp.status} duration_ms=${Date.now() - oaiRetryStartTs} url=${backendUrl}`)
+        const oaiRetryStartTs = Date.now()
+        upstreamResp = await fetchUpstream(backendUrl, apiKey, retryRequest, timeoutMs, clientAbort.signal, requestHeaders)
+        console.log(`[RequestHandler] upstream_ok wire=openai api_type=${apiType} retry=true status=${upstreamResp.status} duration_ms=${Date.now() - oaiRetryStartTs} url=${backendUrl}`)
 
-          if (!upstreamResp.ok) {
-            const retryErrorText = await upstreamResp.text().catch(() => '')
-            const { type: retryErrorType, message: retryErrorMessage } = getUpstreamError(upstreamResp.status, retryErrorText)
-            console.error(`[RequestHandler] Provider error ${upstreamResp.status}: ${retryErrorText.slice(0, 200)}`)
-            console.log(`[RequestHandler] upstream_error_detail wire=openai api_type=${apiType} retry=true status=${upstreamResp.status} duration_ms=${Date.now() - oaiRetryStartTs} content_type=${upstreamResp.headers.get('content-type') || ''} www_authenticate=${upstreamResp.headers.get('www-authenticate') || ''} url=${backendUrl} body_head="${retryErrorText.slice(0, 500).replace(/"/g, "'")}"`)
-            return sendError(res, retryErrorType, retryErrorMessage)
-          }
-        } else {
-          return sendError(res, errorType, errorMessage)
+        if (!upstreamResp.ok) {
+          const retryErrorText = await upstreamResp.text().catch(() => '')
+          const { type: retryErrorType, message: retryErrorMessage } = getUpstreamError(upstreamResp.status, retryErrorText)
+          console.error(`[RequestHandler] Provider error ${upstreamResp.status}: ${retryErrorText.slice(0, 200)}`)
+          console.log(`[RequestHandler] upstream_error_detail wire=openai api_type=${apiType} retry=true status=${upstreamResp.status} duration_ms=${Date.now() - oaiRetryStartTs} content_type=${upstreamResp.headers.get('content-type') || ''} www_authenticate=${upstreamResp.headers.get('www-authenticate') || ''} url=${backendUrl} body_head="${retryErrorText.slice(0, 500).replace(/"/g, "'")}"`)
+          return sendError(res, retryErrorType, retryErrorMessage)
         }
+      } else {
+        return sendError(res, errorType, errorMessage)
       }
+    }
 
-      // Handle streaming response
-      if (wantStream) {
-        res.setHeader('Content-Type', 'text/event-stream')
-        res.setHeader('Cache-Control', 'no-cache')
-        res.setHeader('Connection', 'keep-alive')
+    // Handle streaming response
+    if (wantStream) {
+      res.setHeader('Content-Type', 'text/event-stream')
+      res.setHeader('Cache-Control', 'no-cache')
+      res.setHeader('Connection', 'keep-alive')
 
-        // Background input-token estimate backing the usage fallback for
-        // providers that omit usage from the stream; computes while the
-        // model generates, so stream finish never waits on it.
-        const estimateInputTokens = deferInputTokensEstimate(anthropicRequest)
-        if (apiType === 'responses') {
-          await streamOpenAIResponsesToAnthropic(upstreamResp.body, res, anthropicRequest.model, debug, estimateInputTokens)
-        } else {
-          await streamOpenAIChatToAnthropic(upstreamResp.body, res, anthropicRequest.model, debug, estimateInputTokens)
-        }
+      // Background input-token estimate backing the usage fallback for
+      // providers that omit usage from the stream; computes while the
+      // model generates, so stream finish never waits on it.
+      const estimateInputTokens = deferInputTokensEstimate(anthropicRequest)
+      if (apiType === 'responses') {
+        await streamOpenAIResponsesToAnthropic(upstreamResp.body, res, anthropicRequest.model, debug, estimateInputTokens)
+      } else {
+        await streamOpenAIChatToAnthropic(upstreamResp.body, res, anthropicRequest.model, debug, estimateInputTokens)
+      }
+      console.log(`[RequestHandler] stream_end wire=openai api_type=${apiType} status=${upstreamResp.status} duration_ms=${Date.now() - oaiUpstreamStartTs} client_aborted=${clientAbort.signal.aborted} url=${backendUrl}`)
+      return
+    }
+
+    // Handle non-streaming response
+    const openaiResponse = await upstreamResp.json()
+    if (debug) {
+      console.log(`[RequestHandler] Response body:\n${JSON.stringify(openaiResponse, null, 2)}`)
+    }
+    const anthropicResponse = apiType === 'responses'
+      ? convertOpenAIResponsesToAnthropic(openaiResponse)
+      : convertOpenAIChatToAnthropic(openaiResponse, anthropicRequest.model)
+
+    fillResponseUsageFallback(anthropicResponse, anthropicRequest)
+    res.json(anthropicResponse)
+  } catch (error: any) {
+    // Handle abort/timeout
+    if (error?.name === 'AbortError') {
+      if (clientAbort.signal.aborted) {
+        console.log(`[RequestHandler] client_disconnected wire=openai api_type=${apiType} duration_ms=${Date.now() - oaiUpstreamStartTs} url=${backendUrl} — upstream aborted`)
         return
       }
-
-      // Handle non-streaming response
-      const openaiResponse = await upstreamResp.json()
-      if (debug) {
-        console.log(`[RequestHandler] Response body:\n${JSON.stringify(openaiResponse, null, 2)}`)
-      }
-      const anthropicResponse = apiType === 'responses'
-        ? convertOpenAIResponsesToAnthropic(openaiResponse)
-        : convertOpenAIChatToAnthropic(openaiResponse, anthropicRequest.model)
-
-      fillResponseUsageFallback(anthropicResponse, anthropicRequest)
-      res.json(anthropicResponse)
-    } catch (error: any) {
-      // Handle abort/timeout
-      if (error?.name === 'AbortError') {
-        console.error('[RequestHandler] AbortError (timeout or client disconnect)')
-        return sendError(res, 'timeout_error', 'Request timed out')
-      }
-
-      console.error('[RequestHandler] Internal error:', error?.message || error)
-      return sendError(res, 'api_error', error?.message || 'Internal error')
+      console.error('[RequestHandler] AbortError (timeout)')
+      return sendError(res, 'timeout_error', 'Request timed out')
     }
-  })
+
+    console.error('[RequestHandler] Internal error:', error?.message || error)
+    return sendError(res, 'api_error', error?.message || 'Internal error')
+  }
 }
 
 // ============================================================================

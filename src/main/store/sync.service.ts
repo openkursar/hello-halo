@@ -7,7 +7,7 @@
  * Design:
  *   - Each Mirror source is synced independently
  *   - Batch INSERT (500 per transaction) to avoid long write-locks
- *   - ETag/Last-Modified for change detection (skip if unchanged)
+ *   - HTTP validators (ETag) so an unchanged source costs a 304, not a download
  *   - On failure, old cached data is preserved
  *   - Emits 'store:sync-status-changed' IPC events for UI updates
  */
@@ -16,6 +16,7 @@ import type Database from 'better-sqlite3'
 import type { DatabaseManager } from '../platform/store/types'
 import type { RegistrySource, RegistryEntry } from '../../shared/store/store-types'
 import { getAdapter } from './adapters'
+import type { IndexValidators } from './adapters/types'
 
 const BATCH_SIZE = 500
 const DEFAULT_MIRROR_TTL_MS = 3600000 // 1 hour
@@ -71,8 +72,15 @@ export class SyncService {
 
   /**
    * Sync all enabled Mirror sources that are past their TTL.
+   *
+   * `conditionalOnly` bounds what a zero-TTL pass may cost, so the caller can
+   * run one whenever the user arrives at the store.
    */
-  async syncAll(registries: RegistrySource[], ttlMs = DEFAULT_MIRROR_TTL_MS): Promise<void> {
+  async syncAll(
+    registries: RegistrySource[],
+    ttlMs = DEFAULT_MIRROR_TTL_MS,
+    conditionalOnly = false,
+  ): Promise<boolean> {
     const mirrorRegistries = registries.filter(r => {
       if (!r.enabled) return false
       const adapter = getAdapter(r)
@@ -81,27 +89,43 @@ export class SyncService {
 
     console.log('[SyncService] syncAll:start', {
       ttlMs,
+      conditionalOnly,
       totalRegistries: registries.length,
       mirrorRegistries: mirrorRegistries.length,
     })
 
     const startedAt = performance.now()
     // Sync in parallel (each source is independent)
-    await Promise.allSettled(
-      mirrorRegistries.map(r => this.syncOne(r, ttlMs))
+    const results = await Promise.allSettled(
+      mirrorRegistries.map(r => this.syncOne(r, this.affordableTtl(r.id, ttlMs, conditionalOnly)))
     )
+    const changed = results.some(r => r.status === 'fulfilled' && r.value)
 
     console.log('[SyncService] syncAll:done', {
       ttlMs,
       mirrorRegistries: mirrorRegistries.length,
+      changed,
       durationMs: Math.round(performance.now() - startedAt),
     })
+    return changed
+  }
+
+  /**
+   * A source that stored no validators cannot answer a conditional request, so
+   * re-checking it downloads its whole index. Under `conditionalOnly` those
+   * sources keep the normal TTL rather than the caller's shorter one — without
+   * this, a check meant to cost a few 304s costs a full mirror download.
+   */
+  private affordableTtl(registryId: string, ttlMs: number, conditionalOnly: boolean): number {
+    if (!conditionalOnly) return ttlMs
+    const canRevalidate = Object.keys(this.readValidators(registryId)).length > 0
+    return canRevalidate ? ttlMs : Math.max(ttlMs, DEFAULT_MIRROR_TTL_MS)
   }
 
   /**
    * Sync a single Mirror source. Skips if within TTL and not forced.
    */
-  async syncOne(registry: RegistrySource, ttlMs = DEFAULT_MIRROR_TTL_MS, force = false): Promise<void> {
+  async syncOne(registry: RegistrySource, ttlMs = DEFAULT_MIRROR_TTL_MS, force = false): Promise<boolean> {
     // Wait for any in-flight sync of the same registry instead of skipping:
     // callers like refreshIndex(ttl=0) must not return before data is fresh.
     while (this.syncing.has(registry.id)) {
@@ -120,7 +144,7 @@ export class SyncService {
           ttlMs,
           ageMs: Date.now() - state.last_synced_at,
         })
-        return // still fresh
+        return false // still fresh
       }
     }
 
@@ -143,7 +167,24 @@ export class SyncService {
       }
 
       const t0 = performance.now()
-      const index = await adapter.fetchIndex(registry)
+      const { index, validators } = await adapter.fetchIndex(registry, this.readValidators(registry.id))
+      this.writeValidators(registry.id, validators)
+
+      // Revalidated unchanged — the rows on disk are still correct, so skip the
+      // rewrite entirely and only record that we checked.
+      if (index === null) {
+        const existing = this.db.prepare(
+          `SELECT app_count FROM registry_sync_state WHERE registry_id = ?`
+        ).get(registry.id) as { app_count: number } | undefined
+        console.log('[SyncService] syncOne:not-modified', {
+          registryId: registry.id,
+          registryName: registry.name,
+          durationMs: Math.round(performance.now() - t0),
+        })
+        this.emit(registry.id, 'idle', existing?.app_count ?? 0)
+        return false
+      }
+
       const entries = index.apps.filter(e => e.format === 'bundle')
 
       // Remove old FTS entries BEFORE replacing registry_items rows.
@@ -168,6 +209,7 @@ export class SyncService {
       })
 
       this.emit(registry.id, 'idle', entries.length)
+      return true
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[SyncService] Sync failed for "${registry.name}": ${msg}`)
@@ -183,11 +225,36 @@ export class SyncService {
       ).get(registry.id) as { app_count: number } | undefined
 
       this.emit(registry.id, 'error', existing?.app_count ?? 0, msg)
+      return false
     } finally {
       this.syncing.delete(registry.id)
       release()
       console.log('[SyncService] syncOne:finalize', { registryId: registry.id, inProgressCount: this.syncing.size })
     }
+  }
+
+  /**
+   * Cache validators live in the sync-state row rather than a table of their
+   * own: they are meaningless without the rows they validate, so they expire
+   * together. The shape is opaque to this layer — only the adapter reads it.
+   */
+  private readValidators(registryId: string): IndexValidators {
+    const row = this.db.prepare(
+      `SELECT etag FROM registry_sync_state WHERE registry_id = ?`
+    ).get(registryId) as { etag: string | null } | undefined
+    if (!row?.etag) return {}
+    try {
+      return JSON.parse(row.etag) as IndexValidators
+    } catch {
+      return {}
+    }
+  }
+
+  private writeValidators(registryId: string, validators: IndexValidators): void {
+    const encoded = Object.keys(validators).length > 0 ? JSON.stringify(validators) : null
+    this.db.prepare(
+      `UPDATE registry_sync_state SET etag = ? WHERE registry_id = ?`
+    ).run(encoded, registryId)
   }
 
   /**
@@ -262,13 +329,13 @@ export class SyncService {
 
     const insert = this.db.prepare(`
       INSERT OR REPLACE INTO registry_items (
-        pk, slug, registry_id, name, description, author, tags,
+        pk, slug, registry_id, name, display_name, description, author, tags,
         type, category, rank, version, icon, locale,
         format, path, download_url, size_bytes, checksum,
         requires_mcps, requires_skills,
         created_at, updated_at, i18n, meta, indexed_at
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?,
@@ -287,6 +354,7 @@ export class SyncService {
             e.slug,
             registryId,
             e.name,
+            e.display_name ?? null,
             e.description,
             e.author,
             JSON.stringify(e.tags ?? []),

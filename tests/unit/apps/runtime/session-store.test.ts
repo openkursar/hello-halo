@@ -117,16 +117,17 @@ function userTrigger(text: string, ts = '2026-01-01T00:00:00.000Z'): StoredEvent
   }
 }
 
-/** Create a user trigger message carrying image blocks */
+/** Create a user message carrying image blocks; `isTrigger` marks it as user-sent */
 function userTriggerWithImages(
   text: string,
-  images: Array<{ id?: string; name?: string; data: string }>,
-  ts = '2026-01-01T00:00:00.000Z'
+  images: Array<{ name?: string; data: string }>,
+  ts = '2026-01-01T00:00:00.000Z',
+  isTrigger = true
 ): StoredEvent {
   return {
     _ts: ts,
     type: 'user',
-    _isTrigger: true,
+    ...(isTrigger ? { _isTrigger: true } : {}),
     message: {
       role: 'user',
       content: [
@@ -134,7 +135,6 @@ function userTriggerWithImages(
         ...images.map(img => ({
           type: 'image',
           source: { type: 'base64', media_type: 'image/png', data: img.data },
-          ...(img.id ? { _id: img.id } : {}),
           ...(img.name ? { _name: img.name } : {}),
         })),
       ],
@@ -786,7 +786,7 @@ describe('convertEventsToMessages', () => {
     it('reconstructs attached images on the user message', () => {
       const events: StoredEvent[] = [
         userTriggerWithImages('What is in this screenshot?', [
-          { id: 'img-1', name: 'shot.png', data: 'AAAA' },
+          { name: 'shot.png', data: 'AAAA' },
         ]),
         assistantText('A table of contacts.'),
       ]
@@ -795,7 +795,7 @@ describe('convertEventsToMessages', () => {
 
       expect(messages[0]).toMatchObject({ role: 'user', content: 'What is in this screenshot?' })
       expect(messages[0].images).toEqual([
-        { id: 'img-1', type: 'image', mediaType: 'image/png', data: 'AAAA', name: 'shot.png' },
+        { id: 'session-img-1-0', type: 'image', mediaType: 'image/png', data: 'AAAA', name: 'shot.png' },
       ])
       // Images belong to the user turn only.
       expect(messages[1].images).toBeUndefined()
@@ -803,7 +803,7 @@ describe('convertEventsToMessages', () => {
 
     it('keeps an image-only message (no text) visible', () => {
       const messages = convertEventsToMessages([
-        userTriggerWithImages('', [{ id: 'img-1', data: 'AAAA' }]),
+        userTriggerWithImages('', [{ data: 'AAAA' }]),
       ])
 
       expect(messages).toHaveLength(1)
@@ -811,13 +811,23 @@ describe('convertEventsToMessages', () => {
       expect(messages[0].images).toHaveLength(1)
     })
 
-    it('assigns distinct fallback ids when the transcript carries none', () => {
+    it('assigns distinct ids to the images of one message', () => {
       const messages = convertEventsToMessages([
         userTriggerWithImages('two', [{ data: 'AAAA' }, { data: 'BBBB' }]),
       ])
 
       const ids = messages[0].images!.map(i => i.id)
       expect(new Set(ids).size).toBe(2)
+    })
+
+    it('ignores image blocks on a user event that is not a trigger', () => {
+      // SDK round-trip user events can carry image blocks that are tool
+      // plumbing rather than something the user attached.
+      const messages = convertEventsToMessages([
+        userTriggerWithImages('tool echo', [{ data: 'AAAA' }], undefined, false),
+      ])
+
+      expect(messages[0].images).toBeUndefined()
     })
 
     it('omits the images field for a text-only message', () => {
@@ -844,7 +854,7 @@ describe('convertEventsToMessages', () => {
           ['assistant', 'Got it.'],
         ])
         expect(messages[0].images).toEqual([
-          { id: 'img-1', type: 'image', mediaType: 'image/png', data: 'AAAA', name: 'shot.png' },
+          { id: 'session-img-1-0', type: 'image', mediaType: 'image/png', data: 'AAAA', name: 'shot.png' },
         ])
       } finally {
         rmSync(spacePath, { recursive: true, force: true })

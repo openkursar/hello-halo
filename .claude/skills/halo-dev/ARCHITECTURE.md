@@ -126,6 +126,8 @@ src/
 │       └── *.service.ts + utilities   # Domain singletons: config, conversation, space,
 │                                      #   artifact, artifact-cache, search,
 │                                      #   window, overlay, onboarding, updater, notification,
+│                                      #   announcement (static-feed poll → toast; the only
+│                                      #     server→client push that is not version-coupled),
 │                                      #   protocol, api-validator, model-capabilities,
 │                                      #   secure-storage, browser-view, browser-policy,
 │                                      #   watcher-host
@@ -164,9 +166,11 @@ src/
     │   ├── setup/                     #   Sub-components: LoginSelector, SetupProviderConfig, ServerConnect
     │   ├── store/                     #   App Store UI
     │   ├── ui/                        #   Cross-domain interaction primitives (ConfirmDialog,
-    │   │                              #   ContextMenu, ...). Not shadcn-generated, but follows
-    │   │                              #   the same theme-token pattern. Home for any future
-    │   │                              #   generic primitive (Toast, Popover, Tooltip, ...)
+    │   │                              #   ContextMenu, RichText, ...). Not shadcn-generated,
+    │   │                              #   but follows the same theme-token pattern. Home for
+    │   │                              #   any future generic primitive (Popover, Tooltip, ...)
+    │   │                              #   RichText renders server-authored copy under a hard
+    │   │                              #   element whitelist — never enable raw HTML in it
     │   ├── brand/, icons/, tool/, updater/, notification/
     │   ├── team/                      #   Digital team / office UI (board, member chat, join)
     │   ├── diff/, search/, pulse/, onboarding/, artifact/
@@ -654,6 +658,7 @@ When touching a module, read its design doc first:
 - `src/main/apps/manager/DESIGN.md`
 - `src/main/apps/runtime/DESIGN.md`
 - `src/main/apps/spec/PROTOCOL.md`
+- `src/main/store/DESIGN.md` — App Store (registry federation, source adapters, backend surfaces)
 - `src/main/platform/store/DESIGN.md`
 - `src/main/platform/scheduler/DESIGN.md`
 - `src/main/platform/memory/DESIGN.md`

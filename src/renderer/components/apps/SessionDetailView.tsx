@@ -259,6 +259,7 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
           isGenerating={isLive}
           placeholder={isLive ? t('Add a message to guide this run...') : t('Reply to continue this run...')}
           hideToolsetControls
+          hideKnowledgeControls
         />
       </div>
     </div>

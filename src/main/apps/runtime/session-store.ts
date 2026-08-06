@@ -77,7 +77,7 @@ interface MessageRecord {
   timestamp: string
   thoughts?: ThoughtRecord[]
   thoughtsSummary?: ThoughtsSummaryRecord
-  /** Images the user attached to this message (user records only) */
+  /** Images the user attached to this message (trigger records only) */
   images?: ImageAttachment[]
 }
 
@@ -89,9 +89,9 @@ export interface SessionWriter {
   /** Append a raw SDK stream event */
   writeEvent(event: Record<string, unknown>): void
   /**
-   * Write the initial trigger message (before stream starts).
-   * Attached images are persisted alongside the text so a reload reconstructs
-   * the same bubble the user saw when sending.
+   * Write the initial trigger message (before stream starts). Images are
+   * stored as base64 image blocks in the trigger content (same trade-off as
+   * main-chat conversation JSON) so chat bubbles survive the JSONL reload.
    */
   writeTrigger(content: string, images?: ImageAttachment[]): void
 }
@@ -134,39 +134,23 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
       appendLine({ _ts: new Date().toISOString(), ...event } as StoredEvent)
     },
 
-    writeTrigger(content: string, images?: ImageAttachment[]): void {
+    writeTrigger(content, images): void {
+      const blocks: Array<Record<string, unknown>> = [{ type: 'text', text: content }]
+      for (const img of images ?? []) {
+        blocks.push({
+          type: 'image',
+          source: { type: 'base64', media_type: img.mediaType, data: img.data },
+          ...(img.name ? { _name: img.name } : {}),
+        })
+      }
       appendLine({
         _ts: new Date().toISOString(),
         type: 'user',
         _isTrigger: true,
-        message: { role: 'user', content: buildTriggerContent(content, images) },
+        message: { role: 'user', content: blocks },
       })
     },
   }
-}
-
-/**
- * Build the stored content blocks for a trigger message.
- *
- * Image blocks keep the Anthropic `source` shape so the transcript stays
- * readable as an SDK message; `id` / `name` ride along under the `_` prefix
- * this file uses for Halo-private fields, since the API shape has no room for
- * them and the bubble needs them back on reload.
- */
-function buildTriggerContent(
-  content: string,
-  images?: ImageAttachment[]
-): Array<Record<string, unknown>> {
-  const blocks: Array<Record<string, unknown>> = [{ type: 'text', text: content }]
-  for (const image of images ?? []) {
-    blocks.push({
-      type: 'image',
-      source: { type: 'base64', media_type: image.mediaType, data: image.data },
-      _id: image.id,
-      ...(image.name ? { _name: image.name } : {}),
-    })
-  }
-  return blocks
 }
 
 // ============================================
@@ -392,7 +376,10 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
         // Flush the current turn before showing the user message.
         flush()
         const textContent = extractTextContent(content)
-        const images = extractImageAttachments(content, msgIdx + 1)
+        // Image blocks become bubble attachments only for trigger records (our
+        // own format) — SDK round-trip user events may carry image blocks that
+        // are tool plumbing, not something the user attached.
+        const images = event._isTrigger ? extractImageAttachments(content, msgIdx + 1) : []
         if (textContent || images.length > 0) {
           messages.push({
             id: `session-msg-${++msgIdx}`,
@@ -733,26 +720,22 @@ function extractTextContent(content: unknown): string {
 }
 
 /**
- * Rebuild the renderer's ImageAttachment[] from stored image blocks.
+ * Rebuild image attachments from base64 image blocks in a trigger record.
  *
- * `msgSeq` only seeds the fallback id for transcripts written before ids were
- * persisted — it just has to be stable within one read so React keys hold.
+ * `msgIdx` only seeds the bubble id — the stored block has no id of its own,
+ * so it just has to be stable within one read for React keys to hold.
  */
-function extractImageAttachments(content: unknown, msgSeq: number): ImageAttachment[] {
+function extractImageAttachments(content: unknown, msgIdx: number): ImageAttachment[] {
   if (!Array.isArray(content)) return []
-  const images: ImageAttachment[] = []
-  for (const block of content as any[]) {
-    const source = block?.source
-    if (block?.type !== 'image' || typeof source?.data !== 'string') continue
-    images.push({
-      id: typeof block._id === 'string' ? block._id : `session-img-${msgSeq}-${images.length}`,
-      type: 'image',
-      mediaType: source.media_type as ImageMediaType,
-      data: source.data,
-      ...(typeof block._name === 'string' ? { name: block._name } : {}),
-    })
-  }
-  return images
+  return content
+    .filter((b: any) => b.type === 'image' && b.source?.type === 'base64' && b.source.data)
+    .map((b: any, i: number) => ({
+      id: `session-img-${msgIdx}-${i}`,
+      type: 'image' as const,
+      mediaType: (b.source.media_type || 'image/png') as ImageMediaType,
+      data: b.source.data,
+      ...(b._name ? { name: b._name } : {}),
+    }))
 }
 
 function extractToolResults(content: unknown): Array<{ toolUseId: string; output: string; isError: boolean }> {

@@ -45,6 +45,7 @@ import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable 
 import type { BrowserContext } from '../../services/ai-browser/context'
 import { processStream } from '../../services/agent/stream-processor'
 import { buildMessageContent } from '../../services/agent/message-utils'
+import { prepareNonVisionImageFallback } from '../../services/agent/image-attachments'
 import {
   getOrCreateV2Session,
   closeV2Session,
@@ -416,6 +417,16 @@ export async function sendAppChatMessage(
   const electronPath = getHeadlessElectronPath()
   const workDir = getWorkingDir(spaceId)
 
+  // Non-vision models can't receive image blocks: persist images to files and
+  // inject their paths for the ocr_image tool (mirrors send-message.ts). No
+  // toolset open needed — app chat seeds the OCR MCP server unconditionally
+  // at session creation.
+  const imageFallback = prepareNonVisionImageFallback({
+    scope: { spaceId, conversationId, workDir },
+    credentials,
+    images
+  })
+
   // ── 2. Build memory scope ────────────────────────────
   const memoryScope: MemoryCallerScope = {
     type: 'app',
@@ -747,13 +758,20 @@ export async function sendAppChatMessage(
       ? openSessionWriter(spacePath, appId, chatRunId)
       : undefined
 
-    // Write user message to JSONL for reload recovery
+    // Write user message to JSONL for reload recovery. Original images are
+    // persisted regardless of the vision fallback — they feed the chat bubble
+    // display, not the model.
     if (sessionWriter) {
       sessionWriter.writeTrigger(message, images)
     }
 
     // ── 8. Process stream ──────────────────────────────
-    const messageContent = buildMessageContent(message, images)
+    // With the non-vision fallback active, image blocks are replaced by the
+    // injected attachment-paths block.
+    const messageContent = buildMessageContent(
+      (imageFallback?.contextBlock ?? '') + message,
+      imageFallback ? undefined : images
+    )
 
     // Accumulate the final reply text from raw SDK assistant messages. Keeps the
     // last contiguous run of text blocks so multi-segment answers survive intact

@@ -351,11 +351,11 @@ export interface BackendRequestConfig {
   /** Provider adapter ID — selects a registered adapter for request/response transformations */
   adapterId?: string
   /**
-   * Explicit per-model vision override from Settings > Provider > Model Config.
-   * When set, it overrides the OpenAI-compat converter's name-based vision
-   * inference when deciding whether to keep or strip image content.
-   * `undefined` = no override; the converter falls back to its built-in
-   * blacklist/keyword heuristic (`supportsVisionById`).
+   * The source's effective vision capability for this model, as resolved by
+   * `resolveModelVision` (per-model override → provider declaration → id
+   * heuristic). Decides whether image content is kept or stripped.
+   * `undefined` only for configs not built by AISourceManager; the OpenAI-compat
+   * converter then falls back to its own id heuristic (`supportsVisionById`).
    */
   visionOverride?: boolean
 }

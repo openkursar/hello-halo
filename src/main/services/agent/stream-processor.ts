@@ -28,7 +28,7 @@ import { emitAgentEvent } from './events'
 import { parseSDKMessage } from './message-utils'
 import { extractRealAssistantUsage, buildTokenUsage, isSyntheticAssistantMessage } from './context-usage'
 import { broadcastMcpStatus } from './mcp-manager'
-import { probeFailedServers } from './mcp-probe'
+import { probeUnhealthyServers } from './mcp-probe'
 import {
   handleSubAgentMessage,
   handleTaskStarted,
@@ -984,9 +984,14 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
         }
         // Broadcast MCP status + tools to frontend (global event, not conversation-specific)
         broadcastMcpStatus(mcpServers, tools)
-        // The SDK reports failed servers with no reason — follow up with a
-        // native probe (cooldown-guarded) to attach the failure detail.
-        probeFailedServers(mcpServers.filter(s => s.status === 'failed').map(s => s.name))
+        // The SDK reports unhealthy servers with no reason — follow up with a
+        // native probe (cooldown-guarded) to attach the detail, and to recover
+        // servers CC refused over a stale auth record.
+        probeUnhealthyServers(
+          mcpServers
+            .filter(s => s.status === 'failed' || s.status === 'needs-auth')
+            .map(s => s.name)
+        )
       }
 
       // Task lifecycle events — update sub-agent progress + forward to Agent Team

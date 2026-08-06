@@ -3,15 +3,24 @@
  * Developer-level settings: SDK engine, extended capabilities, max turns, CLI integration
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertTriangle, ChevronDown, ChevronUp, Cpu, Puzzle, RefreshCw, Terminal } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
-import type { HaloConfig } from '../../types'
+import type { EngineAvailabilityReport, EngineId, HaloConfig } from '../../types'
 import { CLIConfigSection } from './CLIConfigSection'
 import { Switch } from '../ui/Switch'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { DEFAULT_DISABLED_TOOLS } from '../../../shared/constants/disabled-tools'
+
+// ─── Agent SDK Engine ───────────────────────────────────────────────────────────
+
+/**
+ * Engine order shown in the selector. Labels and descriptions stay at the
+ * render site as `t()` literals — i18next-parser only extracts literal keys,
+ * so moving the copy into this table would drop the existing translations.
+ */
+const ENGINE_IDS: readonly EngineId[] = ['anthropic', 'halo', 'codex']
 
 // ─── Built-in MCP Extensions ────────────────────────────────────────────────────
 
@@ -113,8 +122,29 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   })
   const [developerMode, setDeveloperModeState] = useState(config?.agent?.developerMode ?? false)
   const [capsPanelOpen, setCapsPanelOpen] = useState(false)
+  const [engineAvailability, setEngineAvailability] = useState<EngineAvailabilityReport | null>(null)
 
   const sdkEngineChanged = sdkEngine !== sdkEngineInitial
+
+  // Engines absent from this build must not be selectable — picking one used to
+  // leave the app unable to start. Until the probe answers, every option stays
+  // enabled: the call is local and resolves in milliseconds, and a selection
+  // made in that window still degrades safely at startup rather than failing.
+  useEffect(() => {
+    let cancelled = false
+    api.getEngineAvailability()
+      .then(result => {
+        if (cancelled || !result?.success || !result.data) return
+        setEngineAvailability(result.data as EngineAvailabilityReport)
+      })
+      .catch(error => console.warn('[AdvancedSection] Engine availability unavailable:', error))
+    return () => { cancelled = true }
+  }, [])
+
+  const isEngineAvailable = (engineId: EngineId) => {
+    if (!engineAvailability) return true
+    return engineAvailability.engines.find(e => e.engineId === engineId)?.available ?? false
+  }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -250,54 +280,54 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
             {t('Choose the underlying engine that powers the AI agent')}
           </p>
 
+          {engineAvailability?.degradedFrom && (
+            <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 mb-3 text-sm text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>
+                {t('The selected engine is not included in this build, so Halo is running on another engine. Your choice has been kept — reinstall a complete package, or pick an available engine below.')}
+              </span>
+            </div>
+          )}
+
           <div className="space-y-2">
-            {/* Claude Code SDK */}
-            <label className="flex items-start gap-3 p-3 rounded-lg border border-border cursor-pointer hover:bg-muted/50 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-              <input
-                type="radio"
-                name="sdkEngine"
-                value="anthropic"
-                checked={sdkEngine === 'anthropic'}
-                onChange={() => handleSdkEngineChange('anthropic')}
-                className="mt-0.5 accent-primary"
-              />
-              <div>
-                <p className="font-medium text-sm">{t('Claude Code SDK')}</p>
-                <p className="text-xs text-muted-foreground">{t('Powered by the official Anthropic Claude Code engine. Works with a wide range of frontier models. (Default)')}</p>
-              </div>
-            </label>
-
-            {/* Halo SDK */}
-            <label className="flex items-start gap-3 p-3 rounded-lg border border-border cursor-pointer hover:bg-muted/50 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-              <input
-                type="radio"
-                name="sdkEngine"
-                value="halo"
-                checked={sdkEngine === 'halo'}
-                onChange={() => handleSdkEngineChange('halo')}
-                className="mt-0.5 accent-primary"
-              />
-              <div>
-                <p className="font-medium text-sm">{t('Halo SDK')}</p>
-                <p className="text-xs text-muted-foreground">{t('The official Halo agent engine. Lightweight on resources, faster startup, optimized for open-source models. Experimental.')}</p>
-              </div>
-            </label>
-
-            {/* Codex SDK */}
-            <label className="flex items-start gap-3 p-3 rounded-lg border border-border cursor-pointer hover:bg-muted/50 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-              <input
-                type="radio"
-                name="sdkEngine"
-                value="codex"
-                checked={sdkEngine === 'codex'}
-                onChange={() => handleSdkEngineChange('codex')}
-                className="mt-0.5 accent-primary"
-              />
-              <div>
-                <p className="font-medium text-sm">{t('Codex SDK')}</p>
-                <p className="text-xs text-muted-foreground">{t('Powered by the official OpenAI Codex SDK. Better suited for GPT-family models. Experimental.')}</p>
-              </div>
-            </label>
+            {ENGINE_IDS.map(engineId => {
+              const available = isEngineAvailable(engineId)
+              return (
+                <label
+                  key={engineId}
+                  className={`flex items-start gap-3 p-3 rounded-lg border border-border transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5 ${
+                    available ? 'cursor-pointer hover:bg-muted/50' : 'cursor-not-allowed opacity-60'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="sdkEngine"
+                    value={engineId}
+                    checked={sdkEngine === engineId}
+                    disabled={!available}
+                    onChange={() => handleSdkEngineChange(engineId)}
+                    className="mt-0.5 accent-primary"
+                  />
+                  <div>
+                    <p className="font-medium text-sm">
+                      {engineId === 'anthropic' && t('Claude Code SDK')}
+                      {engineId === 'halo' && t('Halo SDK')}
+                      {engineId === 'codex' && t('Codex SDK')}
+                      {!available && (
+                        <span className="ml-2 text-xs font-normal text-muted-foreground">
+                          {t('Not included in this build')}
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {engineId === 'anthropic' && t('Powered by the official Anthropic Claude Code engine. Works with a wide range of frontier models. (Default)')}
+                      {engineId === 'halo' && t('The official Halo agent engine. Lightweight on resources, faster startup, optimized for open-source models. Experimental.')}
+                      {engineId === 'codex' && t('Powered by the official OpenAI Codex SDK. Better suited for GPT-family models. Experimental.')}
+                    </p>
+                  </div>
+                </label>
+              )
+            })}
           </div>
 
           {/* Restart required notice */}

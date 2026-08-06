@@ -27,6 +27,7 @@ import {
   getDbMcpServers
 } from './helpers'
 import { isImSessionKey } from '../../../shared/apps/im-keys'
+import { purgeStaleMcpOAuth } from './mcp-auth-state'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
 import { resolveCredentialsForSdk, buildBaseSdkOptions, computeCredentialsFingerprint, computeSessionInputsFingerprint } from './sdk-config'
@@ -142,7 +143,10 @@ function requestSessionRebuild(conversationId: string, reason = 'session rebuild
     return
   }
 
-  cleanupSession(conversationId, reason)
+  // Abort-first close, same as every other rebuild path: without the pre-abort
+  // the old process lingers on stdin EOF for up to seconds, and a successor
+  // created inside that window used to be torn down by the predecessor's exit.
+  closeV2SessionForRebuild(conversationId, reason)
 }
 
 // Wire the toolset broker's rebuild trigger (DI seam, avoids module cycle)
@@ -247,6 +251,14 @@ function cleanupSession(conversationId: string, reason: string, skipMapCheck = f
   pendingConsumerRebuilds.delete(conversationId)
 
   if (info) {
+    // Detach the exit listener first: session.close() never reaches
+    // transport.close(), so without this the listener outlives the session and
+    // can fire against a successor (see registerProcessExitListener guard).
+    try {
+      info.exitUnsubscribe?.()
+    } catch (e) {
+      // Ignore - process may already be gone
+    }
     try {
       info.session.close()  // Release FDs (stdin/stdout/stderr pipes)
     } catch (e) {
@@ -337,29 +349,43 @@ function isSessionTransportReady(session: V2SDKSession): boolean {
  *
  * @param session - The V2 SDK session
  * @param conversationId - Conversation ID for logging and cleanup
+ * @returns Unsubscribe function to detach the listener, or undefined when
+ *          registration was not possible. Callers MUST invoke it on cleanup:
+ *          session.close() never calls transport.close(), so the process
+ *          'exit' listener survives the session it belongs to otherwise.
  */
-function registerProcessExitListener(session: V2SDKSession, conversationId: string): void {
+function registerProcessExitListener(
+  session: V2SDKSession,
+  conversationId: string
+): (() => void) | undefined {
   try {
     // Access SDK internal transport to register exit listener
     const transport = (session as any).query?.transport
 
     if (!transport) {
       console.warn(`[Agent][${conversationId}] Cannot register exit listener: no transport`)
-      return
+      return undefined
     }
 
     // SDK provides onExit(callback) method for process exit notification
     if (typeof transport.onExit === 'function') {
       const unsubscribe = transport.onExit((error: Error | undefined) => {
+        // Identity guard: a replaced session's process dies AFTER its successor
+        // is registered under the same conversationId (close() only sends stdin
+        // EOF; the process lingers up to seconds). Without this check the
+        // predecessor's exit tears down the brand-new session and its consumer.
+        const current = v2Sessions.get(conversationId)
+        if (current && current.session !== session) {
+          console.log(`[Agent][${conversationId}] Ignoring exit of a replaced session's process`)
+          return
+        }
         const errorMsg = error ? `: ${error.message}` : ''
         cleanupSession(conversationId, `process exited${errorMsg}`)
         console.log(`[Agent][${conversationId}] Remaining sessions: ${v2Sessions.size}`)
       })
 
       console.log(`[Agent][${conversationId}] Process exit listener registered`)
-
-      // Note: unsubscribe is returned but we don't need to call it
-      // The listener will be automatically removed when transport.close() is called
+      return typeof unsubscribe === 'function' ? unsubscribe : undefined
     } else {
       console.warn(`[Agent][${conversationId}] SDK transport.onExit not available, relying on polling cleanup`)
     }
@@ -367,6 +393,7 @@ function registerProcessExitListener(session: V2SDKSession, conversationId: stri
     console.error(`[Agent][${conversationId}] Failed to register exit listener:`, e)
     // Not fatal - we still have polling cleanup as fallback
   }
+  return undefined
 }
 
 // ============================================
@@ -522,7 +549,7 @@ function migrateSessionIfNeeded(workDir: string, sessionId: string): boolean {
  * 3. The abort signal also fires SIGTERM via the spawn signal option
  * Both ensure the old process exits promptly before the new one starts.
  */
-function closeV2SessionForRebuild(conversationId: string): void {
+function closeV2SessionForRebuild(conversationId: string, reason = 'rebuild required'): void {
   const info = v2Sessions.get(conversationId)
   if (info) {
     try {
@@ -534,7 +561,7 @@ function closeV2SessionForRebuild(conversationId: string): void {
       // AbortController may not be accessible — proceed with cleanup
     }
   }
-  cleanupSession(conversationId, 'rebuild required')
+  cleanupSession(conversationId, reason)
 }
 
 /**
@@ -790,6 +817,13 @@ async function getOrCreateV2SessionInner(
   }
   assertMcpInstancesUnbound(conversationId, sdkOptions.mcpServers)
 
+  // A stale CC auth record makes the CLI skip a URL-based MCP server outright —
+  // no request is sent and only an `authenticate` tool is exposed. Clear those
+  // before the process spawns so the session starts with the full tool set.
+  // Chat supplies servers through buildMcpServers and automations set them on
+  // sdkOptions directly; both have converged by this point.
+  await purgeStaleMcpOAuth(sdkOptions.mcpServers, `session:${conversationId}`)
+
   if (resolveKnowledgeBases && typeof sdkOptions.systemPrompt === 'string') {
     sdkOptions.systemPrompt += buildKnowledgeSection(resolveKnowledgeBases())
   }
@@ -851,7 +885,7 @@ async function getOrCreateV2SessionInner(
 
   // Register process exit listener for immediate cleanup
   // This is event-driven (better than polling) - when process dies, we clean up immediately
-  registerProcessExitListener(session, conversationId)
+  const exitUnsubscribe = registerProcessExitListener(session, conversationId)
 
   // Store session with current credentials generation
   // Generation is used to detect stale credentials on session reuse
@@ -864,7 +898,8 @@ async function getOrCreateV2SessionInner(
     credentialsGeneration: getCredentialsGeneration(),
     credentialsFingerprint: currentFingerprint,
     knowledgeFingerprint: currentKnowledgeFingerprint,
-    inputsFingerprint: currentInputsFingerprint
+    inputsFingerprint: currentInputsFingerprint,
+    exitUnsubscribe
   })
 
   // Start cleanup if not already running

@@ -30,6 +30,7 @@ import {
   type AISourceType,
   type AISourcesConfig,
   type AISource,
+  type AISourceUser,
   type BackendRequestConfig,
   type DirectCallEndpoint,
   type OAuthStartResult,
@@ -38,7 +39,12 @@ import {
   type ProviderId,
   type AuthQuotaSnapshot
 } from '../../../shared/types'
-import { getBuiltinProvider, isAnthropicProvider, isBuiltinProvider } from '../../../shared/constants'
+import {
+  getBuiltinProvider,
+  isAnthropicProvider,
+  isBuiltinProvider,
+  resolveModelVision
+} from '../../../shared/constants'
 import { getConfig, saveConfig } from '../../foundation/config.service'
 import { getCustomProvider } from './providers/custom.provider'
 import { getGitHubCopilotProvider } from './providers/github-copilot.provider'
@@ -167,6 +173,29 @@ class AISourceManager {
   }
 
   /**
+   * Return a valid OAuth access token for a provider type, or null when no such
+   * source is signed in. Refreshes an expiring token first. Used by the
+   * store to authenticate to an identity-bound registry server.
+   */
+  async getOAuthAccessToken(providerType: ProviderId): Promise<string | null> {
+    const source = this.getDecryptedAiSources().sources.find(
+      s => s.provider === providerType && s.authType === 'oauth' && !!s.accessToken
+    )
+    if (!source) return null
+    await this.ensureValidToken(source.id)
+    const refreshed = this.getDecryptedAiSources().sources.find(s => s.id === source.id)
+    return refreshed?.accessToken ?? null
+  }
+
+  /** The signed-in OAuth user for a provider, or null when not signed in. */
+  getOAuthIdentity(providerType: ProviderId): AISourceUser | null {
+    const source = this.getDecryptedAiSources().sources.find(
+      s => s.provider === providerType && s.authType === 'oauth' && !!s.accessToken
+    )
+    return source?.user ?? null
+  }
+
+  /**
    * Get backend request configuration for the current source
    * This is the main method used by agent.service.ts
    */
@@ -205,6 +234,7 @@ class AISourceManager {
       const legacyConfig = this.buildLegacyOAuthConfig(source)
       const result = provider.getBackendConfig(legacyConfig)
       console.log(`[AISourceManager] OAuth provider returned adapterId: ${result?.adapterId || 'none'}`)
+      this.stampVisionCapability(source, result)
       return result
     }
 
@@ -242,10 +272,7 @@ class AISourceManager {
       config.apiType = source.apiType
     }
 
-    const visionOverride = this.resolveVisionOverride(source, config.model)
-    if (visionOverride !== undefined) {
-      config.visionOverride = visionOverride
-    }
+    this.stampVisionCapability(source, config)
 
     console.log('[AISourceManager] getBackendConfig result:', {
       url: config.url,
@@ -373,7 +400,9 @@ class AISourceManager {
       // rationale; a post-call `config.model = modelId` patch (the previous
       // behaviour) is unsafe because it leaves derived headers stale.
       const legacyConfig = this.buildLegacyOAuthConfig(source, modelId)
-      return provider.getBackendConfig(legacyConfig)
+      const result = provider.getBackendConfig(legacyConfig)
+      this.stampVisionCapability(source, result)
+      return result
     }
 
     // API Key: build config directly. See getBackendConfig() for the rationale
@@ -401,26 +430,23 @@ class AISourceManager {
       config.apiType = source.apiType
     }
 
-    const visionOverride = this.resolveVisionOverride(source, config.model)
-    if (visionOverride !== undefined) {
-      config.visionOverride = visionOverride
-    }
+    this.stampVisionCapability(source, config)
 
     return config
   }
 
   /**
-   * Read the user's explicit per-model vision override for `model`.
+   * Stamp the source's effective vision capability onto a resolved backend
+   * config, so the request pipeline (image fallback, image stripping) decides
+   * from the same answer the input UI shows the user.
    *
-   * Returns the stored boolean only when the user has set it in Model Config;
-   * `undefined` otherwise so downstream image-stripping keeps its name-based
-   * heuristic fallback. Keyed by the wire model id — the same key Model Config
-   * writes — so proxy-prefixed/friendly names never accidentally match.
+   * Applies to OAuth and API-key sources alike: the OAuth branches delegate
+   * config building to the provider, which knows nothing about per-model
+   * capability, so the value has to be attached here or it is lost.
    */
-  private resolveVisionOverride(source: AISource, model: string | undefined): boolean | undefined {
-    if (!model) return undefined
-    const v = source.modelOverrides?.[model]?.vision
-    return typeof v === 'boolean' ? v : undefined
+  private stampVisionCapability(source: AISource, config: BackendRequestConfig | null): void {
+    if (!config) return
+    config.visionOverride = resolveModelVision(source, config.model)
   }
 
   // ========== Source CRUD Operations ==========
@@ -583,6 +609,7 @@ class AISourceManager {
     const availableModels: string[] = data._availableModels || []
     const modelNames: Record<string, string> = data._modelNames || {}
     const defaultModel = data._defaultModel || ''
+    const modelOverrides = data._modelOverrides as AISource['modelOverrides']
 
     const builtin = getBuiltinProvider(providerType)
     const now = new Date().toISOString()
@@ -626,6 +653,7 @@ class AISourceManager {
             user: { name: '', uid: acct.id },
             model: keepModel,
             availableModels: models.length > 0 ? models : s.availableModels,
+            modelOverrides: modelOverrides ?? s.modelOverrides,
             updatedAt: now
           } : s)
           if (!firstId) firstId = existing.id
@@ -643,6 +671,7 @@ class AISourceManager {
             user: { name: '', uid: acct.id },
             model: defaultModel,
             availableModels: models,
+            modelOverrides,
             createdAt: now,
             updatedAt: now
           })
@@ -679,6 +708,7 @@ class AISourceManager {
             },
             model: defaultModel || s.model,
             availableModels: models.length > 0 ? models : s.availableModels,
+            modelOverrides: modelOverrides ?? s.modelOverrides,
             updatedAt: now
           }
         }
@@ -703,6 +733,7 @@ class AISourceManager {
         },
         model: defaultModel,
         availableModels: models,
+        modelOverrides,
         createdAt: now,
         updatedAt: now
       }
@@ -861,8 +892,8 @@ class AISourceManager {
    * Delegates to the provider's refreshConfig() to fetch the latest model
    * list from the remote API, then merges the result back into stored config.
    *
-   * Only non-sensitive fields (availableModels, model, updatedAt) are written;
-   * encrypted tokens on disk are never touched.
+   * Only non-sensitive fields (availableModels, model, modelOverrides,
+   * updatedAt) are written; encrypted tokens on disk are never touched.
    */
   async refreshSourceConfig(sourceId: string): Promise<ProviderResult<void>> {
     await this.ensureInitialized()
@@ -911,12 +942,15 @@ class AISourceManager {
     const freshAiSources = this.getAiSourcesConfig()
     const now = new Date().toISOString()
 
+    const nextOverrides = providerData.modelOverrides as AISource['modelOverrides']
+
     const updatedSources = freshAiSources.sources.map(s => {
       if (s.id !== sourceId) return s
       return {
         ...s,
         availableModels: models.length > 0 ? models : s.availableModels,
         model: providerData.model || s.model,
+        modelOverrides: nextOverrides ?? s.modelOverrides,
         updatedAt: now
       }
     })

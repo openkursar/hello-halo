@@ -10,9 +10,9 @@
  *
  * Tlon public surface.
  *
- * Cross-module integration (agent/app prompts, bootstrap):
- *   getSeedKBIds, getKBReferencesForApp, initTlonWatchers,
- *   shutdownTlon
+ * Cross-module integration (agent/app prompts, bootstrap, apps/manager):
+ *   getSeedKBIds, getKBReferencesForApp, seedAppKnowledgeBases,
+ *   initTlonWatchers, shutdownTlon
  *
  * Controller-facing CRUD / file ops / ingest are re-exported for the
  * tlon.controller. ingest.ts and watcher.ts internals stay otherwise
@@ -35,6 +35,7 @@ export {
   unbindFromSpace,
   bindToApp,
   unbindFromApp,
+  seedAppKnowledgeBases,
   // linked dirs
   addLinkedDir,
   removeLinkedDir,

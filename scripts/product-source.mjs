@@ -34,8 +34,8 @@ export const PRODUCT_JSON = join(PROJECT_ROOT, 'product.json')
 export const POINTER_FILE = join(PROJECT_ROOT, '.product-source')
 
 const VARIANT_ROOT = join(PROJECT_ROOT, 'halo-local')
-// Variant files legitimately live under build/ (e.g. halo-webank/build/), so
-// only truly irrelevant trees are skipped.
+// Variant files legitimately live in nested build/ directories, so only
+// truly irrelevant trees are skipped.
 const SCAN_SKIP = new Set(['node_modules', '.git'])
 const SCAN_MAX_DEPTH = 5
 

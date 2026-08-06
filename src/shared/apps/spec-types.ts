@@ -231,6 +231,8 @@ export interface StoreMetadata {
   slug?: string
   category?: string
   tags?: string[]
+  /** Per-version release notes surfaced in the store version history. */
+  changelog?: string
   locale?: string
   min_app_version?: string
   license?: string
@@ -309,7 +311,14 @@ export interface BrowserLoginEntry {
 /** Common fields shared by ALL app types */
 export interface AppSpecCommon {
   spec_version: string
+  /**
+   * Canonical name. For skills it is the ecosystem identifier (skill directory,
+   * SKILL.md frontmatter `name`, slash command) and is always ASCII; for other
+   * types it doubles as the display name.
+   */
   name: string
+  /** Display name used when `name` is not presentable. `i18n` overrides it. */
+  display_name?: string
   version: string
   author: string
   description: string

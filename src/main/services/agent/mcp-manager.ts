@@ -8,7 +8,7 @@
 import { query as claudeQuery } from './resolved-sdk'
 import { getConfig, getTempSpacePath } from '../../foundation/config.service'
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../openai-compat-router'
-import type { McpServerStatusInfo } from './types'
+import type { McpProbeStatus, McpServerStatusInfo } from './types'
 import {
   getHeadlessElectronPath,
   getApiCredentials,
@@ -85,7 +85,20 @@ function emitMcpStatusBroadcast(): void {
 }
 
 /**
- * Broadcast MCP status to all renderers (global, not conversation-specific).
+ * The status a consumer should act on. A session verdict describes what the
+ * agent actually experienced, so it outranks the probe; the probe only speaks
+ * for servers no session has reported on yet. A session 'pending' is not a
+ * verdict — the session has not concluded — so it never overrides the probe.
+ */
+function deriveStatus(
+  entry: Pick<McpServerStatusInfo, 'probeStatus' | 'sessionStatus'>
+): McpServerStatusInfo['status'] {
+  const sessionVerdict = entry.sessionStatus !== 'pending' ? entry.sessionStatus : undefined
+  return sessionVerdict ?? entry.probeStatus ?? 'pending'
+}
+
+/**
+ * Record an agent session's view of its MCP servers and broadcast.
  * When allTools is provided, parses and groups them by server name.
  * When allTools is omitted, preserves previously cached tools (tools don't change within a session).
  *
@@ -105,34 +118,65 @@ export function broadcastMcpStatus(
   const byName = new Map(cachedMcpStatus.map(s => [s.name, s]))
   for (const s of mcpServers) {
     const prev = byName.get(s.name)
-    const status = s.status as McpServerStatusInfo['status']
+    const sessionStatus = s.status as NonNullable<McpServerStatusInfo['sessionStatus']>
     const tools = toolsByServer
       ? toolsByServer[s.name]    // new tools from SDK
       : prev?.tools              // preserve cached tools
-    byName.set(s.name, {
+    const next: McpServerStatusInfo = {
       name: s.name,
-      status,
+      status: 'pending',
+      sessionStatus,
+      ...(prev?.probeStatus ? { probeStatus: prev.probeStatus } : {}),
       ...(tools ? { tools } : {}),
       // SDK reports no failure reason — keep the last probe detail so the
       // UI is not blanked out; a fresh probe will refresh or clear it.
-      ...(status !== 'connected' && prev?.errorDetail ? { errorDetail: prev.errorDetail } : {}),
+      ...(sessionStatus !== 'connected' && prev?.errorDetail ? { errorDetail: prev.errorDetail } : {}),
       lastCheckedAt: now
-    })
+    }
+    next.status = deriveStatus(next)
+    byName.set(s.name, next)
   }
   cachedMcpStatus = Array.from(byName.values())
 
   emitMcpStatusBroadcast()
 }
 
+/** Probe-sourced fields. `status` is the probe's own verdict, not the derived one. */
+export interface McpProbeStatusPatch {
+  status: McpProbeStatus
+  tools?: string[]
+  serverInfo?: McpServerStatusInfo['serverInfo']
+  errorDetail?: string
+  lastCheckedAt?: number
+}
+
 /**
- * Upsert a single server's status (probe results) and broadcast.
+ * Record a native probe result for one server and broadcast.
+ *
+ * A probe verdict that contradicts the stored session verdict invalidates it:
+ * a probe that connects proves an earlier session failure no longer predicts
+ * the next one (and the probe path has already dropped the stale CC auth
+ * record that could have caused it), while a probe that fails proves an
+ * earlier session success is stale — without the latter, a dead server would
+ * keep showing 'connected' after the user runs a connection test. A session
+ * verdict survives only when both producers agree something is wrong.
  */
-export function updateServerStatus(
-  name: string,
-  patch: Omit<McpServerStatusInfo, 'name'>
-): void {
+export function updateServerStatus(name: string, patch: McpProbeStatusPatch): void {
   const idx = cachedMcpStatus.findIndex(s => s.name === name)
-  const entry: McpServerStatusInfo = { name, ...patch }
+  const prev = idx >= 0 ? cachedMcpStatus[idx] : undefined
+  const { status: probeStatus, ...rest } = patch
+
+  const entry: McpServerStatusInfo = {
+    name,
+    status: 'pending',
+    probeStatus,
+    ...(probeStatus !== 'connected' && prev?.sessionStatus && prev.sessionStatus !== 'connected'
+      ? { sessionStatus: prev.sessionStatus }
+      : {}),
+    ...rest
+  }
+  entry.status = deriveStatus(entry)
+
   if (idx >= 0) cachedMcpStatus[idx] = entry
   else cachedMcpStatus.push(entry)
 

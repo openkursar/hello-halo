@@ -21,6 +21,7 @@ import { getConfig } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
 import type { FileChangesSummary } from '../../shared/file-changes'
 import type { KBSource } from '../../shared/types/tlon'
+import type { ImageAttachment } from '../../shared/types/image-attachment'
 
 // Re-export for existing consumers
 export type { FileChangesSummary } from '../../shared/file-changes'
@@ -48,17 +49,6 @@ interface Thought {
     isError: boolean
     timestamp: string
   }
-}
-
-type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
-
-interface ImageAttachment {
-  id: string
-  type: 'image'
-  mediaType: ImageMediaType
-  data: string
-  name?: string
-  size?: number
 }
 
 interface TokenUsage {

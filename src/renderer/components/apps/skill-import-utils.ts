@@ -9,13 +9,18 @@
  * Supported sources:
  *   - Single `.md` file        → one-file skill, wrapped as SKILL.md
  *   - Folder (drag or browse)  → must contain SKILL.md at root
- *   - .zip archive             → SKILL.md at root OR inside a single
- *                                top-level wrapper folder; macOS metadata
- *                                (__MACOSX/, .DS_Store, ._*) is silently stripped
+ *   - .zip archive             → same as a folder
+ *
+ * Folders and archives alike are read through `package-paths`, so a wrapping
+ * top-level folder is accepted and macOS metadata never reaches the skill.
  *
  * Each successful parse returns a `ParsedSkill` ready to feed into
  * `api.appInstall` with `type: 'skill'`.
  */
+
+import { readFileText, readDirectoryEntryToMap, readFileListToMap } from './file-read-utils'
+import { isIgnoredPackagePath, unwrapPackageFolder, canonicalizePackageEntry } from './package-paths'
+import { readArchiveEntries, ArchiveTooLarge } from './package-archive'
 
 // ─────────────────────────────────────────────────────────
 // Public types
@@ -38,6 +43,11 @@ export interface ParsedSkill {
 /**
  * Derive a slug-friendly name from an arbitrary string.
  * "My Cool Skill" → "my-cool-skill"
+ *
+ * ASCII-only, so non-Latin scripts reduce to an empty string. Callers that need
+ * a usable identifier for any input go through `api.appDeriveSkillCommandName`,
+ * which romanizes in the main process; this stays as the synchronous fallback
+ * while that result is in flight.
  */
 export function toSlug(raw: string): string {
   return raw
@@ -48,10 +58,28 @@ export function toSlug(raw: string): string {
 }
 
 /**
- * Build a SKILL.md string from explicit fields (used by the Visual form).
+ * Constrain typed input to what a skill directory and slash command accept.
+ * Leaves a trailing hyphen alone so the user can keep typing past a separator;
+ * `finalizeCommandName` removes it once the value is committed.
  */
-export function buildMdFromForm(form: { name: string; description: string; bodyContent: string }): string {
-  const slug = toSlug(form.name) || 'my-skill'
+export function sanitizeCommandName(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+/, '')
+}
+
+/** The committed form: no edge hyphens. Empty when nothing usable remains. */
+export function finalizeCommandName(raw: string): string {
+  return sanitizeCommandName(raw).replace(/-+$/, '')
+}
+
+/**
+ * Build a SKILL.md string from explicit fields (used by the Visual form).
+ * The frontmatter carries the command name — the SDK reads the slash command
+ * from it — while the authored name only shapes the body headline.
+ */
+export function buildMdFromForm(
+  form: { name: string; commandName?: string; description: string; bodyContent: string }
+): string {
+  const slug = form.commandName?.trim() || toSlug(form.name) || 'my-skill'
   const desc = form.description.trim() || 'My skill description'
   const headline = form.name.trim() || 'My Skill'
   const body = form.bodyContent.trim()
@@ -74,8 +102,6 @@ export function parseMd(content: string): { name: string; description: string; b
   return { name, description, bodyContent: body }
 }
 
-import { readFileText, readDirectoryEntryToMap } from './file-read-utils'
-
 // ─────────────────────────────────────────────────────────
 // Top-level processors
 // ─────────────────────────────────────────────────────────
@@ -95,44 +121,19 @@ export async function processMdFile(file: File): Promise<ParsedSkill> {
 }
 
 /**
- * Build a ParsedSkill from a FileSystemDirectoryEntry (drag-drop folder).
- * The entry is the folder itself; we strip its name from all paths.
+ * Build a ParsedSkill from a read file tree. The tree is resolved against the
+ * package root first, so every caller — folder, archive or file list — accepts
+ * the same layouts and ships the same files. `folderName` only supplies a
+ * fallback name for a SKILL.md whose frontmatter carries none.
  */
-export async function processDirectoryEntry(entry: FileSystemDirectoryEntry): Promise<ParsedSkill> {
-  const files = await readDirectoryEntryToMap(entry)
-
-  if (!files['SKILL.md']) {
-    throw new Error('SKILL.md not found. A skill folder must contain SKILL.md at its root.')
-  }
-
-  const { name, description } = parseMd(files['SKILL.md'])
-  return {
-    name: name || toSlug(entry.name),
-    description: description || '',
-    skillFiles: files,
-  }
-}
-
-/**
- * Build a ParsedSkill from a FileList produced by <input webkitdirectory>.
- * Each file's webkitRelativePath is "folderName/path/to/file".
- */
-export async function processFileListAsFolder(fileList: FileList): Promise<ParsedSkill> {
-  const skillFiles: Record<string, string> = {}
-  let folderName = ''
-
-  for (const file of Array.from(fileList)) {
-    const relPath = file.webkitRelativePath // e.g. "halo-dev/SKILL.md"
-    const parts = relPath.split('/')
-    if (parts.length < 2) continue
-    if (!folderName) folderName = parts[0]
-    const filePath = parts.slice(1).join('/') // strip top-level folder segment
-    if (!filePath) continue
-    skillFiles[filePath] = await readFileText(file)
-  }
+export function parseSkillFiles(files: Record<string, string>, folderName: string): ParsedSkill {
+  const skillFiles = canonicalizePackageEntry(unwrapPackageFolder(files), 'SKILL.md')
 
   if (!skillFiles['SKILL.md']) {
-    throw new Error('SKILL.md not found. A skill folder must contain SKILL.md at its root.')
+    throw new Error(
+      'SKILL.md not found. A skill package must contain SKILL.md at its root, ' +
+      'or inside a single top-level folder.'
+    )
   }
 
   const { name, description } = parseMd(skillFiles['SKILL.md'])
@@ -144,70 +145,41 @@ export async function processFileListAsFolder(fileList: FileList): Promise<Parse
 }
 
 /**
- * Build a ParsedSkill from a .zip file using fflate (pure JS).
- * Tolerates two shapes:
- *   - Flat:    SKILL.md at the archive root
- *   - Wrapped: every file under a single top-level folder (macOS Finder default)
- * macOS metadata (__MACOSX/, .DS_Store, ._*) is silently ignored.
+ * Build a ParsedSkill from a FileSystemDirectoryEntry (drag-drop folder).
+ * The entry is the folder itself; we strip its name from all paths.
  */
+export async function processDirectoryEntry(entry: FileSystemDirectoryEntry): Promise<ParsedSkill> {
+  return parseSkillFiles(await readDirectoryEntryToMap(entry), entry.name)
+}
+
+/** Build a ParsedSkill from a FileList produced by `<input webkitdirectory>`. */
+export async function processFileListAsFolder(fileList: FileList): Promise<ParsedSkill> {
+  const { files, folderName } = await readFileListToMap(fileList)
+  return parseSkillFiles(files, folderName)
+}
+
+/** Build a ParsedSkill from a .zip file. */
 export async function processZipFile(file: File): Promise<ParsedSkill> {
-  const { unzipSync } = await import('fflate')
-  const buffer = await file.arrayBuffer()
   let entries: Record<string, Uint8Array>
   try {
-    entries = unzipSync(new Uint8Array(buffer))
-  } catch {
+    entries = await readArchiveEntries(file)
+  } catch (err) {
+    if (err instanceof ArchiveTooLarge) throw err
     throw new Error('Could not extract ZIP. Make sure the file is a valid ZIP archive.')
   }
 
-  // Build a raw map (skip directory-only entries and macOS metadata)
+  // Ignored entries are skipped here rather than left to parseSkillFiles so
+  // macOS's binary metadata is never decoded.
+  const decoder = new TextDecoder('utf-8')
   const rawFiles: Record<string, string> = {}
   for (const [path, bytes] of Object.entries(entries)) {
-    if (path.endsWith('/')) continue // directory entry
-    if (path.startsWith('__MACOSX/')) continue
-    if (path.split('/').some(seg => seg === '.DS_Store' || seg.startsWith('._'))) continue
-    rawFiles[path] = new TextDecoder('utf-8').decode(bytes)
+    if (isIgnoredPackagePath(path)) continue
+    rawFiles[path] = decoder.decode(bytes)
   }
 
   if (Object.keys(rawFiles).length === 0) {
     throw new Error('ZIP archive is empty.')
   }
 
-  // Detect a single common top-level folder (e.g. "halo-dev/") and strip it.
-  const topDirs = new Set(
-    Object.keys(rawFiles)
-      .map(p => p.split('/')[0])
-      .filter(Boolean)
-  )
-
-  let skillFiles: Record<string, string> = {}
-  if (topDirs.size === 1) {
-    const prefix = Array.from(topDirs)[0] + '/'
-    const allInPrefix = Object.keys(rawFiles).every(p => p.startsWith(prefix))
-    if (allInPrefix) {
-      for (const [path, content] of Object.entries(rawFiles)) {
-        const stripped = path.slice(prefix.length)
-        if (stripped) skillFiles[stripped] = content
-      }
-    } else {
-      skillFiles = rawFiles
-    }
-  } else {
-    skillFiles = rawFiles
-  }
-
-  if (!skillFiles['SKILL.md']) {
-    throw new Error(
-      'SKILL.md not found in ZIP. The archive must contain SKILL.md at the root level, ' +
-      'or inside a single top-level folder.'
-    )
-  }
-
-  const { name, description } = parseMd(skillFiles['SKILL.md'])
-  const folderName = file.name.replace(/\.zip$/i, '')
-  return {
-    name: name || toSlug(folderName),
-    description: description || '',
-    skillFiles,
-  }
+  return parseSkillFiles(rawFiles, file.name.replace(/\.zip$/i, ''))
 }

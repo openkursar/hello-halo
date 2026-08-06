@@ -16,6 +16,7 @@ function sdkOptionsWithEncodedKey(overrides: {
   key?: string
   url?: string
   apiType?: 'chat_completions' | 'responses' | 'anthropic_passthrough' | 'kiro'
+  visionOverride?: boolean
 } = {}): Record<string, unknown> {
   return {
     env: {
@@ -25,6 +26,7 @@ function sdkOptionsWithEncodedKey(overrides: {
         key: overrides.key ?? 'sk-test-stable-token',
         model: overrides.model ?? 'claude-sonnet-4[1m]',
         apiType: overrides.apiType ?? 'anthropic_passthrough',
+        visionOverride: overrides.visionOverride,
         headers: overrides.headers ?? {
           Authorization: 'Bearer sk-test-stable-token',
           'x-client-request-id': 'aaaaaaaa-0000-0000-0000-000000000001'
@@ -77,6 +79,14 @@ describe('computeCredentialsFingerprint', () => {
     )
     expect(base).not.toBe(otherUrl)
     expect(base).not.toBe(otherApiType)
+  })
+
+  it('changes when the vision capability changes', () => {
+    // The session's encoded key freezes the strip/keep decision, while the
+    // image fallback re-resolves it per turn — they must not drift apart.
+    const off = computeCredentialsFingerprint(sdkOptionsWithEncodedKey({ visionOverride: false }))
+    const on = computeCredentialsFingerprint(sdkOptionsWithEncodedKey({ visionOverride: true }))
+    expect(off).not.toBe(on)
   })
 
   it('handles direct (non-encoded) Anthropic keys as stable opaque values', () => {

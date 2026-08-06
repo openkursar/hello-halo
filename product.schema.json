@@ -3,14 +3,20 @@
   "title": "Halo Product Configuration",
   "description": "Configuration for Halo build variants (public/internal)",
   "type": "object",
-  "required": ["name", "version", "updateConfig", "authProviders"],
+  "required": ["name", "appId", "version", "updateConfig", "authProviders"],
   "properties": {
     "$schema": {
       "type": "string"
     },
     "name": {
       "type": "string",
-      "description": "Product name"
+      "description": "Product name. Also the packaged application name (installer, .app bundle, executable), so variants that may sit side by side on one machine must not share it."
+    },
+    "appId": {
+      "type": "string",
+      "description": "Application bundle identifier (macOS CFBundleIdentifier, Windows install registry key). Variants that may sit side by side on one machine must not share it.",
+      "pattern": "^[a-zA-Z][a-zA-Z0-9-]*(\\.[a-zA-Z][a-zA-Z0-9-]*)+$",
+      "examples": ["com.halo.app", "com.halo.enterprise"]
     },
     "dataFolderName": {
       "type": "string",
@@ -143,6 +149,11 @@
         }
       }
     },
+    "announcementsUrl": {
+      "type": "string",
+      "description": "URL of a static JSON announcement feed (see src/shared/types/announcement.ts). Polled every 6h; new entries are shown as in-app toasts. Omit or leave empty to disable. Independent of updateConfig — release notes only reach users on older versions, this reaches everyone.",
+      "examples": ["https://example.com/announcements.json"]
+    },
     "browserPolicy": {
       "type": "object",
       "description": "Browser network access policy. Controls which domains the embedded browser can navigate to. Omit for unrestricted access (default).",
@@ -175,12 +186,41 @@
     },
     "telemetry": {
       "type": "object",
-      "description": "Telemetry configuration (enterprise/custom builds only). Controls which user-authored / user-identifiable fields may be forwarded to the self-hosted telemetry backend. Omit for open-source builds — every sensitive field is dropped by default.",
+      "description": "Self-hosted telemetry configuration (enterprise/custom builds only). Endpoint and apiKey ship inside the package (user-readable) — per-variant configuration, not secrets; keep them committed in the variant repo. Omit the whole block for open-source builds — the provider stays disabled and every sensitive field is dropped by default.",
       "properties": {
+        "endpoint": {
+          "type": "string",
+          "description": "Base URL of the telemetry backend. Client sends POST {endpoint}/v1/events. Empty or omitted disables the provider."
+        },
+        "apiKey": {
+          "type": "string",
+          "description": "Bearer token sent with each batch. Spam filtering only — extractable from the shipped package, so real protection must be server-side (rate limiting, rotation)."
+        },
         "allowedSensitiveFields": {
           "type": "array",
           "items": { "type": "string" },
           "description": "Whitelist of SENSITIVE_KEYS property names permitted to be sent. Recognized keys: specId, spaceName, modelName, sourceName, mcpId, skillId, imBotName, inputTokens, outputTokens, errorCode."
+        }
+      }
+    },
+    "analytics": {
+      "type": "object",
+      "description": "Public analytics providers (brand builds only). Identifiers ship inside the package and are user-readable — configuration, not secrets. Omit the whole block for open-source builds to disable all providers.",
+      "properties": {
+        "ga": {
+          "type": "object",
+          "description": "Google Analytics 4 (Measurement Protocol). Both fields required for the provider to activate.",
+          "properties": {
+            "measurementId": { "type": "string" },
+            "apiSecret": { "type": "string" }
+          }
+        },
+        "baidu": {
+          "type": "object",
+          "description": "Baidu Analytics (China region).",
+          "properties": {
+            "siteId": { "type": "string" }
+          }
         }
       }
     },

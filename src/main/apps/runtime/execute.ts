@@ -287,6 +287,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const notifyAvail = resolveNotifyAvailability(app, config.notificationChannels, imSessions)
 
     const systemPrompt = buildAppSystemPrompt({
+      appId: app.id,
       appSpec: app.spec,
       memoryInstructions,
       triggerContext: trigger.description,

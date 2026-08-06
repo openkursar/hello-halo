@@ -26,16 +26,20 @@ vi.mock('../../../src/main/services/agent/mcp-manager', () => ({
   updateServerStatus: vi.fn(),
   removeServerStatus: vi.fn()
 }))
+vi.mock('../../../src/main/services/agent/mcp-auth-state', () => ({
+  purgeStaleMcpOAuth: vi.fn(async () => 0)
+}))
 
 import {
   probeServerConfig,
   probeMcpApp,
   handleMcpAppsChangeForStatus,
-  probeFailedServers
+  probeUnhealthyServers
 } from '../../../src/main/services/agent/mcp-probe'
 import { getAppManager } from '../../../src/main/services/app-bridge'
 import { appToSdkServerConfig } from '../../../src/main/services/agent/helpers'
 import { updateServerStatus, removeServerStatus } from '../../../src/main/services/agent/mcp-manager'
+import { purgeStaleMcpOAuth } from '../../../src/main/services/agent/mcp-auth-state'
 
 // ============================================
 // Local test servers
@@ -202,6 +206,30 @@ describe('probeMcpApp', () => {
     )
   })
 
+  it('clears stale CC auth records once the handshake succeeds', async () => {
+    const server = await track(startMcpTestServer())
+    mockManagerWithApp({ id: 'app-ok', specId: 'reachable', spec: { type: 'mcp' } })
+    vi.mocked(appToSdkServerConfig).mockReturnValue({ type: 'http', url: server.url })
+
+    await probeMcpApp('app-ok')
+
+    expect(purgeStaleMcpOAuth).toHaveBeenCalledWith(
+      { reachable: { type: 'http', url: server.url } },
+      'probe:reachable'
+    )
+  })
+
+  it('leaves auth records alone when the handshake is rejected', async () => {
+    const server = await track(startMcpTestServer({ requiredAuth: 'Bearer secret' }))
+    mockManagerWithApp({ id: 'app-401', specId: 'rejecting', spec: { type: 'mcp' } })
+    vi.mocked(appToSdkServerConfig).mockReturnValue({ type: 'http', url: server.url })
+
+    const res = await probeMcpApp('app-401')
+
+    expect(res.result?.status).toBe('needs-auth')
+    expect(purgeStaleMcpOAuth).not.toHaveBeenCalled()
+  })
+
   it('returns an error for unknown apps', async () => {
     mockManagerWithApp(null)
     const res = await probeMcpApp('missing')
@@ -280,7 +308,7 @@ describe('handleMcpAppsChangeForStatus', () => {
   })
 })
 
-describe('probeFailedServers', () => {
+describe('probeUnhealthyServers', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('probes SDK-reported failures once, then honors the cooldown', async () => {
@@ -289,14 +317,14 @@ describe('probeFailedServers', () => {
     mockManagerWithApp(app)
     vi.mocked(appToSdkServerConfig).mockReturnValue({ type: 'http', url: server.url })
 
-    probeFailedServers(['cooldown-server'])
+    probeUnhealthyServers(['cooldown-server'])
     await vi.waitFor(() => {
       expect(updateServerStatus).toHaveBeenCalledTimes(1)
     })
     const requestsAfterFirst = server.requestCount()
 
     // Immediately reported failed again — must be suppressed by the cooldown
-    probeFailedServers(['cooldown-server'])
+    probeUnhealthyServers(['cooldown-server'])
     await new Promise(r => setTimeout(r, 100))
     expect(updateServerStatus).toHaveBeenCalledTimes(1)
     expect(server.requestCount()).toBe(requestsAfterFirst)
@@ -304,7 +332,7 @@ describe('probeFailedServers', () => {
 
   it('skips servers that have no installed app record (.mcp.json / built-ins)', async () => {
     mockManagerWithApp(null)
-    probeFailedServers(['not-an-app'])
+    probeUnhealthyServers(['not-an-app'])
     await new Promise(r => setTimeout(r, 50))
     expect(updateServerStatus).not.toHaveBeenCalled()
   })

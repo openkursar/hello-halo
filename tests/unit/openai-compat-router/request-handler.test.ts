@@ -7,8 +7,8 @@
  * error mapping (getUpstreamError formats + status mapping via sendError).
  *
  * Every leaf the handler dispatches to is mocked (kiro adapter, converters,
- * streams, interceptors, provider adapters, request queue, proxyFetch) so a
- * single call exercises exactly one path deterministically.
+ * streams, interceptors, provider adapters, proxyFetch) so a single call
+ * exercises exactly one path deterministically.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -57,11 +57,6 @@ vi.mock('../../../src/main/openai-compat-router/server/provider-adapters', () =>
 }))
 
 // Run the queued fn inline so conversion-path assertions stay synchronous.
-vi.mock('../../../src/main/openai-compat-router/server/request-queue', () => ({
-  withRequestQueue: (_key: string, fn: () => unknown) => fn(),
-  generateQueueKey: () => 'key',
-}))
-
 // api-type: real-ish behavior driven per test via mockReturnValue.
 const getApiTypeFromUrl = vi.fn(() => 'chat_completions')
 const isValidEndpointUrl = vi.fn(() => true)
@@ -79,15 +74,23 @@ const normalizeSystemPrompt = vi.fn((request: unknown) => ({ request, modified: 
 vi.mock('../../../src/main/openai-compat-router/utils', () => ({
   isNativeAnthropicHost: (...a: unknown[]) => isNativeAnthropicHost(...a),
   normalizeSystemPrompt: (...a: unknown[]) => normalizeSystemPrompt(...a),
+  safeJsonParse: (input: string) => {
+    try {
+      return JSON.parse(input)
+    } catch {
+      return null
+    }
+  },
 }))
 
 vi.mock('../../../src/main/openai-compat-router/utils/token-counter', () => ({
   countTokens: vi.fn(() => 7),
 }))
 
+const fillResponseUsageFallback = vi.fn()
 vi.mock('../../../src/main/openai-compat-router/utils/usage-estimator', () => ({
   deferInputTokensEstimate: vi.fn(() => async () => 0),
-  fillResponseUsageFallback: vi.fn(),
+  fillResponseUsageFallback: (...a: unknown[]) => fillResponseUsageFallback(...a),
 }))
 
 import { handleMessagesRequest } from '../../../src/main/openai-compat-router/server/request-handler'
@@ -102,9 +105,12 @@ interface CapturedRes {
   getHeader: (k: string) => string | undefined
   json: (b: unknown) => void
   end: (b?: string) => void
+  on: (event: string, cb: () => void) => void
+  emit: (event: string) => void
 }
 
 function makeRes(): CapturedRes {
+  const listeners: Record<string, Array<() => void>> = {}
   const res: CapturedRes = {
     statusCode: 200,
     headers: {},
@@ -125,6 +131,12 @@ function makeRes(): CapturedRes {
     },
     end(b) {
       this.ended = b
+    },
+    on(event, cb) {
+      ;(listeners[event] ??= []).push(cb)
+    },
+    emit(event) {
+      for (const cb of listeners[event] ?? []) cb()
     },
   }
   return res
@@ -277,6 +289,69 @@ describe('handleMessagesRequest dispatch', () => {
   })
 })
 
+describe('client disconnect propagation', () => {
+  it('aborts the upstream fetch signal when the client closes mid-stream', async () => {
+    const req = anthReq({ stream: true })
+    runInterceptors.mockResolvedValue({ intercepted: false, request: req })
+    proxyFetch.mockResolvedValue(fakeResponse({ ok: true, body: {} }))
+
+    // Keep the SSE conversion in flight until the test releases it.
+    let releaseStream!: () => void
+    streamOpenAIChatToAnthropic.mockImplementation(
+      () => new Promise<void>((resolve) => { releaseStream = resolve })
+    )
+
+    const res = makeRes()
+    const done = handleMessagesRequest(
+      req,
+      baseConfig({ apiType: 'chat_completions' }),
+      res as unknown as ExpressResponse,
+    )
+    // Let fetch resolve and streaming begin.
+    await vi.waitFor(() => expect(streamOpenAIChatToAnthropic).toHaveBeenCalledTimes(1))
+
+    const fetchSignal = proxyFetch.mock.calls[0][1].signal as AbortSignal
+    expect(fetchSignal.aborted).toBe(false)
+
+    res.emit('close')
+    expect(fetchSignal.aborted).toBe(true)
+
+    releaseStream()
+    await done
+    // clearAllMocks does not drop implementations — remove the pending-promise
+    // impl so later tests get the default resolved stream.
+    streamOpenAIChatToAnthropic.mockReset()
+  })
+
+  it('does not write an error response when the abort came from the client', async () => {
+    const req = anthReq()
+    runInterceptors.mockResolvedValue({ intercepted: false, request: req })
+    proxyFetch.mockImplementation(
+      (_url: string, init: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+          )
+        })
+    )
+
+    const res = makeRes()
+    const done = handleMessagesRequest(
+      req,
+      baseConfig({ apiType: 'chat_completions' }),
+      res as unknown as ExpressResponse,
+    )
+    await vi.waitFor(() => expect(proxyFetch).toHaveBeenCalledTimes(1))
+
+    res.emit('close')
+    await done
+
+    // Client is gone: no timeout_error / api_error must be written.
+    expect(res.jsonBody).toBeUndefined()
+    expect(res.statusCode).toBe(200)
+  })
+})
+
 describe('anthropic passthrough header merge', () => {
   async function runPassthrough(opts: {
     sdkHeaders?: Record<string, string>
@@ -328,6 +403,69 @@ describe('anthropic passthrough header merge', () => {
   it('injects x-api-key when no Authorization header is present', async () => {
     const headers = await runPassthrough({ sdkHeaders: {} })
     expect(headers['x-api-key']).toBe('sk-test')
+  })
+})
+
+describe('anthropic passthrough non-streaming usage repair', () => {
+  async function runNonStream(upstreamBody: string) {
+    const req = anthReq()
+    runInterceptors.mockResolvedValue({ intercepted: false, request: req })
+    proxyFetch.mockResolvedValue(fakeResponse({ ok: true, text: upstreamBody }))
+    const res = makeRes()
+    await handleMessagesRequest(
+      req,
+      baseConfig({ apiType: 'anthropic_passthrough', url: 'https://third-party/v1/messages' }),
+      res as unknown as ExpressResponse,
+    )
+    return res
+  }
+
+  function messageBody(usage?: unknown) {
+    return JSON.stringify({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'hi' }],
+      model: 'glm-5',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      ...(usage === undefined ? {} : { usage }),
+    })
+  }
+
+  it('forwards a well-formed body byte-for-byte', async () => {
+    const body = messageBody({ input_tokens: 12, output_tokens: 3 })
+    const res = await runNonStream(body)
+    expect(res.ended).toBe(body)
+    expect(fillResponseUsageFallback).not.toHaveBeenCalled()
+  })
+
+  it('fills usage when the upstream omitted the object', async () => {
+    fillResponseUsageFallback.mockImplementation((response: { usage?: unknown }) => {
+      response.usage = { input_tokens: 42, output_tokens: 7 }
+    })
+    const res = await runNonStream(messageBody())
+
+    expect(fillResponseUsageFallback).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(res.ended as string).usage).toEqual({ input_tokens: 42, output_tokens: 7 })
+  })
+
+  it('fills usage when the upstream reported zeros', async () => {
+    await runNonStream(messageBody({ input_tokens: 0, output_tokens: 0 }))
+    expect(fillResponseUsageFallback).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves a non-message body untouched', async () => {
+    const body = JSON.stringify({ type: 'error', error: { message: 'nope' } })
+    const res = await runNonStream(body)
+    expect(res.ended).toBe(body)
+    expect(fillResponseUsageFallback).not.toHaveBeenCalled()
+  })
+
+  it('leaves an unparseable body untouched', async () => {
+    const res = await runNonStream('not json at all')
+    expect(res.ended).toBe('not json at all')
+    expect(fillResponseUsageFallback).not.toHaveBeenCalled()
   })
 })
 

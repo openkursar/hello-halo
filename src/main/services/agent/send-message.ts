@@ -18,7 +18,7 @@
 
 import { getConfig } from '../../foundation/config.service'
 import { addMessage } from '../conversation.service'
-import { buildCreationTimeServers } from './toolsets/broker'
+import { buildCreationTimeServers, openToolset } from './toolsets/broker'
 import { buildToolsetSection } from './toolsets/capability-index'
 // The toolset broker (above) supplies AI Browser / web-search / apps as
 // on-demand toolsets; only the knowledge-base helpers are still called directly.
@@ -44,6 +44,7 @@ import {
   formatCanvasContext,
   buildMessageContent,
 } from './message-utils'
+import { prepareNonVisionImageFallback, OCR_TOOLSET_ID } from './image-attachments'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
 import { flushToolStats } from './stream-processor'
 import { analytics } from '../analytics/analytics.service'
@@ -119,6 +120,24 @@ export async function sendMessage(
 
     const resolvedCredentials = await resolveCredentialsForSdk(credentials)
     const electronPath = getHeadlessElectronPath()
+
+    // Non-vision models can't receive image blocks: persist images to files and
+    // inject their paths for the ocr_image tool instead. Runs before session
+    // creation — the OCR auto-open below schedules a rebuild that must be
+    // seeded into this turn's session.
+    const toolsetScope = { spaceId, conversationId, workDir }
+    const imageFallback = prepareNonVisionImageFallback({
+      scope: toolsetScope,
+      credentials,
+      images
+    })
+    if (imageFallback) {
+      const opened = openToolset(toolsetScope, OCR_TOOLSET_ID, 'system')
+      if (!opened.ok) {
+        // Non-fatal: the paths are still injected; the model can request_toolset.
+        console.warn(`[Agent][${conversationId}] Failed to auto-open OCR toolset: ${opened.error}`)
+      }
+    }
 
     // Creation-time MCP servers: external process-based servers (user-installed
     // apps) plus the complete in-process set (always-on web-search / halo-apps,
@@ -209,10 +228,12 @@ export async function sendMessage(
     }
     console.log(`[Agent][${conversationId}] ⏱️ V2 session ready: ${Date.now() - t0}ms`)
 
-    // Prepare message content (canvas context prefix + multi-modal images)
+    // Prepare message content (canvas context prefix + multi-modal images).
+    // With the non-vision fallback active, image blocks are replaced by the
+    // injected attachment-paths block.
     const canvasPrefix = formatCanvasContext(canvasContext)
-    const messageWithContext = canvasPrefix + message
-    const messageContent = buildMessageContent(messageWithContext, images)
+    const messageWithContext = canvasPrefix + (imageFallback?.contextBlock ?? '') + message
+    const messageContent = buildMessageContent(messageWithContext, imageFallback ? undefined : images)
 
     // Send to CC's REPL — consumer handles the response. Mark the dispatch
     // BEFORE send: from here until system:init the consumer looks idle, and an

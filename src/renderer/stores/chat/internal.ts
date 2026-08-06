@@ -104,6 +104,10 @@ export interface ChatState {
   // Pulse: pending cross-space navigation target (set by navigateToConversation, consumed by SpacePage init)
   pendingPulseNavigation: string | null
 
+  // Text to pre-fill into a space's composer on arrival (e.g. a skill's slash
+  // command from the store's "Use" action). Consumed once by InputArea.
+  pendingComposerInput: { spaceId: string; text: string } | null
+
   // Artifacts (per space)
   artifacts: Artifact[]
 

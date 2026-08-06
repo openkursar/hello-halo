@@ -16,6 +16,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { randomUUID } from 'crypto'
+import path from 'path'
 
 // ============================================
 // Mocks for transitive dependencies
@@ -62,12 +63,31 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
   }),
 }))
 
-// Mock config service (used by execute.ts)
+// Mock config service (used by execute.ts, and by tlon/paths.ts transitively
+// via buildAppSystemPrompt's knowledge-base lookup). getHaloDir points at a
+// directory with no knowledge-bases-index.json, so getKBReferencesForApp
+// resolves to an empty registry rather than crashing.
 vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn().mockReturnValue({}),
   getTempSpacePath: vi.fn().mockReturnValue('/tmp/halo-test/temp'),
+  getHaloDir: vi.fn(() => path.join(globalThis.__HALO_TEST_DIR__, '.halo')),
   onNetworkConfigChange: vi.fn(),
   onAgentConfigChange: vi.fn(),
+}))
+
+// createKB (used by the Knowledge-section test below) fires a fire-and-forget
+// dynamic import of ./watcher (native @parcel/watcher); stub it so no real
+// filesystem watchers are created (mirrors tests/unit/services/tlon/service.test.ts).
+vi.mock('../../../../src/main/services/tlon/watcher', () => ({
+  startWatchersForKB: vi.fn(async () => {}),
+  stopWatchersForKB: vi.fn(async () => {}),
+  startLinkedDirWatch: vi.fn(async () => {}),
+  stopLinkedDirWatch: vi.fn(async () => {}),
+}))
+vi.mock('@parcel/watcher', () => ({
+  default: {
+    subscribe: vi.fn(async () => ({ unsubscribe: vi.fn(async () => {}) })),
+  },
 }))
 
 // Mock space service (used by index.ts)
@@ -185,6 +205,7 @@ import {
 } from '../../../../src/main/apps/manager/migrations'
 import { Semaphore } from '../../../../src/main/apps/runtime/concurrency'
 import { buildAppSystemPrompt, buildInitialMessage } from '../../../../src/main/apps/runtime/prompt'
+import { _resetTlonRegistry, createKB, bindToApp } from '../../../../src/main/services/tlon/service'
 import {
   AppNotRunnableError,
   ConcurrencyLimitError,
@@ -1206,6 +1227,7 @@ describe('Prompt Builder', () => {
   describe('buildAppSystemPrompt', () => {
     it('should include base context with platform and date', () => {
       const prompt = buildAppSystemPrompt({
+        appId: 'test-app-id',
         appSpec: createTestSpec(),
         memoryInstructions: '',
         triggerContext: 'Manual trigger',
@@ -1220,6 +1242,7 @@ describe('Prompt Builder', () => {
 
     it('should include App-specific system_prompt', () => {
       const prompt = buildAppSystemPrompt({
+        appId: 'test-app-id',
         appSpec: createTestSpec({ system_prompt: 'Monitor AirPods prices' }),
         memoryInstructions: '',
         triggerContext: 'Scheduled',
@@ -1232,6 +1255,7 @@ describe('Prompt Builder', () => {
 
     it('should include memory instructions when provided', () => {
       const prompt = buildAppSystemPrompt({
+        appId: 'test-app-id',
         appSpec: createTestSpec(),
         memoryInstructions: '## Memory\nUse memory_read to recall state.',
         triggerContext: 'Manual',
@@ -1243,6 +1267,7 @@ describe('Prompt Builder', () => {
 
     it('should always include reporting rules', () => {
       const prompt = buildAppSystemPrompt({
+        appId: 'test-app-id',
         appSpec: createTestSpec(),
         memoryInstructions: '',
         triggerContext: 'Manual',
@@ -1259,6 +1284,7 @@ describe('Prompt Builder', () => {
       // buildAppSystemPrompt; this asserts the aiBrowser branch via the
       // mocked AI_BROWSER_SYSTEM_PROMPT fragment instead.
       const prompt = buildAppSystemPrompt({
+        appId: 'test-app-id',
         appSpec: createTestSpec(),
         memoryInstructions: '',
         triggerContext: 'Manual',
@@ -1271,6 +1297,7 @@ describe('Prompt Builder', () => {
 
     it('should NOT include the AI-browser prompt when usesAIBrowser=false', () => {
       const prompt = buildAppSystemPrompt({
+        appId: 'test-app-id',
         appSpec: createTestSpec(),
         memoryInstructions: '',
         triggerContext: 'Manual',
@@ -1283,6 +1310,7 @@ describe('Prompt Builder', () => {
 
     it('should handle AppSpec without system_prompt', () => {
       const prompt = buildAppSystemPrompt({
+        appId: 'test-app-id',
         appSpec: createTestSpec({ system_prompt: undefined }),
         memoryInstructions: '',
         triggerContext: 'Manual',
@@ -1297,6 +1325,7 @@ describe('Prompt Builder', () => {
 
     it('omits notification guidance when no notify tool is available', () => {
       const prompt = buildAppSystemPrompt({
+        appId: 'test-app-id',
         appSpec: createTestSpec(),
         memoryInstructions: '',
         triggerContext: 'Manual',
@@ -1309,6 +1338,7 @@ describe('Prompt Builder', () => {
 
     it('includes notification guidance only when a notify tool is loaded', () => {
       const prompt = buildAppSystemPrompt({
+        appId: 'test-app-id',
         appSpec: createTestSpec(),
         memoryInstructions: '',
         triggerContext: 'Manual',
@@ -1322,6 +1352,7 @@ describe('Prompt Builder', () => {
 
     it('renders the awaiting-setup capability guidance when provided', () => {
       const prompt = buildAppSystemPrompt({
+        appId: 'test-app-id',
         appSpec: createTestSpec(),
         memoryInstructions: '',
         triggerContext: 'Manual',
@@ -1331,6 +1362,34 @@ describe('Prompt Builder', () => {
 
       expect(prompt).toContain('Capabilities awaiting setup')
       expect(prompt).toContain('no email channel is configured')
+    })
+
+    it('includes the Knowledge section for KBs bound to the app, and omits it otherwise', async () => {
+      _resetTlonRegistry()
+      const kb = createKB({ name: 'Runbooks' })
+      bindToApp(kb.id, 'kb-app-id')
+
+      const withKb = buildAppSystemPrompt({
+        appId: 'kb-app-id',
+        appSpec: createTestSpec(),
+        memoryInstructions: '',
+        triggerContext: 'Manual',
+        workDir: '/tmp/test',
+      })
+      expect(withKb).toContain('# Knowledge')
+      expect(withKb).toContain('Runbooks')
+
+      const withoutKb = buildAppSystemPrompt({
+        appId: 'other-app-id',
+        appSpec: createTestSpec(),
+        memoryInstructions: '',
+        triggerContext: 'Manual',
+        workDir: '/tmp/test',
+      })
+      expect(withoutKb).not.toContain('# Knowledge')
+
+      await vi.dynamicImportSettled()
+      _resetTlonRegistry()
     })
   })
 

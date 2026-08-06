@@ -26,7 +26,8 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/.."
 
 ARCH="${1:-arm64}"
 case "$ARCH" in
@@ -45,58 +46,13 @@ while IFS='=' read -r key value; do
   if [ -z "${!key:-}" ]; then export "$key=$value"; fi
 done < .env.local
 
-# ── 预检: 公证凭据必须齐全 ────────────────────────────────────────────────────
-missing=""
-for v in APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
-  [ -z "${!v:-}" ] && missing="$missing $v"
-done
-if [ -n "$missing" ]; then
-  echo "[build:mac-signed] 公证凭据缺失:$missing (请在 .env.local 配置)"
-  exit 1
-fi
+# ── 签名/公证环境: 凭据预检 + 锁定证书身份, 让 afterPack 跳过 ad-hoc ──────────
+source "$SCRIPT_DIR/lib/mac-signing.sh"
+halo_prepare_mac_signing
 
-# ── 预检: notarytool 必须可用 ────────────────────────────────────────────────
-# 有些机器 active Xcode 里 xcrun 解析不到 notarytool, 回退到 Command Line Tools。
-if ! xcrun --find notarytool >/dev/null 2>&1; then
-  if [ -x /Library/Developer/CommandLineTools/usr/bin/notarytool ]; then
-    export DEVELOPER_DIR=/Library/Developer/CommandLineTools
-    echo "[build:mac-signed] 当前 Xcode 无 notarytool, 已切换 DEVELOPER_DIR=$DEVELOPER_DIR"
-  else
-    echo "[build:mac-signed] 找不到 notarytool (需 Xcode 13+ 或新版 Command Line Tools)"
-    echo "    排查: xcrun --find notarytool  /  sudo xcode-select --install"
-    exit 1
-  fi
-fi
-
-# ── 签名/公证环境: 锁定证书身份, 让 afterPack 跳过 ad-hoc ─────────────────────
-# 优先级: p12 文件 (CSC_LINK) > 本地钥匙串 Developer ID 身份。绝不静默降级为 ad-hoc。
-export CSC_IDENTITY_AUTO_DISCOVERY=true
-export HALO_MAC_SIGN_MODE=developer-id
 export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electron/}"
 
-if [ -n "${CSC_LINK:-}" ]; then
-  # p12 模式: 跨机器/跨团队, 无需本地已安装证书。electron-builder 会把 p12
-  # 导入临时钥匙串签名后自动清理; 身份从 p12 内取, 不设 CSC_NAME。
-  if [ ! -f "$CSC_LINK" ]; then
-    echo "[build:mac-signed] CSC_LINK 指向的 p12 不存在: $CSC_LINK (请检查 .env.local)"
-    exit 1
-  fi
-  SIGN_SRC="p12:$CSC_LINK"
-else
-  # 钥匙串模式: 用本机已安装的 Developer ID 证书。
-  if ! security find-identity -v -p codesigning | grep -q "$APPLE_TEAM_ID"; then
-    echo "[build:mac-signed] 钥匙串未找到 Developer ID 身份 ($APPLE_TEAM_ID)"
-    echo "    - 本机装了证书: security find-identity -v -p codesigning 排查"
-    echo "    - 跨团队/无本地证书: 在 .env.local 配 CSC_LINK=<p12路径> 和 CSC_KEY_PASSWORD=<密码>"
-    exit 1
-  fi
-  # CSC_NAME 用 electron-builder 可子串匹配的身份名 (不含 "Developer ID Application:" 前缀)
-  export CSC_NAME="${CSC_NAME:-$(security find-identity -v -p codesigning \
-    | grep "$APPLE_TEAM_ID" | head -1 | sed -E 's/.*Developer ID Application: (.*)"$/\1/')}"
-  SIGN_SRC="keychain:$CSC_NAME"
-fi
-
-echo "[build:mac-signed] 架构=$ARCH  签名源=$SIGN_SRC  TeamID=$APPLE_TEAM_ID"
+echo "[build:mac-signed] 架构=$ARCH  签名源=$HALO_MAC_SIGN_SRC  TeamID=$APPLE_TEAM_ID"
 
 # ── 准备目标架构的平台二进制 ──────────────────────────────────────────────────
 # afterPack 会校验 cloudflared / better-sqlite3 / codex 等原生二进制, 缺失即 throw
@@ -111,6 +67,7 @@ npm run build
 echo "[build:mac-signed] 打包 + 签名 + 公证 (--publish never)..."
 # 用 target:arch 精确限定单架构 (仅 --arm64/--x64 会被 config 的 arch 数组覆盖成全架构)
 npx electron-builder --mac "dmg:$ARCH" "zip:$ARCH" \
+  --config electron-builder.cjs \
   -c.mac.hardenedRuntime=true -c.mac.notarize.teamId="$APPLE_TEAM_ID" \
   --publish never
 

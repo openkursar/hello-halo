@@ -66,6 +66,12 @@ export * from './notification-channels'
 // Multimodal image attachment (renderer input → transport → runtime → transcript)
 export type { ImageAttachment, ImageMediaType } from './image-attachment'
 
+// In-app toast contract (main -> renderer, incl. remote/mobile over WebSocket)
+export * from './notification'
+
+// Announcement feed contract (remote JSON -> main)
+export * from './announcement'
+
 // Inbound message types (IM channel adapter boundary types)
 export * from './inbound-message'
 

@@ -65,7 +65,7 @@ import type {
   StreamingHandle,
   ProgressEvent,
 } from '../../../../shared/types/inbound-message'
-import type { ImageAttachment, ImageMediaType } from '../../../services/agent/types'
+import type { ImageAttachment, ImageMediaType } from '../../../../shared/types/image-attachment'
 import {
   WecomStreamSession,
   type StreamingTransport,

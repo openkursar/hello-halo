@@ -21,22 +21,7 @@ import { isElectron } from '../../../api/transport'
 import { useTerminalStore } from '../../../stores/terminal.store'
 import { useTranslation } from '../../../i18n'
 import type { TabState } from '../../../services/canvas-lifecycle'
-
-/** Read a theme HSL triplet CSS var and wrap it as a canvas-parseable color. */
-function themeColor(varName: string, fallback: string): string {
-  const raw = getComputedStyle(document.documentElement).getPropertyValue(varName).trim()
-  return raw ? `hsl(${raw})` : fallback
-}
-
-function buildTheme(): Record<string, string> {
-  return {
-    background: themeColor('--card', '#1e1e1e'),
-    foreground: themeColor('--card-foreground', '#d4d4d4'),
-    cursor: themeColor('--primary', '#ffffff'),
-    cursorAccent: themeColor('--card', '#1e1e1e'),
-    selectionBackground: themeColor('--primary', '#264f78'),
-  }
-}
+import { buildTheme, getMinimumContrastRatio } from '../../../lib/terminal-theme'
 
 interface TerminalViewerProps {
   tab: TabState
@@ -77,6 +62,7 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
       convertEol: false,
       scrollback: 10000,
       theme: buildTheme(),
+      minimumContrastRatio: getMinimumContrastRatio(),
       allowProposedApi: true,
     })
     const fit = new FitAddon()
@@ -181,12 +167,24 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
     })
     ro.observe(containerRef.current)
 
+    // xterm.js caches theme colors; toggling the class alone does not repaint.
+    const themeObserver = new MutationObserver(() => {
+      if (disposed || !termRef.current) return
+      termRef.current.options.theme = buildTheme()
+      termRef.current.options.minimumContrastRatio = getMinimumContrastRatio()
+    })
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class'],
+    })
+
     return () => {
       disposed = true
       // Stop gating flow control the moment this consumer goes away, or an
       // unacked backlog would keep the pty paused with nobody left to ack.
       void api.terminalDetach(sessionId)
       ro.disconnect()
+      themeObserver.disconnect()
       dataSub.dispose()
       unsubData()
       term.dispose()

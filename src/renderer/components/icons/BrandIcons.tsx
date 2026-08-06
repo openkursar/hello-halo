@@ -1,16 +1,21 @@
 /**
- * Brand icons for AI-source providers.
+ * Icons for AI-source providers, and the single resolver every provider list
+ * renders through (`getProviderIcon`).
  *
- * Halo renders provider icons from a small lucide set (see the `iconMap`s in the
- * settings/setup components). Providers with a recognizable brand mark register
- * an SVG here, keyed by provider type. These components accept the same props
- * used at the lucide call sites (size/className/style), so they are drop-in
- * replacements. Providers without a brand icon fall back to the lucide path.
+ * A provider's mark comes from one of two places: a brand SVG registered here
+ * and keyed by provider type, or the lucide icon named by `icon` in
+ * product.json. Both are exposed through the same props (size/className/style)
+ * so call sites can render either without branching.
  */
+import {
+  Brain, Cloud, Github, Globe, Key, KeyRound, Lock, LogIn, MessageSquare,
+  Server, Shield, User, Wrench, Zap
+} from 'lucide-react'
 import type { CSSProperties, FC } from 'react'
 
+/** Common surface of a brand SVG and a lucide icon, so both are interchangeable. */
 export interface BrandIconProps {
-  size?: number
+  size?: number | string
   className?: string
   style?: CSSProperties
 }
@@ -60,4 +65,31 @@ const brandIcons: Record<string, FC<BrandIconProps>> = {
 /** Returns a brand icon component for a provider type, or undefined if none. */
 export function getBrandIcon(providerType: string): FC<BrandIconProps> | undefined {
   return brandIcons[providerType]
+}
+
+/** The lucide icons product.json may name in an auth provider's `icon` field. */
+const namedIcons: Record<string, FC<BrandIconProps>> = {
+  'brain': Brain,
+  'cloud': Cloud,
+  'github': Github,
+  'globe': Globe,
+  'key': Key,
+  'key-round': KeyRound,
+  'lock': Lock,
+  'log-in': LogIn,
+  'message-square': MessageSquare,
+  'server': Server,
+  'shield': Shield,
+  'user': User,
+  'wrench': Wrench,
+  'zap': Zap
+}
+
+/**
+ * Resolves the icon for a provider entry: brand mark first, then the lucide
+ * icon named in product.json. Every provider list must go through this so an
+ * entry cannot render one icon on the setup screen and another in settings.
+ */
+export function getProviderIcon(providerType: string, iconName?: string): FC<BrandIconProps> {
+  return getBrandIcon(providerType) ?? (iconName ? namedIcons[iconName] : undefined) ?? Globe
 }

@@ -16,6 +16,7 @@
  *   store:remove-registry                Remove a registry source
  *   store:toggle-registry                Enable or disable a registry source
  *   store:update-registry-adapter-config Update adapter config (e.g. API keys) for a registry
+ *   store:get-capabilities               Resolve renderer-safe store capability flags
  */
 
 import { ipcMain, dialog } from 'electron'
@@ -28,14 +29,17 @@ import {
   checkUpgradesNow,
   publish,
   getPublishPreview,
+  findAppByPublishSlug,
   collectFiles,
   packDhpkg,
+  packSkill,
   unpackDhpkg,
 } from '../store'
 import { getAppManager } from '../apps/manager'
 import { getAppRuntime } from '../apps/runtime'
 import { sendToRenderer } from '../foundation/window.service'
 import type { StoreInstallProgress } from '../../shared/store/store-types'
+import type { AppType } from '../../shared/apps/spec-types'
 import { storeRpc } from '../../shared/rpc/contracts/store.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -117,9 +121,9 @@ export function registerStoreHandlers(): void {
     },
 
     // ── store:publish-preview ──────────────────────────────────────────────
-    storePublishPreview: async (input: { appId: string; author?: string }) => {
+    storePublishPreview: async (input: { appId: string; author?: string; name?: string }) => {
       try {
-        return { success: true, data: getPublishPreview(input.appId, input.author) }
+        return { success: true, data: await getPublishPreview(input.appId, input.author, input.name) }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[StoreIPC] store:publish-preview error:', err.message)
@@ -127,10 +131,29 @@ export function registerStoreHandlers(): void {
       }
     },
 
-    // ── store:publish ──────────────────────────────────────────────────────
-    storePublish: async (input: { appId: string; author?: string; version?: string }) => {
+    // ── store:find-app-by-publish-slug ─────────────────────────────────────
+    storeFindAppByPublishSlug: async (input: { slug: string; type?: AppType; author?: string }) => {
       try {
-        const result = await publish(input.appId, input.author, input.version)
+        return { success: true, data: { appId: findAppByPublishSlug(input.slug, input.type, input.author) } }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[StoreIPC] store:find-app-by-publish-slug error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── store:publish ──────────────────────────────────────────────────────
+    storePublish: async (input: { appId: string; author?: string; version?: string; changelog?: string; category?: string; name?: string; description?: string; tags?: string[] }) => {
+      try {
+        const result = await publish(input.appId, {
+          author: input.author,
+          version: input.version,
+          changelog: input.changelog,
+          category: input.category,
+          name: input.name,
+          description: input.description,
+          tags: input.tags,
+        })
         console.log(
           `[StoreIPC] store:publish: appId=${input.appId} status=${result.status} target=${result.target}` +
           (result.details ? ` details=${JSON.stringify(result.details)}` : '')
@@ -188,6 +211,40 @@ export function registerStoreHandlers(): void {
       }
     },
 
+    // ── store:export-skill ─────────────────────────────────────────────────
+    storeExportSkill: async (input: { appId: string }) => {
+      try {
+        const manager = getAppManager()
+        if (!manager) return { success: false, error: 'App Manager not ready' }
+        const app = manager.getApp(input.appId)
+        if (!app) return { success: false, error: `App not found: ${input.appId}` }
+        if (app.spec.type !== 'skill') {
+          return { success: false, error: `Not a skill: ${input.appId}` }
+        }
+
+        const safeName = (app.spec.store?.slug ?? app.spec.name).replace(/[^a-z0-9-]/gi, '-').toLowerCase()
+        const dialogResult = await dialog.showSaveDialog({
+          title: 'Export skill',
+          defaultPath: `${safeName}-${app.spec.version ?? '0.0.0'}.zip`,
+          filters: [{ name: 'Skill Package', extensions: ['zip'] }],
+        })
+
+        if (dialogResult.canceled || !dialogResult.filePath) {
+          return { success: false, error: 'User cancelled' }
+        }
+
+        const buf = packSkill(app.spec)
+        await writeFile(dialogResult.filePath, buf)
+
+        console.log(`[StoreIPC] store:export-skill: appId=${input.appId} -> ${dialogResult.filePath}`)
+        return { success: true, data: { path: dialogResult.filePath } }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[StoreIPC] store:export-skill error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
     // ── store:import-dhpkg ─────────────────────────────────────────────────
     storeImportDhpkg: async (input?: { filePath?: string; spaceId?: string | null }) => {
       try {
@@ -231,6 +288,56 @@ export function registerStoreHandlers(): void {
         console.error('[StoreIPC] store:import-dhpkg error:', err.message)
         return { success: false, error: err.message }
       }
+    },
+
+    // ── store:get-capabilities ─────────────────────────────────────────────
+    storeGetCapabilities: async () => {
+      return storeController.getStoreCapabilities()
+    },
+
+    // ── store:get-category-taxonomy ────────────────────────────────────────
+    storeGetCategoryTaxonomy: async () => {
+      return storeController.getStoreCategoryTaxonomy()
+    },
+
+    // ── store:revalidate ───────────────────────────────────────────────────
+    storeRevalidate: async () => {
+      return storeController.revalidateStore()
+    },
+
+    // ── store:get-discover-page ────────────────────────────────────────────
+    storeGetDiscoverPage: async (input?: { locale?: string; pageSize?: number }) => {
+      return storeController.getStoreDiscoverPage(input)
+    },
+
+    // ── store:get-my-publications ──────────────────────────────────────────
+    // ── store:ensure-signed-in ─────────────────────────────────────────────
+    storeEnsureSignedIn: async (input?: { force?: boolean }) => {
+      return storeController.ensureStoreSignedIn(input?.force ?? false)
+    },
+
+    // ── store:get-identity ─────────────────────────────────────────────────
+    storeGetIdentity: async () => {
+      return storeController.getStoreIdentity()
+    },
+
+    // ── store:get-sign-in-status ───────────────────────────────────────────
+    storeGetSignInStatus: async () => {
+      return storeController.getStoreSignInStatus()
+    },
+
+    storeGetMyPublications: async () => {
+      return storeController.getStoreMyPublications()
+    },
+
+    // ── store:unpublish ────────────────────────────────────────────────────
+    storeUnpublish: async (input: { slug: string }) => {
+      return storeController.unpublishStoreApp(input)
+    },
+
+    // ── store:ignore-version ───────────────────────────────────────────────
+    storeIgnoreVersion: async (input: { appId: string; version: string }) => {
+      return storeController.ignoreStoreVersion(input)
     },
   })
 
@@ -293,5 +400,5 @@ export function registerStoreHandlers(): void {
     sendToRenderer('store:upgrade-available', event)
   })
 
-  console.log('[StoreIPC] Store handlers registered (18 channels + sync push + upgrade push)')
+  console.log('[StoreIPC] Store handlers registered (sync push + upgrade push)')
 }
