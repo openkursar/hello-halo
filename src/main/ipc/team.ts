@@ -18,6 +18,7 @@ import type {
   TeamRunTrigger,
   TeamTriggerInput,
 } from '../../shared/apps/team-types'
+import type { ImageAttachment } from '../../shared/types/image-attachment'
 
 type Envelope<T = unknown> = { success: true; data?: T } | { success: false; error: string }
 
@@ -179,7 +180,7 @@ export function registerTeamIpc(): void {
         appId: string
         epochId: string
         message: string
-        images?: { type: string; media_type: string; data: string }[]
+        images?: ImageAttachment[]
         thinkingEnabled?: boolean
       }
     ) => handle('team:send-to-member', (s) => s.sendToMember(input))

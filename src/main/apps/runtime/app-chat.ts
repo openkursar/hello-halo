@@ -91,7 +91,7 @@ import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
-import type { ImageAttachment } from '../../services/agent/types'
+import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import { ProgressEventParser } from './progress-formatter'
 import { ReplyTextAccumulator } from './reply-accumulator'
 import { flushSupplementBuffer, clearSupplementBuffer } from './dispatch-inbound'
@@ -749,7 +749,7 @@ export async function sendAppChatMessage(
 
     // Write user message to JSONL for reload recovery
     if (sessionWriter) {
-      sessionWriter.writeTrigger(message)
+      sessionWriter.writeTrigger(message, images)
     }
 
     // ── 8. Process stream ──────────────────────────────

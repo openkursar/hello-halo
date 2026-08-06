@@ -63,6 +63,9 @@ export * from './artifact'
 // Notification channel types (shared between main process and renderer)
 export * from './notification-channels'
 
+// Multimodal image attachment (renderer input → transport → runtime → transcript)
+export type { ImageAttachment, ImageMediaType } from './image-attachment'
+
 // Inbound message types (IM channel adapter boundary types)
 export * from './inbound-message'
 

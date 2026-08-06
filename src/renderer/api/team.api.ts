@@ -9,6 +9,7 @@ import type {
   ProposedMember,
   TeamTriggerInput,
 } from '../../shared/apps/team-types'
+import type { ImageAttachment } from '../../shared/types/image-attachment'
 
 export const teamApi = {
   // ===== Teams =====
@@ -66,7 +67,7 @@ export const teamApi = {
     appId: string
     epochId: string
     message: string
-    images?: { type: string; media_type: string; data: string }[]
+    images?: ImageAttachment[]
     thinkingEnabled?: boolean
   }): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamSendToMember(input)

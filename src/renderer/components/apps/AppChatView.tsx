@@ -230,20 +230,17 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
       role: 'user',
       content,
       timestamp: new Date().toISOString(),
+      ...(images && images.length > 0 ? { images } : {}),
     }
     setMessages(prev => [...prev, userMsg])
     setLoadState('loaded')
 
     try {
-      // Map ImageAttachment[] to API format { type, media_type, data }
-      const apiImages = images && images.length > 0
-        ? images.map(img => ({ type: img.type, media_type: img.mediaType, data: img.data }))
-        : undefined
       const res = await api.appChatSend({
         appId,
         spaceId,
         message: content,
-        images: apiImages,
+        images,
         thinkingEnabled,
         conversationId,
       })

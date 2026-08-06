@@ -14,6 +14,7 @@ import {
   leaveTeamOffice,
 } from '../../controllers/team-invite.controller'
 import type { OfficeScope } from '../../apps/federation/index'
+import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import type {
   CreateTeamInput,
   UpdateTeamInput,
@@ -355,7 +356,7 @@ export function registerTeamRoutes(app: Express): void {
 
       const { message, images, thinkingEnabled } = (req.body ?? {}) as {
         message?: string
-        images?: { type: string; media_type: string; data: string }[]
+        images?: ImageAttachment[]
         thinkingEnabled?: boolean
       }
       if (typeof message !== 'string' || message.length === 0) {

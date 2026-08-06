@@ -450,17 +450,8 @@ export interface ToolCall {
 // Image Attachment Types (for multi-modal messages)
 // ============================================
 
-export type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
-
-// Image attachment for messages
-export interface ImageAttachment {
-  id: string;
-  type: 'image';
-  mediaType: ImageMediaType;
-  data: string;  // Base64 encoded image data
-  name?: string;  // Optional filename
-  size?: number;  // File size in bytes
-}
+import type { ImageAttachment, ImageMediaType } from '../../shared/types/image-attachment';
+export type { ImageAttachment, ImageMediaType };
 
 // Content block types for multi-modal messages (matches Claude API)
 export interface TextContentBlock {

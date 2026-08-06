@@ -46,7 +46,8 @@ import type {
   HealthRecoveryResponse,
   HealthReportResponse,
   HealthExportResponse,
-  HealthCheckResponse
+  HealthCheckResponse,
+  ImageAttachment
 } from '../shared/types'
 import type { StoreInstallProgress } from '../shared/store/store-types'
 
@@ -536,7 +537,7 @@ export interface HaloAPI {
   // App Chat
   // conversationId addresses a specific native/local session; omit for the app's
   // native default session.
-  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean; conversationId?: string; teamContext?: unknown }) => Promise<IpcResponse<{ conversationId: string }>>
+  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean; conversationId?: string; teamContext?: unknown }) => Promise<IpcResponse<{ conversationId: string }>>
   appChatStop: (appId: string, conversationId?: string) => Promise<IpcResponse>
   appChatStatus: (appId: string, conversationId?: string) => Promise<IpcResponse<{ isGenerating: boolean; conversationId: string }>>
   appChatMessages: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
@@ -610,7 +611,7 @@ export interface HaloAPI {
   /** Remote office: leave a joined office, removing the local shadow (joiner). */
   teamLeaveOffice: (input: { officeId: string }) => Promise<IpcResponse>
   /** Send a message to a remote member via the office owner (team wake). */
-  teamSendToMember: (input: { teamId: string; appId: string; epochId: string; message: string; images?: { type: string; media_type: string; data: string }[]; thinkingEnabled?: boolean }) => Promise<IpcResponse>
+  teamSendToMember: (input: { teamId: string; appId: string; epochId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean }) => Promise<IpcResponse>
   /** Conversations (office-shared session objects). */
   teamListConversations: (teamId: string) => Promise<IpcResponse>
   teamOpenConversation: (input: { teamId: string; title?: string }) => Promise<IpcResponse>

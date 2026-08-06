@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } fr
 import { join } from 'path'
 import { jsonrepair } from 'jsonrepair'
 import { TRANSPARENT_TOOLS } from '../../services/agent/constants'
+import type { ImageAttachment, ImageMediaType } from '../../../shared/types/image-attachment'
 
 // ============================================
 // Types
@@ -76,6 +77,8 @@ interface MessageRecord {
   timestamp: string
   thoughts?: ThoughtRecord[]
   thoughtsSummary?: ThoughtsSummaryRecord
+  /** Images the user attached to this message (user records only) */
+  images?: ImageAttachment[]
 }
 
 // ============================================
@@ -85,8 +88,12 @@ interface MessageRecord {
 export interface SessionWriter {
   /** Append a raw SDK stream event */
   writeEvent(event: Record<string, unknown>): void
-  /** Write the initial trigger message (before stream starts) */
-  writeTrigger(content: string): void
+  /**
+   * Write the initial trigger message (before stream starts).
+   * Attached images are persisted alongside the text so a reload reconstructs
+   * the same bubble the user saw when sending.
+   */
+  writeTrigger(content: string, images?: ImageAttachment[]): void
 }
 
 /** Get the directory for run session files */
@@ -127,15 +134,39 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
       appendLine({ _ts: new Date().toISOString(), ...event } as StoredEvent)
     },
 
-    writeTrigger(content: string): void {
+    writeTrigger(content: string, images?: ImageAttachment[]): void {
       appendLine({
         _ts: new Date().toISOString(),
         type: 'user',
         _isTrigger: true,
-        message: { role: 'user', content: [{ type: 'text', text: content }] },
+        message: { role: 'user', content: buildTriggerContent(content, images) },
       })
     },
   }
+}
+
+/**
+ * Build the stored content blocks for a trigger message.
+ *
+ * Image blocks keep the Anthropic `source` shape so the transcript stays
+ * readable as an SDK message; `id` / `name` ride along under the `_` prefix
+ * this file uses for Halo-private fields, since the API shape has no room for
+ * them and the bubble needs them back on reload.
+ */
+function buildTriggerContent(
+  content: string,
+  images?: ImageAttachment[]
+): Array<Record<string, unknown>> {
+  const blocks: Array<Record<string, unknown>> = [{ type: 'text', text: content }]
+  for (const image of images ?? []) {
+    blocks.push({
+      type: 'image',
+      source: { type: 'base64', media_type: image.mediaType, data: image.data },
+      _id: image.id,
+      ...(image.name ? { _name: image.name } : {}),
+    })
+  }
+  return blocks
 }
 
 // ============================================
@@ -361,12 +392,14 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
         // Flush the current turn before showing the user message.
         flush()
         const textContent = extractTextContent(content)
-        if (textContent) {
+        const images = extractImageAttachments(content, msgIdx + 1)
+        if (textContent || images.length > 0) {
           messages.push({
             id: `session-msg-${++msgIdx}`,
             role: 'user',
             content: textContent,
             timestamp: ts,
+            ...(images.length > 0 ? { images } : {}),
           })
         }
       }
@@ -697,6 +730,29 @@ function extractTextContent(content: unknown): string {
     .filter((b: any) => b.type === 'text')
     .map((b: any) => b.text || '')
     .join('')
+}
+
+/**
+ * Rebuild the renderer's ImageAttachment[] from stored image blocks.
+ *
+ * `msgSeq` only seeds the fallback id for transcripts written before ids were
+ * persisted — it just has to be stable within one read so React keys hold.
+ */
+function extractImageAttachments(content: unknown, msgSeq: number): ImageAttachment[] {
+  if (!Array.isArray(content)) return []
+  const images: ImageAttachment[] = []
+  for (const block of content as any[]) {
+    const source = block?.source
+    if (block?.type !== 'image' || typeof source?.data !== 'string') continue
+    images.push({
+      id: typeof block._id === 'string' ? block._id : `session-img-${msgSeq}-${images.length}`,
+      type: 'image',
+      mediaType: source.media_type as ImageMediaType,
+      data: source.data,
+      ...(typeof block._name === 'string' ? { name: block._name } : {}),
+    })
+  }
+  return images
 }
 
 function extractToolResults(content: unknown): Array<{ toolUseId: string; output: string; isError: boolean }> {

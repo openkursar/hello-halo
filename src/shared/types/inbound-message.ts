@@ -11,6 +11,8 @@
  * - recentHistory is optional — some platforms support history pull, some don't
  */
 
+import type { ImageAttachment } from './image-attachment'
+
 // ============================================
 // InboundMessage
 // ============================================
@@ -50,19 +52,10 @@ export interface InboundMessage {
    * Image data for multimodal AI input.
    *
    * Channel adapters download, decrypt, and base64-encode received images into
-   * this array before dispatch. Structurally identical to ImageAttachment in
-   * src/main/services/agent/types.ts — kept inline here to avoid a shared ↔ main
-   * import dependency.
-   *
-   * Only populated for image-type attachments (not files or video).
+   * this array before dispatch. Only populated for image-type attachments
+   * (not files or video).
    */
-  images?: Array<{
-    id: string
-    type: 'image'
-    mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
-    data: string
-    name?: string
-  }>
+  images?: ImageAttachment[]
 }
 
 /** A single entry in the optional recent history array. */

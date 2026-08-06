@@ -11,8 +11,13 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import {
   convertEventsToMessages,
+  openSessionWriter,
+  readSessionMessages,
   type StoredEvent,
 } from '../../../../src/main/apps/runtime/session-store'
 
@@ -108,6 +113,31 @@ function userTrigger(text: string, ts = '2026-01-01T00:00:00.000Z'): StoredEvent
     message: {
       role: 'user',
       content: [{ type: 'text', text }],
+    },
+  }
+}
+
+/** Create a user trigger message carrying image blocks */
+function userTriggerWithImages(
+  text: string,
+  images: Array<{ id?: string; name?: string; data: string }>,
+  ts = '2026-01-01T00:00:00.000Z'
+): StoredEvent {
+  return {
+    _ts: ts,
+    type: 'user',
+    _isTrigger: true,
+    message: {
+      role: 'user',
+      content: [
+        { type: 'text', text },
+        ...images.map(img => ({
+          type: 'image',
+          source: { type: 'base64', media_type: 'image/png', data: img.data },
+          ...(img.id ? { _id: img.id } : {}),
+          ...(img.name ? { _name: img.name } : {}),
+        })),
+      ],
     },
   }
 }
@@ -747,6 +777,91 @@ describe('convertEventsToMessages', () => {
       const toolThoughts = assistant.thoughts!.filter(t => t.type === 'tool_use')
       expect(toolThoughts).toHaveLength(3)
       expect(toolThoughts.every(t => t.toolResult !== undefined)).toBe(true)
+    })
+  })
+
+  // ── Image attachments ──
+
+  describe('image attachments', () => {
+    it('reconstructs attached images on the user message', () => {
+      const events: StoredEvent[] = [
+        userTriggerWithImages('What is in this screenshot?', [
+          { id: 'img-1', name: 'shot.png', data: 'AAAA' },
+        ]),
+        assistantText('A table of contacts.'),
+      ]
+
+      const messages = convertEventsToMessages(events)
+
+      expect(messages[0]).toMatchObject({ role: 'user', content: 'What is in this screenshot?' })
+      expect(messages[0].images).toEqual([
+        { id: 'img-1', type: 'image', mediaType: 'image/png', data: 'AAAA', name: 'shot.png' },
+      ])
+      // Images belong to the user turn only.
+      expect(messages[1].images).toBeUndefined()
+    })
+
+    it('keeps an image-only message (no text) visible', () => {
+      const messages = convertEventsToMessages([
+        userTriggerWithImages('', [{ id: 'img-1', data: 'AAAA' }]),
+      ])
+
+      expect(messages).toHaveLength(1)
+      expect(messages[0].content).toBe('')
+      expect(messages[0].images).toHaveLength(1)
+    })
+
+    it('assigns distinct fallback ids when the transcript carries none', () => {
+      const messages = convertEventsToMessages([
+        userTriggerWithImages('two', [{ data: 'AAAA' }, { data: 'BBBB' }]),
+      ])
+
+      const ids = messages[0].images!.map(i => i.id)
+      expect(new Set(ids).size).toBe(2)
+    })
+
+    it('omits the images field for a text-only message', () => {
+      const messages = convertEventsToMessages([userTrigger('plain text')])
+      expect(messages[0].images).toBeUndefined()
+    })
+
+    it('round-trips images through the JSONL writer and reader', () => {
+      const spacePath = mkdtempSync(join(tmpdir(), 'halo-session-store-'))
+      try {
+        const writer = openSessionWriter(spacePath, 'app-1', 'run-1')
+        writer.writeTrigger('Look at this', [
+          { id: 'img-1', type: 'image', mediaType: 'image/png', data: 'AAAA', name: 'shot.png' },
+        ])
+        writer.writeEvent({
+          type: 'assistant',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'Got it.' }] },
+        })
+
+        const messages = readSessionMessages(spacePath, 'app-1', 'run-1')
+
+        expect(messages.map(m => [m.role, m.content])).toEqual([
+          ['user', 'Look at this'],
+          ['assistant', 'Got it.'],
+        ])
+        expect(messages[0].images).toEqual([
+          { id: 'img-1', type: 'image', mediaType: 'image/png', data: 'AAAA', name: 'shot.png' },
+        ])
+      } finally {
+        rmSync(spacePath, { recursive: true, force: true })
+      }
+    })
+
+    it('writes no image blocks when a trigger has no attachments', () => {
+      const spacePath = mkdtempSync(join(tmpdir(), 'halo-session-store-'))
+      try {
+        openSessionWriter(spacePath, 'app-1', 'run-1').writeTrigger('text only')
+        const messages = readSessionMessages(spacePath, 'app-1', 'run-1')
+
+        expect(messages).toHaveLength(1)
+        expect(messages[0].images).toBeUndefined()
+      } finally {
+        rmSync(spacePath, { recursive: true, force: true })
+      }
     })
   })
 

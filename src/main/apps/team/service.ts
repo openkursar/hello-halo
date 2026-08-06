@@ -24,6 +24,7 @@ import type { AppManagerService } from '../manager'
 import type { AppSpec } from '../spec'
 import type { AutomationSpec } from '../../../shared/apps/spec-types'
 import type { Artifact } from '../../services/artifact.service'
+import type { ImageAttachment } from '../../../shared/types/image-attachment'
 import type { TeamStore } from './types'
 import type {
   Team,
@@ -192,7 +193,8 @@ export interface SendToMemberParams {
   appId: string
   epochId: string
   message: string
-  images?: { type: string; media_type: string; data: string }[]
+  /** Accepted but not yet delivered: the team message bus carries text only. */
+  images?: ImageAttachment[]
   thinkingEnabled?: boolean
 }
 

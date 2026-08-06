@@ -197,20 +197,22 @@ export function TeamSessionChat({
     const convId = buildTeamSessionKey(appId, teamId, eid)
 
     resetSession(convId)
-    const userMsg: Message = { id: `user-${Date.now()}`, role: 'user', content, timestamp: new Date().toISOString() }
+    const userMsg: Message = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content,
+      timestamp: new Date().toISOString(),
+      ...(images && images.length > 0 ? { images } : {}),
+    }
     setMessages(prev => [...prev, userMsg])
     setLoadState('loaded')
 
     const teamContext = { teamId, epochId: eid, correlationId: `user-${Date.now()}`, fromAppId: null, wait: false }
 
     try {
-      const apiImages = images && images.length > 0
-        ? images.map(img => ({ type: img.type, media_type: img.mediaType, data: img.data }))
-        : undefined
-
       const res = isRemote
-        ? await api.teamSendToMember({ teamId, appId, epochId: eid, message: content, images: apiImages, thinkingEnabled })
-        : await api.appChatSend({ appId, spaceId, message: content, images: apiImages, thinkingEnabled, conversationId: convId, teamContext })
+        ? await api.teamSendToMember({ teamId, appId, epochId: eid, message: content, images, thinkingEnabled })
+        : await api.appChatSend({ appId, spaceId, message: content, images, thinkingEnabled, conversationId: convId, teamContext })
 
       const remoteResult = isRemote && res.success ? (res.data as { ok?: boolean; reason?: string } | undefined) : undefined
       const failed = isRemote ? !res.success || remoteResult?.ok === false : !res.success
