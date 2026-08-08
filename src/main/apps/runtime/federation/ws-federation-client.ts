@@ -160,8 +160,13 @@ export class WsFederationClient {
       this.reconnectTimer = null
     }
     if (this.socket) {
+      // Closing a socket that is still handshaking makes `ws` emit 'error'
+      // asynchronously. removeAllListeners drops the 'error' handler, and an
+      // EventEmitter 'error' with no listener is promoted to an uncaught
+      // exception the synchronous catch below can never see — keep a sink.
+      this.socket.removeAllListeners()
+      this.socket.on('error', () => {})
       try {
-        this.socket.removeAllListeners()
         this.socket.close()
       } catch {
         /* already closing */
