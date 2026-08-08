@@ -144,8 +144,12 @@ export function registerArtifactRoutes(app: Express): void {
         readStream.pipe(res)
       }
     } catch (error) {
-      console.error('[Download] Error:', error)
-      res.status(500).json({ success: false, error: (error as Error).message })
+      const err = error as NodeJS.ErrnoException
+      console.error('[Download] Error:', err.stack || err.message)
+      // The path passed validation but vanished mid-request (check-then-use race).
+      // That is a missing resource, not a server fault.
+      const status = err.code === 'ENOENT' ? 404 : 500
+      res.status(status).json({ success: false, error: err.message })
     }
   })
 

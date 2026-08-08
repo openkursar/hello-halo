@@ -19,6 +19,7 @@ import path from 'path'
 import { ensureOpenAICompatRouter, encodeBackendConfig, normalizeApiUrl } from '../openai-compat-router'
 import type { BackendConfig } from '../openai-compat-router'
 import { buildSdkEnv } from './agent/sdk-config'
+import { getTempSpacePath } from '../foundation/config.service'
 import { DEFAULT_MODEL } from '../../shared/types/ai-sources'
 import {
   ModelFetchError,
@@ -197,7 +198,10 @@ export async function validateApiConnection(params: ValidateApiParams): Promise<
   try {
     const sdkOptions: Record<string, unknown> = {
       model: testModel,
-      cwd: app.getPath('temp'),
+      // Halo's own temp space, never the OS temp dir: on macOS the latter is the
+      // shared $TMPDIR that Chromium fills with short-lived `.<bundle-id>.XXXXXX`
+      // files, and a CLI subprocess rooted there races their deletion (ENOENT).
+      cwd: getTempSpacePath(),
       abortController,
       // Use buildSdkEnv for consistent environment setup matching the agent module.
       // This includes CLAUDE_CONFIG_DIR, proxy normalization, and all required flags.

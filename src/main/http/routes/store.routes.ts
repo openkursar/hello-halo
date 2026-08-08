@@ -9,6 +9,7 @@ import {
   rejectIfRemoteMcpForbiddenAsync,
   storeController,
   storeSlugIsMcp,
+  validateFilePath,
 } from './_shared'
 import {
   applyUpgrade,
@@ -390,12 +391,12 @@ export function registerStoreRoutes(app: Express): void {
   app.post('/api/store/import-dhpkg', async (req: Request, res: Response) => {
     try {
       const { filePath, spaceId } = req.body as { filePath?: string; spaceId?: string | null }
-      if (!filePath) {
-        res.status(400).json({ success: false, error: 'Missing filePath' })
-        return
-      }
+      // Remote callers may only import from inside a space directory — an
+      // unchecked path here would read any file the app can reach.
+      const validatedPath = validateFilePath(res, filePath)
+      if (!validatedPath) return
 
-      const buf = await readFile(filePath)
+      const buf = await readFile(validatedPath)
       const { spec } = await unpackDhpkg(buf)
 
       const manager = getAppManager()
@@ -418,7 +419,10 @@ export function registerStoreRoutes(app: Express): void {
 
       res.json({ success: true, data: { appId } })
     } catch (error) {
-      res.json({ success: false, error: (error as Error).message })
+      const err = error as Error
+      console.error('[HTTP] POST /api/store/import-dhpkg failed:', err.stack || err.message)
+      // Echoing the raw message would leak the resolved filesystem path.
+      res.json({ success: false, error: 'Failed to import package' })
     }
   })
 
