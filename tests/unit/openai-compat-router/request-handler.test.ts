@@ -71,10 +71,14 @@ vi.mock('../../../src/main/openai-compat-router/server/api-type', () => ({
 
 const isNativeAnthropicHost = vi.fn(() => false)
 const normalizeSystemPrompt = vi.fn((request: unknown) => ({ request, modified: false }))
-vi.mock('../../../src/main/openai-compat-router/utils', () => ({
-  isNativeAnthropicHost: (...a: unknown[]) => isNativeAnthropicHost(...a),
-  normalizeSystemPrompt: (...a: unknown[]) => normalizeSystemPrompt(...a),
-}))
+vi.mock('../../../src/main/openai-compat-router/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/openai-compat-router/utils')>()
+  return {
+    ...actual,
+    isNativeAnthropicHost: (...a: unknown[]) => isNativeAnthropicHost(...a),
+    normalizeSystemPrompt: (...a: unknown[]) => normalizeSystemPrompt(...a),
+  }
+})
 
 vi.mock('../../../src/main/openai-compat-router/utils/token-counter', () => ({
   countTokens: vi.fn(() => 7),
