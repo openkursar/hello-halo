@@ -55,7 +55,14 @@ function FeaturedGrid({ entries }: { entries: RegistryEntry[] }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
       {entries.map(entry => (
-        <FeaturedCard key={entry.slug} entry={entry} onSelect={() => selectStoreApp(entry.slug)} />
+        <FeaturedCard
+          key={entry.slug}
+          entry={entry}
+          onSelect={() => {
+            void api.trackEvent('store.card.click', { appId: entry.slug, appType: entry.type, source: 'featured' })
+            selectStoreApp(entry.slug)
+          }}
+        />
       ))}
     </div>
   )

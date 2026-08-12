@@ -103,16 +103,6 @@ export function StoreDetail() {
 
   const { installedApp, updateInfo } = useStoreEntryInstallState(entry, registryId)
 
-  // Store funnel: a detail page opened, tagged with the install state.
-  useEffect(() => {
-    if (!entry) return
-    void api.trackEvent('store.detail.view', {
-      appId: entry.slug,
-      appType: entry.type,
-      installedState: updateInfo ? 'update' : installedApp ? 'installed' : 'new',
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entry?.slug])
   const { start: startUpdate, busy: updating, dialogs: updateDialogs } = useStoreUpdateFlow(
     entry,
     updateInfo,
@@ -238,7 +228,7 @@ export function StoreDetail() {
             <p className="text-xs text-muted-foreground/60 mt-1 max-w-xs">{storeDetailError}</p>
           </div>
           <button
-            onClick={() => storeSelectedSlug && void selectStoreApp(storeSelectedSlug)}
+            onClick={() => storeSelectedSlug && void selectStoreApp(storeSelectedSlug, false, 'reload')}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border/60 rounded-lg hover:bg-secondary transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" />

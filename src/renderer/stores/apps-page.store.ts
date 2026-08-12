@@ -16,6 +16,8 @@ import { persist } from 'zustand/middleware'
 import { api } from '../api'
 import { getCurrentLanguage } from '../i18n'
 import { categoryTaxonomyResource, discoverPageResource } from '../lib/store-resources'
+import { findInstalledApp, findEntryUpdate } from '../utils/store-install-state'
+import { useAppsStore } from './apps.store'
 import type { RegistryEntry, StoreAppDetail, UpdateInfo, StoreQuery, StoreQueryResponse, StoreInstallProgress } from '../../shared/store/store-types'
 import type { AppType } from '../../shared/apps/spec-types'
 import type { ImSessionRecord } from '../../shared/types/im-channel'
@@ -45,6 +47,22 @@ const storeListCache = new Map<string, { items: RegistryEntry[]; page: number; h
 
 function storeListCacheKey(q: { category?: string; type?: string; locale?: string }): string {
   return `${q.locale ?? ''}|${q.type ?? ''}|${q.category ?? ''}`
+}
+
+/**
+ * One opened detail, one event. Reported from the action rather than the view
+ * because every entry point routes through here, while the view remounts on
+ * things that are not an open — leaving the store tab with a detail on screen
+ * and coming back used to count a second time.
+ */
+function reportDetailView(detail: StoreAppDetail, availableUpdates: UpdateInfo[]): void {
+  const installedApp = findInstalledApp(detail.entry, detail.registryId, useAppsStore.getState().apps)
+  const updateInfo = findEntryUpdate(installedApp, availableUpdates)
+  void api.trackEvent('store.detail.view', {
+    appId: detail.entry.slug,
+    appType: detail.entry.type,
+    installedState: updateInfo ? 'update' : installedApp ? 'installed' : 'new',
+  })
 }
 
 // ============================================
@@ -171,7 +189,12 @@ interface AppsPageState {
    * never forget the reload step.
    */
   openMarketplaceFilteredBy: (type: AppType | null) => Promise<void>
-  selectStoreApp: (slug: string, autoInstall?: boolean) => Promise<void>
+  /**
+   * `intent` separates opening a detail from re-reading one already open: a
+   * failed load's Retry re-runs this, and counting that as a second view would
+   * inflate the funnel with the user's recovery from an error.
+   */
+  selectStoreApp: (slug: string, autoInstall?: boolean, intent?: 'open' | 'reload') => Promise<void>
   clearStoreSelection: () => void
   /** Consume the "open install dialog on arrival" intent set by a card's install button. */
   consumeStoreAutoInstall: () => boolean
@@ -495,7 +518,7 @@ export const useAppsPageStore = create<AppsPageState>()(
     await get().loadStoreApps()
   },
 
-  selectStoreApp: async (slug, autoInstall = false) => {
+  selectStoreApp: async (slug, autoInstall = false, intent = 'open') => {
     const requestId = ++storeDetailRequestSeq
     set({ storeSelectedSlug: slug, storeAutoInstall: autoInstall, storeDetailLoading: true, storeSelectedDetail: null, storeDetailError: null })
     try {
@@ -503,7 +526,9 @@ export const useAppsPageStore = create<AppsPageState>()(
       if (requestId !== storeDetailRequestSeq) return
 
       if (res.success && res.data) {
-        set({ storeSelectedDetail: res.data as StoreAppDetail })
+        const detail = res.data as StoreAppDetail
+        set({ storeSelectedDetail: detail })
+        if (intent === 'open') reportDetailView(detail, get().availableUpdates)
       } else {
         console.error('[AppsPageStore] selectStoreApp failed:', res.error)
         set({ storeDetailError: (res.error as string) || 'Failed to load app detail' })
