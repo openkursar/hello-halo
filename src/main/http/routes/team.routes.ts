@@ -19,12 +19,14 @@ import type {
   CreateTeamInput,
   UpdateTeamInput,
   TeamMemberInput,
+  UpdateTeamMemberInput,
   TeamEdge,
   ProposedMember,
   TeamTriggerInput,
   BlackboardTask,
   BlackboardFinding,
   BlackboardSnapshot,
+  TeamActivity,
   TeamArtifactGroup,
 } from '../../../shared/apps/team-types'
 
@@ -62,22 +64,25 @@ export function registerTeamRoutes(app: Express): void {
     teamId: string,
     tasks: BlackboardTask[],
     findings: BlackboardFinding[],
-  ): { tasks: BlackboardTask[]; findings: BlackboardFinding[] } {
+    activities: TeamActivity[] = [],
+  ): { tasks: BlackboardTask[]; findings: BlackboardFinding[]; activities: TeamActivity[] } {
     const cred = getOfficeCredential(req)
-    if (!cred) return { tasks, findings }
+    if (!cred) return { tasks, findings, activities }
 
     const store = getTeamStore()
-    if (!store) return { tasks: [], findings: [] }
+    if (!store) return { tasks: [], findings: [], activities: [] }
 
     const appIds = resolveOfficeMemberAppIds(teamId, cred.identity)
-    if (appIds.length === 0) return { tasks: [], findings: [] }
+    if (appIds.length === 0) return { tasks: [], findings: [], activities: [] }
 
     const gate = createScopeGate({ store })
-    const snapshot: BlackboardSnapshot = { tasks, findings, roster: [] }
+    const snapshot: BlackboardSnapshot = { tasks, findings, roster: [], checks: [], activities }
     const taskIds = new Set<string>()
     const findingIds = new Set<string>()
+    const activityIds = new Set<string>()
     const visibleTasks: BlackboardTask[] = []
     const visibleFindings: BlackboardFinding[] = []
+    const visibleActivities: TeamActivity[] = []
     for (const appId of appIds) {
       const filtered = gate.filterBoard(teamId, appId, snapshot)
       for (const t of filtered.tasks) {
@@ -92,8 +97,16 @@ export function registerTeamRoutes(app: Express): void {
           visibleFindings.push(f)
         }
       }
+      // The record of who contacted whom is scoped like the findings list: a
+      // narrowed credential must not learn the office's traffic from the feed.
+      for (const a of filtered.activities) {
+        if (!activityIds.has(a.id)) {
+          activityIds.add(a.id)
+          visibleActivities.push(a)
+        }
+      }
     }
-    return { tasks: visibleTasks, findings: visibleFindings }
+    return { tasks: visibleTasks, findings: visibleFindings, activities: visibleActivities }
   }
 
   // Per-invite scope projection for artifact listings, mirroring the transcript
@@ -198,8 +211,8 @@ export function registerTeamRoutes(app: Express): void {
       }
       // Project tasks/findings down to the credential's scope. PIN requests
       // pass through unchanged; team meta/edges/roster are unaffected.
-      const projected = projectBoardForCredential(req, req.params.teamId, detail.tasks, detail.findings)
-      res.json({ success: true, data: { ...detail, tasks: projected.tasks, findings: projected.findings } })
+      const projected = projectBoardForCredential(req, req.params.teamId, detail.tasks, detail.findings, detail.activities ?? [])
+      res.json({ success: true, data: { ...detail, tasks: projected.tasks, findings: projected.findings, activities: projected.activities } })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -474,8 +487,8 @@ export function registerTeamRoutes(app: Express): void {
       }
       // Same per-invite scope projection as /detail; epoch + members metadata
       // is unaffected, only the tasks/findings the board exposes.
-      const projected = projectBoardForCredential(req, req.params.teamId, board.tasks, board.findings)
-      res.json({ success: true, data: { ...board, tasks: projected.tasks, findings: projected.findings } })
+      const projected = projectBoardForCredential(req, req.params.teamId, board.tasks, board.findings, board.activities ?? [])
+      res.json({ success: true, data: { ...board, tasks: projected.tasks, findings: projected.findings, activities: projected.activities } })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -531,6 +544,36 @@ export function registerTeamRoutes(app: Express): void {
       }
       const added = await service.addMember(req.params.teamId, member)
       res.json({ success: true, data: added })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // PATCH /api/teams/:teamId/members/:appId — rewrite a member's duty and the
+  // capabilities its owner lends to teammates. The service refuses a member this
+  // machine does not own, so a remote client cannot rewrite someone else's.
+  app.patch('/api/teams/:teamId/members/:appId', async (req: Request, res: Response) => {
+    try {
+      const service = getServiceOrFail(res)
+      if (!service) return
+      const updated = service.updateMember(
+        req.params.teamId,
+        req.params.appId,
+        req.body as UpdateTeamMemberInput
+      )
+      res.json({ success: true, data: updated })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // DELETE /api/teams/:teamId/checks/:checkId — stop one periodic check
+  app.delete('/api/teams/:teamId/checks/:checkId', async (req: Request, res: Response) => {
+    try {
+      const service = getServiceOrFail(res)
+      if (!service) return
+      service.cancelCheck(req.params.teamId, req.params.checkId)
+      res.json({ success: true })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

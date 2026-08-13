@@ -206,5 +206,98 @@ export const migrations: Migration[] = [
       db.exec(`ALTER TABLE team_epochs ADD COLUMN title TEXT`)
       db.exec(`ALTER TABLE team_epochs ADD COLUMN outcome TEXT`)
     }
+  },
+  {
+    version: 10,
+    description: 'Add per-team member duty + delegated capability policy, and the team_checks table',
+    up(db) {
+      // duty: what this member is responsible for INSIDE this team, written by
+      // its owner. NULL = nothing written yet.
+      db.exec(`ALTER TABLE team_members ADD COLUMN duty TEXT`)
+      // delegated_policy_json: what a TEAMMATE may make this member do. NULL =
+      // unrestricted, so every existing team behaves exactly as before. Never
+      // replicated — it guards the owner's own machine.
+      db.exec(`ALTER TABLE team_members ADD COLUMN delegated_policy_json TEXT`)
+      // accepts_checks: the one bit of the policy other nodes need, so a
+      // teammate is refused early and clearly instead of at the far end.
+      db.exec(`ALTER TABLE team_members ADD COLUMN accepts_checks INTEGER NOT NULL DEFAULT 1`)
+
+      db.exec(`
+        CREATE TABLE team_checks (
+          id TEXT PRIMARY KEY,
+          team_id TEXT NOT NULL,
+          epoch_id TEXT NOT NULL,
+          target_app_id TEXT NOT NULL,
+          created_by_app_id TEXT NOT NULL,
+          instruction TEXT NOT NULL,
+          schedule_json TEXT NOT NULL,
+          run_count INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          last_run_at INTEGER
+        )
+      `)
+      db.exec(`
+        CREATE INDEX idx_checks_team_epoch
+          ON team_checks(team_id, epoch_id)
+      `)
+      db.exec(`
+        CREATE INDEX idx_checks_target
+          ON team_checks(target_app_id)
+      `)
+    }
+  },
+  {
+    version: 11,
+    description: 'Add team_epochs.last_activity_at so a list of work can be ordered by when it last moved',
+    up(db) {
+      // started_at is the wrong sort key for a conversation: it lives for weeks
+      // and is used daily, so ordering by creation buries the thread the user
+      // talked to five minutes ago under yesterday's runs. Stamped on every turn
+      // that enters the epoch. Backfilled to the last time we know the epoch
+      // moved, so existing rows sort sensibly from day one.
+      db.exec(`ALTER TABLE team_epochs ADD COLUMN last_activity_at INTEGER`)
+      db.exec(`UPDATE team_epochs SET last_activity_at = COALESCE(ended_at, started_at)`)
+    }
+  },
+  {
+    version: 12,
+    description: 'Add team_activity: the office record of what happened (messages, board writes)',
+    up(db) {
+      // The tasks/findings tables hold current STATE; nothing held the acts that
+      // produced it. Directed messages in particular existed only in memory, so
+      // "who contacted whom" was unanswerable the moment a run ended — and a
+      // teammate could only learn a task moved by re-reading the task itself.
+      //
+      // Append-only by design: a reply is a new row pointing at the message it
+      // answers (correlation_id), never an edit — so the row replicates as a
+      // single idempotent insert and needs no pre-image to roll back.
+      db.exec(`
+        CREATE TABLE team_activity (
+          id TEXT PRIMARY KEY,
+          team_id TEXT NOT NULL,
+          epoch_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          actor_app_id TEXT NOT NULL,
+          target_app_id TEXT,
+          subject TEXT NOT NULL DEFAULT '',
+          body TEXT,
+          ref_id TEXT,
+          correlation_id TEXT,
+          status TEXT,
+          created_at INTEGER NOT NULL
+        )
+      `)
+      db.exec(`
+        CREATE INDEX idx_activity_team_epoch
+          ON team_activity(team_id, epoch_id, created_at)
+      `)
+      // Answering "has this message been replied to" is a lookup by the
+      // correlation the reply carries, not a scan of the epoch.
+      db.exec(`
+        CREATE INDEX idx_activity_correlation
+          ON team_activity(correlation_id)
+      `)
+    }
   }
 ]

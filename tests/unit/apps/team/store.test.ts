@@ -448,13 +448,34 @@ describe('TeamStore', () => {
     it('round-trips an epoch and ends it', () => {
       const epoch = makeEpoch()
       store.insertEpoch(epoch)
-      expect(store.getEpochById(epoch.id)).toEqual(epoch)
+      // An epoch no turn has entered yet is exactly as recent as its start.
+      expect(store.getEpochById(epoch.id)).toEqual({ ...epoch, lastActivityAt: epoch.startedAt })
 
       store.endEpoch(epoch.id, 9999, 'completed', 'All tasks done')
       const ended = store.getEpochById(epoch.id)!
       expect(ended.endedAt).toBe(9999)
       expect(ended.endReason).toBe('completed')
       expect(ended.summary).toBe('All tasks done')
+      // Sealing is itself a movement, but activity only ever goes forward: this
+      // epoch's synthetic end stamp predates its start, so the start stands.
+      expect(ended.lastActivityAt).toBe(epoch.startedAt)
+
+      const later = makeEpoch({ id: 'epoch-2', startedAt: 1000 })
+      store.insertEpoch(later)
+      store.endEpoch(later.id, 4000, 'completed', null)
+      expect(store.getEpochById(later.id)!.lastActivityAt).toBe(4000)
+    })
+
+    it('touchEpoch stamps activity forward only', () => {
+      const epoch = makeEpoch({ startedAt: 5000 })
+      store.insertEpoch(epoch)
+
+      store.touchEpoch(epoch.id, 7000)
+      expect(store.getEpochById(epoch.id)!.lastActivityAt).toBe(7000)
+
+      // A late/replicated stamp from earlier must not make the epoch look older.
+      store.touchEpoch(epoch.id, 6000)
+      expect(store.getEpochById(epoch.id)!.lastActivityAt).toBe(7000)
     })
 
     it('returns the open epoch as current and null after it is sealed', () => {

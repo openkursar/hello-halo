@@ -1,8 +1,9 @@
 /**
  * apps/team -- SQLite Store
  *
- * Low-level CRUD for the six Digital Team tables: teams, team_members,
- * team_edges, blackboard_tasks, blackboard_findings, team_epochs.
+ * Low-level CRUD for the Digital Team tables: teams, team_members, team_edges,
+ * blackboard_tasks, blackboard_findings, team_activity, team_epochs,
+ * team_checks, team_triggers.
  *
  * All methods are synchronous (better-sqlite3). The store handles the mapping
  * between flat SQLite rows and the frozen domain types and enforces no business
@@ -30,12 +31,16 @@ import type {
   TeamEdgeRow,
   BlackboardTaskRow,
   BlackboardFindingRow,
+  TeamActivityRow,
   TeamEpochRow,
   TeamTriggerRow,
+  TeamCheckRow,
   TeamFieldUpdate,
+  MemberFieldUpdate,
   TaskPatch,
   TeamStore as ITeamStore,
 } from './types'
+import type { TeamActivity, TeamCheck, TeamDelegatedPolicy } from '../../../shared/apps/team-types'
 import type {
   TeamTrigger,
   TeamRunTriggerType,
@@ -79,6 +84,35 @@ function rowToMember(row: TeamMemberRow): TeamMember {
     memberIdentity: row.member_identity,
     scopeJson: row.scope_json ?? null,
     ownerDisplayName: row.owner_display_name ?? null,
+    duty: row.duty ?? null,
+    delegatedPolicy: parsePolicy(row.delegated_policy_json),
+    acceptsChecks: row.accepts_checks !== 0,
+  }
+}
+
+/** A policy that fails to parse is treated as unset — never as a lockout. */
+function parsePolicy(json: string | null): TeamDelegatedPolicy | null {
+  if (!json) return null
+  try {
+    return JSON.parse(json) as TeamDelegatedPolicy
+  } catch {
+    return null
+  }
+}
+
+function rowToCheck(row: TeamCheckRow): TeamCheck {
+  return {
+    id: row.id,
+    teamId: row.team_id,
+    epochId: row.epoch_id,
+    targetAppId: row.target_app_id,
+    createdByAppId: row.created_by_app_id,
+    instruction: row.instruction,
+    schedule: JSON.parse(row.schedule_json) as TeamCheck['schedule'],
+    runCount: row.run_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastRunAt: row.last_run_at,
   }
 }
 
@@ -120,6 +154,23 @@ function rowToFinding(row: BlackboardFindingRow): BlackboardFinding {
   }
 }
 
+function rowToActivity(row: TeamActivityRow): TeamActivity {
+  return {
+    id: row.id,
+    teamId: row.team_id,
+    epochId: row.epoch_id,
+    kind: row.kind as TeamActivity['kind'],
+    actorAppId: row.actor_app_id,
+    targetAppId: row.target_app_id,
+    subject: row.subject,
+    body: row.body,
+    refId: row.ref_id,
+    correlationId: row.correlation_id,
+    status: (row.status as TeamActivity['status']) ?? null,
+    createdAt: row.created_at,
+  }
+}
+
 function rowToEpoch(row: TeamEpochRow): TeamEpoch {
   return {
     id: row.id,
@@ -133,6 +184,7 @@ function rowToEpoch(row: TeamEpochRow): TeamEpoch {
     title: row.title ?? null,
     outcome: (row.outcome as TeamEpoch['outcome'] | undefined) ?? null,
     triggerType: (row.trigger_type as TeamEpoch['triggerType'] | undefined) ?? 'manual',
+    lastActivityAt: row.last_activity_at ?? row.started_at,
   }
 }
 
@@ -177,8 +229,16 @@ export class TeamStore implements ITeamStore {
   private readonly stmtRemoveMember: Database.Statement
   private readonly stmtListMembersByTeam: Database.Statement
   private readonly stmtGetMemberByName: Database.Statement
+  private readonly stmtGetMember: Database.Statement
   private readonly stmtListMembersByAppId: Database.Statement
   private readonly stmtSetMemberLead: Database.Statement
+  // team_checks
+  private readonly stmtUpsertCheck: Database.Statement
+  private readonly stmtGetCheckById: Database.Statement
+  private readonly stmtDeleteCheck: Database.Statement
+  private readonly stmtListChecksByEpoch: Database.Statement
+  private readonly stmtListChecksByTeam: Database.Statement
+  private readonly stmtListAllChecks: Database.Statement
   // team_edges
   private readonly stmtDeleteEdgesForTeam: Database.Statement
   private readonly stmtInsertEdge: Database.Statement
@@ -192,10 +252,16 @@ export class TeamStore implements ITeamStore {
   // blackboard_findings
   private readonly stmtInsertFinding: Database.Statement
   private readonly stmtListFindingsByEpoch: Database.Statement
+  // team_activity
+  private readonly stmtInsertActivity: Database.Statement
+  private readonly stmtDeleteActivity: Database.Statement
+  private readonly stmtListActivityByEpoch: Database.Statement
+  private readonly stmtListActivityByTeam: Database.Statement
   // team_epochs
   private readonly stmtInsertEpoch: Database.Statement
   private readonly stmtGetEpochById: Database.Statement
   private readonly stmtEndEpoch: Database.Statement
+  private readonly stmtTouchEpoch: Database.Statement
   private readonly stmtReopenEpoch: Database.Statement
   private readonly stmtListEpochsByTeam: Database.Statement
   private readonly stmtGetCurrentEpochForTeam: Database.Statement
@@ -255,10 +321,10 @@ export class TeamStore implements ITeamStore {
     this.stmtAddMember = db.prepare(`
       INSERT INTO team_members (
         team_id, app_id, member_name, role, is_lead, ai_provisioned, added_at, owner_display_name,
-        owner_node_id, origin, member_identity, scope_json
+        owner_node_id, origin, member_identity, scope_json, duty, delegated_policy_json, accepts_checks
       ) VALUES (
         @team_id, @app_id, @member_name, @role, @is_lead, @ai_provisioned, @added_at, @owner_display_name,
-        @owner_node_id, @origin, @member_identity, @scope_json
+        @owner_node_id, @origin, @member_identity, @scope_json, @duty, @delegated_policy_json, @accepts_checks
       )
     `)
     this.stmtSetMemberScope = db.prepare(`
@@ -273,12 +339,44 @@ export class TeamStore implements ITeamStore {
     this.stmtGetMemberByName = db.prepare(`
       SELECT * FROM team_members WHERE team_id = ? AND member_name = ?
     `)
+    this.stmtGetMember = db.prepare(`
+      SELECT * FROM team_members WHERE team_id = ? AND app_id = ?
+    `)
     this.stmtListMembersByAppId = db.prepare(`
       SELECT * FROM team_members WHERE app_id = ? ORDER BY added_at ASC
     `)
     this.stmtSetMemberLead = db.prepare(`
       UPDATE team_members SET is_lead = @is_lead WHERE team_id = @team_id AND app_id = @app_id
     `)
+
+    // ── team_checks ───────────────────────────────
+    this.stmtUpsertCheck = db.prepare(`
+      INSERT INTO team_checks (
+        id, team_id, epoch_id, target_app_id, created_by_app_id,
+        instruction, schedule_json, run_count, created_at, updated_at, last_run_at
+      ) VALUES (
+        @id, @team_id, @epoch_id, @target_app_id, @created_by_app_id,
+        @instruction, @schedule_json, @run_count, @created_at, @updated_at, @last_run_at
+      )
+      ON CONFLICT(id) DO UPDATE SET
+        epoch_id = excluded.epoch_id,
+        target_app_id = excluded.target_app_id,
+        created_by_app_id = excluded.created_by_app_id,
+        instruction = excluded.instruction,
+        schedule_json = excluded.schedule_json,
+        run_count = excluded.run_count,
+        updated_at = excluded.updated_at,
+        last_run_at = excluded.last_run_at
+    `)
+    this.stmtGetCheckById = db.prepare(`SELECT * FROM team_checks WHERE id = ?`)
+    this.stmtDeleteCheck = db.prepare(`DELETE FROM team_checks WHERE id = ?`)
+    this.stmtListChecksByEpoch = db.prepare(`
+      SELECT * FROM team_checks WHERE team_id = ? AND epoch_id = ? ORDER BY created_at ASC
+    `)
+    this.stmtListChecksByTeam = db.prepare(`
+      SELECT * FROM team_checks WHERE team_id = ? ORDER BY created_at ASC
+    `)
+    this.stmtListAllChecks = db.prepare(`SELECT * FROM team_checks ORDER BY created_at ASC`)
 
     // ── team_edges ────────────────────────────────
     this.stmtDeleteEdgesForTeam = db.prepare(`DELETE FROM team_edges WHERE team_id = ?`)
@@ -325,19 +423,52 @@ export class TeamStore implements ITeamStore {
       ORDER BY created_at ASC, rowid ASC
     `)
 
+    // ── team_activity ─────────────────────────────
+    // OR IGNORE, not a plain insert: the same immutable row can arrive twice
+    // (an author's optimistic copy echoed back by replication, or a catch-up
+    // redelivery). A primary-key throw there would abort a replica apply and
+    // strand the log, so a duplicate id is the no-op it logically is.
+    this.stmtInsertActivity = db.prepare(`
+      INSERT OR IGNORE INTO team_activity (
+        id, team_id, epoch_id, kind, actor_app_id, target_app_id,
+        subject, body, ref_id, correlation_id, status, created_at
+      ) VALUES (
+        @id, @team_id, @epoch_id, @kind, @actor_app_id, @target_app_id,
+        @subject, @body, @ref_id, @correlation_id, @status, @created_at
+      )
+    `)
+    this.stmtDeleteActivity = db.prepare(`DELETE FROM team_activity WHERE id = ?`)
+    this.stmtListActivityByEpoch = db.prepare(`
+      SELECT * FROM team_activity
+      WHERE team_id = ? AND epoch_id = ?
+      ORDER BY created_at ASC, rowid ASC
+    `)
+    this.stmtListActivityByTeam = db.prepare(`
+      SELECT * FROM team_activity WHERE team_id = ? ORDER BY created_at ASC, rowid ASC
+    `)
     // ── team_epochs ───────────────────────────────
     this.stmtInsertEpoch = db.prepare(`
       INSERT INTO team_epochs (
-        id, team_id, started_at, ended_at, end_reason, summary, trigger_type, lifecycle, chat_key, title, outcome
+        id, team_id, started_at, ended_at, end_reason, summary, trigger_type, lifecycle, chat_key, title, outcome,
+        last_activity_at
       ) VALUES (
-        @id, @team_id, @started_at, @ended_at, @end_reason, @summary, @trigger_type, @lifecycle, @chat_key, @title, @outcome
+        @id, @team_id, @started_at, @ended_at, @end_reason, @summary, @trigger_type, @lifecycle, @chat_key, @title, @outcome,
+        @last_activity_at
       )
     `)
     this.stmtGetEpochById = db.prepare(`SELECT * FROM team_epochs WHERE id = ?`)
     this.stmtEndEpoch = db.prepare(`
       UPDATE team_epochs
       SET ended_at = @ended_at, end_reason = @end_reason, summary = @summary,
-          outcome = COALESCE(@outcome, outcome)
+          outcome = COALESCE(@outcome, outcome),
+          last_activity_at = MAX(COALESCE(last_activity_at, 0), @ended_at)
+      WHERE id = @id
+    `)
+    // Monotonic: activity only moves forward, so a late-arriving stamp (a
+    // replicated row, an out-of-order turn) can never pull the epoch backwards.
+    this.stmtTouchEpoch = db.prepare(`
+      UPDATE team_epochs
+      SET last_activity_at = MAX(COALESCE(last_activity_at, 0), @at)
       WHERE id = @id
     `)
     // Reversible seal: reopen a hibernated epoch (keep summary as last snapshot).
@@ -490,6 +621,8 @@ export class TeamStore implements ITeamStore {
       this.db.prepare(`DELETE FROM team_members WHERE team_id = ?`).run(officeId)
       this.stmtDeleteEdgesForTeam.run(officeId)
       this.deleteTriggersByTeam(officeId)
+      this.db.prepare(`DELETE FROM team_checks WHERE team_id = ?`).run(officeId)
+      this.db.prepare(`DELETE FROM team_activity WHERE team_id = ?`).run(officeId)
       return this.stmtDeleteTeam.run(officeId).changes > 0
     })
     const removed = purge()
@@ -518,6 +651,9 @@ export class TeamStore implements ITeamStore {
       member_identity: member.memberIdentity ?? null,
       scope_json: member.scopeJson ?? null,
       owner_display_name: member.ownerDisplayName ?? null,
+      duty: member.duty ?? null,
+      delegated_policy_json: member.delegatedPolicy ? JSON.stringify(member.delegatedPolicy) : null,
+      accepts_checks: member.acceptsChecks === false ? 0 : 1,
     })
   }
 
@@ -527,6 +663,27 @@ export class TeamStore implements ITeamStore {
 
   setMemberScope(teamId: string, appId: string, scopeJson: string | null): void {
     this.stmtSetMemberScope.run({ team_id: teamId, app_id: appId, scope_json: scopeJson })
+  }
+
+  updateMemberFields(teamId: string, appId: string, fields: MemberFieldUpdate): void {
+    const sets: string[] = []
+    const params: Record<string, unknown> = { team_id: teamId, app_id: appId }
+    if (fields.duty !== undefined) {
+      sets.push('duty = @duty')
+      params.duty = fields.duty
+    }
+    if (fields.delegatedPolicyJson !== undefined) {
+      sets.push('delegated_policy_json = @delegated_policy_json')
+      params.delegated_policy_json = fields.delegatedPolicyJson
+    }
+    if (fields.acceptsChecks !== undefined) {
+      sets.push('accepts_checks = @accepts_checks')
+      params.accepts_checks = fields.acceptsChecks ? 1 : 0
+    }
+    if (sets.length === 0) return
+    this.db
+      .prepare(`UPDATE team_members SET ${sets.join(', ')} WHERE team_id = @team_id AND app_id = @app_id`)
+      .run(params)
   }
 
   /** Flip a member's lead flag (used when an existing member is named lead). */
@@ -540,6 +697,11 @@ export class TeamStore implements ITeamStore {
 
   getMemberByName(teamId: string, memberName: string): TeamMember | null {
     const row = this.stmtGetMemberByName.get(teamId, memberName) as TeamMemberRow | undefined
+    return row ? rowToMember(row) : null
+  }
+
+  getMember(teamId: string, appId: string): TeamMember | null {
+    const row = this.stmtGetMember.get(teamId, appId) as TeamMemberRow | undefined
     return row ? rowToMember(row) : null
   }
 
@@ -627,7 +789,7 @@ export class TeamStore implements ITeamStore {
 
       // Shadow the host's open run epoch as a local team_epochs row so the
       // joiner's message bus can route a 1:1 reply: completeTurn treats a missing
-      // epoch row as sealed and drops the reply, and reactivateEpoch needs a row
+      // epoch row as sealed and drops the reply, and noteEpochTurn needs a row
       // to reopen. Without this, chatting a HOST-owned member would silently fail
       // ("sent, no reply"). Idempotent — only inserted when absent; a host-
       // generated epoch id never collides.
@@ -647,13 +809,24 @@ export class TeamStore implements ITeamStore {
             chat_key: null,
             title: null,
             outcome: null,
+            last_activity_at: now,
           })
         }
+      }
+
+      // The authority is the single writer for the roster, so the member set is
+      // replaced wholesale. Two fields are exempt for members THIS node owns:
+      // their duty and delegated policy are authored here, and a snapshot taken
+      // before the owner's latest edit reached the authority must not undo it.
+      const ownRows = new Map<string, TeamMemberRow>()
+      for (const row of this.stmtListMembersByTeam.all(officeId) as TeamMemberRow[]) {
+        if (row.owner_node_id === SELF_NODE_ID) ownRows.set(row.app_id, row)
       }
 
       this.db.prepare(`DELETE FROM team_members WHERE team_id = ?`).run(officeId)
       for (const m of snapshot.members) {
         const ownedHere = m.ownerNodeId === selfNodeId
+        const mine = ownedHere ? ownRows.get(m.appId) : undefined
         if ((m.status && m.status !== 'idle') || (m.busy && m.busy.length > 0)) {
           runtime.set(m.appId, {
             status: m.status ?? 'idle',
@@ -674,6 +847,9 @@ export class TeamStore implements ITeamStore {
           member_identity: ownedHere ? null : m.memberIdentity,
           scope_json: null,
           owner_display_name: ownedHere ? null : m.ownerDisplayName ?? null,
+          duty: mine ? mine.duty : m.duty ?? null,
+          delegated_policy_json: mine ? mine.delegated_policy_json : null,
+          accepts_checks: mine ? mine.accepts_checks : m.acceptsChecks === false ? 0 : 1,
         })
       }
 
@@ -847,6 +1023,38 @@ export class TeamStore implements ITeamStore {
     return (this.stmtListFindingsByEpoch.all(teamId, epochId) as BlackboardFindingRow[]).map(rowToFinding)
   }
 
+  // ── team_activity ───────────────────────────────
+
+  /** Append-only and idempotent by id (see the prepared statement's note). */
+  insertActivity(activity: TeamActivity): void {
+    this.stmtInsertActivity.run({
+      id: activity.id,
+      team_id: activity.teamId,
+      epoch_id: activity.epochId,
+      kind: activity.kind,
+      actor_app_id: activity.actorAppId,
+      target_app_id: activity.targetAppId,
+      subject: activity.subject,
+      body: activity.body,
+      ref_id: activity.refId,
+      correlation_id: activity.correlationId,
+      status: activity.status,
+      created_at: activity.createdAt,
+    })
+  }
+
+  deleteActivity(activityId: string): void {
+    this.stmtDeleteActivity.run(activityId)
+  }
+
+  listActivityByEpoch(teamId: string, epochId: string): TeamActivity[] {
+    return (this.stmtListActivityByEpoch.all(teamId, epochId) as TeamActivityRow[]).map(rowToActivity)
+  }
+
+  listActivityByTeam(teamId: string): TeamActivity[] {
+    return (this.stmtListActivityByTeam.all(teamId) as TeamActivityRow[]).map(rowToActivity)
+  }
+
   // ── team_epochs ─────────────────────────────────
 
   insertEpoch(epoch: TeamEpoch, triggerType: TeamRunTriggerType = 'manual'): void {
@@ -862,7 +1070,13 @@ export class TeamStore implements ITeamStore {
       chat_key: epoch.chatKey ?? null,
       title: epoch.title ?? null,
       outcome: epoch.outcome ?? null,
+      last_activity_at: epoch.lastActivityAt ?? epoch.startedAt,
     })
+  }
+
+  /** Stamp a turn entering this epoch, so a list of work can sort by recency. */
+  touchEpoch(epochId: string, at: number): void {
+    this.stmtTouchEpoch.run({ id: epochId, at })
   }
 
   getEpochById(epochId: string): TeamEpoch | null {
@@ -908,7 +1122,8 @@ export class TeamStore implements ITeamStore {
         `UPDATE team_epochs
            SET ended_at = @ended_at, end_reason = @end_reason, summary = @summary,
                title = @title, outcome = @outcome, chat_key = @chat_key,
-               lifecycle = @lifecycle
+               lifecycle = @lifecycle,
+               last_activity_at = MAX(COALESCE(last_activity_at, 0), @last_activity_at)
          WHERE id = @id`
       )
       .run({
@@ -920,6 +1135,10 @@ export class TeamStore implements ITeamStore {
         outcome: epoch.outcome ?? null,
         chat_key: epoch.chatKey ?? null,
         lifecycle: epoch.lifecycle ?? 'run',
+        // Every other field is "later write wins", but activity is monotonic and
+        // both sides stamp it: a node serving its own member's turn must not have
+        // that erased by an authority row that predates it.
+        last_activity_at: epoch.lastActivityAt ?? epoch.startedAt,
       })
   }
 
@@ -952,6 +1171,54 @@ export class TeamStore implements ITeamStore {
   /** All open epochs (run + conversation) of a team, newest first. */
   listOpenEpochs(teamId: string): TeamEpoch[] {
     return (this.stmtListOpenEpochs.all(teamId) as TeamEpochRow[]).map(rowToEpoch)
+  }
+
+  // ── team_checks ─────────────────────────────────
+
+  upsertCheck(check: TeamCheck): void {
+    this.stmtUpsertCheck.run({
+      id: check.id,
+      team_id: check.teamId,
+      epoch_id: check.epochId,
+      target_app_id: check.targetAppId,
+      created_by_app_id: check.createdByAppId,
+      instruction: check.instruction,
+      schedule_json: JSON.stringify(check.schedule),
+      run_count: check.runCount,
+      created_at: check.createdAt,
+      updated_at: check.updatedAt,
+      last_run_at: check.lastRunAt,
+    })
+  }
+
+  getCheckById(checkId: string): TeamCheck | null {
+    const row = this.stmtGetCheckById.get(checkId) as TeamCheckRow | undefined
+    return row ? rowToCheck(row) : null
+  }
+
+  deleteCheck(checkId: string): boolean {
+    return this.stmtDeleteCheck.run(checkId).changes > 0
+  }
+
+  listChecksByEpoch(teamId: string, epochId: string): TeamCheck[] {
+    return (this.stmtListChecksByEpoch.all(teamId, epochId) as TeamCheckRow[]).map(rowToCheck)
+  }
+
+  listChecksByTeam(teamId: string): TeamCheck[] {
+    return (this.stmtListChecksByTeam.all(teamId) as TeamCheckRow[]).map(rowToCheck)
+  }
+
+  listAllChecks(): TeamCheck[] {
+    return (this.stmtListAllChecks.all() as TeamCheckRow[]).map(rowToCheck)
+  }
+
+  /** Returns the removed rows so the caller can tear down their alarms. */
+  deleteChecksByEpoch(teamId: string, epochId: string): TeamCheck[] {
+    const removed = this.listChecksByEpoch(teamId, epochId)
+    if (removed.length > 0) {
+      this.db.prepare(`DELETE FROM team_checks WHERE team_id = ? AND epoch_id = ?`).run(teamId, epochId)
+    }
+    return removed
   }
 
   // ── team_triggers ───────────────────────────────

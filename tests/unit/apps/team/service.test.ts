@@ -47,16 +47,17 @@ const SPACE_A = 'space-a'
 interface FakeApp {
   id: string
   spaceId: string | null
-  spec: { name: string }
+  /** Kept whole (not just the name) so tests can assert what was provisioned. */
+  spec: { name: string; system_prompt?: string }
 }
 
 function makeAppManager() {
   const apps = new Map<string, FakeApp>()
   let counter = 0
 
-  const install = vi.fn(async (spaceId: string | null, spec: { name: string }) => {
+  const install = vi.fn(async (spaceId: string | null, spec: FakeApp['spec']) => {
     const id = `app-${++counter}`
-    apps.set(id, { id, spaceId, spec: { name: spec.name } })
+    apps.set(id, { id, spaceId, spec: { ...spec } })
     return id
   })
   const getApp = vi.fn((appId: string) => apps.get(appId) ?? null)
@@ -100,6 +101,7 @@ function makeRuntime() {
   return {
     bus: {} as never,
     blackboard: blackboard as never,
+    checks: { viewForTeam: () => [], cancelById: vi.fn() } as never,
     startEpoch,
     sealEpoch,
     captureReport: vi.fn(),
@@ -144,7 +146,9 @@ function buildService(overrides?: Partial<TeamServiceDeps>) {
   }
 
   const service = createTeamService(deps)
-  return { service, store, appManager, runtime, dbManager, createdSpaces, deletedSpaces }
+  const installedSpec = (appId: string) => appManager.apps.get(appId)?.spec ?? null
+
+  return { service, store, appManager, runtime, dbManager, createdSpaces, deletedSpaces, installedSpec }
 }
 
 function manualInput(overrides?: Partial<CreateTeamInput>): CreateTeamInput {
@@ -175,6 +179,42 @@ describe('TeamService', () => {
 
   afterEach(() => {
     ctx.dbManager.closeAll()
+  })
+
+  describe('updateMember — duty and delegated capabilities', () => {
+    it('writes a duty for a member of mine, trimmed', async () => {
+      const team = await ctx.service.createTeam(manualInput())
+
+      const updated = ctx.service.updateMember(team.id, 'existing-1', { duty: '  You do the coding.  ' })
+
+      expect(updated.duty).toBe('You do the coding.')
+      expect(ctx.store.listMembersByTeam(team.id).find(m => m.appId === 'existing-1')!.duty)
+        .toBe('You do the coding.')
+    })
+
+    it('derives the one bit teammates need from the policy, and keeps the rest home', async () => {
+      const team = await ctx.service.createTeam(manualInput())
+
+      ctx.service.updateMember(team.id, 'existing-1', {
+        delegatedPolicy: { allowedTools: ['Read'], allowChecks: false },
+      })
+
+      const member = ctx.store.listMembersByTeam(team.id).find(m => m.appId === 'existing-1')!
+      expect(member.acceptsChecks).toBe(false)
+      expect(member.delegatedPolicy).toEqual({ allowedTools: ['Read'], allowChecks: false })
+    })
+
+    it('refuses to rewrite a digital human someone else brought', async () => {
+      const team = await ctx.service.createTeam(manualInput())
+      ctx.store.addMember({
+        teamId: team.id, appId: 'app-theirs', memberName: 'tester', role: '',
+        isLead: false, aiProvisioned: false, addedAt: 9,
+        ownerNodeId: 'node-b', origin: 'remote',
+      })
+
+      expect(() => ctx.service.updateMember(team.id, 'app-theirs', { duty: 'mine now' }))
+        .toThrow(/only its owner/i)
+    })
   })
 
   describe('createTeam — manual', () => {
@@ -243,6 +283,25 @@ describe('TeamService', () => {
       // One independent space + one install per AI member, plus one lead install.
       expect(ctx.createdSpaces).toHaveLength(AI_MEMBER_HARD_LIMIT)
       expect(ctx.appManager.install).toHaveBeenCalledTimes(AI_MEMBER_HARD_LIMIT + 1)
+    })
+
+    it('keeps the proposed responsibility out of the member app’s own prompt', async () => {
+      // The responsibility becomes the member's team duty, which the owner can
+      // rewrite at any time. A second copy baked into the app's system prompt
+      // could never be reached by that edit, leaving the member with two
+      // conflicting job descriptions — so the prompt must not carry it.
+      const team = await ctx.service.createTeam(
+        manualInput({ memberSourcing: 'ai', members: [] }),
+        [{ memberName: 'coder', role: 'engineer', responsibility: 'Ship the API and self-test it.' }]
+      )
+
+      const member = ctx.store.listMembersByTeam(team.id).find((m) => !m.isLead)!
+      expect(member.duty).toBe('Ship the API and self-test it.')
+
+      const spec = ctx.installedSpec(member.appId)!
+      expect(spec.system_prompt).not.toContain('Ship the API and self-test it.')
+      expect(spec.system_prompt).not.toContain(team.name)
+      expect(spec.system_prompt).toContain('coder')
     })
 
     it('assigns unique member names when the proposal collides', async () => {
@@ -473,6 +532,82 @@ describe('TeamService', () => {
       const detail = ctx.service.getTeamDetail('shadow-office')!
       expect(detail.tasks).toHaveLength(1)
       expect(detail.tasks[0].id).toBe('task-1')
+    })
+  })
+
+  describe('decision ownership on a joined office', () => {
+    const NODE_HOST = 'node-host'
+    const SELF = 'node-self'
+    const HOST_LEAD = 'shadow-lead'
+    const OWN_MEMBER = 'my-analyst'
+
+    /** A joined office blocked on a decision, with one member of ours in it. */
+    function materializeBlockedOffice(store: typeof ctx.store = ctx.store) {
+      store.materializeJoinedOffice({
+        hostNodeId: NODE_HOST,
+        selfNodeId: SELF,
+        snapshot: {
+          team: {
+            id: 'shadow-office', name: 'Shadow', goal: 'g', leadAppId: HOST_LEAD,
+            collabMode: 'structured', hostNodeId: NODE_HOST, epochId: 'epoch-host-run',
+            status: 'waiting_user',
+          },
+          members: [
+            {
+              appId: HOST_LEAD, memberName: 'Lead', role: 'Lead', isLead: true,
+              ownerNodeId: NODE_HOST, memberIdentity: 'id-host', ownerDisplayName: 'Alice',
+              status: 'waiting_user',
+            },
+            {
+              appId: OWN_MEMBER, memberName: 'Analyst', role: 'Analyst', isLead: false,
+              ownerNodeId: SELF, memberIdentity: 'id-self', status: 'idle',
+            },
+          ],
+          edges: [],
+        },
+      })
+    }
+
+    it('marks a teammate-owned member as someone else\u2019s, with the owner named', () => {
+      materializeBlockedOffice()
+
+      const roster = ctx.service.getTeamDetail('shadow-office')!.roster
+      const lead = roster.find((m) => m.appId === HOST_LEAD)!
+      expect(lead.status).toBe('waiting_user')
+      expect(lead.sameMachine).toBe(false)
+      expect(lead.owner).toBe('Alice')
+
+      // Ours, so the same status IS addressed to this reader.
+      const mine = roster.find((m) => m.appId === OWN_MEMBER)!
+      expect(mine.sameMachine).toBe(true)
+      expect(mine.owner).toBeNull()
+    })
+
+    it('does not flag the office as waiting on us when the decision is a teammate\u2019s', () => {
+      materializeBlockedOffice()
+
+      const item = ctx.service.listTeamItems().find((i) => i.id === 'shadow-office')!
+      // The office really is blocked (the host says so) — but not on us.
+      expect(item.status).toBe('waiting_user')
+      expect(item.hasWaitingUser).toBe(false)
+      expect(item.waitingCount).toBe(0)
+    })
+
+    it('flags the office when one of our own members raised the decision', () => {
+      const withEscalation = buildService({
+        getPendingEscalations: () => [
+          { appId: OWN_MEMBER, entryId: 'entry-1', question: 'Ship it?', teamId: 'shadow-office' },
+        ],
+      })
+      try {
+        materializeBlockedOffice(withEscalation.store)
+
+        const item = withEscalation.service.listTeamItems().find((i) => i.id === 'shadow-office')!
+        expect(item.hasWaitingUser).toBe(true)
+        expect(item.waitingCount).toBe(1)
+      } finally {
+        withEscalation.dbManager.closeAll()
+      }
     })
   })
 

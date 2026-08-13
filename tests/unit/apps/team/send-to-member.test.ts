@@ -31,7 +31,7 @@ const WORKER = 'app-worker'
 interface SendInputSeen {
   teamId: string
   epochId: string
-  fromAppId: string
+  fromAppId: string | null
   to: string
   message: string
   wait?: boolean
@@ -48,7 +48,7 @@ function build(busSend: (input: SendInputSeen) => unknown) {
   const runtime = {
     // Ad-hoc 1:1 chat reactivates a sealed run epoch before sending so the reply
     // is not dropped on a sealed epoch; no-op in this stub (real impl reopens).
-    reactivateEpoch: vi.fn(),
+    noteEpochTurn: vi.fn(),
     // 1:1 chat with no run opens/reuses a per-member 'conversation' epoch — the
     // real impl inserts one (no run orchestration); the stub returns its id.
     ensureConversationEpoch: vi.fn((_teamId: string, _chatKey: string) => ({ id: 'conv-epoch-1' })),
@@ -123,7 +123,7 @@ describe('E-1 — teamService.sendToMember (host-operator dispatch)', () => {
     dbManager?.closeAll()
   })
 
-  it('delivered + answered (sync reply) → ok:true with the final message, attributed to the lead', async () => {
+  it('delivered + answered (sync reply) → ok:true with the final message, sent as a person', async () => {
     const ctx = build(() => ({ from: 'worker', message: 'done', status: 'ok' }))
     dbManager = ctx.dbManager
     const { teamId, epochId } = seedTeam(ctx.store)
@@ -133,10 +133,12 @@ describe('E-1 — teamService.sendToMember (host-operator dispatch)', () => {
     })
 
     expect(res).toEqual({ ok: true, finalMessage: 'done' })
-    // bus.send targets the member's NAME, not appId.
+    // bus.send targets the member's NAME, not appId. fromAppId is null because a
+    // PERSON is sending: borrowing the lead's identity would file this chat on
+    // the office record under a digital human that never ran.
     expect(ctx.sends).toHaveLength(1)
     expect(ctx.sends[0]).toMatchObject({
-      teamId, epochId, fromAppId: LEAD, to: 'worker', message: 'do it', wait: true,
+      teamId, epochId, fromAppId: null, to: 'worker', message: 'do it', wait: true,
     })
   })
 
@@ -151,11 +153,11 @@ describe('E-1 — teamService.sendToMember (host-operator dispatch)', () => {
     const res = await ctx.service.sendToMember({ teamId, appId: WORKER, epochId, message: 'still there?' })
 
     expect(res).toEqual({ ok: true, finalMessage: 'done' })
-    expect(ctx.runtime.reactivateEpoch).toHaveBeenCalledWith(teamId, epochId)
+    expect(ctx.runtime.noteEpochTurn).toHaveBeenCalledWith(teamId, epochId)
     // Ordering: reactivate fires before the bus send (so completeTurn sees it open).
-    const reactivateOrder = ctx.runtime.reactivateEpoch.mock.invocationCallOrder[0]
+    const noteOrder = ctx.runtime.noteEpochTurn.mock.invocationCallOrder[0]
     const sendOrder = ctx.runtime.bus.send.mock.invocationCallOrder[0]
-    expect(reactivateOrder).toBeLessThan(sendOrder)
+    expect(noteOrder).toBeLessThan(sendOrder)
   })
 
   it('delivered async (queued, no sync answer) → ok:true with finalMessage null', async () => {
@@ -199,16 +201,18 @@ describe('E-1 — teamService.sendToMember (host-operator dispatch)', () => {
     expect(res).toEqual({ ok: true, finalMessage: 'hi' })
     expect(ctx.runtime.ensureConversationEpoch).toHaveBeenCalledWith(teamId, `direct:${WORKER}`)
     expect(ctx.sends).toHaveLength(1)
-    expect(ctx.sends[0]).toMatchObject({ teamId, epochId: 'conv-epoch-1', fromAppId: LEAD, to: 'worker' })
+    expect(ctx.sends[0]).toMatchObject({ teamId, epochId: 'conv-epoch-1', fromAppId: null, to: 'worker' })
   })
 
-  it('team has no lead → NO_LEAD (cannot attribute the operator turn)', async () => {
-    const ctx = build(() => ({ messageId: 'nope' }))
+  it('an office with no lead can still be chatted with — a person needs no member identity', async () => {
+    // The send used to borrow the lead's appId for attribution, which made a
+    // lead-less office reject 1:1 chat outright. A person sends as themselves.
+    const ctx = build(() => ({ from: 'worker', message: 'hi', status: 'ok' }))
     dbManager = ctx.dbManager
     const { teamId, epochId } = seedTeam(ctx.store, { leadAppId: null })
 
     const res = await ctx.service.sendToMember({ teamId, appId: WORKER, epochId, message: 'go' })
-    expect(res).toEqual({ ok: false, finalMessage: null, reason: 'NO_LEAD' })
-    expect(ctx.sends).toHaveLength(0)
+    expect(res).toEqual({ ok: true, finalMessage: 'hi' })
+    expect(ctx.sends[0]).toMatchObject({ fromAppId: null, to: 'worker' })
   })
 })

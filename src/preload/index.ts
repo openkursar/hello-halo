@@ -35,6 +35,7 @@ import type {
   CreateTeamInput,
   UpdateTeamInput,
   TeamMemberInput,
+  UpdateTeamMemberInput,
   TeamEdge,
   ProposedMember,
   TeamRunTrigger,
@@ -572,6 +573,8 @@ export interface HaloAPI {
   teamUpdate: (input: { teamId: string; input: UpdateTeamInput }) => Promise<IpcResponse>
   teamDissolve: (teamId: string) => Promise<IpcResponse>
   teamAddMember: (input: { teamId: string; member: TeamMemberInput }) => Promise<IpcResponse>
+  teamUpdateMember: (input: { teamId: string; appId: string; input: UpdateTeamMemberInput }) => Promise<IpcResponse>
+  teamCancelCheck: (input: { teamId: string; checkId: string }) => Promise<IpcResponse>
   teamRemoveMember: (input: { teamId: string; appId: string }) => Promise<IpcResponse>
   teamSetEdges: (input: { teamId: string; edges: TeamEdge[] }) => Promise<IpcResponse>
   teamProposeMembers: (input: { goal: string; owningSpaceId: string }) => Promise<IpcResponse>
@@ -948,6 +951,8 @@ const api: HaloAPI = {
   teamUpdate: (input) => ipcRenderer.invoke(TEAM_IPC.update, input),
   teamDissolve: (teamId) => ipcRenderer.invoke(TEAM_IPC.dissolve, teamId),
   teamAddMember: (input) => ipcRenderer.invoke(TEAM_IPC.addMember, input),
+  teamUpdateMember: (input) => ipcRenderer.invoke(TEAM_IPC.updateMember, input),
+  teamCancelCheck: (input) => ipcRenderer.invoke(TEAM_IPC.cancelCheck, input),
   teamRemoveMember: (input) => ipcRenderer.invoke(TEAM_IPC.removeMember, input),
   teamSetEdges: (input) => ipcRenderer.invoke(TEAM_IPC.setEdges, input),
   teamProposeMembers: (input) => ipcRenderer.invoke(TEAM_IPC.proposeMembers, input),

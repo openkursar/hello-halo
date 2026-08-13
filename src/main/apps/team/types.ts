@@ -28,12 +28,22 @@ import type {
   JoinedOfficeSnapshot,
   TeamMemberRuntimeStatus,
   RosterBusyEntry,
+  TeamCheck,
+  TeamActivity,
 } from '../../../shared/apps/team-types'
 
 // Re-export the frozen domain contract for apps/team consumers.
 export type {
   Team,
   TeamMember,
+  TeamCheck,
+  TeamCheckSchedule,
+  TeamCheckView,
+  TeamActivity,
+  TeamActivityKind,
+  TeamActivityStatus,
+  TeamDelegatedPolicy,
+  UpdateTeamMemberInput,
   TeamEdge,
   BlackboardTask,
   BlackboardFinding,
@@ -95,6 +105,27 @@ export interface TeamMemberRow {
   scope_json: string | null
   /** Owner's display name for a remote member; added in migration v8 (null = local). */
   owner_display_name: string | null
+  /** Per-team duty text; added in migration v10 (null = nothing written). */
+  duty: string | null
+  /** Delegated capability policy JSON; added in migration v10 (null = unrestricted). */
+  delegated_policy_json: string | null
+  /** Whether teammates may set a periodic check; added in migration v10. */
+  accepts_checks: number
+}
+
+/** Row shape from the `team_checks` table. */
+export interface TeamCheckRow {
+  id: string
+  team_id: string
+  epoch_id: string
+  target_app_id: string
+  created_by_app_id: string
+  instruction: string
+  schedule_json: string
+  run_count: number
+  created_at: number
+  updated_at: number
+  last_run_at: number | null
 }
 
 /** Row shape from the `team_edges` table. */
@@ -132,6 +163,22 @@ export interface BlackboardFindingRow {
   created_at: number
 }
 
+/** Row shape from the `team_activity` table (migration v12). */
+export interface TeamActivityRow {
+  id: string
+  team_id: string
+  epoch_id: string
+  kind: string
+  actor_app_id: string
+  target_app_id: string | null
+  subject: string
+  body: string | null
+  ref_id: string | null
+  correlation_id: string | null
+  status: string | null
+  created_at: number
+}
+
 /** Row shape from the `team_epochs` table. */
 export interface TeamEpochRow {
   id: string
@@ -150,6 +197,8 @@ export interface TeamEpochRow {
   title?: string | null
   /** Run outcome classification; added in migration v9 (null pre-classification). */
   outcome?: string | null
+  /** Last turn into this epoch; added in migration v11 (null → started_at). */
+  last_activity_at?: number | null
 }
 
 /** Row shape from the `team_triggers` table. */
@@ -175,6 +224,13 @@ export interface TeamFieldUpdate {
   memberSourcing?: Team['memberSourcing']
   collabMode?: Team['collabMode']
   escalationRouting?: Team['escalationRouting']
+}
+
+/** Owner-authored member fields (see {@link TeamStore.updateMemberFields}). */
+export interface MemberFieldUpdate {
+  duty?: string | null
+  delegatedPolicyJson?: string | null
+  acceptsChecks?: boolean
 }
 
 /** Fields a member or the lead may change on a single blackboard task. */
@@ -214,8 +270,14 @@ export interface TeamStore {
   removeMember(teamId: string, appId: string): boolean
   setMemberLead(teamId: string, appId: string, isLead: boolean): void
   setMemberScope(teamId: string, appId: string, scopeJson: string | null): void
+  /**
+   * Patch the owner-authored fields of one member (duty / delegated policy /
+   * the derived accepts-checks bit). Omitted fields are preserved.
+   */
+  updateMemberFields(teamId: string, appId: string, fields: MemberFieldUpdate): void
   listMembersByTeam(teamId: string): TeamMember[]
   getMemberByName(teamId: string, memberName: string): TeamMember | null
+  getMember(teamId: string, appId: string): TeamMember | null
   listMembersByAppId(appId: string): TeamMember[]
 
   // ── joined-office projection ──────────────────
@@ -268,6 +330,19 @@ export interface TeamStore {
   deleteFinding(findingId: string): void
   listFindingsByEpoch(teamId: string, epochId: string): BlackboardFinding[]
 
+  // ── team_activity ─────────────────────────────
+  /**
+   * Append one act. Idempotent by id: a replicated row this node already applied
+   * optimistically, or a catch-up redelivery, is a no-op rather than a throw —
+   * activity rows are immutable, so an existing row with the same id IS the row.
+   */
+  insertActivity(activity: TeamActivity): void
+  /** Remove one act by id (no-op if absent). Rollback of a rejected shadow write. */
+  deleteActivity(activityId: string): void
+  listActivityByEpoch(teamId: string, epochId: string): TeamActivity[]
+  /** Every act of a team, across epochs — the replication snapshot's source. */
+  listActivityByTeam(teamId: string): TeamActivity[]
+
   // ── team_epochs ───────────────────────────────
   insertEpoch(epoch: TeamEpoch, triggerType?: TeamRunTriggerType): void
   getEpochById(epochId: string): TeamEpoch | null
@@ -280,6 +355,8 @@ export interface TeamStore {
   ): void
   /** Reopen a sealed epoch (clear ended_at/end_reason; keep summary) for reversible-seal wake. */
   reopenEpoch(epochId: string): void
+  /** Stamp a turn entering this epoch (monotonic; never moves backwards). */
+  touchEpoch(epochId: string, at: number): void
   /** Set a conversation epoch's user-facing title (rename). */
   renameEpoch(epochId: string, title: string | null): void
   /**
@@ -296,6 +373,18 @@ export interface TeamStore {
   listOpenConversationEpochs(teamId: string): TeamEpoch[]
   /** All open epochs (run + conversation) of a team, newest first. */
   listOpenEpochs(teamId: string): TeamEpoch[]
+
+  // ── team_checks ───────────────────────────────
+  /** Insert-or-overwrite by id (office-shared row, later write wins). */
+  upsertCheck(check: TeamCheck): void
+  getCheckById(checkId: string): TeamCheck | null
+  deleteCheck(checkId: string): boolean
+  listChecksByEpoch(teamId: string, epochId: string): TeamCheck[]
+  listChecksByTeam(teamId: string): TeamCheck[]
+  /** Used at boot to re-arm the alarms this machine owns. */
+  listAllChecks(): TeamCheck[]
+  /** Its run or conversation ended, so the checks set inside it end too. */
+  deleteChecksByEpoch(teamId: string, epochId: string): TeamCheck[]
 
   // ── team_triggers ─────────────────────────────
   insertTrigger(trigger: TeamTrigger): void

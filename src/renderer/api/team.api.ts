@@ -5,6 +5,7 @@ import type {
   CreateTeamInput,
   UpdateTeamInput,
   TeamMemberInput,
+  UpdateTeamMemberInput,
   TeamEdge,
   ProposedMember,
   TeamTriggerInput,
@@ -140,6 +141,22 @@ export const teamApi = {
   teamAddMember: async (teamId: string, member: TeamMemberInput): Promise<ApiResponse> => {
     if (isElectron()) return window.halo.teamAddMember({ teamId, member })
     return httpRequest('POST', `/api/teams/${teamId}/members`, member as unknown as Record<string, unknown>)
+  },
+
+  /** Rewrite what one of YOUR OWN members does here, and what teammates may ask of it. */
+  teamUpdateMember: async (
+    teamId: string,
+    appId: string,
+    input: UpdateTeamMemberInput
+  ): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.teamUpdateMember({ teamId, appId, input })
+    return httpRequest('PATCH', `/api/teams/${teamId}/members/${appId}`, input as Record<string, unknown>)
+  },
+
+  /** Stop one periodic check outright, without going through an agent. */
+  teamCancelCheck: async (teamId: string, checkId: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.teamCancelCheck({ teamId, checkId })
+    return httpRequest('DELETE', `/api/teams/${teamId}/checks/${checkId}`)
   },
 
   teamRemoveMember: async (teamId: string, appId: string): Promise<ApiResponse> => {

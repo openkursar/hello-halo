@@ -13,6 +13,7 @@ import type {
   CreateTeamInput,
   UpdateTeamInput,
   TeamMemberInput,
+  UpdateTeamMemberInput,
   TeamEdge,
   ProposedMember,
   TeamRunTrigger,
@@ -73,6 +74,18 @@ export function registerTeamIpc(): void {
     TEAM_IPC.addMember,
     async (_e, input: { teamId: string; member: TeamMemberInput }) =>
       handle('team:add-member', (s) => s.addMember(input.teamId, input.member))
+  )
+
+  ipcMain.handle(
+    TEAM_IPC.updateMember,
+    async (_e, input: { teamId: string; appId: string; input: UpdateTeamMemberInput }) =>
+      handle('team:update-member', (s) => s.updateMember(input.teamId, input.appId, input.input))
+  )
+
+  ipcMain.handle(
+    TEAM_IPC.cancelCheck,
+    async (_e, input: { teamId: string; checkId: string }) =>
+      handle('team:cancel-check', (s) => s.cancelCheck(input.teamId, input.checkId))
   )
 
   ipcMain.handle(
@@ -292,5 +305,5 @@ export function registerTeamIpc(): void {
     return { success: true, data: consumePendingInviteLink() }
   })
 
-  console.log('[TeamIPC] Team handlers registered (29 channels)')
+  console.log('[TeamIPC] Team handlers registered (32 channels)')
 }

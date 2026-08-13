@@ -134,6 +134,13 @@ export interface AgentConfig {
   enableDigitalHumans?: boolean; // Enable Digital Humans MCP tools (automation app management)
   disabledTools?: string[]; // Tools disabled by user (Extended Capabilities toggles)
   developerMode?: boolean;   // [Developer] Enable verbose diagnostic logging across the system
+  teamTurnTimeoutMs?: number; // Team member turn timeout in ms (overrides the built-in default)
+  teamCircuitLimits?: {       // Team circuit breaker overrides (per-epoch limits)
+    maxMessages?: number;
+    maxForwardDepth?: number;
+    maxDurationMs?: number;
+  };
+  teamMaxConcurrentTurns?: number; // Cap on team member turns running at once on this machine
 }
 
 // Schedule value type (used by apps.store + schedule components)

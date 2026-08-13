@@ -47,7 +47,10 @@ import type {
   TeamConversation,
   TeamPendingEscalation,
   RosterMember,
+  UpdateTeamMemberInput,
+  TeamCheckView,
 } from '../../../shared/apps/team-types'
+import { isRemoteMember } from '../../../shared/apps/team-types'
 
 const LOG_TAG = '[TeamService]'
 
@@ -76,6 +79,13 @@ export interface TeamServiceDeps {
 
   /** A membership/edge change occurred → re-project the office roster. */
   onRosterMutated?: (teamId: string) => void
+  /**
+   * An owner rewrote one of its own members' duty (or flipped whether it accepts
+   * periodic checks). Those are office-shared facts, so on a joined office they
+   * must reach the authority — a roster re-projection alone would only travel the
+   * other way. Absent (not federated / hosted here) → the roster hook suffices.
+   */
+  onMemberProfileChanged?: (teamId: string, appId: string) => void
   /**
    * A run started or stopped → push the live run-state (team status + the active
    * epoch) to joiners so a remote status board goes live the instant the host
@@ -120,8 +130,12 @@ export interface TeamSpaceDeps {
   spaceExists: (spaceId: string) => boolean
   createMemberSpace: (params: { teamName: string; memberName: string; owningSpaceId: string }) => string
   deleteMemberSpace?: (spaceId: string) => void
-  /** Absolute filesystem path of a space, to resolve relative artifact refs. */
-  resolveSpacePath?: (spaceId: string) => string | null
+  /**
+   * The directory a space's agent works in — where its published artifacts
+   * actually live. Not the space's internal bookkeeping path; the two differ for
+   * a space pointed at a project folder.
+   */
+  resolveWorkDir?: (spaceId: string) => string | null
 }
 
 /** Build an openable artifact entry from a declared blackboard ref (no FS scan). */
@@ -143,6 +157,22 @@ function buildRefArtifact(path: string, ref: string, spaceId: string | null, cre
   }
 }
 
+/**
+ * Whose teammate this is, for the roster projections built here (the board's own
+ * projection lives in runtime/team/blackboard). Without it a reader cannot tell
+ * a teammate's digital human from its own, and everything the roster says —
+ * "waiting for a decision" above all — reads as if it were addressed to them.
+ * `owner` stays null when the name has not been advertised yet; `sameMachine` is
+ * the unambiguous test.
+ */
+function projectOwnership(member: TeamMember): Pick<RosterMember, 'owner' | 'sameMachine'> {
+  const remote = isRemoteMember(member)
+  return {
+    owner: remote ? member.ownerDisplayName ?? null : null,
+    sameMachine: !remote,
+  }
+}
+
 export interface TeamService {
   createTeam(input: CreateTeamInput, confirmedProposal?: ProposedMember[]): Promise<Team>
   getTeam(teamId: string): Team | null
@@ -151,7 +181,15 @@ export interface TeamService {
   getTeamDetail(teamId: string): TeamDetail | null
   updateTeam(teamId: string, input: UpdateTeamInput): Promise<Team>
   addMember(teamId: string, member: TeamMemberInput): Promise<TeamMember>
+  /**
+   * Change what a member of YOUR OWN is responsible for here, and what teammates
+   * may make it do. Refuses on a member someone else brought — you can read
+   * their duty, not rewrite it.
+   */
+  updateMember(teamId: string, appId: string, input: UpdateTeamMemberInput): TeamMember
   removeMember(teamId: string, appId: string): Promise<void>
+  /** Stop one periodic check outright, without going through an agent. */
+  cancelCheck(teamId: string, checkId: string): void
   setEdges(teamId: string, edges: TeamEdge[]): void
   proposeMembers(goal: string, owningSpaceId: string): Promise<ProposedMember[]>
   runTeam(teamId: string, trigger?: TeamRunTrigger): Promise<void>
@@ -241,7 +279,15 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   // ── Member-app provisioning ──
 
-  /** No subscriptions: members are driven solely by team runs. */
+  /**
+   * The persona only — who this digital human is and how it works. Everything
+   * that is true of it only INSIDE a team (the team, its role there, what it is
+   * responsible for) is deliberately absent: those live on the member row and
+   * are rendered into every team turn by the Team Entry. Duplicating them here
+   * would freeze a second copy that the owner's later edits can never reach.
+   *
+   * No subscriptions: members are driven solely by team runs.
+   */
   function buildMemberSpec(member: ProposedMember, teamName: string): AutomationSpec {
     return {
       spec_version: '1',
@@ -252,11 +298,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       type: 'automation',
       icon: '🤝',
       system_prompt:
-        `You are "${member.memberName}", a member of the digital team "${teamName}".\n` +
-        `Your role: ${member.role}.\n${member.responsibility}\n\n` +
-        `You work on tasks assigned to you through the team. Do the hands-on work in ` +
-        `your own space, write large outputs to files and share their paths, and report ` +
-        `back when a task is done or when you are blocked.`,
+        `You are "${member.memberName}", ${member.role}.\n\n` +
+        `Do the hands-on work in your own space, write large outputs to files and ` +
+        `share their paths, and say clearly when a piece of work is done or when ` +
+        `you are blocked.`,
       store: { install_source: 'manual' as const },
     }
   }
@@ -281,6 +326,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       appId,
       memberName,
       role: proposed.role,
+      // The AI's own description of what this member is for becomes its starting
+      // duty, so a team built this way is not born mute — the user edits from
+      // something real instead of an empty box.
+      duty: proposed.responsibility?.trim() || null,
       isLead: false,
       aiProvisioned: true,
       addedAt: Date.now(),
@@ -298,6 +347,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       appId: input.appId,
       memberName,
       role: input.role ?? '',
+      duty: input.duty?.trim() || null,
       isLead: false,
       aiProvisioned: false,
       addedAt: Date.now(),
@@ -449,12 +499,17 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       // Waiting decisions survive a run seal (P0-5), so a team can be idle yet
       // still have pending escalations — count them independently of run status.
       const waitingCount = pendingEscalationsForTeam(team.id).length
+      // A joined office adopts the host's run status verbatim, so its
+      // 'waiting_user' announces a decision owed by whoever owns the blocked
+      // member — not by the reader. Only decisions raised on this machine (the
+      // local escalation count) are the reader's to make.
+      const blockedOnUs = team.hostNodeId == null && team.status === 'waiting_user'
       return {
         id: team.id,
         name: team.name,
         status: team.status,
         memberCount: members.filter((m) => !m.isLead).length,
-        hasWaitingUser: team.status === 'waiting_user' || waitingCount > 0,
+        hasWaitingUser: blockedOnUs || waitingCount > 0,
         waitingCount,
         leadAppId: team.leadAppId,
         updatedAt: team.updatedAt,
@@ -470,6 +525,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const edges = store.listEdgesByTeam(teamId)
     // Waiting decisions drive the cross-tab banner (C2) and survive a run seal.
     const pendingEscalations = pendingEscalationsForTeam(teamId)
+    // Periodic checks are office-shared rows, so a joined office lists them from
+    // its own replica exactly like the host does.
+    const checks: TeamCheckView[] = getRuntime()?.checks.viewForTeam(teamId) ?? []
 
     // A JOINED shadow office mirrors a remote authority and has no local
     // team_epochs row, so getCurrentEpochForTeam never resolves the host's run
@@ -498,16 +556,20 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
             appId: m.appId,
             memberName: m.memberName,
             role: m.role,
+            duty: m.duty ?? null,
             isLead: m.isLead,
             spaceId: appManager.getApp(m.appId)?.spaceId ?? null,
             status,
+            ...projectOwnership(m),
             ...(taskTitle ? { currentTaskTitle: taskTitle } : {}),
             ...(busy.length > 0 ? { busy } : {}),
           }
         }),
         tasks: store.listTasksByEpoch(teamId, epochId),
         findings: store.listFindingsByEpoch(teamId, epochId),
+        activities: store.listActivityByEpoch(teamId, epochId),
         pendingEscalations,
+        checks,
       }
     }
 
@@ -524,7 +586,12 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         roster: board.roster,
         tasks: board.tasks,
         findings: board.findings,
+        // Read from the store rather than taken off the agent-facing snapshot:
+        // that one drops message bodies and keeps only a recent tail, which is
+        // right for a turn's context and wrong for a person opening the feed.
+        activities: store.listActivityByEpoch(teamId, epoch.id),
         pendingEscalations,
+        checks,
       }
     }
 
@@ -540,14 +607,18 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
           appId: m.appId,
           memberName: m.memberName,
           role: m.role,
+          duty: m.duty ?? null,
           isLead: m.isLead,
           spaceId: appManager.getApp(m.appId)?.spaceId ?? null,
           status: (waiting ? 'waiting_user' : 'idle') as RosterMember['status'],
+          ...projectOwnership(m),
         }
       }),
       tasks: [],
       findings: [],
+      activities: [],
       pendingEscalations,
+      checks,
     }
   }
 
@@ -609,6 +680,50 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     emitUpdated(teamId, { team: requireTeam(teamId) })
     deps.onRosterMutated?.(teamId)
     return member
+  }
+
+  /**
+   * Only the machine that owns a member may rewrite its duty or its delegated
+   * capabilities. Teammates read both through the roster; the owner is the only
+   * author, which is why this refuses rather than silently no-ops.
+   */
+  function updateMember(teamId: string, appId: string, input: UpdateTeamMemberInput): TeamMember {
+    requireTeam(teamId)
+    const member = store.getMember(teamId, appId)
+    if (!member) throw new Error(`Member not found: ${appId}`)
+    if (isRemoteMember(member)) {
+      throw new Error('This digital human belongs to a teammate — only its owner can change it.')
+    }
+
+    const policy = input.delegatedPolicy
+    store.updateMemberFields(teamId, appId, {
+      ...(input.duty !== undefined ? { duty: input.duty.trim() || null } : {}),
+      ...(policy !== undefined
+        ? {
+            delegatedPolicyJson: policy ? JSON.stringify(policy) : null,
+            // The one bit teammates' machines need in order to refuse a periodic
+            // check early and clearly; the rest of the policy never leaves here.
+            acceptsChecks: policy?.allowChecks !== false,
+          }
+        : {}),
+    })
+
+    const updated = store.getMember(teamId, appId)!
+    console.log(`${LOG_TAG} updateMember: team=${teamId} app=${appId}`)
+    emitUpdated(teamId, { team: requireTeam(teamId) })
+    // Duty and the accepts-checks bit are office-shared facts; the delegated
+    // policy itself is not, and nothing here publishes it.
+    deps.onMemberProfileChanged?.(teamId, appId)
+    deps.onRosterMutated?.(teamId)
+    return updated
+  }
+
+  function cancelCheck(teamId: string, checkId: string): void {
+    requireTeam(teamId)
+    const check = store.getCheckById(checkId)
+    if (!check || check.teamId !== teamId) return
+    requireRuntime().checks.cancelById(checkId)
+    emitUpdated(teamId, { team: requireTeam(teamId) })
   }
 
   async function removeMember(teamId: string, appId: string): Promise<void> {
@@ -740,6 +855,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     }
     deps.getTriggerSync?.()?.removeTeam(teamId)
     store.deleteTriggersByTeam(teamId)
+    // Periodic checks die with the team — including their alarms, which the
+    // runtime disarms as each row goes.
+    const rt = getRuntime()
+    for (const check of store.listChecksByTeam(teamId)) rt?.checks.cancelById(check.id)
     store.deleteTeam(teamId)
 
     for (const m of members) {
@@ -794,8 +913,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       const member = memberById.get(appId)
       if (!member) continue
       const spaceId = appManager.getApp(appId)?.spaceId ?? null
-      const spacePath = spaceId ? deps.spaces.resolveSpacePath?.(spaceId) ?? null : null
-      const path = isAbsolute(ref) ? ref : spacePath ? join(spacePath, ref) : ref
+      const workDir = spaceId ? deps.spaces.resolveWorkDir?.(spaceId) ?? null : null
+      const path = isAbsolute(ref) ? ref : workDir ? join(workDir, ref) : ref
 
       let g = groups.get(appId)
       if (!g) {
@@ -828,6 +947,14 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       return {
         id: e.id,
         startedAt: e.startedAt,
+        // Board writes are activity too, and they carry a timestamp of their own
+        // — folding them in keeps an epoch whose last move was a task update
+        // ahead of one that only got a turn stamp earlier.
+        lastActivityAt: Math.max(
+          e.lastActivityAt ?? e.startedAt,
+          ...tasks.map((tk) => tk.updatedAt),
+          ...findings.map((f) => f.createdAt)
+        ),
         endedAt: e.endedAt,
         endReason: e.endReason,
         summary: e.summary,
@@ -853,6 +980,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       tasks: store.listTasksByEpoch(teamId, epochId),
       findings: store.listFindingsByEpoch(teamId, epochId),
       members: store.listMembersByTeam(teamId),
+      activities: store.listActivityByEpoch(teamId, epochId),
     }
   }
 
@@ -897,15 +1025,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   }
 
   async function sendToMember(params: SendToMemberParams): Promise<SendToMemberResult> {
-    const team = requireTeam(params.teamId)
+    requireTeam(params.teamId)
     const target = store.listMembersByTeam(params.teamId).find((m) => m.appId === params.appId)
     if (!target) return { ok: false, finalMessage: null, reason: 'MEMBER_NOT_FOUND' }
-
-    // Host-operator surface: the turn is attributed to the office lead (the
-    // operator's standing identity). Opening a conversation epoch also requires a
-    // lead, so resolve it BEFORE opening one.
-    const fromAppId = team.leadAppId
-    if (!fromAppId) return { ok: false, finalMessage: null, reason: 'NO_LEAD' }
 
     const rt = requireRuntime()
 
@@ -922,22 +1044,23 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       rt.ensureConversationEpoch(params.teamId, memberChatKey(params.appId)).id
 
     // A sealed epoch drops completions, so the operator would see "sent, no
-    // reply" after a run ended. Reactivate first (no-op when already open); a
+    // reply" after a run ended. Note the turn first (wakes a hibernated epoch); a
     // remote member's completion refluxes to this authority node, where the
     // seal check is enforced.
-    rt.reactivateEpoch(params.teamId, epochId)
+    rt.noteEpochTurn(params.teamId, epochId)
 
+    // A person typed this in the member's chat, so the send carries no sender
+    // app. The bus delivers it (that is how a remote member is reached) and
+    // leaves no trace on the office record — a person's chat is not the team's
+    // work, and borrowing the lead's identity to file it would put words in the
+    // mouth of a digital human that never ran, in front of the whole office.
     const result = await rt.bus.send({
       teamId: params.teamId,
       epochId,
-      fromAppId,
+      fromAppId: null,
       to: target.memberName,
       message: params.message,
       wait: true,
-      // A person typed this in the member's chat — deliver it verbatim, never
-      // under a "[Team message from Lead]" header (the lead is only the
-      // accounting identity for the bus).
-      humanOrigin: true,
     })
 
     if ('messageId' in result) return { ok: true, finalMessage: null }
@@ -1018,6 +1141,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         ...(memberAppId ? { memberAppId } : {}),
         ...(kind === 'im' ? { channel: 'im' } : {}),
         startedAt: epoch.startedAt,
+        lastActivityAt: epoch.lastActivityAt ?? epoch.startedAt,
         active: activeEpochIds.has(epoch.id),
         waitingUser: waitingEpochIds.has(epoch.id),
       }
@@ -1053,7 +1177,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     getTeamDetail,
     updateTeam,
     addMember,
+    updateMember,
     removeMember,
+    cancelCheck,
     setEdges,
     proposeMembers,
     runTeam,

@@ -68,13 +68,14 @@ function makeRuntime(store: TeamStore, busyByApp: Map<string, RosterBusyEntry[]>
       return epoch
     },
     renameConversationEpoch: (teamId: string, epochId: string, title: string | null) => store.renameEpoch(epochId, title),
-    reactivateEpoch: vi.fn(),
+    noteEpochTurn: vi.fn(),
     sealEpoch: vi.fn(),
     sealConversationEpoch: vi.fn(async (teamId: string, epochId: string) => store.endEpoch(epochId, Date.now(), 'stopped', null)),
     requestSeal: vi.fn(),
     captureReport: vi.fn(),
     buildPromptContext: vi.fn(),
     resumeFromEscalation: vi.fn(),
+    checks: { viewForTeam: () => [], cancelById: vi.fn() },
   }
 }
 

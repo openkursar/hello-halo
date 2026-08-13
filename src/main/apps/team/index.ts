@@ -29,7 +29,13 @@ export type {
   CollabMode,
   EscalationRouting,
   TeamFieldUpdate,
+  MemberFieldUpdate,
   TaskPatch,
+  TeamCheck,
+  TeamCheckSchedule,
+  TeamCheckView,
+  TeamDelegatedPolicy,
+  UpdateTeamMemberInput,
 } from './types'
 
 export type { TeamService, TeamServiceDeps } from './service'
@@ -91,6 +97,7 @@ interface InitTeamServiceDeps {
   // to office peers by the injected federation layer (the service itself imports
   // no federation). Optional — absent in a non-federated build.
   onRosterMutated?: TeamServiceDeps['onRosterMutated']
+  onMemberProfileChanged?: TeamServiceDeps['onMemberProfileChanged']
   onRunStateChanged?: TeamServiceDeps['onRunStateChanged']
   onMemberRemoved?: TeamServiceDeps['onMemberRemoved']
   onOfficeDissolved?: TeamServiceDeps['onOfficeDissolved']
@@ -111,6 +118,7 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
     proposeMembersFromGoal: deps.proposeMembersFromGoal ?? proposeMembersViaSdk,
     getTriggerSync: deps.getTriggerSync,
     onRosterMutated: deps.onRosterMutated,
+    onMemberProfileChanged: deps.onMemberProfileChanged,
     onRunStateChanged: deps.onRunStateChanged,
     onMemberRemoved: deps.onMemberRemoved,
     onOfficeDissolved: deps.onOfficeDissolved,
