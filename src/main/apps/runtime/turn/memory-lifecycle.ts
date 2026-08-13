@@ -152,7 +152,13 @@ const COMPACTION_MAX_TOKENS = 16384
 
 const COMPACTION_MAX_RETRIES = 2
 
-async function checkAndCompactMemory(
+/**
+ * Best-effort: failures are logged, never re-thrown. Exported for team turns,
+ * which take this step alone — they inject a snapshot and let memory grow, but
+ * write no per-run summary, so compaction is the only thing keeping memory.md
+ * from crossing its size ceiling unbounded.
+ */
+export async function checkAndCompactMemory(
   memory: MemoryService,
   scope: MemoryCallerScope,
   appName: string,

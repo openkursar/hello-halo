@@ -26,6 +26,7 @@ import type {
   MemoryWriteParams,
   MemoryListParams,
   MemoryScopeType,
+  MemoryTurnMode,
   SessionSummaryParams
 } from './types'
 import { COMPACTION_THRESHOLD_BYTES } from './types'
@@ -56,7 +57,7 @@ import { existsSync } from 'fs'
 import { mkdir } from 'fs/promises'
 
 // Re-export types for consumers
-export type { MemoryService, MemoryCallerScope, MemoryScopeType }
+export type { MemoryService, MemoryCallerScope, MemoryScopeType, MemoryTurnMode }
 export { COMPACTION_THRESHOLD_BYTES }
 
 // ============================================================================
@@ -208,8 +209,8 @@ function createMemoryService(): MemoryService {
     },
 
     // ── getPromptInstructions ──────────────────────────────────────────────
-    getPromptInstructions(): string {
-      return generatePromptInstructions()
+    getPromptInstructions(mode: MemoryTurnMode): string {
+      return generatePromptInstructions(mode)
     },
 
     // ── needsCompaction ────────────────────────────────────────────────────

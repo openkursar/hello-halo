@@ -8,13 +8,51 @@
  * available as an MCP tool for structural metadata checks.
  */
 
+import type { MemoryTurnMode } from './types'
+
 /**
  * Generate system prompt instructions for memory usage.
  *
- * @returns Markdown-formatted prompt fragment
+ * The instructions are the same wherever the digital human works — one memory,
+ * one set of habits. `mode` varies only the two mechanical facts that genuinely
+ * differ (when `# now` reached its context, whether a `# History` heading was
+ * written for it). What is worth recording stays its own judgement.
  */
-export function generatePromptInstructions(): string {
-  return MEMORY_INSTRUCTIONS
+export function generatePromptInstructions(mode: MemoryTurnMode): string {
+  return MEMORY_INSTRUCTIONS.replace('{{MEMORY_LOADING}}', LOADING_BY_MODE[mode])
+    .replace('{{MEMORY_HISTORY_WRITING}}', HISTORY_BY_MODE[mode])
+    .replace('{{MEMORY_HISTORY_UPDATES}}', HISTORY_UPDATES_BY_MODE[mode])
+}
+
+const LOADING_BY_MODE: Record<MemoryTurnMode, string> = {
+  run: 'Your `# now` block is pre-loaded in the trigger message each run.',
+  session: 'Your `# now` block was loaded into this session when it started, so it is already in context.',
+}
+
+const HISTORY_UPDATES_BY_MODE: Record<MemoryTurnMode, string> = {
+  run:
+    '**`# History` updates:**\n' +
+    '- The system already inserted a `## YYYY-MM-DD-HHmm` heading for this run\n' +
+    '- Edit that heading to add your summary: `## 2026-01-15-1430 | your summary here`\n' +
+    '- For important events, add `###` details below the heading\n' +
+    '- For routine runs with no changes, a brief summary is sufficient',
+  session:
+    '**`# History` updates:**\n' +
+    '- Write the heading yourself: `## YYYY-MM-DD-HHmm | your summary here`, newest at the top\n' +
+    '- For important events, add `###` details below the heading',
+}
+
+const HISTORY_BY_MODE: Record<MemoryTurnMode, string> = {
+  run:
+    '**`# History`** is your timeline. The system pre-inserts a `## YYYY-MM-DD-HHmm` heading\n' +
+    'at the top before each run. You Edit in the summary after `|` and optionally add details.\n\n' +
+    '- **Important events**: add a `###` sub-heading with details below the `##` timestamp\n' +
+    '- **Routine events**: just fill in the summary — one line is enough',
+  session:
+    '**`# History`** is your timeline. No heading is written for you here, so add your own\n' +
+    '`## YYYY-MM-DD-HHmm | summary` entry at the top.\n\n' +
+    '- **Important events**: add a `###` sub-heading with details below the `##` timestamp\n' +
+    '- **Routine events**: just fill in the summary — one line is enough',
 }
 
 // ============================================================================
@@ -26,19 +64,19 @@ const MEMORY_INSTRUCTIONS = `
 
 You have a persistent \`memory.md\` file that carries state across sessions.
 It has two top-level sections: \`# now\` (working memory) and \`# History\` (timeline).
-Your \`# now\` block is pre-loaded in the trigger message each run.
+{{MEMORY_LOADING}}
 
 ### Structure
 
 \`\`\`
-# now                          ← working memory (auto-loaded)
-## State | one-line summary    ← always first, updated every run
+# now                          ← working memory
+## State | one-line summary    ← always first, keep it current
 ## [Entity Name]               ← per-entity tracking (optional)
 ## Patterns                    ← learned rules (accumulates)
 ## Errors                      ← failure lessons (compact)
 
 # History                      ← timeline (newest first)
-## YYYY-MM-DD-HHmm | summary  ← one entry per run
+## YYYY-MM-DD-HHmm | summary  ← one entry per recorded event
 ### details heading            ← optional, for important events
 \`\`\`
 
@@ -51,11 +89,7 @@ Each field is one fact. Each line is independently editable.
 - **\`## Patterns\`** — Learned rules that improve future performance.
 - **\`## Errors\`** — What went wrong and the fix that worked.
 
-**\`# History\`** is your timeline. The system pre-inserts a \`## YYYY-MM-DD-HHmm\` heading
-at the top before each run. You Edit in the summary after \`|\` and optionally add details.
-
-- **Important events**: add a \`###\` sub-heading with details below the \`##\` timestamp
-- **Routine events**: just fill in the summary — one line is enough
+{{MEMORY_HISTORY_WRITING}}
 
 ### Example: Mature Memory
 
@@ -108,18 +142,14 @@ Update memory **after completing your task, before reporting**. This is required
 Workflow: trigger → do work → compare results with memory → update memory → report.
 
 **\`# now\` updates:**
-- **Every run**: update State fields that changed, update the \`| description\`
+- **Whenever state moved**: update State fields that changed, update the \`| description\`
 - **When you learn something new**: add a line to Patterns or Errors
 - **When tracking a new entity**: create a new \`##\` section under \`# now\`
 - **When a field is obsolete**: remove it with Edit
 
-**\`# History\` updates:**
-- The system already inserted a \`## YYYY-MM-DD-HHmm\` heading for this run
-- Edit that heading to add your summary: \`## 2026-01-15-1430 | your summary here\`
-- For important events, add \`###\` details below the heading
-- For routine runs with no changes, a brief summary is sufficient
+{{MEMORY_HISTORY_UPDATES}}
 
-**Record what helps future runs.** Important discoveries, pattern changes,
+**Record what helps future work.** Important discoveries, pattern changes,
 and error resolutions deserve detailed recording. Routine unchanged checks
 can be a single line.
 
@@ -139,7 +169,7 @@ Edit(memory.md,
   "## State | new description")
 \`\`\`
 
-Add summary to the pre-inserted History heading:
+Fill in a History summary:
 
 \`\`\`
 Edit(memory.md,
@@ -156,7 +186,7 @@ Your memory lives in these files, accessed by priority: **\`memory.md\` → \`me
 
 Start with \`memory.md\`. Only go deeper if the detail you need is not there.
 
-- **\`memory.md\`** — Always start here. \`# now\` is pre-loaded each run.
+- **\`memory.md\`** — Always start here.
   \`Read("memory.md")\` for sections not in context.
 
 - **\`memory/\`** (root) — Compaction archives (old versions of memory.md).

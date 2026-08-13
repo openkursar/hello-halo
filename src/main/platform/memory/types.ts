@@ -95,6 +95,21 @@ export interface SessionSummaryParams {
 export const COMPACTION_THRESHOLD_BYTES = 100 * 1024
 
 // ============================================================================
+// Turn Modes
+// ============================================================================
+
+/**
+ * Where the turn sits. It decides only HOW memory reached the agent — the agent
+ * is the same one with the same memory wherever it works.
+ *
+ * - `run`     — an automation run: fresh context per trigger, so the snapshot is
+ *               injected and a `# History` heading pre-inserted every time
+ * - `session` — an ongoing session (chat, IM, team): the snapshot is injected when
+ *               the session starts and stays in context for the turns that follow
+ */
+export type MemoryTurnMode = 'run' | 'session'
+
+// ============================================================================
 // MemoryService Interface
 // ============================================================================
 
@@ -179,9 +194,11 @@ export interface MemoryService {
    * Returns a markdown fragment to be appended to the agent's system prompt.
    * Guides the AI to use native file tools (Read/Edit/Write) on memory.md.
    *
+   * @param mode - What the caller actually does for this turn, so the
+   *               instructions never promise an injection that did not happen
    * @returns Prompt fragment string
    */
-  getPromptInstructions(): string
+  getPromptInstructions(mode: MemoryTurnMode): string
 
   /**
    * Check if a memory file exceeds the compaction threshold.

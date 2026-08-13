@@ -422,20 +422,47 @@ describe('File Operations', () => {
 // ============================================================================
 
 describe('generatePromptInstructions', () => {
-  // V3 memory model: one constant instruction block for all callers — memory
-  // is edited with native file tools on memory.md, no MCP tools and no
-  // per-caller scope variants.
-  it('should describe the memory.md structure', () => {
-    const instructions = generatePromptInstructions()
+  // Memory is edited with native file tools on memory.md — no MCP tools. Same
+  // instructions wherever the digital human works; only the two mechanical
+  // facts (how `# now` arrived, whether a History heading was written for it)
+  // vary, and neither tells it WHAT is worth recording.
+  const MODES = ['run', 'session'] as const
+
+  it.each(MODES)('should describe the memory.md structure (%s)', (mode) => {
+    const instructions = generatePromptInstructions(mode)
     expect(instructions).toContain('## Memory')
     expect(instructions).toContain('# now')
     expect(instructions).toContain('# History')
     expect(instructions).toContain('memory.md')
   })
 
-  it('should instruct updating memory before reporting', () => {
-    const instructions = generatePromptInstructions()
+  it.each(MODES)('should instruct updating memory before reporting (%s)', (mode) => {
+    const instructions = generatePromptInstructions(mode)
     expect(instructions).toContain('When to Update')
     expect(instructions).toContain('before reporting')
+  })
+
+  it.each(MODES)('should leave no unresolved placeholder (%s)', (mode) => {
+    expect(generatePromptInstructions(mode)).not.toContain('{{')
+  })
+
+  it('should promise a pre-inserted History heading only for automation runs', () => {
+    // The claim is true only where execute.ts actually writes the heading;
+    // promising it elsewhere sends the agent editing a heading that is not there.
+    expect(generatePromptInstructions('run')).toContain('pre-inserts a `## YYYY-MM-DD-HHmm` heading')
+    expect(generatePromptInstructions('session')).not.toContain('pre-inserts')
+    expect(generatePromptInstructions('session')).toContain('add your own')
+  })
+
+  it('should tell both modes their memory is already loaded', () => {
+    expect(generatePromptInstructions('run')).toContain('pre-loaded in the trigger message')
+    expect(generatePromptInstructions('session')).toContain('already in context')
+  })
+
+  it('should not dictate what is worth recording', () => {
+    // Habits are the digital human's own; the instructions only state mechanics.
+    for (const mode of MODES) {
+      expect(generatePromptInstructions(mode)).not.toContain('One entry per meaningful outcome')
+    }
   })
 })
