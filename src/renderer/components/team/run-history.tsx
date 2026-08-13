@@ -1,11 +1,12 @@
 /**
- * run-history — shared formatting + grouping for a team's run history.
+ * run-history — shared formatting + grouping for a team's past work.
  *
- * A run is an event, not a named object: it is identified by time · trigger ·
- * outcome (§P0-4), never a title. These pure helpers are the single source of
- * truth for that presentation, reused by the Live board banner, the event
- * sidebar list, and any run row — so the four outcome classes and the trigger
- * wording never drift between surfaces.
+ * Two kinds of thing appear in that list and they are presented differently:
+ * a RUN is an event, identified by time · trigger · outcome and never a title;
+ * a CONVERSATION is a named thing you go back to. These pure helpers are
+ * the single source of truth for both presentations, reused by the Live board
+ * banner and the event sidebar — so the outcome classes, the trigger wording,
+ * and the conversation fallbacks never drift between surfaces.
  */
 
 import { Sparkles, AlertTriangle, MinusCircle, Clock, Play } from 'lucide-react'
@@ -83,6 +84,23 @@ export function runEventTitle(epoch: TeamEpochSummary | undefined, t: (k: string
   return `${formatRunTime(epoch.startedAt)} · ${triggerLabel(epoch.triggerType, t)}`
 }
 
+/**
+ * Which piece of work an epoch is, each kind named the way that kind is named
+ * everywhere else. For lists that show something belonging to a run or a
+ * conversation from OUTSIDE it, where the row cannot otherwise say where it
+ * came from.
+ */
+export function epochWorkLabel(
+  epochId: string,
+  conversations: TeamConversation[],
+  epochs: TeamEpochSummary[],
+  t: (k: string) => string
+): string {
+  const conversation = conversations.find(c => c.epochId === epochId)
+  if (conversation) return conversationLabel(conversation, t)
+  return runEventTitle(epochs.find(e => e.id === epochId), t)
+}
+
 /** Compact absolute time for a run row (a run is placed by WHEN it ran). */
 export function formatRunTime(ts: number): string {
   try {
@@ -103,23 +121,24 @@ export function formatDuration(ms: number): string {
 
 export type HistoryRow =
   | { kind: 'run'; epoch: TeamEpochSummary }
+  | { kind: 'conversation'; epoch: TeamEpochSummary }
   | { kind: 'group'; key: string; count: number; epochs: TeamEpochSummary[]; triggerType?: TeamRunTriggerType }
 
 /**
- * Split a team's epochs into the run rows (grouping consecutive "no action" runs
- * so a busy scheduler doesn't flood the list) and the archived conversations.
- * Product / escalation / failed / running rows never fold — they always show.
+ * One time-ordered list of everything the team has worked on — runs AND
+ * conversations — newest activity first.
+ *
+ * A conversation is not a run, but it IS a unit of work with a board of its own,
+ * so leaving it out made the tasks it produced unreachable the moment nobody was
+ * actively typing in it. Ordering is by LAST ACTIVITY, never creation: a thread
+ * opened last week and used ten minutes ago belongs at the top.
+ *
+ * Consecutive "no action" RUNS still fold into one row so a busy scheduler
+ * cannot flood the list; a conversation breaks the fold (it is a named thing the
+ * user is looking for by name, never a footnote).
  */
-export function groupHistory(epochs: TeamEpochSummary[]): { rows: HistoryRow[]; archived: TeamEpochSummary[] } {
-  const archived: TeamEpochSummary[] = []
-  const runs: TeamEpochSummary[] = []
-  for (const e of epochs) {
-    if (e.lifecycle === 'conversation') {
-      if (e.endedAt != null) archived.push(e) // open conversations live in the Conversation tab
-      continue
-    }
-    runs.push(e)
-  }
+export function groupHistory(epochs: TeamEpochSummary[]): { rows: HistoryRow[] } {
+  const ordered = [...epochs].sort((a, b) => lastActivityOf(b) - lastActivityOf(a))
 
   const rows: HistoryRow[] = []
   let bucket: TeamEpochSummary[] = []
@@ -129,10 +148,26 @@ export function groupHistory(epochs: TeamEpochSummary[]): { rows: HistoryRow[]; 
     else rows.push({ kind: 'group', key: bucket[0].id, count: bucket.length, epochs: bucket.slice(), triggerType: bucket[0].triggerType })
     bucket = []
   }
-  for (const e of runs) {
+  for (const e of ordered) {
+    if (e.lifecycle === 'conversation') { flush(); rows.push({ kind: 'conversation', epoch: e }); continue }
     if (runOutcome(e) === 'no_action') bucket.push(e)
     else { flush(); rows.push({ kind: 'run', epoch: e }) }
   }
   flush()
-  return { rows, archived }
+  return { rows }
+}
+
+/** When this unit of work last moved (falls back to its start for legacy rows). */
+export function lastActivityOf(e: TeamEpochSummary): number {
+  return e.lastActivityAt || e.startedAt
+}
+
+/**
+ * Display name for an epoch row: a conversation is a named thing, a run is an
+ * event placed by when it ran. Mirrors {@link conversationLabel}'s fallbacks for
+ * a conversation whose label never resolved.
+ */
+export function epochLabel(e: TeamEpochSummary, t: (k: string) => string): string {
+  if (e.lifecycle !== 'conversation') return runEventTitle(e, t)
+  return e.label?.trim() || t('New session')
 }

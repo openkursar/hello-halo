@@ -41,6 +41,11 @@ export interface TeamSessionChatProps {
   reachability?: 'online' | 'away' | 'offline'
   /** Read-only surface (e.g. an IM chat answered elsewhere): no input. */
   readonly?: boolean
+  /**
+   * One line put where the input would be on a read-only surface, saying what to
+   * do instead. Leaving a blank space there reads as broken, not as forbidden.
+   */
+  readonlyNotice?: string
   placeholder?: string
   emptyTitle?: string
   emptyHint?: string
@@ -61,7 +66,7 @@ type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
 
 export function TeamSessionChat({
   appId, spaceId, teamId, epochId, isRemote, ownerName, reachability = 'online',
-  readonly = false, placeholder, emptyTitle, emptyHint, topSlot, aboveInput, ensureEpochId,
+  readonly = false, readonlyNotice, placeholder, emptyTitle, emptyHint, topSlot, aboveInput, ensureEpochId,
 }: TeamSessionChatProps) {
   const { t } = useTranslation()
   const conversationId = buildTeamSessionKey(appId, teamId, epochId ?? 'none')
@@ -222,7 +227,6 @@ export function TeamSessionChat({
           switch (remoteResult?.reason) {
             case 'TIMEOUT': return t('No reply from {{owner}} in time — they may be busy. Try again shortly.', { owner })
             case 'UNDELIVERED': return t('Couldn\u2019t reach {{owner}} — your message was not delivered. Try again when they\u2019re back online.', { owner })
-            case 'NO_LEAD': return t('This office needs a lead before teammates can chat. Set one, then try again.')
             case 'MEMBER_NOT_FOUND': return t('{{owner}} is no longer in this office.', { owner })
             default: return t('Couldn\u2019t send your message just now. Please try again.')
           }
@@ -355,7 +359,13 @@ export function TeamSessionChat({
       )}
 
       {/* Input region — hidden for read-only surfaces and offline owners. */}
-      {readonly ? null : reachability === 'offline' ? (
+      {readonly ? (
+        readonlyNotice ? (
+          <div className="shrink-0 border-t border-border p-3">
+            <p className="px-1 text-xs text-muted-foreground">{readonlyNotice}</p>
+          </div>
+        ) : null
+      ) : reachability === 'offline' ? (
         <div className="shrink-0 border-t border-border p-3">
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
             <p className="text-sm font-medium text-foreground">

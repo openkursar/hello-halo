@@ -15,12 +15,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import { PanelRight, Zap, MessageSquare, History, Loader2 } from 'lucide-react'
 import type { TeamDetail, RosterMember, EpochBoard, TeamConversation } from '../../../shared/apps/team-types'
+import { awaitsOurDecision } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useTranslation } from '../../i18n'
 import { StatusBoard, type BoardView } from './StatusBoard'
 import { EventSidebar } from './EventSidebar'
-import { triggerLabel, formatRunTime, runEventTitle, conversationLabel, outcomeMeta } from './run-history'
+import { triggerLabel, formatRunTime, runEventTitle, conversationLabel, epochLabel, outcomeMeta } from './run-history'
+
+/** Fetched snapshot first, then rows pushed live for the same epoch — later wins per id. */
+function mergeById<T extends { id: string }>(snapshot: T[], live: T[]): T[] {
+  if (live.length === 0) return snapshot
+  const byId = new Map(snapshot.map(row => [row.id, row]))
+  for (const row of live) byId.set(row.id, row)
+  return [...byId.values()]
+}
 
 interface LiveTabProps {
   detail: TeamDetail
@@ -56,61 +65,82 @@ export function LiveTab({ detail, onSelectMember, editingStructure, onExitEditin
   )
   const isPastRun = !!focused && !isLiveRun && !focusedConversation
 
-  // Replay: load the selected past run's recorded board.
-  const [pastBoard, setPastBoard] = useState<EpochBoard | null>(null)
-  const [loadingPast, setLoadingPast] = useState(false)
+  // Anything other than the live run needs its board fetched by id: the team
+  // detail carries ONE epoch's board (the open run, else the latest), so a
+  // conversation's own tasks and findings are simply not in it.
+  const [epochBoard, setEpochBoard] = useState<EpochBoard | null>(null)
+  const [loadingBoard, setLoadingBoard] = useState(false)
   useEffect(() => {
-    if (!isPastRun || !focused) { setPastBoard(null); return }
+    if (isLiveRun || !focused) { setEpochBoard(null); return }
     let cancelled = false
-    setLoadingPast(true)
+    setLoadingBoard(true)
     void loadEpochBoard(detail.team.id, focused).then(b => {
       if (cancelled) return
-      setPastBoard(b)
-      setLoadingPast(false)
+      setEpochBoard(b)
+      setLoadingBoard(false)
     })
     return () => { cancelled = true }
-  }, [isPastRun, focused, detail.team.id, loadEpochBoard])
+  }, [isLiveRun, focused, detail.team.id, loadEpochBoard])
+
+  // detail.tasks/findings accumulate live board writes for whichever epoch is
+  // open (the backend's single-epoch scope, plus any real-time team:blackboard
+  // pushes since) — scope them to the focused event so a conversation's own
+  // tasks/findings render instead of being silently dropped.
+  const focusedTasks = useMemo(() => detail.tasks.filter(tk => tk.epochId === focused), [detail.tasks, focused])
+  const focusedFindings = useMemo(() => detail.findings.filter(f => f.epochId === focused), [detail.findings, focused])
+  const focusedActivities = useMemo(
+    () => (detail.activities ?? []).filter(a => a.epochId === focused),
+    [detail.activities, focused]
+  )
 
   // The board the left column renders, computed from the focused event.
   const board = useMemo<BoardView>(() => {
     if (isLiveRun && focused) {
       return {
         mode: 'live', epochId: focused,
-        roster: detail.roster, edges: detail.edges, tasks: detail.tasks, findings: detail.findings,
+        roster: detail.roster, edges: detail.edges, tasks: focusedTasks, findings: focusedFindings,
+        activities: focusedActivities,
         live: { status: detail.team.status },
       }
     }
     if (focusedConversation) {
-      // A conversation has no board tasks; its "activity" is the live stream of
-      // whoever is working it (the topology pulses those members).
+      // A conversation can post board tasks/findings too (team_post_task /
+      // team_post_finding are not restricted to run epochs) — its "activity" is
+      // both those writes and the live stream of whoever is working it. The
+      // fetched board is the snapshot; live pushes that landed since override it.
       return {
-        mode: 'live', epochId: focused,
-        roster: detail.roster, edges: detail.edges, tasks: [], findings: [],
+        mode: 'live', epochId: focused, kind: 'conversation',
+        roster: detail.roster, edges: detail.edges,
+        tasks: mergeById(epochBoard?.tasks ?? [], focusedTasks),
+        findings: mergeById(epochBoard?.findings ?? [], focusedFindings),
+        activities: mergeById(epochBoard?.activities ?? [], focusedActivities),
         live: { status: focusedConversation.active ? 'running' : 'idle' },
       }
     }
-    if (isPastRun && pastBoard) {
-      const roster: RosterMember[] = pastBoard.members.map(m => ({
+    if (isPastRun && epochBoard) {
+      const roster: RosterMember[] = epochBoard.members.map(m => ({
         appId: m.appId, memberName: m.memberName, role: m.role, isLead: m.isLead, spaceId: null, status: 'idle' as const,
       }))
       return {
         mode: 'replay', epochId: focused,
-        roster, edges: detail.edges, tasks: pastBoard.tasks, findings: pastBoard.findings,
+        kind: epochBoard.epoch.lifecycle === 'conversation' ? 'conversation' : 'run',
+        roster, edges: detail.edges, tasks: epochBoard.tasks, findings: epochBoard.findings,
+        activities: epochBoard.activities ?? [],
         replay: {
-          startedAt: pastBoard.epoch.startedAt,
-          triggerType: pastBoard.epoch.triggerType,
-          outcome: pastBoard.epoch.outcome,
-          summary: pastBoard.epoch.summary,
+          startedAt: epochBoard.epoch.startedAt,
+          triggerType: epochBoard.epoch.triggerType,
+          outcome: epochBoard.epoch.outcome,
+          summary: epochBoard.epoch.summary,
         },
       }
     }
     // Idle / loading: rest on the team structure (a calm org shape).
     return {
       mode: 'live', epochId: null,
-      roster: detail.roster, edges: detail.edges, tasks: [], findings: [],
+      roster: detail.roster, edges: detail.edges, tasks: [], findings: [], activities: [],
       live: { status: liveRunId ? detail.team.status : 'idle' },
     }
-  }, [isLiveRun, focusedConversation, isPastRun, pastBoard, focused, detail, liveRunId])
+  }, [isLiveRun, focusedConversation, isPastRun, epochBoard, focused, detail, liveRunId, focusedTasks, focusedFindings, focusedActivities])
 
   const header = useMemo(() => {
     if (isLiveRun) {
@@ -121,13 +151,20 @@ export function LiveTab({ detail, onSelectMember, editingStructure, onExitEditin
       return { Icon: MessageSquare, label: conversationLabel(focusedConversation, t), live: !!focusedConversation.active }
     }
     if (isPastRun) {
-      const e = pastBoard?.epoch ?? epochs.find(x => x.id === focused)
+      const summary = epochs.find(x => x.id === focused)
+      // A CLOSED conversation lands here too (it left the open list), and it is
+      // still a named thing — showing it as "time · trigger" presents a chat as
+      // a run that never happened.
+      if (summary?.lifecycle === 'conversation') {
+        return { Icon: MessageSquare, label: epochLabel(summary, t), live: false }
+      }
+      const e = epochBoard?.epoch ?? summary
       const when = e ? formatRunTime(e.startedAt) : ''
       const trig = triggerLabel(e?.triggerType, t)
       return { Icon: History, label: when ? `${when} · ${trig}` : t('Past run'), live: false }
     }
     return { Icon: History, label: t('Team structure'), live: false }
-  }, [isLiveRun, focusedConversation, isPastRun, pastBoard, epochs, focused, liveRunId, detail.team.status, t])
+  }, [isLiveRun, focusedConversation, isPastRun, epochBoard, epochs, focused, liveRunId, detail.team.status, t])
 
   // Run status / outcome, folded into the single header line (the standalone
   // banner is gone). `toneClass` is a text color reused for the dot via
@@ -141,7 +178,21 @@ export function LiveTab({ detail, onSelectMember, editingStructure, onExitEditin
     if (isPaused) return { word: t('Resting'), toneClass: 'text-muted-foreground', pulse: false }
     switch (board.live?.status ?? 'idle') {
       case 'running': return { word: t('Running'), toneClass: 'text-emerald-500', pulse: true }
-      case 'waiting_user': return { word: t('Waiting for you'), toneClass: 'text-amber-500', pulse: false }
+      case 'waiting_user': {
+        // A joined office mirrors the host's status, so "blocked on a decision"
+        // says nothing about WHOSE. The roster does: only when one of our own
+        // members raised it is this the reader's move.
+        if (board.roster.some(awaitsOurDecision)) {
+          return { word: t('Waiting for you'), toneClass: 'text-amber-500', pulse: false }
+        }
+        const blocked = board.roster.find(m => m.status === 'waiting_user')
+        const owner = blocked?.owner || t('a teammate')
+        return {
+          word: t('Waiting on {{owner}}', { owner }),
+          toneClass: 'text-muted-foreground',
+          pulse: false,
+        }
+      }
       case 'error': return { word: t('Stopped'), toneClass: 'text-red-500', pulse: false }
       default:
         return focusedConversation
@@ -177,7 +228,7 @@ export function LiveTab({ detail, onSelectMember, editingStructure, onExitEditin
         </div>
 
         <div className="relative flex-1 overflow-y-auto">
-          {loadingPast && !pastBoard && (
+          {loadingBoard && !epochBoard && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
             </div>

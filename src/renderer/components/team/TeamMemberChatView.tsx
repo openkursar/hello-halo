@@ -1,23 +1,32 @@
 /**
- * TeamMemberChatView — a teammate's live work surface (spec §6.4).
+ * TeamMemberChatView — a teammate's live work surface.
  *
  * The chat engine itself is the shared {@link TeamSessionChat}; this component
- * frames it for a MEMBER: the header (name / owner / presence), the context chip
- * ("Bound to: …" — which run/conversation this side-thread is attached to), the offline
- * banner, and the inline escalation panel. The context is ALWAYS explicit — the
- * message lands in the epoch the chip points at (P0-3), never an implicit "latest".
+ * frames it for a MEMBER: the header (name / owner / presence), the team
+ * identity band (what it is responsible for here, and what is standing over it),
+ * and the inline escalation panel.
+ *
+ * The panel belongs to the piece of work you opened it from, and the message you
+ * type lands there — nowhere else. That binding is carried explicitly in the
+ * `epochId` prop all the way down to the send; it is deliberately NOT a thing
+ * you pick here, because you already picked it by walking in through that door.
+ *
+ * You can watch anyone's digital human at work. You cannot talk to one that is
+ * not yours: it runs on someone else's machine, so the way to get it moving is
+ * to ask your own digital human to talk to it.
  */
 
-import { useMemo } from 'react'
-import { X, Star, ChevronDown } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { X, Star, Timer, ChevronRight, Settings } from 'lucide-react'
 import { EscalationPanel } from './EscalationPanel'
 import { MemberPresenceChip, OwnerLabel } from './MemberPresenceChip'
 import { TeamSessionChat } from './TeamSessionChat'
-import { runEventTitle, conversationLabel } from './run-history'
 import { useAppsStore } from '../../stores/apps.store'
-import { useMemberPresence, useTeamStore } from '../../stores/team.store'
+import { useMemberPresence, useTeamStore, type MemberPresence } from '../../stores/team.store'
 import { useTranslation } from '../../i18n'
-import type { RosterMember, TeamMemberRuntimeStatus } from '../../../shared/apps/team-types'
+import { describeRhythm } from './check-format'
+import { awaitsOurDecision, checksForMember } from '../../../shared/apps/team-types'
+import type { RosterMember, TeamCheckView, TeamMemberRuntimeStatus } from '../../../shared/apps/team-types'
 
 interface TeamMemberChatViewProps {
   member: RosterMember
@@ -31,8 +40,9 @@ interface TeamMemberChatViewProps {
   /** True when this epoch is the team's live/current run. */
   isCurrentEpoch: boolean
   onClose: () => void
-  /** Switch the bound context (the chip dropdown), staying on this member. */
-  onSwitchContext?: (epochId: string) => void
+  /** Bind a freshly-created conversation, staying on this member. */
+  onBindEpoch?: (epochId: string) => void
+  onOpenSettings?: () => void
 }
 
 function statusDot(status: TeamMemberRuntimeStatus): string {
@@ -44,7 +54,15 @@ function statusDot(status: TeamMemberRuntimeStatus): string {
   }
 }
 
-export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, onClose, onSwitchContext }: TeamMemberChatViewProps) {
+export function TeamMemberChatView({
+  member,
+  teamId,
+  epochId,
+  isCurrentEpoch,
+  onClose,
+  onBindEpoch,
+  onOpenSettings,
+}: TeamMemberChatViewProps) {
   const { t } = useTranslation()
   const appId = member.appId
   const appSpaceId = useAppsStore(s => s.apps.find(a => a.id === appId)?.spaceId)
@@ -52,36 +70,11 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
 
   const presence = useMemberPresence(teamId, appId)
   const showOwner = presence.isRemote
-
-  // The events this teammate can be spoken to about: the live run + any open
-  // conversation it serves. Drives the context chip's dropdown (§6.4).
-  const conversations = useTeamStore(s => s.conversations)
-  const detail = useTeamStore(s => s.detail)
-  const epochs = useTeamStore(s => s.epochs)
-  // The live run's stable identity is time · trigger (a run is an event, not a
-  // named thing), consistent with the Live tab + event sidebar.
-  const runEpochId = detail?.team.currentEpochId
-  const runLabel = useMemo(
-    () => runEventTitle(epochs.find(e => e.id === runEpochId), t),
-    [epochs, runEpochId, t]
+  const detailChecks = useTeamStore(s => s.detail?.checks)
+  const checks = useMemo(
+    () => checksForMember(detailChecks ?? [], appId, epochId),
+    [detailChecks, appId, epochId]
   )
-  const contextOptions = useMemo(() => {
-    const opts: { epochId: string; label: string }[] = []
-    if (runEpochId) opts.push({ epochId: runEpochId, label: runLabel })
-    for (const c of conversations) {
-      // A member's own direct thread + native/IM conversations it participates in.
-      if (c.kind === 'member' && c.memberAppId !== appId) continue
-      opts.push({ epochId: c.epochId, label: conversationLabel(c, t) })
-    }
-    return opts
-  }, [conversations, detail?.team.currentEpochId, runLabel, appId, t])
-
-  const currentLabel = useMemo(() => {
-    const found = contextOptions.find(o => o.epochId === epochId)
-    if (found) return found.label
-    if (epochId && epochId === detail?.team.currentEpochId) return runLabel
-    return t('this session')
-  }, [contextOptions, epochId, detail?.team.currentEpochId, runLabel, t])
 
   const hasContext = !!epochId
 
@@ -93,7 +86,6 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
         <div className="flex min-w-0 items-center gap-1.5">
           {member.isLead && <Star className="h-3.5 w-3.5 flex-shrink-0 fill-current text-amber-500" />}
           <span className="truncate text-sm font-medium text-foreground">{member.memberName}</span>
-          {member.role && <span className="truncate text-xs text-muted-foreground">· {member.role}</span>}
           {showOwner && (
             <span className="flex min-w-0 items-center gap-1.5">
               <OwnerLabel ownerName={presence.ownerName} />
@@ -117,39 +109,15 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
         </button>
       </div>
 
-      {/* Context chip (§6.4): what this side-thread is bound to. Everything you
-          say here, and the record you see, belong to the selected event. */}
-      {hasContext && (
-        <div className="flex items-center gap-1.5 border-b border-border px-4 py-1.5">
-          <span className="text-xs text-muted-foreground">{t('To:')}</span>
-          {contextOptions.length > 1 && onSwitchContext ? (
-            <div className="relative">
-              <select
-                value={epochId ?? ''}
-                onChange={(e) => onSwitchContext(e.target.value)}
-                className="appearance-none rounded-md border border-border bg-secondary py-0.5 pl-2 pr-6 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                title={t('Everything you say here, and the record you see, belong to the selected event.')}
-              >
-                {contextOptions.map(o => (
-                  <option key={o.epochId} value={o.epochId}>{o.label}</option>
-                ))}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-            </div>
-          ) : (
-            <span
-              className="rounded-md bg-secondary px-2 py-0.5 text-xs text-foreground"
-              title={t('Everything you say here, and the record you see, belong to the selected event.')}
-            >
-              {currentLabel}
-            </span>
-          )}
-        </div>
-      )}
+      <IdentityBand
+        teamId={teamId}
+        member={member}
+        checks={checks}
+        onOpenSettings={onOpenSettings}
+      />
 
-      {/* No context yet → guide the user to open a fresh session (§6.4). */}
       {!hasContext ? (
-        <NoContextGuide member={member} teamId={teamId} onOpened={onSwitchContext} />
+        <NoContextGuide member={member} teamId={teamId} onOpened={onBindEpoch} />
       ) : (
         <TeamSessionChat
           appId={appId}
@@ -159,23 +127,138 @@ export function TeamMemberChatView({ member, teamId, epochId, isCurrentEpoch, on
           isRemote={presence.isRemote}
           ownerName={presence.ownerName}
           reachability={presence.reachability}
+          readonly={presence.isRemote}
+          readonlyNotice={
+            presence.isRemote
+              ? t('To get it moving, tell your own digital human and let it do the asking.')
+              : undefined
+          }
           placeholder={t('Message {{name}}…', { name: member.memberName })}
           emptyTitle={t('No work yet in this team.')}
           emptyHint={t('Run the team, or send a message to this member.')}
         />
       )}
 
-      {/* Escalation (user decision) — surfaced inline when this member awaits a decision. */}
+      {/* A pending decision belongs to the person whose digital human raised it.
+          On its owner's machine that is an answerable question; anywhere else the
+          question itself never left that machine, so the honest thing to show is
+          who the office is waiting on. */}
       {member.status === 'waiting_user' && (
-        <div className="shrink-0 border-t border-amber-500/30 bg-amber-500/5 p-3">
-          <EscalationPanel member={member} teamName="" />
+        awaitsOurDecision(member) ? (
+          <div className="shrink-0 border-t border-amber-500/30 bg-amber-500/5 p-3">
+            <EscalationPanel member={member} />
+          </div>
+        ) : (
+          <div className="shrink-0 border-t border-border px-3 py-2 text-xs text-muted-foreground">
+            <OwnerDecisionNotice presence={presence} />
+          </div>
+        )
+      )}
+    </div>
+  )
+}
+
+/**
+ * Names the person the office is actually waiting on, and — when their machine
+ * is away — says so, because that is the difference between "any moment now" and
+ * "not until they are back".
+ */
+function OwnerDecisionNotice({ presence }: { presence: MemberPresence }) {
+  const { t } = useTranslation()
+  const owner = presence.ownerName || t('its owner')
+
+  return presence.reachability === 'online'
+    ? <>{t('{{owner}} needs to answer this one before it can move on.', { owner })}</>
+    : <>{t('{{owner}}\u2019s computer is offline, so this decision has to wait for them.', { owner })}</>
+}
+
+/**
+ * Who this member is inside the team, one line by default: the opening line of
+ * its duty, plus a marker when something is standing over it. Expanded, it is
+ * the full duty and every periodic check, each stoppable on the spot.
+ */
+function IdentityBand({ teamId, member, checks, onOpenSettings }: {
+  teamId: string
+  member: RosterMember
+  checks: TeamCheckView[]
+  onOpenSettings?: () => void
+}) {
+  const { t, i18n } = useTranslation()
+  const cancelCheck = useTeamStore(s => s.cancelCheck)
+  // Open by default when something is standing over this member: the marker on
+  // the floor is what brought most people here, so show them what it is.
+  const [open, setOpen] = useState(checks.length > 0)
+
+  const duty = member.duty?.trim() ?? ''
+  const firstLine = duty ? duty.split('\n')[0] : ''
+  const summary = firstLine || t('No duty written yet')
+
+  return (
+    <div className="border-b border-border">
+      <div className="flex items-center gap-2 px-4 py-1.5">
+        <button
+          onClick={() => setOpen(v => !v)}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+        >
+          <span className="truncate text-xs text-muted-foreground">{summary}</span>
+          {checks.length > 0 && (
+            <span className="flex flex-shrink-0 items-center gap-0.5 rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              <Timer className="h-3 w-3" />
+              {checks.length}
+            </span>
+          )}
+          <ChevronRight className={`h-3.5 w-3.5 flex-shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`} />
+        </button>
+        {onOpenSettings && (
+          <button
+            onClick={onOpenSettings}
+            className="flex-shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+            title={t('Settings')}
+          >
+            <Settings className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div className="space-y-2 px-4 pb-2.5">
+          <p className="whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
+            {duty || t('Nothing written yet.')}
+          </p>
+          {checks.map(check => (
+            <div key={check.id} className="flex items-start gap-2 rounded-md bg-secondary/50 px-2 py-1.5">
+              <Timer className="mt-0.5 h-3 w-3 flex-shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-foreground">
+                  {t('{{who}} has it look {{schedule}}: {{what}}', {
+                    who: check.createdByMemberName,
+                    schedule: describeRhythm(check.schedule, t, i18n.language),
+                    what: check.instruction,
+                  })}
+                </p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">
+                  {check.reachable
+                    ? t('{{count}} rounds so far', { count: check.runCount })
+                    : t('Not running: {{owner}}’s computer is offline', {
+                        owner: check.targetOwner || t('its owner'),
+                      })}
+                </p>
+              </div>
+              <button
+                onClick={() => void cancelCheck(teamId, check.id)}
+                className="flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                {t('Stop')}
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>
   )
 }
 
-/** §6.4 empty state: "Open a new session with them?" → creates a visible session. */
+/** Empty state: "Open a new session with them?" → creates a visible session. */
 function NoContextGuide({ member, teamId, onOpened }: {
   member: RosterMember
   teamId: string

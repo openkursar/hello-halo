@@ -261,6 +261,7 @@ function InnerCanvas({
           colorMode={colorMode}
           fitView
           fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
+          minZoom={0.15}
           nodesDraggable={editable}
           nodesConnectable={editable}
           elementsSelectable
@@ -271,7 +272,10 @@ function InnerCanvas({
           className="bg-transparent"
         >
           <Background gap={cartoon ? 24 : 16} size={1} className={cartoon ? 'opacity-20' : 'opacity-50'} />
-          {editable && <Controls showInteractive={false} position="bottom-left" className="!shadow-md" />}
+          {/* Read mode had no way to recover from a roster too wide to fit — no
+              buttons to zoom out or re-run fit view once clipped. Bottom-right so
+              it doesn't collide with the cartoon skin's corner plant. */}
+          <Controls showInteractive={editable} position="bottom-right" className="!shadow-md" />
         </ReactFlow>
         {editable && <RelationshipsPanel />}
       </div>

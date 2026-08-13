@@ -1,30 +1,58 @@
 /**
- * ConversationTab — "talk to the team" (spec §6.1/§6.2, the default landing tab).
+ * ConversationTab — "talk to the team" (the default landing tab).
  *
  * Left: the active conversation, rendered by the shared {@link TeamSessionChat}.
  * Right: the office's conversation list ({@link TeamSessionPanel}), collapsible
  * on desktop and a full-screen drawer on mobile.
  *
- * "Talking to the team" = talking to the LEAD (front desk): the lead answers and
- * dispatches internally. A member direct thread targets that teammate instead.
- * IM chats are read-only here (they are answered in the IM app).
+ * Talking to the team starts with YOUR OWN digital human — the one you brought
+ * in, which knows you and can go negotiate with the rest. You can hand the
+ * conversation to a different one of yours from the header, and that choice
+ * sticks. A member direct thread targets that teammate instead, and an IM chat
+ * is read-only here (it is answered in the IM app).
  */
 
-import { useMemo, useState } from 'react'
-import { PanelRight, Zap, MessageSquarePlus, Radar } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { PanelRight, Zap, MessageSquarePlus, Radar, Bot, ChevronDown, Check } from 'lucide-react'
 import { useTeamStore, useMemberPresence } from '../../stores/team.store'
+import { useDefaultChatTarget, useTeamViewPrefsStore } from '../../stores/team-view-prefs.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useTranslation } from '../../i18n'
 import { TeamSessionChat } from './TeamSessionChat'
 import { TeamSessionPanel } from './TeamSessionPanel'
 import { conversationLabel } from './run-history'
-import type { TeamDetail, TeamConversation } from '../../../shared/apps/team-types'
+import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
+import type { TeamDetail, TeamConversation, TeamMember } from '../../../shared/apps/team-types'
+import { isRemoteMember } from '../../../shared/apps/team-types'
 
 interface ConversationTabProps {
   detail: TeamDetail
   /** Jump to the Live tab focused on a specific event (the active-door card). */
   onOpenLive: (epochId: string) => void
+}
+
+/**
+ * The digital humans in this office that can actually take a message here: run
+ * on this machine AND still installed. A member row can outlive its app (the app
+ * was uninstalled, the profile was reset), and pointing the chat at one of those
+ * produces a send that fails silently — so they are not offered at all.
+ */
+function useChatTargets(detail: TeamDetail): { own: TeamMember[]; lead: TeamMember | null } {
+  const apps = useAppsStore(s => s.apps)
+  return useMemo(() => {
+    const installed = new Set(apps.map(a => a.id))
+    // A teammate's member is served by their machine, so its absence here means
+    // nothing; one of mine has to genuinely exist on this one.
+    const live = detail.members.filter(m => isRemoteMember(m) || installed.has(m.appId))
+    return {
+      own: live.filter(m => !isRemoteMember(m) && m.appId !== detail.team.leadAppId),
+      // The lead is the office's front desk, so it stays reachable even when the
+      // office is hosted elsewhere — that is the fallback for someone who is
+      // only watching and brought nobody.
+      lead: live.find(m => m.appId === detail.team.leadAppId) ?? null,
+    }
+  }, [apps, detail.members, detail.team.leadAppId])
 }
 
 export function ConversationTab({ detail, onOpenLive }: ConversationTabProps) {
@@ -34,6 +62,7 @@ export function ConversationTab({ detail, onOpenLive }: ConversationTabProps) {
 
   const conversations = useTeamStore(s => s.conversations)
   const selectedId = useTeamStore(s => s.selectedConversationId)
+  const setDefaultMember = useTeamViewPrefsStore(s => s.setDefaultMember)
 
   const [panelOpen, setPanelOpen] = useState(!isMobile)
 
@@ -41,6 +70,20 @@ export function ConversationTab({ detail, onOpenLive }: ConversationTabProps) {
     () => conversations.find(c => c.epochId === selectedId) ?? null,
     [conversations, selectedId]
   )
+
+  const { own, lead } = useChatTargets(detail)
+  const ownAppIds = useMemo(() => own.map(m => m.appId), [own])
+  const defaultTarget = useDefaultChatTarget(team.id, ownAppIds, lead?.appId ?? null)
+
+  // A member thread is bound to its teammate; anything else goes to your pick.
+  const boundTarget = selected?.kind === 'member' ? selected.memberAppId ?? null : null
+  const targetAppId = boundTarget ?? defaultTarget
+  const targetMember = detail.roster.find(m => m.appId === targetAppId) ?? null
+
+  // Opening one of your own threads is also a way of choosing who you talk to.
+  useEffect(() => {
+    if (boundTarget && ownAppIds.includes(boundTarget)) setDefaultMember(team.id, boundTarget)
+  }, [boundTarget, ownAppIds, team.id, setDefaultMember])
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -51,6 +94,15 @@ export function ConversationTab({ detail, onOpenLive }: ConversationTabProps) {
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {selected ? conversationLabel(selected, t) : t('Conversation')}
           </span>
+          {!boundTarget && targetMember && (
+            <TargetPicker
+              own={own}
+              lead={lead}
+              currentAppId={targetAppId}
+              currentName={targetMember.memberName}
+              onPick={appId => setDefaultMember(team.id, appId)}
+            />
+          )}
           {/* Jump to the Live view — the team's canonical "watch them work" tab.
               Focused on this conversation when one is open, else the live run. */}
           <button
@@ -74,7 +126,13 @@ export function ConversationTab({ detail, onOpenLive }: ConversationTabProps) {
           {/* Always a ready chat — no "click New session" gate. With nothing
               selected we render a DRAFT that creates the conversation on first
               send (parity with the space chat's type-first experience). */}
-          <ConversationChat detail={detail} conversation={selected} onOpenLive={onOpenLive} />
+          <ConversationChat
+            detail={detail}
+            conversation={selected}
+            targetAppId={targetAppId}
+            targetMember={targetMember}
+            onOpenLive={onOpenLive}
+          />
         </div>
       </div>
 
@@ -88,28 +146,75 @@ export function ConversationTab({ detail, onOpenLive }: ConversationTabProps) {
   )
 }
 
-function ConversationChat({ detail, conversation, onOpenLive }: {
+/** Hand the conversation to a different digital human of yours. */
+function TargetPicker({ own, lead, currentAppId, currentName, onPick }: {
+  own: TeamMember[]
+  lead: TeamMember | null
+  currentAppId: string | null
+  currentName: string
+  onPick: (appId: string) => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+
+  if (own.length + (lead ? 1 : 0) < 2) return null
+
+  const choose = (appId: string) => {
+    onPick(appId)
+    setOpen(false)
+  }
+
+  const row = (member: TeamMember, note?: string) => (
+    <button
+      key={member.appId}
+      onClick={() => choose(member.appId)}
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-secondary"
+    >
+      <Check className={`h-3.5 w-3.5 flex-shrink-0 ${member.appId === currentAppId ? 'text-primary' : 'invisible'}`} />
+      <span className="min-w-0 flex-1 truncate">{member.memberName}</span>
+      {note && <span className="flex-shrink-0 text-xs text-muted-foreground">{note}</span>}
+    </button>
+  )
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        className="flex flex-shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-secondary"
+        title={t('Choose which of your digital humans to talk to')}
+      >
+        <Bot className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="max-w-[6rem] truncate sm:max-w-[10rem]">{currentName}</span>
+        <ChevronDown className="h-3 w-3 text-muted-foreground" />
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-56 p-1">
+        {own.map(m => row(m))}
+        {lead && (
+          <>
+            {own.length > 0 && <div className="my-1 border-t border-border" />}
+            {row(lead, t('Lead'))}
+          </>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function ConversationChat({ detail, conversation, targetAppId, targetMember, onOpenLive }: {
   detail: TeamDetail
   /** null = a draft native session (lazily created on first send). */
   conversation: TeamConversation | null
+  targetAppId: string | null
+  targetMember: TeamDetail['roster'][number] | null
   onOpenLive: (epochId: string) => void
 }) {
   const { t } = useTranslation()
   const apps = useAppsStore(s => s.apps)
   const openConversation = useTeamStore(s => s.openConversation)
-
-  // Target: a member thread speaks to that teammate; a draft or any other
-  // conversation speaks to the LEAD (the front desk that answers + dispatches).
-  const targetAppId = conversation?.kind === 'member' && conversation.memberAppId
-    ? conversation.memberAppId
-    : detail.team.leadAppId
-  const targetMember = detail.roster.find(m => m.appId === targetAppId) ?? null
   const presence = useMemberPresence(detail.team.id, targetAppId ?? '')
 
-  const spaceId = apps.find(a => a.id === targetAppId)?.spaceId ?? targetMember?.spaceId ?? ''
   const epochId = conversation?.epochId ?? null
 
-  // Active-door card (C3): how many teammates are working this very event.
+  // Active-door card: how many teammates are working this very event.
   const busyCount = useMemo(
     () => epochId ? detail.roster.filter(m => (m.busy ?? []).some(b => b.epochId === epochId)).length : 0,
     [detail.roster, epochId]
@@ -118,10 +223,14 @@ function ConversationChat({ detail, conversation, onOpenLive }: {
   if (!targetAppId || !targetMember) {
     return (
       <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">
-        {t('This office needs a lead before you can talk to the team.')}
+        {detail.members.some(m => !isRemoteMember(m))
+          ? t('The digital humans in this office are no longer installed, so there is nobody here to answer. Add one in Settings.')
+          : t('Bring one of your digital humans into this office to start talking.')}
       </div>
     )
   }
+
+  const spaceId = apps.find(a => a.id === targetAppId)?.spaceId ?? targetMember.spaceId ?? ''
 
   const imNotice = conversation?.readonly ? (
     <div className="mb-3 rounded-lg border border-border bg-secondary/40 px-3 py-2">
@@ -156,9 +265,9 @@ function ConversationChat({ detail, conversation, onOpenLive }: {
       ownerName={presence.ownerName}
       reachability={presence.reachability}
       readonly={conversation?.readonly}
-      placeholder={t('Message the team…')}
-      emptyTitle={t('Say something to the team.')}
-      emptyHint={t('The lead will line up digital humans to do it.')}
+      placeholder={t('Message {{name}}…', { name: targetMember.memberName })}
+      emptyTitle={t('Say what you need.')}
+      emptyHint={t('{{name}} will bring in whoever else is needed.', { name: targetMember.memberName })}
       topSlot={imNotice}
       aboveInput={activeDoor}
       // Draft: create + select the conversation on the first message.

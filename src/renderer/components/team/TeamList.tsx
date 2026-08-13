@@ -16,8 +16,11 @@ interface TeamListProps {
   onJoinOffice: () => void
 }
 
+// `hasWaitingUser` is the only decision signal read here: it means a decision is
+// waiting on YOU, while a joined office's status mirrors its host and can
+// announce one that belongs to whoever owns the blocked member.
 function statusDotClass(status: TeamStatus, hasWaitingUser: boolean): string {
-  if (hasWaitingUser || status === 'waiting_user') return 'bg-amber-500'
+  if (hasWaitingUser) return 'bg-amber-500'
   switch (status) {
     case 'running': return 'bg-green-500'
     case 'error': return 'bg-red-500'
@@ -34,8 +37,11 @@ export function TeamList({ onNewTeam, onJoinOffice }: TeamListProps) {
   const isLoadingList = useTeamStore(s => s.isLoadingList)
 
   const statusLabel = (status: TeamStatus, hasWaitingUser: boolean): string => {
-    if (hasWaitingUser || status === 'waiting_user') return t('Waiting for decision')
+    if (hasWaitingUser) return t('Waiting for decision')
     switch (status) {
+      // A joined office blocked on someone else's decision still reads as
+      // running here — the run is open, it just isn't this reader's move.
+      case 'waiting_user':
       case 'running': return t('Running')
       case 'error': return t('Error')
       default: return t('Idle')

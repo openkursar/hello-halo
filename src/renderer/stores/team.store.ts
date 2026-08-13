@@ -12,6 +12,7 @@ import type {
   TeamMember,
   TeamEdge,
   TeamMemberInput,
+  UpdateTeamMemberInput,
   CreateTeamInput,
   UpdateTeamInput,
   ProposedMember,
@@ -132,6 +133,10 @@ interface TeamState {
   /** Leave a joined office (joiner): removes this node's local shadow of it. */
   leaveOffice: (teamId: string) => Promise<boolean>
   addMember: (teamId: string, member: TeamMemberInput) => Promise<boolean>
+  /** Rewrite what one of your own members does here, and what teammates may ask of it. */
+  updateMember: (teamId: string, appId: string, input: UpdateTeamMemberInput) => Promise<boolean>
+  /** Stop one periodic check directly, without asking an agent to do it. */
+  cancelCheck: (teamId: string, checkId: string) => Promise<boolean>
   removeMember: (teamId: string, appId: string) => Promise<boolean>
   setEdges: (teamId: string, edges: TeamEdge[]) => Promise<boolean>
 
@@ -195,7 +200,10 @@ function notifyMembersJoined(officeName: string, joined: Array<{ ownerDisplayNam
 /** Sort: waiting-for-decision first, then running, then most-recent activity. */
 function sortTeams(teams: TeamListItem[]): TeamListItem[] {
   const rank = (t: TeamListItem): number => {
-    if (t.hasWaitingUser || t.status === 'waiting_user') return 0
+    // hasWaitingUser alone: it already means "a decision is waiting on YOU",
+    // whereas a joined office's status mirrors the host and can announce a
+    // decision someone else owes.
+    if (t.hasWaitingUser) return 0
     if (t.status === 'running') return 1
     return 2
   }
@@ -526,6 +534,36 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     }
   },
 
+  updateMember: async (teamId, appId, input) => {
+    try {
+      const res = await api.teamUpdateMember(teamId, appId, input)
+      if (res.success) {
+        await get().loadDetail(teamId)
+        return true
+      }
+      notifyError(res.error || i18n.t('Could not save the change.'))
+      return false
+    } catch (err) {
+      console.error('[TeamStore] updateMember error:', err)
+      return false
+    }
+  },
+
+  cancelCheck: async (teamId, checkId) => {
+    try {
+      const res = await api.teamCancelCheck(teamId, checkId)
+      if (res.success) {
+        await get().loadDetail(teamId)
+        return true
+      }
+      notifyError(res.error || i18n.t('Could not stop that check.'))
+      return false
+    } catch (err) {
+      console.error('[TeamStore] cancelCheck error:', err)
+      return false
+    }
+  },
+
   removeMember: async (teamId, appId) => {
     try {
       const res = await api.teamRemoveMember(teamId, appId)
@@ -667,7 +705,11 @@ export const useTeamStore = create<TeamState>((set, get) => ({
           name: team.name,
           status: team.status,
           memberCount: existing?.memberCount ?? s.detail?.members.length ?? 0,
-          hasWaitingUser: team.status === 'waiting_user' || (existing?.hasWaitingUser ?? false),
+          // A joined office adopts the host's status, so its 'waiting_user' is a
+          // decision owed by the blocked member's owner — never by this reader.
+          hasWaitingUser:
+            (team.hostNodeId == null && team.status === 'waiting_user') ||
+            (existing?.hasWaitingUser ?? false),
           leadAppId: team.leadAppId,
           updatedAt: team.updatedAt,
         }
@@ -696,13 +738,20 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   },
 
   applyTeamBlackboard: (event) => {
-    const { teamId, task, finding } = event
+    const { teamId, task, finding, activity } = event
     if (get().currentTeamId !== teamId) return
 
     set(s => {
       if (!s.detail || s.detail.team.id !== teamId) return {}
       const detail = s.detail
 
+      if (activity) {
+        // Append-only, so a repeat (a replica echo of a row this node authored)
+        // is dropped rather than duplicating the feed.
+        const activities = detail.activities ?? []
+        if (activities.some(a => a.id === activity.id)) return {}
+        return { detail: { ...detail, activities: [activity, ...activities] } }
+      }
       if (task) {
         const exists = detail.tasks.some(tk => tk.id === task.id)
         const tasks = exists

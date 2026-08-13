@@ -10,7 +10,7 @@
  * palette. Owner identity tints the hair via a stable per-member hue.
  */
 
-import { Star } from 'lucide-react'
+import { Star, Timer } from 'lucide-react'
 import { MemberPresenceChip, OwnerLabel } from '../../MemberPresenceChip'
 import { useTranslation } from '../../../../i18n'
 import type { MemberView } from '../member-view'
@@ -141,7 +141,7 @@ function Workstation({ view, hair }: WorkstationProps) {
 /** Small floating status pill in the scene's top-right corner. */
 function StatusBadge({ view }: { view: MemberView }) {
   const { t } = useTranslation()
-  const { member, isWorking, isUnreachable, isAlert } = view
+  const { member, presence, isWorking, isUnreachable, isAlert, waitsOnOwner } = view
 
   if (isWorking) {
     return (
@@ -160,6 +160,16 @@ function StatusBadge({ view }: { view: MemberView }) {
       </span>
     )
   }
+  // Blocked, but on someone else's word — stated plainly, in the resting palette
+  // so it never reads as this reader's to clear.
+  if (waitsOnOwner) {
+    const owner = presence.ownerName || t('its owner')
+    return (
+      <span className="absolute right-2 top-2 inline-flex max-w-[85%] items-center gap-1 truncate rounded-full border border-border bg-secondary/70 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+        {t('Waiting on {{owner}}', { owner })}
+      </span>
+    )
+  }
   if (isUnreachable) return null
   return (
     <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full border border-border bg-secondary/70 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
@@ -170,7 +180,7 @@ function StatusBadge({ view }: { view: MemberView }) {
 
 export function WorkstationCard({ view, active }: { view: MemberView; active: boolean }) {
   const { t } = useTranslation()
-  const { member, presence, isLead, isUnreachable, isWorking, isAlert, summary } = view
+  const { member, presence, isLead, isUnreachable, isWorking, isAlert, summary, checkCount } = view
   const hair = `hsl(${memberHue(member.appId)} 46% 46%)`
 
   return (
@@ -185,6 +195,15 @@ export function WorkstationCard({ view, active }: { view: MemberView; active: bo
     >
       <div className="relative flex h-[120px] items-end justify-center bg-gradient-to-b from-transparent to-secondary/25">
         {isLead && <Star className="absolute left-2 top-2 h-3.5 w-3.5 fill-current text-amber-500" />}
+        {checkCount > 0 && (
+          <span
+            className="absolute bottom-2 left-2 inline-flex items-center gap-0.5 rounded-full border border-border bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+            title={t('Someone has it check in on a schedule')}
+          >
+            <Timer className="h-3 w-3" />
+            {checkCount}
+          </span>
+        )}
         <StatusBadge view={view} />
         <Workstation view={view} hair={hair} />
       </div>

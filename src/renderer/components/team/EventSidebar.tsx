@@ -2,12 +2,14 @@
  * EventSidebar — the list of things ("units of work") on the right of the Live tab.
  *
  * Symmetric with the Conversation tab's session sidebar: pick an item here, watch
- * it on the left. Two sections:
- *   · Busy now: the live run + conversations members are actively working
- *     — click to watch it stream.
- *   · Ran before: past runs, identified by time · trigger · outcome (a run
- *     is an event, not a named thing), grouped so a busy scheduler doesn't flood
- *     the list. Click to replay it on the left.
+ * it on the left. Two sections, and only two, because "is it moving right now" is
+ * the only distinction worth a heading here:
+ *   · Busy now: whatever is running this moment — the live run, and conversations
+ *     members are actively working. Click to watch it stream.
+ *   · Earlier: everything else, newest ACTIVITY first — past runs and quiet
+ *     conversations side by side. A conversation is a standing thing, so between
+ *     messages it moves down here rather than vanishing; otherwise its board (and
+ *     every task raised in it) becomes unreachable the moment nobody is typing.
  *
  * This replaces the old standalone History tab: selecting + viewing now happen in
  * one place, and a past run opens as the same topology visualization as a live one.
@@ -16,8 +18,9 @@
 import { useMemo, useState } from 'react'
 import { Zap, MessageSquare, ChevronRight, AlertTriangle } from 'lucide-react'
 import type { TeamDetail, TeamConversation, TeamEpochSummary } from '../../../shared/apps/team-types'
+import { awaitsOurDecision } from '../../../shared/apps/team-types'
 import { useTranslation } from '../../i18n'
-import { runOutcome, outcomeMeta, triggerLabel, formatRunTime, runEventTitle, groupHistory, conversationLabel, type HistoryRow } from './run-history'
+import { runOutcome, outcomeMeta, triggerLabel, formatRunTime, runEventTitle, groupHistory, conversationLabel, epochLabel, lastActivityOf, type HistoryRow } from './run-history'
 
 interface EventSidebarProps {
   detail: TeamDetail
@@ -32,6 +35,13 @@ export function EventSidebar({ detail, conversations, epochs, selectedEpochId, o
   const { t } = useTranslation()
   const liveRunId = detail.team.currentEpochId
   const liveStatus = detail.team.status
+  // The run's warning mark is a call to action, so it only lights up when the
+  // decision holding the run is one of ours to make (a joined office mirrors the
+  // host's 'waiting_user' regardless of whose member raised it).
+  const runWaitsOnUs = useMemo(
+    () => liveStatus === 'waiting_user' && detail.roster.some(awaitsOurDecision),
+    [liveStatus, detail.roster]
+  )
   // The live run keeps its stable time · trigger identity (never "in progress" —
   // that's the pulse's job), so its title doesn't mutate when it seals.
   const liveRunEpoch = useMemo(() => epochs.find(e => e.id === liveRunId), [epochs, liveRunId])
@@ -40,11 +50,14 @@ export function EventSidebar({ detail, conversations, epochs, selectedEpochId, o
   const activeConversations = useMemo(() => conversations.filter(c => c.active || c.waitingUser), [conversations])
   const hasBusy = !!liveRunId || activeConversations.length > 0
 
-  // Ran before: past runs only — the currently-live run stays in Busy now,
-  // conversations belong to the Conversation tab, so both are filtered out here.
+  // Earlier: everything not in Busy now, runs and conversations together.
+  const busyIds = useMemo(
+    () => new Set([liveRunId, ...activeConversations.map(c => c.epochId)].filter((id): id is string => !!id)),
+    [liveRunId, activeConversations]
+  )
   const { rows } = useMemo(
-    () => groupHistory(epochs.filter(e => e.id !== liveRunId)),
-    [epochs, liveRunId]
+    () => groupHistory(epochs.filter(e => !busyIds.has(e.id))),
+    [epochs, busyIds]
   )
 
   return (
@@ -70,7 +83,7 @@ export function EventSidebar({ detail, conversations, epochs, selectedEpochId, o
                 icon={<Zap className="h-3.5 w-3.5 flex-shrink-0 text-emerald-500" />}
                 title={runEventTitle(liveRunEpoch, t)}
                 live={liveStatus === 'running'}
-                waiting={liveStatus === 'waiting_user'}
+                waiting={runWaitsOnUs}
               />
             )}
             {activeConversations.map(c => (
@@ -87,19 +100,30 @@ export function EventSidebar({ detail, conversations, epochs, selectedEpochId, o
           </div>
         )}
 
-        {/* ── Ran before ── */}
+        {/* ── Earlier ── */}
         <div className="px-2 pb-3 pt-2">
-          <SectionLabel>{t('Ran before')}</SectionLabel>
+          <SectionLabel>{t('Earlier')}</SectionLabel>
           {rows.length === 0 ? (
             <p className="px-2 py-6 text-center text-xs text-muted-foreground/60">
-              {t('No runs yet. Press Run to start the first one.')}
+              {t('Nothing yet. Talk to the team, or press Run.')}
             </p>
           ) : (
-            rows.map(row => (
-              row.kind === 'group'
-                ? <NoActionGroup key={row.key} group={row} selectedEpochId={selectedEpochId} onSelect={onSelect} />
-                : <RunRow key={row.epoch.id} epoch={row.epoch} selected={selectedEpochId === row.epoch.id} onClick={() => onSelect(row.epoch.id)} />
-            ))
+            rows.map(row => {
+              if (row.kind === 'group') {
+                return <NoActionGroup key={row.key} group={row} selectedEpochId={selectedEpochId} onSelect={onSelect} />
+              }
+              if (row.kind === 'conversation') {
+                return (
+                  <ConversationRow
+                    key={row.epoch.id}
+                    epoch={row.epoch}
+                    selected={selectedEpochId === row.epoch.id}
+                    onClick={() => onSelect(row.epoch.id)}
+                  />
+                )
+              }
+              return <RunRow key={row.epoch.id} epoch={row.epoch} selected={selectedEpochId === row.epoch.id} onClick={() => onSelect(row.epoch.id)} />
+            })
           )}
         </div>
       </div>
@@ -132,6 +156,29 @@ function EventRow({ selected, onClick, icon, title, live, waiting }: {
       {waiting
         ? <AlertTriangle className="h-3 w-3 flex-shrink-0 text-amber-500" />
         : live ? <span className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-emerald-500" /> : null}
+    </button>
+  )
+}
+
+/**
+ * A quiet conversation row: its NAME, plus when it last moved. A conversation is
+ * a thing you go back to by name, so time is the subtitle here — the inverse of
+ * a run row, where the time IS the identity.
+ */
+function ConversationRow({ epoch, selected, onClick }: { epoch: TeamEpochSummary; selected: boolean; onClick: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <button
+      onClick={onClick}
+      className={`flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left transition-colors ${
+        selected ? 'bg-secondary' : 'hover:bg-secondary/50'
+      }`}
+    >
+      <MessageSquare className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs text-foreground">{epochLabel(epoch, t)}</div>
+        <span className="text-[11px] text-muted-foreground/60">{formatRunTime(lastActivityOf(epoch))}</span>
+      </div>
     </button>
   )
 }

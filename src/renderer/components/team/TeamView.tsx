@@ -37,10 +37,11 @@ export function TeamView({ detail }: TeamViewProps) {
   const { t } = useTranslation()
   const team = detail.team
 
-  const loadDetail = useTeamStore(s => s.loadDetail)
   const epochs = useTeamStore(s => s.epochs)
   const runTeam = useTeamStore(s => s.runTeam)
   const pauseTeam = useTeamStore(s => s.pauseTeam)
+
+  const isRunning = team.status === 'running'
 
   const [tab, setTab] = useState<BoardTab>('conversation')
   const [selectedMember, setSelectedMember] = useState<RosterMember | null>(null)
@@ -50,19 +51,17 @@ export function TeamView({ detail }: TeamViewProps) {
   // The unit of work the Live tab is focused on (a live run, a conversation, or a
   // past run). null = default (live run, else the most recent run).
   const [focusedEpochId, setFocusedEpochId] = useState<string | null>(null)
+  // Non-null aims the Settings tab at one member rather than the team itself.
+  const [settingsMemberId, setSettingsMemberId] = useState<string | null>(null)
 
   const liveEpochId = team.currentEpochId ?? epochs[0]?.id ?? null
 
   // A member opened from the Live board binds to whatever item is focused there
   // (so a past-run member opens that run's transcript, not the live one).
-  const openMemberLive = (m: RosterMember) => { setChatEpochId(focusedEpochId ?? liveEpochId); setSelectedMember(m) }
-
-  // Poll detail while running so the floor feels alive.
-  useEffect(() => {
-    if (team.status !== 'running') return
-    const id = setInterval(() => { void loadDetail(team.id) }, 3000)
-    return () => clearInterval(id)
-  }, [team.status, team.id, loadDetail])
+  const openMemberLive = (m: RosterMember) => {
+    setChatEpochId(focusedEpochId ?? liveEpochId)
+    setSelectedMember(m)
+  }
 
   // Re-sync selected member with the latest roster; drop if removed.
   useEffect(() => {
@@ -71,7 +70,6 @@ export function TeamView({ detail }: TeamViewProps) {
     setSelectedMember(fresh ?? null)
   }, [detail.roster]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isRunning = team.status === 'running'
   const overlayOpen = !!selectedMember
   // Gates every authority-only control (run/edit/invite) — a joined office is watch-only.
   const isJoined = team.hostNodeId != null
@@ -189,7 +187,11 @@ export function TeamView({ detail }: TeamViewProps) {
           )}
           {tab === 'settings' && (
             <div className="flex-1 overflow-y-auto">
-              <SettingsTab detail={detail} />
+              <SettingsTab
+                detail={detail}
+                openMemberId={settingsMemberId}
+                onOpenMemberChange={setSettingsMemberId}
+              />
             </div>
           )}
         </div>
@@ -209,7 +211,11 @@ export function TeamView({ detail }: TeamViewProps) {
               epochId={chatEpochId}
               isCurrentEpoch={!!chatEpochId && chatEpochId === team.currentEpochId}
               onClose={() => setSelectedMember(null)}
-              onSwitchContext={setChatEpochId}
+              onOpenSettings={() => {
+                setSettingsMemberId(selectedMember.appId)
+                setSelectedMember(null)
+                setTab('settings')
+              }}
             />
           </div>
         </div>

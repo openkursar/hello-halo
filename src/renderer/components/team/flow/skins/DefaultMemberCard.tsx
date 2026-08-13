@@ -4,7 +4,7 @@
  * one-line role / current-task summary.
  */
 
-import { Star, Loader2, AlertTriangle } from 'lucide-react'
+import { Star, Loader2, AlertTriangle, Timer } from 'lucide-react'
 import type { TeamMemberRuntimeStatus } from '../../../../../shared/apps/team-types'
 import { MemberPresenceChip, OwnerLabel } from '../../MemberPresenceChip'
 import { useTranslation } from '../../../../i18n'
@@ -21,7 +21,7 @@ function statusDotClass(status: TeamMemberRuntimeStatus): string {
 
 export function DefaultMemberCard({ view, selected, active }: { view: MemberView; selected: boolean; active: boolean }) {
   const { t } = useTranslation()
-  const { member, presence, isLead, isUnreachable, isWorking, isAlert, summary } = view
+  const { member, presence, isLead, isUnreachable, isWorking, isAlert, summary, checkCount } = view
 
   return (
     <div
@@ -43,8 +43,19 @@ export function DefaultMemberCard({ view, selected, active }: { view: MemberView
           {isLead && <Star className="h-3.5 w-3.5 flex-shrink-0 fill-current text-amber-500" />}
           <span className="truncate">{member.memberName}</span>
         </span>
-        {isAlert && <AlertTriangle className="ml-auto h-3.5 w-3.5 flex-shrink-0 text-amber-500" />}
-        {isWorking && !isAlert && <Loader2 className="ml-auto h-3.5 w-3.5 flex-shrink-0 animate-spin text-emerald-500" />}
+        <span className="ml-auto flex flex-shrink-0 items-center gap-1">
+          {checkCount > 0 && (
+            <span
+              className="flex items-center gap-0.5 rounded-full bg-secondary px-1.5 text-[10px] text-muted-foreground"
+              title={t('Someone has it check in on a schedule')}
+            >
+              <Timer className="h-3 w-3" />
+              {checkCount}
+            </span>
+          )}
+          {isAlert && <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />}
+          {isWorking && !isAlert && <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-500" />}
+        </span>
       </div>
 
       {presence.isRemote && (

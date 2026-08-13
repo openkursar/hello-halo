@@ -17,9 +17,13 @@ import type { ScheduleValue } from '../apps/schedule-utils'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Switch } from '../ui/Switch'
 import { HttpTriggerCard } from '../common/HttpTriggerCard'
+import { TeamMemberSettings } from './TeamMemberSettings'
 
 interface SettingsTabProps {
   detail: TeamDetail
+  /** The member whose settings screen is open; null shows the team's own settings. */
+  openMemberId: string | null
+  onOpenMemberChange: (appId: string | null) => void
 }
 
 // ── Helpers ──
@@ -35,11 +39,24 @@ function valueToConfig(value: ScheduleValue): TeamScheduleConfig {
 
 // ── Component ──
 
-export function SettingsTab({ detail }: SettingsTabProps) {
+export function SettingsTab({ detail, openMemberId, onOpenMemberChange }: SettingsTabProps) {
   const { t } = useTranslation()
   // A joined office is owned by someone else: settings are read-only here and
   // schedule/triggers (authoritative run config) are hidden entirely.
   const readOnly = detail.team.hostNodeId != null
+  // Adding a member lands straight on its settings: a member joined without a
+  // duty is mute in the team, so "added" is not the end of the flow.
+  const openMember = detail.members.find(m => m.appId === openMemberId) ?? null
+
+  if (openMember) {
+    return (
+      <TeamMemberSettings
+        detail={detail}
+        member={openMember}
+        onBack={() => onOpenMemberChange(null)}
+      />
+    )
+  }
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -52,7 +69,7 @@ export function SettingsTab({ detail }: SettingsTabProps) {
         {/* Everyday settings up top (§6.6): name / goal, schedule, members. */}
         <GoalSection team={detail.team} first readOnly={readOnly} />
         {!readOnly && <ScheduleSection teamId={detail.team.id} />}
-        <MembersSection detail={detail} readOnly={readOnly} />
+        <MembersSection detail={detail} readOnly={readOnly} onOpenMember={onOpenMemberChange} />
 
         {/* Advanced, folded away (§6.6): collaboration structure, escalation
             routing, HTTP trigger, and disband — rarely touched, out of the way. */}
@@ -292,7 +309,11 @@ function OfficeSkinSection({ teamId }: { teamId: string }) {
 
 // ── 4. Members ──
 
-function MembersSection({ detail, readOnly }: { detail: TeamDetail; readOnly?: boolean }) {
+function MembersSection({ detail, readOnly, onOpenMember }: {
+  detail: TeamDetail
+  readOnly?: boolean
+  onOpenMember: (appId: string) => void
+}) {
   const { t } = useTranslation()
   const addMember = useTeamStore(s => s.addMember)
   const removeMember = useTeamStore(s => s.removeMember)
@@ -326,9 +347,10 @@ function MembersSection({ detail, readOnly }: { detail: TeamDetail; readOnly?: b
             <MemberCard
               key={member.appId}
               memberName={member.memberName}
-              role={member.role}
+              duty={member.duty ?? ''}
               description={app?.spec.description ?? ''}
               isLead={member.isLead}
+              onOpen={() => onOpenMember(member.appId)}
               onOpenApp={() => openApp(member.appId)}
               onMakeLead={readOnly || member.isLead ? undefined : () => setPromote({ appId: member.appId, name: member.memberName })}
               onRemove={readOnly || member.isLead ? undefined : () => void removeMember(detail.team.id, member.appId)}
@@ -358,7 +380,11 @@ function MembersSection({ detail, readOnly }: { detail: TeamDetail; readOnly?: b
               {candidates.map(a => (
                 <button
                   key={a.id}
-                  onClick={async () => { await addMember(detail.team.id, { appId: a.id }); setShowAdd(false) }}
+                  onClick={async () => {
+                    const ok = await addMember(detail.team.id, { appId: a.id })
+                    setShowAdd(false)
+                    if (ok) onOpenMember(a.id)
+                  }}
                   className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-secondary"
                 >
                   <span className="font-medium">{a.spec.name}</span>
@@ -385,18 +411,19 @@ function MembersSection({ detail, readOnly }: { detail: TeamDetail; readOnly?: b
 
       {!readOnly && (
         <p className="mt-3 text-xs text-muted-foreground/60">
-          {t('Role is specific to this team. Description changes apply to the digital human everywhere.')}
+          {t('A duty applies only inside this team. Changing the digital human itself affects it everywhere.')}
         </p>
       )}
     </Section>
   )
 }
 
-function MemberCard({ memberName, role, description, isLead, onOpenApp, onMakeLead, onRemove }: {
+function MemberCard({ memberName, duty, description, isLead, onOpen, onOpenApp, onMakeLead, onRemove }: {
   memberName: string
-  role: string
+  duty: string
   description: string
   isLead: boolean
+  onOpen: () => void
   onOpenApp: () => void
   onMakeLead?: () => void
   onRemove?: () => void
@@ -405,15 +432,16 @@ function MemberCard({ memberName, role, description, isLead, onOpenApp, onMakeLe
   return (
     <div className="group rounded-lg border border-border bg-background p-3">
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
+        <button onClick={onOpen} className="min-w-0 flex-1 text-left">
           <div className="flex items-center gap-1.5">
             {isLead && <span className="text-amber-500">★</span>}
             <span className="text-sm font-medium text-foreground">{memberName}</span>
             {isLead && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">{t('AI Lead')}</span>}
           </div>
-          {role && <p className="mt-0.5 text-xs text-muted-foreground">{role}</p>}
-          {description && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground/70">{description}</p>}
-        </div>
+          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+            {duty || description || t('No duty written yet — tap to write one.')}
+          </p>
+        </button>
         <div className="flex flex-shrink-0 items-center gap-1">
           {onMakeLead && (
             <button

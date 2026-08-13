@@ -11,8 +11,9 @@
  */
 
 import { useMemo } from 'react'
-import { CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File } from 'lucide-react'
-import type { TeamDetail, RosterMember, BlackboardTask, BlackboardFinding, TaskStatus, TeamEdge, TeamStatus, EpochOutcome, TeamRunTriggerType } from '../../../shared/apps/team-types'
+import { CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File, Send, Clock, BellOff, Flag } from 'lucide-react'
+import type { TeamDetail, RosterMember, BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamEdge, TeamStatus, EpochOutcome, TeamRunTriggerType } from '../../../shared/apps/team-types'
+import { awaitsOurDecision, answeredCorrelationIds, isAwaitingReply } from '../../../shared/apps/team-types'
 import type { Thought } from '../../types'
 import type { ActiveFlow } from '../../stores/team.store'
 import { TeamFlowCanvas } from './flow/TeamFlowCanvas'
@@ -32,10 +33,18 @@ import { useTranslation } from '../../i18n'
 export interface BoardView {
   epochId: string | null
   mode: 'live' | 'replay'
+  /** What the focused unit of work IS — a conversation is never "started with Run". */
+  kind?: 'run' | 'conversation'
   roster: RosterMember[]
   edges: TeamEdge[]
   tasks: BlackboardTask[]
   findings: BlackboardFinding[]
+  /**
+   * What actually happened, in order — including the directed messages, which no
+   * other list holds. Empty for runs recorded before the office kept this record;
+   * the feed falls back to deriving rows from tasks/findings in that case.
+   */
+  activities: TeamActivity[]
   /** Present in 'live' mode — drives the live run-state banner. */
   live?: { status: TeamStatus }
   /** Present in 'replay' mode — drives the "past run" banner (time · trigger · outcome). */
@@ -73,9 +82,10 @@ export function StatusBoard({ detail, board, activeFlows, onSelectMember, editin
 
   return (
     <div className="flex flex-col gap-5 p-3 sm:gap-6 sm:p-6">
-      {/* Escalations awaiting the user — prominent and actionable (click a member
-          to open its chat, where the decision panel is shown inline). */}
-      <EscalationCallout roster={board.roster} onSelectMember={onSelectMember} />
+      {/* Decisions awaiting a person. Ours are prominent and actionable (click a
+          member to open its chat, where the decision panel is shown inline);
+          a teammate's is stated quietly so the floor doesn't look stalled. */}
+      <PendingDecisions roster={board.roster} onSelectMember={onSelectMember} />
 
       {/* ── Office topology: read-only auto-laid-out canvas (React Flow + dagre).
           A replayed run shows the final org shape (no live message flows). ── */}
@@ -104,9 +114,11 @@ export function StatusBoard({ detail, board, activeFlows, onSelectMember, editin
       <RecentActivity
         tasks={board.tasks}
         findings={board.findings}
+        activities={board.activities}
         roster={board.roster}
         teamId={detail.team.id}
         epochId={board.epochId}
+        kind={board.kind ?? 'run'}
         onSelectMember={onSelectMember}
         title={isLive ? undefined : t('What happened')}
         summary={board.mode === 'replay' ? board.replay?.summary ?? null : null}
@@ -217,33 +229,65 @@ function LiveActivityFeed({ roster, teamId, epochId, onSelectMember }: LiveActiv
 }
 
 // ──────────────────────────────────────────────
-// Escalation callout (members awaiting the user's decision)
+// Pending decisions
 // ──────────────────────────────────────────────
 
-function EscalationCallout({ roster, onSelectMember }: { roster: RosterMember[]; onSelectMember: (m: RosterMember) => void }) {
+/**
+ * A member awaiting a decision is a call to action for exactly one person: the
+ * one whose digital human raised it. Everyone else needs the fact (otherwise the
+ * office just looks stalled) without being asked to act on it — so the two are
+ * told apart here and rendered in different registers.
+ */
+function PendingDecisions({ roster, onSelectMember }: { roster: RosterMember[]; onSelectMember: (m: RosterMember) => void }) {
   const { t } = useTranslation()
   const waiting = roster.filter(m => m.status === 'waiting_user')
+  const ours = waiting.filter(awaitsOurDecision)
+  const theirs = waiting.filter(m => !awaitsOurDecision(m))
   if (waiting.length === 0) return null
 
+  const unnamedOwner = t('a teammate')
+
   return (
-    <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 sm:px-4">
-      <div className="flex items-center gap-2">
-        <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-500" />
-        <span className="text-sm font-medium text-foreground">{t('Waiting for your decision')}</span>
-      </div>
-      <div className="mt-1.5 flex flex-wrap gap-1.5">
-        {waiting.map(m => (
-          <button
-            key={m.appId}
-            onClick={() => onSelectMember(m)}
-            className="inline-flex items-center gap-1 rounded-lg border border-amber-500/40 bg-background px-2.5 py-1 text-sm text-foreground transition-colors hover:bg-amber-500/10"
-          >
-            {m.isLead && <Star className="h-3 w-3 fill-current text-amber-500" />}
-            {m.memberName}
-            <span className="text-xs text-amber-600 dark:text-amber-400">{t('Respond')}</span>
-          </button>
-        ))}
-      </div>
+    <div className="flex flex-col gap-2">
+      {ours.length > 0 && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 sm:px-4">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-500" />
+            <span className="text-sm font-medium text-foreground">{t('Waiting for your decision')}</span>
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {ours.map(m => (
+              <button
+                key={m.appId}
+                onClick={() => onSelectMember(m)}
+                className="inline-flex items-center gap-1 rounded-lg border border-amber-500/40 bg-background px-2.5 py-1 text-sm text-foreground transition-colors hover:bg-amber-500/10"
+              >
+                {m.isLead && <Star className="h-3 w-3 fill-current text-amber-500" />}
+                {m.memberName}
+                <span className="text-xs text-amber-600 dark:text-amber-400">{t('Respond')}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {theirs.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-xs text-muted-foreground">
+          {theirs.map(m => (
+            <button
+              key={m.appId}
+              onClick={() => onSelectMember(m)}
+              className="inline-flex items-center gap-1 rounded-md px-1 py-0.5 transition-colors hover:bg-secondary/60 hover:text-foreground"
+            >
+              <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-muted-foreground/50" />
+              {t('{{member}} is waiting on {{owner}}', {
+                member: m.memberName,
+                owner: m.owner || unnamedOwner,
+              })}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -255,9 +299,11 @@ function EscalationCallout({ roster, onSelectMember }: { roster: RosterMember[];
 interface RecentActivityProps {
   tasks: BlackboardTask[]
   findings: BlackboardFinding[]
+  activities: TeamActivity[]
   roster: RosterMember[]
   teamId: string
   epochId: string | null
+  kind: 'run' | 'conversation'
   onSelectMember: (member: RosterMember) => void
   /** Section heading override (a replay says "What happened", live says "Recent activity"). */
   title?: string
@@ -265,8 +311,13 @@ interface RecentActivityProps {
   summary?: string | null
 }
 
-/** A task transition or a posted finding, unified for the activity feed. */
+/**
+ * A recorded act, or — for a run that predates the office record — a row derived
+ * from the tasks/findings that survived. Deriving cannot reconstruct messages or
+ * a task's earlier transitions, which is precisely why the record now exists.
+ */
 type ActivityRow =
+  | { kind: 'act'; ts: number; act: TeamActivity }
   | { kind: 'task'; ts: number; task: BlackboardTask }
   | { kind: 'task_assigned'; ts: number; task: BlackboardTask }
   | { kind: 'finding'; ts: number; finding: BlackboardFinding }
@@ -300,7 +351,7 @@ function ActorName({ appId, name, onSelect }: { appId: string | null; name: stri
   )
 }
 
-function RecentActivity({ tasks, findings, roster, teamId, epochId, onSelectMember, title, summary }: RecentActivityProps) {
+function RecentActivity({ tasks, findings, activities, roster, teamId, epochId, kind, onSelectMember, title, summary }: RecentActivityProps) {
   const { t } = useTranslation()
 
   // doneCount in the refetch key re-resolves artifacts as tasks complete.
@@ -316,10 +367,21 @@ function RecentActivity({ tasks, findings, roster, teamId, epochId, onSelectMemb
     if (m) onSelectMember(m)
   }
 
-  // Tasks (by last transition) and findings (by post time) share one
-  // time-ordered stream, so the feed reflects everything written to the board
-  // for this run — not just task status changes.
+  // Which messages have an answer. Replies are not rows of their own: a reply is
+  // the state of the message it answers, and showing both doubles the feed while
+  // saying one thing.
+  const answered = useMemo(() => answeredCorrelationIds(activities), [activities])
+
   const recent = useMemo<ActivityRow[]>(() => {
+    if (activities.length > 0) {
+      return activities
+        .filter(a => a.kind !== 'reply')
+        .map<ActivityRow>(act => ({ kind: 'act', ts: act.createdAt, act }))
+        .sort((a, b) => b.ts - a.ts)
+        .slice(0, 15)
+    }
+    // A run recorded before the office kept this record: reconstruct what can be
+    // reconstructed from the state that survived.
     const rows: ActivityRow[] = []
     for (const task of tasks) {
       rows.push({ kind: 'task', ts: task.updatedAt, task })
@@ -333,7 +395,7 @@ function RecentActivity({ tasks, findings, roster, teamId, epochId, onSelectMemb
       rows.push({ kind: 'finding', ts: finding.createdAt, finding })
     }
     return rows.sort((a, b) => b.ts - a.ts).slice(0, 15)
-  }, [tasks, findings])
+  }, [activities, tasks, findings])
 
   return (
     <div>
@@ -348,12 +410,29 @@ function RecentActivity({ tasks, findings, roster, teamId, epochId, onSelectMemb
       {recent.length === 0 ? (
         summary ? null : (
           <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground/70">
-            {t('No activity yet. Run the team to get started.')}
+            {kind === 'conversation'
+              // The board is what the team WRITES DOWN; a conversation can be
+              // answered without writing anything down, so an empty board here
+              // is a normal outcome, not a "you have not started yet".
+              ? t('Nothing recorded on the board in this conversation.')
+              : t('No activity yet. Run the team to get started.')}
           </p>
         )
       ) : (
         <ul className="flex flex-col gap-1">
           {recent.map(row => {
+            if (row.kind === 'act') {
+              return (
+                <ActRow
+                  key={row.act.id}
+                  act={row.act}
+                  answered={answered}
+                  nameFor={nameFor}
+                  onSelect={selectByAppId}
+                  taskTitleFor={taskId => tasks.find(tk => tk.id === taskId)?.title ?? null}
+                />
+              )
+            }
             if (row.kind === 'task_assigned') {
               const task = row.task
               return (
@@ -419,6 +498,94 @@ function RecentActivity({ tasks, findings, roster, teamId, epochId, onSelectMemb
         </ul>
       )}
     </div>
+  )
+}
+
+interface ActRowProps {
+  act: TeamActivity
+  answered: ReadonlySet<string>
+  nameFor: (appId: string | null) => string
+  onSelect: (appId: string) => void
+  taskTitleFor: (taskId: string) => string | null
+}
+
+/**
+ * One recorded act. The main side stores only the CONTENT (a task title, a
+ * message's first line) and the kind; the sentence around it is composed here so
+ * it reads in the user's language.
+ */
+function ActRow({ act, answered, nameFor, onSelect, taskTitleFor }: ActRowProps) {
+  const { t } = useTranslation()
+
+  const actor = <ActorName appId={act.actorAppId} name={nameFor(act.actorAppId)} onSelect={onSelect} />
+  const target = act.targetAppId
+    ? <ActorName appId={act.targetAppId} name={nameFor(act.targetAppId)} onSelect={onSelect} />
+    : null
+
+  let Icon: FeedIcon = Circle
+  let tint = 'text-muted-foreground/50'
+  let middle: React.ReactNode = null
+  // Delivery state of a message. "Not delivered" is deliberately distinct from
+  // "no reply yet": one never arrived, the other is simply still open.
+  let state: string | null = null
+
+  switch (act.kind) {
+    case 'message':
+      Icon = Send
+      tint = 'text-foreground/60'
+      middle = <><span className="text-muted-foreground"> {t('messaged')} </span>{target}<span className="text-muted-foreground">: </span><span className="text-foreground/80">{act.subject}</span></>
+      state = act.status === 'undelivered'
+        ? t('not delivered')
+        : isAwaitingReply(act, answered) ? t('no reply yet') : t('answered')
+      break
+    case 'task_post':
+      Icon = Circle
+      middle = <><span className="text-muted-foreground"> {t('assigned')} </span><span className="text-foreground/80">{act.subject}</span><span className="text-muted-foreground"> {t('to')} </span>{target}</>
+      break
+    case 'task_update': {
+      const p = taskPresentation((act.status as TaskStatus) ?? 'pending', t)
+      Icon = p.Icon
+      tint = p.tint
+      const title = act.refId ? taskTitleFor(act.refId) : null
+      middle = <><span className="text-muted-foreground"> {p.verb} </span><span className="text-foreground/80">{title ?? act.subject}</span></>
+      break
+    }
+    case 'finding':
+      Icon = MessageSquareText
+      tint = 'text-muted-foreground/70'
+      middle = <><span className="text-muted-foreground"> {t('shared')} </span><span className="text-foreground/80">{act.subject}</span></>
+      break
+    case 'check_set':
+      Icon = Clock
+      tint = 'text-sky-500'
+      middle = <><span className="text-muted-foreground"> {t('set a recurring check on')} </span>{target}<span className="text-muted-foreground">: </span><span className="text-foreground/80">{act.subject}</span></>
+      break
+    case 'check_stop':
+      Icon = BellOff
+      tint = 'text-muted-foreground/70'
+      middle = <><span className="text-muted-foreground"> {t('stopped a recurring check on')} </span>{target}</>
+      break
+    case 'run_end':
+      Icon = Flag
+      tint = 'text-emerald-500'
+      middle = <><span className="text-muted-foreground"> {t('ended the run')} </span><span className="text-foreground/80">{act.subject}</span></>
+      break
+    default:
+      return null
+  }
+
+  return (
+    <li className="flex items-start gap-2.5 rounded-lg px-2 py-1.5 text-sm hover:bg-secondary/40">
+      <Icon className={`mt-0.5 h-3.5 w-3.5 flex-shrink-0 ${tint}`} />
+      <span className="min-w-0 flex-1 truncate">
+        {actor}
+        {middle}
+      </span>
+      {state && (
+        <span className="hidden flex-shrink-0 text-[11px] text-muted-foreground/60 sm:inline">{state}</span>
+      )}
+      <span className="flex-shrink-0 text-[11px] text-muted-foreground/60">{relativeTime(act.createdAt, t)}</span>
+    </li>
   )
 }
 

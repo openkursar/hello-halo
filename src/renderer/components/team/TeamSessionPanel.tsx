@@ -20,13 +20,17 @@ interface TeamSessionPanelProps {
   onClose?: () => void
 }
 
-/** Order: waiting for a decision first, then active, then most recent (§6.2). */
+/**
+ * Order: waiting for a decision first, then active, then most recently used.
+ * A thread lives for weeks, so creation time buries the one talked to five
+ * minutes ago under threads opened long before it.
+ */
 function sortConversations(list: TeamConversation[]): TeamConversation[] {
   const rank = (c: TeamConversation): number => (c.waitingUser ? 0 : c.active ? 1 : 2)
   return [...list].sort((a, b) => {
     const ra = rank(a), rb = rank(b)
     if (ra !== rb) return ra - rb
-    return b.startedAt - a.startedAt
+    return (b.lastActivityAt || b.startedAt) - (a.lastActivityAt || a.startedAt)
   })
 }
 

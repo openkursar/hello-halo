@@ -25,7 +25,9 @@ export function AutomationBadge() {
   const selectTeam = useTeamStore(s => s.selectTeam)
 
   // Teams awaiting a decision / actively running (for the status line + sort).
-  const waitingTeam = teams.find(tm => tm.hasWaitingUser || tm.status === 'waiting_user')
+  // Only `hasWaitingUser` — a joined office's status mirrors its host, so it can
+  // announce a decision that belongs to whoever owns the blocked member.
+  const waitingTeam = teams.find(tm => tm.hasWaitingUser)
   const runningTeam = teams.find(tm => tm.status === 'running')
 
   // Only show for automation-type apps
