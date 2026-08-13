@@ -136,7 +136,10 @@ src/
 ├── worker/                            # Utility processes (file-watcher)
 ├── shared/                            # Cross-process types, constants, protocols
 │   ├── types/                         # ai-sources, artifact, health, notification-channels
-│   ├── apps/                          # app-types, spec-types, team-types, im-keys
+│   ├── apps/                          # app-types, spec-types, team-types, im-keys,
+│   │                                  #   capability-policy (what a non-owner caller may
+│   │                                  #   make a digital human do — shared by IM guests
+│   │                                  #   and teammates; enforced in apps/runtime/capability-policy)
 │   └── constants/                     # providers, ignore-patterns
 │
 ├── preload/
@@ -171,6 +174,8 @@ src/
     │   │                              #   any future generic primitive (Popover, Tooltip, ...)
     │   │                              #   RichText renders server-authored copy under a hard
     │   │                              #   element whitelist — never enable raw HTML in it
+    │   ├── capability/                #   Capability-policy editor shared by the IM guest
+    │   │                              #   settings and the team member settings
     │   ├── brand/, icons/, tool/, updater/, notification/
     │   ├── team/                      #   Digital team / office UI (board, member chat, join)
     │   ├── diff/, search/, pulse/, onboarding/, artifact/
@@ -242,7 +247,7 @@ All channels follow `module:action` format. Modules are organized by functional 
 | Browser | `browser`, `browser-policy`, `ai-browser`, `overlay` |
 | Apps & store | `app`, `store`, `onboarding` |
 | IM channels | `im-channels`, `im-sessions`, `wecom-bot`, `weixin-ilink` |
-| Digital team | `team` (offices, members, blackboard, invites, federation presence) |
+| Digital team | `team` (offices, members + per-team duty/capability policy, blackboard, periodic checks, invites, federation presence) |
 | Transport & remote | `remote`, `notification-channels` |
 | System & diag | `system`, `perf`, `health`, `git-bash` |
 
@@ -773,8 +778,8 @@ model and where things are:
 
 | Piece | Location | Role |
 |---|---|---|
-| Coordination kernel | `apps/runtime/team/` | message-bus (send/wait/turn-complete), blackboard (tasks/findings), orchestration, artifact-read (location-transparent `team_read_artifact`). **Never imports the federation transport** — cross-node behavior arrives only through bootstrap-injected seams. |
-| Team persistence | `apps/team/` | teams/members/edges/epochs (SQLite, `app_team`) + published-ref semantics SSOT (`artifact-refs.ts`, shared with the federation owner-serve gate) |
+| Coordination kernel | `apps/runtime/team/` | message-bus (send/wait/turn-complete), blackboard (tasks/findings/activity), board-digest (what a member missed, rendered into its turn input), orchestration, artifact-read (location-transparent `team_read_artifact`). **Never imports the federation transport** — cross-node behavior arrives only through bootstrap-injected seams. |
+| Team persistence | `apps/team/` | teams/members (incl. per-team duty + delegated capability policy)/edges/epochs/triggers/checks/activity (SQLite, `app_team`) + published-ref semantics SSOT (`artifact-refs.ts`, shared with the federation owner-serve gate) |
 | Federation runtime | `apps/runtime/federation/` | join/presence coordinator, per-node manager (host+joiner roles), M2 authority (election/replication/handover), activity relay |
 | Feed substrate | `apps/runtime/federation/log/` + `ctrl-feed.ts` + `session-feed.ts` | per-author append-only feeds: durable ctrl outbox (effectively-once wake/turn-complete) + multi-replica session transcripts (local-first history) |
 | Federation persistence | `apps/federation/` | office nodes/credentials/authority + FeedStore (`app_federation`) |
@@ -783,9 +788,16 @@ model and where things are:
 | UI | `components/team/`, `stores/team.store.ts` | board, member chat, join dialog; events under `team:*` (see `shared/apps/team-types.ts` TEAM_EVENTS) |
 
 Key invariants (violating these is an architecture bug):
+- The blackboard is a RECORD, not a source of truth. What is on it is reliable;
+  what is missing proves nothing (a member can do work and not write it down).
+  No code, prompt, or UI may turn its silence into a claim that something did not
+  happen — the truth about delivery is the mailbox receipt, the truth about work
+  is the member. `team_activity` (append-only, office-shared) is what makes the
+  record complete enough to be useful: directed messages exist nowhere else.
 - Kernel imports no federation transport (links/frames/routes) — renderer event fan-out
   (`broadcastToAll`/`sendToRenderer`) is UI egress, not the federation link; federation
   reads/writes only through stores + injected deps.
 - Star topology: joiners talk only to the office authority; joiner↔joiner traffic is relayed/mirror-served by it.
 - Directed control messages ride the durable feed outbox (no fire-and-forget); transcripts are multi-replica (every node keeps a local copy).
+- Office-shared rows outside the board (member profile, periodic checks) ride the same single-writer log; a member's delegated capability policy never leaves the machine it guards.
 - Team/federation changes additionally require the cluster tier: `npm run build` then `npm run test:team -- federation` (never in parallel with other suites).

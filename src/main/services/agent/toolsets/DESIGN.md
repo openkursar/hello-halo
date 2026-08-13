@@ -105,7 +105,7 @@ creation, and their usage guides appended in `prompt.ts` / `prompt/identity.ts`.
 Capabilities are toggled in `AppCapabilitiesSection.tsx` (grant/revoke-permission).
 All built-in capabilities default ON (only an explicit user deny turns one off —
 see PROTOCOL.md §13); `ai-terminal` is still excluded for guests
-(conservative allowlist in `app-chat.ts` `buildGuestMcpServers`).
+(conservative allowlist in `apps/runtime/capability-policy.ts` `filterMcpServersByPolicy`, strict mode).
 
 ## 7) Session rebuild contract
 

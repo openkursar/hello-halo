@@ -86,3 +86,4 @@ src/sdk/
 
 # Local git worktrees created for isolated work
 .claude/worktrees/
+.cluster*
