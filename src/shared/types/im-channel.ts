@@ -24,6 +24,7 @@
  */
 
 import type { InboundMessage, ReplyHandle } from './inbound-message'
+import type { CapabilityPolicy } from '../apps/capability-policy'
 
 // ============================================
 // GuestPolicy (IM permission control)
@@ -32,54 +33,11 @@ import type { InboundMessage, ReplyHandle } from './inbound-message'
 /**
  * Permission policy for non-owner (guest) users in IM channels.
  *
- * White-list model: only explicitly listed tools are allowed.
- * When `allowedTools` is undefined, all tools are allowed (no restriction).
- * When `allowedTools` is an empty array, no tools are allowed.
- *
- * At runtime, this list is split by prefix:
- *   - Built-in tools (no prefix) → SDK `disallowedTools` (inverted whitelist)
- *   - MCP tools → the injection-control fields below
- *
+ * Structurally the shared {@link CapabilityPolicy}; the guest scenario reads it
+ * in 'strict' mode (nothing granted unless listed), so an unset flag denies.
  * Used by ImChannelInstanceConfig (persisted) and ImPermissionContext (runtime).
  */
-export interface GuestPolicy {
-  /**
-   * Built-in tool names the guest is allowed to use (white-list).
-   * All built-in tools are selectable in the UI (advanced tools like
-   * Bash, Write, Edit, NotebookEdit are in a separate group). All off by default.
-   *
-   * undefined = all tools allowed (no tool restriction)
-   * []        = no tools allowed
-   */
-  allowedTools?: string[]
-
-  // ── Halo MCP injection control ──
-  // Conservative: not configured = not injected for guests.
-
-  /** Allow guest to use AI browser */
-  allowAiBrowser?: boolean
-  /** Allow guest to send email on behalf of owner */
-  allowEmail?: boolean
-  /** Allow guest to send notifications */
-  allowNotify?: boolean
-  /** Allow guest to manage digital humans */
-  allowApps?: boolean
-  /** Allow guest to send files via IM */
-  allowFileSend?: boolean
-  /**
-   * Allow guest to use on-device OCR (ocr_image). Gated because the tool reads
-   * arbitrary local file paths — unlike web-search/halo-memory it reaches the
-   * local filesystem, so it must be host-controlled like the other capabilities
-   * above rather than always-on.
-   */
-  allowOcr?: boolean
-
-  /**
-   * User-installed MCP server names (specId) that guests are allowed to use.
-   * Only servers in this list are injected into guest sessions.
-   */
-  allowedUserMcp?: string[]
-}
+export type GuestPolicy = CapabilityPolicy
 
 // ============================================
 // ImChannelInstanceConfig (Persisted)
