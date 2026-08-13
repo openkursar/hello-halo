@@ -45,6 +45,7 @@ import {
   buildMessageContent,
 } from './message-utils'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
+import { createConversationSink } from './conversation-sink'
 import { flushToolStats } from './stream-processor'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
@@ -180,8 +181,11 @@ export async function sendMessage(
     // Get or create persistent V2 session (also starts persistent consumer if new)
     const v2Session = await getOrCreateV2Session(
       spaceId, conversationId, sdkOptions, sessionId, workDir,
-      resolvedCredentials.displayModel,  // Passed to consumer for thought parsing
-      resolvedCredentials.capabilities?.contextWindow,
+      {
+        displayModel: resolvedCredentials.displayModel,
+        contextWindow: resolvedCredentials.capabilities?.contextWindow,
+        sink: createConversationSink(spaceId, conversationId),
+      },
       resolvedKbIds,
       buildMcpServers,
       resolveKnowledgeBases

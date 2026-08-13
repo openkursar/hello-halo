@@ -22,7 +22,8 @@
 | External message injection | `inject-message.ts` | Entry point for IM inbound / programmatic triggers to push messages into a session. |
 | Session control | `control.ts` | Interrupt / pause / switch-model mid-session. |
 | Outbound message composition | `send-message.ts`, `message-utils.ts` | User message assembly, attachment handling, token counting. |
-| Session consumption loop | `session-consumer.ts` | Iterator over SDK events; dispatches into stream-processor. |
+| Session consumption loop | `session-consumer.ts` | Persistent per-session loop over SDK turns; dispatches into stream-processor. Surface-agnostic — see §3.1. |
+| Turn destination | `turn-sink.ts`, `conversation-sink.ts` | `TurnSink` is where a consumed turn goes (persistence + delivery). `conversation-sink.ts` is the space-chat implementation; `apps/runtime/app-chat-sink.ts` is the digital-human one. |
 | Top-level orchestration | `agents.ts`, `index.ts` | Public surface; wires everything together. |
 | Constants & shared types | `constants.ts`, `types.ts`, `events.ts`, `helpers.ts` | — |
 
@@ -63,6 +64,44 @@ Key invariants:
 - Thoughts are **append-only** during a turn. A turn ends when SDK emits `result` or `error`.
 - Tool calls go through three states: `pending` → `running` → `completed`/`failed`. Each state transition is a separate thought event.
 - `requiresApproval: true` tool calls **block** the stream until permission-handler resolves.
+
+### 3.1) One consumption model, pluggable destinations
+
+CC is a REPL: it produces turns from any input, not just user messages — a
+background task finishing or a team agent reporting yields a turn with nobody
+waiting for it. The consumer therefore **never leaves the stream**: it re-enters
+`stream()` immediately after each turn, so such output is read as it appears.
+
+A surface that instead read the stream once per user message would leave that
+turn queued in the pipe, and the next message would consume it as its own answer
+— every later reply then lagging one turn behind, permanently. Digital-human
+chat had exactly this shape before it was moved onto the consumer.
+
+What differs per surface is not consumption but **destination**, which is the
+`TurnSink` contract (`turn-sink.ts`):
+
+```
+session-consumer (one loop per V2 session, surface-agnostic)
+  ├── onTurnStart      — CC acknowledged a turn (system:init)
+  ├── onRawMessage     — every SDK message of the turn
+  ├── onTurnComplete   — the turn's StreamResult
+  ├── onTurnError      — the turn threw
+  └── onConsumerStopped — no further turn will arrive
+
+  implementations:
+    conversation-sink.ts            — conversation.service + chat UI (space chat)
+    apps/runtime/app-chat-sink.ts   — run JSONL + reply delivery (digital humans)
+```
+
+A sink is supplied through `getOrCreateV2Session`'s `consumer` argument; its
+presence is what starts a consumer at all. Automation runs
+(`apps/runtime/execute.ts`) pass none and drive their own `processStream` — a
+headless batch execution has no turn gaps to lose, and two readers would fight
+over one stream.
+
+**Adding a chat entry point = writing a sink.** The consumer must never learn
+about a surface; a branch on conversation kind inside this loop is the smell
+that the sink boundary is being bypassed.
 
 ## 4) Subagent Model
 

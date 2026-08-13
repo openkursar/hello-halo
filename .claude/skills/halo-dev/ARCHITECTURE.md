@@ -98,6 +98,8 @@ src/
 │   ├── openai-compat-router/          # Anthropic <-> OpenAI bridge
 │   └── services/                      # Domain services — grouped by role:
 │       ├── agent/                     # Agent engine — largest subsystem. See agent/DESIGN.md
+│       │   │                          #   One persistent consumer per session; per-surface
+│       │   │                          #   destinations behind TurnSink (agent/DESIGN.md §3.1)
 │       │   └── toolsets/              #   Toolset Broker — on-demand in-process MCP loading. See toolsets/DESIGN.md
 │       ├── ai-browser/                # AI Browser + tools/
 │       ├── ai-terminal/              # AI Terminal (pty + xterm headless + MCP tools). See ai-terminal/DESIGN.md

@@ -31,7 +31,8 @@ import { purgeStaleMcpOAuth } from './mcp-auth-state'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
 import { resolveCredentialsForSdk, buildBaseSdkOptions, computeCredentialsFingerprint, computeSessionInputsFingerprint } from './sdk-config'
-import { startConsumer, type ConsumerHandle } from './session-consumer'
+import { startConsumer, type ConsumerHandle, type ConsumerContext } from './session-consumer'
+import { createConversationSink } from './conversation-sink'
 import { hasActiveTeamTasks } from './subagent-handler'
 import { setSessionInvalidator, buildCreationTimeServers } from './toolsets/broker'
 import { buildToolsetSection } from './toolsets/capability-index'
@@ -594,8 +595,11 @@ function assertMcpInstancesUnbound(
  * @param sdkOptions - SDK options for session creation
  * @param sessionId - Optional session ID for resumption
  * @param workDir - Working directory (required for session migration when sessionId is provided)
- * @param displayModel - Display model name for thought parsing (when provided, starts persistent consumer)
- * @param contextWindow - Source-resolved context window for token-usage display
+ * @param consumer - Display model, context window, and the {@link TurnSink} for
+ *   the persistent consumer. Supplying it is what makes a newly created session
+ *   consumed continuously; omit it only for surfaces that drive their own
+ *   `processStream` (automation runs), which would otherwise fight over the
+ *   stream with the consumer.
  * @param resolvedKbIds - Ids of the knowledge bases that resolve for this call
  *   (registry-active + index ready; NOT the conversation's declared ids — see
  *   computeKnowledgeFingerprint for why the distinction matters)
@@ -616,8 +620,7 @@ export async function getOrCreateV2Session(
   sdkOptions: Record<string, any>,
   sessionId?: string,
   workDir?: string,
-  displayModel?: string,
-  contextWindow?: number,
+  consumer?: SessionConsumerOptions,
   resolvedKbIds?: string[],
   buildMcpServers?: () => Record<string, unknown> | null,
   resolveKnowledgeBases?: () => KBReference[]
@@ -637,7 +640,7 @@ export async function getOrCreateV2Session(
 
   const promise = getOrCreateV2SessionInner(
     spaceId, conversationId, sdkOptions, sessionId, workDir,
-    displayModel, contextWindow, resolvedKbIds, buildMcpServers, resolveKnowledgeBases
+    consumer, resolvedKbIds, buildMcpServers, resolveKnowledgeBases
   )
   inFlightSessionCreations.set(conversationId, promise)
   try {
@@ -650,14 +653,21 @@ export async function getOrCreateV2Session(
 /** conversationId -> in-flight getOrCreateV2Session promise. */
 const inFlightSessionCreations = new Map<string, Promise<V2SessionInfo['session']>>()
 
+/**
+ * Consumer wiring for a newly created session. Grouped rather than passed as
+ * loose positional arguments because these three values only ever travel
+ * together, and their presence — not their content — is what decides whether
+ * the session gets a persistent consumer at all.
+ */
+export type SessionConsumerOptions = Omit<ConsumerContext, 'spaceId' | 'conversationId'>
+
 async function getOrCreateV2SessionInner(
   spaceId: string,
   conversationId: string,
   sdkOptions: Record<string, any>,
   sessionId?: string,
   workDir?: string,
-  displayModel?: string,
-  contextWindow?: number,
+  consumerOptions?: SessionConsumerOptions,
   resolvedKbIds?: string[],
   buildMcpServers?: () => Record<string, unknown> | null,
   resolveKnowledgeBases?: () => KBReference[]
@@ -878,11 +888,11 @@ async function getOrCreateV2SessionInner(
   // Start cleanup if not already running
   startSessionCleanup()
 
-  // Start persistent consumer for chat conversations (when displayModel is provided).
-  // Automation apps (app-chat.ts, execute.ts) don't pass displayModel and handle
-  // their own processStream() calls, so they don't get a consumer.
-  if (displayModel) {
-    const consumer = startConsumer(session, spaceId, conversationId, displayModel, contextWindow)
+  // Start the persistent consumer for surfaces that supplied a sink (space chat,
+  // app chat). Automation runs drive their own processStream() and pass none, so
+  // nothing competes for the stream.
+  if (consumerOptions) {
+    const consumer = startConsumer(session, { spaceId, conversationId, ...consumerOptions })
     consumers.set(conversationId, consumer)
     console.log(`[Agent][${conversationId}] Persistent consumer started`)
   }
@@ -968,7 +978,11 @@ export async function ensureSessionWarm(
   try {
     const session = await getOrCreateV2Session(
       spaceId, conversationId, sdkOptions, sessionId, workDir,
-      resolvedCredentials.displayModel, resolvedCredentials.capabilities?.contextWindow,
+      {
+        displayModel: resolvedCredentials.displayModel,
+        contextWindow: resolvedCredentials.capabilities?.contextWindow,
+        sink: createConversationSink(spaceId, conversationId),
+      },
       resolvedKbIds,
       buildMcpServers,
       resolveKnowledgeBases

@@ -44,34 +44,38 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 //
 // vi.mock factories are hoisted above top-level statements; use vi.hoisted
 // so the maps and spies are available to the factories.
-const { activeSessions, v2Sessions, closeV2Session, stopGeneration } = vi.hoisted(() => {
-  const _activeSessions = new Map<string, unknown>()
+const { consumers, v2Sessions, closeV2Session, stopGeneration } = vi.hoisted(() => {
+  const _consumers = new Map<string, unknown>()
   const _v2Sessions = new Map<string, unknown>()
   return {
-    activeSessions: _activeSessions,
+    consumers: _consumers,
     v2Sessions: _v2Sessions,
     closeV2Session: vi.fn((id: string) => {
       _v2Sessions.delete(id)
     }),
     stopGeneration: vi.fn(async (id: string) => {
-      _activeSessions.delete(id)
+      _consumers.delete(id)
     }),
   }
 })
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
-  activeSessions,
   v2Sessions,
   closeV2Session,
+  getConsumerHandle: (id: string) => consumers.get(id) ?? null,
+  getRunningConsumerIds: () => Array.from(consumers.keys()),
   // Unused by restartAppChat but referenced by app-chat module-level imports
   getOrCreateV2Session: vi.fn(),
-  createSessionState: vi.fn(),
-  registerActiveSession: vi.fn(),
-  unregisterActiveSession: vi.fn(),
+  markTurnDispatched: vi.fn(),
+  updateConsumerDisplayModel: vi.fn(),
 }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({
   stopGeneration,
+  getSessionState: (id: string) =>
+    consumers.has(id)
+      ? { isActive: true, thoughts: [], spaceId: 'space-1' }
+      : { isActive: false, thoughts: [] },
 }))
 
 // Helpers, sdk-config, permission-handler — unused by restartAppChat but
@@ -158,9 +162,21 @@ import { restartAppChat, getAppChatConversationId } from '../../../../src/main/a
 // Helpers
 // ============================================
 
-function seedSession(map: 'active' | 'v2', conversationId: string): void {
-  const target = map === 'active' ? activeSessions : v2Sessions
-  target.set(conversationId, {})
+/** A cached CC subprocess for this conversation (idle unless also marked generating). */
+function seedSession(conversationId: string): void {
+  v2Sessions.set(conversationId, {})
+}
+
+/**
+ * Mark a seeded session as mid-turn. Generating state now lives on the
+ * persistent consumer, and a live consumer always has its V2 session cached —
+ * so this is strictly an annotation on an already-seeded session.
+ */
+function markGenerating(conversationId: string): void {
+  consumers.set(conversationId, {
+    isRunning: true,
+    getActiveSessionState: () => ({ thoughts: [], spaceId: 'space-1' }),
+  })
 }
 
 // ============================================
@@ -169,15 +185,15 @@ function seedSession(map: 'active' | 'v2', conversationId: string): void {
 
 describe('restartAppChat', () => {
   beforeEach(() => {
-    activeSessions.clear()
+    consumers.clear()
     v2Sessions.clear()
     closeV2Session.mockClear()
     stopGeneration.mockClear()
   })
 
   it('returns 0 when no sessions match the app', async () => {
-    seedSession('v2', getAppChatConversationId('other-app'))
-    seedSession('v2', getAppChatConversationId('other-app') + ':wecom-bot:direct:abc')
+    seedSession(getAppChatConversationId('other-app'))
+    seedSession(getAppChatConversationId('other-app') + ':wecom-bot:direct:abc')
 
     const result = await restartAppChat('target-app')
 
@@ -188,7 +204,7 @@ describe('restartAppChat', () => {
 
   it('closes the native app-chat session', async () => {
     const nativeKey = getAppChatConversationId('target-app')
-    seedSession('v2', nativeKey)
+    seedSession(nativeKey)
 
     const result = await restartAppChat('target-app')
 
@@ -198,9 +214,9 @@ describe('restartAppChat', () => {
 
   it('closes IM channel sessions for the same app', async () => {
     const nativeKey = getAppChatConversationId('target-app')
-    seedSession('v2', nativeKey)
-    seedSession('v2', `${nativeKey}:wecom-bot:direct:user-123`)
-    seedSession('v2', `${nativeKey}:wecom-bot:group:room-456`)
+    seedSession(nativeKey)
+    seedSession(`${nativeKey}:wecom-bot:direct:user-123`)
+    seedSession(`${nativeKey}:wecom-bot:group:room-456`)
 
     const result = await restartAppChat('target-app')
 
@@ -216,9 +232,9 @@ describe('restartAppChat', () => {
   it('does not touch sessions of other apps', async () => {
     const targetKey = getAppChatConversationId('target-app')
     const otherKey = getAppChatConversationId('other-app')
-    seedSession('v2', targetKey)
-    seedSession('v2', otherKey)
-    seedSession('v2', `${otherKey}:wecom-bot:direct:foo`)
+    seedSession(targetKey)
+    seedSession(otherKey)
+    seedSession(`${otherKey}:wecom-bot:direct:foo`)
 
     const result = await restartAppChat('target-app')
 
@@ -233,9 +249,9 @@ describe('restartAppChat', () => {
     // uses `prefix + ':'` precisely to guard against this.
     const targetKey = getAppChatConversationId('target-app')
     const lookalikeKey = getAppChatConversationId('target-app-2')
-    seedSession('v2', targetKey)
-    seedSession('v2', lookalikeKey)
-    seedSession('v2', `${lookalikeKey}:wecom-bot:direct:foo`)
+    seedSession(targetKey)
+    seedSession(lookalikeKey)
+    seedSession(`${lookalikeKey}:wecom-bot:direct:foo`)
 
     const result = await restartAppChat('target-app')
 
@@ -246,13 +262,13 @@ describe('restartAppChat', () => {
 
   it('interruptActive aborts in-flight generations before closing the session', async () => {
     const nativeKey = getAppChatConversationId('target-app')
-    seedSession('active', nativeKey)
-    seedSession('v2', nativeKey)
+    seedSession(nativeKey)
+    markGenerating(nativeKey)
 
     const callOrder: string[] = []
     stopGeneration.mockImplementationOnce(async (id: string) => {
       callOrder.push(`stop:${id}`)
-      activeSessions.delete(id)
+      consumers.delete(id)
     })
     closeV2Session.mockImplementationOnce((id: string) => {
       callOrder.push(`close:${id}`)
@@ -265,25 +281,23 @@ describe('restartAppChat', () => {
     expect(callOrder).toEqual([`stop:${nativeKey}`, `close:${nativeKey}`])
   })
 
-  it('interruptActive handles sessions present only in activeSessions (no cached V2 entry)', async () => {
-    // Edge case: a session is mid-generation but the v2Sessions cache
-    // has been swept (idle cleanup race). Interrupt must still close it.
+  it('ignores a generating conversation whose V2 session is already gone', async () => {
+    // A consumer whose session was already swept has nothing left to restart:
+    // the enumeration is over cached subprocesses precisely so this is a no-op.
     const nativeKey = getAppChatConversationId('target-app')
-    seedSession('active', nativeKey)
+    markGenerating(nativeKey)
 
     const result = await restartAppChat('target-app', { interruptActive: true })
 
-    expect(result.sessionsClosed).toBe(1)
-    expect(stopGeneration).toHaveBeenCalledWith(nativeKey)
-    expect(closeV2Session).toHaveBeenCalledWith(nativeKey)
+    expect(result.sessionsClosed).toBe(0)
+    expect(stopGeneration).not.toHaveBeenCalled()
+    expect(closeV2Session).not.toHaveBeenCalled()
   })
 
-  it('interruptActive deduplicates when a session lives in both maps', async () => {
-    // Sessions that are actively generating also have a v2Sessions entry.
-    // The function must not double-close.
+  it('closes a generating session exactly once', async () => {
     const nativeKey = getAppChatConversationId('target-app')
-    seedSession('active', nativeKey)
-    seedSession('v2', nativeKey)
+    seedSession(nativeKey)
+    markGenerating(nativeKey)
 
     const result = await restartAppChat('target-app', { interruptActive: true })
 
@@ -296,8 +310,8 @@ describe('restartAppChat', () => {
     // A non-revoke edit must not drop an in-flight reply: the active session is
     // deferred (not stopped, not closed) and rebuilt on its next message.
     const nativeKey = getAppChatConversationId('target-app')
-    seedSession('active', nativeKey)
-    seedSession('v2', nativeKey)
+    seedSession(nativeKey)
+    markGenerating(nativeKey)
 
     const result = await restartAppChat('target-app')
 
@@ -309,9 +323,9 @@ describe('restartAppChat', () => {
   it('default (no interrupt) still closes idle sessions while deferring active ones', async () => {
     const nativeKey = getAppChatConversationId('target-app')
     const idleImKey = `${nativeKey}:wecom-bot:direct:user-1`
-    seedSession('active', nativeKey)   // mid-generation → deferred
-    seedSession('v2', nativeKey)
-    seedSession('v2', idleImKey)       // idle → closed now
+    seedSession(nativeKey)
+    markGenerating(nativeKey)    // mid-generation → deferred
+    seedSession(idleImKey)       // idle → closed now
 
     const result = await restartAppChat('target-app')
 
@@ -324,8 +338,8 @@ describe('restartAppChat', () => {
   it('continues closing other sessions after a per-session failure', async () => {
     const nativeKey = getAppChatConversationId('target-app')
     const imKey = `${nativeKey}:wecom-bot:direct:user-1`
-    seedSession('v2', nativeKey)
-    seedSession('v2', imKey)
+    seedSession(nativeKey)
+    seedSession(imKey)
 
     // First close throws; second must still execute.
     closeV2Session

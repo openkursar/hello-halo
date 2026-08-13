@@ -20,14 +20,18 @@
 import { tmpdir } from 'os'
 import type { InboundMessage, ReplyHandle, ProgressEvent } from '../../../shared/types/inbound-message'
 import { getAppManager } from '../manager'
-import { sendAppChatMessage, buildImSessionKey, clearImSession } from './app-chat'
+import {
+  sendAppChatMessage,
+  buildImSessionKey,
+  clearImSession,
+  isAppChatConversationGenerating,
+} from './app-chat'
 import type { ImSessionContext } from './im-channels/im-prompt'
 import { getImSessionRegistry } from './im-session-registry'
 import { getActiveImChannelManager } from './im-channels'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import { stopGeneration } from '../../services/agent/control'
-import { activeSessions } from '../../services/agent/session-manager'
 import { setImPermissionContext, clearImPermissionContext } from './im-permission-registry'
 import { setImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
@@ -353,7 +357,7 @@ export function flushSupplementBuffer(conversationId: string): void {
     return
   }
 
-  if (activeSessions.has(conversationId)) {
+  if (isAppChatConversationGenerating(conversationId)) {
     console.log(
       `${LOG_TAG} flushSupplementBuffer deferred: conv=${conversationId} is ` +
       `busy (race with newly-arrived message), ${entries.length} supplement(s) ` +
@@ -597,7 +601,7 @@ export async function dispatchInboundMessage(
   // ── Stop command: abort generation, silently drop buffered supplements ──
   if (isStopCommand(msg.body)) {
     const dropped = clearSupplementBuffer(conversationId)
-    const isActive = activeSessions.has(conversationId)
+    const isActive = isAppChatConversationGenerating(conversationId)
     if (isActive) {
       console.log(
         `${LOG_TAG} Stop command received: channel=${msg.channel}, chatId=${msg.chatId}, ` +
@@ -637,7 +641,9 @@ export async function dispatchInboundMessage(
   }
 
   // ── Supplement buffering (busy → buffer, flush after generation ends) ──
-  if (!options.skipBusyCheck && activeSessions.has(conversationId)) {
+  // "Busy" covers an autonomous turn too: starting a round while one is running
+  // would let that turn claim this message's round and answer the wrong thing.
+  if (!options.skipBusyCheck && isAppChatConversationGenerating(conversationId)) {
     const entry: SupplementEntry = { msg, reply, appId, instanceId }
     const buffer = supplementBuffers.get(conversationId) ?? []
     buffer.push(entry)
