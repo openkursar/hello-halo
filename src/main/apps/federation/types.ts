@@ -119,10 +119,17 @@ export type ReplicationOpName =
   | 'post_task'
   | 'update_task'
   | 'post_finding'
+  /** One recorded coordination act (message / reply / board write / check). */
+  | 'post_activity'
   | 'roster_join'
   | 'roster_leave'
   /** Whole-row epoch apply (open/seal/rename/reopen/outcome) — office-shared. */
   | 'epoch_upsert'
+  /** Owner-authored member facts (team duty, accepts-periodic-checks). */
+  | 'member_profile'
+  /** Whole-row apply / removal of a periodic check — office-shared. */
+  | 'check_upsert'
+  | 'check_delete'
 
 /** One persisted replication-log entry (app_federation.blackboard_replication_log). */
 export interface ReplicationLogEntry {

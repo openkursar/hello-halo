@@ -170,6 +170,15 @@ export type ReplicationOp =
   | 'post_task'
   | 'update_task'
   | 'post_finding'
+  /**
+   * One recorded coordination act — a message, the reply that answered it, a
+   * board write, a check. Office-shared because "who contacted whom" must read
+   * the same on every node: a directed message otherwise exists only inside the
+   * two transcripts it passed through, which may sit on different machines.
+   * Payload = the full TeamActivity row. Rows are immutable, so apply is a plain
+   * idempotent insert — there is no update op and no pre-image to restore.
+   */
+  | 'post_activity'
   | 'roster_join'
   | 'roster_leave'
   /**
@@ -180,6 +189,31 @@ export type ReplicationOp =
    * wins), exactly the shadow-write convergence tasks/findings already use.
    */
   | 'epoch_upsert'
+  /**
+   * Owner-authored member facts the whole office needs: what a member is
+   * responsible for here, and whether its owner accepts periodic checks on it.
+   * Only the node that OWNS the member may write them; everyone else reads.
+   * Payload = `{ teamId, appId, duty, acceptsChecks }`.
+   */
+  | 'member_profile'
+  /**
+   * Whole-row apply of a periodic check. Checks are office-shared so every
+   * node's board — and every teammate's read of it — shows the same list, and
+   * any member can stop one it did not set. Payload = the full TeamCheck row.
+   */
+  | 'check_upsert'
+  /** Removal of a periodic check by id. Payload = the TeamCheck row that ended. */
+  | 'check_delete'
+
+/**
+ * The office-shared rows that live in the TEAM layer rather than on the board.
+ * They ride the same single-writer log, but their apply belongs to the team
+ * module (which also has to arm or disarm a local alarm).
+ */
+export type OfficeStateOp = Extract<
+  ReplicationOp,
+  'member_profile' | 'check_upsert' | 'check_delete'
+>
 
 // ── Artifact reference ──
 
@@ -333,6 +367,8 @@ export interface CatchupResponseFrame {
   snapshot?: {
     tasks: unknown[]
     findings: unknown[]
+    /** Optional so a snapshot from a node predating the office record still applies. */
+    activities?: unknown[]
     roster: unknown[]
     appliedSeq: number
     term: number

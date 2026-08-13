@@ -229,6 +229,14 @@ export interface RosterMemberSnap {
   appId: string
   memberName: string
   role: string
+  /** What this member is responsible for in this office, in its owner's words. */
+  duty?: string | null
+  /**
+   * Whether this member's owner lets teammates put a periodic check on it. Only
+   * this one bit of the owner's policy travels — enough to refuse early with a
+   * readable message; the policy itself never leaves the machine it guards.
+   */
+  acceptsChecks?: boolean
   isLead: boolean
   ownerNodeId: NodeId
   memberIdentity: string | null

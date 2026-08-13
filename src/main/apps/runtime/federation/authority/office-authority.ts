@@ -18,7 +18,7 @@
  */
 
 import type { NodeId, FederationMessage } from '../types'
-import type { M2Frame, ReplicationOp } from '../protocol-m2'
+import type { M2Frame, OfficeStateOp, ReplicationOp } from '../protocol-m2'
 import { DEFAULT_P2P_CAPS } from '../protocol-m2'
 import type { AuthorityStore, FederationStore } from '../../../federation'
 import type { TeamStore, BlackboardTask } from '../../../team'
@@ -56,6 +56,11 @@ export interface OfficeAuthorityDeps {
   reassignTask: (task: BlackboardTask) => void
   /** Apply an admitted member write through the authority's kernel blackboard. */
   applyMemberWrite: (record: MemberWriteRecord) => void
+  /**
+   * Apply a replicated office-shared row owned by the team layer (a member's
+   * profile, a periodic check). Absent → the row is ignored on this node.
+   */
+  applyOfficeState?: (op: OfficeStateOp, payload: Record<string, unknown>) => void
 
   // ── lifecycle callbacks (manager/bootstrap) ──
   /** This node won the election → start hosting + heartbeating as the authority. */
@@ -194,6 +199,7 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     // so a partitioned authority does NOT optimistically commit unreplicated writes.
     getKnownStandbyCount: () => Math.max(0, getLastKnownRoster().filter((n) => n !== selfNodeId).length),
     applyMemberWrite: deps.applyMemberWrite,
+    applyOfficeState: deps.applyOfficeState,
     admitMemberWrite: (frame) => {
       // A member's coordination write is admitted only if its scope allows it
       // (read-only spectators cannot write). Enforced HERE on the authority, not
@@ -300,11 +306,22 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
       .listMembersByTeam(teamId)
       .filter((m) => m.ownerNodeId === frame.fromNode)
     if (ownedByNode.length === 0) return null
-    const p = frame.payload as { createdByAppId?: string; callerAppId?: string; authorAppId?: string }
-    const claimed = p.createdByAppId ?? p.callerAppId ?? p.authorAppId
-    if (claimed) {
-      // A self-reported author is honoured ONLY if the authenticated node owns it.
-      return ownedByNode.some((m) => m.appId === claimed) ? claimed : null
+    const p = frame.payload as {
+      createdByAppId?: string
+      callerAppId?: string
+      authorAppId?: string
+      targetAppId?: string
+      appId?: string
+    }
+    // A write can name more than one member — a periodic check names both the
+    // member that set it and the member it wakes, and either side's node may
+    // publish an update. The node writes on behalf of whichever of them it
+    // actually owns; naming only members it owns none of is still a refusal.
+    const claims = [p.createdByAppId, p.callerAppId, p.authorAppId, p.targetAppId, p.appId].filter(
+      (c): c is string => typeof c === 'string' && c.length > 0
+    )
+    if (claims.length > 0) {
+      return claims.find((c) => ownedByNode.some((m) => m.appId === c)) ?? null
     }
     // No self-report: a single-owner node is unambiguous; a multi-owner node is
     // ambiguous and must name its subject → deny.

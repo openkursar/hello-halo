@@ -446,6 +446,8 @@ export function createFederationCoordinator(
         appId: m.appId,
         memberName: m.memberName,
         role: m.role,
+        duty: m.duty ?? null,
+        acceptsChecks: m.acceptsChecks !== false,
         isLead: m.isLead,
         ownerNodeId: absoluteOwner,
         memberIdentity: m.memberIdentity ?? null,

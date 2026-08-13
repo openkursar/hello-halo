@@ -30,11 +30,13 @@ import type {
   PostTaskInput,
   UpdateTaskInput,
   PostFindingInput,
+  PostActivityInput,
 } from '../../team/blackboard'
 import type {
   BlackboardTask,
   BlackboardFinding,
   BlackboardSnapshot,
+  TeamActivity,
   TeamReadBoardFilter,
 } from '../../../../../shared/apps/team-types'
 
@@ -137,7 +139,10 @@ export function handleShadowWriteReject(fid: string, retryable: boolean): void {
 /** A blackboard write routed to an office's host (member → authority). */
 export interface OutboundBlackboardWrite {
   teamId: string
-  op: Extract<ReplicationOp, 'post_task' | 'update_task' | 'post_finding' | 'epoch_upsert'>
+  op: Extract<
+    ReplicationOp,
+    'post_task' | 'update_task' | 'post_finding' | 'post_activity' | 'epoch_upsert'
+  >
   payload: Record<string, unknown>
   taskId?: string
   /** Cross-restart globally-unique idempotency key (matches host's log fid usage). */
@@ -334,6 +339,48 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
     return { findingId: finding.id }
   }
 
+  /**
+   * Recording an act must never be able to fail the act itself. A message that
+   * was already delivered, or a task that was already created, cannot be undone
+   * because the office is mid-sync — so unlike the board writes above this path
+   * does NOT refuse while paused: it applies locally and lets replication
+   * reconcile. The row is immutable, so a rejected shadow write rolls back to a
+   * clean delete with no pre-image.
+   */
+  function postActivity(input: PostActivityInput): { activityId: string } {
+    const host = hostOf(input.teamId)
+    if (host === null) return base.postActivity(input)
+
+    const activity: TeamActivity = {
+      id: input.id ?? randomUUID(),
+      teamId: input.teamId,
+      epochId: input.epochId,
+      kind: input.kind,
+      actorAppId: input.actorAppId,
+      targetAppId: input.targetAppId ?? null,
+      subject: input.subject,
+      body: input.body ?? null,
+      refId: input.refId ?? null,
+      correlationId: input.correlationId ?? null,
+      status: input.status ?? null,
+      createdAt: Date.now(),
+    }
+    store.insertActivity(activity) // optimistic local apply
+    emitShadowWrite(
+      input.teamId,
+      host,
+      {
+        teamId: input.teamId,
+        op: 'post_activity',
+        payload: activity as unknown as Record<string, unknown>,
+        fid: randomUUID(),
+      },
+      () => store.deleteActivity(activity.id)
+    )
+    console.log(`${LOG_TAG} shadow postActivity team=${input.teamId} kind=${activity.kind} → host=${host}`)
+    return { activityId: activity.id }
+  }
+
   function readBoard(
     teamId: string,
     epochId: string,
@@ -345,5 +392,5 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
     return base.readBoard(teamId, epochId, callerAppId, filter)
   }
 
-  return { postTask, updateTask, postFinding, readBoard }
+  return { postTask, updateTask, postFinding, postActivity, readBoard }
 }

@@ -79,6 +79,32 @@ office it joined; both wrap a `Federation` (coordinator + link).
   roster) + frame-plane classification. `presence-constants.ts` — FSM thresholds.
 - `deps.ts` — the `FederationStore` / `OfficeCredentialLike` structural contracts.
 
+**Office-shared rows outside the board**
+
+Some office-shared state belongs to the TEAM layer rather than the blackboard: a
+member's owner-authored profile (`member_profile` — its team duty and whether it
+accepts periodic checks) and periodic checks (`check_upsert` / `check_delete`).
+They ride the same single-writer log as tasks and epochs — `routeSharedWrite` is
+the one implementation of "authority captures locally, joiner sends to the host,
+a single machine needs neither" — but their apply is injected as
+`applyOfficeState`, because it also has to arm or disarm a local alarm. The
+member's *delegated policy* is deliberately NOT among them: it guards one
+person's machine, so only that machine holds it; just the accepts-checks bit
+travels, on the roster snapshot.
+
+**The office record (`post_activity`)**
+
+The record of what happened — who messaged whom, who answered, who moved a task
+— replicates like a board row rather than as office state: its apply is a plain
+insert into `team_activity`, with no alarm to arm. It must be office-shared
+because a directed message exists nowhere else AS a message (only inside the two
+transcripts it passed through, on machines that may differ), so a record true on
+one node only would be worse than none. The rows are immutable — an answer is a
+new row pointing back at the message it answers — so there is no update op,
+apply is idempotent by id, and a rejected shadow write rolls back to a delete.
+The catch-up snapshot carries them team-wide rather than per task-epoch, because
+an epoch can consist entirely of messages.
+
 **Manager (the facade)**
 - `manager.ts` — `createFederationManager(deps)`: per-node facade over all hosted
   + joined offices. Owns host/join lifecycle, inbound routing + origin assertions,
@@ -219,6 +245,7 @@ interprets payloads beyond `kind`.
 | Task | Start here |
 |---|---|
 | Join/presence semantics, roster snapshot shape | `coordinator.ts` |
+| A new office-shared row (not on the board) | `protocol-m2.ts` `ReplicationOp`, then `manager.routeOfficeStateWrite` + the injected `applyOfficeState` |
 | A new M2 control frame / capability / reject reason | `protocol-m2.ts`, then the `authority/*` handler |
 | Host/join lifecycle, inbound routing, wake, egress | `manager.ts` |
 | Election / replication / reconcile / scope | `authority/*` (via `office-authority.ts`) |

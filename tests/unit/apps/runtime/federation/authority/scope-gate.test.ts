@@ -141,12 +141,18 @@ describe('authority/scope-gate', () => {
         { id: 'f-hidden', teamId: TEAM_ID, epochId: 'e', authorAppId: HIDDEN, body: 'y', ref: null, createdAt: 1 },
       ],
       roster: [],
+      checks: [],
+      activities: [
+        { id: 'a-lead', teamId: TEAM_ID, epochId: 'e', kind: 'message', actorAppId: LEAD, targetAppId: FULL, subject: 'go', body: null, refId: null, correlationId: 'c1', status: 'sent', createdAt: 1 },
+        { id: 'a-hidden', teamId: TEAM_ID, epochId: 'e', kind: 'finding', actorAppId: HIDDEN, targetAppId: null, subject: 'y', body: null, refId: 'f-hidden', correlationId: null, status: null, createdAt: 1 },
+      ],
     })
 
     it('full visibility sees every task + finding (positive)', () => {
       const out = gate.filterBoard(TEAM_ID, FULL, snapshot())
       expect(out.tasks).toHaveLength(2)
       expect(out.findings).toHaveLength(2)
+      expect(out.activities).toHaveLength(2)
     })
     it('assigned visibility sees only its own tasks (negative on others)', () => {
       const out = gate.filterBoard(TEAM_ID, ASSIGNED, snapshot())
@@ -159,6 +165,10 @@ describe('authority/scope-gate', () => {
     it('discoverable=false hides others’ findings, keeps own (negative)', () => {
       const out = gate.filterBoard(TEAM_ID, HIDDEN, snapshot())
       expect(out.findings.map((f) => f.id)).toEqual(['f-hidden'])
+    })
+    it('discoverable=false hides acts it was not party to (negative)', () => {
+      const out = gate.filterBoard(TEAM_ID, HIDDEN, snapshot())
+      expect(out.activities.map((a) => a.id)).toEqual(['a-hidden'])
     })
   })
 

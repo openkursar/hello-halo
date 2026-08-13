@@ -47,6 +47,7 @@ import type {
   RejectFrame,
   RejectReason,
   ReplicationOp,
+  OfficeStateOp,
 } from '../protocol-m2'
 import { createFidDedup } from '../protocol-m2'
 import type { AuthorityStore, ReplicationLogEntry } from '../../../federation/types'
@@ -56,6 +57,7 @@ import type {
   BlackboardTask,
   BlackboardFinding,
   TaskStatus,
+  TeamActivity,
   TeamEpoch,
 } from '../../../../../shared/apps/team-types'
 import { SELF_NODE_ID } from '../../../../../shared/apps/team-types'
@@ -88,6 +90,13 @@ export const REPLICATION_CATCHUP_BATCH = 256
 export interface ReplicationSnapshot {
   tasks: BlackboardTask[]
   findings: BlackboardFinding[]
+  /**
+   * The office record of what happened. Carried team-wide rather than per
+   * task-epoch (the way findings are gathered), because an epoch can consist
+   * entirely of messages — a conversation with no tasks would otherwise be
+   * invisible to a standby whose gap outran the retained log.
+   */
+  activities: TeamActivity[]
   roster: RosterEntry[]
   appliedSeq: number
   term: number
@@ -111,7 +120,7 @@ export type CatchupResult =
 export interface MemberWriteRecord {
   teamId: string
   epochId: string
-  op: 'post_task' | 'update_task' | 'post_finding' | 'epoch_upsert'
+  op: Exclude<ReplicationOp, 'roster_join' | 'roster_leave'>
   payload: Record<string, unknown>
   taskId?: string
 }
@@ -168,6 +177,13 @@ export interface ReplicationDeps {
    * roster behaviour).
    */
   applyRosterChange?: (op: 'roster_join' | 'roster_leave', payload: Record<string, unknown>) => void
+  /**
+   * Apply a replicated office-shared row that lives in the TEAM layer rather
+   * than on the board: a member's owner-authored profile, or a periodic check
+   * (whose apply also arms or disarms a local alarm). Injected so this module
+   * stays a pure log. Default: no-op.
+   */
+  applyOfficeState?: (op: OfficeStateOp, payload: Record<string, unknown>) => void
   /**
    * Fired after a hot-standby applies a replicated task/finding to its replica
    * store, so the renderer refreshes live. NOT fired for roster ops (they
@@ -487,12 +503,26 @@ export function createReplication(deps: ReplicationDeps): Replication {
         // post_task) — a duplicate is a no-op, any other failure still propagates.
         insertFindingIdempotent(frame.payload as unknown as BlackboardFinding)
         return true
+      case 'post_activity':
+        // Immutable + append-only like findings, and the store's insert already
+        // ignores a duplicate id — so a redelivery or an author's optimistic
+        // pre-apply converges with no special handling here.
+        replicaStore.insertActivity(frame.payload as unknown as TeamActivity)
+        return true
       case 'epoch_upsert':
         // Epochs (runs + conversations) are office-shared: idempotent whole-row
         // apply so every node's session list / history converge with the
         // authority. A redelivered or optimistically-pre-applied row is a no-op.
         replicaStore.upsertEpoch(frame.payload as unknown as TeamEpoch)
         return true
+      case 'member_profile':
+      case 'check_upsert':
+      case 'check_delete':
+        // Owner-authored member facts and periodic checks converge the same
+        // idempotent way. The apply itself belongs to the team layer (it also has
+        // to arm or disarm a local alarm), so it rides the injected hook.
+        deps.applyOfficeState?.(frame.op, frame.payload)
+        return false
       case 'roster_join':
       case 'roster_leave':
         // Roster replication mutates the federation membership ledger, not the
@@ -679,6 +709,7 @@ export function createReplication(deps: ReplicationDeps): Replication {
     return {
       tasks,
       findings,
+      activities: replicaStore.listActivityByTeam(officeId),
       roster,
       appliedSeq: getAppliedSeq(),
       term: getTerm(),
@@ -846,6 +877,15 @@ export function createReplication(deps: ReplicationDeps): Replication {
       }
     }
     for (const finding of snapFindings) insertFindingIdempotent(finding)
+
+    // Acts are the COMPLETE team set (unlike findings), so a local row the
+    // snapshot omits is a stale optimistic write and is pruned outright.
+    const snapActivities = (snapshot.activities ?? []) as TeamActivity[]
+    const wantActivityIds = new Set(snapActivities.map((a) => a.id))
+    for (const local of replicaStore.listActivityByTeam(officeId)) {
+      if (!wantActivityIds.has(local.id)) replicaStore.deleteActivity(local.id)
+    }
+    for (const activity of snapActivities) replicaStore.insertActivity(activity)
 
     replicaAppliedSeq = Math.max(replicaAppliedSeq, snapshot.appliedSeq)
     onReplicaApplied({ op: 'post_task' })

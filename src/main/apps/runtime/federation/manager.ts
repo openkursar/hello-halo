@@ -46,6 +46,7 @@ import {
   type ArtifactRef,
   type BlackboardWriteFrame,
   type M2Frame,
+  type OfficeStateOp,
   type SerializedHistoryMessage,
 } from './protocol-m2'
 import { createCtrlFeed, type CtrlFeed } from './ctrl-feed'
@@ -237,6 +238,12 @@ export interface FederationManagerDeps {
   feedStore?: FeedStore
   /** Apply an admitted member write through the authority's kernel blackboard. */
   applyMemberWrite?: (record: MemberWriteRecord) => void
+  /**
+   * Apply a replicated office-shared row that belongs to the team layer: a
+   * member's owner-authored profile, or a periodic check (whose apply also arms
+   * or disarms this node's alarm).
+   */
+  applyOfficeState?: (op: OfficeStateOp, payload: Record<string, unknown>) => void
   /** The office's open run epoch, for post-handover reconciliation. */
   getCurrentRunEpoch?: (officeId: string) => { teamId: string; epochId: string } | null
   /** Owner reachability for a member appId (presence + kernel busy). */
@@ -418,6 +425,11 @@ export interface FederationManager {
    * Authority → single-writer log; joiner → routed to the host as a member write.
    */
   routeEpochWrite(epoch: { id: string; teamId: string }): void
+  /**
+   * Share an office-shared team-layer row (a member's owner-authored profile, a
+   * periodic check) the same way epochs are shared.
+   */
+  routeOfficeStateWrite(teamId: string, op: OfficeStateOp, payload: Record<string, unknown>): void
   /** The per-office authority module (M2), or null when absent. */
   getOfficeAuthority(officeId: string): OfficeAuthority | null
   /**
@@ -703,6 +715,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       getOwnerStatus: (appId) => deps.getOwnerStatus?.(officeId, appId) ?? 'idle',
       reassignTask: (task) => deps.reassignTask?.(officeId, task),
       applyMemberWrite: (record) => deps.applyMemberWrite?.(record),
+      applyOfficeState: (op, payload) => deps.applyOfficeState?.(op, payload),
       onBecomeAuthority: (term) => {
         // The successor records itself as authority (term-state already did).
         // Mark its own node row online so its replication views include it,
@@ -2343,30 +2356,53 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
    * the office is neither hosted nor joined here (single-machine team).
    */
   function routeEpochWrite(epoch: { id: string; teamId: string }): void {
-    const host = hosted.get(epoch.teamId)
+    routeSharedWrite(epoch.teamId, 'epoch_upsert', epoch as unknown as Record<string, unknown>, epoch.id)
+  }
+
+  /**
+   * Share an office-shared row that lives in the team layer rather than on the
+   * board: a member's owner-authored profile, or a periodic check.
+   */
+  function routeOfficeStateWrite(
+    teamId: string,
+    op: OfficeStateOp,
+    payload: Record<string, unknown>
+  ): void {
+    routeSharedWrite(teamId, op, payload)
+    if (op === 'member_profile') scheduleRosterRefresh(teamId)
+  }
+
+  /**
+   * The one rule for every office-shared write: the authority captures it into
+   * its single-writer log; a joiner sends it to the host, which applies and
+   * re-replicates it to everyone. A team on one machine needs neither.
+   */
+  function routeSharedWrite(
+    teamId: string,
+    op: BlackboardWriteRecord['op'],
+    payload: Record<string, unknown>,
+    epochId = ''
+  ): void {
+    const host = hosted.get(teamId)
     if (host) {
-      host.authority?.captureLocalWrite({
-        teamId: epoch.teamId,
-        epochId: epoch.id,
-        op: 'epoch_upsert',
-        payload: epoch as unknown as Record<string, unknown>,
-      })
-      scheduleRosterRefresh(epoch.teamId)
+      host.authority?.captureLocalWrite({ teamId, epochId, op, payload })
+      if (op === 'epoch_upsert') scheduleRosterRefresh(teamId)
       return
     }
-    const join = joined.get(epoch.teamId)
-    if (!join) return // single-machine team (not federated) → local write is enough
+    const join = joined.get(teamId)
+    if (!join) return
+    const hostNode = deps.teamStore.getTeamById(teamId)?.hostNodeId
+    if (!hostNode) return
     const frame: BlackboardWriteFrame = {
       kind: 'blackboard-write',
-      officeId: epoch.teamId,
+      officeId: teamId,
       fromNode: deps.getLocalNodeId(),
       term: join.authority?.getTerm() ?? 0,
-      op: 'epoch_upsert',
-      payload: epoch as unknown as Record<string, unknown>,
+      op,
+      payload,
       fid: randomUUID(),
     }
-    const hostNode = deps.teamStore.getTeamById(epoch.teamId)?.hostNodeId
-    if (hostNode) join.federation.link.send(hostNode, frame)
+    join.federation.link.send(hostNode, frame)
   }
 
   /** The host (authority) applies + replicates this write on receipt. */
@@ -2723,6 +2759,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     routeAuthorityWrite,
     sendMemberWrite,
     routeEpochWrite,
+    routeOfficeStateWrite,
     getOfficeAuthority,
     getOfficePresence,
     broadcastRosterFor,

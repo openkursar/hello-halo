@@ -121,7 +121,15 @@ export function createScopeGate({ store }: { store: TeamStore }): ScopeGate {
       ? snapshot.findings
       : snapshot.findings.filter((f) => f.authorAppId === appId)
 
-    return { tasks, findings, roster: snapshot.roster }
+    // The record of who did what is redacted on the same rule as findings: an
+    // undiscoverable member sees only the acts it was party to. Without this a
+    // narrowed member would learn the whole office's traffic from the feed it
+    // could not learn from the board.
+    const activities = scope.discoverable
+      ? snapshot.activities
+      : snapshot.activities.filter((a) => a.actorAppId === appId || a.targetAppId === appId)
+
+    return { tasks, findings, roster: snapshot.roster, checks: snapshot.checks, activities }
   }
 
   const canReinvite = (teamId: string, appId: string): boolean =>
