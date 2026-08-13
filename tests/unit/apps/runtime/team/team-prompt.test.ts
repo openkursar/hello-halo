@@ -26,7 +26,6 @@ function makeCtx(overrides: Partial<TeamPromptContext> = {}): TeamPromptContext 
     selfRole: 'Lead',
     selfIsLead: true,
     roster: [],
-    source: { fromMemberName: null, expectsReply: false },
     ...overrides,
   }
 }
@@ -81,6 +80,17 @@ describe('buildTeamImBridge', () => {
   })
 })
 
+describe('buildTeamEntry — no per-turn content', () => {
+  // The Entry is baked into the session's system prompt, which is part of the
+  // agent session's reuse fingerprint. Anything that changes per turn rebuilds
+  // the subprocess on every turn and kills the one still streaming.
+  it('says nothing about who started this turn or whether they are waiting', () => {
+    const out = buildTeamEntry(makeCtx({ roster: [localMate] }))
+    expect(out).not.toContain('This turn was started by')
+    expect(out).not.toContain('waiting for your reply')
+  })
+})
+
 describe('buildTeamEntry roster — cross-machine awareness', () => {
   it('labels a remote teammate with its owner and adds the cross-machine section', () => {
     const out = buildTeamEntry(makeCtx({ roster: [localMate, remoteMate] }))
@@ -116,5 +126,34 @@ describe('buildTeamConstraints — dispatch + side-effect discipline', () => {
 
     const memberOut = buildTeamConstraints(makeCtx({ selfIsLead: false })).join('\n')
     expect(memberOut).not.toContain('Dispatch to who is available')
+  })
+})
+
+describe('team duty in the prompt', () => {
+  it('tells a member what it is responsible for in this team', () => {
+    const entry = buildTeamEntry(makeCtx({ selfDuty: 'You do the coding.\nTell Code Review when done.' }))
+
+    expect(entry).toContain('What you are responsible for here')
+    expect(entry).toContain('You do the coding.')
+    expect(entry).toContain('Tell Code Review when done.')
+  })
+
+  it('says nothing about a duty that has not been written', () => {
+    expect(buildTeamEntry(makeCtx())).not.toContain('What you are responsible for here')
+    expect(buildTeamEntry(makeCtx({ selfDuty: '   ' }))).not.toContain('What you are responsible for here')
+  })
+
+  it('carries a teammate’s duty in full so work can be handed to the right one', () => {
+    const entry = buildTeamEntry(makeCtx({
+      roster: [{ ...localMate, duty: 'You review code and reject what is not ready.' }],
+    }))
+
+    expect(entry).toContain('- researcher — Research')
+    expect(entry).toContain('You review code and reject what is not ready.')
+  })
+
+  it('leaves the roster line alone for a teammate with no duty written', () => {
+    const entry = buildTeamEntry(makeCtx({ roster: [localMate] }))
+    expect(entry).toContain('- researcher — Research')
   })
 })

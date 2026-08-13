@@ -204,7 +204,7 @@ import {
   migrations as managerMigrations,
 } from '../../../../src/main/apps/manager/migrations'
 import { Semaphore } from '../../../../src/main/apps/runtime/concurrency'
-import { buildAppSystemPrompt, buildInitialMessage } from '../../../../src/main/apps/runtime/prompt'
+import { buildAppSystemPrompt, buildInitialMessage, buildMemorySection } from '../../../../src/main/apps/runtime/prompt'
 import { _resetTlonRegistry, createKB, bindToApp } from '../../../../src/main/services/tlon/service'
 import {
   AppNotRunnableError,
@@ -1459,6 +1459,52 @@ describe('Prompt Builder', () => {
 
       expect(msg).toContain('"My Automation"')
       expect(msg).toContain('Instructions')
+    })
+  })
+
+  // Shared with app-chat, which opens a team session with the same block.
+  describe('buildMemorySection', () => {
+    const base = {
+      totalLines: 0,
+      sizeBytes: 0,
+      firstSection: null,
+      headers: [],
+      fullContent: null,
+      memoryFilePath: '/tmp/test-memory.md',
+    }
+
+    it('should point at the file and ask for creation when none exists', () => {
+      const section = buildMemorySection({ ...base, exists: false })
+
+      expect(section).toContain('## Memory')
+      expect(section).toContain('/tmp/test-memory.md')
+      expect(section).toContain('No memory file exists yet')
+    })
+
+    it('should inline the whole file when it is small', () => {
+      const section = buildMemorySection({
+        ...base,
+        exists: true,
+        totalLines: 4,
+        sizeBytes: 40,
+        fullContent: '# now\n\n## State | all quiet',
+      })
+
+      expect(section).toContain('## State | all quiet')
+    })
+
+    it('should inject only the # now block when the file is large', () => {
+      const section = buildMemorySection({
+        ...base,
+        exists: true,
+        totalLines: 400,
+        sizeBytes: 40000,
+        firstSection: '# now\n\n## State | 3 items tracked',
+        headers: [{ line: 30, heading: '# History', level: 1, lineCount: 120 }],
+      })
+
+      expect(section).toContain('## State | 3 items tracked')
+      expect(section).toContain('# History')
     })
   })
 })

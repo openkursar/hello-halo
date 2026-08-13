@@ -15,16 +15,10 @@
  */
 
 import { readFile as fsReadFile } from 'fs/promises'
-import {
-  resolve as pathResolve,
-  join as pathJoin,
-  relative as pathRelative,
-  isAbsolute as pathIsAbsolute,
-  sep as pathSep,
-} from 'path'
 import type { TeamStore } from '../../team'
 import { resolvePublishedArtifactAuthor } from '../../team/artifact-refs'
 import { isRemoteMember } from '../../../../shared/apps/team-types'
+import { resolveArtifactRef } from './artifact-path'
 
 const LOG_TAG = '[TeamArtifactRead]'
 
@@ -89,8 +83,13 @@ export class RemoteArtifactError extends Error {
 
 export interface LocalArtifactResolverDeps {
   store: TeamStore
-  /** Absolute space path of an app's working directory; null when unknown. */
-  getSpacePathForApp: (appId: string) => string | null
+  /**
+   * The directory an app's agent actually works in — NOT the space's internal
+   * bookkeeping path. The two differ for a space pointed at a project folder,
+   * and resolving a ref against the wrong one makes every artifact unreadable.
+   * Null when unknown.
+   */
+  getWorkDirForApp: (appId: string) => string | null
   /** Injectable file read (tests); defaults to fs/promises readFile. */
   readFile?: (absPath: string) => Promise<Uint8Array>
 }
@@ -103,26 +102,29 @@ export type ResolveLocalArtifactBytes = (params: {
 
 /**
  * Resolve a published team artifact's bytes from THIS node's disk: the ref's
- * publishing finding/task names the producing app → its space → the file. Only a
- * published ref is servable (never an arbitrary path), and the resolved path is
- * traversal-guarded via path.relative. Returns null when the producer is not a
- * local app (a remote member's file lives on its owner) or the file is gone.
- * Shared by the federation owner-serve path and the team reader below.
+ * publishing finding/task names the producing app → its working directory → the
+ * file (`resolveArtifactRef`, the same rule publishing enforces). Only a
+ * published ref is servable, never an arbitrary path. Returns null when the
+ * producer is not a local app (a remote member's file lives on its owner), the
+ * ref escapes the work dir, or the file is gone. Shared by the federation
+ * owner-serve path and the team reader below.
  */
 export function createLocalArtifactResolver(deps: LocalArtifactResolverDeps): ResolveLocalArtifactBytes {
   const readFile = deps.readFile ?? ((absPath: string) => fsReadFile(absPath))
   return async ({ teamId, epochId, ref }) => {
     const authorAppId = resolvePublishedArtifactAuthor(deps.store, teamId, epochId, ref)
     if (!authorAppId) return null
-    const spacePath = deps.getSpacePathForApp(authorAppId)
-    if (!spacePath) return null
-    const base = pathResolve(spacePath)
-    const abs = pathResolve(pathJoin(base, ref))
-    const rel = pathRelative(base, abs)
-    if (rel === '..' || rel.startsWith('..' + pathSep) || pathIsAbsolute(rel)) return null
+    const workDir = deps.getWorkDirForApp(authorAppId)
+    if (!workDir) return null
+    const resolved = resolveArtifactRef(workDir, ref)
+    if (!resolved.ok) {
+      console.warn(`${LOG_TAG} ref="${ref}" unresolvable in "${workDir}": ${resolved.reason}`)
+      return null
+    }
     try {
-      return await readFile(abs)
-    } catch {
+      return await readFile(resolved.absPath)
+    } catch (err) {
+      console.warn(`${LOG_TAG} read failed for "${resolved.absPath}":`, (err as Error).message)
       return null
     }
   }
@@ -204,17 +206,7 @@ export function createTeamArtifactReader(deps: TeamArtifactReaderDeps): ReadTeam
       }
     }
 
-    if (!bytes) {
-      return {
-        ok: false,
-        ref,
-        owner: ownerName,
-        reason: 'not-found',
-        message:
-          'The referenced file could not be found where it was published. Ask the teammate to ' +
-          're-publish it, or share the content directly in a message.',
-      }
-    }
+    if (!bytes) return goneResult(ref, ownerName)
 
     // Binary guard: a NUL byte in the head means this is not text worth inlining.
     const head = bytes.subarray(0, Math.min(bytes.length, 8000))
@@ -236,6 +228,24 @@ export function createTeamArtifactReader(deps: TeamArtifactReaderDeps): ReadTeam
       truncated ? bytes.subarray(0, utf8SafeEnd(bytes, inlineCap)) : bytes
     ).toString('utf8')
     return { ok: true, ref, owner: ownerName, content, bytes: bytes.length, truncated }
+  }
+}
+
+/**
+ * The file was published but is no longer there. Publication is validated at the
+ * time it happens, so this means it moved or was deleted afterwards — asking for
+ * a re-publish of the same vanished path only loops, so ask for the file's
+ * current whereabouts instead.
+ */
+function goneResult(ref: string, ownerName: string | null): TeamArtifactReadResult {
+  return {
+    ok: false,
+    ref,
+    owner: ownerName,
+    reason: 'not-found',
+    message:
+      `"${ref}" is no longer at the location it was published from — it was moved or deleted ` +
+      'after publishing. Ask the teammate where it is now, or to share the content in a message.',
   }
 }
 
@@ -270,15 +280,7 @@ function remoteFailureResult(
           'publish it with team_post_finding(ref, ...) or attach it to their task as resultRef, then try again.',
       }
     case 'not-found':
-      return {
-        ok: false,
-        ref,
-        owner: ownerName,
-        reason: 'not-found',
-        message:
-          'The referenced file could not be found where it was published. Ask the teammate to ' +
-          're-publish it, or share the content directly in a message.',
-      }
+      return goneResult(ref, ownerName)
     default:
       return {
         ok: false,

@@ -8,10 +8,13 @@
 import { randomUUID } from 'crypto'
 import { broadcastToAll } from '../../../http/websocket'
 import { sendToRenderer } from '../../../foundation/window.service'
+import { Semaphore } from '../concurrency'
 import {
   buildTeamSessionKey,
   isRemoteMember,
   TEAM_EVENTS,
+  TEAM_DEFAULT_TURN_TIMEOUT_MS,
+  TEAM_DEFAULT_MAX_CONCURRENT_TURNS,
 } from '../../../../shared/apps/team-types'
 import type {
   TeamEpoch,
@@ -26,7 +29,13 @@ import type {
 import type { TeamStore } from '../../team'
 import { deriveConversationLabel, deriveConversationTitle } from '../../team/epoch-label'
 import { isNativeConversationChatKey } from '../../../../shared/apps/im-keys'
-import type { MessageBus, TurnCompletion, CircuitBreachEvent } from './message-bus'
+import type {
+  MessageBus,
+  TurnCompletion,
+  CircuitBreachEvent,
+  BusyDisposition,
+  WakeDisposition,
+} from './message-bus'
 import type { TeamPromptContext } from './team-prompt'
 
 const LOG_TAG = '[TeamOrch]'
@@ -93,23 +102,35 @@ export interface Orchestration {
    * to). The derived title is captured + replicated like any rename, so every
    * node's session list stops showing "New session".
    */
-  maybeAutoNameConversation(teamId: string, epochId: string, appId: string, message: string): void
+  maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): void
   /**
-   * Reversible seal: wake a hibernated (sealed) epoch when someone engages it
-   * again (user/IM/teammate). Clears the end stamp and, for run epochs, restores
-   * team.currentEpochId + status=running. No-op if the epoch is already open.
-   * This is what lets a team keep coordinating — and the lead keep receiving
-   * member replies — after a run was auto-sealed.
+   * A turn is entering this epoch (user/IM/teammate). Stamps its activity so a
+   * list of work can be ordered by when it last moved, and — reversible seal —
+   * wakes it if hibernated: clears the end stamp and, for run epochs, restores
+   * team.currentEpochId + status=running. The wake is what lets a team keep
+   * coordinating (and the lead keep receiving member replies) after an auto-seal.
    */
-  reactivateEpoch(teamId: string, epochId: string): void
+  noteEpochTurn(teamId: string, epochId: string): void
   sealEpoch(teamId: string, endReason: EpochEndReason, summary?: string | null): Promise<void>
   /** Seal a single conversation epoch (e.g. an IM chat cleared by the user). */
   sealConversationEpoch(teamId: string, epochId: string, endReason?: EpochEndReason, summary?: string | null): Promise<void>
   /** Deferred: seal runs after the lead's current turn ends. */
   requestSeal(teamId: string, epochId: string, summary: string): void
 
+  wakeForCheck(params: {
+    teamId: string
+    epochId: string
+    appId: string
+    body: string
+    onBusy: BusyDisposition
+  }): Promise<WakeDisposition>
+
   captureReport(correlationId: string, outcome: TurnCompletion): void
-  buildPromptContext(trigger: TeamTriggerContext, selfAppId: string): TeamPromptContext | null
+  /**
+   * The team layers of a member's system prompt. Keyed by (team, member) only:
+   * nothing about the current turn may enter it (see TeamPromptContext).
+   */
+  buildPromptContext(teamId: string, selfAppId: string): TeamPromptContext | null
   getMemberStatus(appId: string): TeamMemberRuntimeStatus
   /**
    * Everything a member is serving right now for one team (open run and/or
@@ -134,6 +155,15 @@ export interface OrchestrationDeps {
   bus: MessageBus
   session: OrchestrationSessionDeps
   turnTimeoutMs?: number
+  /**
+   * Cap on team member turns running at once on this machine (across every
+   * team/epoch) — the same resource-contention concern the automation
+   * runtime bounds via its own semaphore (`apps/runtime/service.ts`), but
+   * team turns bypass that gate entirely, so without this a burst of
+   * deliveries can start unbounded concurrent agent turns. Defaults to
+   * `TEAM_DEFAULT_MAX_CONCURRENT_TURNS`.
+   */
+  maxConcurrentTurns?: number
   /**
    * Observer fired AFTER a run epoch is sealed (manual pause, quiescence
    * auto-seal, circuit breach). Additive only — it does not alter seal semantics;
@@ -173,16 +203,76 @@ export interface OrchestrationDeps {
    * labeling a conversation a member is busy with. Absent → raw chat id.
    */
   describeChatKey?: (teamId: string, chatKey: string) => string | null
+  /**
+   * What the member being woken has missed since it last looked at the board,
+   * or null when there is nothing to say. Rendered into the turn's INPUT (see
+   * `withDigest`) — never into the Entry, which must stay byte-stable. Late-bound
+   * by the runtime factory. Absent → turns carry no digest.
+   */
+  renderDigest?: (teamId: string, epochId: string, viewerAppId: string) => string | null
+  /**
+   * A run or conversation was archived. Periodic checks are scoped to the thing
+   * they were set inside, so they end with it. Late-bound by the runtime factory
+   * (checks are constructed after orchestration). Never thrown into the seal path.
+   */
+  onEpochArchived?: (teamId: string, epochId: string) => void
 }
 
-const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000
+// Long tasks (coding, multi-step research) routinely exceed 30 minutes; the
+// default is raised to bound a single turn generously while still catching a
+// genuinely stuck session. Configurable per-deployment via `deps.turnTimeoutMs`
+// (wired from `agent.teamTurnTimeoutMs`) for workloads that need more.
+const DEFAULT_TURN_TIMEOUT_MS = TEAM_DEFAULT_TURN_TIMEOUT_MS
+
+/**
+ * A busy team flips member status many times a second, and each viewer-side
+ * refresh refetches the open team's detail — so the UI push is coalesced to one
+ * per window per team (mirrors the federation roster plane's own floor).
+ */
+const STATUS_PUSH_COALESCE_MS = 750
+
+/** Sharpens the header of a wait=true envelope: the sender's turn is blocked on this one. */
+const AWAITING_REPLY_NOTE =
+  'The sender is waiting for your reply — finish the requested work; your final ' +
+  'message in this turn is automatically delivered back to them.'
 
 export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   const { store, bus, session } = deps
   const turnTimeoutMs = deps.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS
   const onRunStateChanged = deps.onRunStateChanged
+  // Gates the actual agent-loop dispatch (not wakeTarget's own return, which
+  // must keep resolving as soon as the turn is accepted — see wakeTarget doc).
+  // A turn queued behind this fills its slot the instant one frees up. Mirrors
+  // the automation runtime's own semaphore (apps/runtime/service.ts): same
+  // class of resource contention, same proven bound, applied to team turns.
+  const turnSemaphore = new Semaphore(deps.maxConcurrentTurns ?? TEAM_DEFAULT_MAX_CONCURRENT_TURNS)
+
+  // Per-team coalescing timers for the viewer-side status push.
+  const statusPushTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  function scheduleStatusPush(teamId: string): void {
+    if (statusPushTimers.has(teamId)) return
+    const timer = setTimeout(() => {
+      statusPushTimers.delete(teamId)
+      // Fires after the turn that scheduled it — by then the store may be gone
+      // (shutdown, team dissolved). A missed pulse is not worth an unhandled throw.
+      try {
+        emitTeamUpdated(teamId)
+      } catch (err) {
+        console.error(`${LOG_TAG} coalesced status push failed:`, err)
+      }
+    }, STATUS_PUSH_COALESCE_MS)
+    if (typeof timer.unref === 'function') timer.unref()
+    statusPushTimers.set(teamId, timer)
+  }
 
   function notifyMemberStatusChanged(teamId: string): void {
+    // The viewer's own machine needs this too: the federation observer below
+    // projects the roster to OTHER nodes and is a no-op for a team that is not
+    // hosted, so without this push a local team's board never learns that a
+    // member went working — the reason conversation turns looked frozen while a
+    // run looked alive (a run additionally flips team.status, which the UI polls).
+    scheduleStatusPush(teamId)
     try {
       deps.onMemberStatusChanged?.(teamId)
     } catch (err) {
@@ -232,7 +322,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       `The team run was stopped automatically: ${describeBreach(event.reason)}.`
     )
     try {
-      await sealEpoch(event.teamId, 'error', `Circuit breaker: ${event.reason}`)
+      await sealEpochById(event.teamId, event.epochId, 'error', `Circuit breaker: ${event.reason}`)
     } catch (err) {
       console.error(`${LOG_TAG} sealEpoch after breach failed:`, err)
     }
@@ -242,6 +332,26 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
   function isBusy(sessionKey: string): boolean {
     return session.isSessionActive(sessionKey)
+  }
+
+  /**
+   * Runs the agent-loop call once a concurrency slot is free; queues otherwise.
+   * `abandoned` is polled right after acquiring the slot so a turn that already
+   * timed out out while queued does not go on to start the real call on a
+   * session the timeout handler may already be tearing down (the double-
+   * execution risk timeouts guard against — see wakeTarget below).
+   */
+  async function runGatedTurn(
+    request: Parameters<OrchestrationSessionDeps['sendAppChatMessage']>[0],
+    abandoned: () => boolean
+  ): ReturnType<OrchestrationSessionDeps['sendAppChatMessage']> {
+    await turnSemaphore.acquire()
+    try {
+      if (abandoned()) return { finalMessage: null, undelivered: { reason: 'Timed out waiting for a concurrency slot' } }
+      return await session.sendAppChatMessage(request)
+    } finally {
+      turnSemaphore.release()
+    }
   }
 
   /**
@@ -271,14 +381,18 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
     capturedEscalations.delete(trigger.correlationId)
 
+    let timedOut = false
     const turnPromise = withTimeout(
-      session.sendAppChatMessage({
-        appId,
-        spaceId,
-        message: renderEnvelope(envelope, trigger),
-        conversationId: sessionKey,
-        teamContext: trigger,
-      }),
+      runGatedTurn(
+        {
+          appId,
+          spaceId,
+          message: renderEnvelope(envelope, trigger),
+          conversationId: sessionKey,
+          teamContext: trigger,
+        },
+        () => timedOut
+      ),
       turnTimeoutMs
     )
     // The member just went working → push the pulse to viewers.
@@ -299,8 +413,18 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
                 content: res.finalMessage ?? '',
                 ...(trigger.taskId ? { taskId: trigger.taskId } : {}),
               }),
-        (err): TurnCompletion => {
+        async (err): Promise<TurnCompletion> => {
           if (err instanceof TurnTimeoutError) {
+            timedOut = true
+            // Actually tear down the still-running turn instead of merely
+            // abandoning the promise — otherwise the member's session stays
+            // occupied by the timed-out generation while the sender may
+            // re-dispatch, risking two turns executing on the same session.
+            try {
+              await session.closeTeamSession(appId, teamId, epochId)
+            } catch (closeErr) {
+              console.error(`${LOG_TAG} closeTeamSession after timeout failed:`, closeErr)
+            }
             return capturedEscalations.get(trigger.correlationId) ?? { kind: 'timeout' }
           }
           return (
@@ -325,7 +449,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
           const t = store.getTeamById(seal.teamId)
           if (t && t.leadAppId === appId) {
             pendingSeals.delete(epochId)
-            void sealEpoch(seal.teamId, 'completed', seal.summary).catch((err) =>
+            void sealEpochById(seal.teamId, epochId, 'completed', seal.summary).catch((err) =>
               console.error(`${LOG_TAG} deferred sealEpoch failed:`, err)
             )
           }
@@ -384,72 +508,127 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       )
       quiescenceNudgeCount.delete(epochId)
       try {
-        await sealEpoch(teamId, 'completed', 'Auto-sealed: all tasks completed, lead did not finalize.')
+        await sealEpochById(teamId, epochId, 'completed', 'Auto-sealed: all tasks completed, lead did not finalize.')
       } catch (err) {
         console.error(`${LOG_TAG} quiescence auto-seal failed:`, err)
       }
     }
   }
 
+  /**
+   * Start a member's turn for a due periodic check. What a busy target means is
+   * the caller's to decide, because only it knows whether another round is
+   * coming: a recurring check skips (stacking missed rounds on a member that is
+   * already working is how a check turns into a pile-up), a one-shot queues.
+   */
+  async function wakeForCheck(params: {
+    teamId: string
+    epochId: string
+    appId: string
+    body: string
+    onBusy: BusyDisposition
+  }): Promise<WakeDisposition> {
+    return wakeSelf({ ...params, kind: 'periodic_check' })
+  }
+
+  /**
+   * Start a turn the runtime itself asked for, addressed to the member from
+   * itself: there is no sender to reply to, and the body is already whatever the
+   * member needs to read. Routed through the bus so it shares the busy gate with
+   * teammate messages — two turns on one session key destroy each other.
+   */
+  async function wakeSelf(params: {
+    teamId: string
+    epochId: string
+    appId: string
+    body: string
+    kind: TeamTriggerContext['kind']
+    onBusy: BusyDisposition
+  }): Promise<WakeDisposition> {
+    const { teamId, epochId, appId, body, kind, onBusy } = params
+    const correlationId = randomUUID()
+    return bus.deliverRuntimeWake({
+      envelope: {
+        id: randomUUID(),
+        teamId,
+        epochId,
+        fromAppId: appId,
+        toAppId: appId,
+        body,
+        wait: false,
+        correlationId,
+        createdAt: Date.now(),
+      },
+      trigger: { teamId, epochId, correlationId, fromAppId: null, wait: false, kind },
+      onBusy,
+    })
+  }
+
   async function nudgeLead(teamId: string, epochId: string): Promise<void> {
     const team = store.getTeamById(teamId)
     if (!team?.leadAppId) return
 
-    const trigger: TeamTriggerContext = {
-      teamId,
-      epochId,
-      correlationId: randomUUID(),
-      fromAppId: null,
-      wait: false,
-      kind: 'run_start',
-    }
-    const nudgeEnvelope: TeamEnvelope = {
-      id: randomUUID(),
-      teamId,
-      epochId,
-      fromAppId: team.leadAppId,
-      toAppId: team.leadAppId,
-      body:
-        '[System] All tasks are in a terminal state and all members are idle. ' +
-        'The run appears complete. If the goal is achieved, you MUST call ' +
-        '`team_complete("<summary>")` now to finalize this run. ' +
-        'If you do not, the system will auto-seal the run.',
-      wait: false,
-      correlationId: trigger.correlationId,
-      createdAt: Date.now(),
-    }
-    const sessionKey = buildTeamSessionKey(team.leadAppId, teamId, epochId)
-
     try {
-      await wakeTarget({
-        sessionKey,
-        appId: team.leadAppId,
+      await wakeSelf({
         teamId,
         epochId,
-        envelope: nudgeEnvelope,
-        trigger,
+        appId: team.leadAppId,
+        kind: 'run_start',
+        onBusy: 'buffer',
+        body:
+          '[System] All tasks are in a terminal state and all members are idle. ' +
+          'The run appears complete. If the goal is achieved, you MUST call ' +
+          '`team_complete("<summary>")` now to finalize this run. ' +
+          'If you do not, the system will auto-seal the run.',
       })
     } catch (err) {
       console.error(`${LOG_TAG} nudgeLead failed:`, err)
     }
   }
 
+  /**
+   * Turn input — NOT the system prompt. Everything that varies per turn (who
+   * sent this, whether they are blocking on the reply) is rendered here, because
+   * the team Entry is frozen into the session's reuse fingerprint and must stay
+   * byte-identical across a member's consecutive turns.
+   */
+  /**
+   * Append what this member missed while it was not running.
+   *
+   * This is the only point at which a member is told anything without having to
+   * ask for it: the board does not push, and `team_read_board` costs a whole
+   * model round-trip that the member has to remember to spend. The turn input is
+   * read by construction, so riding it is both cheaper and reliable.
+   *
+   * It belongs in the message and NOT in the Entry — the Entry is frozen into the
+   * session's reuse fingerprint, so per-turn text there would rebuild the
+   * subprocess every turn (see team-prompt.ts).
+   */
+  function withDigest(body: string, envelope: TeamEnvelope): string {
+    const digest = deps.renderDigest?.(envelope.teamId, envelope.epochId, envelope.toAppId)
+    return digest ? `${body}\n\n${digest}` : body
+  }
+
   function renderEnvelope(envelope: TeamEnvelope, trigger: TeamTriggerContext): string {
     if (trigger.kind === 'completion') {
-      const who = memberName(envelope.teamId, envelope.fromAppId)
+      const who = envelope.fromAppId ? memberName(envelope.teamId, envelope.fromAppId) : 'a teammate'
       const task = envelope.taskRef ? ` · task ${envelope.taskRef}` : ''
-      return `[Result from ${who}${task}]\n\n${envelope.body}`
+      return withDigest(`[Result from ${who}${task}]\n\n${envelope.body}`, envelope)
     }
-    // A human's 1:1 message arrives verbatim — no teammate header. The send is
-    // attributed to the lead only for bus accounting; impersonating "[Team
-    // message from Lead]" both confuses the member and misleads the person
-    // reading the transcript. Local app-chat sends the raw text; match it.
-    if (trigger.humanOrigin) return envelope.body
+    // A periodic check arrives with its own header (who set it, the original
+    // words, which round this is) already rendered by the checks module.
+    if (trigger.kind === 'periodic_check') return withDigest(envelope.body, envelope)
+    // A person's 1:1 message arrives verbatim — no teammate header, and no team
+    // bookkeeping either: talking to your own digital human is not coordinating a
+    // team, and the appended lines would both derail the reply and read as noise
+    // in a transcript that person opens. Local app-chat sends the raw text; match it.
+    if (trigger.kind === 'human_message') return envelope.body
     const fromName = trigger.fromAppId ? memberName(envelope.teamId, trigger.fromAppId) : null
-    const header = fromName
-      ? `[Team message from ${fromName}${trigger.wait ? ' — awaiting your reply' : ''}]`
-      : '[Team run signal]'
-    return `${header}\n\n${envelope.body}`
+    if (!fromName) return withDigest(`[Team run signal]\n\n${envelope.body}`, envelope)
+    const header = trigger.wait
+      ? `[Team message from ${fromName} — awaiting your reply]\n${AWAITING_REPLY_NOTE}`
+      : `[Team message from ${fromName}]`
+    return withDigest(`${header}\n\n${envelope.body}`, envelope)
   }
 
   // ── Escalation routing ──────────────────────────────────────────────────────
@@ -465,7 +644,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
     const isLead = team.leadAppId === fromAppId
     if (team.escalationRouting === 'lead' && !isLead && team.leadAppId) {
-      const leadMember = store.listMembersByTeam(teamId).find((m) => m.appId === team.leadAppId)
+      const leadMember = store.getMember(teamId, team.leadAppId)
       if (!leadMember) return
       const fromName = memberName(teamId, fromAppId)
       void bus
@@ -524,7 +703,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     if (!team || !epoch) return false
 
     // Clear the awaiting marker and bring a run epoch's team status back to
-    // running (reactivateEpoch only restores status when the epoch was sealed).
+    // running (noteEpochTurn only restores status when the epoch was sealed).
     // Drop the epoch key once its last waiter is gone so resolved escalations
     // don't accumulate empty sets that getMemberStatus would keep scanning.
     const waiters = escalationWaiters.get(epochId)
@@ -571,14 +750,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     ;(trigger as TeamTriggerContext & { forwardDepth?: number }).forwardDepth = 1
 
     console.log(`${LOG_TAG} resumeFromEscalation: team=${teamId} epoch=${epochId} app=${appId} lead=${isLeadSelf}`)
-    void wakeTarget({
-      sessionKey: buildTeamSessionKey(appId, teamId, epochId),
-      appId,
-      teamId,
-      epochId,
-      envelope,
-      trigger,
-    }).catch((err) => {
+    // Buffered rather than dispatched when the member is mid-turn: losing this
+    // wake would leave the digital human waiting on an answer it already got,
+    // with nothing left to wake it again.
+    void bus.deliverRuntimeWake({ envelope, trigger, onBusy: 'buffer' }).catch((err) => {
       console.error(`${LOG_TAG} resumeFromEscalation wake failed:`, err)
     })
     return true
@@ -712,7 +887,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     console.log(`${LOG_TAG} renameConversationEpoch: team=${teamId} epoch=${epochId}`)
   }
 
-  function maybeAutoNameConversation(teamId: string, epochId: string, appId: string, message: string): void {
+  function maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): void {
     const epoch = store.getEpochById(epochId)
     // Only a still-untitled NATIVE conversation gets auto-named. Member/IM chats
     // already derive their label (member name / chat name); runs use a summary.
@@ -726,9 +901,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     ) {
       return
     }
-    // The lead is the front desk the user talks to; a member's woken turn on this
-    // epoch must not name it (its input is a relayed envelope, not the user's words).
-    if (store.getTeamById(teamId)?.leadAppId !== appId) return
+    // A conversation is named after what the PERSON said. Which member received
+    // it is irrelevant — the user picks who to talk to, so keying on the lead
+    // named threads started with anyone else after the first teammate envelope
+    // reached the lead, i.e. "[Team message from …]".
+    if (!fromHuman) return
     const title = deriveConversationTitle(message)
     if (!title) return
     store.renameEpoch(epochId, title)
@@ -780,6 +957,12 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
     bus.resetEpoch(epochId)
 
+    try {
+      deps.onEpochArchived?.(teamId, epochId)
+    } catch (err) {
+      console.error(`${LOG_TAG} onEpochArchived observer failed:`, err)
+    }
+
     quiescenceNudgeCount.delete(epochId)
     // Escalation waiters deliberately SURVIVE the seal (P0-5): a decision the
     // user has not made yet keeps the member marked waiting_user (and the
@@ -793,9 +976,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     }
   }
 
-  function reactivateEpoch(teamId: string, epochId: string): void {
+  function noteEpochTurn(teamId: string, epochId: string): void {
     const epoch = store.getEpochById(epochId)
-    if (!epoch || epoch.endedAt === null) return // already open (or gone) — nothing to do
+    if (!epoch) return
+    store.touchEpoch(epochId, Date.now())
+    if (epoch.endedAt === null) return // already open — nothing to wake
     store.reopenEpoch(epochId)
     // Run epochs own the single-run pointer + team status; conversation epochs
     // never did, so leave those untouched.
@@ -805,7 +990,42 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     }
     publishEpoch(epochId)
     emitTeamUpdated(teamId)
-    console.log(`${LOG_TAG} reactivateEpoch: team=${teamId} epoch=${epochId} lifecycle=${epoch.lifecycle}`)
+    console.log(`${LOG_TAG} noteEpochTurn woke a sealed epoch: team=${teamId} epoch=${epochId} lifecycle=${epoch.lifecycle}`)
+  }
+
+  /**
+   * Seal an EXACT epoch by id — the single implementation every seal path
+   * funnels through, so a request scoped to one epoch (team_complete inside a
+   * conversation, a deferred seal, a breach on a specific epoch) can never be
+   * satisfied by archiving a different one. Only touches team.currentEpochId/
+   * status when the sealed epoch IS the team's current run pointer; a
+   * conversation epoch (or a run epoch that already stopped being current)
+   * leaves that pointer untouched.
+   */
+  async function sealEpochById(
+    teamId: string,
+    epochId: string,
+    endReason: EpochEndReason,
+    summary: string | null
+  ): Promise<void> {
+    const epoch = store.getEpochById(epochId)
+    if (!epoch || epoch.endedAt !== null) return
+
+    console.log(`${LOG_TAG} sealEpochById: team=${teamId} epoch=${epochId} reason=${endReason}`)
+    await archiveEpoch(teamId, epochId, endReason, summary)
+
+    const team = store.getTeamById(teamId)
+    if (team && team.currentEpochId === epochId) {
+      store.updateTeamStatus(teamId, 'idle')
+      store.updateTeamCurrentEpoch(teamId, null)
+      emitTeamUpdated(teamId)
+      // Propagate the rested run-state to joiners. The service-level pauseTeam
+      // fires this too, but quiescence/breach auto-seal funnels only through
+      // here — without this an auto-ended run leaves a joiner's members
+      // spinning until the next throttled roster refresh. Observer-only;
+      // never blocks or breaks the seal.
+      notifyRunStateChanged(teamId)
+    }
   }
 
   async function sealEpoch(
@@ -827,19 +1047,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       notifyRunStateChanged(teamId)
       return
     }
-
-    console.log(`${LOG_TAG} sealEpoch: team=${teamId} epoch=${epoch.id} reason=${endReason}`)
-
-    await archiveEpoch(teamId, epoch.id, endReason, summary ?? null)
-
-    store.updateTeamStatus(teamId, 'idle')
-    store.updateTeamCurrentEpoch(teamId, null)
-    emitTeamUpdated(teamId)
-    // Propagate the rested run-state to joiners. The service-level pauseTeam fires
-    // this too, but quiescence/breach auto-seal funnels only through here — without
-    // this an auto-ended run leaves a joiner's members spinning until the next
-    // throttled roster refresh. Observer-only; never blocks or breaks the seal.
-    notifyRunStateChanged(teamId)
+    await sealEpochById(teamId, epoch.id, endReason, summary ?? null)
   }
 
   function notifyRunStateChanged(teamId: string): void {
@@ -861,10 +1069,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     endReason: EpochEndReason = 'stopped',
     summary?: string | null
   ): Promise<void> {
-    const epoch = store.getEpochById(epochId)
-    if (!epoch || epoch.endedAt !== null) return
-    console.log(`${LOG_TAG} sealConversationEpoch: team=${teamId} epoch=${epochId} reason=${endReason}`)
-    await archiveEpoch(teamId, epochId, endReason, summary ?? null)
+    await sealEpochById(teamId, epochId, endReason, summary ?? null)
   }
 
   // ── Report sink ───────────────────────────────────────────────────────────
@@ -880,13 +1085,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
   // ── Prompt context ──────────────────────────────────────────────────────────
 
-  function buildPromptContext(
-    trigger: TeamTriggerContext,
-    selfAppId: string
-  ): TeamPromptContext | null {
-    const team = store.getTeamById(trigger.teamId)
+  function buildPromptContext(teamId: string, selfAppId: string): TeamPromptContext | null {
+    const team = store.getTeamById(teamId)
     if (!team) return null
-    const members = store.listMembersByTeam(trigger.teamId)
+    const members = store.listMembersByTeam(teamId)
     const self = members.find((m) => m.appId === selfAppId)
     if (!self) return null
 
@@ -897,9 +1099,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         return {
           memberName: m.memberName,
           role: m.role,
+          duty: m.duty ?? null,
           isLead: m.isLead,
           contactable:
-            team.collabMode === 'free' || store.isEdgeAllowed(trigger.teamId, selfAppId, m.appId),
+            team.collabMode === 'free' || store.isEdgeAllowed(teamId, selfAppId, m.appId),
           owner: remote ? m.ownerDisplayName ?? 'a teammate' : null,
           sameMachine: !remote,
         }
@@ -912,12 +1115,9 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       escalationRouting: team.escalationRouting,
       selfMemberName: self.memberName,
       selfRole: self.role,
+      selfDuty: self.duty ?? null,
       selfIsLead: self.isLead,
       roster,
-      source: {
-        fromMemberName: trigger.fromAppId ? memberName(trigger.teamId, trigger.fromAppId) : null,
-        expectsReply: trigger.wait,
-      },
     }
   }
 
@@ -969,7 +1169,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   // ── Internal helpers ──────────────────────────────────────────────────────────
 
   function memberName(teamId: string, appId: string): string {
-    return store.listMembersByTeam(teamId).find((m) => m.appId === appId)?.memberName ?? appId
+    return store.getMember(teamId, appId)?.memberName ?? appId
   }
 
   function emitTeamUpdated(teamId: string): void {
@@ -995,12 +1195,13 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
   return {
     wakeTarget,
+    wakeForCheck,
     isBusy,
     startEpoch,
     ensureConversationEpoch,
     renameConversationEpoch,
     maybeAutoNameConversation,
-    reactivateEpoch,
+    noteEpochTurn,
     sealEpoch,
     sealConversationEpoch,
     requestSeal,
@@ -1022,8 +1223,9 @@ class TurnTimeoutError extends Error {
 }
 
 /**
- * The underlying turn continues after timeout but its outcome is no longer
- * awaited; the session layer tears it down on the next seal/clear.
+ * Rejects with TurnTimeoutError after `ms` if `promise` has not settled.
+ * The caller (wakeTarget) is responsible for tearing down the underlying
+ * turn on timeout — this wrapper only stops waiting for it.
  */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {

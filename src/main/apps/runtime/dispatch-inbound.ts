@@ -262,7 +262,8 @@ function resolveTeamBacking(teamId: string, chatKey: string): TeamBacking | null
       correlationId: randomUUID(),
       fromAppId: null,
       wait: false,
-      kind: 'message',
+      // A real person in a chat window, reaching the team's front desk.
+      kind: 'human_message',
     },
   }
 }

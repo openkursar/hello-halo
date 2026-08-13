@@ -7,6 +7,10 @@
 import { createMessageBus } from './message-bus'
 import { createBlackboard } from './blackboard'
 import { createOrchestration } from './orchestration'
+import { createTeamChecks } from './checks'
+import { createBoardDigest } from './board-digest'
+import type { TeamChecks } from './checks'
+import type { BoardDigest } from './board-digest'
 import type { Orchestration, OrchestrationSessionDeps } from './orchestration'
 import type { MessageBus, TurnCompletion, CircuitLimits } from './message-bus'
 import type { Blackboard, BlackboardWriteRecord } from './blackboard'
@@ -16,12 +20,14 @@ import type { TeamStore } from '../../team'
 import type {
   TeamEpoch,
   EpochEndReason,
-  TeamTriggerContext,
   TeamRunTrigger,
   TeamMemberRuntimeStatus,
   RosterBusyEntry,
+  TeamCheck,
+  TeamDelegatedPolicy,
 } from '../../../../shared/apps/team-types'
 import { buildTeamSessionKey } from '../../../../shared/apps/team-types'
+import type { SchedulerService } from '../../../platform/scheduler'
 import { parseTeamSessionKey, parseTeamChatKey } from '../../../../shared/apps/im-keys'
 import type { ImSessionContext } from '../im-channels/im-prompt'
 import { activeSessions } from '../../../services/agent/session-manager'
@@ -88,6 +94,16 @@ async function resolveImRoute(
 export interface TeamRuntime {
   bus: MessageBus
   blackboard: Blackboard
+  /** Periodic checks: set/stop/inspect the standing instructions in this office. */
+  checks: TeamChecks
+  /** What a member missed, rendered into its turn input and its board reads. */
+  digest: BoardDigest
+  /**
+   * What a TEAMMATE may make this member do, as its owner set it. Null =
+   * unrestricted. Read by the chat entry point when a turn was started by
+   * someone other than the owner; never shown to teammates.
+   */
+  getDelegatedPolicy(teamId: string, appId: string): TeamDelegatedPolicy | null
   /** Location-transparent read of a published team artifact (see {@link ReadTeamArtifact}). */
   readArtifact?: ReadTeamArtifact
   /**
@@ -104,16 +120,17 @@ export interface TeamRuntime {
   ensureConversationEpoch(teamId: string, chatKey: string, title?: string): TeamEpoch
   /** Rename a conversation epoch (captured + replicated office-wide). */
   renameConversationEpoch(teamId: string, epochId: string, title: string | null): void
-  /** Auto-name an untitled native conversation from the lead's first user message. */
-  maybeAutoNameConversation(teamId: string, epochId: string, appId: string, message: string): void
-  /** Reversible seal: wake a hibernated epoch when re-engaged (no-op if already open). */
-  reactivateEpoch(teamId: string, epochId: string): void
+  /** Auto-name an untitled native conversation from the person's first message. */
+  maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): void
+  /** A turn is entering this epoch: stamp its activity, and wake it if hibernated. */
+  noteEpochTurn(teamId: string, epochId: string): void
   sealEpoch(teamId: string, endReason: EpochEndReason, summary?: string | null): Promise<void>
   /** Seal a single conversation epoch (e.g. an IM chat cleared by the user). */
   sealConversationEpoch(teamId: string, epochId: string, endReason?: EpochEndReason, summary?: string | null): Promise<void>
   requestSeal(teamId: string, epochId: string, summary: string): void
   captureReport(correlationId: string, outcome: TurnCompletion): void
-  buildPromptContext(trigger: TeamTriggerContext, selfAppId: string): TeamPromptContext | null
+  /** The team layers of a member's system prompt — stable per (team, member). */
+  buildPromptContext(teamId: string, selfAppId: string): TeamPromptContext | null
   /**
    * Resume a team turn after the user answered a member's escalation. Returns
    * false when the team/epoch is gone (caller must NOT fall back to a solo run).
@@ -133,6 +150,8 @@ export interface CreateTeamRuntimeDeps {
   circuitOverrides?: Partial<CircuitLimits>
   syncWaitTimeoutMs?: number
   turnTimeoutMs?: number
+  /** Cap on team member turns running at once on this machine. Passed through to orchestration. */
+  maxConcurrentTurns?: number
   /**
    * Replication capture: fired after each authoritative local blackboard write
    * so the federation layer can sequence and replicate it to hot-standbys.
@@ -191,6 +210,18 @@ export interface CreateTeamRuntimeDeps {
   hasPendingEscalation?: (appId: string, teamId: string) => boolean
   /** Human name for an IM chatKey (IM session registry). Absent → raw chat id. */
   describeChatKey?: (teamId: string, chatKey: string) => string | null
+  /**
+   * The platform scheduler that rings periodic checks for locally-owned members.
+   * Absent → checks are still recorded and shared, but nothing wakes (test runtimes).
+   */
+  scheduler?: SchedulerService | null
+  /**
+   * Share a periodic-check change office-wide (bootstrap routes it onto the
+   * federation replication plane). Absent → single-machine team.
+   */
+  publishCheck?: (change: { op: 'upsert' | 'delete'; check: TeamCheck }) => void
+  /** A team's periodic checks changed → refresh any open board. */
+  onChecksChanged?: (teamId: string) => void
 }
 
 export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
@@ -199,9 +230,24 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
 
   // Late-bound: bus is created first, orchestration hooks are forwarded once wired.
   let orchestration: Orchestration | null = null
+  // Checks are built last (they wake through orchestration) but orchestration
+  // must end their epoch's checks on seal — the same forward-shim trick.
+  let checks: TeamChecks | null = null
+  // The bus records every message it carries, but the board it records onto is
+  // built after it (the board's roster projection reads orchestration state).
+  // Same forward shim: acts before the board exists are dropped, and none can —
+  // no message can be sent before the runtime finishes constructing.
+  let board: Blackboard | null = null
+
+  const digest = createBoardDigest({
+    store,
+    // A task whose assignee is mid-turn is being worked on, not stalled.
+    getMemberStatus: (appId) => memberStatus(appId),
+  })
 
   const bus = createMessageBus({
     store,
+    recordActivity: (input) => board?.postActivity(input),
     hooks: {
       wakeTarget: (params) => {
         if (!orchestration) throw new Error('Team orchestration not initialized')
@@ -219,11 +265,28 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     bus,
     session,
     turnTimeoutMs: deps.turnTimeoutMs,
+    maxConcurrentTurns: deps.maxConcurrentTurns,
     onRunStateChanged: deps.onRunStateChanged,
     onMemberStatusChanged: deps.onMemberStatusChanged,
     onEpochMutation: deps.onEpochMutation,
     hasPendingEscalation: deps.hasPendingEscalation,
     describeChatKey: deps.describeChatKey,
+    renderDigest: (teamId, epochId, viewerAppId) => digest.render({ teamId, epochId, viewerAppId }),
+    onEpochArchived: (teamId, epochId) => {
+      checks?.clearEpoch(teamId, epochId)
+      digest.clearEpoch(epochId)
+    },
+  })
+
+  checks = createTeamChecks({
+    store,
+    scheduler: deps.scheduler ?? null,
+    wake: (params) => orchestration!.wakeForCheck(params),
+    isBusy: (teamId, epochId, appId) =>
+      orchestration!.isBusy(buildTeamSessionKey(appId, teamId, epochId)),
+    ...(deps.publishCheck ? { publish: deps.publishCheck } : {}),
+    ...(deps.onChecksChanged ? { onChanged: deps.onChecksChanged } : {}),
+    ...(deps.checkMemberReachable ? { isReachable: deps.checkMemberReachable } : {}),
   })
 
   // Local sessions first; when they say idle, fold in the injected overlay so a
@@ -241,17 +304,22 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     // Reuse the same reachability seam the bus uses for its honest-delivery gate,
     // so the roster's presence column and delivery decisions agree.
     ...(deps.checkMemberReachable ? { getMemberReachable: deps.checkMemberReachable } : {}),
+    getChecks: (teamId, epochId) => checks!.viewForEpoch(teamId, epochId),
     onWrite: deps.onBlackboardWrite,
   })
   // The location-aware decorator (if injected) routes shadow-office writes to the
   // authority; the authority's own runtime gets the kernel blackboard unwrapped.
   const blackboard = deps.wrapBlackboard ? deps.wrapBlackboard(baseBlackboard) : baseBlackboard
+  board = blackboard
 
   console.log(`${LOG_TAG} created`)
 
   return {
     bus,
     blackboard,
+    checks,
+    digest,
+    getDelegatedPolicy: (teamId, appId) => store.getMember(teamId, appId)?.delegatedPolicy ?? null,
     ...(deps.readArtifact ? { readArtifact: deps.readArtifact } : {}),
     getMemberStatus: memberStatus,
     getMemberBusy: (appId, teamId) => orchestration!.getMemberBusy(appId, teamId),
@@ -260,16 +328,16 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
       orchestration!.ensureConversationEpoch(teamId, chatKey, title),
     renameConversationEpoch: (teamId, epochId, title) =>
       orchestration!.renameConversationEpoch(teamId, epochId, title),
-    maybeAutoNameConversation: (teamId, epochId, appId, message) =>
-      orchestration!.maybeAutoNameConversation(teamId, epochId, appId, message),
-    reactivateEpoch: (teamId, epochId) => orchestration!.reactivateEpoch(teamId, epochId),
+    maybeAutoNameConversation: (teamId, epochId, fromHuman, message) =>
+      orchestration!.maybeAutoNameConversation(teamId, epochId, fromHuman, message),
+    noteEpochTurn: (teamId, epochId) => orchestration!.noteEpochTurn(teamId, epochId),
     sealEpoch: (teamId, reason, summary) => orchestration!.sealEpoch(teamId, reason, summary),
     sealConversationEpoch: (teamId, epochId, reason, summary) =>
       orchestration!.sealConversationEpoch(teamId, epochId, reason, summary),
     requestSeal: (teamId, epochId, summary) => orchestration!.requestSeal(teamId, epochId, summary),
     captureReport: (correlationId, outcome) => orchestration!.captureReport(correlationId, outcome),
-    buildPromptContext: (trigger, selfAppId) =>
-      orchestration!.buildPromptContext(trigger, selfAppId),
+    buildPromptContext: (teamId, selfAppId) =>
+      orchestration!.buildPromptContext(teamId, selfAppId),
     resumeFromEscalation: (params) => orchestration!.resumeFromEscalation(params),
   }
 }
@@ -341,5 +409,11 @@ export type { Blackboard, BlackboardWriteRecord } from './blackboard'
 export type { MessageBus, TurnCompletion } from './message-bus'
 export { createTeamArtifactReader, createLocalArtifactResolver, RemoteArtifactError } from './artifact-read'
 export type { ReadTeamArtifact, TeamArtifactReadResult, RemoteArtifactFailure } from './artifact-read'
+export { resolveArtifactRef } from './artifact-path'
+export type { ArtifactRefResolution, ArtifactRefRejection } from './artifact-path'
 export { createTeamTriggerScheduler, TEAM_JOB_KIND } from './team-triggers'
 export type { TeamTriggerScheduler } from './team-triggers'
+export { TEAM_CHECK_JOB_KIND, TeamCheckError, describeSchedule, renderCheckWake } from './checks'
+export type { TeamChecks } from './checks'
+export { createBoardDigest } from './board-digest'
+export type { BoardDigest } from './board-digest'

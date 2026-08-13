@@ -588,6 +588,16 @@ interface HaloConfig {
     disabledTools?: string[]
     /** Developer: enable verbose diagnostic logging (HTTP payloads, session lifecycle, stream events, scheduler) */
     developerMode?: boolean
+    /** Team member turn timeout in ms. Overrides the built-in default when set. */
+    teamTurnTimeoutMs?: number
+    /** Team circuit breaker overrides (per-epoch limits). Unset fields fall back to defaults. */
+    teamCircuitLimits?: {
+      maxMessages?: number
+      maxForwardDepth?: number
+      maxDurationMs?: number
+    }
+    /** Cap on team member turns running at once on this machine. Overrides the built-in default when set. */
+    teamMaxConcurrentTurns?: number
   }
   remoteAccess: {
     enabled: boolean

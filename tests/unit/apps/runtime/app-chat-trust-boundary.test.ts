@@ -145,9 +145,16 @@ import {
   clearAppChat,
   forkNativeChatSession,
   getAppChatConversationId,
-  buildGuestMcpServers,
 } from '../../../../src/main/apps/runtime/app-chat'
+import { filterMcpServersByPolicy } from '../../../../src/main/apps/runtime/capability-policy'
 import type { GuestPolicy } from '../../../../src/shared/types/im-channel'
+
+/** A guest is a stranger: nothing is granted unless the host said so. */
+const buildGuestMcpServers = (
+  all: Record<string, unknown>,
+  db: Record<string, unknown> | null,
+  policy?: GuestPolicy
+) => filterMcpServersByPolicy(all, db, policy, 'strict')
 
 const APP = 'target-app'
 const OTHER = 'other-app'

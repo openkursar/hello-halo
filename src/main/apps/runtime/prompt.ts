@@ -394,12 +394,16 @@ export function buildEscalationResumeMessage(escalation: {
  * - No file: guidance to create one
  * - Small file (≤30 lines): full content inline
  * - Large file (>30 lines): first section + structural outline
+ *
+ * Exported for app-chat, which injects the same section at the start of a team
+ * session — the digital human is the same one either way, so it must meet its
+ * memory in the same shape whether the turn came from a schedule or a teammate.
  */
-function buildMemorySection(snapshot: MemorySnapshot): string {
+export function buildMemorySection(snapshot: MemorySnapshot): string {
   const lines: string[] = []
   lines.push('## Memory')
   lines.push('')
-  lines.push('Your persistent memory from previous runs. Read it to maintain continuity and avoid repeating work.')
+  lines.push('Your persistent memory from previous work. Read it to maintain continuity and avoid repeating work.')
   lines.push('')
 
   if (!snapshot.exists) {

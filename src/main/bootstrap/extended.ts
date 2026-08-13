@@ -70,12 +70,12 @@ import { createFederationManager, setFederationManager, getFederationManager, ma
 import { getRemoteAccessStatus } from '../services/remote'
 import type { OwnerStatus, MemberWriteRecord, ArtifactRef } from '../apps/runtime/federation'
 import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/apps/team-types'
-import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamUpdatedEvent, TeamEpoch } from '../../shared/apps/team-types'
+import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck } from '../../shared/apps/team-types'
 import { parseTeamSessionKey, parseTeamChatKey } from '../../shared/apps/im-keys'
 import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createLocalArtifactResolver, RemoteArtifactError } from '../apps/runtime/team'
 import { readTeamMemberMessages } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
-import { createSpace, deleteSpace, getSpace } from '../services/space.service'
+import { createSpace, deleteSpace, getSpace, getSpaceDir } from '../services/space.service'
 import { listArtifacts } from '../services/artifact.service'
 import { installAppsSubscribers } from '../services/analytics/subscribers/apps.subscriber'
 import { runStartupSnapshot } from '../services/analytics/snapshot'
@@ -217,14 +217,20 @@ async function initPlatformAndApps(): Promise<void> {
     const localSessionDeps = createDefaultSessionDeps(teamStore)
 
     // Local artifact byte resolution (apps/runtime/team/artifact-read): bootstrap
-    // only supplies the app→space path lookup. Shared by the federation
+    // only supplies the app→work-dir lookup. Shared by the federation
     // owner-serve path and the team_read_artifact reader below.
+    //
+    // getSpaceDir, never space.path: for a space pointed at a project folder the
+    // agent works in that folder, so a ref resolved against space.path (internal
+    // bookkeeping) can never be found.
+    const resolveAppWorkDir = (appId: string): string | null => {
+      const app = appManager.getApp(appId)
+      if (!app?.spaceId) return null
+      return getSpaceDir(app.spaceId) || null
+    }
     const readLocalArtifactBytes = createLocalArtifactResolver({
       store: teamStore,
-      getSpacePathForApp: (appId) => {
-        const app = appManager.getApp(appId)
-        return app?.spaceId ? getSpace(app.spaceId)?.path ?? null : null
-      },
+      getWorkDirForApp: resolveAppWorkDir,
     })
 
     // Federation manager: per-office host/joiner coordinators. Bootstrap is the
@@ -259,6 +265,38 @@ async function initPlatformAndApps(): Promise<void> {
       // Apply a remote member's admitted write to the authority's blackboard,
       // PRESERVING the owner-generated id (so the owner's optimistic copy and the
       // authority converge), then replicate it to hot-standbys.
+      // Office-shared rows that live in the TEAM layer, not on the board: a
+      // member's owner-authored profile, and periodic checks (whose apply also
+      // arms or disarms this machine's alarm). Applied identically whether the
+      // row arrives as a member write at the authority or as a replicated entry
+      // on a standby, so every node converges through one path.
+      const applyOfficeStateRow = (
+        op: 'member_profile' | 'check_upsert' | 'check_delete',
+        payload: Record<string, unknown>
+      ) => {
+        try {
+          if (op === 'member_profile') {
+            const p = payload as { teamId?: string; appId?: string; duty?: string | null; acceptsChecks?: boolean }
+            if (!p.teamId || !p.appId) return
+            teamStore.updateMemberFields(p.teamId, p.appId, {
+              duty: p.duty ?? null,
+              acceptsChecks: p.acceptsChecks !== false,
+            })
+            const team = teamStore.getTeamById(p.teamId)
+            const event = team ? { teamId: p.teamId, team } : { teamId: p.teamId }
+            broadcastToAll(TEAM_EVENTS.updated, event)
+            sendToRenderer(TEAM_EVENTS.updated, event)
+            return
+          }
+          const check = payload as unknown as TeamCheck
+          const runtime = getActiveTeamRuntime()
+          if (op === 'check_upsert') runtime?.checks.applyReplicated(check)
+          else runtime?.checks.applyReplicatedDelete(check.id)
+        } catch (err) {
+          console.error('[Bootstrap] applyOfficeStateRow failed:', err)
+        }
+      }
+
       const applyAuthorityMemberWrite = (record: MemberWriteRecord) => {
         try {
           if (record.op === 'post_task') {
@@ -281,6 +319,12 @@ async function initPlatformAndApps(): Promise<void> {
             const finding = record.payload as unknown as BlackboardFinding
             try { teamStore.insertFinding(finding) } catch { /* duplicate id → idempotent */ }
             emitBlackboard({ teamId: record.teamId, epochId: finding.epochId, kind: 'finding', finding })
+          } else if (record.op === 'post_activity') {
+            // Immutable row; the store's insert ignores a duplicate id, so a retry
+            // of an already-applied act is a no-op rather than a swallowed throw.
+            const activity = record.payload as unknown as TeamActivity
+            teamStore.insertActivity(activity)
+            emitBlackboard({ teamId: record.teamId, epochId: activity.epochId, kind: 'activity', activity })
           } else if (record.op === 'epoch_upsert') {
             // A joiner-created conversation/run epoch (P0-1): apply the shared row,
             // then fall through to routeAuthorityWrite so it re-replicates to every
@@ -291,6 +335,12 @@ async function initPlatformAndApps(): Promise<void> {
             const payload = team ? { teamId: record.teamId, team } : { teamId: record.teamId }
             broadcastToAll(TEAM_EVENTS.updated, payload)
             sendToRenderer(TEAM_EVENTS.updated, payload)
+          } else if (
+            record.op === 'member_profile' ||
+            record.op === 'check_upsert' ||
+            record.op === 'check_delete'
+          ) {
+            applyOfficeStateRow(record.op, record.payload)
           }
         } catch (err) {
           console.error('[Bootstrap] applyAuthorityMemberWrite failed:', err)
@@ -422,10 +472,28 @@ async function initPlatformAndApps(): Promise<void> {
         // (which does not exist) and is silently never written — the cause of
         // "history-not-found" on a viewer and a member's reply flashing then
         // vanishing with no record on either side.
-        runLocalTurn: (request) =>
-          localSessionDeps.sendAppChatMessage(
-            withOwnerResolvedSpace(request, (appId) => localSessionDeps.getMemberSpaceId(appId))
-          ),
+        runLocalTurn: async (request) => {
+          // This path runs a member's turn WITHOUT passing through the kernel's
+          // wakeTarget, so none of its status pushes fire. The other side learns
+          // through the roster round-trip; this machine — the one whose own
+          // digital human is working — has to be told locally, or its board sits
+          // idle for the whole turn.
+          const teamId = request.teamContext.teamId
+          const notifyLocalBoard = () => {
+            const team = teamStore.getTeamById(teamId)
+            const payload = team ? { teamId, team } : { teamId }
+            broadcastToAll(TEAM_EVENTS.updated, payload)
+            sendToRenderer(TEAM_EVENTS.updated, payload)
+          }
+          notifyLocalBoard()
+          try {
+            return await localSessionDeps.sendAppChatMessage(
+              withOwnerResolvedSpace(request, (appId) => localSessionDeps.getMemberSpaceId(appId))
+            )
+          } finally {
+            notifyLocalBoard()
+          }
+        },
         // Deliberately NO kernel unblock on confirmed-offline: over a WAN tunnel
         // a confirmed-offline is routinely a transient outage, and the durable
         // ctrl outbox delivers the wake when the owner returns. Failing the wait
@@ -451,6 +519,7 @@ async function initPlatformAndApps(): Promise<void> {
         // ── Authority/replication/resilience (falls back to local-only behaviour when absent) ──
         authorityStore: authStore ?? undefined,
         applyMemberWrite: (record) => applyAuthorityMemberWrite(record),
+        applyOfficeState: (op, payload) => applyOfficeStateRow(op, payload),
         getCurrentRunEpoch: (officeId) => {
           const ep = teamStore.getCurrentEpochForTeam(officeId)
           return ep ? { teamId: officeId, epochId: ep.id } : null
@@ -721,6 +790,9 @@ async function initPlatformAndApps(): Promise<void> {
         store: teamStore,
         session: teamSessionDeps,
         readArtifact: readTeamArtifact,
+        turnTimeoutMs: getConfig().agent?.teamTurnTimeoutMs,
+        circuitOverrides: getConfig().agent?.teamCircuitLimits,
+        maxConcurrentTurns: getConfig().agent?.teamMaxConcurrentTurns,
         // Epoch lifecycle replication (P0-1): conversations + run history become
         // office-shared — every node's session list converges. Authority writes
         // to the single-writer log; a joiner routes it to the host.
@@ -729,6 +801,22 @@ async function initPlatformAndApps(): Promise<void> {
         // activity entry is the truth, not just the in-memory waiter set.
         hasPendingEscalation: hasPendingEscalationFor,
         describeChatKey: describeTeamChatKey,
+        // Periodic checks ring on the machine that owns the target member.
+        scheduler,
+        // …and the row itself is office-shared, so every node's board shows the
+        // same list and any member can stop a check it did not set.
+        publishCheck: ({ op, check }) =>
+          getFederationManager()?.routeOfficeStateWrite(
+            check.teamId,
+            op === 'upsert' ? 'check_upsert' : 'check_delete',
+            check as unknown as Record<string, unknown>
+          ),
+        onChecksChanged: (teamId) => {
+          const team = teamStore.getTeamById(teamId)
+          const payload = team ? { teamId, team } : { teamId }
+          broadcastToAll(TEAM_EVENTS.updated, payload)
+          sendToRenderer(TEAM_EVENTS.updated, payload)
+        },
         onBlackboardWrite: (record) => getFederationManager()?.routeAuthorityWrite(record),
         // Auto-seal (quiescence) / breach end a run without going through the
         // service-level pauseTeam, so they must also push the rested run-state to
@@ -801,9 +889,9 @@ async function initPlatformAndApps(): Promise<void> {
             console.warn('[Bootstrap] Team member space delete failed:', err)
           )
         },
-        // Resolve a space to its absolute path so relative artifact refs
-        // (e.g. "brief.md") can be opened.
-        resolveSpacePath: (spaceId) => getSpace(spaceId)?.path ?? null,
+        // Resolve a space to the directory its agent works in, so relative
+        // artifact refs (e.g. "brief.md") open the file the member published.
+        resolveWorkDir: (spaceId) => getSpaceDir(spaceId) || null,
       },
       listArtifacts: (spaceId) => listArtifacts(spaceId),
       // Decisions waiting on the user (survive a run seal, P0-5) + IM chat naming
@@ -817,6 +905,19 @@ async function initPlatformAndApps(): Promise<void> {
       // re-broadcasts the roster (the frame lets a joiner drop the row immediately;
       // the roster re-broadcast is the convergent source of truth).
       onRosterMutated: (teamId) => getFederationManager()?.broadcastRosterFor(teamId),
+      // A duty (and whether the member accepts periodic checks) is authored by
+      // its owner, but read by the whole office — on a joined office the roster
+      // only travels host→joiners, so the edit has to go up the other way.
+      onMemberProfileChanged: (teamId, appId) => {
+        const member = teamStore.getMember(teamId, appId)
+        if (!member) return
+        getFederationManager()?.routeOfficeStateWrite(teamId, 'member_profile', {
+          teamId,
+          appId,
+          duty: member.duty ?? null,
+          acceptsChecks: member.acceptsChecks !== false,
+        })
+      },
       onMemberRemoved: (teamId, appId) => {
         const mgr = getFederationManager()
         mgr?.projectMemberRemoved(teamId, appId)
@@ -851,6 +952,13 @@ async function initPlatformAndApps(): Promise<void> {
     } else if (teamService && !eventRouter) {
       console.warn('[Bootstrap] EventRouter unavailable; team trigger scheduler not initialized')
     }
+
+    // Periodic checks share the scheduler and the same pre-start window — their
+    // alarms must be armed before the timer loop starts ticking. They need no
+    // EventRouter, so they are wired independently of the trigger scheduler.
+    const teamChecks = getActiveTeamRuntime()?.checks
+    teamChecks?.registerHandler()
+    teamChecks?.rehydrate()
   } else {
     console.warn('[Bootstrap] Team store unavailable; team service not initialized')
   }

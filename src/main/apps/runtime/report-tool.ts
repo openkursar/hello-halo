@@ -199,7 +199,7 @@ export function createReportToolServer(
         // routing — that escalation is forwarded to the lead to resolve first.
         // The LEAD's own upward escalation must always reach the user, otherwise
         // it would be silently lost (the lead is the last resort before the user).
-        const teamPrompt = runtime?.buildPromptContext(team, runContext.appId)
+        const teamPrompt = runtime?.buildPromptContext(team.teamId, runContext.appId)
         suppressUserEscalation =
           teamPrompt?.escalationRouting === 'lead' && teamPrompt?.selfIsLead === false
       }

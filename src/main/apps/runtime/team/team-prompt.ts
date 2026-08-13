@@ -8,6 +8,12 @@ import type { CollabMode, EscalationRouting } from '../../../../shared/apps/team
 export interface TeamPromptRosterEntry {
   memberName: string
   role: string
+  /**
+   * What this teammate is responsible for in this team, written by its owner.
+   * Carried in full — deciding who to hand work to, and what they will hand back,
+   * is exactly what this text is for, so truncating it defeats the purpose.
+   */
+  duty?: string | null
   isLead: boolean
   contactable: boolean
   /**
@@ -21,6 +27,14 @@ export interface TeamPromptRosterEntry {
   sameMachine?: boolean
 }
 
+/**
+ * INVARIANT: every field here must be stable for a (team, member) pair across
+ * consecutive turns. The rendered Entry is baked into the session's system
+ * prompt, which is part of the agent session's reuse fingerprint — a field that
+ * changes per turn rebuilds the CC subprocess on every turn (killing the one
+ * that is still streaming). Per-turn facts (who started this turn, whether the
+ * sender is blocking on the reply) belong in the message body instead.
+ */
 export interface TeamPromptContext {
   teamName: string
   goal: string
@@ -28,12 +42,10 @@ export interface TeamPromptContext {
   escalationRouting: EscalationRouting
   selfMemberName: string
   selfRole: string
+  /** What YOU are responsible for in this team, written by your owner. */
+  selfDuty?: string | null
   selfIsLead: boolean
   roster: TeamPromptRosterEntry[]
-  source: {
-    fromMemberName: string | null
-    expectsReply: boolean
-  }
 }
 
 // ── Entry layer ──
@@ -47,20 +59,15 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
     `Your member name (how teammates address you): ${ctx.selfMemberName}.`,
     ctx.selfIsLead ? 'You are the team LEAD.' : '',
     '',
+    // The owner's own words about this member's part in this team. It layers on
+    // top of the digital human's persona and applies ONLY inside team turns.
+    ...(ctx.selfDuty && ctx.selfDuty.trim()
+      ? ['### What you are responsible for here', '', ctx.selfDuty.trim(), '']
+      : []),
     'This is a team-channel turn. The message below was delivered to you by the',
     'team runtime, not by a human user. Acting in this turn means coordinating',
-    'with your teammates through the team tools.',
-    '',
-    '### Where this message came from',
-    '',
-    ctx.source.fromMemberName
-      ? `This turn was started by "${ctx.source.fromMemberName}".`
-      : 'This turn was started by the team runtime (a run/start signal).',
-    ctx.source.expectsReply
-      ? 'The sender is waiting for your reply — finish the requested work; your ' +
-        'final message in this turn is automatically delivered back to them.'
-      : 'When you finish, your final message is automatically delivered back to ' +
-        'whoever messaged you. Just answer normally — you do NOT need any tool to reply.',
+    'with your teammates through the team tools. The message itself says who it',
+    'came from and whether the sender is waiting on you.',
     '',
     '### Team Goal',
     '',
@@ -79,13 +86,27 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
     '  the input of their next turn. Default is async (wait=false): you get a',
     '  message id now and their reply arrives later as a new turn. Use wait=true',
     '  only when you truly need just that one reply and nothing else to do.',
-    '- Put large outputs on disk and pass the file PATH on the board / in the',
-    '  message — never paste big content into a message.',
+    '- Put large outputs in a file and share the file, not the text: publish it',
+    '  with `team_post_finding(ref)` or attach it to your task as `resultRef`,',
+    '  and teammates open it with `team_read_artifact(ref)`. A ref must name a',
+    '  file inside your working directory, written relative to it (e.g.',
+    '  "docs/design.md"); a file outside it cannot be shared this way. Publishing',
+    '  checks the file on the spot, so a successful publish means teammates can',
+    '  really read it — and a failure tells you what to fix. Never paste big',
+    '  content into a message.',
     '- Use `team_read_board()` to reconcile shared state (tasks, findings,',
-    '  roster). Trust the board over your own memory — your context may have',
-    '  been compacted. Use `team_post_task` / `team_update_task` to record work',
-    '  and `team_post_finding(...)` to share an observation/artifact — these are',
-    '  shared RECORDS, not how you reply.',
+    '  roster, and the record of what has happened). Your own context may have',
+    '  been compacted, and the board is where you recover facts from — but it is',
+    '  a record of what was WRITTEN DOWN, not of everything that happened. What',
+    '  is on it is reliable; what is missing from it proves nothing. Someone may',
+    '  have finished the work and not recorded it. To find out whether something',
+    '  happened, ask the person — never conclude it did not because the board is',
+    '  silent.',
+    '- Keep the record straight as you go: `team_post_task` / `team_update_task`',
+    '  for work, `team_post_finding(...)` for an observation or artifact. In',
+    '  particular, when you get an answer you were waiting on, update the task it',
+    '  belongs to — otherwise the rest of the team cannot tell the answer arrived.',
+    '  These are shared RECORDS, not how you reply.',
     '- Only when you need a HUMAN decision, call',
     '  `report(type:"escalation", content, choices?)`.',
   ]
@@ -103,7 +124,13 @@ function renderRoster(ctx: TeamPromptContext): string[] {
     // same-machine teammates need no label (they are yours, on this machine).
     const ownership =
       m.sameMachine === false ? ` — ${m.owner ? `${m.owner}\u2019s digital human` : 'a teammate\u2019s digital human'}` : ''
-    return `- ${m.memberName} — ${m.role || 'member'}${tags ? ` (${tags})` : ''}${ownership}`
+    const head = `- ${m.memberName} — ${m.role || 'member'}${tags ? ` (${tags})` : ''}${ownership}`
+    // Their owner's own description of what they do here — the basis for
+    // deciding who to hand a piece of work to, so it is carried verbatim.
+    const duty = m.duty?.trim()
+    if (!duty) return head
+    const indented = duty.split('\n').map((line) => `    ${line}`).join('\n')
+    return `${head}\n${indented}`
   })
 
   if (ctx.collabMode === 'structured') {
@@ -128,12 +155,11 @@ function renderRoster(ctx: TeamPromptContext): string[] {
       '  call `team_read_board()` and check each teammate\u2019s `presence` — skip or',
       '  reassign anyone shown `offline` instead of waiting on them.',
       '- File paths do NOT cross machines. A path you write here is unreadable on a',
-      '  teammate\u2019s machine (and vice versa). To hand a file to a teammate on',
-      '  another machine, publish it with `team_post_finding(ref, content)` (or set',
-      '  a task\u2019s `resultRef`) and let them read it with `team_read_artifact(ref)`.',
-      '  Never pass a bare local path across machines and assume they can open it.',
-      '- When you receive a deliverable from a teammate, read it with',
-      '  `team_read_artifact(ref)` — it fetches the file wherever it lives.'
+      '  teammate\u2019s machine (and vice versa) — even for the same project, whose',
+      '  directory sits somewhere else on theirs. Never pass a bare local path',
+      '  across machines and assume they can open it: publish the file as a ref',
+      '  (see above) and let them read it with `team_read_artifact(ref)`, which',
+      '  fetches it from wherever it lives.'
     )
   }
 
@@ -205,7 +231,11 @@ function buildTeamRules(ctx: TeamPromptContext): string {
     '  Never end the turn empty.',
     '- No fabricated completion: never claim a task is done unless you actually',
     '  produced and verified the result. If you wrote a file, reference its path;',
-    "  do not invent outcomes you did not produce."
+    '  do not invent outcomes you did not produce.',
+    '- No inference from silence: a task still open, or a teammate with nothing',
+    '  on the board, tells you what has been recorded — not what has been done.',
+    '  If you need to know whether something happened, ask that teammate directly',
+    '  instead of treating the gap as an answer.'
   )
 
   // Side-effect discipline (all members). A "not delivered" receipt means the

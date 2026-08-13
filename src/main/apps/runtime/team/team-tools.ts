@@ -5,12 +5,16 @@
 
 import { z } from 'zod'
 import { tool, createSdkMcpServer } from '../../../services/agent/resolved-sdk'
-import { TEAM_MCP_SERVER_NAME, TEAM_TOOL_NAMES } from '../../../../shared/apps/team-types'
+import { TEAM_MCP_SERVER_NAME, TEAM_TOOL_NAMES, toActivitySubject } from '../../../../shared/apps/team-types'
 import { TeamBusError } from './message-bus'
+import { TeamCheckError, describeSchedule } from './checks'
+import { resolveArtifactRef, explainArtifactRefRejection, formatArtifactSize } from './artifact-path'
 import type { MessageBus } from './message-bus'
-import type { Blackboard } from './blackboard'
+import type { Blackboard, PostActivityInput } from './blackboard'
+import type { TeamChecks } from './checks'
+import type { BoardDigest } from './board-digest'
 import type { ReadTeamArtifact } from './index'
-import type { CollabMode, TaskStatus } from '../../../../shared/apps/team-types'
+import type { CollabMode, TaskStatus, TeamCheckSchedule } from '../../../../shared/apps/team-types'
 
 const LOG_TAG = '[TeamTools]'
 
@@ -25,11 +29,28 @@ export interface TeamMcpContext {
   bus: MessageBus
   blackboard: Blackboard
   /**
+   * The caller's working directory — the same one its agent runs in. Published
+   * refs are resolved against it, which is why the value must come from the turn
+   * that owns the agent rather than be looked up here.
+   */
+  callerWorkDir: string
+  /**
    * Location-transparent read of a published team artifact. Absent → the tool is
    * still registered but reports the capability is unavailable (non-federated
    * test runtimes).
    */
   readArtifact?: ReadTeamArtifact
+  /**
+   * Periodic checks on teammates. Absent → the tools report the capability is
+   * unavailable rather than silently doing nothing (non-federated test runtimes).
+   */
+  checks?: TeamChecks
+  /**
+   * What this member has missed. Appended to a board read so the nudge lands at
+   * the moment the member is already thinking about coordination. Absent → the
+   * read returns the snapshot alone.
+   */
+  digest?: BoardDigest
   /** Deferred: applied after the lead's turn ends, never aborts mid-turn. */
   requestComplete: (summary: string) => void
 }
@@ -43,8 +64,61 @@ function textResult(text: string, isError = false) {
   }
 }
 
+/**
+ * Record an act that changed the board. Messages are NOT recorded here — the bus
+ * records those, because it is the one point every message path passes through.
+ *
+ * `subject` carries the CONTENT (a task title, an instruction), never a composed
+ * sentence: the feed is rendered in the user's language and the digest phrases
+ * itself for an agent, so each surface writes its own wording around the kind.
+ *
+ * Bookkeeping never breaks the act: the write already succeeded when we get here.
+ */
+function record(ctx: TeamMcpContext, input: Omit<PostActivityInput, 'teamId' | 'epochId' | 'actorAppId'>): void {
+  try {
+    ctx.blackboard.postActivity({
+      teamId: ctx.teamId,
+      epochId: ctx.epochId,
+      actorAppId: ctx.callerAppId,
+      ...input,
+    })
+  } catch (err) {
+    console.error(`${LOG_TAG} failed to record ${input.kind} (the write itself stands):`, err)
+  }
+}
+
+/**
+ * A ref is checked the moment it is published, not the moment someone tries to
+ * read it. Publishing something unreadable used to succeed here and fail hours
+ * later on another machine, leaving the publisher believing it had shared the
+ * file and the reader believing it had never been sent — neither holding enough
+ * of the truth to fix it. The stored form is the portable one this returns.
+ */
+function acceptRef(
+  ctx: TeamMcpContext,
+  ref: string
+): { ok: true; ref: string; receipt: string } | { ok: false; message: string } {
+  const resolved = resolveArtifactRef(ctx.callerWorkDir, ref)
+  if (!resolved.ok) {
+    console.warn(
+      `${LOG_TAG} rejected ref="${ref}" from=${ctx.callerAppId} workDir="${ctx.callerWorkDir}": ${resolved.reason}`
+    )
+    return {
+      ok: false,
+      message: explainArtifactRefRejection(resolved.reason, { ref, workDir: ctx.callerWorkDir }),
+    }
+  }
+  return {
+    ok: true,
+    ref: resolved.ref,
+    // Echo the stored form: an absolute path the member passed in was folded to
+    // a relative one, and it must see the ref teammates will actually use.
+    receipt: `"${resolved.ref}" (${formatArtifactSize(resolved.bytes)})`,
+  }
+}
+
 function busErrorResult(err: unknown) {
-  if (err instanceof TeamBusError) return textResult(err.message, true)
+  if (err instanceof TeamBusError || err instanceof TeamCheckError) return textResult(err.message, true)
   const message = err instanceof Error ? err.message : String(err)
   return textResult(`Team operation failed: ${message}`, true)
 }
@@ -147,6 +221,13 @@ function buildPostTaskTool(ctx: TeamMcpContext) {
           assigneeAppId,
           parentId: input.parentId,
         })
+        record(ctx, {
+          kind: 'task_post',
+          targetAppId: assigneeAppId,
+          subject: toActivitySubject(input.title),
+          refId: taskId,
+          status: 'pending',
+        })
         return textResult(`Task created (id: ${taskId}), assigned to "${input.assignee}".`)
       } catch (err) {
         return busErrorResult(err)
@@ -158,8 +239,8 @@ function buildPostTaskTool(ctx: TeamMcpContext) {
 function buildUpdateTaskTool(ctx: TeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.updateTask,
-    'Update a blackboard task: set its status, attach a result reference (file ' +
-      'path), or add a note. Update your own task when you finish it; the lead ' +
+    'Update a blackboard task: set its status, attach the file it produced, or ' +
+      'add a note. Update your own task when you finish it; the lead ' +
       'may update any task.\n\n' +
       'Example: { "taskId": "...", "status": "done", "resultRef": "competitors.md" }',
     {
@@ -167,7 +248,14 @@ function buildUpdateTaskTool(ctx: TeamMcpContext) {
       status: z
         .enum(TASK_STATUS_VALUES)
         .describe('New task status: pending | in_progress | done | rejected | blocked.'),
-      resultRef: z.string().optional().describe('Reference to a produced artifact (file path).'),
+      resultRef: z
+        .string()
+        .optional()
+        .describe(
+          'The file this task produced, as a path relative to your working directory (e.g. ' +
+            '"docs/design.md"). It must already exist — the update is refused if it does not. ' +
+            'Omit this when the task produced no file; put the outcome in note instead.'
+        ),
       note: z.string().optional().describe('Short note (e.g. rejection reason or blocker).'),
     },
     async (input) => {
@@ -175,16 +263,37 @@ function buildUpdateTaskTool(ctx: TeamMcpContext) {
         `${LOG_TAG} ${TEAM_TOOL_NAMES.updateTask}: team=${ctx.teamId} task=${input.taskId} ` +
           `status=${input.status}`
       )
+      let resultRef: string | undefined
+      let receipt = ''
+      if (input.resultRef) {
+        const accepted = acceptRef(ctx, input.resultRef)
+        if (!accepted.ok) {
+          // Refused whole rather than applied without the ref: a task shown done
+          // with its deliverable silently dropped is the same false success this
+          // gate exists to end.
+          return textResult(`The task was NOT updated. ${accepted.message}`, true)
+        }
+        resultRef = accepted.ref
+        receipt = ` Attached ${accepted.receipt}.`
+      }
       try {
         ctx.blackboard.updateTask({
           teamId: ctx.teamId,
           epochId: ctx.epochId,
           taskId: input.taskId,
           status: input.status as TaskStatus,
-          resultRef: input.resultRef,
+          resultRef,
           note: input.note,
         })
-        return textResult(`Task ${input.taskId} updated to "${input.status}".`)
+        // The task row keeps only its latest state, so without this act the fact
+        // that someone moved it — and when — is gone the moment it moves again.
+        record(ctx, {
+          kind: 'task_update',
+          subject: toActivitySubject(input.note ?? ''),
+          refId: input.taskId,
+          status: input.status as TaskStatus,
+        })
+        return textResult(`Task ${input.taskId} updated to "${input.status}".${receipt}`)
       } catch (err) {
         return busErrorResult(err)
       }
@@ -202,22 +311,43 @@ function buildPostFindingTool(ctx: TeamMcpContext) {
       'Example: { "content": "Competitor X dropped prices 20%", "ref": "notes.md" }',
     {
       content: z.string().optional().describe('Free-text finding. Required if ref is omitted.'),
-      ref: z.string().optional().describe('Reference to a file/artifact. Required if content is omitted.'),
+      ref: z
+        .string()
+        .optional()
+        .describe(
+          'A file inside your working directory, as a path relative to it (e.g. "docs/design.md"). ' +
+            'The file must already exist — it is checked now, and publishing fails if it is not ' +
+            'there or is outside your working directory. Required if content is omitted.'
+        ),
     },
     async (input) => {
       if (!input.content && !input.ref) {
         return textResult('You must provide at least one of "content" or "ref".', true)
       }
       console.log(`${LOG_TAG} ${TEAM_TOOL_NAMES.postFinding}: team=${ctx.teamId} from=${ctx.callerAppId}`)
+      let ref: string | undefined
+      let receipt = ''
+      if (input.ref) {
+        const accepted = acceptRef(ctx, input.ref)
+        if (!accepted.ok) return textResult(`Nothing was published. ${accepted.message}`, true)
+        ref = accepted.ref
+        receipt = ` Published ${accepted.receipt} — teammates read it with ` +
+          `${TEAM_TOOL_NAMES.readArtifact}(ref: "${accepted.ref}").`
+      }
       try {
         const { findingId } = ctx.blackboard.postFinding({
           teamId: ctx.teamId,
           epochId: ctx.epochId,
           callerAppId: ctx.callerAppId,
           content: input.content,
-          ref: input.ref,
+          ref,
         })
-        return textResult(`Finding posted (id: ${findingId}).`)
+        record(ctx, {
+          kind: 'finding',
+          subject: toActivitySubject(ref ?? input.content ?? ''),
+          refId: findingId,
+        })
+        return textResult(`Finding posted (id: ${findingId}).${receipt}`)
       } catch (err) {
         return busErrorResult(err)
       }
@@ -235,6 +365,9 @@ function buildReadBoardTool(ctx: TeamMcpContext) {
       '(who brought this teammate; null = runs on your machine), and `sameMachine` ' +
       '(false = runs on a teammate\u2019s machine, so file paths from there are not ' +
       'readable here — use team_read_artifact for their outputs).\n\n' +
+      '`checks` lists the periodic checks running in this piece of work: who set ' +
+      'each one, who it wakes, what it says and how many rounds it has run. Read ' +
+      'it before setting one (so you do not duplicate) and to find the one to stop.\n\n' +
       'Optional filters: { "mine": true } for tasks assigned to you, ' +
       '{ "status": "pending" } for tasks in a given state.',
     {
@@ -254,7 +387,15 @@ function buildReadBoardTool(ctx: TeamMcpContext) {
           mine: input.mine,
           status: input.status as TaskStatus | undefined,
         })
-        return textResult(JSON.stringify(snapshot))
+        // The same lines the turn's input carries, offered again at the moment
+        // the member has actually chosen to think about the board — which is
+        // when it is most likely to act on them.
+        const digest = ctx.digest?.render({
+          teamId: ctx.teamId,
+          epochId: ctx.epochId,
+          viewerAppId: ctx.callerAppId,
+        })
+        return textResult(digest ? `${JSON.stringify(snapshot)}\n\n${digest}` : JSON.stringify(snapshot))
       } catch (err) {
         return busErrorResult(err)
       }
@@ -275,7 +416,10 @@ function buildReadArtifactTool(ctx: TeamMcpContext) {
     {
       ref: z
         .string()
-        .describe('The artifact reference: a finding ref or a task resultRef (as shown on the board).'),
+        .describe(
+          'The artifact reference exactly as the board shows it (a finding ref or a task ' +
+            'resultRef). It is the producer\u2019s path, not yours — do not rewrite it.'
+        ),
     },
     async (input) => {
       console.log(
@@ -305,6 +449,137 @@ function buildReadArtifactTool(ctx: TeamMcpContext) {
   )
 }
 
+function buildScheduleTool(ctx: TeamMcpContext) {
+  return tool(
+    TEAM_TOOL_NAMES.schedule,
+    'Have a teammate (or yourself) wake up on a rhythm and act on a standing ' +
+      'instruction — the way you would say "from now on check every half hour, ' +
+      'and tell me when it is ready".\n\n' +
+      'Use it when the thing you are waiting for happens outside the team and ' +
+      'you cannot know when: an external system finishing, a bug getting fixed, ' +
+      'a report appearing. Do NOT use it to poll a teammate who will message you ' +
+      'back anyway.\n\n' +
+      'Write the instruction as if the reader has forgotten everything: what to ' +
+      'look at, what counts as ready, what to do then, and when to stop. They see ' +
+      'exactly these words each time, plus who set it and which round it is.\n\n' +
+      'Pick one of every / cron / once. It lasts until someone calls ' +
+      'team_unschedule, and ends automatically when this piece of work does.\n\n' +
+      'Example: { "to": "bugfixer", "every": "30m", "instruction": "Check the ' +
+      '2026-08 release plan for open bugs. Fix and self-test any you find, then ' +
+      'tell the test lead. When there are none left, stop this check." }',
+    {
+      to: z.string().describe('Teammate to wake (member name within this team). Use your own name for a self-check.'),
+      instruction: z
+        .string()
+        .describe('The standing instruction, delivered verbatim on every wake. Make it self-contained.'),
+      every: z.string().optional().describe('Interval such as "30m", "2h", "1d". Minimum 10 seconds.'),
+      cron: z.string().optional().describe('Cron expression (5- or 6-part), e.g. "0 9 * * *".'),
+      once: z
+        .string()
+        .optional()
+        .describe('A single future moment as an ISO-8601 timestamp, e.g. "2026-08-11T09:00:00Z".'),
+    },
+    async (input) => {
+      console.log(
+        `${LOG_TAG} ${TEAM_TOOL_NAMES.schedule}: team=${ctx.teamId} epoch=${ctx.epochId} ` +
+          `from=${ctx.callerAppId} to="${input.to}"`
+      )
+      if (!ctx.checks) return textResult('Periodic checks are not available in this context.', true)
+      try {
+        const schedule = parseScheduleInput(input)
+        const targetAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.to)
+        ctx.bus.assertCanContact(ctx.teamId, ctx.callerAppId, targetAppId, ctx.collabMode)
+
+        const check = ctx.checks.schedule({
+          teamId: ctx.teamId,
+          epochId: ctx.epochId,
+          createdByAppId: ctx.callerAppId,
+          targetAppId,
+          instruction: input.instruction,
+          schedule,
+        })
+        record(ctx, {
+          kind: 'check_set',
+          targetAppId,
+          subject: toActivitySubject(input.instruction),
+          body: input.instruction,
+          refId: check.id,
+        })
+        return textResult(
+          `"${input.to}" will now wake ${describeSchedule(check.schedule)} with your instruction ` +
+            `(check id: ${check.id}). Call team_unschedule when it is no longer needed.`
+        )
+      } catch (err) {
+        return busErrorResult(err)
+      }
+    }
+  )
+}
+
+function buildUnscheduleTool(ctx: TeamMcpContext) {
+  return tool(
+    TEAM_TOOL_NAMES.unschedule,
+    'Stop a periodic check. Name the teammate to stop everything running on ' +
+      'them, or add a checkId to stop just that one. Read team_read_board first ' +
+      'to see which checks exist and who set them — you may stop one you did not ' +
+      'set.\n\n' +
+      'Example: { "to": "bugfixer" }',
+    {
+      to: z.string().describe('Teammate whose periodic checks should stop (member name).'),
+      checkId: z.string().optional().describe('Stop only this check. Omit to stop all of theirs.'),
+    },
+    async (input) => {
+      console.log(
+        `${LOG_TAG} ${TEAM_TOOL_NAMES.unschedule}: team=${ctx.teamId} epoch=${ctx.epochId} to="${input.to}"`
+      )
+      if (!ctx.checks) return textResult('Periodic checks are not available in this context.', true)
+      try {
+        const targetAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.to)
+        const stopped = ctx.checks.cancel({
+          teamId: ctx.teamId,
+          epochId: ctx.epochId,
+          targetAppId,
+          ...(input.checkId ? { checkId: input.checkId } : {}),
+        })
+        if (stopped.length === 0) {
+          return textResult(`"${input.to}" has no periodic check running here, so there was nothing to stop.`)
+        }
+        for (const check of stopped) {
+          record(ctx, {
+            kind: 'check_stop',
+            targetAppId,
+            subject: toActivitySubject(check.instruction),
+            refId: check.id,
+          })
+        }
+        return textResult(
+          `Stopped ${stopped.length} periodic check${stopped.length === 1 ? '' : 's'} on "${input.to}".`
+        )
+      } catch (err) {
+        return busErrorResult(err)
+      }
+    }
+  )
+}
+
+/** Exactly one of every / cron / once, validated before anything is written. */
+function parseScheduleInput(input: { every?: string; cron?: string; once?: string }): TeamCheckSchedule {
+  const given = [input.every, input.cron, input.once].filter((v) => v !== undefined && v !== '')
+  if (given.length === 0) {
+    throw new TeamCheckError('Give one of "every", "cron" or "once" so the check knows when to run.')
+  }
+  if (given.length > 1) {
+    throw new TeamCheckError('Give only one of "every", "cron" or "once".')
+  }
+  if (input.every) return { kind: 'every', every: input.every }
+  if (input.cron) return { kind: 'cron', cron: input.cron }
+  const at = Date.parse(input.once as string)
+  if (Number.isNaN(at)) {
+    throw new TeamCheckError(`"${input.once}" is not a readable timestamp. Use ISO-8601, e.g. "2026-08-11T09:00:00Z".`)
+  }
+  return { kind: 'once', once: at }
+}
+
 function buildCompleteTool(ctx: TeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.complete,
@@ -321,6 +596,9 @@ function buildCompleteTool(ctx: TeamMcpContext) {
       }
       console.log(`${LOG_TAG} ${TEAM_TOOL_NAMES.complete}: team=${ctx.teamId} epoch=${ctx.epochId}`)
       try {
+        // Recorded before the seal: sealEpoch clears the epoch's live state, and
+        // this act has to land inside the epoch it ends.
+        record(ctx, { kind: 'run_end', subject: toActivitySubject(input.summary), body: input.summary })
         ctx.requestComplete(input.summary)
         return textResult(
           'Run will be sealed after this turn ends. The epoch and all member ' +
@@ -341,6 +619,8 @@ export function createTeamMcpServer(context: TeamMcpContext): SdkMcpServer {
     buildPostFindingTool(context),
     buildReadBoardTool(context),
     buildReadArtifactTool(context),
+    buildScheduleTool(context),
+    buildUnscheduleTool(context),
     buildCompleteTool(context),
   ]
 

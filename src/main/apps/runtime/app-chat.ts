@@ -39,7 +39,6 @@ import { emitAgentEvent } from '../../services/agent/events'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
 import { createCanUseTool } from '../../services/agent/permission-handler'
 import { getImPermissionContext } from './im-permission-registry'
-import type { GuestPolicy } from '../../../shared/types/im-channel'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import type { BrowserContext } from '../../services/ai-browser/context'
@@ -65,6 +64,7 @@ import { buildTeamEntry, buildTeamConstraints, buildTeamImBridge } from './team/
 import { getActiveTeamRuntime } from './team'
 import { createTeamMcpServer } from './team/team-tools'
 import { TEAM_MCP_SERVER_NAME } from '../../../shared/apps/team-types'
+import { computeDisallowedBuiltins, filterMcpServersByPolicy } from './capability-policy'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import { createFileSendMcpServer } from './im-channels/file-send-mcp'
 import { mergeConfigWithDefaults } from './config-defaults'
@@ -83,6 +83,8 @@ import { getSpace, getSpaceDir } from '../../services/space.service'
 import { openSessionWriter, readSessionMessages, saveChatSessionId, loadChatSessionId, deleteChatSessionId, copySessionJsonl } from './session-store'
 import { getAppMemoryService, getActivityStore } from './index'
 import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
+import { prepareMemoryForTurn, checkAndCompactMemory } from './turn/memory-lifecycle'
+import { buildMemorySection } from './prompt'
 import { createReportToolServer, type ReportToolContext } from './report-tool'
 // Key builders live in shared/ so the renderer can import them without
 // depending on main-process modules.
@@ -104,111 +106,11 @@ export { getAppChatConversationId, buildImSessionKey }
 // ============================================
 
 /**
- * Complete list of SDK built-in tools (from SDK init event).
- *
- * Used to compute the guest disallowed list: ALL minus guest's whitelist = blacklist.
- * Must be kept in sync when upgrading the Claude Code SDK — if a new built-in tool
- * is added and not listed here, guests would have access to it by default.
- *
- * NOTE: SDK `tools` option (API-level whitelist) was tested and confirmed non-functional —
- * the SDK ignores it entirely. `disallowedTools` is the only working mechanism.
+ * The team's own coordination tools are the channel this turn arrives on, not a
+ * capability the owner lends out: withholding them would not restrict a teammate,
+ * it would cut the digital human off from the conversation it was woken for.
  */
-const ALL_BUILTIN_TOOLS = [
-  'AskUserQuestion',
-  'Bash',
-  'CronCreate',
-  'CronDelete',
-  'CronList',
-  'Edit',
-  'EnterPlanMode',
-  'EnterWorktree',
-  'ExitPlanMode',
-  'ExitWorktree',
-  'Glob',
-  'Grep',
-  'NotebookEdit',
-  'Read',
-  'Skill',
-  'Task',
-  'TaskOutput',
-  'TaskStop',
-  'TodoWrite',
-  'WebFetch',
-  'WebSearch',
-  'Write',
-]
-
-/**
- * Halo MCP servers that are always safe for guests (read-only, no side effects,
- * no local-filesystem reach). These are injected into guest sessions regardless
- * of GuestPolicy. OCR is deliberately NOT here: it reads arbitrary local file
- * paths, so it is host-controlled via GUEST_TOGGLEABLE_MCP below.
- */
-const GUEST_SAFE_MCP = new Set(['web-search', 'halo-memory'])
-
-/**
- * Halo MCP servers controlled by GuestPolicy toggle switches.
- * Maps MCP server name → GuestPolicy boolean field name.
- * If the toggle is not set (undefined/false), the MCP is not injected for guests.
- */
-const GUEST_TOGGLEABLE_MCP: Record<string, keyof GuestPolicy> = {
-  'ai-browser':   'allowAiBrowser',
-  'halo-email':   'allowEmail',
-  'halo-notify':  'allowNotify',
-  'halo-apps':    'allowApps',
-  'im-file-send': 'allowFileSend',
-  'ocr':          'allowOcr',
-}
-
-/**
- * Build a filtered MCP servers map for guest sessions.
- *
- * Three-tier filtering:
- *   1. User-installed MCPs (from db) → only if listed in allowedUserMcp whitelist
- *   2. Halo safe MCPs → always injected (web-search, halo-memory)
- *   3. Halo toggleable MCPs → injected only if corresponding GuestPolicy flag is true
- *   4. Unknown MCPs (future additions) → NOT injected (conservative strategy)
- *
- * @param allMcpServers - Complete MCP servers map (already built for owner session)
- * @param dbMcpServers - User-installed MCP servers from database (null if none)
- * @param policy - Guest policy from channel instance config
- */
-export function buildGuestMcpServers(
-  allMcpServers: Record<string, any>,
-  dbMcpServers: Record<string, unknown> | null,
-  policy?: GuestPolicy
-): Record<string, any> {
-  const result: Record<string, any> = {}
-
-  for (const [name, server] of Object.entries(allMcpServers)) {
-    // User-installed MCP → whitelist control
-    if (dbMcpServers && name in dbMcpServers) {
-      if (policy?.allowedUserMcp?.includes(name)) {
-        result[name] = server
-      }
-      continue
-    }
-
-    // Halo safe MCP → always inject
-    if (GUEST_SAFE_MCP.has(name)) {
-      result[name] = server
-      continue
-    }
-
-    // Halo toggleable MCP → check policy switch
-    const toggleKey = GUEST_TOGGLEABLE_MCP[name]
-    if (toggleKey) {
-      if (policy?.[toggleKey]) {
-        result[name] = server
-      }
-      continue
-    }
-
-    // Unknown MCP (future additions) → NOT injected (conservative)
-  }
-
-  return result
-}
+const TEAM_CHANNEL_MCP: ReadonlySet<string> = new Set([TEAM_MCP_SERVER_NAME, 'halo-report'])
 
 // ============================================
 // Types
@@ -364,6 +266,25 @@ function registerExternalChatSession(
   broadcastToAll('app:im-session-updated', sessionEvent)
 }
 
+/**
+ * The `## Memory` block a session opens with — the same block an automation run
+ * gets, because it is the same digital human with the same memory whether it is
+ * working alone, talking to its owner, or working inside a team. No `# History`
+ * heading is pre-inserted: a session spans many turns, and the heading marks a
+ * unit of work, not a turn (see MemoryPrepareOptions).
+ *
+ * Best-effort — a memory read fault must cost the turn its context, not the turn.
+ */
+async function buildSessionMemoryPreamble(scope: MemoryCallerScope, appId: string): Promise<string> {
+  try {
+    const { snapshot } = await prepareMemoryForTurn(scope, { preInsertHistory: false })
+    return `${buildMemorySection(snapshot)}\n\n`
+  } catch (err) {
+    console.error(`[AppChat][${appId}] Memory snapshot failed, continuing without it:`, err)
+    return ''
+  }
+}
+
 // ============================================
 // Core
 // ============================================
@@ -436,7 +357,7 @@ export async function sendAppChatMessage(
   }
 
   // ── 3. Build system prompt for interactive chat ──────
-  const memoryInstructions = memory.getPromptInstructions()
+  const memoryInstructions = memory.getPromptInstructions('session')
   const usesAIBrowser = resolvePermission(app, 'ai-browser')
   const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
   const usesEmail = resolvePermission(app, 'email') // gated on channel config downstream
@@ -482,18 +403,18 @@ export async function sendAppChatMessage(
   // the lead keeps its team identity + tools and gains a front-desk bridge so it
   // replies to the person in-chat. The lead runs as a trusted team peer, so IM
   // guest hardening (buildImConstraints) is intentionally NOT applied.
-  // Reversible seal: any team turn (user/IM/teammate) re-engaging a hibernated
-  // epoch wakes it first, so coordination resumes and member replies route back
-  // to the lead. No-op when the epoch is already open.
   if (teamContext) {
-    getActiveTeamRuntime()?.reactivateEpoch(teamContext.teamId, teamContext.epochId)
-    // Auto-name a native "New session" from the user's first message (parity with
-    // the space chat). No-op unless this is the lead's turn on a still-untitled
-    // native conversation, so a member's woken turn never names it.
-    getActiveTeamRuntime()?.maybeAutoNameConversation(teamContext.teamId, teamContext.epochId, appId, message)
+    // Every team turn (user/IM/teammate) stamps the epoch's activity, and wakes
+    // it when hibernated so coordination resumes and member replies route back.
+    getActiveTeamRuntime()?.noteEpochTurn(teamContext.teamId, teamContext.epochId)
+    // Auto-name a native "New session" from the person's first message (parity
+    // with the space chat). A teammate-driven turn's input is a relayed
+    // envelope, never the user's words.
+    const fromHuman = !teamContext.kind || teamContext.kind === 'human_message'
+    getActiveTeamRuntime()?.maybeAutoNameConversation(teamContext.teamId, teamContext.epochId, fromHuman, message)
   }
   const teamPromptCtx = teamContext
-    ? getActiveTeamRuntime()?.buildPromptContext(teamContext, appId) ?? null
+    ? getActiveTeamRuntime()?.buildPromptContext(teamContext.teamId, appId) ?? null
     : null
   let entry: string
   let constraints: string[]
@@ -608,6 +529,9 @@ export async function sendAppChatMessage(
             callerAppId: app.id,
             collabMode: teamPromptCtx.collabMode,
             selfIsLead: teamPromptCtx.selfIsLead,
+            // The agent's own cwd: published refs are resolved against it, so it
+            // must be the very directory this turn runs in.
+            callerWorkDir: workDir,
             bus: getActiveTeamRuntime()!.bus,
             blackboard: getActiveTeamRuntime()!.blackboard,
             // Location-transparent artifact read (wired by bootstrap); absent →
@@ -615,6 +539,8 @@ export async function sendAppChatMessage(
             ...(getActiveTeamRuntime()!.readArtifact
               ? { readArtifact: getActiveTeamRuntime()!.readArtifact }
               : {}),
+            checks: getActiveTeamRuntime()!.checks,
+            digest: getActiveTeamRuntime()!.digest,
             // Lead-only team_complete → deferred seal after the lead's turn ends.
             requestComplete: (summary) =>
               getActiveTeamRuntime()!.requestSeal(teamContext.teamId, teamContext.epochId, summary),
@@ -661,29 +587,48 @@ export async function sendAppChatMessage(
   // For non-owner senders in IM sessions, restrict available tools via SDK options.
   // Two layers:
   //   1. disallowedTools (built-in) — blacklist computed by inverting the guest's whitelist.
-  //      ALL_BUILTIN_TOOLS minus guest's allowed tools = disallowed. The SDK removes
-  //      these from the model's visible tool pool entirely (API-level removal).
-  //   2. MCP injection control — filter which MCP servers are injected for guests.
-  //      Not injected = model can't see the tool at all. Replaces old allowedTools MCP approach.
+  //      The SDK removes these from the model's visible tool pool entirely.
+  //   2. MCP injection control — a server that is not injected does not exist.
   // Owner sessions are unaffected (bypassPermissions, full tool access).
   // permCtx was read earlier (before system prompt build) for ownerIds injection.
   if (permCtx && !permCtx.isOwner) {
-    const guestAllowed = permCtx.guestPolicy?.allowedTools ?? []
-    // Split: built-in tools only (mcp__ entries are legacy, ignored here)
-    const builtinAllowedSet = new Set(guestAllowed.filter(t => !t.startsWith('mcp__')))
-    // Invert whitelist → blacklist for built-in tools
-    const disallowed = ALL_BUILTIN_TOOLS.filter(t => !builtinAllowedSet.has(t))
+    const disallowed = computeDisallowedBuiltins(permCtx.guestPolicy, 'strict')
     sdkOptions.disallowedTools = disallowed
     sdkOptions.allowedTools = []
     if (sdkOptions.extraArgs) {
       delete sdkOptions.extraArgs['dangerously-skip-permissions']
     }
     sdkOptions.permissionMode = 'default'
-    // MCP injection control: only inject servers the guest is allowed to see
-    sdkOptions.mcpServers = buildGuestMcpServers(mcpServers, dbMcpServers, permCtx.guestPolicy)
+    sdkOptions.mcpServers = filterMcpServersByPolicy(mcpServers, dbMcpServers, permCtx.guestPolicy, 'strict')
     console.log(
       `[AppChat][${appId}] Guest session: sender=${permCtx.senderId}, ` +
-      `allowed=[${Array.from(builtinAllowedSet)}], disallowed=${disallowed.length} tools, ` +
+      `disallowed=${disallowed.length} tools, ` +
+      `mcpServers=[${Object.keys(sdkOptions.mcpServers).join(', ')}]`
+    )
+  }
+
+  // ── Delegated capability control (a teammate woke this digital human) ──────
+  // Only turns started by ANOTHER member are held to the owner's policy: a
+  // person talking to a digital human in its own chat, and a person reaching the
+  // team over IM, are not teammates borrowing it. A withheld capability is
+  // absent from the turn rather than refused mid-call, and an unset policy
+  // withholds nothing — a team that never opened the screen is unchanged.
+  const delegatedPolicy =
+    teamContext && teamContext.kind !== 'human_message' && !imSession
+      ? getActiveTeamRuntime()?.getDelegatedPolicy(teamContext.teamId, appId) ?? null
+      : null
+  if (delegatedPolicy) {
+    const disallowed = computeDisallowedBuiltins(delegatedPolicy, 'permissive')
+    if (disallowed.length > 0) sdkOptions.disallowedTools = disallowed
+    sdkOptions.mcpServers = filterMcpServersByPolicy(
+      mcpServers,
+      dbMcpServers,
+      delegatedPolicy,
+      'permissive',
+      TEAM_CHANNEL_MCP
+    )
+    console.log(
+      `[AppChat][${appId}] Teammate-driven turn: disallowed=${disallowed.length} tools, ` +
       `mcpServers=[${Object.keys(sdkOptions.mcpServers).join(', ')}]`
     )
   }
@@ -766,10 +711,18 @@ export async function sendAppChatMessage(
     }
 
     // ── 8. Process stream ──────────────────────────────
+    // Every session opens with the digital human's memory, the same way an
+    // automation run does — otherwise it works for days, in a team or with its
+    // owner, never seeing what it recorded before. Only on the first turn: the
+    // V2 session carries the conversation forward, so the block stays in context
+    // without being resent. Kept out of the JSONL trigger — the transcript shows
+    // what was actually said, not our preamble.
+    const memoryPreamble = resumeSessionId ? '' : await buildSessionMemoryPreamble(memoryScope, appId)
+
     // With the non-vision fallback active, image blocks are replaced by the
     // injected attachment-paths block.
     const messageContent = buildMessageContent(
-      (imageFallback?.contextBlock ?? '') + message,
+      memoryPreamble + (imageFallback?.contextBlock ?? '') + message,
       imageFallback ? undefined : images
     )
 
@@ -956,6 +909,16 @@ export async function sendAppChatMessage(
         }
       })
     }
+
+    // A session grows memory.md just like a run does, so it gets the same size
+    // ceiling — a file that only automation runs keep in check would still bloat
+    // for a digital human that mostly works in chats and teams. Costs nothing
+    // until the threshold is crossed. Detached: housekeeping, not part of the turn.
+    void checkAndCompactMemory(memory, memoryScope, app.spec.name, chatRunId, async () => ({
+      anthropicApiKey: resolvedCreds.anthropicApiKey,
+      anthropicBaseUrl: resolvedCreds.anthropicBaseUrl,
+      sdkModel: resolvedCreds.sdkModel,
+    }))
 
     // Flush buffered IM supplements (deferred so busy lock is released first)
     if (conversationId !== defaultConvId) {

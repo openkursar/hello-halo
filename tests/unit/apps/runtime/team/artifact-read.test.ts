@@ -7,7 +7,10 @@
  *   - a resultRef-only delivery (task done, no finding) resolves the same way —
  *     both publication forms the tools promise are actually readable;
  *   - an unpublished ref returns not-found with publish guidance;
- *   - the local resolver refuses path traversal and absolute refs;
+ *   - a published-but-vanished file is reported as moved, NOT as "re-publish it"
+ *     (publication is validated when it happens, so that advice only loops);
+ *   - the local resolver refuses traversal and out-of-work-dir absolute refs,
+ *     while still serving a legacy absolute ref that lands inside the work dir;
  *   - a binary artifact (NUL in head) is refused, never inlined;
  *   - oversized text is truncated at a UTF-8 character boundary (no U+FFFD);
  *   - a remote producer without an injected remote fetch reports the capability
@@ -42,7 +45,7 @@ const REMOTE_NODE = 'node-remote'
 describe('artifact-read', () => {
   let dbManager: DatabaseManager
   let store: TeamStore
-  let spaceDir: string
+  let workDir: string
 
   function seed(): void {
     const now = Date.now()
@@ -127,7 +130,7 @@ describe('artifact-read', () => {
   function makeReader(overrides?: Partial<Parameters<typeof createTeamArtifactReader>[0]>) {
     const readLocalBytes = createLocalArtifactResolver({
       store,
-      getSpacePathForApp: (appId) => (appId === LOCAL_APP ? spaceDir : null),
+      getWorkDirForApp: (appId) => (appId === LOCAL_APP ? workDir : null),
     })
     return createTeamArtifactReader({ store, readLocalBytes, ...overrides })
   }
@@ -138,17 +141,17 @@ describe('artifact-read', () => {
     dbManager.runMigrations(db, MIGRATION_NAMESPACE, migrations)
     store = new TeamStore(db)
     seed()
-    spaceDir = mkdtempSync(join(tmpdir(), 'halo-artifact-read-'))
+    workDir = mkdtempSync(join(tmpdir(), 'halo-artifact-read-'))
   })
 
   afterEach(() => {
     dbManager.closeAll()
-    rmSync(spaceDir, { recursive: true, force: true })
+    rmSync(workDir, { recursive: true, force: true })
   })
 
   describe('local producer', () => {
     it('reads a finding-published ref', async () => {
-      writeFileSync(join(spaceDir, 'brief.md'), '# Brief\ncontent')
+      writeFileSync(join(workDir, 'brief.md'), '# Brief\ncontent')
       publishFinding('brief.md')
 
       const res = await makeReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'brief.md' })
@@ -159,7 +162,7 @@ describe('artifact-read', () => {
     })
 
     it('reads a resultRef-only delivery (task done, no finding)', async () => {
-      writeFileSync(join(spaceDir, 'report.md'), 'delivered via resultRef')
+      writeFileSync(join(workDir, 'report.md'), 'delivered via resultRef')
       deliverAsResultRef('report.md')
 
       const res = await makeReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'report.md' })
@@ -168,7 +171,7 @@ describe('artifact-read', () => {
     })
 
     it('returns not-found with publish guidance for an unpublished ref', async () => {
-      writeFileSync(join(spaceDir, 'exists.md'), 'on disk but never published')
+      writeFileSync(join(workDir, 'exists.md'), 'on disk but never published')
 
       const res = await makeReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'exists.md' })
       expect(res.ok).toBe(false)
@@ -177,18 +180,30 @@ describe('artifact-read', () => {
       expect(res.message).toContain('resultRef')
     })
 
-    it('returns not-found when the published file is gone from disk', async () => {
+    it('says the file moved (not "re-publish") when it is gone from disk', async () => {
       publishFinding('gone.md')
 
       const res = await makeReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'gone.md' })
       expect(res.ok).toBe(false)
       expect(res.reason).toBe('not-found')
-      expect(res.message).toContain('re-publish')
+      expect(res.message).toContain('moved or deleted')
+      // Publication is validated when it happens, so re-publishing the same
+      // vanished path only loops — the guidance must not send them there.
+      expect(res.message).not.toContain('re-publish')
     })
 
-    it('refuses traversal and absolute refs even when published', async () => {
-      mkdirSync(join(spaceDir, 'sub'), { recursive: true })
-      writeFileSync(join(spaceDir, 'secret.txt'), 'secret')
+    it('reads a ref nested under the work dir', async () => {
+      mkdirSync(join(workDir, 'docs'), { recursive: true })
+      writeFileSync(join(workDir, 'docs', 'design.md'), '# Design')
+      publishFinding('docs/design.md')
+
+      const res = await makeReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'docs/design.md' })
+      expect(res.ok).toBe(true)
+      expect(res.content).toBe('# Design')
+    })
+
+    it('refuses traversal and out-of-work-dir absolute refs even when published', async () => {
+      writeFileSync(join(workDir, 'secret.txt'), 'secret')
       publishFinding('../secret.txt')
       publishFinding('/etc/hosts')
 
@@ -200,8 +215,19 @@ describe('artifact-read', () => {
       expect(absolute.ok).toBe(false)
     })
 
+    it('still serves a legacy absolute ref that points inside the work dir', async () => {
+      // Rows written before refs were normalized at publish time.
+      const abs = join(workDir, 'legacy.md')
+      writeFileSync(abs, 'stored absolute')
+      publishFinding(abs)
+
+      const res = await makeReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: abs })
+      expect(res.ok).toBe(true)
+      expect(res.content).toBe('stored absolute')
+    })
+
     it('refuses a binary artifact instead of inlining it', async () => {
-      writeFileSync(join(spaceDir, 'blob.bin'), Buffer.from([1, 2, 0, 3, 4]))
+      writeFileSync(join(workDir, 'blob.bin'), Buffer.from([1, 2, 0, 3, 4]))
       publishFinding('blob.bin')
 
       const res = await makeReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'blob.bin' })
@@ -214,7 +240,7 @@ describe('artifact-read', () => {
       // "é" is 2 bytes (0xC3 0xA9); a 15-byte cap over "aaaaaaaaaaaaaaé..." would
       // split the glyph without boundary handling.
       const text = 'aaaaaaaaaaaaaa' + 'é'.repeat(20) // 14 + 40 bytes
-      writeFileSync(join(spaceDir, 'big.md'), text)
+      writeFileSync(join(workDir, 'big.md'), text)
       publishFinding('big.md')
 
       const res = await makeReader({ inlineCapBytes: 15 })({
@@ -260,7 +286,7 @@ describe('artifact-read', () => {
     it.each([
       ['owner-unreachable', 'unreachable', 'can\u2019t be reached'],
       ['not-published', 'not-found', 'team_post_finding'],
-      ['not-found', 'not-found', 're-publish'],
+      ['not-found', 'not-found', 'moved or deleted'],
     ] as const)('maps a %s remote failure to calm guidance', async (failure, reason, phrase) => {
       publishFinding('remote.md', REMOTE_APP)
 

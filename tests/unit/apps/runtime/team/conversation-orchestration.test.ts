@@ -110,26 +110,52 @@ describe('conversation + outcome orchestration', () => {
     expect(epochMutations.some((e) => e.id === e1.id)).toBe(true)
   })
 
-  it('auto-names an untitled native conversation from the lead\u2019s first message', () => {
+  it('auto-names an untitled native conversation from the person\u2019s first message', () => {
     const orch = build()
     const convo = orch.ensureConversationEpoch(TEAM_ID, nativeConversationChatKey('u1'))
     expect(convo.title).toBeNull()
-    // A member's turn must NOT name it (only the lead / front desk does).
-    orch.maybeAutoNameConversation(TEAM_ID, convo.id, RESEARCHER_APP, 'irrelevant member turn')
+    // A bus-delivered turn must NOT name it — its input is a relayed envelope.
+    orch.maybeAutoNameConversation(TEAM_ID, convo.id, false, '[Team message from Researcher] look at this')
     expect(store.getEpochById(convo.id)?.title).toBeNull()
-    // The lead's first user message names it (whitespace collapsed).
-    orch.maybeAutoNameConversation(TEAM_ID, convo.id, LEAD_APP, '  Who should we\n watch this week?  ')
+    // The person's first message names it (whitespace collapsed).
+    orch.maybeAutoNameConversation(TEAM_ID, convo.id, true, '  Who should we\n watch this week?  ')
     expect(store.getEpochById(convo.id)?.title).toBe('Who should we watch this week?')
     // A later message does NOT rename it (title set = only the first names).
-    orch.maybeAutoNameConversation(TEAM_ID, convo.id, LEAD_APP, 'a follow-up')
+    orch.maybeAutoNameConversation(TEAM_ID, convo.id, true, 'a follow-up')
     expect(store.getEpochById(convo.id)?.title).toBe('Who should we watch this week?')
+  })
+
+  it('names a conversation the person started with a NON-lead member', () => {
+    const orch = build()
+    const convo = orch.ensureConversationEpoch(TEAM_ID, nativeConversationChatKey('u2'))
+    // The Conversation tab lets the user pick who to talk to, so keying naming on
+    // the lead left these threads unnamed until a teammate envelope named them.
+    orch.maybeAutoNameConversation(TEAM_ID, convo.id, true, 'Can you check the build?')
+    expect(store.getEpochById(convo.id)?.title).toBe('Can you check the build?')
   })
 
   it('does not auto-name a member direct chat (it labels by member name)', () => {
     const orch = build()
     const convo = orch.ensureConversationEpoch(TEAM_ID, memberChatKey(RESEARCHER_APP))
-    orch.maybeAutoNameConversation(TEAM_ID, convo.id, LEAD_APP, 'hello there')
+    orch.maybeAutoNameConversation(TEAM_ID, convo.id, true, 'hello there')
     expect(store.getEpochById(convo.id)?.title).toBeNull()
+  })
+
+  it('stamps last activity monotonically as turns enter an epoch', () => {
+    const orch = build()
+    const convo = orch.ensureConversationEpoch(TEAM_ID, nativeConversationChatKey('u3'))
+    const created = store.getEpochById(convo.id)!.lastActivityAt
+    expect(created).toBe(convo.startedAt)
+
+    const later = convo.startedAt + 60_000
+    store.touchEpoch(convo.id, later)
+    expect(store.getEpochById(convo.id)!.lastActivityAt).toBe(later)
+
+    // A stamp from the past never pulls it backwards — including the one
+    // noteEpochTurn writes with the current clock.
+    store.touchEpoch(convo.id, convo.startedAt - 10_000)
+    orch.noteEpochTurn(TEAM_ID, convo.id)
+    expect(store.getEpochById(convo.id)!.lastActivityAt).toBe(later)
   })
 
   it('getMemberBusy lists the open epochs a member is actively serving, with labels', () => {
@@ -145,6 +171,35 @@ describe('conversation + outcome orchestration', () => {
     expect(busy[0].kind).toBe('conversation')
     // A member direct-chat labels as the member's name (main-side resolved).
     expect(busy[0].label).toBe('researcher')
+  })
+
+  it('seals the conversation it was given, leaving an open run untouched', async () => {
+    // Guards against sealing the team's current run instead of the
+    // conversation the tool call was actually made from.
+    const orch = build()
+    const run = await orch.startEpoch(TEAM_ID)
+    const convo = orch.ensureConversationEpoch(TEAM_ID, nativeConversationChatKey('u1'))
+
+    await orch.sealConversationEpoch(TEAM_ID, convo.id, 'completed', 'chat done')
+
+    expect(store.getEpochById(convo.id)?.endedAt).not.toBeNull()
+    expect(store.getEpochById(convo.id)?.summary).toBe('chat done')
+    // The run is still the team's live instance.
+    expect(store.getEpochById(run.id)?.endedAt).toBeNull()
+    const team = store.getTeamById(TEAM_ID)!
+    expect(team.currentEpochId).toBe(run.id)
+    expect(team.status).toBe('running')
+  })
+
+  it('ignores a second seal of an already-sealed conversation', async () => {
+    const orch = build()
+    const convo = orch.ensureConversationEpoch(TEAM_ID, nativeConversationChatKey('u1'))
+
+    await orch.sealConversationEpoch(TEAM_ID, convo.id, 'completed', 'first')
+    await orch.sealConversationEpoch(TEAM_ID, convo.id, 'stopped', 'second')
+
+    expect(store.getEpochById(convo.id)?.endReason).toBe('completed')
+    expect(store.getEpochById(convo.id)?.summary).toBe('first')
   })
 
   it('classifies a produced run as "output" on seal', async () => {

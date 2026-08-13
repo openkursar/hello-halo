@@ -16,11 +16,22 @@ import type {
   RosterMember,
   RosterBusyEntry,
   TaskStatus,
+  TeamActivity,
+  TeamActivityKind,
+  TeamActivityStatus,
   TeamReadBoardFilter,
   TeamMemberRuntimeStatus,
+  TeamCheckView,
 } from '../../../../shared/apps/team-types'
 
 const LOG_TAG = '[Blackboard]'
+
+/**
+ * How many acts the AGENT-facing snapshot carries. A long-running epoch
+ * accumulates hundreds; the whole point of the record is that the digest and
+ * the UI can reach it, not that every turn re-reads it in full.
+ */
+const SNAPSHOT_ACTIVITY_LIMIT = 60
 
 export interface PostTaskInput {
   teamId: string
@@ -48,10 +59,35 @@ export interface PostFindingInput {
   ref?: string
 }
 
+/**
+ * One coordination act to record. `id` may be supplied by a caller that already
+ * owns a stable identifier (the message bus mints an envelope id before the act
+ * is recorded), so the recorded row and the thing it describes share one key.
+ */
+export interface PostActivityInput {
+  teamId: string
+  epochId: string
+  kind: TeamActivityKind
+  actorAppId: string
+  targetAppId?: string | null
+  subject: string
+  body?: string | null
+  refId?: string | null
+  correlationId?: string | null
+  status?: TeamActivityStatus | null
+  id?: string
+}
+
 export interface Blackboard {
   postTask(input: PostTaskInput): { taskId: string }
   updateTask(input: UpdateTaskInput): void
   postFinding(input: PostFindingInput): { findingId: string }
+  /**
+   * Append one act to the office record. Append-only: an answer is recorded as a
+   * new `reply` act carrying the original's `correlationId`, never as an edit of
+   * the message row.
+   */
+  postActivity(input: PostActivityInput): { activityId: string }
   readBoard(
     teamId: string,
     epochId: string,
@@ -69,7 +105,15 @@ export interface Blackboard {
 export interface BlackboardWriteRecord {
   teamId: string
   epochId: string
-  op: 'post_task' | 'update_task' | 'post_finding' | 'epoch_upsert'
+  op:
+    | 'post_task'
+    | 'update_task'
+    | 'post_finding'
+    | 'post_activity'
+    | 'epoch_upsert'
+    | 'member_profile'
+    | 'check_upsert'
+    | 'check_delete'
   payload: Record<string, unknown>
   taskId?: string
 }
@@ -92,6 +136,12 @@ export interface BlackboardDeps {
    * Absent → every member is treated as reachable (non-federated runtime).
    */
   getMemberReachable?: (appId: string, teamId: string) => boolean
+  /**
+   * Periodic checks running in an epoch, so the board answers "what is already
+   * being watched" in the same read that answers "what is already assigned".
+   * Injected (the checks module is built after the board). Absent → none.
+   */
+  getChecks?: (teamId: string, epochId: string) => TeamCheckView[]
   /**
    * Fired AFTER each successful local blackboard write. Notification-only: the
    * write is already applied; the replication layer assigns a seq and fans the
@@ -124,6 +174,12 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
 
   function emitFinding(teamId: string, epochId: string, finding: BlackboardFinding): void {
     const payload = { teamId, epochId, kind: 'finding' as const, finding }
+    broadcastToAll(TEAM_EVENTS.blackboard, payload)
+    sendToRenderer(TEAM_EVENTS.blackboard, payload)
+  }
+
+  function emitActivity(teamId: string, epochId: string, activity: TeamActivity): void {
+    const payload = { teamId, epochId, kind: 'activity' as const, activity }
     broadcastToAll(TEAM_EVENTS.blackboard, payload)
     sendToRenderer(TEAM_EVENTS.blackboard, payload)
   }
@@ -210,6 +266,32 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
     return { findingId: finding.id }
   }
 
+  function postActivity(input: PostActivityInput): { activityId: string } {
+    const activity: TeamActivity = {
+      id: input.id ?? randomUUID(),
+      teamId: input.teamId,
+      epochId: input.epochId,
+      kind: input.kind,
+      actorAppId: input.actorAppId,
+      targetAppId: input.targetAppId ?? null,
+      subject: input.subject,
+      body: input.body ?? null,
+      refId: input.refId ?? null,
+      correlationId: input.correlationId ?? null,
+      status: input.status ?? null,
+      createdAt: Date.now(),
+    }
+    store.insertActivity(activity)
+    emitActivity(input.teamId, input.epochId, activity)
+    notifyWrite({
+      teamId: input.teamId,
+      epochId: input.epochId,
+      op: 'post_activity',
+      payload: activity as unknown as Record<string, unknown>,
+    })
+    return { activityId: activity.id }
+  }
+
   function buildRoster(teamId: string, tasks: BlackboardTask[]): RosterMember[] {
     const members = store.listMembersByTeam(teamId)
     return members.map((m) => {
@@ -232,6 +314,7 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
         appId: m.appId,
         memberName: m.memberName,
         role: m.role,
+        duty: m.duty ?? null,
         isLead: m.isLead,
         spaceId: null,
         status,
@@ -253,12 +336,21 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
     let tasks = store.listTasksByEpoch(teamId, epochId)
     const findings = store.listFindingsByEpoch(teamId, epochId)
     const roster = buildRoster(teamId, tasks)
+    const checks = deps.getChecks?.(teamId, epochId) ?? []
+    // Subject only, and only the recent tail. The full text stays on the row for
+    // the UI to open on demand — an agent that needs a message verbatim has it in
+    // its own transcript, and pasting bodies here would turn every board read
+    // into a re-read of the whole conversation.
+    const activities = store
+      .listActivityByEpoch(teamId, epochId)
+      .slice(-SNAPSHOT_ACTIVITY_LIMIT)
+      .map((a) => ({ ...a, body: null }))
 
     if (filter?.mine) tasks = tasks.filter((t) => t.assigneeAppId === callerAppId)
     if (filter?.status) tasks = tasks.filter((t) => t.status === filter.status)
 
-    return { tasks, findings, roster }
+    return { tasks, findings, roster, checks, activities }
   }
 
-  return { postTask, updateTask, postFinding, readBoard }
+  return { postTask, updateTask, postFinding, postActivity, readBoard }
 }

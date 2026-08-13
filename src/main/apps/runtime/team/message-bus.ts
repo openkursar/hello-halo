@@ -8,11 +8,18 @@
 import { randomUUID } from 'crypto'
 import { broadcastToAll } from '../../../http/websocket'
 import { sendToRenderer } from '../../../foundation/window.service'
-import { buildTeamSessionKey, TEAM_EVENTS, TEAM_CIRCUIT_DEFAULTS } from '../../../../shared/apps/team-types'
+import {
+  buildTeamSessionKey,
+  TEAM_EVENTS,
+  TEAM_CIRCUIT_DEFAULTS,
+  toActivitySubject,
+} from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 import type { TeamStore } from '../../team'
+import type { PostActivityInput } from './blackboard'
 import type {
   CollabMode,
+  TeamActivityStatus,
   TeamEnvelope,
   TeamTriggerContext,
   TeamSendAsyncResult,
@@ -120,7 +127,13 @@ export interface CircuitBreachEvent {
 export interface SendInput {
   teamId: string
   epochId: string
-  fromAppId: string
+  /**
+   * The teammate sending, or null when a PERSON is (a 1:1 member chat). A
+   * person's message rides this bus because that is how it reaches a member on
+   * another machine, but it is not team traffic: it is delivered and nothing
+   * else — no office record, no circuit charge, no flow signal.
+   */
+  fromAppId: string | null
   /** Member name, resolved to appId via the store. */
   to: string
   message: string
@@ -128,12 +141,35 @@ export interface SendInput {
   /** Guards against ping-pong: initial lead wake is 0, each completion-wake increments. */
   forwardDepth?: number
   taskRef?: string
-  /** Human-originated 1:1 send (see TeamTriggerContext.humanOrigin). */
-  humanOrigin?: boolean
 }
+
+/**
+ * What to do with a runtime wake whose target is already occupied.
+ * - `buffer`: mailbox it and deliver when the current turn ends. For a wake that
+ *   must not be lost (an escalation answer the member is blocked on).
+ * - `skip`: drop it. For a wake that repeats on its own rhythm (a periodic
+ *   check) — queueing those only piles up rounds the member already missed.
+ */
+export type BusyDisposition = 'buffer' | 'skip'
+
+export type WakeDisposition = 'dispatched' | 'buffered' | 'skipped'
 
 export interface MessageBus {
   send(input: SendInput): Promise<TeamSendAsyncResult | TeamSendSyncResult>
+  /**
+   * Start a turn the RUNTIME itself asked for (escalation resume, self-nudge,
+   * periodic check) rather than a member's `team_send`. Carries no delivery
+   * receipt and does not charge the circuit breaker, but goes through the SAME
+   * busy gate as `send`: the bus is the only component that knows whether a
+   * session already has a turn running or a wake in flight, so a path that calls
+   * the session layer directly can start a second concurrent turn on one session
+   * key — which tears down the subprocess the first turn is still streaming.
+   */
+  deliverRuntimeWake(params: {
+    envelope: TeamEnvelope
+    trigger: TeamTriggerContext
+    onBusy: BusyDisposition
+  }): Promise<WakeDisposition>
   completeTurn(params: {
     sessionKey: string
     trigger: TeamTriggerContext
@@ -168,6 +204,15 @@ export interface MessageBusDeps {
   hooks: TeamDeliveryHooks
   circuitOverrides?: Partial<CircuitLimits>
   syncWaitTimeoutMs?: number
+  /**
+   * Append one act to the office record (the blackboard's activity stream).
+   * Directed messages are recorded HERE rather than in the tool layer because
+   * this is the one place every teammate message path converges — a member's
+   * `team_send`, an escalation routed to the lead — so the record does not
+   * depend on each caller remembering. Late-bound by the runtime factory (the
+   * bus is constructed before the blackboard). Absent → no record kept.
+   */
+  recordActivity?: (input: PostActivityInput) => void
 }
 
 // ── Internal state ──────────────────────────────────────────────────────────
@@ -177,8 +222,11 @@ interface PendingWait {
   fromMemberName: string
   timer: NodeJS.Timeout
   forwardDepth: number
+  teamId: string
   /** The epoch this wait belongs to, so resetEpoch only clears its own waiters. */
   epochId: string
+  /** The sender, so an unblocked wait can be recorded as an answer TO someone. */
+  fromAppId: string | null
   /** The target member, so a confirmed-offline member can unblock its waiters. */
   toAppId: string
 }
@@ -315,19 +363,69 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     return store.listMembersByTeam(teamId).find((m) => m.appId === appId)?.memberName ?? appId
   }
 
-  function emitMessageEvent(env: TeamEnvelope): void {
+  function emitMessageEvent(env: TeamEnvelope, fromAppId: string): void {
     const payload = {
       teamId: env.teamId,
       epochId: env.epochId,
-      fromAppId: env.fromAppId,
+      fromAppId,
       toAppId: env.toAppId,
-      fromMemberName: memberNameOf(env.teamId, env.fromAppId),
+      fromMemberName: memberNameOf(env.teamId, fromAppId),
       toMemberName: memberNameOf(env.teamId, env.toAppId),
       messageId: env.id,
       ts: env.createdAt,
     }
     broadcastToAll(TEAM_EVENTS.message, payload)
     sendToRenderer(TEAM_EVENTS.message, payload)
+  }
+
+  /** Never let bookkeeping break coordination: the act already happened. */
+  function recordActivity(input: PostActivityInput): void {
+    if (!deps.recordActivity) return
+    try {
+      deps.recordActivity(input)
+    } catch (err) {
+      console.error(`${LOG_TAG} recordActivity failed (the act itself stands):`, err)
+    }
+  }
+
+  /** How the turn a message started ended, in the record's vocabulary. */
+  function replyStatusOf(outcome: TurnCompletion): TeamActivityStatus {
+    switch (outcome.kind) {
+      case 'result':
+        return 'ok'
+      case 'escalation':
+        return 'escalation'
+      case 'error':
+        return 'error'
+      case 'timeout':
+        return 'timeout'
+      case 'undelivered':
+        return 'undelivered'
+    }
+  }
+
+  /**
+   * Record that the turn a message started has ended. Append-only: this is a NEW
+   * act pointing back at the message through its correlationId, never an edit of
+   * the message row — which is what keeps "answered / awaiting reply" derivable
+   * without a mutable status column, and keeps replication a single idempotent
+   * insert.
+   *
+   * Only messages get an answer: a completion wake (fromAppId null) or a periodic
+   * check answers nobody, so recording one would invent a reply.
+   */
+  function recordReply(trigger: TeamTriggerContext, finisherAppId: string, outcome: TurnCompletion): void {
+    if (!trigger.fromAppId || trigger.kind !== 'message') return
+    recordActivity({
+      teamId: trigger.teamId,
+      epochId: trigger.epochId,
+      kind: 'reply',
+      actorAppId: finisherAppId,
+      targetAppId: trigger.fromAppId,
+      subject: toActivitySubject(describeCompletion(outcome)),
+      correlationId: trigger.correlationId,
+      status: replyStatusOf(outcome),
+    })
   }
 
   function bufferDelivery(sessionKey: string, entry: BufferedDelivery): void {
@@ -354,12 +452,24 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     mailboxRechecks.set(sessionKey, timer)
   }
 
-  /** Buffer if the target is mid-turn (or a wake is in flight); otherwise wake now. */
-  async function deliver(env: TeamEnvelope, trigger: TeamTriggerContext): Promise<void> {
+  /**
+   * The single dispatch gate: buffer (or skip) if the target is mid-turn or a
+   * wake is in flight; otherwise wake now. Every path that starts a team turn
+   * goes through here, so the reservation below is the whole concurrency story.
+   */
+  async function deliver(
+    env: TeamEnvelope,
+    trigger: TeamTriggerContext,
+    onBusy: BusyDisposition = 'buffer'
+  ): Promise<WakeDisposition> {
     const sessionKey = buildTeamSessionKey(env.toAppId, env.teamId, env.epochId)
     if (hooks.isBusy(sessionKey) || wakesInFlight.has(sessionKey)) {
+      if (onBusy === 'skip') {
+        console.log(`${LOG_TAG} Target busy, skipped: session=${sessionKey} kind=${trigger.kind}`)
+        return 'skipped'
+      }
       bufferDelivery(sessionKey, { envelope: env, trigger, appId: env.toAppId })
-      return
+      return 'buffered'
     }
     wakesInFlight.add(sessionKey)
     try {
@@ -378,11 +488,24 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       wakesInFlight.delete(sessionKey)
       throw err
     }
+    return 'dispatched'
+  }
+
+  function deliverRuntimeWake(params: {
+    envelope: TeamEnvelope
+    trigger: TeamTriggerContext
+    onBusy: BusyDisposition
+  }): Promise<WakeDisposition> {
+    return deliver(params.envelope, params.trigger, params.onBusy)
   }
 
   async function send(input: SendInput): Promise<TeamSendAsyncResult | TeamSendSyncResult> {
     const wait = input.wait ?? false
     const forwardDepth = input.forwardDepth ?? 0
+    // Null = a person wrote this. Every piece of team bookkeeping below is gated
+    // on it: the record, the budget and the flow signal all describe what the
+    // digital humans do among themselves, and a person's chat is none of it.
+    const fromAppId = input.fromAppId
 
     const toAppId = resolveMemberAppId(input.teamId, input.to)
 
@@ -396,18 +519,39 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       console.warn(
         `${LOG_TAG} send: target owner unreachable, not delivered: team=${input.teamId} to=${input.to} app=${toAppId}`
       )
-      return { messageId: randomUUID(), delivery: 'undelivered' }
+      const messageId = randomUUID()
+      // Recorded, not swallowed: "tried and did not arrive" is a different fact
+      // from "never tried", and the sender's later digest must not nag about a
+      // reply that can never come.
+      if (fromAppId) {
+        recordActivity({
+          teamId: input.teamId,
+          epochId: input.epochId,
+          id: messageId,
+          kind: 'message',
+          actorAppId: fromAppId,
+          targetAppId: toAppId,
+          subject: toActivitySubject(input.message),
+          body: input.message,
+          refId: messageId,
+          status: 'undelivered',
+        })
+      }
+      return { messageId, delivery: 'undelivered' }
     }
 
     // Topology is enforced at the tool layer (assertCanContact before send).
-    chargeCircuit(input.teamId, input.epochId, forwardDepth)
+    // The budget guards AI loops, which a person cannot start: every message
+    // they send costs them a keystroke, so charging one would only let a chat
+    // burn the run's allowance and start its clock before the team even begins.
+    if (fromAppId) chargeCircuit(input.teamId, input.epochId, forwardDepth)
 
     const correlationId = randomUUID()
     const envelope: TeamEnvelope = {
       id: randomUUID(),
       teamId: input.teamId,
       epochId: input.epochId,
-      fromAppId: input.fromAppId,
+      fromAppId,
       toAppId,
       body: input.message,
       wait,
@@ -415,23 +559,39 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       taskRef: input.taskRef,
       createdAt: Date.now(),
     }
-    emitMessageEvent(envelope)
+    if (fromAppId) {
+      emitMessageEvent(envelope, fromAppId)
+      // The envelope id doubles as the act's id, so the live UI signal and the
+      // durable record refer to the same message rather than two ids for one send.
+      recordActivity({
+        teamId: input.teamId,
+        epochId: input.epochId,
+        id: envelope.id,
+        kind: 'message',
+        actorAppId: fromAppId,
+        targetAppId: toAppId,
+        subject: toActivitySubject(input.message),
+        body: input.message,
+        refId: envelope.id,
+        correlationId,
+        status: 'sent',
+      })
+    }
 
     const trigger: TeamTriggerContext = {
       teamId: input.teamId,
       epochId: input.epochId,
       correlationId,
-      fromAppId: input.fromAppId,
+      fromAppId,
       wait,
       taskId: input.taskRef,
-      kind: 'message',
-      ...(input.humanOrigin ? { humanOrigin: true } : {}),
+      kind: fromAppId ? 'message' : 'human_message',
     }
     ;(trigger as TeamTriggerContext & { forwardDepth?: number }).forwardDepth = forwardDepth + 1
 
     console.log(
       `${LOG_TAG} send: team=${input.teamId} epoch=${input.epochId} ` +
-        `from=${input.fromAppId} to=${input.to}(${toAppId}) wait=${wait} depth=${forwardDepth}`
+        `from=${fromAppId ?? 'person'} to=${input.to}(${toAppId}) wait=${wait} depth=${forwardDepth}`
     )
 
     if (!wait) {
@@ -453,7 +613,9 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
         fromMemberName: input.to,
         timer,
         forwardDepth,
+        teamId: input.teamId,
         epochId: input.epochId,
+        fromAppId,
         toAppId,
       })
 
@@ -504,6 +666,21 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       if (pending.toAppId !== appId) continue
       clearTimeout(pending.timer)
       pendingWaits.delete(corr)
+      // The wait is over, so the record has to say so — otherwise the sender's
+      // digest keeps reporting a message "still waiting" that nothing will
+      // answer. A person's wait has no message row to close and no digest.
+      if (pending.fromAppId) {
+        recordActivity({
+          teamId: pending.teamId,
+          epochId: pending.epochId,
+          kind: 'reply',
+          actorAppId: pending.toAppId,
+          targetAppId: pending.fromAppId,
+          subject: toActivitySubject(describeCompletion(outcome)),
+          correlationId: corr,
+          status: replyStatusOf(outcome),
+        })
+      }
       // A confirmed-offline unblock keeps timeout semantics but tells the sender
       // explicitly that the teammate is gone so it can reassign (naming them so a
       // lead waiting on several teammates knows exactly who dropped).
@@ -583,6 +760,9 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       return
     }
 
+    const finisherAppId = appIdFromSessionKey(sessionKey) ?? trigger.fromAppId ?? ''
+    if (finisherAppId) recordReply(trigger, finisherAppId, outcome)
+
     if (trigger.wait) {
       resolvePendingWait(trigger.correlationId, outcome)
     } else if (trigger.fromAppId) {
@@ -590,7 +770,6 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       if (outcome.kind !== 'escalation') {
         const depth =
           (trigger as TeamTriggerContext & { forwardDepth?: number }).forwardDepth ?? 1
-        const finisherAppId = appIdFromSessionKey(sessionKey) ?? trigger.fromAppId
         const completionEnv: TeamEnvelope = {
           id: randomUUID(),
           teamId: trigger.teamId,
@@ -704,6 +883,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
 
   return {
     send,
+    deliverRuntimeWake,
     completeTurn,
     assertCanContact,
     resolveMemberAppId,
