@@ -1,25 +1,54 @@
 /**
  * Process Cleaner - Orphan process cleanup
  *
- * Implements dual-mechanism cleanup:
- * 1. PID-based cleanup (from registry)
- * 2. Args-based cleanup (scan for --halo-managed flag)
- *
- * Defense in depth - ensures no orphan processes survive.
+ * Only ever touches processes of previous app instances: recorded PIDs (confirmed
+ * against the binary recorded for them), plus a command-line scan for the
+ * halo-managed marker — inert while no spawn path passes that marker.
  */
 
 import type { CleanupResult, ProcessEntry, ProcessType } from '../types'
 import {
   getCurrentInstanceId,
   getOrphanProcesses,
-  clearOrphanEntries,
-  loadRegistry
+  clearOrphanEntries
 } from './registry'
 import { getPlatformOps } from './platform'
 
 // Command-line argument patterns for Halo-managed processes
 const HALO_MANAGED_FLAG = 'halo-managed'
 const HALO_INSTANCE_PREFIX = 'halo-instance='
+
+// Binary each tracked process type runs as. Types absent here are never killed
+// by PID.
+const PROCESS_BINARY: Partial<Record<ProcessType, string>> = {
+  'v2-session': 'claude',
+  tunnel: 'cloudflared'
+}
+
+/**
+ * The OS reuses PIDs, so an entry from a previous run can point at a process with
+ * nothing to do with Halo - especially after a reboot. A PID qualifies only while
+ * it still runs the binary recorded for its type.
+ */
+async function selectKillablePids(entries: ProcessEntry[]): Promise<Set<number>> {
+  const platformOps = getPlatformOps()
+  const killable = new Set<number>()
+
+  for (const [type, binary] of Object.entries(PROCESS_BINARY)) {
+    const recordedPids = entries.filter(e => e.type === type).map(e => e.pid)
+    if (recordedPids.length === 0) {
+      continue
+    }
+
+    for (const proc of await platformOps.findByArgs(binary)) {
+      if (recordedPids.includes(proc.pid) && proc.name?.replace(/\.exe$/i, '') === binary) {
+        killable.add(proc.pid)
+      }
+    }
+  }
+
+  return killable
+}
 
 /**
  * Clean up orphan processes from previous app instances
@@ -50,25 +79,25 @@ export async function cleanupOrphans(): Promise<CleanupResult> {
   // ====================================
 
   const orphanEntries = getOrphanProcesses()
-  console.log(`[Health][Cleaner] Found ${orphanEntries.length} orphan entries in registry`)
+  const killablePids = await selectKillablePids(orphanEntries)
+  console.log(`[Health][Cleaner] ${orphanEntries.length} orphan entries, ${killablePids.size} still running`)
 
   for (const entry of orphanEntries) {
-    if (!entry.pid) {
-      // No PID recorded - will rely on args-based cleanup
+    if (!entry.pid || !killablePids.has(entry.pid)) {
+      // Dead, PID-less, or reassigned elsewhere - args-based cleanup is the only
+      // path allowed to touch it.
       continue
     }
 
     try {
-      if (platformOps.isProcessAlive(entry.pid)) {
-        await platformOps.killProcess(entry.pid, 'SIGTERM')
-        result.cleaned++
-        result.details.push({
-          pid: entry.pid,
-          type: entry.type,
-          method: 'pid'
-        })
-        console.log(`[Health][Cleaner] Killed orphan by PID: ${entry.pid} (${entry.type})`)
-      }
+      await platformOps.killProcess(entry.pid, 'SIGTERM')
+      result.cleaned++
+      result.details.push({
+        pid: entry.pid,
+        type: entry.type,
+        method: 'pid'
+      })
+      console.log(`[Health][Cleaner] Killed orphan by PID: ${entry.pid} (${entry.type})`)
     } catch (error) {
       console.error(`[Health][Cleaner] Failed to kill PID ${entry.pid}:`, error)
       result.failed++

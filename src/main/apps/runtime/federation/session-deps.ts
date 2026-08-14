@@ -188,8 +188,8 @@ export function makeLocationAwareSessionDeps(
         if (!sent) {
           // Owner unreachable at send time: the wake definitively did NOT go out.
           // Resolve as undelivered (not empty success) so the sender can reassign;
-          // the lead's wait=true hang is additionally covered by the message bus's
-          // resolvePendingWaitsForMember on confirmed-offline.
+          // a person's 1:1 chat blocking on a completion receipt is additionally
+          // covered by the bus's resolvePendingWaitsForMember on confirmed-offline.
           console.warn(`${LOG_TAG} wake not sent app=${request.appId} owner=${owner}; resolving undelivered`)
           finishUndelivered('owner-unreachable')
         }
@@ -197,8 +197,11 @@ export function makeLocationAwareSessionDeps(
     },
 
     isSessionActive(sessionKey) {
-      // Remote members run their session on the owner; the authority does not
-      // track it. Returning false makes the bus deliver rather than buffer.
+      // Remote members run their session on the owner, so this answers false and
+      // the bus hands the wake straight over. Deliberate: busyness is only
+      // knowable on the machine that runs the turn, so the OWNER applies the gate
+      // when the wake lands (`bus.runRelayedTurn`). Do not answer this from a
+      // remote status view — it is already stale when the wake arrives.
       return local.isSessionActive(sessionKey)
     },
 

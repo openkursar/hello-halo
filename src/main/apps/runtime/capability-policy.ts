@@ -19,8 +19,29 @@ import {
   CAPABILITY_SAFE_MCP,
 } from '../../../shared/apps/capability-policy'
 import type { CapabilityMode, CapabilityPolicy } from '../../../shared/apps/capability-policy'
+import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 
 export { computeDisallowedBuiltins }
+
+/**
+ * Whether this team turn is someone OTHER than the owner putting the digital
+ * human to work — the only turns an owner's delegated policy is meant to hold.
+ * The question is WHO started it, not whether a person or a model typed it: a
+ * colleague reaching in by hand does the same damage as their digital human.
+ *
+ * An absent `kind` can only be the owner: the owner's own chat goes straight to
+ * the session, and the office credential that reaches the cross-machine 1:1
+ * endpoint is denied that local path (`http/auth/route-scope`).
+ *
+ * IM-backed turns are deliberately left out — the team's IM front desk is a
+ * separate scenario with its own hardening decision.
+ */
+export function isBorrowedTeamTurn(
+  teamTurnKind: TeamTriggerContext['kind'] | undefined,
+  overImChannel: boolean
+): boolean {
+  return !!teamTurnKind && !overImChannel
+}
 
 const SAFE_MCP = new Set(CAPABILITY_SAFE_MCP)
 const TOGGLE_BY_SERVER = new Map(CAPABILITY_MCP_TOGGLES.map((t) => [t.server, t.key]))

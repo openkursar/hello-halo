@@ -3,9 +3,13 @@
  * behind `team_read_artifact`, against a real in-memory TeamStore.
  *
  * Proven:
- *   - a finding-published ref of a local producer resolves to its text;
+ *   - a finding-published ref of a local producer resolves to its text, and names
+ *     the producer so the reader can see whose file the name opened;
  *   - a resultRef-only delivery (task done, no finding) resolves the same way —
  *     both publication forms the tools promise are actually readable;
+ *   - one member publishing a ref twice, in both forms, is still one producer;
+ *   - a ref two members published is refused as ambiguous and names them, rather
+ *     than silently handing back whichever row sorted first;
  *   - an unpublished ref returns not-found with publish guidance;
  *   - a published-but-vanished file is reported as moved, NOT as "re-publish it"
  *     (publication is validated when it happens, so that advice only loops);
@@ -99,7 +103,7 @@ describe('artifact-read', () => {
 
   function publishFinding(ref: string, authorAppId = LOCAL_APP): void {
     store.insertFinding({
-      id: `finding-${ref}`,
+      id: `finding-${authorAppId}-${ref}`,
       teamId: TEAM_ID,
       epochId: EPOCH_ID,
       authorAppId,
@@ -158,7 +162,34 @@ describe('artifact-read', () => {
       expect(res.ok).toBe(true)
       expect(res.content).toBe('# Brief\ncontent')
       expect(res.owner).toBeNull()
+      // Named even for a same-machine producer: a ref alone never says whose
+      // file the reader is about to trust.
+      expect(res.producer).toBe('local')
       expect(res.truncated).toBe(false)
+    })
+
+    it('treats one member publishing a ref in both forms as one producer', async () => {
+      writeFileSync(join(workDir, 'plan.md'), 'one author, two rows')
+      publishFinding('plan.md')
+      deliverAsResultRef('plan.md')
+
+      const res = await makeReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'plan.md' })
+      expect(res.ok).toBe(true)
+      expect(res.content).toBe('one author, two rows')
+    })
+
+    it('refuses a ref two members published instead of picking one', async () => {
+      writeFileSync(join(workDir, 'report.md'), 'the local one')
+      publishFinding('report.md', LOCAL_APP)
+      publishFinding('report.md', REMOTE_APP)
+
+      const res = await makeReader()({ teamId: TEAM_ID, epochId: EPOCH_ID, ref: 'report.md' })
+      expect(res.ok).toBe(false)
+      expect(res.reason).toBe('ambiguous')
+      expect(res.message).toContain('local')
+      expect(res.message).toContain('remote')
+      // Neither candidate's bytes are served alongside the refusal.
+      expect(res.content).toBeUndefined()
     })
 
     it('reads a resultRef-only delivery (task done, no finding)', async () => {
@@ -281,6 +312,7 @@ describe('artifact-read', () => {
       expect(res.ok).toBe(true)
       expect(res.content).toBe('remote bytes')
       expect(res.owner).toBe('Alice')
+      expect(res.producer).toBe('remote')
     })
 
     it.each([

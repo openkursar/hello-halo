@@ -29,10 +29,11 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
 
 ## Files
 
-- `message-bus.ts` — Registry/addressing, topology enforcement, mailbox
-  buffering, wait=true/false reply mechanics, turn-completion routing, per-epoch
-  circuit breaker. Exports `createMessageBus(deps)` and the `TeamDeliveryHooks`
-  /`TurnCompletion` contract the session layer implements.
+- `message-bus.ts` — Registry/addressing, topology enforcement, the single
+  per-session turn slot and the mailbox that queues behind it, turn-completion
+  bookkeeping, per-epoch circuit breaker. Exports `createMessageBus(deps)` and
+  the `TeamDeliveryHooks` / `TurnCompletion` contract the session layer
+  implements.
 - `blackboard.ts` — Scoped-write facade over `TeamStore` that emits
   `team:blackboard` after each write, plus `readBoard()` returning a
   `BlackboardSnapshot`. Roster live status is injected via `getMemberStatus`.
@@ -46,7 +47,13 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   answer. The second half exists because a pure delta structurally cannot see it:
   "nothing happened" is not an event. The watermark advances to the newest act
   ACCOUNTED FOR, never to wall-clock, since two acts can share a millisecond and
-  a clock-based mark would skip the second forever. Rendered twice — into the
+  a clock-based mark would skip the second forever. The delta half is RANKED,
+  not cut off by recency: a message accepted for delivery to this member is
+  dropped outright (it arrived as the input of a turn the member took, so
+  digesting it quotes back the message being read right now), successful traffic
+  between two OTHER members is folded to one line per pair, and the budget in
+  between goes to the facts that reach the member nowhere else — a task moving, a
+  run ending, a message that never arrived. A failure is never folded away. Rendered twice — into the
   envelope (`orchestration.withDigest`) and onto a `team_read_board` result — from
   one implementation, so the two can never drift.
 - `checks.ts` — periodic checks: one member's standing instruction for another
@@ -75,6 +82,16 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   unreadable used to succeed here and fail hours later on another machine, with
   the publisher sure it had shared the file and the reader sure it never
   arrived, neither holding enough of the truth to fix it.
+  The same gate refuses a name **another member already published**
+  (`blackboard.findPublishedRefConflict`). A ref is a path inside its
+  publisher's own working directory, so two members reach for `report.md`
+  independently; on the board those are one identical string, and every reader
+  downstream then receives whichever row resolution picked — a wrong file that
+  looks exactly like the right one. Publishing is the last instant the two are
+  still tellable apart, and the member holding the file is standing right there,
+  one rename away. Ownership is the ref's FUTURE owner, not the caller: a task's
+  resultRef belongs to the assignee, so a lead attaching a member's own file to
+  that member's task is not a collision. Republishing your own ref is an update.
 - `artifact-path.ts` — what a published `ref` MEANS: a file inside the producing
   member's WORKING directory, stored relative to it. Two rules earn their own
   module because publishing and reading must never disagree about them. First,
@@ -91,12 +108,45 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   SSOT (`apps/team/artifact-refs`: a finding's ref OR a task's resultRef), then
   reads bytes locally (`createLocalArtifactResolver`, resolving through
   `artifact-path`, shared with the federation owner-serve path) or through the
-  injected remote fetch.
+  injected remote fetch. A ref claimed by two members resolves to `ambiguous`
+  and is refused by name — the publish gate above makes that rare, but it cannot
+  be made impossible (two nodes publishing at once each see a free name until
+  replication catches up), and a guess here is undetectable to the model that
+  receives it. Every successful read names its producer for the same reason: the
+  reader asked for a name and must be able to see whose file that name opened.
   Applies a binary guard and a UTF-8-boundary-safe inline ceiling. Remote
   failures arrive as the typed `RemoteArtifactError` contract (bootstrap maps
   federation codes via `classifyArtifactFetchFailure`), so raw transport codes
   never reach the agent-facing message. No remote fetch injected → cross-machine
   reads report an honest "unavailable".
+
+## Output is not delivery
+
+**A member's own output reaches no teammate. Ever.** Speaking to a teammate is
+an explicit `team_send`; the runtime forwards nothing on a member's behalf, not
+even the last thing it writes, and not even to whoever started the turn.
+
+This is forced, not stylistic. A member's team-channel session is **also where
+its owner talks to it** — the same `conversationId` carries a person typing and
+a teammate's envelope (see "Team as an IM backend" and `sendToMember`). One
+window, two listeners, one output. Nothing in the system can tell which of them
+a given sentence was meant for; only the model knows. The old design guessed
+"the teammate" and wired the turn's final message straight into the sender's
+mailbox, which produced exactly what a wrong guess produces:
+
+- what a member said *to its owner* was mailed to a colleague;
+- the colleague's own sign-off came straight back;
+- both sides kept relaying each other's closing lines, carrying no new
+  information, until the circuit breaker stopped them;
+- and the target received two things per exchange — the message the model chose
+  to send, plus the one the system added.
+
+So the rule is the one Claude Code's own team tooling states: *your plain output
+is not visible to other agents — to communicate you must call the tool*. The
+cost is that a model which forgets to call `team_send` leaves its colleague
+waiting. That is a real cost, paid deliberately, and it has one backstop: the
+board digest tells a sender when a message of theirs has gone unanswered (see
+"the office record" below — a turn merely ending never marks it answered).
 
 ## The two channels (do not conflate)
 
@@ -123,16 +173,30 @@ the same. Nowhere did "who contacted whom" exist as a fact.
 
 `team_activity` is that record. Three properties shape it:
 
-- **Append-only.** A reply is a NEW act carrying the original's `correlationId`,
-  never an edit of the message row. So "answered / awaiting reply" is derived
-  (`answeredCorrelationIds` / `isAwaitingReply` in `shared/apps/team-types`, one
-  rule shared by the digest and the renderer), replication is a single idempotent
-  insert, and a rejected shadow write rolls back to a plain delete.
-- **Recorded where the system already knows.** Messages and replies are recorded
-  by the BUS (`send`, `completeTurn`, `resolvePendingWaitsForMember`) because
-  that is the one point every teammate message path converges — a member's
-  `team_send`, an escalation routed to the lead. Board acts are recorded by the
-  tool layer. Neither depends on an agent choosing to keep a log.
+- **Append-only.** A `reply` act is a NEW row carrying the original's
+  `correlationId`, never an edit of the message row. So "answered / awaiting
+  reply" is derived (`answeredCorrelationIds` / `isAwaitingReply` in
+  `shared/apps/team-types`, one rule shared by the digest and the renderer),
+  replication is a single idempotent insert, and a rejected shadow write rolls
+  back to a plain delete.
+- **A turn ending is not a reply** (`isRecordableFate`). `completeTurn` files a
+  `reply` act only for the fates the sender cannot learn any other way — `error`,
+  `timeout`, `undelivered` — because the member is not running and cannot report
+  those itself. A turn that simply *ran* files nothing: its closing words went to
+  whoever is watching that member's chat, and if they were meant for the sender
+  they were sent with `team_send`, which files its own `message` act.
+  Recording every turn end as a reply did two kinds of damage. It quoted the
+  member's closing line back at the sender through the digest ("X answered
+  you: …") — the same conflation as auto-delivery, moved into the record. And it
+  satisfied `answeredCorrelationIds`, switching off the digest's "you asked X and
+  nothing has come back" for the exact case that line exists to catch: a model
+  that forgot to reply. With the auto-delivery gone that backstop is the only one
+  left, so it must never be silenced by silence.
+- **Recorded where the system already knows.** Messages and failed fates are
+  recorded by the BUS (`send`, `completeTurn`, `resolvePendingWaitsForMember`)
+  because that is the one point every teammate message path converges — a
+  member's `team_send`, an escalation routed to the lead. Board acts are recorded
+  by the tool layer. Neither depends on an agent choosing to keep a log.
 - **Only digital humans act.** The record is what the digital humans did among
   themselves; a person's words are never on it. The bus keys this on
   `fromAppId === null` (see below), and `PostActivityInput.actorAppId` is
@@ -205,11 +269,11 @@ interface TeamDeliveryHooks {
 `wakeTarget` injects the envelope as a team-channel turn with the trigger
 context. Its returned promise is NOT the turn outcome — the outcome is reported
 back asynchronously through `bus.completeTurn(...)` when the turn ends (any of
-the four §5.6 exits). This keeps the lead non-blocking: it fires `wait=false`
-sends and is re-woken later, exactly mirroring §5.6 "fire-and-get-woken".
+the four §5.6 exits). This keeps every sender non-blocking: `send` hands over and
+returns, and whether an answer ever comes is up to the target's `team_send`.
 
 `isBusy` lets the bus decide buffer-vs-deliver: if the target session is
-mid-turn — or a wake is already IN FLIGHT for it (the busy probe only turns
+mid-turn — or a turn is already IN FLIGHT for it (the busy probe only turns
 true once the session layer registers the turn, so the bus reserves the key
 synchronously at dispatch to keep two racing deliveries from running two
 concurrent turns on one session) — the envelope is enqueued in its mailbox and
@@ -223,7 +287,9 @@ bus never sees (a human 1:1 chat with a member uses the same session key):
    ANY team-session turn ends, so mail buffered behind a human turn is not
    stranded until the next bus turn (which may never come);
 3. a per-session recheck timer armed at buffering — covers the race where the
-   target went idle between the busy probe and the buffer push.
+   target went idle between the busy probe and the buffer push. It re-arms while
+   the target is still busy and stops once the mailbox is empty, so mail behind a
+   turn that hangs for minutes is not held hostage to that turn ending.
 
 ## Bus public API
 
@@ -233,17 +299,25 @@ bus never sees (a human 1:1 chat with a member uses the same session key):
   Resolves member name→appId, enforces topology, and — for a teammate send only
   (`fromAppId !== null`, see "A person is not a member") — bumps circuit
   counters, records the act and emits `team:message`. Then builds the
-  `TeamEnvelope` and:
-  - `wait=false`: enqueue + wake target, resolve immediately with `{ messageId }`.
-  - `wait=true`: enqueue + wake target, return a promise held until the target's
-    turn completes (resolved by `completeTurn`) or the wait timeout fires.
+  `TeamEnvelope`, hands it to the gate, and resolves with `{ messageId }` plus a
+  `delivery` receipt: absent when handed over now, `'queued'` when the target was
+  mid-turn, `'undelivered'` when its owner was unreachable at send time. Since
+  nothing is ever delivered back, this receipt is everything the sender learns —
+  which is why "queued" is worth saying: a lead that knows the target is busy can
+  pick someone else. It is accurate for a locally-owned target; a remote one
+  queues on its OWNER, invisible from here, and reads as a plain hand-over.
   Throws `TopologyError` / `UnknownMemberError` / `CircuitBreakerError` (the tool
   layer converts these to error tool_results).
+  `input.wait` asks for a completion receipt instead, and **no agent can set
+  it** — `team_send` has no such parameter. Its one caller is
+  `teamService.sendToMember`, a PERSON's cross-machine 1:1 chat, whose UI must
+  distinguish "sent" from "never arrived". Even then the receipt is a status; the
+  person reads the member's actual reply in the transcript.
 - `deliverRuntimeWake({ envelope, trigger, onBusy }) → Promise<WakeDisposition>`
   A turn the RUNTIME asked for, not a member's `team_send`: the escalation
   resume, the quiescence nudge, a due periodic check. No delivery receipt, no
   circuit charge — but the SAME busy gate as `send`, because the bus is the only
-  component that knows a session already has a turn running or a wake in flight.
+  component that knows a session already has a turn running or one in flight.
   A path that calls `wakeTarget` directly starts a second concurrent turn on one
   session key, and the loser's subprocess is torn down mid-stream.
   `onBusy` picks the semantics, and only the caller knows which applies:
@@ -251,17 +325,35 @@ bus never sees (a human 1:1 chat with a member uses the same session key):
   — an escalation answer is the member's ONLY way back to life, and a one-shot
   check has no second chance; `'skip'` for one that comes round again on its own
   rhythm (a recurring check).
+- `runRelayedTurn({ sessionKey, run }) → Promise<T>`
+  The **owner-side** gate for a federation wake (see "One turn per session" below).
+  Same slot, same mailbox, same cap as everything else; it does NOT go through
+  `wakeTarget`, because the turn's input was rendered and booked on the sending
+  node and re-entering the session layer here would render a second header, file a
+  duplicate act, and start a quiescence sweep on a node that does not own the run.
+  `run` is invoked once the slot is free; its promise settles the caller's and
+  releases the slot. A `resetEpoch` (or a mailbox overflow) rejects a still-queued
+  one rather than leaving the remote caller on its hours-long backstop.
 - `completeTurn({ sessionKey, trigger, outcome })`
-  Called by the session layer when a woken team turn ends. Routes per §5.2/5.3:
-  - `trigger.wait=true` → resolve the pending send promise (`ok` / `timeout`).
-  - `trigger.wait=false` → build a completion envelope and wake the ORIGINAL
-    sender (a fresh turn) so it can reconcile against the board.
-  Then releases the session's wake reservation and drains any buffered mailbox
-  envelopes for that `sessionKey`.
+  Called by the session layer when a woken team turn ends. It **delivers
+  nothing** (see "Output is not delivery"). It releases the session's slot,
+  records the outcome if it is a failure worth recording (see the office record),
+  resolves a completion receipt if a non-agent caller is holding one, and drains
+  the mailbox for that `sessionKey`.
 - `drainMailbox(sessionKey)` — the session layer's liveness nudge (drain #2
   above). Idempotent; a busy or reserved session is a no-op.
 - `assertCanContact(teamId, fromAppId, toAppId, collabMode)` — topology check;
-  `free` allows all, `structured` uses `store.isEdgeAllowed`.
+  `free` allows all, `structured` uses `store.isEdgeAllowed` **in either
+  direction**. Topology governs who may OPEN a conversation, never who may answer
+  one: edges are directed and the default structured topology is a one-way star
+  (`lead → member`), so a strict check forbids a member from messaging its own
+  lead. That was invisible while the runtime forwarded a turn's final message
+  back on its own — no rule was consulted, so every reply got through. Now that
+  answering is a `team_send`, the strict check would leave a structured team
+  mute: dispatch works, nothing comes back, and the member reports "the topology
+  does not allow me to contact them" to nobody. Accepting the reverse edge
+  restores exactly the set of channels that worked before; peer-to-peer still
+  needs a peer edge.
 - `getEpochStats(epochId)` / `resetEpoch(epochId)` — circuit-breaker observability
   and lifecycle reset (session layer calls `resetEpoch` on seal).
 - `onBreach(cb)` — subscribe to circuit-breaker breaches (orchestration polls /
@@ -271,15 +363,19 @@ bus never sees (a human 1:1 chat with a member uses the same session key):
 
 ```ts
 type TurnCompletion =
-  | { kind: 'report_result'; content: string; taskId?: string }
-  | { kind: 'report_escalation'; content: string }
-  | { kind: 'no_report' }
+  | { kind: 'result'; content: string; taskId?: string }
+  | { kind: 'escalation'; content: string }
   | { kind: 'error'; message: string }
   | { kind: 'timeout' }
+  | { kind: 'undelivered'; reason: string }
 ```
 
-These are exactly the §5.6 four exits (plus the explicit result/escalation
-report cases). The session layer maps each turn ending to one of these.
+The session layer maps each turn ending to one of these. **It is a status, not a
+reply** — the `content` on a `result` is never forwarded to anyone. It has two
+non-teammate consumers only: a completion receipt (a person's 1:1 chat) and,
+for the failing kinds, the office record. `undelivered` exists so "the wake
+never reached the owner" is distinguishable from `result` with empty content
+(the turn ran and said nothing) and from `timeout` (reachable but slow).
 
 ## Circuit breaker (§13.3)
 
@@ -288,7 +384,10 @@ team-level overridable via `circuitOverrides`:
 
 - `maxMessages` — total `team_send` count per epoch.
 - `maxForwardDepth` — envelope chain depth (each completion-wake carries
-  `forwardDepth = parent + 1`); guards A↔B ping-pong.
+  `forwardDepth = parent + 1`); guards A↔B ping-pong. The depth rides on
+  `TeamTriggerContext` into the woken turn and back out through the `team_send`
+  that turn makes (`TeamMcpContext.forwardDepth`) — a chain restarting at 0 per
+  hop is a chain this limit can never see.
 - `maxDurationMs` — wall-clock since the epoch's first TEAMMATE send.
 
 A person's 1:1 message charges nothing at all (see "A person is not a member").
@@ -400,6 +499,24 @@ persisted inside the `content_json` blob — no migration) AND captures
 the orchestration detects turn end regardless (§5.6); a captured report only
 enriches the outcome.
 
+### An open question does not suspend a member
+
+A member that escalates ends its turn, but it is NOT parked: teammate messages
+and periodic checks keep waking it, and it can hit a second wall and ask again.
+So **a member may owe several answers at once**, and they come back in whatever
+order the person works through them. Three consequences the code must keep:
+
+- The tool result says exactly this. It used to promise "you will be resumed
+  with the user's response", which taught a member to read the next unrelated
+  wake as its answer. It also names the questions still unanswered, so a new ask
+  can absorb or supersede an old one instead of piling on.
+- `resumeFromEscalation` **quotes the question** it answers. Without it, an
+  answer to the older of two open questions binds to the newer one.
+- The user-facing queue is worked oldest-first (`components/team/EscalationPanel`).
+  The app record's single `pendingEscalationId` is only ever the newest and
+  cannot express a queue; the activity store (`getAllPendingEscalations`) is the
+  truth for "what is still open".
+
 ## Triggers & entries — a team is triggerable like a digital human
 
 A team is a first-class triggerable entity: every way a single digital human can
@@ -439,11 +556,19 @@ conversation epoch for this chat (`chatKey = ${instanceId}:${chatId}`), and call
 `sendAppChatMessage` with BOTH `imSession` (reply path, file send) AND
 `teamContext` (team tools + Entry). `app-chat` composes the
 team Entry with `buildTeamImBridge` (front-desk framing: the message is from a
-real person; the lead's final message goes back to the chat; delegate via team
-tools, prefer `wait=true`). The lead runs as a trusted team peer — IM guest
-hardening is intentionally not applied (no permission context for the team
-session key). Provider-agnostic: any IM brand works, since the binding lives in
-the generic config + dispatch path.
+real person; the lead's final message goes back to the chat). The lead runs as a
+trusted team peer — IM guest hardening is intentionally not applied (no
+permission context for the team session key). Provider-agnostic: any IM brand
+works, since the binding lives in the generic config + dispatch path.
+
+This is **the one place a final message IS a delivery**, and only because the IM
+reply handle is attached to this turn — it still reaches no teammate. The bridge
+says so explicitly, so the exemption cannot be read as "your output is visible
+after all". It also tells the lead that a specialist's answer cannot arrive
+inside this turn: a delegated question becomes two messages to the person (an
+acknowledgement now, the answer when the teammate's `team_send` wakes the lead
+again) rather than one long silence. That is a deliberate trade for the sender
+knowing which listener it is talking to.
 
 ## Conversations & run outcomes (office-shared session model)
 
@@ -510,11 +635,17 @@ Two facts about a member are per-TEAM and owner-authored, and they live on the
   `buildPromptContext` puts the member's own duty in the Entry and every
   teammate's duty in the roster, in full (deciding who to hand work to is exactly
   what the text is for).
-- **delegated policy** — what a TEAMMATE may make it do. Enforced in `app-chat`
-  on the OWNER's machine, and only for turns started by another member: a person
-  talking to a digital human in its own chat (`kind: 'human_message'`), and a
-  person reaching the team over IM, are not teammates borrowing it. An unset
-  policy withholds nothing. The team's own
+- **delegated policy** — what someone ELSE may make it do. Enforced in
+  `app-chat` on the OWNER's machine, for every turn the owner did not start
+  (`isBorrowedTeamTurn`). The question is deliberately WHO, not human-vs-model:
+  the limit is about what may happen on the owner's machine, and a colleague
+  reaching in by hand does the same damage as their digital human doing it — so
+  a cross-machine 1:1 from another person is held to it exactly like a
+  teammate's `team_send`. The owner's own chat is the one exemption; it is
+  recognisable because it goes straight to the session and carries no trigger
+  `kind`, a path no office credential can reach (`http/auth/route-scope`). An
+  IM-backed turn is out of scope of this rule (see "Team as an IM backend").
+  An unset policy withholds nothing. The team's own
   coordination servers (`halo-team`, `halo-report`) are never withheld — they are
   the channel the turn arrived on, not a capability being lent.
 
@@ -523,11 +654,56 @@ The shared vocabulary (which tools exist, what an unstated permission means) is
 `apps/runtime/capability-policy.ts` — the same pair the IM guest path uses, so
 the two scenarios cannot drift.
 
+## One turn per session — the only lock in the design
+
+A team session key (`app-chat:{appId}:team:{teamId}:{epochId}`) runs **at most
+one turn at a time**, no matter who asked for it or from which machine. The
+bus's `tryReserve` is that rule; everything else queues in the session's single
+mailbox (FIFO, cap 128 shedding oldest, drained at turn end plus a re-arming
+recheck).
+
+Two turns on one session key is not a slowdown, it is corruption, and it is
+worth knowing exactly why. Both turns resolve to the **same live CC subprocess**
+(the session is reused), and both call `v2Session.send()` — that part is
+harmless, the SDK just enqueues onto one stdin. The damage is on the way out:
+`SDKSession.stream()` hands every caller a fresh generator over **one cached
+`queryIterator`**, and each generator returns on the first `result` it sees.
+Two sends that the CLI folds into one turn produce ONE `result`, so one
+consumer returns — possibly holding the other turn's answer — and the other
+waits forever on a completion that will never come. If the two turns also differ
+in tool set (the owner's own turn is unrestricted, a teammate's is filtered by
+the delegated policy — `isBorrowedTeamTurn`), the input fingerprint changes and
+`getOrCreateV2Session` tears the subprocess down mid-stream; the three guards
+that would defer that rebuild all read the `consumers` map, which app-chat
+deliberately never populates.
+
+Hence: **every path that starts a team turn goes through the bus.** Envelopes via
+`deliver`, runtime wakes via `deliverRuntimeWake`, and a federation wake landing
+on the member's owner via `runRelayedTurn`. The last one is the one that used to
+be missing — `bootstrap`'s `runLocalTurn` called `sendAppChatMessage` directly,
+so a cross-machine message walked straight into a session a local one already
+owned. The gate belongs on the OWNER because busyness is only knowable, and only
+still true, on the machine that runs the turn: the sender's view is stale by the
+time the wake crosses the network, and `remote-busy-overlay` is a display
+projection, not a lock.
+
+One consequence to keep in mind when reading `federation/coordinator.ts`: with a
+queue, two wakes for one session no longer collapse into a single turn, so each
+gets its own `turn-complete`. The batch-ack that once answered a whole
+conversation's wakes with the first outcome was removed — under a queue it hands
+wake #2 the outcome of turn #1 before turn #2 has even started.
+
 ## Concurrency safety — by construction
 
-No locks anywhere. Task writes are scoped by id, findings and activity are
+No locks anywhere else. Task writes are scoped by id, findings and activity are
 append-only (activity inserts are `OR IGNORE`, so a replica echo of a row this
-node authored is a no-op rather than a clash), the roster is derived. Bus mailboxes are per-session arrays consumed serially (one
-actor = one single-threaded turn). Pending wait-promises are keyed by
-`correlationId`. Overlapping writes from different actors target disjoint keys,
-so there is no clobber.
+node authored is a no-op rather than a clash), the roster is derived. The
+publish gate's ref-uniqueness check reads before it writes, which is atomic
+enough on one node (a turn is single-threaded and the store is synchronous) and
+deliberately best-effort across nodes — hence the reader's ambiguity refusal,
+which needs no coordination to stay correct. The rule is that a gate may make a
+bad state rare; only a reader that refuses to guess can make it harmless. Bus
+mailboxes are per-session arrays consumed serially (one actor = one
+single-threaded turn). Pending completion receipts are keyed by `correlationId`.
+Overlapping writes from different actors target disjoint keys, so there is no
+clobber.

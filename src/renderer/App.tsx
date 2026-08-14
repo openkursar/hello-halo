@@ -670,6 +670,12 @@ export default function App() {
       useAppsStore.getState().handleStatusChanged(appId, state as any)
     })
 
+    // Installs happen outside this window's control (an office provisioning its
+    // lead, an App creating another App), so the cached list has to follow them.
+    const unsubList = api.onAppListChanged(() => {
+      useAppsStore.getState().handleListChanged()
+    })
+
     const unsubActivity = api.onAppActivityEntry((data) => {
       const { appId, entry } = data as { appId: string; entry: unknown }
       useAppsStore.getState().handleNewActivityEntry(appId, entry as any)
@@ -694,6 +700,7 @@ export default function App() {
 
     return () => {
       unsubStatus()
+      unsubList()
       unsubActivity()
       unsubEscalation()
       unsubNavigate()

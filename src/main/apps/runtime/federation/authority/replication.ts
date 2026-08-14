@@ -632,11 +632,20 @@ export function createReplication(deps: ReplicationDeps): Replication {
 
   function handleBlackboardWrite(from: NodeId, frame: BlackboardWriteFrame): void {
     if (frame.officeId !== officeId) return
+    // The member sees nothing beyond a reject frame, and SCOPE_DENIED makes it
+    // drop the row for good — without a host-side log a refused write is
+    // indistinguishable from a dropped frame on both sides.
     if (frame.term < getTerm()) {
+      console.warn(
+        `${LOG_TAG} refuse member write office=${officeId} from=${from} op=${frame.op} fid=${frame.fid} reason=EPOCH_STALE frameTerm=${frame.term} term=${getTerm()}`
+      )
       reject(from, frame.fid, 'EPOCH_STALE')
       return
     }
     if (!admitMemberWrite(frame)) {
+      console.warn(
+        `${LOG_TAG} refuse member write office=${officeId} from=${from} op=${frame.op} fid=${frame.fid} reason=SCOPE_DENIED`
+      )
       reject(from, frame.fid, 'SCOPE_DENIED')
       return
     }

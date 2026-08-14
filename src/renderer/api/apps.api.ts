@@ -375,6 +375,9 @@ export const appsApi = {
   onAppStatusChanged: (callback: (data: unknown) => void) =>
     onEvent('app:status_changed', callback),
 
+  onAppListChanged: (callback: (data: unknown) => void) =>
+    onEvent('app:list_changed', callback),
+
   onAppActivityEntry: (callback: (data: unknown) => void) =>
     onEvent('app:activity_entry:new', callback),
 

@@ -195,13 +195,13 @@ function DelegatedCapabilities({ teamId, member }: { teamId: string; member: Tea
         onClick={() => setOpen(v => !v)}
         className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
       >
-        <span className="flex-1 text-sm text-foreground">{t('What teammates can ask it to do')}</span>
+        <span className="flex-1 text-sm text-foreground">{t('What others can ask it to do')}</span>
         <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`} />
       </button>
       {open && (
         <div className="space-y-3 border-t border-border px-3 py-3">
           <p className="text-xs text-muted-foreground/70">
-            {t('The tools it has in hand when a teammate’s digital human puts it to work. Talking to it yourself is unaffected.')}
+            {t('The tools it has in hand when anyone else puts it to work — a teammate’s digital human, or a person on another machine. Talking to it yourself is unaffected.')}
           </p>
           <CapabilityPolicyFields
             policy={policy}

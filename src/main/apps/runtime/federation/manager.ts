@@ -396,7 +396,7 @@ export interface FederationManager {
   /**
    * Immediate reachability of a member's OWNER from this node's view: true for a
    * locally owned member, or a remote owner currently online + connected; false
-   * when a remote owner is offline/unreachable. Drives the wait=false honest
+   * when a remote owner is offline/unreachable. Drives the async send's honest
    * "not delivered" gate so a send to an offline teammate is reported at once.
    */
   isMemberReachable(appId: string, teamId?: string): boolean

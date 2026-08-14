@@ -12,6 +12,11 @@
  *     form, so it still resolves on another machine;
  *   - a file outside the work dir, and a missing file, are refused — and no
  *     finding row is written;
+ *   - a name another member already published is refused: two rows carrying one
+ *     name are indistinguishable to every later reader, and this is the last
+ *     moment anyone can still tell them apart;
+ *   - republishing your OWN name is an update, not a collision, and a lead may
+ *     attach a member's file to that member's task without tripping the gate;
  *   - a refused resultRef leaves the task status untouched too (no half-applied
  *     update that shows work as delivered without its deliverable);
  *   - a finding with content and no ref is unaffected by the gate.
@@ -51,6 +56,7 @@ import { TEAM_TOOL_NAMES } from '../../../../../src/shared/apps/team-types'
 const TEAM_ID = 'team-1'
 const EPOCH_ID = 'epoch-1'
 const APP_ID = 'app-writer'
+const PEER_APP_ID = 'app-analyst'
 
 type ToolReply = { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
 
@@ -89,6 +95,15 @@ describe('team tools publish gate', () => {
       memberName: 'writer',
       role: 'Writer',
       isLead: true,
+      aiProvisioned: false,
+      addedAt: now,
+    })
+    store.addMember({
+      teamId: TEAM_ID,
+      appId: PEER_APP_ID,
+      memberName: 'analyst',
+      role: 'Analyst',
+      isLead: false,
       aiProvisioned: false,
       addedAt: now,
     })
@@ -137,14 +152,14 @@ describe('team tools publish gate', () => {
 
   const findings = () => store.listFindingsByEpoch(TEAM_ID, EPOCH_ID)
 
-  function seedTask(): string {
+  function seedTask(assigneeAppId: string | null = APP_ID, taskId = 'task-1'): string {
     const now = Date.now()
     store.insertTask({
-      id: 'task-1',
+      id: taskId,
       teamId: TEAM_ID,
       epochId: EPOCH_ID,
       title: 'Write the design',
-      assigneeAppId: APP_ID,
+      assigneeAppId,
       status: 'in_progress',
       resultRef: null,
       note: null,
@@ -153,7 +168,20 @@ describe('team tools publish gate', () => {
       createdAt: now,
       updatedAt: now,
     })
-    return 'task-1'
+    return taskId
+  }
+
+  /** A ref another member already put on the board. */
+  function peerPublished(ref: string): void {
+    store.insertFinding({
+      id: `finding-peer-${ref}`,
+      teamId: TEAM_ID,
+      epochId: EPOCH_ID,
+      authorAppId: PEER_APP_ID,
+      body: null,
+      ref,
+      createdAt: Date.now(),
+    })
   }
 
   describe('team_post_finding', () => {
@@ -192,6 +220,38 @@ describe('team tools publish gate', () => {
       expect(res.isError).toBe(true)
       expect(res.content[0].text).toContain('does not exist')
       expect(findings()).toHaveLength(0)
+    })
+
+    it('refuses a name another member already published and writes nothing', async () => {
+      writeFileSync(join(workDir, 'report.md'), 'mine')
+      peerPublished('report.md')
+
+      const res = await call(TEAM_TOOL_NAMES.postFinding, { ref: 'report.md' })
+      expect(res.isError).toBe(true)
+      expect(res.content[0].text).toContain('Nothing was published')
+      // A rename is the only move available to this agent, so the refusal has to
+      // name the holder and offer it.
+      expect(res.content[0].text).toContain('analyst')
+      expect(res.content[0].text).toContain('Rename')
+      expect(findings()).toHaveLength(1) // only the peer's row
+    })
+
+    it('collides on the STORED form, so an absolute path cannot slip past', async () => {
+      writeFileSync(join(workDir, 'report.md'), 'mine')
+      peerPublished('report.md')
+
+      const res = await call(TEAM_TOOL_NAMES.postFinding, { ref: join(workDir, 'report.md') })
+      expect(res.isError).toBe(true)
+      expect(findings()).toHaveLength(1)
+    })
+
+    it('lets a member republish its own ref (an update, not a collision)', async () => {
+      writeFileSync(join(workDir, 'notes.md'), 'v1')
+
+      expect((await call(TEAM_TOOL_NAMES.postFinding, { ref: 'notes.md' })).isError).toBeUndefined()
+      const second = await call(TEAM_TOOL_NAMES.postFinding, { ref: 'notes.md', content: 'v2 is up' })
+      expect(second.isError).toBeUndefined()
+      expect(findings()).toHaveLength(2)
     })
 
     it('leaves a content-only finding untouched', async () => {
@@ -233,6 +293,41 @@ describe('team tools publish gate', () => {
       const task = store.getTaskById(taskId)
       expect(task?.status).toBe('in_progress')
       expect(task?.resultRef).toBeNull()
+    })
+
+    it('refuses a resultRef another member already published, leaving the task untouched', async () => {
+      const taskId = seedTask()
+      writeFileSync(join(workDir, 'design.md'), 'mine')
+      peerPublished('design.md')
+
+      const res = await call(TEAM_TOOL_NAMES.updateTask, {
+        taskId,
+        status: 'done',
+        resultRef: 'design.md',
+      })
+      expect(res.isError).toBe(true)
+      expect(res.content[0].text).toContain('was NOT updated')
+      expect(res.content[0].text).toContain('analyst')
+      const task = store.getTaskById(taskId)
+      expect(task?.status).toBe('in_progress')
+      expect(task?.resultRef).toBeNull()
+    })
+
+    it('attaches a member\u2019s own published file to that member\u2019s task', async () => {
+      // The caller is the lead, but the ref belongs to the ASSIGNEE who published
+      // it: keying the check on the caller would refuse a ref that still resolves
+      // to exactly one producer.
+      const taskId = seedTask(PEER_APP_ID, 'task-peer')
+      writeFileSync(join(workDir, 'design.md'), 'the analyst\u2019s file')
+      peerPublished('design.md')
+
+      const res = await call(TEAM_TOOL_NAMES.updateTask, {
+        taskId,
+        status: 'done',
+        resultRef: 'design.md',
+      })
+      expect(res.isError).toBeUndefined()
+      expect(store.getTaskById(taskId)?.resultRef).toBe('design.md')
     })
 
     it('updates status normally when no resultRef is given', async () => {

@@ -213,6 +213,8 @@ import {
   RunExecutionError,
 } from '../../../../src/main/apps/runtime/errors'
 import { createAppRuntimeService } from '../../../../src/main/apps/runtime/service'
+import { broadcastToAll } from '../../../../src/main/http/websocket'
+import { sendToRenderer } from '../../../../src/main/foundation/window.service'
 import { executeRun } from '../../../../src/main/apps/runtime/execute'
 import { createReportToolServer } from '../../../../src/main/apps/runtime/report-tool'
 import type {
@@ -1593,6 +1595,8 @@ describe('AppRuntimeService', () => {
       updateStatus: vi.fn(),
       updateLastRun: vi.fn(),
       onAppStatusChange: vi.fn().mockReturnValue(() => {}),
+      onAppInstalled: vi.fn().mockReturnValue(() => {}),
+      onAppUninstalled: vi.fn().mockReturnValue(() => {}),
     }
 
     // Mock Scheduler
@@ -2330,6 +2334,25 @@ describe('AppRuntimeService', () => {
     it('should register a status change handler on the manager', () => {
       createService()
       expect(mockAppManager.onAppStatusChange).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // Every client caches the installed-App list, so both transports have to be
+  // told when that list gains or loses a member.
+  describe('installed-App list announcements', () => {
+    it('should announce install and uninstall on both transports', () => {
+      createService()
+
+      const onInstalled = mockAppManager.onAppInstalled.mock.calls[0][0]
+      const onUninstalled = mockAppManager.onAppUninstalled.mock.calls[0][0]
+
+      onInstalled({ id: 'app-installed' })
+      expect(sendToRenderer).toHaveBeenCalledWith('app:list_changed', { appId: 'app-installed', change: 'installed' })
+      expect(broadcastToAll).toHaveBeenCalledWith('app:list_changed', { appId: 'app-installed', change: 'installed' })
+
+      onUninstalled({ id: 'app-gone' })
+      expect(sendToRenderer).toHaveBeenCalledWith('app:list_changed', { appId: 'app-gone', change: 'uninstalled' })
+      expect(broadcastToAll).toHaveBeenCalledWith('app:list_changed', { appId: 'app-gone', change: 'uninstalled' })
     })
   })
 })

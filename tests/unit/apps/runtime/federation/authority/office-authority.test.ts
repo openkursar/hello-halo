@@ -30,8 +30,10 @@ import {
   createOfficeAuthority,
   type OfficeAuthority,
 } from '../../../../../../src/main/apps/runtime/federation/authority/office-authority'
+import type { MemberWriteRecord } from '../../../../../../src/main/apps/runtime/federation/authority/replication'
 import type { FederationMessage } from '../../../../../../src/main/apps/runtime/federation/types'
-import type { BlackboardTask } from '../../../../../../src/shared/apps/team-types'
+import type { TeamMember } from '../../../../../../src/main/apps/team'
+import type { BlackboardTask, TeamActivity } from '../../../../../../src/shared/apps/team-types'
 
 const OFFICE = 'office-x'
 const EPOCH = 'epoch-1'
@@ -44,6 +46,8 @@ interface Node {
   team: TeamStore
   office: OfficeAuthority
   onBecomeAuthority: ReturnType<typeof vi.fn>
+  /** Member writes this node admitted and applied through its kernel blackboard. */
+  applied: MemberWriteRecord[]
 }
 
 function task(id: string, assignee: string | null = null, status: BlackboardTask['status'] = 'pending'): BlackboardTask {
@@ -61,13 +65,19 @@ describe('office-authority (3-node resilience integration)', () => {
     created.length = 0
   })
 
-  function build(): { nodes: Record<string, Node>; kill: (id: string) => void } {
+  function build(): {
+    nodes: Record<string, Node>
+    kill: (id: string) => void
+    sent: { to: string; frame: FederationMessage }[]
+  } {
     const ids = ['A', 'B', 'C']
     const joinedAt: Record<string, number> = { A: 1, B: 2, C: 3 }
     const dead = new Set<string>()
     const registry = new Map<string, Node>()
+    const sent: { to: string; frame: FederationMessage }[] = []
 
     const route = (to: string, frame: FederationMessage) => {
+      sent.push({ to, frame })
       if (dead.has(to)) return
       const from = (frame as { fromNode?: string }).fromNode ?? 'unknown'
       if (dead.has(from)) return
@@ -96,6 +106,7 @@ describe('office-authority (3-node resilience integration)', () => {
       }
       auth.patchAuthorityState(OFFICE, { term: 1, authorityNodeId: 'A', rosterEpoch: 1 }, 0)
       const onBecomeAuthority = vi.fn()
+      const applied: MemberWriteRecord[] = []
       const office = createOfficeAuthority({
         officeId: OFFICE,
         selfNodeId: id,
@@ -108,7 +119,7 @@ describe('office-authority (3-node resilience integration)', () => {
         getCurrentRunEpoch: () => ({ teamId: OFFICE, epochId: EPOCH }),
         getOwnerStatus: () => 'idle',
         reassignTask: () => {},
-        applyMemberWrite: () => {},
+        applyMemberWrite: (record) => applied.push(record),
         onBecomeAuthority,
         onAuthorityChange: () => {},
         resolveArtifactBytes: async () => null,
@@ -117,7 +128,7 @@ describe('office-authority (3-node resilience integration)', () => {
         schedule: () => () => {},
         jitter: () => 0,
       })
-      registry.set(id, { id, dbm, fed, auth, team, office, onBecomeAuthority })
+      registry.set(id, { id, dbm, fed, auth, team, office, onBecomeAuthority, applied })
     }
 
     const nodes = Object.fromEntries(registry) as Record<string, Node>
@@ -128,7 +139,7 @@ describe('office-authority (3-node resilience integration)', () => {
         nodes[peerId].fed.setNodeStatus(OFFICE, id, 'offline', 0)
       }
     }
-    return { nodes, kill }
+    return { nodes, kill, sent }
   }
 
   it('replicates the authority writes and commits with heir-inclusion', () => {
@@ -169,6 +180,88 @@ describe('office-authority (3-node resilience integration)', () => {
     expect(nodes.B.onBecomeAuthority).toHaveBeenCalledWith(2)
 
     expect(nodes.B.team.getTaskById('t1')).toBeTruthy()
+  })
+
+  function member(appId: string, ownerNodeId: string): TeamMember {
+    return {
+      teamId: OFFICE,
+      appId,
+      memberName: appId,
+      role: 'worker',
+      isLead: false,
+      aiProvisioned: false,
+      addedAt: 1,
+      ownerNodeId,
+      origin: ownerNodeId === 'A' ? 'local' : 'remote',
+      memberIdentity: appId,
+      scopeJson: null,
+    }
+  }
+
+  /** A directed act (message/reply): the actor and the target sit on DIFFERENT nodes. */
+  function directedActivity(actorAppId: string, targetAppId: string): TeamActivity {
+    return {
+      id: 'act-1',
+      teamId: OFFICE,
+      epochId: EPOCH,
+      kind: 'message',
+      actorAppId,
+      targetAppId,
+      subject: 'hello',
+      body: null,
+      refId: null,
+      correlationId: null,
+      status: 'sent',
+      createdAt: 0,
+    }
+  }
+
+  it("records a joiner's directed activity: the actor it owns carries the write, not the target it does not", () => {
+    // Drop `actorAppId` from the resolvable subject fields and the only claim
+    // left is targetAppId — a member of the AUTHORITY's node — so every
+    // cross-node message record is refused non-retryably and rolled back.
+    const { nodes, sent } = build()
+    for (const id of ['A', 'B', 'C']) {
+      nodes[id].team.addMember(member('remote-wkr', 'B'))
+      nodes[id].team.addMember(member('local-wkr', 'A'))
+    }
+
+    nodes.A.office.handle('B', {
+      kind: 'blackboard-write',
+      officeId: OFFICE,
+      fromNode: 'B',
+      term: nodes.A.office.getTerm(),
+      op: 'post_activity',
+      payload: directedActivity('remote-wkr', 'local-wkr') as unknown as Record<string, unknown>,
+      fid: 'fid-activity-1',
+    } as never)
+
+    expect(nodes.A.applied.map((r) => r.op)).toEqual(['post_activity'])
+    expect(sent.some((s) => s.frame.kind === 'reject')).toBe(false)
+  })
+
+  it('refuses a write that names only members the sending node does not own', () => {
+    const { nodes, sent } = build()
+    for (const id of ['A', 'B', 'C']) {
+      nodes[id].team.addMember(member('remote-wkr', 'B'))
+      nodes[id].team.addMember(member('local-wkr', 'A'))
+    }
+
+    // B owns `remote-wkr`, yet claims to act AS the authority's own member.
+    nodes.A.office.handle('B', {
+      kind: 'blackboard-write',
+      officeId: OFFICE,
+      fromNode: 'B',
+      term: nodes.A.office.getTerm(),
+      op: 'post_activity',
+      payload: directedActivity('local-wkr', 'local-wkr') as unknown as Record<string, unknown>,
+      fid: 'fid-activity-2',
+    } as never)
+
+    expect(nodes.A.applied).toHaveLength(0)
+    expect(
+      sent.some((s) => s.frame.kind === 'reject' && (s.frame as { reason?: string }).reason === 'SCOPE_DENIED')
+    ).toBe(true)
   })
 
   it('O-SB / partition minority: with two peers dead, the lone survivor pauses (no double authority)', () => {

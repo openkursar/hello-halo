@@ -797,6 +797,13 @@ Key invariants (violating these is an architecture bug):
 - Kernel imports no federation transport (links/frames/routes) — renderer event fan-out
   (`broadcastToAll`/`sendToRenderer`) is UI egress, not the federation link; federation
   reads/writes only through stores + injected deps.
+- A published artifact ref belongs to ONE member per epoch. Refs are paths inside
+  each producer's own working directory, so two members choosing the same name is
+  the default accident, not an edge case: the publish gate refuses a name another
+  member already holds, and a ref that still ends up claimed twice is refused as
+  ambiguous by every reader (`apps/team/artifact-refs` is the SSOT for both).
+  Never reintroduce a "first/newest publisher wins" pick — a model handed the
+  wrong file has no way to notice it got one.
 - Star topology: joiners talk only to the office authority; joiner↔joiner traffic is relayed/mirror-served by it.
 - Directed control messages ride the durable feed outbox (no fire-and-forget); transcripts are multi-replica (every node keeps a local copy).
 - Office-shared rows outside the board (member profile, periodic checks) ride the same single-writer log; a member's delegated capability policy never leaves the machine it guards.

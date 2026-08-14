@@ -64,7 +64,7 @@ import { buildTeamEntry, buildTeamConstraints, buildTeamImBridge } from './team/
 import { getActiveTeamRuntime } from './team'
 import { createTeamMcpServer } from './team/team-tools'
 import { TEAM_MCP_SERVER_NAME } from '../../../shared/apps/team-types'
-import { computeDisallowedBuiltins, filterMcpServersByPolicy } from './capability-policy'
+import { computeDisallowedBuiltins, filterMcpServersByPolicy, isBorrowedTeamTurn } from './capability-policy'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import { createFileSendMcpServer } from './im-channels/file-send-mcp'
 import { mergeConfigWithDefaults } from './config-defaults'
@@ -541,6 +541,9 @@ export async function sendAppChatMessage(
               : {}),
             checks: getActiveTeamRuntime()!.checks,
             digest: getActiveTeamRuntime()!.digest,
+            // Stamped onto the messages this turn sends, so the circuit
+            // breaker's depth limit spans hops.
+            forwardDepth: teamContext.forwardDepth,
             // Lead-only team_complete → deferred seal after the lead's turn ends.
             requestComplete: (summary) =>
               getActiveTeamRuntime()!.requestSeal(teamContext.teamId, teamContext.epochId, summary),
@@ -607,14 +610,11 @@ export async function sendAppChatMessage(
     )
   }
 
-  // ── Delegated capability control (a teammate woke this digital human) ──────
-  // Only turns started by ANOTHER member are held to the owner's policy: a
-  // person talking to a digital human in its own chat, and a person reaching the
-  // team over IM, are not teammates borrowing it. A withheld capability is
-  // absent from the turn rather than refused mid-call, and an unset policy
-  // withholds nothing — a team that never opened the screen is unchanged.
+  // ── Delegated capability control (someone else put this digital human to work) ──
+  // A withheld capability is absent from the turn rather than refused mid-call,
+  // and an unset policy withholds nothing.
   const delegatedPolicy =
-    teamContext && teamContext.kind !== 'human_message' && !imSession
+    teamContext && isBorrowedTeamTurn(teamContext.kind, !!imSession)
       ? getActiveTeamRuntime()?.getDelegatedPolicy(teamContext.teamId, appId) ?? null
       : null
   if (delegatedPolicy) {
@@ -686,6 +686,13 @@ export async function sendAppChatMessage(
     )
 
     registerActiveSession(conversationId, sessionState)
+
+    // Member status is derived from the ledger registered above, so the pulse
+    // must follow that write — an earlier one re-reads the member as idle.
+    const startedTeamSession = parseTeamSessionKey(conversationId)
+    if (startedTeamSession) {
+      getActiveTeamRuntime()?.noteMemberStatusChanged(startedTeamSession.teamId)
+    }
 
     // Set thinking tokens dynamically
     if (typeof v2Session.setMaxThinkingTokens === 'function') {
@@ -894,13 +901,17 @@ export async function sendAppChatMessage(
 
     console.log(`[AppChat][${appId}] Active session cleaned up`)
 
-    // A TEAM-session turn ended — bus-driven, human 1:1, or IM alike. Nudge the
-    // bus mailbox: only bus-driven turns pass through completeTurn's drain, so
-    // without this a lead kept busy by human 1:1 chat on the same session key
-    // strands its teammates' buffered completions forever (they buffered
-    // against THIS turn's busy window and nothing else ever picks them up).
-    // Deferred so the busy probe reads idle when the drain runs.
-    if (parseTeamSessionKey(conversationId)) {
+    // A TEAM-session turn ended — bus-driven, human 1:1, or IM alike.
+    const endedTeamSession = parseTeamSessionKey(conversationId)
+    if (endedTeamSession) {
+      // Only bus-driven turns get orchestration's own pulse, and only a HOSTED
+      // office is re-baselined periodically, so a 1:1 turn would otherwise leave
+      // the member's own machine showing it as working forever.
+      getActiveTeamRuntime()?.noteMemberStatusChanged(endedTeamSession.teamId)
+      // Nudge the bus mailbox: only bus-driven turns pass through completeTurn's
+      // drain, so without this a lead kept busy by human 1:1 chat on the same
+      // session key strands its teammates' buffered completions forever.
+      // Deferred so the busy probe reads idle when the drain runs.
       setImmediate(() => {
         try {
           getActiveTeamRuntime()?.bus.drainMailbox(conversationId)

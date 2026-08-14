@@ -60,17 +60,23 @@ describe('buildTeamImBridge', () => {
     expect(out).toContain('NOT by the team runtime')
   })
 
-  it('tells the lead its final message is the reply (no tool needed)', () => {
+  it('tells the lead its final message is the reply TO THE PERSON (no tool needed)', () => {
     const out = buildTeamImBridge(im)
     expect(out).toContain('final message')
-    expect(out.toLowerCase()).toContain('do not call any tool to reply')
+    expect(out.toLowerCase()).toContain('do not call any tool to')
+    // The exemption is scoped to this chat; it must not read as "your output
+    // reaches teammates too".
+    expect(out).toContain('reach no')
   })
 
-  it('steers delegation toward wait=true so results land within the turn', () => {
+  it('warns that a specialist answer cannot land inside this turn (two messages, not one)', () => {
     const out = buildTeamImBridge(im)
     expect(out).toContain('team_send')
-    expect(out).toContain('wait=true')
-    expect(out).toContain('wait=false')
+    expect(out).toContain('cannot')
+    expect(out).toContain('later as a new turn')
+    // No wait=* advice: there is no primitive that lands a result in this turn.
+    expect(out).not.toContain('wait=true')
+    expect(out).not.toContain('wait=false')
   })
 
   it('reflects a direct chat type', () => {

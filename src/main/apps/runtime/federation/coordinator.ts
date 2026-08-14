@@ -775,16 +775,10 @@ export function createFederationCoordinator(
 
   // ── Owner side: run a remote member's turn, then report completion ──
 
-  // Coalesced-wake ledger. Concurrent wakes aimed at the SAME member session
-  // (identical conversationId) are absorbed by the engine into the one turn
-  // already in flight (mid-turn injection), so only the first caller's promise
-  // carries the turn's real completion. Every arriving wake registers its
-  // correlation here; the FIRST completion for a conversation drains and acks
-  // the WHOLE batch with the same outcome, so no coalesced sender is left
-  // hanging until its sync-wait timeout. A later (already-drained) completion
-  // finds nothing to ack — turn-completes are one-shot per correlation.
-  const pendingWakeAcks = new Map<string, Array<{ from: NodeId; correlationId: string }>>()
-
+  // One wake, one turn, one ack: wakes for the same member session never
+  // overlap, because the owner runs them through the kernel's busy gate — a
+  // second wake QUEUES and gets its own turn with its own completion.
+  //
   // Idempotency ledger so a RE-delivered wake (a network duplicate, or a future
   // sender-side retransmit) never starts a second turn — double execution is a
   // correctness bug, not just waste. A correlationId is at most once "run":
@@ -839,10 +833,6 @@ export function createFederationCoordinator(
 
     console.log(`${LOG_TAG} wake received office=${officeId} app=${msg.request.appId} corr=${corr}`)
     inFlightWakes.add(corr)
-    const convId = msg.request.conversationId
-    const pending = pendingWakeAcks.get(convId) ?? []
-    pending.push({ from, correlationId: corr })
-    pendingWakeAcks.set(convId, pending)
     void onWake(msg.request)
       .then((res): TurnCompletion => ({ kind: 'result', content: res.finalMessage ?? '' }))
       .catch((err): TurnCompletion => ({
@@ -850,28 +840,13 @@ export function createFederationCoordinator(
         message: err instanceof Error ? err.message : String(err),
       }))
       .then((outcome) => {
-        const batch = pendingWakeAcks.get(convId)
-        if (!batch || batch.length === 0) return // already drained by an earlier completion
-        pendingWakeAcks.delete(convId)
-        if (batch.length > 1) {
-          console.log(
-            `${LOG_TAG} acking ${batch.length} coalesced wakes office=${officeId} conv=${convId}`
-          )
-        }
-        for (const entry of batch) {
-          inFlightWakes.delete(entry.correlationId)
-          // Remember the outcome so a late duplicate of this wake re-acks instead
-          // of re-running (its sender's turn-complete may have been lost).
-          rememberCompleted(entry.correlationId, outcome)
-          // The joiner link routes only to its single host peer, so the target
-          // node id is a label; each wake's origin keeps its own reflux address.
-          link.send(entry.from, {
-            kind: 'turn-complete',
-            officeId,
-            correlationId: entry.correlationId,
-            outcome,
-          })
-        }
+        inFlightWakes.delete(corr)
+        // Remember the outcome so a late duplicate of this wake re-acks instead
+        // of re-running (its sender's turn-complete may have been lost).
+        rememberCompleted(corr, outcome)
+        // The joiner link routes only to its single host peer, so the target
+        // node id is a label; each wake's origin keeps its own reflux address.
+        link.send(from, { kind: 'turn-complete', officeId, correlationId: corr, outcome })
       })
   }
 

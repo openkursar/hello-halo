@@ -103,7 +103,10 @@ Cross-machine digital-team offices reached release candidate:
   semantics (finding ref OR task resultRef) are a single source of truth in
   `apps/team/artifact-refs.ts`, shared with the federation owner-serve gate;
   remote fetch failures are classified by exported codes
-  (`classifyArtifactFetchFailure`), never by message prose.
+  (`classifyArtifactFetchFailure`), never by message prose. A ref belongs to one
+  member per epoch: the publish gate refuses a name another member holds, and a
+  ref claimed twice anyway is refused as ambiguous instead of resolved to
+  whichever row sorted first.
 - ARCHITECTURE.md §24 documents the model + invariants.
 
 ## Notes

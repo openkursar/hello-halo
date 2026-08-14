@@ -61,28 +61,21 @@ export function useOfficeSkin(teamId: string): OfficeSkin {
 }
 
 /**
- * Which digital human of yours a team conversation talks to.
- *
- * Order: the one you last spoke to here → the first one you brought → the team
- * lead. The lead is the fallback for someone who brought nobody (they are only
- * watching), never the default for someone who did. Candidates are the ones that
- * can actually answer, so a remembered choice that has since been uninstalled
- * falls through instead of pointing the chat at nothing.
+ * Which digital human of yours a team conversation talks to. Candidates must be
+ * ones that can actually answer, so a remembered choice that has since been
+ * uninstalled falls through instead of pointing the chat at nothing. Null when
+ * none of yours run on this machine — a teammate's answers to its own owner and
+ * is reached from its own thread, never adopted here as a stand-in.
  */
 export function pickChatTarget(
   remembered: string | undefined,
-  candidateAppIds: string[],
-  leadAppId: string | null
+  candidateAppIds: string[]
 ): string | null {
   if (remembered && candidateAppIds.includes(remembered)) return remembered
-  return candidateAppIds[0] ?? leadAppId
+  return candidateAppIds[0] ?? null
 }
 
-export function useDefaultChatTarget(
-  teamId: string,
-  candidateAppIds: string[],
-  leadAppId: string | null
-): string | null {
+export function useDefaultChatTarget(teamId: string, candidateAppIds: string[]): string | null {
   const remembered = useTeamViewPrefsStore((state) => state.defaultMemberByTeam[teamId])
-  return pickChatTarget(remembered, candidateAppIds, leadAppId)
+  return pickChatTarget(remembered, candidateAppIds)
 }

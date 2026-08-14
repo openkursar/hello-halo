@@ -16,6 +16,7 @@ import { useAppsPageStore } from '../../stores/apps-page.store'
 import { AppStatusDot } from './AppStatusDot'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
+import { formatTimeAgo } from '../../utils/time'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import { api } from '../../api'
 import { useSpaceStore } from '../../stores/space.store'
@@ -305,23 +306,6 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
       )}
     </div>
   )
-}
-
-// ──────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────
-
-function formatTimeAgo(timestamp: number, t: (s: string, opts?: Record<string, unknown>) => string): string {
-  const diff = Date.now() - timestamp
-  // Handle future timestamps (clock skew) - return "just now" for any negative diff
-  if (diff <= 0) return t('just now')
-  const mins = Math.floor(diff / 60_000)
-  if (mins < 1) return t('just now')
-  if (mins < 60) return t('{{count}}m ago', { count: mins })
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return t('{{count}}h ago', { count: hrs })
-  const days = Math.floor(hrs / 24)
-  return t('{{count}}d ago', { count: days })
 }
 
 // ──────────────────────────────────────────────

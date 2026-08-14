@@ -15,6 +15,9 @@
  *     happened" is not an event, and it is exactly the failure this module is
  *     here to catch.
  *
+ * The delta half is ranked, not truncated by recency: its budget belongs to the
+ * facts that reach the member nowhere else.
+ *
  * What it must never do is turn absence into a verdict. It reports the two facts
  * side by side ("they answered you; that task is still open") and leaves the
  * inference to the reader — the record can prove something WAS recorded, never
@@ -98,7 +101,7 @@ export function createBoardDigest(deps: BoardDigestDeps): BoardDigest {
     switch (act.kind) {
       case 'message':
         if (act.status === 'undelivered') return `${actor} tried to reach ${target ?? 'someone'} and it did not arrive`
-        return toYou ? `${actor} messaged you:${quoted}` : `${actor} → ${target}:${quoted}`
+        return `${actor} → ${target}:${quoted}`
       case 'reply':
         return toYou ? `${actor} answered you:${quoted}` : `${actor} answered ${target}`
       case 'task_post':
@@ -120,18 +123,46 @@ export function createBoardDigest(deps: BoardDigestDeps): BoardDigest {
     }
   }
 
-  /** Acts this member has not been shown. Its own acts are not news to it. */
+  /**
+   * What happened that this member has no other way of knowing.
+   *
+   * Dropped before ranking, as already read: the member's own acts, and messages
+   * to it accepted for delivery (each arrived as the input of a turn it took).
+   * The rest competes for the budget by how else it could be learned — a task
+   * moving or a message that never arrived exist nowhere but here, a finding is
+   * also a file on the board, traffic between two others is worth only a count.
+   */
   function changesFor(
     acts: readonly TeamActivity[],
     viewerAppId: string,
     since: number,
     names: Map<string, string>
   ): string[] {
-    return acts
-      .filter((a) => a.createdAt > since && a.actorAppId !== viewerAppId)
-      .slice(-MAX_LINES_PER_SECTION)
-      .map((a) => describeAct(a, viewerAppId, names))
-      .filter((line): line is string => line !== null)
+    const fresh = acts.filter(
+      (a) => a.createdAt > since && a.actorAppId !== viewerAppId && !deliveredToViewer(a, viewerAppId)
+    )
+    const chatter = fresh.filter((a) => isSideChatter(a, viewerAppId))
+    const direct = fresh.filter((a) => !isSideChatter(a, viewerAppId))
+
+    const lines: string[] = []
+    const roomLeft = (): number => MAX_LINES_PER_SECTION - lines.length
+    // Rendered before the cap so an act that renders to nothing cannot spend a
+    // line another would have filled; the tail is what the member has least
+    // accounted for.
+    const pushRecent = (tier: readonly TeamActivity[]): void => {
+      const room = roomLeft()
+      if (room <= 0) return
+      const rendered = tier
+        .map((a) => describeAct(a, viewerAppId, names))
+        .filter((line): line is string => line !== null)
+      lines.push(...rendered.slice(-room))
+    }
+
+    pushRecent(direct.filter((a) => a.kind !== 'finding'))
+    pushRecent(direct.filter((a) => a.kind === 'finding'))
+    const room = roomLeft()
+    if (room > 0) lines.push(...foldChatter(chatter, names).slice(0, room))
+    return lines
   }
 
   /**
@@ -204,6 +235,50 @@ export function createBoardDigest(deps: BoardDigestDeps): BoardDigest {
   }
 
   return { render, clearEpoch }
+}
+
+/**
+ * A message this member has already read: anything accepted for delivery arrives
+ * as the input of a turn it takes. An undelivered one never did, so the record is
+ * the only place it exists.
+ */
+function deliveredToViewer(act: TeamActivity, viewerAppId: string): boolean {
+  return act.kind === 'message' && act.targetAppId === viewerAppId && act.status !== 'undelivered'
+}
+
+/**
+ * Successful traffic between two OTHER members (the caller has already dropped
+ * this member's own acts) — the one class safe to hand over as a count rather
+ * than content, since `team_read_board` still has every line. Failures are never
+ * folded away.
+ */
+function isSideChatter(act: TeamActivity, viewerAppId: string): boolean {
+  return (
+    act.kind === 'message' &&
+    act.status === 'sent' &&
+    act.targetAppId !== null &&
+    act.targetAppId !== viewerAppId
+  )
+}
+
+/** One line per pair, busiest first: who has been talking, never what about. */
+function foldChatter(acts: readonly TeamActivity[], names: Map<string, string>): string[] {
+  const pairs = new Map<string, { first: string; second: string; count: number }>()
+  for (const act of acts) {
+    if (!act.targetAppId) continue
+    const [first, second] = [act.actorAppId, act.targetAppId].sort()
+    const key = `${first}\u0000${second}`
+    const pair = pairs.get(key) ?? { first, second, count: 0 }
+    pair.count += 1
+    pairs.set(key, pair)
+  }
+  return [...pairs.values()]
+    .sort((a, b) => b.count - a.count)
+    .map(({ first, second, count }) => {
+      const one = names.get(first) ?? first
+      const other = names.get(second) ?? second
+      return `${one} and ${other} exchanged ${count} message${count === 1 ? '' : 's'}`
+    })
 }
 
 /** Coarse, human age ("40 minutes", "2 hours") — precision here is noise. */

@@ -27,11 +27,14 @@ import { createMessageBus } from '../../../../../src/main/apps/runtime/team/mess
 import type { Team, TeamMember, TeamEpoch } from '../../../../../src/main/apps/team/types'
 import type { BlackboardWriteRecord } from '../../../../../src/main/apps/runtime/team/blackboard'
 import { answeredCorrelationIds, isAwaitingReply } from '../../../../../src/shared/apps/team-types'
+import { buildTeamSessionKey } from '../../../../../src/shared/apps/im-keys'
 
 const TEAM_ID = 'team-1'
 const EPOCH_ID = 'epoch-1'
 const LEAD_APP = 'app-lead'
 const RESEARCHER_APP = 'app-researcher'
+/** A third member, so a test can stage traffic the viewer is no part of. */
+const WRITER_APP = 'app-writer'
 
 const HOUR = 60 * 60 * 1000
 
@@ -59,6 +62,13 @@ function seed(store: TeamStore): void {
   for (const m of members) store.addMember(m)
   const epoch: TeamEpoch = { id: EPOCH_ID, teamId: TEAM_ID, startedAt: now, endedAt: null, endReason: null, summary: null, lifecycle: 'run' }
   store.insertEpoch(epoch)
+}
+
+function addWriter(store: TeamStore): void {
+  store.addMember({
+    teamId: TEAM_ID, appId: WRITER_APP, memberName: 'writer', role: 'Writing',
+    isLead: false, aiProvisioned: false, addedAt: Date.now(),
+  })
 }
 
 describe('office record + board digest', () => {
@@ -237,6 +247,66 @@ describe('office record + board digest', () => {
       expect(digest.render({ teamId: TEAM_ID, epochId: EPOCH_ID, viewerAppId: RESEARCHER_APP })).toBeNull()
     })
 
+    it('never quotes back a message the member already read as its own turn input', () => {
+      const digest = createBoardDigest({ store })
+      store.insertActivity({
+        id: 'a-1', teamId: TEAM_ID, epochId: EPOCH_ID, kind: 'message',
+        actorAppId: LEAD_APP, targetAppId: RESEARCHER_APP, subject: 'confirm the spec',
+        body: null, refId: 'a-1', correlationId: 'c-1', status: 'sent', createdAt: Date.now(),
+      })
+      expect(digest.render({ teamId: TEAM_ID, epochId: EPOCH_ID, viewerAppId: RESEARCHER_APP })).toBeNull()
+    })
+
+    it('does report a message aimed at the member that never arrived', () => {
+      const digest = createBoardDigest({ store })
+      store.insertActivity({
+        id: 'a-1', teamId: TEAM_ID, epochId: EPOCH_ID, kind: 'message',
+        actorAppId: LEAD_APP, targetAppId: RESEARCHER_APP, subject: 'confirm the spec',
+        body: null, refId: 'a-1', correlationId: null, status: 'undelivered', createdAt: Date.now(),
+      })
+      expect(digest.render({ teamId: TEAM_ID, epochId: EPOCH_ID, viewerAppId: RESEARCHER_APP })).toContain(
+        'did not arrive'
+      )
+    })
+
+    it('folds traffic between two other members into a count, keeping their words off the digest', () => {
+      addWriter(store)
+      const digest = createBoardDigest({ store })
+      for (let i = 0; i < 4; i++) {
+        const [from, to] = i % 2 === 0 ? [RESEARCHER_APP, WRITER_APP] : [WRITER_APP, RESEARCHER_APP]
+        store.insertActivity({
+          id: `a-${i}`, teamId: TEAM_ID, epochId: EPOCH_ID, kind: 'message',
+          actorAppId: from, targetAppId: to, subject: `small talk ${i}`,
+          body: null, refId: `a-${i}`, correlationId: `c-${i}`, status: 'sent', createdAt: Date.now() + i,
+        })
+      }
+
+      const text = digest.render({ teamId: TEAM_ID, epochId: EPOCH_ID, viewerAppId: LEAD_APP })
+      expect(text).toContain('researcher and writer exchanged 4 messages')
+      expect(text).not.toContain('small talk')
+    })
+
+    it('spends the budget on what only the board carries before it spends it on chatter', () => {
+      addWriter(store)
+      const digest = createBoardDigest({ store })
+      for (let i = 0; i < 6; i++) {
+        store.insertActivity({
+          id: `t-${i}`, teamId: TEAM_ID, epochId: EPOCH_ID, kind: 'task_post',
+          actorAppId: RESEARCHER_APP, targetAppId: WRITER_APP, subject: `Task ${i}`,
+          body: null, refId: `task-${i}`, correlationId: null, status: null, createdAt: Date.now() + i,
+        })
+      }
+      store.insertActivity({
+        id: 'a-1', teamId: TEAM_ID, epochId: EPOCH_ID, kind: 'message',
+        actorAppId: RESEARCHER_APP, targetAppId: WRITER_APP, subject: 'small talk',
+        body: null, refId: 'a-1', correlationId: 'c-1', status: 'sent', createdAt: Date.now() + 10,
+      })
+
+      const text = digest.render({ teamId: TEAM_ID, epochId: EPOCH_ID, viewerAppId: LEAD_APP })
+      expect(text).toContain('Task 5')
+      expect(text).not.toContain('exchanged')
+    })
+
     it('states that the record is partial, so a gap is never read as a verdict', () => {
       const board = createBlackboard({ store })
       const digest = createBoardDigest({ store })
@@ -249,7 +319,7 @@ describe('office record + board digest', () => {
   })
 
   describe('message bus', () => {
-    it('records every message it carries, and the reply that closes it', async () => {
+    it('records every message it carries, and leaves it OPEN when the turn merely ends', async () => {
       const board = createBlackboard({ store })
       const bus = createMessageBus({
         store,
@@ -266,7 +336,6 @@ describe('office record + board digest', () => {
         fromAppId: LEAD_APP,
         to: 'researcher',
         message: 'Confirm the field spec\nand reply when done',
-        wait: false,
       })
       const messageId = 'messageId' in result ? result.messageId : ''
 
@@ -285,7 +354,7 @@ describe('office record + board digest', () => {
 
       const correlationId = acts[0].correlationId!
       bus.completeTurn({
-        sessionKey: `team:${RESEARCHER_APP}:${TEAM_ID}:${EPOCH_ID}`,
+        sessionKey: buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID),
         trigger: {
           teamId: TEAM_ID,
           epochId: EPOCH_ID,
@@ -297,8 +366,94 @@ describe('office record + board digest', () => {
         outcome: { kind: 'result', content: 'Confirmed.' },
       })
 
-      const answered = answeredCorrelationIds(store.listActivityByEpoch(TEAM_ID, EPOCH_ID))
-      expect(answered.has(correlationId)).toBe(true)
+      // A finished turn is not an answer: "Confirmed." went to whoever watches
+      // the member's own chat, never to the lead. Filing it as a reply marks the
+      // question answered and silences the unanswered-message net below.
+      const afterTurn = store.listActivityByEpoch(TEAM_ID, EPOCH_ID)
+      expect(afterTurn).toHaveLength(1)
+      expect(answeredCorrelationIds(afterTurn).has(correlationId)).toBe(false)
+    })
+
+    it('closes a message when its turn FAILED — a fate the sender cannot learn any other way', async () => {
+      const board = createBlackboard({ store })
+      const bus = createMessageBus({
+        store,
+        recordActivity: (input) => board.postActivity(input),
+        hooks: { wakeTarget: async () => {}, isBusy: () => false },
+      })
+
+      await bus.send({
+        teamId: TEAM_ID,
+        epochId: EPOCH_ID,
+        fromAppId: LEAD_APP,
+        to: 'researcher',
+        message: 'Confirm the field spec',
+      })
+      const correlationId = store.listActivityByEpoch(TEAM_ID, EPOCH_ID)[0].correlationId!
+
+      bus.completeTurn({
+        sessionKey: buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID),
+        trigger: {
+          teamId: TEAM_ID,
+          epochId: EPOCH_ID,
+          correlationId,
+          fromAppId: LEAD_APP,
+          wait: false,
+          kind: 'message',
+        },
+        outcome: { kind: 'timeout' },
+      })
+
+      const acts = store.listActivityByEpoch(TEAM_ID, EPOCH_ID)
+      expect(acts).toHaveLength(2)
+      expect(acts.find((a) => a.kind === 'reply')).toMatchObject({
+        actorAppId: RESEARCHER_APP,
+        targetAppId: LEAD_APP,
+        status: 'timeout',
+        correlationId,
+      })
+    })
+
+    it('nags the sender when a message goes unanswered — the net that catches a forgotten team_send', async () => {
+      const board = createBlackboard({ store })
+      const bus = createMessageBus({
+        store,
+        recordActivity: (input) => board.postActivity(input),
+        hooks: { wakeTarget: async () => {}, isBusy: () => false },
+      })
+
+      await bus.send({
+        teamId: TEAM_ID,
+        epochId: EPOCH_ID,
+        fromAppId: LEAD_APP,
+        to: 'researcher',
+        message: 'Confirm the field spec',
+      })
+      const correlationId = store.listActivityByEpoch(TEAM_ID, EPOCH_ID)[0].correlationId!
+
+      // The researcher's turn ends with a line to its own owner; it never called
+      // team_send, so the lead heard nothing.
+      bus.completeTurn({
+        sessionKey: buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID),
+        trigger: {
+          teamId: TEAM_ID,
+          epochId: EPOCH_ID,
+          correlationId,
+          fromAppId: LEAD_APP,
+          wait: false,
+          kind: 'message',
+        },
+        outcome: { kind: 'result', content: 'Looks fine to me.' },
+      })
+
+      // An hour later the lead is woken for something else; the digest is what
+      // tells it the question is still open.
+      const later = Date.now() + 60 * 60 * 1000
+      const digest = createBoardDigest({ store, now: () => later })
+      const text = digest.render({ teamId: TEAM_ID, epochId: EPOCH_ID, viewerAppId: LEAD_APP })
+      expect(text).toContain('nothing has come back')
+      expect(text).toContain('Confirm the field spec')
+      expect(text).not.toContain('Looks fine to me')
     })
 
     it("a person's 1:1 message is delivered and leaves no trace — theirs to have, not the office's to keep", async () => {
@@ -369,7 +524,7 @@ describe('office record + board digest', () => {
         to: 'researcher', message: 'quick question', wait: false,
       })
       bus.completeTurn({
-        sessionKey: `team:${RESEARCHER_APP}:${TEAM_ID}:${EPOCH_ID}`,
+        sessionKey: buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID),
         trigger: {
           teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'c-human',
           fromAppId: null, wait: false, kind: 'human_message',

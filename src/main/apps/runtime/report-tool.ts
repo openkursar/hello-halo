@@ -17,6 +17,7 @@ import { broadcastToAll } from '../../http/websocket'
 import { sendToRenderer } from '../../foundation/window.service'
 import { notifyAppEvent } from '../../services/notification.service'
 import { getActiveTeamRuntime } from './team'
+import { oneLineExcerpt } from './text-truncate'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 
 // ============================================
@@ -51,6 +52,41 @@ function textResult(text: string, isError = false) {
     content: [{ type: 'text' as const, text }],
     ...(isError ? { isError: true } : {}),
   }
+}
+
+const OPEN_QUESTION_EXCERPT = 80
+
+/**
+ * A solo run really is suspended on the answer; a team turn is not — teammate
+ * messages and periodic checks keep waking the member while its question sits
+ * unanswered, and a member told otherwise reads the next unrelated wake as the
+ * answer it was promised.
+ */
+function resumeExpectation(inTeamTurn: boolean): string {
+  return inTeamTurn
+    ? 'End this turn now. The question stays open until the user answers it; ' +
+      'you may still be woken for other work meanwhile, and the answer will ' +
+      'arrive as its own wake quoting the question it belongs to.'
+    : 'The user has been notified. End this run now — you will be ' +
+      'resumed with the user\'s response once they reply.'
+}
+
+/**
+ * People answer in their own order, so a new question does not replace an
+ * earlier one. Naming what is still outstanding lets the model fold the new ask
+ * into an old one, or say plainly that it supersedes it.
+ */
+function describeOpenQuestions(store: ActivityStore, appId: string, exceptEntryId: string): string {
+  const others = store
+    .getAllPendingEscalations()
+    .filter((e) => e.appId === appId && e.id !== exceptEntryId)
+  if (others.length === 0) return ''
+
+  const quoted = others
+    .map((e) => `"${oneLineExcerpt(e.content.question || e.content.summary, OPEN_QUESTION_EXCERPT)}"`)
+    .join('; ')
+  return ` You also have ${others.length} earlier question(s) still unanswered: ${quoted}.` +
+    ' If this new one replaces or absorbs any of them, say so in it.'
 }
 
 // ============================================
@@ -285,8 +321,8 @@ export function createReportToolServer(
 
         return textResult(
           `Escalation sent to user (entry: ${entryId}). ` +
-          'The user has been notified. End this run now — you will be ' +
-          'resumed with the user\'s response once they reply.'
+          resumeExpectation(!!team) +
+          describeOpenQuestions(store, runContext.appId, entryId)
         )
       }
 

@@ -5,9 +5,9 @@
  * in-memory TeamStore and a MOCK TeamDeliveryHooks:
  *   - member resolution + unknown member rejection
  *   - topology reject (structured) vs allow (free)
- *   - wait=true resolve on result (final message) + timeout
- *   - wait=false returns messageId + completion re-wakes the original sender
- *   - busy → buffer → drain on turn completion
+ *   - a send returns a messageId and NOTHING is delivered back when the turn ends
+ *   - the completion receipt (a person's 1:1 chat, not a teammate) + its timeout
+ *   - busy → buffer → drain on turn completion, for local and relayed turns alike
  *   - circuit breaker breach (message count + forward depth)
  *
  * The event emitters (http/websocket, foundation/window.service) are mocked so
@@ -175,6 +175,19 @@ describe('MessageBus', () => {
       const bus = createMessageBus({ store, hooks })
       expect(() => bus.assertCanContact(TEAM_ID, LEAD_APP, RESEARCHER_APP, 'structured')).not.toThrow()
     })
+
+    it('structured mode lets a member ANSWER along the reverse edge', () => {
+      // The default topology is a one-way star (lead → member), and a reply is
+      // itself a team_send: a strict edge check leaves a structured team able to
+      // receive orders but never to answer them.
+      seedTeam(store, 'structured')
+      const { hooks } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+      expect(() => bus.assertCanContact(TEAM_ID, RESEARCHER_APP, LEAD_APP, 'structured')).not.toThrow()
+      expect(() => bus.assertCanContact(TEAM_ID, RESEARCHER_APP, TESTER_APP, 'structured')).toThrow(
+        TopologyError
+      )
+    })
   })
 
   // ===========================================================================
@@ -207,12 +220,12 @@ describe('MessageBus', () => {
       expect(sendToRenderer).toHaveBeenCalledWith('team:message', expect.any(Object))
     })
 
-    it('on completion, re-wakes the ORIGINAL sender with a completion envelope', async () => {
+    it('does NOT deliver the finished turn back to the sender — a reply is an explicit team_send', async () => {
       seedTeam(store, 'free')
       const { hooks, wakes } = makeHooks()
       const bus = createMessageBus({ store, hooks })
 
-      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'Do T1', wait: false })
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'Do T1' })
       const targetWake = wakes[0]
 
       bus.completeTurn({
@@ -221,14 +234,38 @@ describe('MessageBus', () => {
         outcome: { kind: 'result', content: 'T1 done: competitors.md' },
       })
 
-      // A second wake goes back to the lead (the original sender).
+      // The closing line went to whoever is watching the member's own chat.
+      // Forwarding it as the lead's answer makes two members relay each other's
+      // sign-offs forever.
+      expect(wakes).toHaveLength(1)
+    })
+
+    it('a teammate reply reaches the sender only when the member actually sends one', async () => {
+      seedTeam(store, 'free')
+      const { hooks, wakes } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'Do T1' })
+      const targetWake = wakes[0]
+
+      await bus.send({
+        teamId: TEAM_ID,
+        epochId: EPOCH_ID,
+        fromAppId: RESEARCHER_APP,
+        to: 'lead',
+        message: 'T1 done: competitors.md',
+      })
+      bus.completeTurn({
+        sessionKey: targetWake.sessionKey,
+        trigger: targetWake.trigger,
+        outcome: { kind: 'result', content: 'sent it over' },
+      })
+
       expect(wakes).toHaveLength(2)
-      const completionWake = wakes[1]
-      expect(completionWake.appId).toBe(LEAD_APP)
-      expect(completionWake.envelope.body).toContain('T1 done')
-      expect(completionWake.envelope.fromAppId).toBe(RESEARCHER_APP)
-      // RC3: the completion carries the finisher identity via kind='completion'.
-      expect(completionWake.trigger.kind).toBe('completion')
+      expect(wakes[1].appId).toBe(LEAD_APP)
+      expect(wakes[1].envelope.body).toBe('T1 done: competitors.md')
+      expect(wakes[1].trigger.fromAppId).toBe(RESEARCHER_APP)
+      expect(wakes[1].trigger.kind).toBe('message')
     })
 
     it('wait=false to an UNREACHABLE remote member returns undelivered NOW (no false "sent", no delivery attempt)', async () => {
@@ -643,6 +680,190 @@ describe('MessageBus', () => {
       } finally {
         vi.useRealTimers()
       }
+    })
+
+    it('the recheck keeps re-arming while the target stays busy', async () => {
+      // A turn can hang for minutes: a single recheck spent on a still-busy
+      // target strands the mail until that turn ends.
+      vi.useFakeTimers()
+      try {
+        seedTeam(store, 'free')
+        const { hooks, wakes, busy } = makeHooks()
+        const bus = createMessageBus({ store, hooks })
+
+        busy.add(LEAD_KEY)
+        await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP, to: 'lead', message: 'held', wait: false })
+
+        await vi.advanceTimersByTimeAsync(10_000) // several rechecks, all busy
+        expect(wakes).toHaveLength(0)
+
+        busy.delete(LEAD_KEY)
+        await vi.advanceTimersByTimeAsync(3100)
+        expect(wakes).toHaveLength(1)
+        expect(wakes[0].envelope.body).toBe('held')
+
+        // Drained mailbox → no timer left running.
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
+  // ===========================================================================
+  // Relayed turns (a federation wake landing on the member's OWNER).
+  //
+  // The owner is the only node that can know whether the member is already
+  // mid-turn. Without the gate a relayed wake runs into a session a local
+  // delivery already owns: two turns share one SDK message iterator, whoever
+  // reads the single `result` first finishes with the other's answer, and the
+  // loser waits forever.
+  // ===========================================================================
+
+  describe('runRelayedTurn — the owner-side gate', () => {
+    const RESEARCHER_KEY = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID)
+
+    function deferred<T>() {
+      let resolve!: (v: T) => void
+      let reject!: (e: unknown) => void
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res
+        reject = rej
+      })
+      return { promise, resolve, reject }
+    }
+
+    it('runs immediately on an idle session', async () => {
+      seedTeam(store, 'free')
+      const { hooks } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+
+      const out = await bus.runRelayedTurn({
+        sessionKey: RESEARCHER_KEY,
+        run: async () => 'ran',
+      })
+      expect(out).toBe('ran')
+    })
+
+    it('waits for the turn in progress instead of starting a second one', async () => {
+      seedTeam(store, 'free')
+      const { hooks, busy } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+
+      // A local turn is live on this session — a person chatting with the member.
+      busy.add(RESEARCHER_KEY)
+      let started = false
+      const relayed = bus.runRelayedTurn({
+        sessionKey: RESEARCHER_KEY,
+        run: async () => {
+          started = true
+          return 'ran'
+        },
+      })
+      await Promise.resolve()
+      expect(started).toBe(false)
+
+      busy.delete(RESEARCHER_KEY)
+      bus.drainMailbox(RESEARCHER_KEY)
+      await expect(relayed).resolves.toBe('ran')
+      expect(started).toBe(true)
+    })
+
+    it('holds the slot while it runs, so a local delivery queues behind it', async () => {
+      seedTeam(store, 'free')
+      const { hooks, wakes } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+
+      const gate = deferred<string>()
+      const relayed = bus.runRelayedTurn({ sessionKey: RESEARCHER_KEY, run: () => gate.promise })
+      await Promise.resolve()
+
+      const sent = await bus.send({
+        teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'Do T1',
+      })
+      expect(wakes).toHaveLength(0)
+      expect('messageId' in sent && sent.delivery).toBe('queued')
+
+      gate.resolve('ran')
+      await relayed
+      await Promise.resolve()
+      expect(wakes).toHaveLength(1)
+      expect(wakes[0].envelope.body).toBe('Do T1')
+    })
+
+    it('releases the slot when the turn throws', async () => {
+      seedTeam(store, 'free')
+      const { hooks, wakes } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+
+      await expect(
+        bus.runRelayedTurn({
+          sessionKey: RESEARCHER_KEY,
+          run: async () => {
+            throw new Error('boom')
+          },
+        })
+      ).rejects.toThrow('boom')
+
+      await bus.send({
+        teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'Do T1',
+      })
+      expect(wakes).toHaveLength(1)
+    })
+
+    it('serialises several relayed turns rather than overlapping them', async () => {
+      seedTeam(store, 'free')
+      const { hooks } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+
+      const order: string[] = []
+      const first = deferred<void>()
+      const second = deferred<void>()
+
+      const a = bus.runRelayedTurn({
+        sessionKey: RESEARCHER_KEY,
+        run: async () => {
+          order.push('a:start')
+          await first.promise
+          order.push('a:end')
+        },
+      })
+      const b = bus.runRelayedTurn({
+        sessionKey: RESEARCHER_KEY,
+        run: async () => {
+          order.push('b:start')
+          await second.promise
+          order.push('b:end')
+        },
+      })
+
+      await Promise.resolve()
+      expect(order).toEqual(['a:start'])
+
+      first.resolve()
+      await a
+      await Promise.resolve()
+      expect(order).toEqual(['a:start', 'a:end', 'b:start'])
+
+      second.resolve()
+      await b
+      expect(order).toEqual(['a:start', 'a:end', 'b:start', 'b:end'])
+    })
+
+    it('fails a still-queued relayed turn when the epoch is reset, instead of stranding its caller', async () => {
+      seedTeam(store, 'free')
+      const { hooks, busy } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+
+      busy.add(RESEARCHER_KEY)
+      const relayed = bus.runRelayedTurn({ sessionKey: RESEARCHER_KEY, run: async () => 'ran' })
+      await Promise.resolve()
+
+      // The caller is on another node holding a completion waiter — failing it
+      // now beats an hours-long backstop.
+      bus.resetEpoch(EPOCH_ID)
+      await expect(relayed).rejects.toThrow(/run was stopped/)
     })
   })
 })

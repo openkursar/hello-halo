@@ -107,10 +107,10 @@ async function performFallbackCheck(): Promise<void> {
     // ========================================
     // Step 1: Read Registry Statistics (passive)
     // ========================================
+    // Row counts are not a health signal on their own — rows inherited from a
+    // previous run say nothing about the running app. Real process leaks are
+    // caught by the PPID scan in doImmediateCheck().
     const registryStats = getRegistryStats()
-    if (registryStats.orphanProcesses > 0) {
-      issues.push(`${registryStats.orphanProcesses} orphan processes in registry`)
-    }
 
     // ========================================
     // Step 2: Read Recent Events (passive)
@@ -170,7 +170,7 @@ async function performFallbackCheck(): Promise<void> {
     // Always log memory numbers (heap used/total, rss) so the trajectory toward an
     // OOM is visible across cycles, and the reasons behind a non-healthy status —
     // otherwise a status that stays 'degraded' for hours is logged without any cause.
-    const memInfo = `heap=${heapUsedMB.toFixed(0)}/${heapTotalMB.toFixed(0)}MB rss=${rssMB.toFixed(0)}MB`
+    const memInfo = `heap=${heapUsedMB.toFixed(0)}/${heapTotalMB.toFixed(0)}MB rss=${rssMB.toFixed(0)}MB procs=${registryStats.currentProcesses}`
     const reasonInfo = issues.length > 0 ? `; reasons: ${issues.join('; ')}` : ''
     console.log(`[Health][Runtime] Passive check complete: ${newStatus} (${memInfo}${reasonInfo})`)
   } catch (error) {

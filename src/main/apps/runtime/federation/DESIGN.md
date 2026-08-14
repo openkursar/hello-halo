@@ -165,6 +165,22 @@ Shared per-node state (all keyed by officeId): `hosted`, `joined`,
   ownership instead. Relayed (gateway) frames trust the gateway's session binding.
 - **Wake dispatch** — `sendWakeToMember` + `runOrForwardWakeOnHost` (a joiner→
   joiner wake is relayed through the host to the real owner and refluxed back).
+  **The busy gate is on the OWNER, not the sender.** `runLocalTurn` (injected by
+  bootstrap) runs the landed wake through `bus.runRelayedTurn`, so it queues
+  behind whatever that member is already doing — a teammate's message, or its own
+  owner chatting with it on the same session key. It must not go through
+  `wakeTarget`: the turn's input was already rendered and booked on the sending
+  node. Putting the gate on the sender instead is not an option — its view of a
+  remote member is stale by the time the wake crosses the network, and for a
+  member it does not own it has no view at all (`session-deps.isSessionActive`
+  answers false by design; `remote-busy-overlay` is a display projection, not a
+  lock). Skipping the gate entirely is what let a relayed wake start a second
+  turn on one session key: see `team/DESIGN.md` "One turn per session" for what
+  that does to the shared SDK iterator.
+  Consequence for `coordinator.handleWake`: wakes for one session no longer
+  collapse into a single turn, so each acks its own `turn-complete`. The old
+  batch-ack keyed by `conversationId` was removed — with a queue it answers the
+  second wake with the first turn's outcome.
 - **Roster egress** — `broadcastRosterFor` (immediate) / `scheduleRosterRefresh`
   (coalesced during a run) / `projectMemberRemoved` / `projectOfficeDissolved`.
 - **Transport re-form seam** — after a host loss the authority moves to a peer;

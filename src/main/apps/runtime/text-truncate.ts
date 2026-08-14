@@ -31,3 +31,14 @@ export function truncateUtf16Safe(text: string, maxUnits: number): string {
 
   return text.slice(0, end)
 }
+
+/**
+ * A single-line, length-capped copy of `text`, for quoting it inside a prompt or
+ * a tool result. Collapses the paragraph breaks that would otherwise turn one
+ * quoted question into several apparent instructions once inlined.
+ */
+export function oneLineExcerpt(text: string, maxUnits: number): string {
+  const oneLine = text.trim().replace(/\s+/g, ' ')
+  const cut = truncateUtf16Safe(oneLine, maxUnits)
+  return cut.length < oneLine.length ? `${cut}...` : cut
+}

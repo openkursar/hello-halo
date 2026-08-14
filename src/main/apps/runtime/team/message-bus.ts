@@ -46,28 +46,26 @@ export interface TeamDeliveryHooks {
   }): Promise<void>
   isBusy(sessionKey: string): boolean
   /**
-   * Immediate reachability of a member's OWNER at send time. True for a locally
-   * owned member (always runnable) and for a remote owner that is currently online
-   * + connected; false only when a remote owner is offline/unreachable. Absent →
-   * treated as reachable (non-federated runtimes). Used by the wait=false path to
-   * report a non-delivery NOW instead of a false "sent".
+   * Immediate reachability of a member's OWNER at send time. False only for a
+   * remote owner that is offline/unreachable; a locally owned member is always
+   * reachable. Absent → treated as reachable (non-federated runtimes).
    */
   checkReachable?(appId: string, teamId: string): boolean
 }
 
 /**
- * Turn outcome. The result is the turn's final message (via onReply), not
- * a voluntary report call — report is only for escalation.
+ * How a woken turn ENDED. A status, never a reply: nothing here is forwarded as
+ * a message, since the only way to answer a teammate is an explicit `team_send`.
+ * `result` content survives only for the completion receipt and the failure record.
  */
 export type TurnCompletion =
   | { kind: 'result'; content: string; taskId?: string }
   | { kind: 'escalation'; content: string }
   | { kind: 'error'; message: string }
   | { kind: 'timeout' }
-  // The wake never reached the target (owner offline/unreachable) or no completion
-  // signal ever returned. Distinct from 'result' with empty content (a real but
-  // silent reply) and from 'timeout' (reachable but slow): the sender must be able
-  // to tell "not delivered" apart so it can reassign rather than assume a reply.
+  // The wake never reached the target, or no completion signal returned. Distinct
+  // from 'result' with empty content (the turn ran and said nothing) and from
+  // 'timeout' (reachable but slow), so the sender can decide to reassign.
   | { kind: 'undelivered'; reason: string }
 
 // ── Bus errors ──────────────────────────────────────────────────────────────
@@ -129,16 +127,23 @@ export interface SendInput {
   epochId: string
   /**
    * The teammate sending, or null when a PERSON is (a 1:1 member chat). A
-   * person's message rides this bus because that is how it reaches a member on
-   * another machine, but it is not team traffic: it is delivered and nothing
-   * else — no office record, no circuit charge, no flow signal.
+   * person's message is delivered and nothing else — no office record, no
+   * circuit charge, no flow signal.
    */
   fromAppId: string | null
   /** Member name, resolved to appId via the store. */
   to: string
   message: string
+  /**
+   * Hold the send until the woken turn ends, and resolve with a delivery receipt.
+   *
+   * Not a teammate primitive — `team_send` cannot set it. It exists for a
+   * person's cross-machine 1:1 chat (`teamService.sendToMember`), whose UI must
+   * be able to say "not delivered". The receipt reports status only; the reply
+   * itself reaches the person through the member's own transcript.
+   */
   wait?: boolean
-  /** Guards against ping-pong: initial lead wake is 0, each completion-wake increments. */
+  /** Guards against ping-pong: initial lead wake is 0, each forwarded wake increments. */
   forwardDepth?: number
   taskRef?: string
 }
@@ -159,17 +164,36 @@ export interface MessageBus {
   /**
    * Start a turn the RUNTIME itself asked for (escalation resume, self-nudge,
    * periodic check) rather than a member's `team_send`. Carries no delivery
-   * receipt and does not charge the circuit breaker, but goes through the SAME
-   * busy gate as `send`: the bus is the only component that knows whether a
-   * session already has a turn running or a wake in flight, so a path that calls
-   * the session layer directly can start a second concurrent turn on one session
-   * key — which tears down the subprocess the first turn is still streaming.
+   * receipt and does not charge the circuit breaker, but must go through the
+   * SAME busy gate as `send`: only the bus knows whether a session already has a
+   * turn running or a wake in flight, and a second concurrent turn on one
+   * session key tears down the subprocess the first is still streaming.
    */
   deliverRuntimeWake(params: {
     envelope: TeamEnvelope
     trigger: TeamTriggerContext
     onBusy: BusyDisposition
   }): Promise<WakeDisposition>
+  /**
+   * Run a turn this node was ASKED to run by another node — a federation wake
+   * landing on the member's owner. Shares the busy gate and the mailbox with
+   * every other delivery, and nothing else.
+   *
+   * It cannot go through `deliverRuntimeWake`: the turn's input was already
+   * rendered and booked by the sending node, so re-entering `wakeTarget` would
+   * render a second header, file a duplicate act, and sweep quiescence on a node
+   * that does not own the run. Only the gate is needed here.
+   *
+   * `run` is invoked once a slot is free (immediately, or when the current turn
+   * ends); its promise settles this call's and releases the slot. A hard epoch
+   * reset rejects a still-queued run rather than stranding the caller.
+   */
+  runRelayedTurn<T>(params: { sessionKey: string; run: () => Promise<T> }): Promise<T>
+  /**
+   * A woken team turn ended. Releases the session's slot, drains its mailbox, and
+   * records the outcome when it is a failure. It delivers NOTHING: a teammate
+   * hears the turn's last words only if the member chose to `team_send` them.
+   */
   completeTurn(params: {
     sessionKey: string
     trigger: TeamTriggerContext
@@ -178,9 +202,9 @@ export interface MessageBus {
   assertCanContact(teamId: string, fromAppId: string, toAppId: string, collabMode: CollabMode): void
   resolveMemberAppId(teamId: string, memberName: string): string
   /**
-   * Immediately resolve every wait=true pending entry targeting `appId` (e.g. a
-   * member confirmed offline) so a blocked sender unblocks instead of hanging to
-   * the sync-wait timeout. Returns how many waiters were resolved.
+   * Resolve every pending completion receipt targeting `appId` (e.g. a member
+   * confirmed offline) so a blocked caller unblocks instead of hanging to the
+   * receipt timeout. Returns how many waiters were resolved.
    */
   resolvePendingWaitsForMember(appId: string, outcome: TurnCompletion): number
   getEpochStats(epochId: string): EpochStats
@@ -188,13 +212,11 @@ export interface MessageBus {
   onBreach(listener: (event: CircuitBreachEvent) => void): () => void
   hasBufferedMessages(epochId: string): boolean
   /**
-   * Liveness nudge: attempt one buffered delivery for a session that (may
-   * have) just gone idle. `completeTurn` drains after every BUS-driven turn,
-   * but a team session also runs turns the bus never sees — a human 1:1 chat
-   * with a member occupies the same session key — and their completions must
-   * drain the mailbox too, or mail buffered behind them strands forever. The
-   * session layer calls this from its turn-end path; a busy/reserved session
-   * is a no-op (the eventual completeTurn picks the mail up).
+   * Attempt one buffered delivery for a session that may have just gone idle.
+   * `completeTurn` drains after every bus-driven turn, but a team session also
+   * runs turns the bus never sees (a human 1:1 chat occupies the same session
+   * key) and mail buffered behind those would strand forever. A busy/reserved
+   * session is a no-op — the eventual `completeTurn` picks the mail up.
    */
   drainMailbox(sessionKey: string): void
 }
@@ -203,14 +225,14 @@ export interface MessageBusDeps {
   store: TeamStore
   hooks: TeamDeliveryHooks
   circuitOverrides?: Partial<CircuitLimits>
+  /** Ceiling on a completion receipt (`SendInput.wait`). Defaults to the run's max duration. */
   syncWaitTimeoutMs?: number
   /**
    * Append one act to the office record (the blackboard's activity stream).
-   * Directed messages are recorded HERE rather than in the tool layer because
-   * this is the one place every teammate message path converges — a member's
-   * `team_send`, an escalation routed to the lead — so the record does not
-   * depend on each caller remembering. Late-bound by the runtime factory (the
-   * bus is constructed before the blackboard). Absent → no record kept.
+   * Recorded here rather than in the tool layer because this is where every
+   * teammate message path converges, so the record does not depend on each
+   * caller remembering. Late-bound by the runtime factory (the bus is
+   * constructed before the blackboard). Absent → no record kept.
    */
   recordActivity?: (input: PostActivityInput) => void
 }
@@ -225,27 +247,37 @@ interface PendingWait {
   teamId: string
   /** The epoch this wait belongs to, so resetEpoch only clears its own waiters. */
   epochId: string
-  /** The sender, so an unblocked wait can be recorded as an answer TO someone. */
+  /** The sender, so a failed wait can be recorded against the right message. */
   fromAppId: string | null
   /** The target member, so a confirmed-offline member can unblock its waiters. */
   toAppId: string
 }
 
-interface BufferedDelivery {
-  envelope: TeamEnvelope
-  trigger: TeamTriggerContext
-  appId: string
-}
+/**
+ * One queued turn for a busy session. Two shapes, one FIFO: an ENVELOPE is
+ * dispatched through `hooks.wakeTarget` (the session layer renders and books it),
+ * a RELAYED turn is already rendered and booked by the node that sent it and only
+ * needs its `run` called. One queue, so a session has one line, one cap and one
+ * drain regardless of where the work came from.
+ */
+type MailboxEntry =
+  | { kind: 'envelope'; envelope: TeamEnvelope; trigger: TeamTriggerContext; appId: string }
+  | {
+      kind: 'relayed'
+      /** Called with the session slot already reserved; releases it when it settles. */
+      start: () => void
+      /** The queue was discarded (epoch reset) — fail the caller rather than strand it. */
+      cancel: (reason: string) => void
+    }
 
 const DEFAULT_SYNC_WAIT_TIMEOUT_MS = TEAM_CIRCUIT_DEFAULTS.maxDurationMs
 
 /**
  * Upper bound of buffered deliveries per busy member session. The mailbox is
- * volatile coordination state (never replicated, dropped on epoch seal), so an
- * unbounded buffer is pure OOM exposure under a runaway sender. Overflow sheds
- * the OLDEST entry with a warning: the newest instruction is the one most worth
- * keeping, and the blackboard — not the mailbox — is the durable driver a lead
- * falls back to for anything shed.
+ * volatile (never replicated, dropped on epoch seal), so an unbounded buffer is
+ * OOM exposure under a runaway sender. Overflow sheds the OLDEST entry: the
+ * newest instruction is worth most, and the blackboard is the durable fallback
+ * for anything shed.
  */
 const MAILBOX_BUFFER_CAP = 128
 
@@ -262,23 +294,19 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
   const syncWaitTimeoutMs = deps.syncWaitTimeoutMs ?? DEFAULT_SYNC_WAIT_TIMEOUT_MS
 
   const pendingWaits = new Map<string, PendingWait>()
-  const mailboxBuffers = new Map<string, BufferedDelivery[]>()
+  const mailboxBuffers = new Map<string, MailboxEntry[]>()
   const epochStats = new Map<string, EpochStats>()
   const breachListeners = new Set<(event: CircuitBreachEvent) => void>()
-  // Session keys with a wake dispatched but the turn not yet completed. The
-  // busy probe (hooks.isBusy) only turns true once the session layer REGISTERS
-  // the turn, which happens asynchronously after wakeTarget is invoked — two
-  // deliveries inside that window both read "idle" and race two concurrent
-  // turns onto one session. Reserving the key SYNCHRONOUSLY before dispatch
-  // closes the window: the second delivery buffers instead. Released by
-  // completeTurn (every bus turn ends there, success or error) or on a wake
+  // Session keys with a turn dispatched but not yet completed. `hooks.isBusy`
+  // only turns true once the session layer registers the turn, asynchronously
+  // after dispatch — two deliveries inside that window both read "idle" and race
+  // two turns onto one session. Reserving the key synchronously at dispatch
+  // closes it. Released by completeTurn, by a relayed turn settling, or on a
   // dispatch failure.
   const wakesInFlight = new Set<string>()
-  // One pending mailbox recheck per session: a delivery buffered against a
-  // busy probe can race the target going idle between the probe and the push
-  // (no turn-end will fire for it). The recheck is a cheap backstop; the
-  // turn-end drains (completeTurn + the session layer's drainMailbox) remain
-  // the primary liveness path.
+  // One pending recheck per session: a delivery buffered against a busy probe can
+  // race the target going idle between the probe and the push, and no turn-end
+  // fires for it. A backstop only — the turn-end drains stay the primary path.
   const mailboxRechecks = new Map<string, NodeJS.Timeout>()
 
   function statsFor(epochId: string): EpochStats {
@@ -344,6 +372,15 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     return member.appId
   }
 
+  /**
+   * Topology governs who may OPEN a conversation — never who may answer one.
+   *
+   * Edges are directed and the default structured topology is a one-way star
+   * (`lead → member`, `service.defaultEdges`), so a forward-only check would
+   * refuse a member's answer to the lead that dispatched the work. Hence the
+   * reverse edge counts too: you can reach anyone who can reach you. Peer-to-peer
+   * still needs a peer edge, and `free` allows everything.
+   */
   function assertCanContact(
     teamId: string,
     fromAppId: string,
@@ -351,12 +388,10 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     collabMode: CollabMode
   ): void {
     if (collabMode === 'free') return
-    if (!store.isEdgeAllowed(teamId, fromAppId, toAppId)) {
-      const target = store
-        .listMembersByTeam(teamId)
-        .find((m) => m.appId === toAppId)
-      throw new TopologyError(target?.memberName ?? toAppId)
-    }
+    if (store.isEdgeAllowed(teamId, fromAppId, toAppId)) return
+    if (store.isEdgeAllowed(teamId, toAppId, fromAppId)) return
+    const target = store.listMembersByTeam(teamId).find((m) => m.appId === toAppId)
+    throw new TopologyError(target?.memberName ?? toAppId)
   }
 
   function memberNameOf(teamId: string, appId: string): string {
@@ -405,17 +440,27 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
   }
 
   /**
-   * Record that the turn a message started has ended. Append-only: this is a NEW
-   * act pointing back at the message through its correlationId, never an edit of
-   * the message row — which is what keeps "answered / awaiting reply" derivable
-   * without a mutable status column, and keeps replication a single idempotent
-   * insert.
+   * Whether a message's fate is one the sender cannot learn any other way — the
+   * endings the member cannot report itself because it is not running. A turn
+   * that ran reports itself: its `team_send` files its own act, and an escalation
+   * routes on its own path.
+   */
+  function isRecordableFate(outcome: TurnCompletion): boolean {
+    return outcome.kind === 'error' || outcome.kind === 'timeout' || outcome.kind === 'undelivered'
+  }
+
+  /**
+   * Record the FATE of a message whose turn has ended, only when that fate is a
+   * failure. Recording a turn end as a 'reply' would satisfy
+   * `answeredCorrelationIds` and switch off the digest's "you asked X and nothing
+   * came back" safety net — the very silence it exists to catch.
    *
-   * Only messages get an answer: a completion wake (fromAppId null) or a periodic
-   * check answers nobody, so recording one would invent a reply.
+   * Append-only, keyed by correlationId, so "answered / awaiting reply" stays
+   * derivable and replication stays one idempotent insert.
    */
   function recordReply(trigger: TeamTriggerContext, finisherAppId: string, outcome: TurnCompletion): void {
     if (!trigger.fromAppId || trigger.kind !== 'message') return
+    if (!isRecordableFate(outcome)) return
     recordActivity({
       teamId: trigger.teamId,
       epochId: trigger.epochId,
@@ -428,18 +473,44 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     })
   }
 
-  function bufferDelivery(sessionKey: string, entry: BufferedDelivery): void {
+  function describeMailboxEntry(entry: MailboxEntry): string {
+    return entry.kind === 'envelope' ? `messageId=${entry.envelope.id}` : 'relayed turn'
+  }
+
+  function bufferEntry(sessionKey: string, entry: MailboxEntry): void {
     const buffer = mailboxBuffers.get(sessionKey) ?? []
     if (buffer.length >= MAILBOX_BUFFER_CAP) {
       const shed = buffer.shift()
       console.warn(
-        `${LOG_TAG} Mailbox full (${MAILBOX_BUFFER_CAP}); shed oldest: session=${sessionKey} messageId=${shed?.envelope.id}`
+        `${LOG_TAG} Mailbox full (${MAILBOX_BUFFER_CAP}); shed oldest: session=${sessionKey} ` +
+          `${shed ? describeMailboxEntry(shed) : ''}`
       )
+      // A shed relayed turn has a caller on another node holding a promise;
+      // failing it now beats leaving it to a backstop measured in hours.
+      if (shed?.kind === 'relayed') shed.cancel('mailbox overflow')
     }
     buffer.push(entry)
     mailboxBuffers.set(sessionKey, buffer)
-    console.log(`${LOG_TAG} Target busy, buffered: session=${sessionKey} bufferSize=${buffer.length}`)
+    console.log(
+      `${LOG_TAG} Target busy, buffered: session=${sessionKey} ` +
+        `${describeMailboxEntry(entry)} bufferSize=${buffer.length}`
+    )
     scheduleMailboxRecheck(sessionKey)
+  }
+
+  /**
+   * Take the session's single turn slot, or report that it is taken. A session
+   * runs at most one turn, whoever asked for it and from whichever machine.
+   */
+  function tryReserve(sessionKey: string): boolean {
+    if (hooks.isBusy(sessionKey) || wakesInFlight.has(sessionKey)) return false
+    wakesInFlight.add(sessionKey)
+    return true
+  }
+
+  function releaseAndDrain(sessionKey: string): void {
+    wakesInFlight.delete(sessionKey)
+    drainMailbox(sessionKey)
   }
 
   function scheduleMailboxRecheck(sessionKey: string): void {
@@ -452,26 +523,20 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     mailboxRechecks.set(sessionKey, timer)
   }
 
-  /**
-   * The single dispatch gate: buffer (or skip) if the target is mid-turn or a
-   * wake is in flight; otherwise wake now. Every path that starts a team turn
-   * goes through here, so the reservation below is the whole concurrency story.
-   */
   async function deliver(
     env: TeamEnvelope,
     trigger: TeamTriggerContext,
     onBusy: BusyDisposition = 'buffer'
   ): Promise<WakeDisposition> {
     const sessionKey = buildTeamSessionKey(env.toAppId, env.teamId, env.epochId)
-    if (hooks.isBusy(sessionKey) || wakesInFlight.has(sessionKey)) {
+    if (!tryReserve(sessionKey)) {
       if (onBusy === 'skip') {
         console.log(`${LOG_TAG} Target busy, skipped: session=${sessionKey} kind=${trigger.kind}`)
         return 'skipped'
       }
-      bufferDelivery(sessionKey, { envelope: env, trigger, appId: env.toAppId })
+      bufferEntry(sessionKey, { kind: 'envelope', envelope: env, trigger, appId: env.toAppId })
       return 'buffered'
     }
-    wakesInFlight.add(sessionKey)
     try {
       await hooks.wakeTarget({
         sessionKey,
@@ -499,29 +564,64 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     return deliver(params.envelope, params.trigger, params.onBusy)
   }
 
+  function runRelayedTurn<T>(params: { sessionKey: string; run: () => Promise<T> }): Promise<T> {
+    const { sessionKey, run } = params
+    return new Promise<T>((resolve, reject) => {
+      // Called with the slot already reserved by whoever dequeued us; it is ours
+      // to hand back on every exit, or the session stays fake-busy forever.
+      const start = (): void => {
+        let running: Promise<T>
+        try {
+          running = run()
+        } catch (err) {
+          releaseAndDrain(sessionKey)
+          reject(err)
+          return
+        }
+        running.then(
+          (value) => {
+            releaseAndDrain(sessionKey)
+            resolve(value)
+          },
+          (err) => {
+            releaseAndDrain(sessionKey)
+            reject(err)
+          }
+        )
+      }
+
+      if (tryReserve(sessionKey)) {
+        console.log(`${LOG_TAG} Relayed turn dispatched: session=${sessionKey}`)
+        start()
+        return
+      }
+      bufferEntry(sessionKey, {
+        kind: 'relayed',
+        start,
+        cancel: (reason) => reject(new Error(`Relayed turn dropped before it ran: ${reason}`)),
+      })
+    })
+  }
+
   async function send(input: SendInput): Promise<TeamSendAsyncResult | TeamSendSyncResult> {
     const wait = input.wait ?? false
     const forwardDepth = input.forwardDepth ?? 0
-    // Null = a person wrote this. Every piece of team bookkeeping below is gated
-    // on it: the record, the budget and the flow signal all describe what the
-    // digital humans do among themselves, and a person's chat is none of it.
+    // Null = a person wrote this; every piece of team bookkeeping below is gated
+    // on it.
     const fromAppId = input.fromAppId
 
     const toAppId = resolveMemberAppId(input.teamId, input.to)
 
-    // Immediate outbound reachability gate (async sends only). A wait=false send to
-    // a remote member whose owner is offline/unreachable will NEVER be delivered —
-    // there is no persistent offline outbox — so report it NOW rather than a false
-    // "sent" that only self-corrects at the hours-long backstop. A local or online
-    // target proceeds normally (a busy-but-reachable target is buffered = queued);
-    // the wait=true path keeps its richer three-state via the completion receipt.
+    // There is no persistent offline outbox, so a send to an unreachable owner
+    // will never arrive: report it now instead of a false "sent" that only
+    // self-corrects at the hours-long backstop. Receipted sends skip this — their
+    // completion receipt already carries the richer three-state.
     if (!wait && hooks.checkReachable && !hooks.checkReachable(toAppId, input.teamId)) {
       console.warn(
         `${LOG_TAG} send: target owner unreachable, not delivered: team=${input.teamId} to=${input.to} app=${toAppId}`
       )
       const messageId = randomUUID()
-      // Recorded, not swallowed: "tried and did not arrive" is a different fact
-      // from "never tried", and the sender's later digest must not nag about a
+      // Recorded, not swallowed, so the sender's digest does not nag about a
       // reply that can never come.
       if (fromAppId) {
         recordActivity({
@@ -541,9 +641,8 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     }
 
     // Topology is enforced at the tool layer (assertCanContact before send).
-    // The budget guards AI loops, which a person cannot start: every message
-    // they send costs them a keystroke, so charging one would only let a chat
-    // burn the run's allowance and start its clock before the team even begins.
+    // The budget guards AI loops, which a person cannot start — charging their
+    // chat would only burn the run's allowance and start its clock early.
     if (fromAppId) chargeCircuit(input.teamId, input.epochId, forwardDepth)
 
     const correlationId = randomUUID()
@@ -554,7 +653,6 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       fromAppId,
       toAppId,
       body: input.message,
-      wait,
       correlationId,
       taskRef: input.taskRef,
       createdAt: Date.now(),
@@ -595,14 +693,19 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     )
 
     if (!wait) {
-      await deliver(envelope, trigger)
-      return { messageId: envelope.id }
+      const disposition = await deliver(envelope, trigger)
+      // Nothing is auto-delivered back, so this receipt is all the sender ever
+      // learns: distinguishing "queued behind their current turn" from "handed
+      // over now" lets a lead pick someone else instead of waiting.
+      return disposition === 'buffered'
+        ? { messageId: envelope.id, delivery: 'queued' }
+        : { messageId: envelope.id }
     }
 
     return new Promise<TeamSendSyncResult>((resolve) => {
       const timer = setTimeout(() => {
         if (pendingWaits.delete(correlationId)) {
-          console.warn(`${LOG_TAG} wait=true timed out: corr=${correlationId}`)
+          console.warn(`${LOG_TAG} completion receipt timed out: corr=${correlationId}`)
           resolve({ from: input.to, message: '', status: 'timeout' })
         }
       }, syncWaitTimeoutMs)
@@ -625,7 +728,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
         if (pending) {
           clearTimeout(pending.timer)
           pendingWaits.delete(correlationId)
-          console.error(`${LOG_TAG} wakeTarget failed for wait=true send:`, err)
+          console.error(`${LOG_TAG} wakeTarget failed for a receipted send:`, err)
           pending.resolve({ from: input.to, message: '', status: 'timeout' })
         }
       })
@@ -666,10 +769,10 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       if (pending.toAppId !== appId) continue
       clearTimeout(pending.timer)
       pendingWaits.delete(corr)
-      // The wait is over, so the record has to say so — otherwise the sender's
-      // digest keeps reporting a message "still waiting" that nothing will
-      // answer. A person's wait has no message row to close and no digest.
-      if (pending.fromAppId) {
+      // This path only fires on a confirmed failure, so the record must close the
+      // message or the sender's digest keeps reporting it as "still waiting". A
+      // person's wait has no message row to close.
+      if (pending.fromAppId && isRecordableFate(outcome)) {
         recordActivity({
           teamId: pending.teamId,
           epochId: pending.epochId,
@@ -681,9 +784,8 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
           status: replyStatusOf(outcome),
         })
       }
-      // A confirmed-offline unblock keeps timeout semantics but tells the sender
-      // explicitly that the teammate is gone so it can reassign (naming them so a
-      // lead waiting on several teammates knows exactly who dropped).
+      // A confirmed-offline unblock keeps timeout semantics but names the teammate,
+      // so a lead waiting on several knows exactly who dropped.
       if (outcome.kind === 'timeout') {
         pending.resolve({
           from: pending.fromMemberName,
@@ -703,11 +805,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
           status: 'ok',
         })
       } else {
-        pending.resolve({
-          from: pending.fromMemberName,
-          message: outcome.kind === 'escalation' ? outcome.content : outcome.content,
-          status: 'ok',
-        })
+        pending.resolve({ from: pending.fromMemberName, message: outcome.content, status: 'ok' })
       }
       resolved += 1
     }
@@ -717,10 +815,11 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     return resolved
   }
 
+  /** How a turn ended, for a receipt or a record — never for delivery to a teammate. */
   function describeCompletion(outcome: TurnCompletion): string {
     switch (outcome.kind) {
       case 'result':
-        return outcome.content.trim() || '(the teammate ended its turn without a message)'
+        return outcome.content.trim() || '(the member ended its turn without a message)'
       case 'escalation':
         return outcome.content
       case 'error':
@@ -740,12 +839,12 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     outcome: TurnCompletion
   }): void {
     const { trigger, outcome, sessionKey } = params
-    // The turn this wake reserved is over — release the key so the drain below
-    // (and any new delivery) can dispatch the next turn.
+    // Released before the epoch guard below: a sealed epoch must not leave the
+    // session fake-busy forever.
     wakesInFlight.delete(sessionKey)
     console.log(
       `${LOG_TAG} completeTurn: session=${sessionKey} corr=${trigger.correlationId} ` +
-        `wait=${trigger.wait} outcome=${outcome.kind}`
+        `receipted=${!!trigger.wait} outcome=${outcome.kind}`
     )
 
     // Key on the epoch's own endedAt, NOT team.currentEpochId: conversation
@@ -763,41 +862,11 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     const finisherAppId = appIdFromSessionKey(sessionKey) ?? trigger.fromAppId ?? ''
     if (finisherAppId) recordReply(trigger, finisherAppId, outcome)
 
-    if (trigger.wait) {
-      resolvePendingWait(trigger.correlationId, outcome)
-    } else if (trigger.fromAppId) {
-      // Escalations are routed by the session layer, not re-woken as a peer completion.
-      if (outcome.kind !== 'escalation') {
-        const depth =
-          (trigger as TeamTriggerContext & { forwardDepth?: number }).forwardDepth ?? 1
-        const completionEnv: TeamEnvelope = {
-          id: randomUUID(),
-          teamId: trigger.teamId,
-          epochId: trigger.epochId,
-          fromAppId: finisherAppId,
-          toAppId: trigger.fromAppId,
-          body: describeCompletion(outcome),
-          wait: false,
-          correlationId: trigger.correlationId,
-          taskRef: trigger.taskId,
-          createdAt: Date.now(),
-        }
-        // fromAppId=null makes the sender's own turn end terminal (no reply loop).
-        const completionTrigger: TeamTriggerContext = {
-          teamId: trigger.teamId,
-          epochId: trigger.epochId,
-          correlationId: randomUUID(),
-          fromAppId: null,
-          wait: false,
-          taskId: trigger.taskId,
-          kind: 'completion',
-        }
-        ;(completionTrigger as TeamTriggerContext & { forwardDepth?: number }).forwardDepth = depth
-        void deliver(completionEnv, completionTrigger).catch((err) => {
-          console.error(`${LOG_TAG} Failed to wake sender with completion:`, err)
-        })
-      }
-    }
+    // The one thing a completion may resolve: a receipt someone is holding. Never
+    // a teammate — one chat window has two listeners (the person and the
+    // teammate) and nothing here can tell which the member's closing line meant,
+    // so a teammate hears back only through an explicit `team_send`.
+    if (trigger.wait) resolvePendingWait(trigger.correlationId, outcome)
 
     drainMailbox(sessionKey)
   }
@@ -805,12 +874,28 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
   function drainMailbox(sessionKey: string): void {
     const buffer = mailboxBuffers.get(sessionKey)
     if (!buffer || buffer.length === 0) return
-    if (hooks.isBusy(sessionKey) || wakesInFlight.has(sessionKey)) return
+    if (hooks.isBusy(sessionKey) || wakesInFlight.has(sessionKey)) {
+      // Re-arm: this recheck is already consumed, so leaving now would pin the
+      // mail on the current turn ending — a turn that may hang for minutes.
+      scheduleMailboxRecheck(sessionKey)
+      return
+    }
 
     const next = buffer.shift()!
     if (buffer.length === 0) mailboxBuffers.delete(sessionKey)
-    console.log(`${LOG_TAG} Draining buffered envelope: session=${sessionKey} remaining=${buffer.length}`)
+    console.log(
+      `${LOG_TAG} Draining mailbox: session=${sessionKey} ` +
+        `${describeMailboxEntry(next)} remaining=${buffer.length}`
+    )
     wakesInFlight.add(sessionKey)
+
+    if (next.kind === 'relayed') {
+      // Already rendered and booked by the node that sent it: just run it. It
+      // releases the slot and drains the next entry when it settles.
+      next.start()
+      return
+    }
+
     void hooks
       .wakeTarget({
         sessionKey,
@@ -845,9 +930,14 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     // run we're stopping); count the drop so it isn't silent.
     let droppedEnvelopes = 0
     for (const key of [...mailboxBuffers.keys()]) {
-      if (key.endsWith(`:${epochId}`)) {
-        droppedEnvelopes += mailboxBuffers.get(key)?.length ?? 0
-        mailboxBuffers.delete(key)
+      if (!key.endsWith(`:${epochId}`)) continue
+      const dropped = mailboxBuffers.get(key) ?? []
+      droppedEnvelopes += dropped.length
+      mailboxBuffers.delete(key)
+      // A queued relayed turn has a caller on another node awaiting completion;
+      // dropping it silently would hang that node until its hours-long backstop.
+      for (const entry of dropped) {
+        if (entry.kind === 'relayed') entry.cancel('the run was stopped')
       }
     }
     for (const [key, timer] of [...mailboxRechecks]) {
@@ -884,6 +974,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
   return {
     send,
     deliverRuntimeWake,
+    runRelayedTurn,
     completeTurn,
     assertCanContact,
     resolveMemberAppId,

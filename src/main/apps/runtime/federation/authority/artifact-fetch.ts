@@ -286,7 +286,9 @@ export function createArtifactService(deps: ArtifactServiceDeps): ArtifactServic
  * (`apps/team/artifact-refs`): a ref is published when a finding carries it or
  * a task delivers it as resultRef. Both anchor the ref to a producing app, so a
  * ref recognized here is necessarily owner-anchored — and the owner-serve gate
- * stays in lockstep with the viewer-side producer resolution.
+ * stays in lockstep with the viewer-side producer resolution, including its
+ * refusal to serve a ref two members claim — each side must refuse on its own,
+ * since their views of who claimed what can differ.
  */
 function defaultIsPublished(store: TeamStore, ref: ArtifactRef): boolean {
   return isPublishedArtifactRef(store, ref.teamId, ref.epochId, ref.ref)

@@ -17,7 +17,8 @@ import type {
 } from './types'
 import {
   markInstanceStart,
-  markCleanExit
+  markCleanExit,
+  cleanupOrphans
 } from './process-guardian'
 import {
   startFallbackPolling,
@@ -109,9 +110,15 @@ export async function initializeHealthSystem(): Promise<void> {
     // - Config errors -> agent startup fails -> emitAgentError -> critical event
     // - Port conflicts -> remote access fails -> user sees error
     // - Disk full -> file write fails -> user sees error
-    // - Orphan processes -> cleanupOrphans() already handles this
     //
     // Event-driven checks (runtime) are still active for actual error recovery.
+
+    // Processes left by the previous run are reaped here, once per launch —
+    // runtime reconciliation only ever looks at the current instance. Not
+    // awaited: init must not block on a process scan.
+    cleanupOrphans().catch(error => {
+      console.error('[Health][Orchestrator] Orphan cleanup failed:', error)
+    })
 
     // Register health event handler for automatic recovery
     onHealthEvent(handleHealthEvent)

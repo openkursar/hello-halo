@@ -1141,6 +1141,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
           appId,
           taskId: teamContext.taskId,
           response: decision,
+          question: entry.content.question || entry.content.summary,
         })
         if (!resumed) {
           console.warn(
@@ -1460,6 +1461,23 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       console.warn(`[Runtime] Failed to broadcast status change for app=${appId}:`, err)
     }
   })
+
+  // ── Announce membership changes of the installed-App set ────────────────
+  // Installs happen behind a client's back (a team provisioning its lead, an App
+  // creating another App, a Store install from a different window); without this
+  // signal its list only refreshes when a view remounts. Distinct from
+  // app:status_changed, which reports a known App's runtime state.
+  function announceListChange(appId: string, change: 'installed' | 'uninstalled'): void {
+    try {
+      broadcastToAll('app:list_changed', { appId, change })
+      sendToRenderer('app:list_changed', { appId, change })
+    } catch (err) {
+      console.warn(`[Runtime] Failed to broadcast list change for app=${appId}:`, err)
+    }
+  }
+
+  appManager.onAppInstalled((app: InstalledApp) => announceListChange(app.id, 'installed'))
+  appManager.onAppUninstalled((app: InstalledApp) => announceListChange(app.id, 'uninstalled'))
 
   return service
 }

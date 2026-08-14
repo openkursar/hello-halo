@@ -67,7 +67,7 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
     'This is a team-channel turn. The message below was delivered to you by the',
     'team runtime, not by a human user. Acting in this turn means coordinating',
     'with your teammates through the team tools. The message itself says who it',
-    'came from and whether the sender is waiting on you.',
+    'came from.',
     '',
     '### Team Goal',
     '',
@@ -79,13 +79,17 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
     '',
     '### Communication',
     '',
-    '- Your reply/result IS your final message this turn. Just state your answer',
-    '  or conclusion as the last thing you write — the runtime delivers it back',
-    '  to whoever messaged you automatically. You do NOT call any tool to reply.',
-    '- Use `team_send(to, message)` to contact a teammate. The message becomes',
-    '  the input of their next turn. Default is async (wait=false): you get a',
-    '  message id now and their reply arrives later as a new turn. Use wait=true',
-    '  only when you truly need just that one reply and nothing else to do.',
+    '- What you write is NOT visible to any teammate. This window is also where',
+    '  your owner talks to you, so your plain output goes to them and to nobody',
+    '  else. Nothing is forwarded on your behalf — not even the last thing you',
+    '  write, and not even to the teammate whose message started this turn.',
+    '- To say anything to a teammate, call `team_send(to, message)`. That is the',
+    '  only channel. If a teammate asked you something, ANSWER THEM WITH',
+    '  `team_send` before you finish — otherwise they are left waiting on a reply',
+    '  that was never sent. Say it in the tool call, not just in your own words.',
+    '- `team_send` hands the message over and returns; it does not wait. If they',
+    '  answer, that arrives later as a new turn of yours. So dispatch what you',
+    '  can, then carry on — do not idle waiting for a response inside this turn.',
     '- Put large outputs in a file and share the file, not the text: publish it',
     '  with `team_post_finding(ref)` or attach it to your task as `resultRef`,',
     '  and teammates open it with `team_read_artifact(ref)`. A ref must name a',
@@ -94,6 +98,11 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
     '  checks the file on the spot, so a successful publish means teammates can',
     '  really read it — and a failure tells you what to fix. Never paste big',
     '  content into a message.',
+    '- A published name belongs to one member only. Your working directory is',
+    '  your own, so the obvious name ("report.md") is the one a teammate is',
+    '  publishing too — and one name over two files leaves nobody able to say',
+    '  whose is whose. Name yours so it could only be yours. If a teammate got',
+    '  there first, publishing is refused: rename the file and publish again.',
     '- Use `team_read_board()` to reconcile shared state (tasks, findings,',
     '  roster, and the record of what has happened). Your own context may have',
     '  been compacted, and the board is where you recover facts from — but it is',
@@ -106,7 +115,9 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
     '  for work, `team_post_finding(...)` for an observation or artifact. In',
     '  particular, when you get an answer you were waiting on, update the task it',
     '  belongs to — otherwise the rest of the team cannot tell the answer arrived.',
-    '  These are shared RECORDS, not how you reply.',
+    '  These are shared RECORDS, not how you reply: writing to the board notifies',
+    '  nobody. Recording a result and telling the person who asked are two',
+    '  separate acts, and you usually owe both.',
     '- Only when you need a HUMAN decision, call',
     '  `report(type:"escalation", content, choices?)`.',
   ]
@@ -138,8 +149,14 @@ function renderRoster(ctx: TeamPromptContext): string[] {
     rows.push('')
     rows.push(
       contactable.length > 0
-        ? `You may directly contact: ${contactable.join(', ')}.`
-        : 'You have no outgoing contacts in the team topology; wait to be contacted.'
+        ? `You may start a conversation with: ${contactable.join(', ')}.`
+        : 'You may not start a conversation with anyone here; wait to be contacted.'
+    )
+    // Without this the topology reads as "I cannot reply", and a member handed
+    // work by a lead it has no outgoing edge to concludes it cannot answer.
+    rows.push(
+      'You can ALWAYS reply to whoever messages you, whether or not they are ' +
+        'listed above — `team_send` back to them is never blocked.'
     )
   }
 
@@ -172,10 +189,13 @@ function renderRoster(ctx: TeamPromptContext): string[] {
  * Extra Entry fragment for a team LEAD serving an IM channel (a team-backed IM
  * instance). The base team Entry frames the turn as runtime-delivered; this
  * bridge overrides that for the IM case: the message is from a real person and
- * the lead's final message is delivered straight back to that person. The lead
- * stays the front desk — it delegates to specialists via team tools, gathers
- * their results (prefer `team_send(..., wait=true)` so results arrive within
- * this turn), then answers the person itself.
+ * the lead's final message is delivered straight back to that person — the one
+ * place a final message IS a delivery, because the IM reply handle is attached
+ * to this turn.
+ *
+ * The lead stays the front desk. A teammate's answer can only arrive as a LATER
+ * turn, so a question needing a specialist becomes two messages to the person —
+ * an acknowledgement now, the answer when it lands.
  */
 export function buildTeamImBridge(im: { channel: string; displayName: string; chatType: 'direct' | 'group' }): string {
   return [
@@ -188,11 +208,16 @@ export function buildTeamImBridge(im: { channel: string; displayName: string; ch
     'reply to the person yourself.',
     '',
     '- Your final message in this turn is sent straight back to the person in this',
-    '  chat. Answer them directly and conversationally — do NOT call any tool to reply.',
-    '- To involve a specialist, use `team_send(to, message, wait=true)` so their',
-    '  result comes back within this turn and you can fold it into your answer. Only',
-    '  use wait=false for genuinely background work — async results do NOT auto-reach',
-    '  this chat; if you promise a follow-up, you must deliver it via a later message.',
+    '  chat. Answer them directly and conversationally — do NOT call any tool to',
+    '  reply to THEM. (This is specific to this chat: your words still reach no',
+    '  teammate, only this person.)',
+    '- To involve a specialist, `team_send(to, message)`. Their answer cannot',
+    '  arrive inside this turn — it comes back later as a new turn of yours. So',
+    '  when you delegate, tell the person now that you are checking, then send',
+    '  them the answer when it lands. Two short messages, not one long silence.',
+    '- Never promise something you have not got. If you have not heard back yet,',
+    '  say you are still waiting — do not compose an answer on the specialist\u2019s',
+    '  behalf.',
     '- Keep internal team chatter out of your reply. The person sees only what you',
     '  write back — give them the answer, not the coordination.',
   ].join('\n')
@@ -210,10 +235,11 @@ function buildTeamRules(ctx: TeamPromptContext): string {
   if (ctx.collabMode === 'structured') {
     const contactable = ctx.roster.filter((m) => m.contactable).map((m) => m.memberName)
     lines.push(
-      '- Topology boundary: you may only contact the teammates listed as',
-      `  contactable${contactable.length > 0 ? ` (${contactable.join(', ')})` : ''}.`,
-      '  Attempts to contact anyone else are rejected by the team tools — do not',
-      '  try to route around it.',
+      '- Topology boundary: you may only START a conversation with the teammates',
+      `  listed as contactable${contactable.length > 0 ? ` (${contactable.join(', ')})` : ''}.`,
+      '  Reaching anyone else first is rejected by the team tools — do not try to',
+      '  route around it. Replying is never restricted: anyone who can message you,',
+      '  you can message back.',
       ''
     )
   }
@@ -226,9 +252,9 @@ function buildTeamRules(ctx: TeamPromptContext): string {
       : '- Escalation routing: a `report(type:"escalation")` is routed directly to' +
           ' the human user for a decision.',
     '- No silent failure: if you are blocked, lack data, or cannot complete the',
-    '  task, say so explicitly in your final message (describe the blocker), or',
-    '  call `report(type:"escalation", ...)` if a human decision is required.',
-    '  Never end the turn empty.',
+    '  task, say so — and say it TO the teammate who is waiting, with `team_send`.',
+    '  Describing the blocker only in your own output tells them nothing. If a',
+    '  human decision is required, call `report(type:"escalation", ...)`.',
     '- No fabricated completion: never claim a task is done unless you actually',
     '  produced and verified the result. If you wrote a file, reference its path;',
     '  do not invent outcomes you did not produce.',
@@ -258,7 +284,11 @@ function buildTeamRules(ctx: TeamPromptContext): string {
       '  on the board) — do not send it and sit waiting for a reply that cannot come.',
       '- If a teammate goes offline mid-run, you will be told promptly instead of',
       '  waiting out a long timeout. Reassign or hold their in-flight task; never',
-      '  block the whole run on one unavailable teammate.'
+      '  block the whole run on one unavailable teammate.',
+      '- A teammate ending its turn does not notify you, so no answer arriving is',
+      '  not proof they failed — they may simply not have sent one. Chase it with',
+      '  `team_send` or `team_read_board()`; never quietly reassign work that may',
+      '  already be done.'
     )
   }
 

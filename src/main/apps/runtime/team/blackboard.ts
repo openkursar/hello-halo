@@ -8,6 +8,7 @@ import { randomUUID } from 'crypto'
 import { broadcastToAll } from '../../../http/websocket'
 import { sendToRenderer } from '../../../foundation/window.service'
 import { TEAM_EVENTS, isRemoteMember } from '../../../../shared/apps/team-types'
+import { findConflictingPublisher } from '../../team/artifact-refs'
 import type { TeamStore } from '../../team'
 import type {
   BlackboardTask,
@@ -60,6 +61,20 @@ export interface PostFindingInput {
 }
 
 /**
+ * Which publication form is claiming a ref, so the board can name the app that
+ * will OWN it: a finding belongs to its author, a task's resultRef to the
+ * ASSIGNEE — who may not be the member calling the tool.
+ */
+export type PublishedRefClaim =
+  | { kind: 'finding'; authorAppId: string }
+  | { kind: 'task'; taskId: string }
+
+/** The teammate already publishing a ref someone else is about to claim. */
+export interface PublishedRefConflict {
+  memberName: string
+}
+
+/**
  * One coordination act to record. `id` may be supplied by a caller that already
  * owns a stable identifier (the message bus mints an envelope id before the act
  * is recorded), so the recorded row and the thing it describes share one key.
@@ -94,6 +109,17 @@ export interface Blackboard {
     callerAppId: string,
     filter?: TeamReadBoardFilter
   ): BlackboardSnapshot
+  /**
+   * Is another member already publishing this ref? Two members can pick one name
+   * for two files, and once both are on the board nothing downstream can tell
+   * them apart. Null = the name is free, or is already this claimant's own.
+   */
+  findPublishedRefConflict(input: {
+    teamId: string
+    epochId: string
+    ref: string
+    claim: PublishedRefClaim
+  }): PublishedRefConflict | null
 }
 
 /**
@@ -352,5 +378,27 @@ export function createBlackboard(deps: BlackboardDeps): Blackboard {
     return { tasks, findings, roster, checks, activities }
   }
 
-  return { postTask, updateTask, postFinding, postActivity, readBoard }
+  function findPublishedRefConflict(input: {
+    teamId: string
+    epochId: string
+    ref: string
+    claim: PublishedRefClaim
+  }): PublishedRefConflict | null {
+    const claimantAppId =
+      input.claim.kind === 'finding'
+        ? input.claim.authorAppId
+        : store.getTaskById(input.claim.taskId)?.assigneeAppId ?? null
+    const conflictAppId = findConflictingPublisher(
+      store,
+      input.teamId,
+      input.epochId,
+      input.ref,
+      claimantAppId
+    )
+    if (!conflictAppId) return null
+    const member = store.listMembersByTeam(input.teamId).find((m) => m.appId === conflictAppId)
+    return { memberName: member?.memberName ?? 'another teammate' }
+  }
+
+  return { postTask, updateTask, postFinding, postActivity, readBoard, findPublishedRefConflict }
 }

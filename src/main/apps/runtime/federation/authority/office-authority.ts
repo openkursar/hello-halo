@@ -36,6 +36,25 @@ import type { ArtifactRef } from '../protocol-m2'
 
 const LOG_TAG = '[OfficeAuthority]'
 
+/**
+ * The payload fields through which a write names the member it acts for, in
+ * preference order (the acting member first, the other party it names last).
+ *
+ * EVERY replicated op that carries an author MUST list its field here, in the
+ * same change that adds it to the payload. An unlisted author field loses its
+ * claim: if the payload also names a member on ANOTHER node (targetAppId), that
+ * foreign name becomes the only claim and the write is refused for good — the
+ * refusal is non-retryable, so the writer rolls its row back.
+ */
+const WRITE_SUBJECT_FIELDS = [
+  'createdByAppId', // post_task
+  'callerAppId',
+  'authorAppId', // post_finding
+  'actorAppId', // post_activity — who performed the recorded act
+  'targetAppId', // the other party (directed activity, periodic check)
+  'appId', // member_profile
+] as const
+
 export interface OfficeAuthorityDeps {
   officeId: string
   selfNodeId: NodeId
@@ -215,8 +234,22 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
       const payload = frame.payload as { teamId?: string }
       const teamId = typeof payload.teamId === 'string' ? payload.teamId : officeId
       const subjectAppId = resolveWriteSubjectAppId(teamId, frame)
-      if (!subjectAppId) return false
-      return scopeGate.canCoordinationWrite(teamId, subjectAppId)
+      // A refusal here is non-retryable — the writer discards a row it already
+      // showed its user — and this is the only place that knows why, so the
+      // resolved subject (or its absence) has to be logged here.
+      if (!subjectAppId) {
+        console.warn(
+          `${LOG_TAG} member write denied: no owned subject office=${officeId} team=${teamId} from=${frame.fromNode} op=${frame.op}`
+        )
+        return false
+      }
+      const allowed = scopeGate.canCoordinationWrite(teamId, subjectAppId)
+      if (!allowed) {
+        console.warn(
+          `${LOG_TAG} member write denied by scope office=${officeId} team=${teamId} from=${frame.fromNode} op=${frame.op} subject=${subjectAppId}`
+        )
+      }
+      return allowed
     },
     // Commit adopts the ABSOLUTE epoch stamped in the write's payload — the
     // same value replicas apply — so authority and replicas converge through
@@ -306,18 +339,12 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
       .listMembersByTeam(teamId)
       .filter((m) => m.ownerNodeId === frame.fromNode)
     if (ownedByNode.length === 0) return null
-    const p = frame.payload as {
-      createdByAppId?: string
-      callerAppId?: string
-      authorAppId?: string
-      targetAppId?: string
-      appId?: string
-    }
+    const p = frame.payload as Partial<Record<(typeof WRITE_SUBJECT_FIELDS)[number], string>>
     // A write can name more than one member — a periodic check names both the
     // member that set it and the member it wakes, and either side's node may
     // publish an update. The node writes on behalf of whichever of them it
     // actually owns; naming only members it owns none of is still a refusal.
-    const claims = [p.createdByAppId, p.callerAppId, p.authorAppId, p.targetAppId, p.appId].filter(
+    const claims = WRITE_SUBJECT_FIELDS.map((f) => p[f]).filter(
       (c): c is string => typeof c === 'string' && c.length > 0
     )
     if (claims.length > 0) {

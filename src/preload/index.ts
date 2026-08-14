@@ -560,6 +560,7 @@ export interface HaloAPI {
 
   // App Event Listeners
   onAppStatusChanged: (callback: (data: unknown) => void) => () => void
+  onAppListChanged: (callback: (data: unknown) => void) => () => void
   onAppActivityEntry: (callback: (data: unknown) => void) => () => void
   onAppEscalation: (callback: (data: unknown) => void) => () => void
   onAppNavigate: (callback: (data: unknown) => void) => () => void
@@ -938,6 +939,7 @@ const api: HaloAPI = {
 
   // App Event Listeners
   onAppStatusChanged: (callback) => createEventListener('app:status_changed', callback),
+  onAppListChanged: (callback) => createEventListener('app:list_changed', callback),
   onAppActivityEntry: (callback) => createEventListener('app:activity_entry:new', callback),
   onAppEscalation: (callback) => createEventListener('app:escalation:new', callback),
   onAppNavigate: (callback) => createEventListener('app:navigate', callback),

@@ -425,8 +425,6 @@ export interface TeamEnvelope {
   fromAppId: string | null
   toAppId: string
   body: string
-  /** wait=true → sender blocks until reply; wait=false → fire-and-forget. */
-  wait: boolean
   correlationId: string
   taskRef?: string
   createdAt: number
@@ -439,21 +437,29 @@ export interface TeamTriggerContext {
   correlationId: string
   /**
    * The teammate this turn came from. Null when no digital human is behind it:
-   * a run start, a person's message, a completion or a self-wake. This is the
-   * fact the office record and the circuit budget key on — both describe what
-   * the digital humans do among themselves.
+   * a run start, a person's message or a self-wake. The office record and the
+   * circuit budget both key on it.
    */
   fromAppId: string | null
+  /**
+   * Someone is holding a completion receipt for this turn. Only a non-agent
+   * caller sets it (a person's cross-machine 1:1 chat); it changes nothing about
+   * how the turn runs or what the member is told.
+   */
   wait: boolean
   taskId?: string
   /**
-   * Drives inbound header rendering. 'completion' carries the finisher identity
-   * in envelope.fromAppId, not trigger.fromAppId. 'periodic_check' and
-   * 'human_message' are delivered verbatim — the first already carries its own
-   * header, the second is a person's words, which no teammate framing may
-   * impersonate.
+   * Drives inbound header rendering. 'periodic_check' and 'human_message' are
+   * delivered verbatim — the first already carries its own header, the second is
+   * a person's words, which no teammate framing may impersonate.
    */
-  kind?: 'run_start' | 'message' | 'completion' | 'periodic_check' | 'human_message'
+  kind?: 'run_start' | 'message' | 'periodic_check' | 'human_message'
+  /**
+   * Position of this turn in the chain that caused it; the circuit breaker's
+   * `maxForwardDepth` counts it. Must travel with the trigger — a chain that
+   * restarts at 0 on every hop never reaches the limit.
+   */
+  forwardDepth?: number
 }
 
 export interface TeamContext {
@@ -667,25 +673,31 @@ export interface JoinedOfficeSnapshot {
 export interface TeamSendInput {
   to: string
   message: string
-  wait?: boolean
 }
 export interface TeamSendAsyncResult {
   messageId: string
   /**
-   * Set to 'undelivered' when an immediate reachability check found the target's
-   * owner offline/unreachable at send time. Async (wait=false) sends have no
-   * persistent offline outbox, so such a message will NOT auto-deliver later —
-   * the sender is told NOW instead of falsely seeing "sent". Absent → accepted for
-   * delivery (a busy-but-reachable target is buffered = queued).
+   * What happened to the send. Nothing is ever auto-delivered back, so this
+   * receipt is all the sender learns:
+   *   - 'undelivered' the target's owner was offline/unreachable at send time.
+   *                   There is no offline outbox, so it will NOT arrive later.
+   *   - 'queued'      the target is mid-turn; the message waits in its mailbox.
+   *                   Only knowable for a locally-owned target — a remote one
+   *                   queues on its OWNER, so it reads as a plain hand-over.
+   * Absent → handed over to the target's session now.
    */
-  delivery?: 'undelivered'
+  delivery?: 'undelivered' | 'queued'
 }
+/**
+ * Receipt for a send that waited on the woken turn's ending. Not reachable from
+ * `team_send` — only a person's cross-machine 1:1 chat asks for one, so its UI
+ * can distinguish "sent" from "never arrived".
+ */
 export interface TeamSendSyncResult {
   from: string
   message: string
   /**
-   * Sender-facing delivery truth, so a teammate never mistakes a non-delivery for
-   * a real (empty) reply:
+   * Delivery truth, so a non-delivery is never mistaken for a real (empty) reply:
    *   - 'ok'          the turn ran and reported back (message may still be empty).
    *   - 'timeout'     it was reachable but did not finish within the wait window.
    *   - 'undelivered' the wake never reached the owner (offline/unreachable) or no

@@ -485,14 +485,27 @@ async function initPlatformAndApps(): Promise<void> {
             broadcastToAll(TEAM_EVENTS.updated, payload)
             sendToRenderer(TEAM_EVENTS.updated, payload)
           }
-          notifyLocalBoard()
-          try {
-            return await localSessionDeps.sendAppChatMessage(
-              withOwnerResolvedSpace(request, (appId) => localSessionDeps.getMemberSpaceId(appId))
-            )
-          } finally {
+          const run = async () => {
             notifyLocalBoard()
+            try {
+              return await localSessionDeps.sendAppChatMessage(
+                withOwnerResolvedSpace(request, (appId) => localSessionDeps.getMemberSpaceId(appId))
+              )
+            } finally {
+              notifyLocalBoard()
+            }
           }
+          // Only the OWNER can know whether this member is already mid-turn, and
+          // only at the instant the turn starts — the sender's view is stale by
+          // the time the wake crosses the network. So the busy gate is applied
+          // HERE, sharing the kernel's mailbox with local deliveries: without it
+          // a relayed wake starts a second turn on a session key a local one
+          // already owns, and the two race one shared SDK iterator (the loser
+          // waits forever for a completion that never comes).
+          // conversationId IS the session key (buildTeamSessionKey).
+          const bus = getActiveTeamRuntime()?.bus
+          if (!bus) return run()
+          return bus.runRelayedTurn({ sessionKey: request.conversationId, run })
         },
         // Deliberately NO kernel unblock on confirmed-offline: over a WAN tunnel
         // a confirmed-offline is routinely a transient outage, and the durable
@@ -829,7 +842,7 @@ async function initPlatformAndApps(): Promise<void> {
         // flight; overlay it so boards/rosters pulse the member everywhere.
         getMemberStatusOverlay: (appId) =>
           getFederationManager()?.isMemberRemoteBusy(appId) ? 'working' : null,
-        // Immediate reachability for the wait=false honest-delivery gate: a member
+        // Immediate reachability for the honest-delivery gate on a send: a member
         // owned by an offline/unreachable remote node is reported "not delivered" at
         // send time. No federation manager (non-federated) → default reachable.
         checkMemberReachable: (appId, teamId) =>

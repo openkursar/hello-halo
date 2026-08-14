@@ -100,10 +100,14 @@ export function TeamSessionChat({
   // message + live stream — the epoch has no persisted rows yet.
   const prevEpochRef = useRef(epochId)
   const draftCommitRef = useRef(false)
+  // True while a turn started from THIS surface is in flight: its user bubble is
+  // already on screen optimistically, so it must not trigger the pull below.
+  const ownTurnRef = useRef(false)
   useEffect(() => {
     draftCommitRef.current = prevEpochRef.current === null && epochId !== null
     prevEpochRef.current = epochId
     seqCursorRef.current = 0
+    ownTurnRef.current = false
     setIsStale(false)
   }, [appId, epochId])
 
@@ -172,8 +176,17 @@ export function TeamSessionChat({
 
   const prevGen = useRef(isGenerating)
   useEffect(() => {
-    if (prevGen.current && !isGenerating) void loadMessages(true)
+    const started = !prevGen.current && isGenerating
+    const ended = prevGen.current && !isGenerating
     prevGen.current = isGenerating
+    // A turn set off elsewhere — an answered decision, a teammate's message —
+    // persisted its trigger before streaming. Pull it in now, or the reply shows
+    // up without the words it answers until the whole turn is over.
+    if (started && !ownTurnRef.current) void loadMessages(true)
+    if (ended) {
+      ownTurnRef.current = false
+      void loadMessages(true)
+    }
   }, [isGenerating, loadMessages])
 
   useEffect(() => {
@@ -184,6 +197,9 @@ export function TeamSessionChat({
   }, [teamId, appId, loadMessages])
 
   const markSendFailed = useCallback((messageId: string, reason: string) => {
+    // The turn never started: release the latch, or the next turn started
+    // elsewhere is mistaken for ours and its trigger goes unread.
+    ownTurnRef.current = false
     setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, error: reason } : m)))
   }, [])
 
@@ -202,6 +218,7 @@ export function TeamSessionChat({
     const convId = buildTeamSessionKey(appId, teamId, eid)
 
     resetSession(convId)
+    ownTurnRef.current = true
     const userMsg: Message = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -247,7 +264,7 @@ export function TeamSessionChat({
 
   const handleStop = useCallback(async () => {
     try {
-      await api.appChatStop(appId)
+      await api.appChatStop(appId, conversationId)
       useChatStore.getState().resetSession(conversationId)
     } catch (err) {
       console.error('[TeamSessionChat] stop error:', err)

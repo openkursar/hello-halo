@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto'
 import { broadcastToAll } from '../../../http/websocket'
 import { sendToRenderer } from '../../../foundation/window.service'
 import { Semaphore } from '../concurrency'
+import { oneLineExcerpt } from '../text-truncate'
 import {
   buildTeamSessionKey,
   isRemoteMember,
@@ -138,6 +139,14 @@ export interface Orchestration {
    */
   getMemberBusy(appId: string, teamId: string): RosterBusyEntry[]
   /**
+   * Announce that a member's live status may have moved, for a turn this
+   * orchestration did not run. Status is DERIVED from the session ledger, so a
+   * turn started outside the bus (a 1:1 chat, an IM-backed turn) flips it with
+   * nothing to tell viewers. Re-derived when the pulse lands, so announce AFTER
+   * the ledger write being reported, never before.
+   */
+  noteMemberStatusChanged(teamId: string): void
+  /**
    * Resume a team turn after the user answered a member's escalation. Returns
    * false when the team/epoch is gone (caller must NOT fall back to a solo run).
    */
@@ -147,6 +156,12 @@ export interface Orchestration {
     appId: string
     taskId?: string
     response: string
+    /**
+     * The question this answers. A member may have several open at once and the
+     * person answers them in any order, so without it an answer binds to the
+     * wrong one.
+     */
+    question?: string
   }): boolean
 }
 
@@ -231,10 +246,12 @@ const DEFAULT_TURN_TIMEOUT_MS = TEAM_DEFAULT_TURN_TIMEOUT_MS
  */
 const STATUS_PUSH_COALESCE_MS = 750
 
-/** Sharpens the header of a wait=true envelope: the sender's turn is blocked on this one. */
-const AWAITING_REPLY_NOTE =
-  'The sender is waiting for your reply — finish the requested work; your final ' +
-  'message in this turn is automatically delivered back to them.'
+/**
+ * How much of the original question rides back with its answer: enough to tell
+ * two open questions apart, not enough to crowd out the turn input. The member
+ * still holds the full text in its own session.
+ */
+const QUOTED_QUESTION_LIMIT = 300
 
 export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   const { store, bus, session } = deps
@@ -376,7 +393,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
     console.log(
       `${LOG_TAG} wakeTarget: team=${teamId} epoch=${epochId} app=${appId} ` +
-        `corr=${trigger.correlationId} wait=${trigger.wait}`
+        `corr=${trigger.correlationId} kind=${trigger.kind ?? 'n/a'}`
     )
 
     capturedEscalations.delete(trigger.correlationId)
@@ -555,7 +572,6 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         fromAppId: appId,
         toAppId: appId,
         body,
-        wait: false,
         correlationId,
         createdAt: Date.now(),
       },
@@ -587,12 +603,6 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   }
 
   /**
-   * Turn input — NOT the system prompt. Everything that varies per turn (who
-   * sent this, whether they are blocking on the reply) is rendered here, because
-   * the team Entry is frozen into the session's reuse fingerprint and must stay
-   * byte-identical across a member's consecutive turns.
-   */
-  /**
    * Append what this member missed while it was not running.
    *
    * This is the only point at which a member is told anything without having to
@@ -609,12 +619,16 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     return digest ? `${body}\n\n${digest}` : body
   }
 
+  /**
+   * The turn's INPUT — not the system prompt. Everything that varies per turn
+   * (who sent this) is rendered here, because the team Entry is frozen into the
+   * session's reuse fingerprint and must stay byte-identical across a member's
+   * consecutive turns.
+   *
+   * No header may promise that the turn's last words go anywhere: answering a
+   * teammate is an explicit `team_send`, never an implicit hand-back.
+   */
   function renderEnvelope(envelope: TeamEnvelope, trigger: TeamTriggerContext): string {
-    if (trigger.kind === 'completion') {
-      const who = envelope.fromAppId ? memberName(envelope.teamId, envelope.fromAppId) : 'a teammate'
-      const task = envelope.taskRef ? ` · task ${envelope.taskRef}` : ''
-      return withDigest(`[Result from ${who}${task}]\n\n${envelope.body}`, envelope)
-    }
     // A periodic check arrives with its own header (who set it, the original
     // words, which round this is) already rendered by the checks module.
     if (trigger.kind === 'periodic_check') return withDigest(envelope.body, envelope)
@@ -625,10 +639,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     if (trigger.kind === 'human_message') return envelope.body
     const fromName = trigger.fromAppId ? memberName(envelope.teamId, trigger.fromAppId) : null
     if (!fromName) return withDigest(`[Team run signal]\n\n${envelope.body}`, envelope)
-    const header = trigger.wait
-      ? `[Team message from ${fromName} — awaiting your reply]\n${AWAITING_REPLY_NOTE}`
-      : `[Team message from ${fromName}]`
-    return withDigest(`${header}\n\n${envelope.body}`, envelope)
+    return withDigest(`[Team message from ${fromName}]\n\n${envelope.body}`, envelope)
   }
 
   // ── Escalation routing ──────────────────────────────────────────────────────
@@ -654,7 +665,6 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
           fromAppId,
           to: leadMember.memberName,
           message: `[Escalation from ${fromName}] ${content}`,
-          wait: false,
         })
         .catch((err) => {
           console.error(`${LOG_TAG} Failed to route escalation to lead:`, err)
@@ -689,15 +699,17 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   }
 
   // Wakes the escalating member via the team channel, which reactivates a sealed
-  // epoch automatically. The member's completion then routes back to the lead.
+  // epoch automatically. Where the outcome goes from there is the member's call:
+  // the turn ending notifies nobody, so it must `team_send` whoever is waiting.
   function resumeFromEscalation(params: {
     teamId: string
     epochId: string
     appId: string
     taskId?: string
     response: string
+    question?: string
   }): boolean {
-    const { teamId, epochId, appId, taskId, response } = params
+    const { teamId, epochId, appId, taskId, response, question } = params
     const team = store.getTeamById(teamId)
     const epoch = store.getEpochById(epochId)
     if (!team || !epoch) return false
@@ -718,14 +730,21 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     notifyMemberStatusChanged(teamId)
 
     const isLeadSelf = team.leadAppId === appId
-    // A member's completion should wake the lead to reconcile; the lead's own
-    // resumed turn is terminal (it drives the next round itself).
+    // Attributed to the lead so the member reads it as coming from its team,
+    // not from nowhere.
     const fromAppId = isLeadSelf ? null : team.leadAppId ?? null
     const correlationId = randomUUID()
+    // Written for two readers: the member, which needs the question to bind the
+    // answer, and the person, for whom this is the member's visible transcript.
+    const asked = question?.trim()
+      ? `You asked: "${oneLineExcerpt(question, QUOTED_QUESTION_LIMIT)}"\n\n`
+      : ''
     const body =
-      '[The user answered your escalation]\n\n' +
-      `${response}\n\n` +
-      'Continue from here. When you are done, state your result as your final message.'
+      '[The user answered your question]\n\n' +
+      asked +
+      `Their answer: ${response}\n\n` +
+      'Continue from here. If a teammate is waiting on the outcome, send it to ' +
+      'them with `team_send` — ending your turn does not notify anyone.'
     const envelope: TeamEnvelope = {
       id: randomUUID(),
       teamId,
@@ -733,7 +752,6 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       fromAppId: fromAppId ?? appId,
       toAppId: appId,
       body,
-      wait: false,
       correlationId,
       taskRef: taskId,
       createdAt: Date.now(),
@@ -827,7 +845,6 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       fromAppId: team.leadAppId,
       toAppId: team.leadAppId,
       body: digest ? `${digest}\n\n${startBody}` : startBody,
-      wait: false,
       correlationId: trigger.correlationId,
       createdAt: Date.now(),
     }
@@ -1209,6 +1226,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     buildPromptContext,
     getMemberStatus,
     getMemberBusy,
+    noteMemberStatusChanged: notifyMemberStatusChanged,
     resumeFromEscalation,
   }
 }

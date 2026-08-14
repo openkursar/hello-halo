@@ -33,26 +33,21 @@ interface ConversationTabProps {
 }
 
 /**
- * The digital humans in this office that can actually take a message here: run
- * on this machine AND still installed. A member row can outlive its app (the app
- * was uninstalled, the profile was reset), and pointing the chat at one of those
- * produces a send that fails silently — so they are not offered at all.
+ * The digital humans this conversation can be handed to: the ones running on
+ * THIS machine, still installed. The lead is no exception — it qualifies only
+ * when it runs here; a teammate's answers to its own owner and is reached from
+ * its own thread.
+ *
+ * The installed check matters because a member row can outlive its app
+ * (uninstalled, profile reset), and pointing the chat at one of those produces a
+ * send that fails silently.
  */
-function useChatTargets(detail: TeamDetail): { own: TeamMember[]; lead: TeamMember | null } {
+function useOwnChatTargets(detail: TeamDetail): TeamMember[] {
   const apps = useAppsStore(s => s.apps)
   return useMemo(() => {
     const installed = new Set(apps.map(a => a.id))
-    // A teammate's member is served by their machine, so its absence here means
-    // nothing; one of mine has to genuinely exist on this one.
-    const live = detail.members.filter(m => isRemoteMember(m) || installed.has(m.appId))
-    return {
-      own: live.filter(m => !isRemoteMember(m) && m.appId !== detail.team.leadAppId),
-      // The lead is the office's front desk, so it stays reachable even when the
-      // office is hosted elsewhere — that is the fallback for someone who is
-      // only watching and brought nobody.
-      lead: live.find(m => m.appId === detail.team.leadAppId) ?? null,
-    }
-  }, [apps, detail.members, detail.team.leadAppId])
+    return detail.members.filter(m => !isRemoteMember(m) && installed.has(m.appId))
+  }, [apps, detail.members])
 }
 
 export function ConversationTab({ detail, onOpenLive }: ConversationTabProps) {
@@ -71,9 +66,9 @@ export function ConversationTab({ detail, onOpenLive }: ConversationTabProps) {
     [conversations, selectedId]
   )
 
-  const { own, lead } = useChatTargets(detail)
+  const own = useOwnChatTargets(detail)
   const ownAppIds = useMemo(() => own.map(m => m.appId), [own])
-  const defaultTarget = useDefaultChatTarget(team.id, ownAppIds, lead?.appId ?? null)
+  const defaultTarget = useDefaultChatTarget(team.id, ownAppIds)
 
   // A member thread is bound to its teammate; anything else goes to your pick.
   const boundTarget = selected?.kind === 'member' ? selected.memberAppId ?? null : null
@@ -97,7 +92,6 @@ export function ConversationTab({ detail, onOpenLive }: ConversationTabProps) {
           {!boundTarget && targetMember && (
             <TargetPicker
               own={own}
-              lead={lead}
               currentAppId={targetAppId}
               currentName={targetMember.memberName}
               onPick={appId => setDefaultMember(team.id, appId)}
@@ -147,9 +141,8 @@ export function ConversationTab({ detail, onOpenLive }: ConversationTabProps) {
 }
 
 /** Hand the conversation to a different digital human of yours. */
-function TargetPicker({ own, lead, currentAppId, currentName, onPick }: {
+function TargetPicker({ own, currentAppId, currentName, onPick }: {
   own: TeamMember[]
-  lead: TeamMember | null
   currentAppId: string | null
   currentName: string
   onPick: (appId: string) => void
@@ -157,14 +150,14 @@ function TargetPicker({ own, lead, currentAppId, currentName, onPick }: {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
 
-  if (own.length + (lead ? 1 : 0) < 2) return null
+  if (own.length < 2) return null
 
   const choose = (appId: string) => {
     onPick(appId)
     setOpen(false)
   }
 
-  const row = (member: TeamMember, note?: string) => (
+  const row = (member: TeamMember) => (
     <button
       key={member.appId}
       onClick={() => choose(member.appId)}
@@ -172,7 +165,6 @@ function TargetPicker({ own, lead, currentAppId, currentName, onPick }: {
     >
       <Check className={`h-3.5 w-3.5 flex-shrink-0 ${member.appId === currentAppId ? 'text-primary' : 'invisible'}`} />
       <span className="min-w-0 flex-1 truncate">{member.memberName}</span>
-      {note && <span className="flex-shrink-0 text-xs text-muted-foreground">{note}</span>}
     </button>
   )
 
@@ -188,12 +180,6 @@ function TargetPicker({ own, lead, currentAppId, currentName, onPick }: {
       </PopoverTrigger>
       <PopoverContent align="end" className="w-56 p-1">
         {own.map(m => row(m))}
-        {lead && (
-          <>
-            {own.length > 0 && <div className="my-1 border-t border-border" />}
-            {row(lead, t('Lead'))}
-          </>
-        )}
       </PopoverContent>
     </Popover>
   )

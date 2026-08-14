@@ -392,5 +392,14 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
     return base.readBoard(teamId, epochId, callerAppId, filter)
   }
 
-  return { postTask, updateTask, postFinding, postActivity, readBoard }
+  function findPublishedRefConflict(
+    input: Parameters<Blackboard['findPublishedRefConflict']>[0]
+  ): ReturnType<Blackboard['findPublishedRefConflict']> {
+    // Same local projection as readBoard, so only as current as replication: a
+    // name claimed on another node may not be here yet, which is why the reader
+    // still refuses an ambiguous ref instead of trusting this gate.
+    return base.findPublishedRefConflict(input)
+  }
+
+  return { postTask, updateTask, postFinding, postActivity, readBoard, findPublishedRefConflict }
 }

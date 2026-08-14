@@ -13,7 +13,7 @@
 import { useMemo } from 'react'
 import { CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File, Send, Clock, BellOff, Flag } from 'lucide-react'
 import type { TeamDetail, RosterMember, BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamEdge, TeamStatus, EpochOutcome, TeamRunTriggerType } from '../../../shared/apps/team-types'
-import { awaitsOurDecision, answeredCorrelationIds, isAwaitingReply } from '../../../shared/apps/team-types'
+import { awaitsOurDecision } from '../../../shared/apps/team-types'
 import type { Thought } from '../../types'
 import type { ActiveFlow } from '../../stores/team.store'
 import { TeamFlowCanvas } from './flow/TeamFlowCanvas'
@@ -367,14 +367,11 @@ function RecentActivity({ tasks, findings, activities, roster, teamId, epochId, 
     if (m) onSelectMember(m)
   }
 
-  // Which messages have an answer. Replies are not rows of their own: a reply is
-  // the state of the message it answers, and showing both doubles the feed while
-  // saying one thing.
-  const answered = useMemo(() => answeredCorrelationIds(activities), [activities])
-
   const recent = useMemo<ActivityRow[]>(() => {
     if (activities.length > 0) {
       return activities
+        // A 'reply' row is only written when a turn failed to run (message-bus
+        // recordReply); the feed has no row form for that.
         .filter(a => a.kind !== 'reply')
         .map<ActivityRow>(act => ({ kind: 'act', ts: act.createdAt, act }))
         .sort((a, b) => b.ts - a.ts)
@@ -426,7 +423,6 @@ function RecentActivity({ tasks, findings, activities, roster, teamId, epochId, 
                 <ActRow
                   key={row.act.id}
                   act={row.act}
-                  answered={answered}
                   nameFor={nameFor}
                   onSelect={selectByAppId}
                   taskTitleFor={taskId => tasks.find(tk => tk.id === taskId)?.title ?? null}
@@ -503,7 +499,6 @@ function RecentActivity({ tasks, findings, activities, roster, teamId, epochId, 
 
 interface ActRowProps {
   act: TeamActivity
-  answered: ReadonlySet<string>
   nameFor: (appId: string | null) => string
   onSelect: (appId: string) => void
   taskTitleFor: (taskId: string) => string | null
@@ -514,7 +509,7 @@ interface ActRowProps {
  * message's first line) and the kind; the sentence around it is composed here so
  * it reads in the user's language.
  */
-function ActRow({ act, answered, nameFor, onSelect, taskTitleFor }: ActRowProps) {
+function ActRow({ act, nameFor, onSelect, taskTitleFor }: ActRowProps) {
   const { t } = useTranslation()
 
   const actor = <ActorName appId={act.actorAppId} name={nameFor(act.actorAppId)} onSelect={onSelect} />
@@ -525,8 +520,9 @@ function ActRow({ act, answered, nameFor, onSelect, taskTitleFor }: ActRowProps)
   let Icon: FeedIcon = Circle
   let tint = 'text-muted-foreground/50'
   let middle: React.ReactNode = null
-  // Delivery state of a message. "Not delivered" is deliberately distinct from
-  // "no reply yet": one never arrived, the other is simply still open.
+  // Only a message that never arrived earns a label. Answered-ness is not one:
+  // the record cannot tell a question from a notice, and a reply is a message of
+  // its own, already in the feed a row below.
   let state: string | null = null
 
   switch (act.kind) {
@@ -534,9 +530,7 @@ function ActRow({ act, answered, nameFor, onSelect, taskTitleFor }: ActRowProps)
       Icon = Send
       tint = 'text-foreground/60'
       middle = <><span className="text-muted-foreground"> {t('messaged')} </span>{target}<span className="text-muted-foreground">: </span><span className="text-foreground/80">{act.subject}</span></>
-      state = act.status === 'undelivered'
-        ? t('not delivered')
-        : isAwaitingReply(act, answered) ? t('no reply yet') : t('answered')
+      state = act.status === 'undelivered' ? t('not delivered') : null
       break
     case 'task_post':
       Icon = Circle

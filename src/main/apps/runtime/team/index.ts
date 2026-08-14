@@ -115,6 +115,14 @@ export interface TeamRuntime {
   getMemberStatus(appId: string): TeamMemberRuntimeStatus
   /** Live busy assignments (open run/conversations being served) with human labels. */
   getMemberBusy(appId: string, teamId: string): RosterBusyEntry[]
+  /**
+   * Announce that a member's live status may have moved, for a turn the team
+   * orchestration did not run itself (a 1:1 chat, an IM-backed turn). Status is
+   * derived from the session ledger, so a missed announcement latches 'working'
+   * until the next re-baseline — which only a HOSTED office gets. Read-through:
+   * announce AFTER the ledger write, never before.
+   */
+  noteMemberStatusChanged(teamId: string): void
   startEpoch(teamId: string, trigger?: TeamRunTrigger): Promise<TeamEpoch>
   /** Get/create a per-chat long-lived 'conversation' epoch (message-driven entries, e.g. IM). */
   ensureConversationEpoch(teamId: string, chatKey: string, title?: string): TeamEpoch
@@ -141,6 +149,8 @@ export interface TeamRuntime {
     appId: string
     taskId?: string
     response: string
+    /** Several may be open at once; without it an answer binds to the wrong one. */
+    question?: string
   }): boolean
 }
 
@@ -187,7 +197,7 @@ export interface CreateTeamRuntimeDeps {
   onMemberStatusChanged?: (teamId: string) => void
   /**
    * Immediate reachability of a member's owner at send time (bootstrap wires it to
-   * the federation manager). Drives the wait=false honest "not delivered" gate.
+   * the federation manager). Drives the async send's honest "not delivered" gate.
    * Absent → all members treated as reachable (non-federated runtime).
    */
   checkMemberReachable?: (appId: string, teamId: string) => boolean
@@ -323,6 +333,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     ...(deps.readArtifact ? { readArtifact: deps.readArtifact } : {}),
     getMemberStatus: memberStatus,
     getMemberBusy: (appId, teamId) => orchestration!.getMemberBusy(appId, teamId),
+    noteMemberStatusChanged: (teamId) => orchestration!.noteMemberStatusChanged(teamId),
     startEpoch: (teamId, trigger) => orchestration!.startEpoch(teamId, trigger),
     ensureConversationEpoch: (teamId, chatKey, title) =>
       orchestration!.ensureConversationEpoch(teamId, chatKey, title),
@@ -348,7 +359,7 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
       const { sendAppChatMessage } = await import('../app-chat')
 
       // For a team-backed IM conversation epoch, the LEAD is the chat's front
-      // desk: its orchestration-driven turns (e.g. a member's wait=false reply
+      // desk: its orchestration-driven turns (e.g. a member's team_send reply
       // waking it) must be framed for, and pushed back to, that IM chat — the
       // user's direct turn already gets this in dispatch-inbound, but later
       // woken turns would otherwise have no user-facing sink. Members' woken

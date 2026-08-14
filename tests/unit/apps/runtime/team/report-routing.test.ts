@@ -53,7 +53,12 @@ function makeStore() {
   const entries: ActivityEntry[] = []
   return {
     entries,
-    store: { insertEntry: vi.fn((e: ActivityEntry) => entries.push(e)) } as any,
+    store: {
+      insertEntry: vi.fn((e: ActivityEntry) => entries.push(e)),
+      getAllPendingEscalations: vi.fn(() =>
+        entries.filter((e) => e.type === 'escalation' && !e.userResponse)
+      ),
+    } as any,
   }
 }
 
@@ -214,6 +219,61 @@ describe('report routing (§5.3)', () => {
       expect.objectContaining({ appId: 'app-lead', teamId: 'team-1', epochId: 'epoch-1' })
     )
     expect(res.content[0].text).toMatch(/escalation sent to user/i)
+  })
+
+  it('a team escalation is told its turn is not suspended (teammates still wake it)', async () => {
+    const { store } = makeStore()
+    const ctx: ReportToolContext = {
+      appId: 'app-researcher',
+      appName: 'Researcher',
+      runId: 'chat',
+      sessionKey: 'app-chat:app-researcher:team:team-1',
+      teamContext: TRIGGER,
+    }
+    const handler = getReportHandler(ctx, store)
+    const res = await handler({ type: 'escalation', summary: 'Data source 403', question: 'Skip or wait?' })
+
+    // A member believing it is suspended reads the next unrelated wake as its answer.
+    const text = res.content[0].text as string
+    expect(text).toMatch(/stays open until the user answers/i)
+    expect(text).toMatch(/still be woken for other work/i)
+    expect(text).not.toMatch(/you will be\s+resumed/i)
+  })
+
+  it('a second escalation names the ones still unanswered', async () => {
+    const { store, entries } = makeStore()
+    const ctx: ReportToolContext = {
+      appId: 'app-researcher',
+      appName: 'Researcher',
+      runId: 'chat',
+      sessionKey: 'app-chat:app-researcher:team:team-1',
+      teamContext: TRIGGER,
+    }
+    const handler = getReportHandler(ctx, store)
+    await handler({ type: 'escalation', summary: 'first', question: 'Which test account\nshould I use?' })
+    const res = await handler({ type: 'escalation', summary: 'second', question: 'Ship without the VDI?' })
+
+    expect(entries).toHaveLength(2)
+    const text = res.content[0].text as string
+    // Multi-line questions are inlined so one quoted question cannot read as
+    // several separate instructions.
+    expect(text).toContain('1 earlier question(s) still unanswered: "Which test account should I use?"')
+    expect(text).not.toContain('Ship without the VDI?')
+  })
+
+  it('the first escalation of an app names no others', async () => {
+    const { store } = makeStore()
+    const ctx: ReportToolContext = {
+      appId: 'app-researcher',
+      appName: 'Researcher',
+      runId: 'chat',
+      sessionKey: 'app-chat:app-researcher:team:team-1',
+      teamContext: TRIGGER,
+    }
+    const handler = getReportHandler(ctx, store)
+    const res = await handler({ type: 'escalation', summary: 'only one', question: 'Go?' })
+
+    expect(res.content[0].text as string).not.toMatch(/still unanswered/i)
   })
 
   it('non-team turn → unchanged: a normal activity entry is written', async () => {

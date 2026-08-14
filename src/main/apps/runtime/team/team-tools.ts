@@ -10,7 +10,7 @@ import { TeamBusError } from './message-bus'
 import { TeamCheckError, describeSchedule } from './checks'
 import { resolveArtifactRef, explainArtifactRefRejection, formatArtifactSize } from './artifact-path'
 import type { MessageBus } from './message-bus'
-import type { Blackboard, PostActivityInput } from './blackboard'
+import type { Blackboard, PostActivityInput, PublishedRefClaim } from './blackboard'
 import type { TeamChecks } from './checks'
 import type { BoardDigest } from './board-digest'
 import type { ReadTeamArtifact } from './index'
@@ -51,6 +51,12 @@ export interface TeamMcpContext {
    * read returns the snapshot alone.
    */
   digest?: BoardDigest
+  /**
+   * Forward depth of the turn these tools serve. A `team_send` inherits it so the
+   * circuit breaker sees one chain across hops instead of a fresh chain per
+   * member. Absent → the caller's turn had no chain behind it (depth 0).
+   */
+  forwardDepth?: number
   /** Deferred: applied after the lead's turn ends, never aborts mid-turn. */
   requestComplete: (summary: string) => void
 }
@@ -93,10 +99,16 @@ function record(ctx: TeamMcpContext, input: Omit<PostActivityInput, 'teamId' | '
  * later on another machine, leaving the publisher believing it had shared the
  * file and the reader believing it had never been sent — neither holding enough
  * of the truth to fix it. The stored form is the portable one this returns.
+ *
+ * The uniqueness check has the same shape: a ref is a path inside the publisher's
+ * OWN working directory, so two members reach for one name and the board holds a
+ * single indistinguishable string. Here is the last instant they can be told
+ * apart, and the member holding the file is the one who can rename it.
  */
 function acceptRef(
   ctx: TeamMcpContext,
-  ref: string
+  ref: string,
+  claim: PublishedRefClaim
 ): { ok: true; ref: string; receipt: string } | { ok: false; message: string } {
   const resolved = resolveArtifactRef(ctx.callerWorkDir, ref)
   if (!resolved.ok) {
@@ -106,6 +118,27 @@ function acceptRef(
     return {
       ok: false,
       message: explainArtifactRefRejection(resolved.reason, { ref, workDir: ctx.callerWorkDir }),
+    }
+  }
+  // Compared in the STORED form: two refs collide as the board holds them, not
+  // as they were typed.
+  const conflict = ctx.blackboard.findPublishedRefConflict({
+    teamId: ctx.teamId,
+    epochId: ctx.epochId,
+    ref: resolved.ref,
+    claim,
+  })
+  if (conflict) {
+    console.warn(
+      `${LOG_TAG} rejected ref="${resolved.ref}" from=${ctx.callerAppId}: already published by ${conflict.memberName}`
+    )
+    return {
+      ok: false,
+      message:
+        `${conflict.memberName} has already published "${resolved.ref}" in this piece of work, and ` +
+        'a published name must belong to one member only — otherwise a teammate opening it cannot ' +
+        'tell whose file they are reading. Rename your file to a name that is yours alone (adding ' +
+        'your member name to it works), then use that reference instead.',
     }
   }
   return {
@@ -126,25 +159,21 @@ function busErrorResult(err: unknown) {
 function buildSendTool(ctx: TeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.send,
-    'Send a directed message to a teammate. The message becomes the input of ' +
-      "the teammate's next turn.\n\n" +
-      'Set wait=false (default) for async: you get a messageId now and the reply ' +
-      'arrives later as a new turn. Set wait=true to block until the teammate ' +
-      'reports back (use sparingly — only when you truly need just this one reply).\n\n' +
-      'Put large outputs on disk and pass the path in the board, not in the message.\n\n' +
-      'Example: { "to": "researcher", "message": "Do task T1, details on the board", "wait": false }',
+    'Send a message to a teammate. This is the ONLY way to reach one — your own ' +
+      'output is not shown to teammates, so anything you do not send here, they ' +
+      'never see.\n\n' +
+      "The message becomes the input of the teammate's next turn. This call " +
+      'returns as soon as the message is handed over; if they answer, it arrives ' +
+      'later as a new turn of yours — so do not sit and wait for it.\n\n' +
+      'Put large outputs on disk and share the path, not the text.\n\n' +
+      'Example: { "to": "researcher", "message": "Do task T1, details on the board" }',
     {
       to: z.string().describe('Target teammate name (member name within this team).'),
       message: z.string().describe('Message body. Keep it directive and self-contained.'),
-      wait: z
-        .boolean()
-        .optional()
-        .describe('Block until the teammate reports back. Defaults to false (async).'),
     },
     async (input) => {
       console.log(
-        `${LOG_TAG} ${TEAM_TOOL_NAMES.send}: team=${ctx.teamId} from=${ctx.callerAppId} ` +
-          `to="${input.to}" wait=${input.wait ?? false}`
+        `${LOG_TAG} ${TEAM_TOOL_NAMES.send}: team=${ctx.teamId} from=${ctx.callerAppId} to="${input.to}"`
       )
       try {
         const toAppId = ctx.bus.resolveMemberAppId(ctx.teamId, input.to)
@@ -156,35 +185,33 @@ function buildSendTool(ctx: TeamMcpContext) {
           fromAppId: ctx.callerAppId,
           to: input.to,
           message: input.message,
-          wait: input.wait ?? false,
+          forwardDepth: ctx.forwardDepth,
         })
+        // A teammate send is always async; the sync receipt shape is unreachable
+        // from here (only a person's 1:1 chat asks for one).
+        if (!('messageId' in result)) {
+          return textResult(`Message sent to "${input.to}".`)
+        }
 
-        if ('messageId' in result) {
-          if (result.delivery === 'undelivered') {
-            // Do NOT report success: the teammate's owner is offline/unreachable and
-            // an async send has no offline queue, so this will not arrive later.
-            return textResult(
-              `"${input.to}" is offline right now — this message was NOT delivered and will not be queued. ` +
-                `Reassign the work, or wait until they are back online and send again.`
-            )
-          }
+        if (result.delivery === 'undelivered') {
+          // Do NOT report success: the teammate's owner is offline/unreachable and
+          // there is no offline queue, so this will not arrive later.
           return textResult(
-            `Message sent (id: ${result.messageId}). The reply will arrive later as a new turn.`
+            `"${input.to}" is offline right now — this message was NOT delivered and will not be queued. ` +
+              `Reassign the work, or wait until they are back online and send again.`
           )
         }
-        if (result.status === 'timeout') {
+        if (result.delivery === 'queued') {
           return textResult(
-            `No reply from "${result.from}" within the time limit. Proceed without it or follow up.`
+            `Message queued for "${input.to}" (id: ${result.messageId}). They are busy with another turn ` +
+              `right now; it will be delivered the moment that turn ends. If this is urgent, consider ` +
+              `another teammate.`
           )
         }
-        if (result.status === 'undelivered') {
-          // Do NOT report success: the message never reached the teammate.
-          return textResult(
-            `Message to "${result.from}" was NOT delivered — they appear to be offline or unreachable. ` +
-              `Reassign the work or try again once they are back online.`
-          )
-        }
-        return textResult(`Reply from "${result.from}": ${result.message}`)
+        return textResult(
+          `Message delivered to "${input.to}" (id: ${result.messageId}). If they answer, it will arrive ` +
+            `later as a new turn — carry on with other work.`
+        )
       } catch (err) {
         return busErrorResult(err)
       }
@@ -253,7 +280,8 @@ function buildUpdateTaskTool(ctx: TeamMcpContext) {
         .optional()
         .describe(
           'The file this task produced, as a path relative to your working directory (e.g. ' +
-            '"docs/design.md"). It must already exist — the update is refused if it does not. ' +
+            '"docs/design.md"). It must already exist, and its name must be unused by other ' +
+            'teammates — the update is refused otherwise. ' +
             'Omit this when the task produced no file; put the outcome in note instead.'
         ),
       note: z.string().optional().describe('Short note (e.g. rejection reason or blocker).'),
@@ -266,7 +294,7 @@ function buildUpdateTaskTool(ctx: TeamMcpContext) {
       let resultRef: string | undefined
       let receipt = ''
       if (input.resultRef) {
-        const accepted = acceptRef(ctx, input.resultRef)
+        const accepted = acceptRef(ctx, input.resultRef, { kind: 'task', taskId: input.taskId })
         if (!accepted.ok) {
           // Refused whole rather than applied without the ref: a task shown done
           // with its deliverable silently dropped is the same false success this
@@ -317,7 +345,8 @@ function buildPostFindingTool(ctx: TeamMcpContext) {
         .describe(
           'A file inside your working directory, as a path relative to it (e.g. "docs/design.md"). ' +
             'The file must already exist — it is checked now, and publishing fails if it is not ' +
-            'there or is outside your working directory. Required if content is omitted.'
+            'there or is outside your working directory. The name must also be unused by other ' +
+            'teammates, so prefer one that is clearly yours. Required if content is omitted.'
         ),
     },
     async (input) => {
@@ -328,7 +357,7 @@ function buildPostFindingTool(ctx: TeamMcpContext) {
       let ref: string | undefined
       let receipt = ''
       if (input.ref) {
-        const accepted = acceptRef(ctx, input.ref)
+        const accepted = acceptRef(ctx, input.ref, { kind: 'finding', authorAppId: ctx.callerAppId })
         if (!accepted.ok) return textResult(`Nothing was published. ${accepted.message}`, true)
         ref = accepted.ref
         receipt = ` Published ${accepted.receipt} — teammates read it with ` +
@@ -437,7 +466,12 @@ function buildReadArtifactTool(ctx: TeamMcpContext) {
         if (!res.ok) {
           return textResult(res.message ?? `Could not read artifact "${input.ref}".`, true)
         }
-        const ownerLabel = res.owner ? ` (produced by ${res.owner})` : ''
+        // The reader asked for a ref; this is where it learns whose file it got.
+        const ownerLabel = res.producer
+          ? ` (produced by ${res.producer}${res.owner ? `, on ${res.owner}\u2019s machine` : ''})`
+          : res.owner
+            ? ` (produced on ${res.owner}\u2019s machine)`
+            : ''
         const truncNote = res.truncated
           ? `\n\n[Truncated: showing the first part of a ${res.bytes ?? 0}-byte file.]`
           : ''

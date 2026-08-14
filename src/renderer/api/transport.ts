@@ -466,6 +466,7 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
       'perf:snapshot': 'onPerfSnapshot',
       'perf:warning': 'onPerfWarning',
       'app:status_changed': 'onAppStatusChanged',
+      'app:list_changed': 'onAppListChanged',
       'app:activity_entry:new': 'onAppActivityEntry',
       'app:escalation:new': 'onAppEscalation',
       'app:navigate': 'onAppNavigate',

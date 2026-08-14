@@ -26,6 +26,12 @@ let previousInstanceId: string | undefined
 /** In-memory registry cache */
 let registryCache: HealthRegistry | null = null
 
+/**
+ * Entries left behind by the previous run, held in memory for one-shot cleanup.
+ * Persisting them would add a dead instance's rows to the file at every launch.
+ */
+let orphanCandidates: ProcessEntry[] = []
+
 /** Registry file path */
 function getRegistryPath(): string {
   return join(getHaloDir(), '.health-registry.json')
@@ -62,16 +68,17 @@ export function markInstanceStart(): string {
     console.warn('[Health][Registry] Failed to read previous registry:', error)
   }
 
-  // Create new registry with current instance
-  // IMPORTANT: Preserve previous processes for orphan cleanup!
-  // They have the old instanceId and will be identified as orphans by getOrphanProcesses()
+  // The file only ever describes the live instance; the previous run's entries
+  // live in memory until cleanup consumes them.
+  orphanCandidates = previousRegistry?.processes ?? []
+
   const registry: HealthRegistry = {
     version: 1,
     instanceId: currentInstanceId,
     previousInstanceId,
     startedAt: startTime,
     lastCleanExit: false,  // Will be set to true on clean shutdown
-    processes: previousRegistry?.processes ?? []  // Preserve for orphan detection
+    processes: []
   }
 
   // Ensure directory exists
@@ -235,33 +242,22 @@ export function getCurrentProcesses(): ProcessEntry[] {
 }
 
 /**
- * Get orphan processes (from previous instances)
+ * Get orphan processes (left by previous instances, cleared once handled)
  */
 export function getOrphanProcesses(): ProcessEntry[] {
-  const registry = loadRegistry()
-  if (!registry) {
-    return []
-  }
-
-  return registry.processes.filter(p => p.instanceId !== currentInstanceId)
+  return [...orphanCandidates]
 }
 
 /**
- * Remove orphan entries from registry
+ * Drop the orphan entries inherited from the previous run
  */
 export function clearOrphanEntries(): void {
-  const registry = loadRegistry()
-  if (!registry) {
+  if (orphanCandidates.length === 0) {
     return
   }
 
-  const originalCount = registry.processes.length
-  registry.processes = registry.processes.filter(p => p.instanceId === currentInstanceId)
-
-  if (registry.processes.length < originalCount) {
-    saveRegistry(registry)
-    console.log(`[Health][Registry] Cleared ${originalCount - registry.processes.length} orphan entries`)
-  }
+  console.log(`[Health][Registry] Cleared ${orphanCandidates.length} orphan entries`)
+  orphanCandidates = []
 }
 
 /**
@@ -316,20 +312,13 @@ export function getRegistryStats(): {
   orphanProcesses: number
 } {
   const registry = loadRegistry()
-  if (!registry) {
-    return {
-      totalProcesses: 0,
-      currentProcesses: 0,
-      orphanProcesses: 0
-    }
-  }
-
-  const currentCount = registry.processes.filter(p => p.instanceId === currentInstanceId).length
-  const orphanCount = registry.processes.length - currentCount
+  const currentCount = registry
+    ? registry.processes.filter(p => p.instanceId === currentInstanceId).length
+    : 0
 
   return {
-    totalProcesses: registry.processes.length,
+    totalProcesses: currentCount + orphanCandidates.length,
     currentProcesses: currentCount,
-    orphanProcesses: orphanCount
+    orphanProcesses: orphanCandidates.length
   }
 }

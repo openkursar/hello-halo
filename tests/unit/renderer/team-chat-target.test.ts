@@ -1,10 +1,12 @@
 /**
  * Which digital human a team conversation opens onto.
  *
- * The rule has to survive two things that actually happen: you brought several
- * and expect the one you last used, and a member row outliving its app (the app
- * was uninstalled, the profile was reset) — a remembered choice that can no
- * longer answer must fall through instead of pointing the chat at nothing.
+ * This pane speaks for the digital humans on THIS machine — the lead included
+ * when it runs here, since it is then one of yours like any other. The rule has
+ * to survive two things that actually happen: you brought several and expect the
+ * one you last used, and a member row outliving its app (the app was
+ * uninstalled, the profile was reset) — a remembered choice that can no longer
+ * answer must fall through instead of pointing the chat at nothing.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -16,27 +18,23 @@ const LEAD = 'app-lead'
 
 describe('team conversation target', () => {
   it('opens onto the first one you brought when you have never chosen', () => {
-    expect(pickChatTarget(undefined, [ARCHITECT, PM], LEAD)).toBe(ARCHITECT)
+    expect(pickChatTarget(undefined, [ARCHITECT, PM])).toBe(ARCHITECT)
   })
 
   it('opens onto the one you last chose', () => {
-    expect(pickChatTarget(PM, [ARCHITECT, PM], LEAD)).toBe(PM)
+    expect(pickChatTarget(PM, [ARCHITECT, PM])).toBe(PM)
   })
 
   it('falls through when the one you chose can no longer answer', () => {
-    expect(pickChatTarget(PM, [ARCHITECT], LEAD)).toBe(ARCHITECT)
+    expect(pickChatTarget(PM, [ARCHITECT])).toBe(ARCHITECT)
   })
 
-  it('falls back to the lead only when you brought nobody', () => {
-    expect(pickChatTarget(undefined, [], LEAD)).toBe(LEAD)
-    expect(pickChatTarget(PM, [], LEAD)).toBe(LEAD)
+  it('keeps the lead when the lead is one of this machine\u2019s own', () => {
+    expect(pickChatTarget(LEAD, [LEAD, ARCHITECT])).toBe(LEAD)
   })
 
-  it('never prefers the lead over one of your own', () => {
-    expect(pickChatTarget(undefined, [ARCHITECT], LEAD)).not.toBe(LEAD)
-  })
-
-  it('reports nobody to talk to rather than guessing', () => {
-    expect(pickChatTarget(undefined, [], null)).toBeNull()
+  it('reports nobody to talk to rather than reaching for a teammate\u2019s', () => {
+    expect(pickChatTarget(undefined, [])).toBeNull()
+    expect(pickChatTarget(PM, [])).toBeNull()
   })
 })

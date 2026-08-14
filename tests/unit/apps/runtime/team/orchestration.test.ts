@@ -810,12 +810,87 @@ describe('TeamOrchestration', () => {
       expect(orch.getMemberStatus(RESEARCHER_APP)).toBe('working')
     })
 
+    it('the resume wake quotes the question it answers', async () => {
+      seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      const orch = build(deps)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'go', wait: false })
+      orch.captureReport(pendings[0].teamContext.correlationId, { kind: 'escalation', content: 'need a decision' })
+      pendings[0].resolve()
+      await flush()
+
+      orch.resumeFromEscalation({
+        teamId: TEAM_ID,
+        epochId: epoch.id,
+        appId: RESEARCHER_APP,
+        response: 'use the staging account',
+        question: 'Which test account\n\nshould I use?',
+      })
+      await flush()
+
+      // A member can owe several answers at once and they return in whatever
+      // order the person works through them: unquoted, an answer binds to the
+      // wrong question.
+      const calls = (deps.sendAppChatMessage as any).mock.calls
+      const body = calls[calls.length - 1][0].message as string
+      expect(body).toContain('You asked: "Which test account should I use?"')
+      expect(body).toContain('use the staging account')
+    })
+
     it('resumeFromEscalation returns false when the epoch is gone (no solo fallback)', () => {
       seedTeam(store, { escalationRouting: 'user' })
       const { deps } = makeSession()
       const orch = build(deps)
       const ok = orch.resumeFromEscalation({ teamId: TEAM_ID, epochId: 'missing', appId: RESEARCHER_APP, response: 'x' })
       expect(ok).toBe(false)
+    })
+  })
+
+  // ===========================================================================
+  // Member status pulse (turns the bus did not run)
+  // ===========================================================================
+
+  describe('noteMemberStatusChanged', () => {
+    it('announces every edge to the federation egress and one coalesced push to viewers', () => {
+      seedTeam(store)
+      const { deps } = makeSession()
+      const observed: string[] = []
+      bus = createMessageBus({
+        store,
+        hooks: { wakeTarget: (p) => orch.wakeTarget(p), isBusy: (k) => orch.isBusy(k) },
+      })
+      const orch = createOrchestration({
+        store,
+        bus,
+        session: deps,
+        onMemberStatusChanged: (teamId) => observed.push(teamId),
+      })
+      sendToRenderer.mockClear()
+      broadcastToAll.mockClear()
+
+      vi.useFakeTimers()
+      try {
+        // A member's status is derived, never stored, so a turn run outside the
+        // bus (a person's 1:1 chat, an IM turn) reaches viewers only through this
+        // seam. Both its edges land inside one coalescing window.
+        orch.noteMemberStatusChanged(TEAM_ID)
+        orch.noteMemberStatusChanged(TEAM_ID)
+
+        // The federation egress needs every edge (it throttles on its own side).
+        expect(observed).toEqual([TEAM_ID, TEAM_ID])
+        // The viewer push is coalesced, so a chatty team cannot storm the UI.
+        expect(sendToRenderer).not.toHaveBeenCalled()
+
+        vi.advanceTimersByTime(1000)
+        const pushed = sendToRenderer.mock.calls.filter(([channel]) => channel === 'team:updated')
+        expect(pushed).toHaveLength(1)
+        expect(pushed[0][1]).toMatchObject({ teamId: TEAM_ID })
+        expect(broadcastToAll.mock.calls.filter(([channel]) => channel === 'team:updated')).toHaveLength(1)
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 
@@ -892,16 +967,14 @@ describe('TeamOrchestration', () => {
       const orch = build(deps)
       const researcherEntry = () => buildTeamEntry(orch.buildPromptContext(TEAM_ID, RESEARCHER_APP)!)
 
-      // Turn 1: the lead asks and blocks on the reply.
-      const waited = bus.send({
-        teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher',
-        message: 'go', wait: true,
+      // Turn 1: the lead sends.
+      await bus.send({
+        teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'go',
       })
       await flush()
       const firstEntry = researcherEntry()
       const firstMessage = (deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls[0][0].message
       pendings[0].resolve('done')
-      await waited
       await flush()
 
       // Turn 2: a periodic check — a different sender (none at all).
@@ -911,12 +984,15 @@ describe('TeamOrchestration', () => {
       await flush()
 
       expect(researcherEntry()).toBe(firstEntry)
-      // The per-turn facts did not disappear — they moved into the turn input.
+      // Who started the turn did not disappear — it moved into the turn input.
       expect(firstEntry).not.toContain('This turn was started by')
-      expect(firstEntry).not.toContain('waiting for your reply')
-      expect(firstMessage).toContain('[Team message from lead — awaiting your reply]')
-      expect(firstMessage).toContain('The sender is waiting for your reply')
+      expect(firstMessage).toContain('[Team message from lead]')
       expect(firstMessage).toContain('go')
+      // No header may promise that ending the turn delivers anything: replying is
+      // an explicit team_send, and a header saying otherwise teaches members to
+      // sign off AT a colleague instead of answering them.
+      expect(firstMessage).not.toContain('awaiting your reply')
+      expect(firstMessage).not.toContain('automatically delivered')
     })
   })
 
@@ -959,7 +1035,7 @@ describe('TeamOrchestration', () => {
       const resumed = pendings.slice(1).find((p) => p.conversationId === researcherKey)
       expect(resumed).toBeTruthy()
       const resumedMessage = (deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls
-        .find((c) => c[0].conversationId === researcherKey && c[0].message.includes('answered your escalation'))
+        .find((c) => c[0].conversationId === researcherKey && c[0].message.includes('answered your question'))
       expect(resumedMessage).toBeTruthy()
     })
 

@@ -1,8 +1,8 @@
 /**
  * Location-transparent published-artifact reading — the logic behind the
  * `team_read_artifact` tool. Resolves the producing member from the team board
- * (a publishing finding's author, else the assignee of a task delivering the
- * ref as resultRef), then reads the bytes wherever they live: from this node's
+ * (a publishing finding's author, or the assignee of a task delivering the ref
+ * as resultRef), then reads the bytes wherever they live: from this node's
  * disk for a same-machine producer, or pulled on demand from the owner node for
  * a remote one (via the injected remote fetch). Text is decoded with a size
  * ceiling and a binary guard so a huge or binary file never floods the model
@@ -16,7 +16,7 @@
 
 import { readFile as fsReadFile } from 'fs/promises'
 import type { TeamStore } from '../../team'
-import { resolvePublishedArtifactAuthor } from '../../team/artifact-refs'
+import { resolvePublishedArtifact } from '../../team/artifact-refs'
 import { isRemoteMember } from '../../../../shared/apps/team-types'
 import { resolveArtifactRef } from './artifact-path'
 
@@ -35,13 +35,18 @@ export interface TeamArtifactReadResult {
   ref: string
   /** Owner display name for a remote artifact; null when produced on this machine. */
   owner?: string | null
+  /**
+   * Producing teammate's member name, local or remote. Always set on a successful
+   * read: a ref alone cannot tell the reader whose file it opened.
+   */
+  producer?: string | null
   /** Decoded text content (present when ok). */
   content?: string
   /** Raw byte size of the artifact. */
   bytes?: number
   /** True when `content` was truncated to the inline size ceiling. */
   truncated?: boolean
-  reason?: 'not-found' | 'unreachable' | 'binary' | 'unavailable' | 'error'
+  reason?: 'not-found' | 'ambiguous' | 'unreachable' | 'binary' | 'unavailable' | 'error'
   message?: string
 }
 
@@ -106,15 +111,20 @@ export type ResolveLocalArtifactBytes = (params: {
  * file (`resolveArtifactRef`, the same rule publishing enforces). Only a
  * published ref is servable, never an arbitrary path. Returns null when the
  * producer is not a local app (a remote member's file lives on its owner), the
- * ref escapes the work dir, or the file is gone. Shared by the federation
- * owner-serve path and the team reader below.
+ * ref is claimed by two members, the ref escapes the work dir, or the file is
+ * gone. Shared by the federation owner-serve path and the team reader below.
  */
 export function createLocalArtifactResolver(deps: LocalArtifactResolverDeps): ResolveLocalArtifactBytes {
   const readFile = deps.readFile ?? ((absPath: string) => fsReadFile(absPath))
   return async ({ teamId, epochId, ref }) => {
-    const authorAppId = resolvePublishedArtifactAuthor(deps.store, teamId, epochId, ref)
-    if (!authorAppId) return null
-    const workDir = deps.getWorkDirForApp(authorAppId)
+    const resolution = resolvePublishedArtifact(deps.store, teamId, epochId, ref)
+    if (resolution.kind !== 'unique') {
+      if (resolution.kind === 'ambiguous') {
+        console.warn(`${LOG_TAG} ref="${ref}" claimed by ${resolution.authorAppIds.length} members; not served`)
+      }
+      return null
+    }
+    const workDir = deps.getWorkDirForApp(resolution.authorAppId)
     if (!workDir) return null
     const resolved = resolveArtifactRef(workDir, ref)
     if (!resolved.ok) {
@@ -164,8 +174,12 @@ export function createTeamArtifactReader(deps: TeamArtifactReaderDeps): ReadTeam
   const inlineCap = deps.inlineCapBytes ?? DEFAULT_INLINE_CAP_BYTES
 
   return async ({ teamId, epochId, ref }) => {
-    const producerAppId = resolvePublishedArtifactAuthor(deps.store, teamId, epochId, ref)
-    if (!producerAppId) {
+    const members = deps.store.listMembersByTeam(teamId)
+    const nameOf = (appId: string): string =>
+      members.find((m) => m.appId === appId)?.memberName ?? 'a teammate'
+
+    const resolution = resolvePublishedArtifact(deps.store, teamId, epochId, ref)
+    if (resolution.kind === 'none') {
       return {
         ok: false,
         ref,
@@ -175,8 +189,24 @@ export function createTeamArtifactReader(deps: TeamArtifactReaderDeps): ReadTeam
           'with team_post_finding(ref, ...) or attach it to their task as resultRef, then try again.',
       }
     }
+    if (resolution.kind === 'ambiguous') {
+      // Refused rather than picked: either choice hands back a file the reader
+      // never asked for, with nothing in the result to reveal the swap.
+      const names = resolution.authorAppIds.map(nameOf).join(', ')
+      return {
+        ok: false,
+        ref,
+        reason: 'ambiguous',
+        message:
+          `More than one teammate published "${ref}" (${names}), so there is no way to tell ` +
+          'which file you mean. Ask one of them to publish theirs again under a name that is ' +
+          'theirs alone, then read that reference.',
+      }
+    }
 
-    const member = deps.store.listMembersByTeam(teamId).find((m) => m.appId === producerAppId)
+    const producerAppId = resolution.authorAppId
+    const member = members.find((m) => m.appId === producerAppId)
+    const producerName = member?.memberName ?? null
     const remote = member ? isRemoteMember(member) : false
     const ownerName = remote ? member?.ownerDisplayName ?? 'a teammate' : null
 
@@ -227,7 +257,7 @@ export function createTeamArtifactReader(deps: TeamArtifactReaderDeps): ReadTeam
     const content = Buffer.from(
       truncated ? bytes.subarray(0, utf8SafeEnd(bytes, inlineCap)) : bytes
     ).toString('utf8')
-    return { ok: true, ref, owner: ownerName, content, bytes: bytes.length, truncated }
+    return { ok: true, ref, owner: ownerName, producer: producerName, content, bytes: bytes.length, truncated }
   }
 }
 

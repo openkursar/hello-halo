@@ -127,6 +127,8 @@ interface AppsState {
   // ── Real-time Event Handlers ──────────────
   /** Called by App.tsx when app:status_changed arrives */
   handleStatusChanged: (appId: string, state: AutomationAppState) => void
+  /** Called by App.tsx when app:list_changed arrives */
+  handleListChanged: () => void
   /** Called by App.tsx when app:activity_entry:new arrives */
   handleNewActivityEntry: (appId: string, entry: ActivityEntry) => void
   /** Called by App.tsx when app:escalation:new arrives */
@@ -138,6 +140,14 @@ interface AppsState {
 // ============================================
 
 const PAGE_SIZE = 30
+
+/**
+ * One user action can install several Apps (an App plus its bundled skills, an
+ * office provisioning its lead), so the events arrive in a burst. Collapse them
+ * into a single refetch.
+ */
+const LIST_RELOAD_DELAY_MS = 200
+let listReloadTimer: ReturnType<typeof setTimeout> | null = null
 
 export const useAppsStore = create<AppsState>((set, get) => ({
   apps: [],
@@ -633,6 +643,14 @@ export const useAppsStore = create<AppsState>((set, get) => ({
         ),
       }
     })
+  },
+
+  handleListChanged: () => {
+    if (listReloadTimer) clearTimeout(listReloadTimer)
+    listReloadTimer = setTimeout(() => {
+      listReloadTimer = null
+      void get().loadApps()
+    }, LIST_RELOAD_DELAY_MS)
   },
 
   handleNewActivityEntry: (appId, entry) => {

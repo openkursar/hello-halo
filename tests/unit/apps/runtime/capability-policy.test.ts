@@ -14,7 +14,7 @@ import {
   computeDisallowedBuiltins,
   fullCapabilityPolicy,
 } from '../../../../src/shared/apps/capability-policy'
-import { filterMcpServersByPolicy } from '../../../../src/main/apps/runtime/capability-policy'
+import { filterMcpServersByPolicy, isBorrowedTeamTurn } from '../../../../src/main/apps/runtime/capability-policy'
 
 const ALL_MCP = {
   'web-search': {},
@@ -97,5 +97,32 @@ describe('MCP server injection', () => {
   it('keeps a guest away from OCR until the host allows it', () => {
     expect(filterMcpServersByPolicy(ALL_MCP, DB_MCP, {}, 'strict')).not.toHaveProperty('ocr')
     expect(filterMcpServersByPolicy(ALL_MCP, DB_MCP, { allowOcr: true }, 'strict')).toHaveProperty('ocr')
+  })
+})
+
+describe('who a delegated policy holds', () => {
+  // The limit is about what may happen on the OWNER's machine, so the question
+  // is who started the turn — not whether a person or a model typed it.
+  it('does not restrict the owner talking to their own digital human', () => {
+    // The owner's chat is delivered straight to the session and carries no kind.
+    expect(isBorrowedTeamTurn(undefined, false)).toBe(false)
+  })
+
+  it('restricts another PERSON reaching it from a different machine', () => {
+    expect(isBorrowedTeamTurn('human_message', false)).toBe(true)
+  })
+
+  it('restricts a teammate’s digital human', () => {
+    expect(isBorrowedTeamTurn('message', false)).toBe(true)
+  })
+
+  it('restricts the turns the runtime starts on the team’s behalf', () => {
+    expect(isBorrowedTeamTurn('run_start', false)).toBe(true)
+    expect(isBorrowedTeamTurn('periodic_check', false)).toBe(true)
+  })
+
+  it('leaves an IM-backed turn to the IM hardening decision', () => {
+    expect(isBorrowedTeamTurn('human_message', true)).toBe(false)
+    expect(isBorrowedTeamTurn('message', true)).toBe(false)
   })
 })
