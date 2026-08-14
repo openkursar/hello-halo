@@ -82,6 +82,7 @@ import {
   getPrimaryRegistry,
 } from '../store'
 import { startUpgradeScheduler, stopUpgradeScheduler } from '../store/upgrade.service'
+import { startAnnouncementScheduler, stopAnnouncementScheduler } from '../services/announcement.service'
 import { cleanupImChannelTempFiles } from '../apps/runtime/im-channels'
 import { registerIdleTask, startIdleDrain } from './idle-queue'
 import { seedDefaultAppIfNeeded } from '../apps/manager/seed'
@@ -185,6 +186,11 @@ async function initPlatformAndApps(): Promise<void> {
   // 6h periodic check + auto-apply for patch/minor on 'auto' strategy.
   // Surfaces 'store:upgrade-available' events for major/notify/manual.
   startUpgradeScheduler()
+
+  // ── Announcement Feed ──────────────────────────────────────────────────
+  // 6h poll of the static feed declared in product.json. No-ops when the
+  // build has no feed configured (open-source default).
+  startAnnouncementScheduler()
 
   // ── Start timer loops AFTER all wiring is complete ──────────────────────
   // This ensures no events fire before subscriptions are registered.
@@ -435,6 +441,9 @@ export async function cleanupExtendedServices(): Promise<void> {
 
   // Store: Stop upgrade scheduler before tearing down registry / app manager
   stopUpgradeScheduler()
+
+  // Announcements: stop polling the feed
+  stopAnnouncementScheduler()
 
   // Store: Shutdown registry service (before app manager)
   shutdownRegistryService()

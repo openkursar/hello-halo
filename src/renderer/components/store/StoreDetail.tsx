@@ -103,16 +103,6 @@ export function StoreDetail() {
 
   const { installedApp, updateInfo } = useStoreEntryInstallState(entry, registryId)
 
-  // Store funnel: a detail page opened, tagged with the install state.
-  useEffect(() => {
-    if (!entry) return
-    void api.trackEvent('store.detail.view', {
-      appId: entry.slug,
-      appType: entry.type,
-      installedState: updateInfo ? 'update' : installedApp ? 'installed' : 'new',
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entry?.slug])
   const { start: startUpdate, busy: updating, dialogs: updateDialogs } = useStoreUpdateFlow(
     entry,
     updateInfo,

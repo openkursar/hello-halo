@@ -8,13 +8,13 @@
  * renders here always has something to show.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { api } from '../../api'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useDiscoverPage } from '../../hooks/useDiscoverPage'
 import { useCategoryLabel } from '../../hooks/useStoreCategories'
-import type { RegistryEntry, StoreCollection, ResolvedDiscoverNode } from '../../../shared/store/store-types'
+import type { RegistryEntry, ResolvedCollection, ResolvedDiscoverNode } from '../../../shared/store/store-types'
 import { StoreCard } from './StoreCard'
 import { StoreGrid } from './StoreGrid'
 import { RankBoard, rankBoardEntries, MIN_RANK_ENTRIES } from './RankBoard'
@@ -55,7 +55,14 @@ function FeaturedGrid({ entries }: { entries: RegistryEntry[] }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
       {entries.map(entry => (
-        <FeaturedCard key={entry.slug} entry={entry} onSelect={() => selectStoreApp(entry.slug)} />
+        <FeaturedCard
+          key={entry.slug}
+          entry={entry}
+          onSelect={() => {
+            void api.trackEvent('store.card.click', { appId: entry.slug, appType: entry.type, source: 'featured' })
+            selectStoreApp(entry.slug)
+          }}
+        />
       ))}
     </div>
   )
@@ -92,14 +99,11 @@ function FeaturedCard({ entry, onSelect }: { entry: RegistryEntry; onSelect: () 
   )
 }
 
-function CollectionCard({ collection, bySlug }: { collection: StoreCollection; bySlug: Map<string, RegistryEntry> }) {
+function CollectionCard({ collection }: { collection: ResolvedCollection }) {
   const { t } = useTranslation()
   const selectStoreApp = useAppsPageStore(state => state.selectStoreApp)
   const [open, setOpen] = useState(false)
-  const previewMembers = collection.memberSlugs
-    .map(slug => bySlug.get(slug))
-    .filter((e): e is RegistryEntry => !!e)
-    .slice(0, 3)
+  const previewMembers = collection.entries.slice(0, 3)
 
   return (
     <>
@@ -125,14 +129,13 @@ function CollectionCard({ collection, bySlug }: { collection: StoreCollection; b
             ))}
           </div>
           <span className="text-xs text-muted-foreground">
-            {t('{{count}} apps', { count: collection.memberSlugs.length })}
+            {t('{{count}} apps', { count: collection.entries.length })}
           </span>
         </div>
       </button>
       {open && (
         <CollectionDialog
           collection={collection}
-          bySlug={bySlug}
           onClose={() => setOpen(false)}
           onSelect={slug => { setOpen(false); selectStoreApp(slug) }}
         />
@@ -143,19 +146,15 @@ function CollectionCard({ collection, bySlug }: { collection: StoreCollection; b
 
 function CollectionDialog({
   collection,
-  bySlug,
   onClose,
   onSelect,
 }: {
-  collection: StoreCollection
-  bySlug: Map<string, RegistryEntry>
+  collection: ResolvedCollection
   onClose: () => void
   onSelect: (slug: string) => void
 }) {
   const { t } = useTranslation()
-  const members = collection.memberSlugs
-    .map(slug => bySlug.get(slug))
-    .filter((e): e is RegistryEntry => !!e)
+  const members = collection.entries
 
   return (
     <div
@@ -187,15 +186,11 @@ function CollectionDialog({
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-4 bg-background">
-          {members.length === 0 ? (
-            <div className="text-center text-sm text-muted-foreground py-10">{t('No apps in this collection yet')}</div>
-          ) : (
-            <div className="grid grid-cols-1 gap-3">
-              {members.map(entry => (
-                <StoreCard key={entry.slug} entry={entry} source="collection" onClick={() => onSelect(entry.slug)} />
-              ))}
-            </div>
-          )}
+          <div className="grid grid-cols-1 gap-3">
+            {members.map(entry => (
+              <StoreCard key={entry.slug} entry={entry} source="collection" onClick={() => onSelect(entry.slug)} />
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -210,13 +205,11 @@ function CollectionDialog({
 function SectionBody({ node, padded }: { node: ResolvedDiscoverNode; padded?: boolean }) {
   const { t } = useTranslation()
   const locale = getCurrentLanguage()
-  const storeApps = useAppsPageStore(state => state.storeApps)
   const seedStoreApps = useAppsPageStore(state => state.seedStoreApps)
   const collections = node.collections ?? []
   const title = resolveLocaleText(node.title, locale)
   const subtitle = resolveLocaleText(node.subtitle, locale)
   const entries = node.entries ?? []
-  const bySlug = useMemo(() => new Map(storeApps.map(e => [e.slug, e])), [storeApps])
 
   // Keep the browse list in step with the catalog page that travelled with the
   // payload, so the grid and the curated sections describe the same snapshot.
@@ -243,7 +236,7 @@ function SectionBody({ node, padded }: { node: ResolvedDiscoverNode; padded?: bo
       <>
         <SectionLabel sub={subtitle}>{title ?? t('Scene Collections')}</SectionLabel>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {collections.map(c => <CollectionCard key={c.id} collection={c} bySlug={bySlug} />)}
+          {collections.map(c => <CollectionCard key={c.id} collection={c} />)}
         </div>
       </>,
     )

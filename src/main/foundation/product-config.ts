@@ -199,6 +199,19 @@ export interface ProductConfig {
   /** Browser network access policy (optional, unrestricted when omitted) */
   browserPolicy?: BrowserPolicy
   /**
+   * Announcement feed URL (optional; omitted/empty disables the feature).
+   *
+   * A plain JSON document matching `shared/types/announcement.ts`, served as a
+   * static file — deliberately not an API, so publishing is a file upload and
+   * retracting is emptying the list. Deployments usually point this at the same
+   * static host that serves the update feed.
+   *
+   * Kept separate from `updateConfig` on purpose: release notes only reach users
+   * who are behind on versions, so they cannot carry a message meant for
+   * everyone.
+   */
+  announcementsUrl?: string
+  /**
    * Enterprise service defaults (optional).
    * Pre-populates service configurations so internal users don't need manual setup.
    * Open-source builds omit this field entirely.
@@ -414,6 +427,14 @@ export function getDataFolderName(): string {
  */
 export function getServiceDefaults(): ServiceDefaults | undefined {
   return loadProductConfig().serviceDefaults
+}
+
+/**
+ * Get the announcement feed URL from product.json.
+ * Returns undefined when the feature is not configured for this build.
+ */
+export function getAnnouncementsUrl(): string | undefined {
+  return loadProductConfig().announcementsUrl?.trim() || undefined
 }
 
 /**

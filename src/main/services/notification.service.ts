@@ -19,7 +19,8 @@
 import { Notification } from 'electron'
 import { getConfig } from '../foundation/config.service'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
-import { broadcastToAll } from '../http/websocket'
+import { broadcastToAll, getAuthenticatedClientCount } from '../http/websocket'
+import type { ToastPayload } from '../../shared/types/notification'
 
 // ── Helpers ────────────────────────────────────────────
 
@@ -32,32 +33,38 @@ function isWindowFocused(): boolean {
 }
 
 /**
- * Send an in-app toast to the renderer process.
- * The renderer's NotificationToast component picks this up via the notification store.
+ * Push an in-app toast to every connected client.
+ *
+ * Delivery is dual: IPC for the Electron renderer, WebSocket for remote and
+ * mobile clients. Callers that only want the desktop window should not use
+ * this.
+ *
+ * @returns whether at least one surface received it. A closed main window with
+ * no remote clients silently drops the payload, so any caller that records the
+ * toast as delivered (announcement dedup) must gate on this.
  */
-function sendInAppToast(
-  title: string,
-  body: string,
-  options?: { appId?: string; variant?: 'default' | 'success' | 'warning' | 'error'; duration?: number }
-): void {
-  const payload = {
-    title,
-    body,
-    variant: options?.variant ?? 'default',
-    duration: options?.duration ?? 0,
-    appId: options?.appId,
+export function pushToast(payload: ToastPayload): boolean {
+  const message: ToastPayload = {
+    ...payload,
+    variant: payload.variant ?? 'default',
+    duration: payload.duration ?? 0,
   }
 
-  // 1. Send to Electron renderer via IPC (desktop)
-  const sent = sendToRenderer('notification:toast', payload)
-  console.log(`[Notification] In-app toast sent=${sent}: title="${title}"`)
+  const sentToRenderer = sendToRenderer('notification:toast', message)
 
-  // 2. Broadcast to remote/mobile WebSocket clients
+  let remoteClients = 0
   try {
-    broadcastToAll('notification:toast', payload as unknown as Record<string, unknown>)
+    broadcastToAll('notification:toast', message as unknown as Record<string, unknown>)
+    remoteClients = getAuthenticatedClientCount()
   } catch {
     // WebSocket module might not be initialized yet, ignore
   }
+
+  const delivered = sentToRenderer || remoteClients > 0
+  console.log(
+    `[Notification] In-app toast delivered=${delivered} (renderer=${sentToRenderer}, remote=${remoteClients}): title="${message.title}"`
+  )
+  return delivered
 }
 
 // ── Public API ─────────────────────────────────────────
@@ -141,10 +148,10 @@ export function notifyAppEvent(title: string, body: string, options?: AppNotific
     if (focused) {
       // Window is focused — macOS suppresses OS notifications for foreground apps.
       // Send an in-app toast instead so the user always sees it.
-      sendInAppToast(title, body, { appId: options?.appId, variant: 'default' })
+      pushToast({ title, body, appId: options?.appId })
     } else if (!Notification.isSupported()) {
       console.warn('[Notification] Notification.isSupported() = false — falling back to in-app toast')
-      sendInAppToast(title, body, { appId: options?.appId, variant: 'default' })
+      pushToast({ title, body, appId: options?.appId })
     } else {
       try {
         const mainWindow = getMainWindow()
@@ -172,7 +179,7 @@ export function notifyAppEvent(title: string, body: string, options?: AppNotific
       } catch (error) {
         console.error('[Notification] Failed to show app event notification:', error)
         // Fallback to in-app toast if OS notification fails
-        sendInAppToast(title, body, { appId: options?.appId, variant: 'default' })
+        pushToast({ title, body, appId: options?.appId })
       }
     }
   }

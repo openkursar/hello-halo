@@ -149,6 +149,11 @@
         }
       }
     },
+    "announcementsUrl": {
+      "type": "string",
+      "description": "URL of a static JSON announcement feed (see src/shared/types/announcement.ts). Polled every 6h; new entries are shown as in-app toasts. Omit or leave empty to disable. Independent of updateConfig — release notes only reach users on older versions, this reaches everyone.",
+      "examples": ["https://example.com/announcements.json"]
+    },
     "browserPolicy": {
       "type": "object",
       "description": "Browser network access policy. Controls which domains the embedded browser can navigate to. Omit for unrestricted access (default).",
