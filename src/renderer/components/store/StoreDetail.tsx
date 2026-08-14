@@ -228,7 +228,7 @@ export function StoreDetail() {
             <p className="text-xs text-muted-foreground/60 mt-1 max-w-xs">{storeDetailError}</p>
           </div>
           <button
-            onClick={() => storeSelectedSlug && void selectStoreApp(storeSelectedSlug, false, 'reload')}
+            onClick={() => storeSelectedSlug && void selectStoreApp(storeSelectedSlug)}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground border border-border/60 rounded-lg hover:bg-secondary transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" />

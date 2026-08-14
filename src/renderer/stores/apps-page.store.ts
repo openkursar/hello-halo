@@ -49,13 +49,30 @@ function storeListCacheKey(q: { category?: string; type?: string; locale?: strin
   return `${q.locale ?? ''}|${q.type ?? ''}|${q.category ?? ''}`
 }
 
+/** The slug already counted for the selection currently on screen. */
+let reportedDetailSlug: string | null = null
+
+/**
+ * A detail fetch outlives the selection that started it: without invalidating
+ * it, a slow response lands on a state the user already left, repainting the
+ * detail they backed out of and counting a view for it.
+ */
+function abandonStoreDetail(): void {
+  storeDetailRequestSeq++
+  reportedDetailSlug = null
+}
+
 /**
  * One opened detail, one event. Reported from the action rather than the view
  * because every entry point routes through here, while the view remounts on
  * things that are not an open — leaving the store tab with a detail on screen
- * and coming back used to count a second time.
+ * and coming back used to count a second time. Keyed on the slug rather than on
+ * the caller's intent so that a Retry counts the load it finally succeeds at,
+ * having counted nothing for the attempt that failed.
  */
 function reportDetailView(detail: StoreAppDetail, availableUpdates: UpdateInfo[]): void {
+  if (reportedDetailSlug === detail.entry.slug) return
+  reportedDetailSlug = detail.entry.slug
   const installedApp = findInstalledApp(detail.entry, detail.registryId, useAppsStore.getState().apps)
   const updateInfo = findEntryUpdate(installedApp, availableUpdates)
   void api.trackEvent('store.detail.view', {
@@ -189,12 +206,7 @@ interface AppsPageState {
    * never forget the reload step.
    */
   openMarketplaceFilteredBy: (type: AppType | null) => Promise<void>
-  /**
-   * `intent` separates opening a detail from re-reading one already open: a
-   * failed load's Retry re-runs this, and counting that as a second view would
-   * inflate the funnel with the user's recovery from an error.
-   */
-  selectStoreApp: (slug: string, autoInstall?: boolean, intent?: 'open' | 'reload') => Promise<void>
+  selectStoreApp: (slug: string, autoInstall?: boolean) => Promise<void>
   clearStoreSelection: () => void
   /** Consume the "open install dialog on arrival" intent set by a card's install button. */
   consumeStoreAutoInstall: () => boolean
@@ -301,30 +313,33 @@ export const useAppsPageStore = create<AppsPageState>()(
     }
   },
 
-  reset: () => set({
-    selectedAppId: null,
-    detailView: null,
-    initialAppId: null,
-    showInstallDialog: false,
-    currentTab: 'my-digital-humans',
-    imPanelOpen: true,
-    selectedImSession: null,
-    imSessions: [],
-    imSessionsAppId: null,
-    storeApps: [],
-    storeLoading: false,
-    storeError: null,
-    storeSearchQuery: '',
-    storeCategory: null,
-    storeTypeFilter: null,
-    storePage: 1,
-    storeHasMore: false,
-    storeSelectedSlug: null,
-    storeSelectedDetail: null,
-    storeDetailLoading: false,
-    storeDetailError: null,
-    availableUpdates: [],
-  }),
+  reset: () => {
+    abandonStoreDetail()
+    set({
+      selectedAppId: null,
+      detailView: null,
+      initialAppId: null,
+      showInstallDialog: false,
+      currentTab: 'my-digital-humans',
+      imPanelOpen: true,
+      selectedImSession: null,
+      imSessions: [],
+      imSessionsAppId: null,
+      storeApps: [],
+      storeLoading: false,
+      storeError: null,
+      storeSearchQuery: '',
+      storeCategory: null,
+      storeTypeFilter: null,
+      storePage: 1,
+      storeHasMore: false,
+      storeSelectedSlug: null,
+      storeSelectedDetail: null,
+      storeDetailLoading: false,
+      storeDetailError: null,
+      availableUpdates: [],
+    })
+  },
 
   // ── Store Actions ──────────────────────────
 
@@ -518,7 +533,7 @@ export const useAppsPageStore = create<AppsPageState>()(
     await get().loadStoreApps()
   },
 
-  selectStoreApp: async (slug, autoInstall = false, intent = 'open') => {
+  selectStoreApp: async (slug, autoInstall = false) => {
     const requestId = ++storeDetailRequestSeq
     set({ storeSelectedSlug: slug, storeAutoInstall: autoInstall, storeDetailLoading: true, storeSelectedDetail: null, storeDetailError: null })
     try {
@@ -528,7 +543,7 @@ export const useAppsPageStore = create<AppsPageState>()(
       if (res.success && res.data) {
         const detail = res.data as StoreAppDetail
         set({ storeSelectedDetail: detail })
-        if (intent === 'open') reportDetailView(detail, get().availableUpdates)
+        reportDetailView(detail, get().availableUpdates)
       } else {
         console.error('[AppsPageStore] selectStoreApp failed:', res.error)
         set({ storeDetailError: (res.error as string) || 'Failed to load app detail' })
@@ -542,14 +557,17 @@ export const useAppsPageStore = create<AppsPageState>()(
     }
   },
 
-  clearStoreSelection: () => set({
-    storeSelectedSlug: null,
-    storeAutoInstall: false,
-    storeSelectedDetail: null,
-    storeDetailLoading: false,
-    storeDetailError: null,
-    storeError: null,
-  }),
+  clearStoreSelection: () => {
+    abandonStoreDetail()
+    set({
+      storeSelectedSlug: null,
+      storeAutoInstall: false,
+      storeSelectedDetail: null,
+      storeDetailLoading: false,
+      storeDetailError: null,
+      storeError: null,
+    })
+  },
 
   consumeStoreAutoInstall: () => {
     if (!get().storeAutoInstall) return false
@@ -560,6 +578,7 @@ export const useAppsPageStore = create<AppsPageState>()(
   openStorePublish: (type, appId) => {
     // Surface the store tab's header (which owns the publish dialog): leave any
     // detail/mine sub-view so StoreHeader renders and can consume the intent.
+    abandonStoreDetail()
     set({
       currentTab: 'store',
       storeMineOpen: false,

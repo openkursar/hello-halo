@@ -130,18 +130,17 @@ export function StoreMine() {
     else showToast({ title: res.error || t('Take down failed. Please try again.'), variant: 'error', duration: 4000 })
   }, [load, showConfirm, showToast, t])
 
-  // Reported like any other card click, tagged `mine` so the browse funnel can
-  // exclude it at query time. Emitting it keeps click ≥ view true everywhere,
-  // which is what makes an inverted ratio readable as a missing event rather
-  // than as a surface that was never instrumented.
+  // Tagged `mine` so the browse funnel can exclude it: an author reopening their
+  // own publication is not catalog traffic, but it does open a detail, so it has
+  // to be emitted for the click and view sides to cover the same openings.
   //
   // A publication carries no type once it leaves the public index — which is
-  // exactly the taken-down state this page exists to show — so the dimension
-  // says so rather than arriving empty and reading as a gap in the pipeline.
+  // exactly the taken-down state this page exists to show. The dimension is left
+  // off there rather than filled with a value that is not an app type.
   const openDetail = useCallback((pub: MyPublication) => {
     void api.trackEvent('store.card.click', {
       appId: pub.slug,
-      appType: pub.type ?? 'unlisted',
+      ...(pub.type ? { appType: pub.type } : {}),
       source: 'mine',
     })
     void selectStoreApp(pub.slug)
