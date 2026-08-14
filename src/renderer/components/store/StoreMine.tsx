@@ -130,9 +130,10 @@ export function StoreMine() {
     else showToast({ title: res.error || t('Take down failed. Please try again.'), variant: 'error', duration: 4000 })
   }, [load, showConfirm, showToast, t])
 
-  // Tagged `mine` so the browse funnel can exclude it: an author reopening their
-  // own publication is not catalog traffic, but it does open a detail, so it has
-  // to be emitted for the click and view sides to cover the same openings.
+  // Emitted so that every opened detail has a click behind it. `source` records
+  // that this one is an author reopening their own publication rather than
+  // catalog traffic; nothing splits the funnel on it today, so these clicks do
+  // count towards the store-wide click rate.
   //
   // A publication carries no type once it leaves the public index — which is
   // exactly the taken-down state this page exists to show. The dimension is left

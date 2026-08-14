@@ -13,9 +13,6 @@ vi.mock('../../../src/renderer/api', () => ({
   api: {
     trackEvent,
     storeGetAppDetail: (slug: string) => storeGetAppDetail(slug),
-    storeList: vi.fn(),
-    storeInstall: vi.fn(),
-    imSessionsList: vi.fn(),
   },
 }))
 
@@ -69,15 +66,6 @@ describe('store detail view telemetry', () => {
     expect(viewedSlugs()).toEqual(['alpha'])
   })
 
-  it('counts one view when an already-loaded detail is re-read', async () => {
-    storeGetAppDetail.mockResolvedValue(detailOf('alpha'))
-
-    await useAppsPageStore.getState().selectStoreApp('alpha')
-    await useAppsPageStore.getState().selectStoreApp('alpha')
-
-    expect(viewedSlugs()).toEqual(['alpha'])
-  })
-
   it('counts again when the app is reopened after leaving the detail', async () => {
     storeGetAppDetail.mockResolvedValue(detailOf('alpha'))
 
@@ -99,5 +87,20 @@ describe('store detail view telemetry', () => {
 
     expect(viewedSlugs()).toEqual([])
     expect(useAppsPageStore.getState().storeSelectedDetail).toBeNull()
+  })
+
+  it('leaves the loading flag to the newer request when a superseded one returns', async () => {
+    let releaseFirst: (value: unknown) => void = () => {}
+    storeGetAppDetail
+      .mockReturnValueOnce(new Promise(resolve => { releaseFirst = resolve }))
+      .mockReturnValueOnce(new Promise(() => {}))
+
+    const superseded = useAppsPageStore.getState().selectStoreApp('alpha')
+    void useAppsPageStore.getState().selectStoreApp('beta')
+    releaseFirst(detailOf('alpha'))
+    await superseded
+
+    expect(viewedSlugs()).toEqual([])
+    expect(useAppsPageStore.getState().storeDetailLoading).toBe(true)
   })
 })

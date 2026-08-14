@@ -49,9 +49,6 @@ function storeListCacheKey(q: { category?: string; type?: string; locale?: strin
   return `${q.locale ?? ''}|${q.type ?? ''}|${q.category ?? ''}`
 }
 
-/** The slug already counted for the selection currently on screen. */
-let reportedDetailSlug: string | null = null
-
 /**
  * A detail fetch outlives the selection that started it: without invalidating
  * it, a slow response lands on a state the user already left, repainting the
@@ -59,20 +56,14 @@ let reportedDetailSlug: string | null = null
  */
 function abandonStoreDetail(): void {
   storeDetailRequestSeq++
-  reportedDetailSlug = null
 }
 
 /**
- * One opened detail, one event. Reported from the action rather than the view
- * because every entry point routes through here, while the view remounts on
- * things that are not an open — leaving the store tab with a detail on screen
- * and coming back used to count a second time. Keyed on the slug rather than on
- * the caller's intent so that a Retry counts the load it finally succeeds at,
- * having counted nothing for the attempt that failed.
+ * Reported from the action rather than from the detail view: every entry point
+ * routes through here, while the view also remounts on things that are not an
+ * open, such as leaving the store tab with a detail on screen and coming back.
  */
 function reportDetailView(detail: StoreAppDetail, availableUpdates: UpdateInfo[]): void {
-  if (reportedDetailSlug === detail.entry.slug) return
-  reportedDetailSlug = detail.entry.slug
   const installedApp = findInstalledApp(detail.entry, detail.registryId, useAppsStore.getState().apps)
   const updateInfo = findEntryUpdate(installedApp, availableUpdates)
   void api.trackEvent('store.detail.view', {
@@ -553,7 +544,9 @@ export const useAppsPageStore = create<AppsPageState>()(
       console.error('[AppsPageStore] selectStoreApp error:', err)
       set({ storeDetailError: 'Failed to load app detail' })
     } finally {
-      set({ storeDetailLoading: false })
+      // A superseded response must not clear the flag its successor is still
+      // waiting on, or the detail renders as not-found until that one lands.
+      if (requestId === storeDetailRequestSeq) set({ storeDetailLoading: false })
     }
   },
 
