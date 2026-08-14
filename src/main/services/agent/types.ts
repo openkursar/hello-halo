@@ -5,6 +5,8 @@
  * This file has no dependencies and is imported by all other agent modules.
  */
 
+import type { ReasoningEffortSetting } from '../../../shared/constants/reasoning-effort'
+
 // ============================================
 // API Credentials
 // ============================================
@@ -23,6 +25,11 @@ export interface ResolvedModelCapabilities {
   maxOutputTokens: number
   /** Effective context window for the model (preset merged with user override) */
   contextWindow: number
+  /**
+   * How hard the model should think while Deep Thinking is on, as set by the
+   * user in Model Config. `undefined` = use Halo's default level.
+   */
+  reasoningEffort?: ReasoningEffortSetting
 }
 
 /**
@@ -121,7 +128,7 @@ export interface AgentRequest {
   message: string
   resumeSessionId?: string
   images?: ImageAttachment[]  // Optional images for multi-modal messages
-  thinkingEnabled?: boolean   // Enable extended thinking mode (maxThinkingTokens: 10240)
+  thinkingEnabled?: boolean   // Enable extended thinking; depth comes from the model's reasoning effort
   model?: string              // Model to use (for future model switching)
   canvasContext?: CanvasContext  // Current canvas state for AI awareness
   knowledgeBaseId?: string         // When set, run as a "chat with this knowledge base" turn:

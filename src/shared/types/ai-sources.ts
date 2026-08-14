@@ -17,6 +17,7 @@
 
 import { v4 as uuidv4 } from 'uuid'
 import type { ModelCapabilityOverride } from './model-capabilities'
+import type { ReasoningEffortSetting } from '../constants/reasoning-effort'
 
 // ============================================================================
 // Localization Utilities
@@ -358,6 +359,13 @@ export interface BackendRequestConfig {
    * blacklist/keyword heuristic (`supportsVisionById`).
    */
   visionOverride?: boolean
+  /**
+   * Reasoning effort the user set for this model in Settings > Provider >
+   * Model Config. Forwarded to the OpenAI-compat converters, which shape it
+   * into the upstream's own effort field. `undefined` = the converter infers
+   * the level from the request's thinking budget.
+   */
+  reasoningEffort?: ReasoningEffortSetting
 }
 
 // ============================================================================

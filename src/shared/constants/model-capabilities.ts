@@ -9,6 +9,8 @@
  *     correct output-length parameter (`max_completion_tokens` for reasoning
  *     models, `max_tokens` otherwise). OpenAI rejects `max_tokens` on the
  *     o1/o3/o4-mini and gpt-5-thinking families with HTTP 400.
+ *   - Reasoning effort ladders: which effort levels an upstream accepts, and
+ *     how it is told to stop thinking.
  *
  * Resolution order (vision):
  *   1. Explicit ModelOption.supportsVision (provider-declared) — highest priority
@@ -18,6 +20,7 @@
  */
 
 import type { ModelOption } from '../types/ai-sources'
+import type { ReasoningEffortLevel } from './reasoning-effort'
 
 /**
  * Known non-vision model patterns (blacklist).
@@ -134,4 +137,58 @@ export function isReasoningModelById(modelId: string | undefined | null): boolea
     const next = lower[prefix.length]
     return next === undefined || next === '-' || next === '.'
   })
+}
+
+/** How an upstream expresses reasoning effort on the OpenAI-compatible wire. */
+export interface ReasoningEffortProfile {
+  /** Levels this upstream accepts. An inferred level outside it clamps down. */
+  levels: readonly ReasoningEffortLevel[]
+  /**
+   * Wire value that stops the model from thinking. Absent means the field is
+   * omitted instead, which is how most upstreams are told not to think.
+   */
+  disableValue?: string
+}
+
+/**
+ * Ladder assumed for a model with no entry below: the narrow set every
+ * OpenAI-compatible endpoint has always accepted.
+ *
+ * Halo only picks a level itself when the user declared none, and guessing
+ * `max` at an endpoint that never heard of it turns a working conversation
+ * into an HTTP 400. A user who knows their upstream accepts more sets the
+ * level in Model Config, which bypasses this ladder.
+ */
+const DEFAULT_REASONING_EFFORT_PROFILE: ReasoningEffortProfile = {
+  levels: ['low', 'medium', 'high']
+}
+
+/**
+ * Upstreams that deviate from {@link DEFAULT_REASONING_EFFORT_PROFILE}.
+ * Matched like the vision blacklist — lowercase substring, so proxy-prefixed
+ * ids (`Pro/zai-org/GLM-5`) still resolve. First match wins.
+ *
+ * Deliberately short: an entry here is a claim about a specific upstream's API,
+ * and a wrong claim fails as an HTTP 400 the user cannot act on.
+ */
+const REASONING_EFFORT_PROFILES: ReadonlyArray<{
+  pattern: string
+  profile: ReasoningEffortProfile
+}> = [
+  // GLM-5 reasons by default, so omitting the field leaves it thinking; it
+  // takes an explicit value to stop.
+  { pattern: 'glm-5', profile: { levels: ['low', 'medium', 'high'], disableValue: 'none' } },
+]
+
+/**
+ * Effort profile for a wire model id. Used by the openai-compat router, where
+ * only the request body's `model` string is available.
+ */
+export function reasoningEffortProfileById(
+  modelId: string | undefined | null
+): ReasoningEffortProfile {
+  if (!modelId) return DEFAULT_REASONING_EFFORT_PROFILE
+  const lower = modelId.toLowerCase()
+  return REASONING_EFFORT_PROFILES.find((entry) => lower.includes(entry.pattern))?.profile
+    ?? DEFAULT_REASONING_EFFORT_PROFILE
 }

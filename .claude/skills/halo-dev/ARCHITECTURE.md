@@ -131,7 +131,10 @@ src/
 ├── shared/                            # Cross-process types, constants, protocols
 │   ├── types/                         # ai-sources, artifact, health, notification-channels
 │   ├── apps/                          # app-types, spec-types
-│   └── constants/                     # providers, ignore-patterns
+│   └── constants/                     # providers, ignore-patterns, display-scale,
+│                                      #   model-capabilities (wire-id → capability
+│                                      #   inference), model-runtime-limits,
+│                                      #   reasoning-effort
 │
 ├── preload/
 │   └── index.ts                       # Exposes HaloAPI to renderer (source of truth for IPC)

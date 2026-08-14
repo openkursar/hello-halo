@@ -41,6 +41,7 @@ import { getImSessionRegistry } from './im-session-registry'
 import { autoSyncRunResult } from './im-auto-sync'
 import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getWorkingDir, getMcpServersForRequires } from '../../services/agent/helpers'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
+import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { getOrCreateV2Session } from '../../services/agent/session-manager'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
@@ -464,7 +465,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // back by polling (see DESIGN.md §2.10), which is enough to watch a run's steps.
     sdkOptions.includePartialMessages = false
     // Enable extended thinking for automation runs (same as interactive chat)
-    sdkOptions.maxThinkingTokens = 10240
+    applyReasoningEffort(sdkOptions, true, resolvedCreds.capabilities)
 
     const mcpServerNames = sdkOptions.mcpServers ? Object.keys(sdkOptions.mcpServers) : []
     console.log(
@@ -472,7 +473,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       `promptLen=${systemPrompt.length}, maxTurns=${sdkOptions.maxTurns}, ` +
       `mcpServers=[${mcpServerNames.join(', ')}], aiBrowser=${usesAIBrowser}, email=${usesEmail}`
     )
-    console.debug(`[Runtime][${runTag}] SDK options: model=${sdkOptions.model}, allowedTools=${(sdkOptions.allowedTools || []).length}, disallowedTools=${(sdkOptions.disallowedTools || []).length}, maxThinkingTokens=${sdkOptions.maxThinkingTokens}`)
+    console.debug(`[Runtime][${runTag}] SDK options: model=${sdkOptions.model}, allowedTools=${(sdkOptions.allowedTools || []).length}, disallowedTools=${(sdkOptions.disallowedTools || []).length}, effort=${sdkOptions.reasoningEffort}, maxThinkingTokens=${sdkOptions.maxThinkingTokens}`)
 
     // Session creation strategy:
     //   escalation_followup / continue_followup → restore existing session via

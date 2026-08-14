@@ -45,6 +45,7 @@ import {
   buildMessageContent,
 } from './message-utils'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
+import { applyReasoningEffort } from './reasoning-effort'
 import { createConversationSink } from './conversation-sink'
 import { flushToolStats } from './stream-processor'
 import { analytics } from '../analytics/analytics.service'
@@ -171,9 +172,9 @@ export async function sendMessage(
     })
 
     // Apply dynamic configurations (Thinking mode)
-    if (thinkingEnabled) {
-      sdkOptions.maxThinkingTokens = 10240
-    }
+    const thinkingBudget = applyReasoningEffort(
+      sdkOptions, thinkingEnabled, resolvedCredentials.capabilities
+    )
 
     const t0 = Date.now()
     console.log(`[Agent][${conversationId}] Getting or creating V2 session...`)
@@ -206,7 +207,7 @@ export async function sendMessage(
     // transcript on every call, polluting context and surfacing in the chat UI.
     try {
       if (v2Session.setMaxThinkingTokens) {
-        await v2Session.setMaxThinkingTokens(thinkingEnabled ? 10240 : null)
+        await v2Session.setMaxThinkingTokens(thinkingBudget)
       }
     } catch (e) {
       console.error(`[Agent][${conversationId}] Failed to set dynamic params:`, e)

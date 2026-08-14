@@ -22,6 +22,7 @@
 import path from 'path'
 import { mkdirSync } from 'fs'
 import { getApiCredentials, credentialsToBackendConfig } from '../helpers'
+import { resolveCodexReasoningEffort } from '../reasoning-effort'
 import { getConfig, getHaloDir } from '../../../foundation/config.service'
 import { getCleanUserEnv } from '../sdk-config'
 import { ensureOpenAICompatRouter, encodeBackendConfig } from '../../../openai-compat-router'
@@ -40,6 +41,12 @@ export interface CodexResolvedOptions {
   displayModel: string
   /** thread/start parameters. */
   threadParams: ThreadStartParams
+  /**
+   * Codex effort level this session thinks at, already clamped to Codex's
+   * ladder. Kept alongside `threadParams` so a mid-session thinking toggle can
+   * restore it without deriving a level from a token budget.
+   */
+  reasoningEffort: string
   /** MCP servers (used by the event normalizer to populate system.init.tools). */
   mcpServers: Record<string, any>
   /** Local bridge for SDK-backed MCP servers. Owned by CodexAppServerSession. */
@@ -77,7 +84,12 @@ export async function resolveCodexOptions(sdkOptions: Record<string, any>): Prom
   // in `env`, not in `config.env`.
   const preparedMcp = await prepareCodexMcpServers(sdkOptions.mcpServers)
   try {
-    const { config, processEnvAdditions } = await buildThreadConfig(sdkOptions, credentials, preparedMcp.mcpServers)
+    // Absent for sessions that never carry a turn, such as the connectivity
+    // check in api-validator.service.
+    const reasoningEffort = resolveCodexReasoningEffort(sdkOptions.reasoningEffort ?? 'off')
+    const { config, processEnvAdditions } = await buildThreadConfig(
+      sdkOptions, credentials, preparedMcp.mcpServers, reasoningEffort
+    )
     const env = await buildCodexEnv(sdkOptions, credentials, processEnvAdditions)
 
     const threadParams: ThreadStartParams = {
@@ -94,6 +106,7 @@ export async function resolveCodexOptions(sdkOptions: Record<string, any>): Prom
       model,
       displayModel: credentials.displayModel || credentials.model || model,
       threadParams,
+      reasoningEffort,
       mcpServers: pickInjectedMcpServers(sdkOptions.mcpServers || {}, preparedMcp.injectedServerNames),
       mcpBridge: preparedMcp.bridge,
       // Default to true to match Halo's chat path (sdk-config.ts sets it
@@ -198,9 +211,10 @@ async function buildThreadConfig(
   sdkOptions: Record<string, any>,
   credentials: ApiCredentials,
   codexMcpServers: Record<string, unknown>,
+  reasoningEffort: string,
 ): Promise<BuiltThreadConfig> {
   const config: Record<string, unknown> = {
-    model_reasoning_effort: sdkOptions.maxThinkingTokens ? 'high' : 'medium',
+    model_reasoning_effort: reasoningEffort,
     sandbox_workspace_write: { network_access: true },
     hide_agent_reasoning: false,
     show_raw_agent_reasoning: false,

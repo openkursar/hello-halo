@@ -31,6 +31,7 @@ import { purgeStaleMcpOAuth } from './mcp-auth-state'
 import { emitAgentEvent } from './events'
 import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../health'
 import { resolveCredentialsForSdk, buildBaseSdkOptions, computeCredentialsFingerprint, computeSessionInputsFingerprint } from './sdk-config'
+import { applySessionReasoningEffort } from './reasoning-effort'
 import { startConsumer, type ConsumerHandle, type ConsumerContext } from './session-consumer'
 import { createConversationSink } from './conversation-sink'
 import { hasActiveTeamTasks } from './subagent-handler'
@@ -974,6 +975,8 @@ export async function ensureSessionWarm(
     digitalHumansEnabled,
     toolsetIndex: buildToolsetSection(spaceId, conversationId),
   })
+
+  applySessionReasoningEffort(sdkOptions, resolvedCredentials.capabilities)
 
   try {
     const session = await getOrCreateV2Session(

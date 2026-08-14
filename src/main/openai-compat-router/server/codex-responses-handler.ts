@@ -729,7 +729,10 @@ export async function handleResponsesRequest(
       `tool_uses=${assistantToolUseTotal} tool_results=${userToolResults} parallel_call_turns=${assistantParallelTurns}`,
   )
   const requestToSend = { ...anthropicRequest, stream: codexRequest.stream === true }
-  const convertOptions = { visionOverride: config.visionOverride }
+  const convertOptions = {
+    visionOverride: config.visionOverride,
+    reasoningEffort: config.reasoningEffort
+  }
   const openaiRequest = apiType === 'responses'
     ? convertAnthropicToOpenAIResponses(requestToSend, convertOptions).request
     : convertAnthropicToOpenAIChat(requestToSend, convertOptions).request

@@ -202,8 +202,11 @@ export interface OpenAIChatRequest {
   top_logprobs?: number
 
   // Extended - Reasoning effort (top-level string per OpenAI Chat Completions spec)
+  // Left as a free string: the accepted levels differ per provider and per
+  // model (`none`/`minimal`/`xhigh`/`max` all exist somewhere), and values
+  // Halo does not recognize are forwarded untouched.
   // @see https://platform.openai.com/docs/api-reference/chat/create#reasoning_effort
-  reasoning_effort?: 'low' | 'medium' | 'high'
+  reasoning_effort?: string
 }
 
 // ============================================================================

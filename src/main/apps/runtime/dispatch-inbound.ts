@@ -830,6 +830,10 @@ export async function dispatchInboundMessage(
       senderIdentity,
       imSession,
 
+      // IM has no Deep Thinking toggle, so replies take the same extended
+      // thinking this digital human's scheduled runs get.
+      thinkingEnabled: true,
+
       // Relay origin for pushes this run makes. Captured from the raw inbound
       // body (assembled text carries runtime tags and, after a relay was
       // consumed, the previous hop's block). The subject is set for group chats

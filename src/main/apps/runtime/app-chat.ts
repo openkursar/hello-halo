@@ -43,6 +43,7 @@ import {
 } from '../../services/agent/helpers'
 import { emitAgentEvent } from '../../services/agent/events'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
+import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { createCanUseTool } from '../../services/agent/permission-handler'
 import { getImPermissionContext } from './im-permission-registry'
 import type { GuestPolicy } from '../../../shared/types/im-channel'
@@ -570,6 +571,8 @@ export async function sendAppChatMessage(
     mcpServers,
   })
 
+  const thinkingBudget = applyReasoningEffort(sdkOptions, thinkingEnabled, resolvedCreds.capabilities)
+
   // Override for app chat context
   sdkOptions.systemPrompt = systemPrompt
 
@@ -676,7 +679,7 @@ export async function sendAppChatMessage(
     // Set thinking tokens dynamically
     if (typeof v2Session.setMaxThinkingTokens === 'function') {
       try {
-        await v2Session.setMaxThinkingTokens(thinkingEnabled ? 10240 : null)
+        await v2Session.setMaxThinkingTokens(thinkingBudget)
       } catch (e) {
         console.error(`[AppChat][${appId}] Failed to set thinking tokens:`, e)
       }
