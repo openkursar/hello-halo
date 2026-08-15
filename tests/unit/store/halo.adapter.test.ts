@@ -105,11 +105,52 @@ describe('HaloAdapter', () => {
     })
 
     const adapter = new HaloAdapter()
-    const index = await adapter.fetchIndex(MOCK_SOURCE)
+    const { index } = await adapter.fetchIndex(MOCK_SOURCE)
 
     expect(index.apps).toHaveLength(1)
     expect(index.apps[0].slug).toBe('alice/hello')
     expect(index.apps[0].format).toBe('bundle')
+  })
+
+  it('revalidates with stored ETags and reports no change on 304', async () => {
+    // Every part unchanged means the caller can leave stored rows alone; the
+    // adapter must say so rather than returning an empty index.
+    const seen: Record<string, string | null> = {}
+    ;(globalThis as { fetch: typeof fetch }).fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const headers = new Headers(init?.headers)
+      seen[url] = headers.get('If-None-Match')
+      return new Response(null, { status: 304 })
+    }) as unknown as typeof fetch
+
+    const adapter = new HaloAdapter()
+    const stored = {
+      'digital-humans.json': '"dh1"',
+      'skills.json': '"sk1"',
+      'mcps.json': '"mcp1"',
+    }
+    const result = await adapter.fetchIndex(MOCK_SOURCE, stored)
+
+    expect(result.index).toBeNull()
+    expect(result.validators).toEqual(stored)
+    expect(seen['http://example.test/skills.json']).toBe('"sk1"')
+  })
+
+  it('records the ETags the server returns so the next sync can revalidate', async () => {
+    ;(globalThis as { fetch: typeof fetch }).fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const body = url.endsWith('skills.json') ? envelope([baseEntry()]) : envelope([])
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ETag: `"v-${url.split('/').pop()}"` },
+      })
+    }) as unknown as typeof fetch
+
+    const adapter = new HaloAdapter()
+    const { index, validators } = await adapter.fetchIndex(MOCK_SOURCE)
+
+    expect(index?.apps).toHaveLength(1)
+    expect(validators['skills.json']).toBe('"v-skills.json"')
   })
 
   it('accepts split index responses that include format:bundle (current server)', async () => {
@@ -121,7 +162,7 @@ describe('HaloAdapter', () => {
     })
 
     const adapter = new HaloAdapter()
-    const index = await adapter.fetchIndex(MOCK_SOURCE)
+    const { index } = await adapter.fetchIndex(MOCK_SOURCE)
 
     expect(index.apps).toHaveLength(1)
     expect(index.apps[0].format).toBe('bundle')

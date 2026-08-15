@@ -7,8 +7,12 @@
  * toolset in the system prompt) regardless of how many toolsets exist.
  */
 
-/** Who triggered a toolset open/close */
-export type ToolsetOpener = 'user' | 'ai' | 'restore'
+/**
+ * Who triggered a toolset open/close. 'system' marks an automatic open by the
+ * runtime itself (e.g. the non-vision image fallback opening OCR) — distinct
+ * from 'ai', which never opens directly and only requests.
+ */
+export type ToolsetOpener = 'user' | 'ai' | 'restore' | 'system'
 
 /** Per-session scope passed to toolset server factories */
 export interface ToolsetScope {

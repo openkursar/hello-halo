@@ -16,6 +16,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { app } from 'electron'
 import { type AuthProviderConfig } from '../../shared/types'
+import type { CategoryTaxonomy, RegistrySource } from '../../shared/store/store-types'
 
 // AuthProviderConfig is defined in src/shared/types/ai-sources.ts so the main
 // loader and the renderer setup UI share one source of truth. Re-exported here
@@ -72,8 +73,12 @@ export interface BrowserPolicy {
  * properties without touching source code. Only declared fields are applied;
  * omitted fields retain their built-in defaults.
  *
- * - `url`     — replace the registry endpoint (e.g. point to an internal mirror)
- * - `name`    — replace the display name shown in the Store UI
+ * - `url`        — replace the registry endpoint (e.g. point to an internal mirror)
+ * - `name`       — replace the display name shown in the Store UI
+ * - `sourceType` — replace the protocol driver. A deployment that redirects a
+ *                  built-in source to its own server declares the server's
+ *                  protocol here; omitting it leaves the built-in default, so
+ *                  the backend surface stays dark.
  * - `enabled` — force-enable or force-disable the registry on every startup;
  *               overrides the user's manual toggle in Settings. The entry
  *               is still visible in the registry list, just locked.
@@ -88,6 +93,7 @@ export interface BrowserPolicy {
 export interface RegistryOverride {
   url?: string
   name?: string
+  sourceType?: RegistrySource['sourceType']
   enabled?: boolean
   hidden?: boolean
   /**
@@ -158,6 +164,19 @@ export interface ImChannelsProductConfig {
   permissionControl?: ImChannelsPermissionDefaults
 }
 
+/**
+ * Store section of product.json.
+ *
+ * `categories` is the no-server scene-category enumeration: a deployment
+ * without a store server (which would otherwise own the enum) can
+ * still customize categories here without forking. It is the middle tier of
+ * the resolution chain `server ?? product.json ?? built-in`; a build that
+ * omits it falls back to the built-in community set.
+ */
+export interface StoreProductConfig {
+  categories?: CategoryTaxonomy
+}
+
 // ============================================
 // Product Configuration
 // ============================================
@@ -179,6 +198,19 @@ export interface ProductConfig {
   updateConfig?: UpdateConfig
   /** Browser network access policy (optional, unrestricted when omitted) */
   browserPolicy?: BrowserPolicy
+  /**
+   * Announcement feed URL (optional; omitted/empty disables the feature).
+   *
+   * A plain JSON document matching `shared/types/announcement.ts`, served as a
+   * static file — deliberately not an API, so publishing is a file upload and
+   * retracting is emptying the list. Deployments usually point this at the same
+   * static host that serves the update feed.
+   *
+   * Kept separate from `updateConfig` on purpose: release notes only reach users
+   * who are behind on versions, so they cannot carry a message meant for
+   * everyone.
+   */
+  announcementsUrl?: string
   /**
    * Enterprise service defaults (optional).
    * Pre-populates service configurations so internal users don't need manual setup.
@@ -215,6 +247,27 @@ export interface ProductConfig {
    * Open-source builds omit this (no restrictions by default).
    */
   imChannels?: ImChannelsProductConfig
+
+  /**
+   * Store configuration (optional).
+   *
+   * Holds the no-server scene-category enumeration. Open-source/community
+   * builds omit this and fall back to the built-in category set.
+   */
+  store?: StoreProductConfig
+
+  /**
+   * Store creator-identity provider (optional).
+   *
+   * Declares which AI-source provider type supplies the authoritative user
+   * identity used for publish attribution and "my publications" (e.g.
+   * "halo-cloud"). The store reads the signed-in token of this provider
+   * and forwards it to an identity-bound store server. Omitted → no account
+   * binding; the store falls back to whatever the server advertises ('shared'
+   * or 'none'). The generic core references only this field, never a specific
+   * provider.
+   */
+  identityProvider?: string
 
   /**
    * Identity source for telemetry (optional).
@@ -314,10 +367,18 @@ let productConfigPath: string | null = null
  * In development, product.json is in project root; in production it lives
  * inside app.asar. `app.getAppPath()` resolves to the right base in both
  * cases, so a single join handles both.
+ *
+ * A `product.local.json` next to it takes precedence in unpackaged builds so a
+ * developer can point at local services without editing the packaged
+ * product.json (which electron-builder generates). It never applies once packaged.
  */
 export function getProductConfigPath(): string {
   if (productConfigPath) return productConfigPath
-  productConfigPath = join(app.getAppPath(), 'product.json')
+  const base = app.getAppPath()
+  const localPath = join(base, 'product.local.json')
+  productConfigPath = !app.isPackaged && existsSync(localPath)
+    ? localPath
+    : join(base, 'product.json')
   return productConfigPath
 }
 
@@ -369,6 +430,14 @@ export function getServiceDefaults(): ServiceDefaults | undefined {
 }
 
 /**
+ * Get the announcement feed URL from product.json.
+ * Returns undefined when the feature is not configured for this build.
+ */
+export function getAnnouncementsUrl(): string | undefined {
+  return loadProductConfig().announcementsUrl?.trim() || undefined
+}
+
+/**
  * Get IM channel permission defaults from product.json.
  * Returns undefined when no defaults are configured (open-source/personal builds).
  */
@@ -383,6 +452,24 @@ export function getImChannelsPermissionDefaults(): ImChannelsPermissionDefaults 
  */
 export function getIdentitySource(): string | undefined {
   return loadProductConfig().identitySource
+}
+
+/**
+ * Get the store scene-category enumeration from product.json.
+ * Returns undefined when not configured — the taxonomy resolver then falls
+ * back to the built-in community set. Shape validation lives with the
+ * resolver (store tier), not here.
+ */
+export function getStoreCategoriesConfig(): CategoryTaxonomy | undefined {
+  return loadProductConfig().store?.categories
+}
+
+/**
+ * Get the declared store identity provider type from product.json.
+ * Returns undefined when no identity binding is configured (anonymous builds).
+ */
+export function getStoreIdentityProvider(): string | undefined {
+  return loadProductConfig().identityProvider
 }
 
 /**

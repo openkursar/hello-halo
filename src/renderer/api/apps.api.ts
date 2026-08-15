@@ -217,6 +217,13 @@ export const appsApi = {
     return { success: false, error: 'Not supported outside Electron' }
   },
 
+  appDeriveSkillCommandName: async (name: string): Promise<ApiResponse<string>> => {
+    if (isElectron()) {
+      return window.halo.appDeriveSkillCommandName(name)
+    }
+    return httpRequest('GET', `/api/skills/command-name?name=${encodeURIComponent(name)}`)
+  },
+
   appGetDataPath: async (appId: string): Promise<ApiResponse<{ path: string }>> => {
     if (isElectron()) {
       return window.halo.appGetDataPath(appId)
@@ -257,7 +264,7 @@ export const appsApi = {
   // App Chat
   // conversationId addresses a specific native/local session; omit for the app's
   // native default session.
-  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean; conversationId?: string }): Promise<ApiResponse<{ conversationId: string }>> => {
+  appChatSend: async (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; mediaType: string; data: string; name?: string }>; thinkingEnabled?: boolean; conversationId?: string }): Promise<ApiResponse<{ conversationId: string }>> => {
     // Subscribe to agent events so remote/Capacitor clients receive streaming updates.
     // The view also subscribes on mount (via useRemoteSubscription), but the API-level
     // subscription mirrors sendMessage's pattern and ensures coverage if the API is

@@ -23,6 +23,7 @@
 | External message injection | `inject-message.ts` | Entry point for IM inbound / programmatic triggers to push messages into a session. |
 | Session control | `control.ts` | Interrupt / pause / switch-model mid-session. |
 | Outbound message composition | `send-message.ts`, `message-utils.ts` | User message assembly, attachment handling, token counting. |
+| Non-vision image fallback | `image-attachments.ts` | For models without vision: persists pasted images into the space's `attachments/` dir (content-addressed, mirrors the conversation-dir layout) and replaces the outbound image blocks with a `<halo_attachments>` path block for the `ocr_image` tool. Vision models bypass it entirely. Broker-free by design — ensuring ocr_image is present is the caller's concern: `send-message.ts` auto-opens the OCR toolset (opener `system`, before session creation so the rebuild seeds the same turn); app chat (`apps/runtime/app-chat.ts`) seeds the OCR MCP server unconditionally. |
 | Session consumption loop | `session-consumer.ts` | Persistent per-session loop over SDK turns; dispatches into stream-processor. Surface-agnostic — see §3.1. |
 | Turn destination | `turn-sink.ts`, `conversation-sink.ts` | `TurnSink` is where a consumed turn goes (persistence + delivery). `conversation-sink.ts` is the space-chat implementation; `apps/runtime/app-chat-sink.ts` is the digital-human one. |
 | Top-level orchestration | `agents.ts`, `index.ts` | Public surface; wires everything together. |

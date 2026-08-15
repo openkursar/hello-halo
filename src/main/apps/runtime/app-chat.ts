@@ -51,6 +51,7 @@ import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../serv
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import type { BrowserContext } from '../../services/ai-browser/context'
 import { buildMessageContent } from '../../services/agent/message-utils'
+import { prepareNonVisionImageFallback } from '../../services/agent/image-attachments'
 import {
   getOrCreateV2Session,
   closeV2Session,
@@ -419,6 +420,16 @@ export async function sendAppChatMessage(
   const electronPath = getHeadlessElectronPath()
   const workDir = getWorkingDir(spaceId)
 
+  // Non-vision models can't receive image blocks: persist images to files and
+  // inject their paths for the ocr_image tool (mirrors send-message.ts). No
+  // toolset open needed — app chat seeds the OCR MCP server unconditionally
+  // at session creation.
+  const imageFallback = prepareNonVisionImageFallback({
+    scope: { spaceId, conversationId, workDir },
+    credentials,
+    images
+  })
+
   // ── 2. Build memory scope ────────────────────────────
   const memoryScope: MemoryCallerScope = {
     type: 'app',
@@ -688,10 +699,17 @@ export async function sendAppChatMessage(
     console.log(`[AppChat][${appId}] V2 session ready: ${Date.now() - t0}ms`)
 
     // ── 7. Persist the user message for reload recovery ──
-    sink.writeUserMessage(message)
+    // Original images are persisted regardless of the vision fallback — they
+    // feed the chat bubble display, not the model.
+    sink.writeUserMessage(message, images)
 
     // ── 8. Dispatch and wait for this message's turn ────
-    const messageContent = buildMessageContent(message, images)
+    // With the non-vision fallback active, image blocks are replaced by the
+    // injected attachment-paths block.
+    const messageContent = buildMessageContent(
+      (imageFallback?.contextBlock ?? '') + message,
+      imageFallback ? undefined : images
+    )
 
     // Claim the next turn for this message. Enqueued immediately before send so
     // the window in which an autonomous turn could start first — and therefore

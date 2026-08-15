@@ -28,6 +28,7 @@
 
 import type { StreamResult } from '../../services/agent/stream-processor'
 import type { TurnSink } from '../../services/agent/turn-sink'
+import type { ImageAttachment } from '../../services/agent/types'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import { parseAppChatKey } from '../../../shared/apps/im-keys'
 import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
@@ -131,8 +132,8 @@ class AppChatSink implements TurnSink {
   }
 
   /** Persist a user message to the transcript ahead of the turn it triggers. */
-  writeUserMessage(text: string): void {
-    this.getWriter()?.writeTrigger(text)
+  writeUserMessage(text: string, images?: ImageAttachment[]): void {
+    this.getWriter()?.writeTrigger(text, images)
   }
 
   // ── TurnSink ───────────────────────────────────────────

@@ -12,7 +12,7 @@
  */
 
 import type { Response as ExpressResponse } from 'express'
-import type { AnthropicRequest, BackendConfig } from '../types'
+import type { AnthropicMessageResponse, AnthropicRequest, BackendConfig } from '../types'
 import {
   convertAnthropicToOpenAIChat,
   convertAnthropicToOpenAIResponses,
@@ -25,7 +25,7 @@ import {
   streamAnthropicPassthrough,
   pipeAnthropicPassthrough
 } from '../stream'
-import { isNativeAnthropicHost, normalizeSystemPrompt } from '../utils'
+import { isNativeAnthropicHost, normalizeSystemPrompt, safeJsonParse } from '../utils'
 import { proxyFetch } from '../../services/proxy-fetch'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { runInterceptors } from '../interceptors'
@@ -322,6 +322,29 @@ function forwardResponseHeaders(upstreamResp: globalThis.Response, res: ExpressR
 }
 
 /**
+ * Fill absent/zero usage on a non-streaming passthrough body.
+ *
+ * Passthrough bodies are the upstream's own JSON, so nothing guarantees the
+ * `usage` object our converters always build. Consumers read
+ * `usage.input_tokens` unconditionally — the Claude Code SDK aborts the turn
+ * when it is missing, observed on third-party Anthropic-compatible gateways.
+ * The streaming branch already applies this fallback via BaseStreamHandler.
+ *
+ * Bodies that are not a parseable message response, and well-formed ones, are
+ * returned untouched so the passthrough stays byte-exact.
+ */
+function repairPassthroughUsage(body: string, request: AnthropicRequest): string {
+  const parsed = safeJsonParse<AnthropicMessageResponse>(body)
+  if (!parsed || parsed.type !== 'message' || !Array.isArray(parsed.content)) return body
+
+  const usage = parsed.usage
+  if (usage && usage.input_tokens && usage.output_tokens) return body
+
+  fillResponseUsageFallback(parsed, request)
+  return JSON.stringify(parsed)
+}
+
+/**
  * Handle Anthropic passthrough request — zero format conversion.
  *
  * Proxies the Anthropic request directly to the upstream Anthropic API.
@@ -456,13 +479,14 @@ async function handleAnthropicPassthrough(
       return
     }
 
-    // Non-streaming: forward JSON response as-is
+    // Non-streaming: forward the JSON response, repairing absent usage only
+    // (see repairPassthroughUsage)
     const body = await upstreamResp.text()
     if (debug) {
       console.log(`[RequestHandler] Anthropic response:\n${body.slice(0, 2000)}`)
     }
     forwardResponseHeaders(upstreamResp, res)
-    res.end(body)
+    res.end(repairPassthroughUsage(body, anthropicRequest))
   } catch (error: any) {
     if (error?.name === 'AbortError') {
       if (clientAbort.signal.aborted) {

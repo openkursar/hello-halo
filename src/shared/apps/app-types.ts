@@ -114,6 +114,9 @@ export interface InstalledApp {
    * - 'manual':  no automatic checks; user-triggered only
    */
   upgradeStrategy: UpgradeStrategy
+
+  /** Whether the one-time knowledge-base seed has already run for this App. */
+  knowledgeSeeded: boolean
 }
 
 /** User-controlled per-app upgrade strategy. */

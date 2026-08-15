@@ -60,7 +60,9 @@ import {
   resolveSources,
   resolveSourcesForReadPaths,
   getSeedKBIds,
+  seedAppKnowledgeBases,
   getKBReferenceById,
+  getKBReferencesForApp,
   getKBChatContext,
   collectIngestCandidates,
 } from '../../../../src/main/services/tlon/service'
@@ -677,6 +679,62 @@ describe('Tlon Service', () => {
       const kb = createKB({ name: 'Fence' })
       fs.writeFileSync(getKBIndexMdPath(kb.id), '```markdown\n# Inner\n```', 'utf-8')
       expect(getKBReferenceById(kb.id)?.indexContent).toBe('# Inner')
+    })
+  })
+
+  describe('seedAppKnowledgeBases', () => {
+    it('binds the same space-bound-plus-default set as getSeedKBIds', () => {
+      const bound = createKB({ name: 'Bound' })
+      const other = createKB({ name: 'Other' })
+      const def = createKB({ name: 'Default' })
+      bindToSpace(bound.id, 'space-1')
+      setDefaultKB(def.id)
+
+      seedAppKnowledgeBases('app-1', 'space-1')
+
+      expect(listKBsForApp('app-1').map(k => k.id).sort()).toEqual(getSeedKBIds('space-1').sort())
+      expect(listKBsForApp('app-1').map(k => k.id)).not.toContain(other.id)
+    })
+
+    it('seeds only the default KB for a global app (spaceId null)', () => {
+      const def = createKB({ name: 'GlobalDefault' })
+      const spaceOnly = createKB({ name: 'SpaceOnly' })
+      setDefaultKB(def.id)
+      bindToSpace(spaceOnly.id, 'space-1')
+
+      seedAppKnowledgeBases('app-global', null)
+
+      expect(listKBsForApp('app-global').map(k => k.id)).toEqual([def.id])
+    })
+
+    it('is idempotent and a no-op when no default or space-bound KB exists', () => {
+      const kb = createKB({ name: 'Unrelated' })
+      seedAppKnowledgeBases('app-empty', 'space-none')
+      expect(listKBsForApp('app-empty')).toEqual([])
+      expect(listKBsForApp('app-empty')).not.toContainEqual(expect.objectContaining({ id: kb.id }))
+
+      // Calling twice must not duplicate bindings.
+      const def = createKB({ name: 'D' })
+      setDefaultKB(def.id)
+      seedAppKnowledgeBases('app-empty', 'space-none')
+      seedAppKnowledgeBases('app-empty', 'space-none')
+      expect(listKBsForApp('app-empty').map(k => k.id)).toEqual([def.id])
+    })
+  })
+
+  describe('getKBReferencesForApp', () => {
+    it('returns only active, indexed KBs bound to the app', () => {
+      const active = createKB({ name: 'Active' })
+      const paused = createKB({ name: 'Paused' })
+      const unbound = createKB({ name: 'Unbound' })
+      bindToApp(active.id, 'app-1')
+      bindToApp(paused.id, 'app-1')
+      updateKB(paused.id, { status: 'paused' })
+
+      const refs = getKBReferencesForApp('app-1')
+      expect(refs.map(r => r.id)).toEqual([active.id])
+      expect(refs.map(r => r.id)).not.toContain(paused.id)
+      expect(refs.map(r => r.id)).not.toContain(unbound.id)
     })
   })
 

@@ -3,14 +3,20 @@
   "title": "Halo Product Configuration",
   "description": "Configuration for Halo build variants (public/internal)",
   "type": "object",
-  "required": ["name", "version", "updateConfig", "authProviders"],
+  "required": ["name", "appId", "version", "updateConfig", "authProviders"],
   "properties": {
     "$schema": {
       "type": "string"
     },
     "name": {
       "type": "string",
-      "description": "Product name"
+      "description": "Product name. Also the packaged application name (installer, .app bundle, executable), so variants that may sit side by side on one machine must not share it."
+    },
+    "appId": {
+      "type": "string",
+      "description": "Application bundle identifier (macOS CFBundleIdentifier, Windows install registry key). Variants that may sit side by side on one machine must not share it.",
+      "pattern": "^[a-zA-Z][a-zA-Z0-9-]*(\\.[a-zA-Z][a-zA-Z0-9-]*)+$",
+      "examples": ["com.halo.app", "com.halo.enterprise"]
     },
     "dataFolderName": {
       "type": "string",
@@ -142,6 +148,11 @@
           }
         }
       }
+    },
+    "announcementsUrl": {
+      "type": "string",
+      "description": "URL of a static JSON announcement feed (see src/shared/types/announcement.ts). Polled every 6h; new entries are shown as in-app toasts. Omit or leave empty to disable. Independent of updateConfig — release notes only reach users on older versions, this reaches everyone.",
+      "examples": ["https://example.com/announcements.json"]
     },
     "browserPolicy": {
       "type": "object",

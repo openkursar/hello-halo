@@ -10,7 +10,7 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { Play, Pause, RotateCcw, RefreshCw, Globe, ExternalLink, MessageSquare, Activity, Cog, ChevronRight, Share2 } from 'lucide-react'
-import Avatar from 'boring-avatars'
+import { AutomationAvatar } from './AutomationAvatar'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { AppStatusDot } from './AppStatusDot'
@@ -22,9 +22,6 @@ import { useSpaceStore } from '../../stores/space.store'
 import { useAppStore } from '../../stores/app.store'
 import { ShareCurrentAppDialog } from '../store/ShareCurrentAppDialog'
 import type { BrowserLoginEntry } from '../../../shared/apps/spec-types'
-
-// Brand-aligned palette for boring-avatars
-const AVATAR_COLORS = ['#84B9EF', '#6C8EBF', '#3D5A80', '#98C1D9', '#E0FBFC']
 
 interface AutomationHeaderProps {
   appId: string
@@ -157,12 +154,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
       <div className="flex items-start gap-3 px-4 pt-4 pb-3">
         {/* Avatar */}
         <div className="flex-shrink-0 rounded-xl overflow-hidden">
-          <Avatar
-            size={44}
-            name={name || appId}
-            variant="beam"
-            colors={AVATAR_COLORS}
-          />
+          <AutomationAvatar name={name || appId} size={44} />
         </div>
 
         {/* Info */}

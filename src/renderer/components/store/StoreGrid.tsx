@@ -6,44 +6,53 @@
  * Supports paginated loading with "Load More" button.
  */
 
+import { useEffect } from 'react'
+import { api } from '../../api'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { StoreCard } from './StoreCard'
+import { StoreNotice } from './StoreNotice'
 import { useTranslation } from '../../i18n'
 import { Package, Loader2 } from 'lucide-react'
 
-export function StoreGrid() {
+/**
+ * `embedded` drops the grid's own outer padding for use inside a discover
+ * section that already provides `px-4 pt-4` + a section label, so the
+ * title-to-cards spacing matches the other discover blocks.
+ */
+export function StoreGrid({ embedded = false }: { embedded?: boolean }) {
   const { t } = useTranslation()
   const storeApps = useAppsPageStore(state => state.storeApps)
   const storeHasMore = useAppsPageStore(state => state.storeHasMore)
   const storeLoading = useAppsPageStore(state => state.storeLoading)
+  const storeSearchQuery = useAppsPageStore(state => state.storeSearchQuery)
   const selectStoreApp = useAppsPageStore(state => state.selectStoreApp)
   const loadMoreStoreApps = useAppsPageStore(state => state.loadMoreStoreApps)
 
-  if (storeApps.length === 0) {
+  const isEmpty = storeApps.length === 0
+  useEffect(() => {
+    if (isEmpty) {
+      void api.trackEvent('store.empty_state', { scene: storeSearchQuery ? 'search_no_result' : 'list_empty' })
+    }
+  }, [isEmpty, storeSearchQuery])
+
+  if (isEmpty) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-4 p-8 text-center">
-        <div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center">
-          <Package className="w-6 h-6 text-muted-foreground" />
-        </div>
-        <div>
-          <p className="text-sm font-medium text-foreground">
-            {t('No apps found')}
-          </p>
-          <p className="text-xs text-muted-foreground mt-1">
-            {t('Try adjusting your search or filters')}
-          </p>
-        </div>
-      </div>
+      <StoreNotice
+        icon={<Package className="w-6 h-6 text-muted-foreground" />}
+        title={t('No apps found')}
+        desc={t('Try adjusting your search or filters')}
+      />
     )
   }
 
   return (
     <div className="flex flex-col">
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 ${embedded ? '' : 'px-4 pb-4'}`}>
         {storeApps.map(entry => (
           <StoreCard
             key={entry.slug}
             entry={entry}
+            source={embedded ? 'discover' : 'grid'}
             onClick={() => selectStoreApp(entry.slug)}
           />
         ))}

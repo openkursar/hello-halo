@@ -230,14 +230,17 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
       role: 'user',
       content,
       timestamp: new Date().toISOString(),
+      images,
     }
     setMessages(prev => [...prev, userMsg])
     setLoadState('loaded')
 
     try {
-      // Map ImageAttachment[] to API format { type, media_type, data }
+      // Backend AppChatRequest.images expects the ImageAttachment shape
+      // (mediaType camelCase — buildMessageContent and the OCR fallback both
+      // read it); name feeds the attachment-paths block for non-vision models.
       const apiImages = images && images.length > 0
-        ? images.map(img => ({ type: img.type, media_type: img.mediaType, data: img.data }))
+        ? images.map(img => ({ type: img.type, mediaType: img.mediaType, data: img.data, name: img.name }))
         : undefined
       const res = await api.appChatSend({
         appId,
@@ -292,6 +295,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
             isGenerating={false}
             placeholder={t('Chat with this App...')}
             hideToolsetControls
+            hideKnowledgeControls
           />
         </div>
       </div>
@@ -316,6 +320,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
             isGenerating={false}
             placeholder={t('Chat with this App...')}
             hideToolsetControls
+            hideKnowledgeControls
           />
         </div>
       </div>
@@ -402,6 +407,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
           isGenerating={isGenerating}
           placeholder={t('Chat with this App...')}
           hideToolsetControls
+          hideKnowledgeControls
           slashCommands={slashCommands}
           mentionArtifacts={mentionArtifacts}
         />

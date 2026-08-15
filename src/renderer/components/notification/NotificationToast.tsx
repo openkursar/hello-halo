@@ -11,9 +11,15 @@
  * Mount once in App.tsx — it reads from useNotificationStore.
  */
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import { X, Bell, CheckCircle2, AlertTriangle, AlertCircle } from 'lucide-react'
 import { useNotificationStore, type ToastItem, type ToastVariant } from '../../stores/notification.store'
+
+// This component is mounted at the app root, so a static import would pull the
+// markdown parser into the entry chunk for a surface most sessions never show
+// rich copy in. The fallback renders the same text unparsed, which stays
+// readable for the moment the chunk takes to arrive.
+const RichText = lazy(() => import('../ui/RichText').then(m => ({ default: m.RichText })))
 
 // ── Variant config ──────────────────────────────────────
 
@@ -67,10 +73,13 @@ function Toast({ toast }: { toast: ToastItem }) {
   }, [toast.duration, handleDismiss])
 
   const style = variantStyles[toast.variant]
+  // Server-authored copy is structured and usually longer, so it earns the
+  // wider card. Plain one-line toasts keep the original width.
+  const isRich = toast.bodyFormat === 'markdown'
 
   return (
     <div className="animate-in slide-in-from-bottom-4 fade-in duration-300 pointer-events-auto">
-      <div className="bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl p-4 max-w-sm">
+      <div className={`bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl p-4 w-full sm:w-auto ${isRich ? 'sm:max-w-md' : 'sm:max-w-sm'}`}>
         <div className="flex items-start gap-3">
           {/* Icon */}
           <div className={`flex-shrink-0 w-10 h-10 ${style.bg} rounded-full flex items-center justify-center`}>
@@ -81,7 +90,15 @@ function Toast({ toast }: { toast: ToastItem }) {
           <div className="flex-1 min-w-0">
             <h4 className="text-sm font-medium text-zinc-100">{toast.title}</h4>
             {toast.body && (
-              <p className="text-xs text-zinc-400 mt-1 line-clamp-3">{toast.body}</p>
+              <div className="mt-1 max-h-32 overflow-y-auto text-xs text-zinc-400">
+                {isRich
+                  ? (
+                    <Suspense fallback={<p className="whitespace-pre-line">{toast.body}</p>}>
+                      <RichText content={toast.body} />
+                    </Suspense>
+                  )
+                  : <p className="whitespace-pre-line">{toast.body}</p>}
+              </div>
             )}
 
             {/* Actions */}
@@ -136,7 +153,7 @@ export function NotificationToast() {
   if (toasts.length === 0) return null
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+    <div className="fixed bottom-4 inset-x-4 sm:inset-x-auto sm:right-4 z-50 flex flex-col items-stretch sm:items-end gap-2 pointer-events-none">
       {toasts.map((toast) => (
         <Toast key={toast.id} toast={toast} />
       ))}

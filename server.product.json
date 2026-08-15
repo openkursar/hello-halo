@@ -1,6 +1,7 @@
 {
   "$schema": "./product.schema.json",
   "name": "Halo",
+  "appId": "com.halo.app",
   "dataFolderName": "halo",
   "version": "1.0.0",
   "updateConfig": {

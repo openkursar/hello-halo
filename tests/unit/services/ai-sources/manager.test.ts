@@ -142,6 +142,53 @@ describe('getBackendConfigForSource — override model', () => {
   })
 })
 
+describe('vision capability on the backend config', () => {
+  // OAuth branches delegate config building to the provider, which knows
+  // nothing about per-model capability. When they returned that config
+  // untouched, every OAuth source silently lost its vision setting: the input
+  // area announced OCR while the request still carried image blocks, and a
+  // text-only upstream rejected the whole turn with HTTP 400.
+  it('stamps the per-model override onto an OAuth source config', () => {
+    seed({
+      currentId: 'o1',
+      sources: [oauthSource({
+        model: 'glm-4.6',
+        modelOverrides: { 'glm-4.6': { vision: true } }
+      })]
+    })
+    expect(new AISourceManager().getBackendConfig()!.visionOverride).toBe(true)
+  })
+
+  it('stamps the override for the effective model on the per-source path', () => {
+    seed({
+      currentId: 'o1',
+      sources: [oauthSource({
+        model: 'glm-4.6',
+        availableModels: [{ id: 'glm-4.6', name: 'GLM 4.6' }, { id: 'glm-5.2', name: 'GLM 5.2' }],
+        modelOverrides: { 'glm-4.6': { vision: true }, 'glm-5.2': { vision: false } }
+      })]
+    })
+    const bc = new AISourceManager().getBackendConfigForSource('o1', 'glm-5.2')
+    expect(bc!.visionOverride).toBe(false)
+  })
+
+  it('falls back to the id heuristic when the source declares nothing', () => {
+    seed({ currentId: 'o1', sources: [oauthSource({ model: 'glm-4.6' })] })
+    expect(new AISourceManager().getBackendConfig()!.visionOverride).toBe(false)
+  })
+
+  it('honors the provider-declared model flag on an api-key source', () => {
+    seed({
+      currentId: 's1',
+      sources: [apiKeySource({
+        model: 'minimax-m2',
+        availableModels: [{ id: 'minimax-m2', name: 'MiniMax M2', supportsVision: true }]
+      })]
+    })
+    expect(new AISourceManager().getBackendConfig()!.visionOverride).toBe(true)
+  })
+})
+
 describe('OAuth multi-account _accounts upsert', () => {
   async function loginWithAccounts(mgr: AISourceManager, accounts: Array<{ key: string; label: string; id: string }>) {
     // Register a stub provider whose completeLogin returns the _accounts payload,

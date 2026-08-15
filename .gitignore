@@ -33,6 +33,7 @@ local_docs/
 # Local plugins
 halo-local/
 product.json
+product.local.json
 
 # Active product variant pointer (per-machine, managed by `npm run product`)
 .product-source
@@ -78,3 +79,6 @@ src/sdk/
 /wiki/
 # Personal marketing/intro drafts (not product code)
 /intro-doc/
+
+# Local git worktrees created for isolated work
+.claude/worktrees/

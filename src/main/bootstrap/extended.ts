@@ -74,12 +74,20 @@ import { registerWeixinIlinkHandlers } from '../ipc/weixin-ilink'
 import { registerTlonHandlers } from '../ipc/tlon'
 import { initTlonWatchers, shutdownTlon, migrateKBsToTextIndex } from '../services/tlon'
 import { shutdownOcr } from '../services/ocr'
-import { initRegistryService, shutdownRegistryService } from '../store'
+import {
+  initRegistryService,
+  shutdownRegistryService,
+  flushPendingInstallOrders,
+  getRegistryById,
+  getPrimaryRegistry,
+} from '../store'
 import { startUpgradeScheduler, stopUpgradeScheduler } from '../store/upgrade.service'
+import { startAnnouncementScheduler, stopAnnouncementScheduler } from '../services/announcement.service'
 import { cleanupImChannelTempFiles } from '../apps/runtime/im-channels'
 import { registerIdleTask, startIdleDrain } from './idle-queue'
 import { seedDefaultAppIfNeeded } from '../apps/manager/seed'
 import { loadBuiltinApps } from '../apps/manager/builtin-loader'
+import { backfillKnowledgeSeeds } from '../apps/manager/knowledge-backfill'
 
 // Module-level reference to db for cleanup
 let platformDb: DatabaseManager | null = null
@@ -168,10 +176,21 @@ async function initPlatformAndApps(): Promise<void> {
   // ── Phase 4: Registry Service (App Store) ─────────────────────────────
   initRegistryService({ db })
 
+  // Replay install orders that could not reach the store server (offline
+  // installs, server outage). Idempotent server-side, safe to fire and forget.
+  void flushPendingInstallOrders({ byId: getRegistryById, primary: getPrimaryRegistry }).catch(err =>
+    console.warn('[Bootstrap] install-order replay failed:', err)
+  )
+
   // ── Upgrade Scheduler ─────────────────────────────────────────────────
   // 6h periodic check + auto-apply for patch/minor on 'auto' strategy.
   // Surfaces 'store:upgrade-available' events for major/notify/manual.
   startUpgradeScheduler()
+
+  // ── Announcement Feed ──────────────────────────────────────────────────
+  // 6h poll of the static feed declared in product.json. No-ops when the
+  // build has no feed configured (open-source default).
+  startAnnouncementScheduler()
 
   // ── Start timer loops AFTER all wiring is complete ──────────────────────
   // This ensures no events fire before subscriptions are registered.
@@ -189,6 +208,7 @@ async function initPlatformAndApps(): Promise<void> {
   registerIdleTask('load-builtin-apps', () => loadBuiltinApps(appManager))
   registerIdleTask('seed-default-app', () => seedDefaultAppIfNeeded(appManager))
   registerIdleTask('startup-snapshot', () => runStartupSnapshot(appManager, runtime))
+  registerIdleTask('backfill-knowledge-seeds', () => backfillKnowledgeSeeds(appManager))
   startIdleDrain()
 
   const dt = performance.now() - t0
@@ -421,6 +441,9 @@ export async function cleanupExtendedServices(): Promise<void> {
 
   // Store: Stop upgrade scheduler before tearing down registry / app manager
   stopUpgradeScheduler()
+
+  // Announcements: stop polling the feed
+  stopAnnouncementScheduler()
 
   // Store: Shutdown registry service (before app manager)
   shutdownRegistryService()

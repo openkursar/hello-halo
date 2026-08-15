@@ -38,7 +38,8 @@ import type {
   HealthExportResponse,
   HealthCheckResponse
 } from '../shared/types'
-import type { StoreInstallProgress } from '../shared/store/store-types'
+import type { StoreInstallProgress, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, StoreSignInStatus } from '../shared/store/store-types'
+import type { AppType } from '../shared/apps/spec-types'
 
 // Seed --display-scale before the renderer's first paint. The main process
 // passes the persisted scale via additionalArguments at window creation;
@@ -518,6 +519,7 @@ export interface HaloAPI {
   appExportSpec: (appId: string) => Promise<IpcResponse<{ yaml: string; filename: string }>>
   appImportSpec: (input: { spaceId: string; yamlContent: string; userConfig?: Record<string, unknown> }) => Promise<IpcResponse>
   appOpenSkillFolder: (appId: string) => Promise<IpcResponse>
+  appDeriveSkillCommandName: (name: string) => Promise<IpcResponse<string>>
   appListAvailableSkills: (appId: string) => Promise<IpcResponse<import('../shared/apps/app-types').AvailableSkill[]>>
   appGetDataPath: (appId: string) => Promise<IpcResponse<{ path: string }>>
   appOpenDataFolder: (appId: string) => Promise<IpcResponse>
@@ -527,7 +529,7 @@ export interface HaloAPI {
   // App Chat
   // conversationId addresses a specific native/local session; omit for the app's
   // native default session.
-  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; media_type: string; data: string }>; thinkingEnabled?: boolean; conversationId?: string }) => Promise<IpcResponse<{ conversationId: string }>>
+  appChatSend: (request: { appId: string; spaceId: string; message: string; images?: Array<{ type: string; mediaType: string; data: string; name?: string }>; thinkingEnabled?: boolean; conversationId?: string }) => Promise<IpcResponse<{ conversationId: string }>>
   appChatStop: (appId: string, conversationId?: string) => Promise<IpcResponse>
   appChatStatus: (appId: string, conversationId?: string) => Promise<IpcResponse<{ isGenerating: boolean; conversationId: string }>>
   appChatMessages: (input: { appId: string; spaceId: string; conversationId?: string }) => Promise<IpcResponse>
@@ -573,10 +575,22 @@ export interface HaloAPI {
   storeUpdateRegistryAdapterConfig: (input: { registryId: string; adapterConfig: Record<string, unknown> }) => Promise<IpcResponse>
   storeCheckUpdatesNow: () => Promise<IpcResponse>
   storeApplyUpgrade: (input: { appId: string; mode?: 'patch_minor' | 'major' | 'force' }) => Promise<IpcResponse>
-  storePublish: (input: { appId: string; author?: string; version?: string }) => Promise<IpcResponse>
-  storePublishPreview: (input: { appId: string; author?: string }) => Promise<IpcResponse<{ slug: string; localVersion: string; storeVersion: string | null }>>
+  storePublish: (input: { appId: string; author?: string; version?: string; changelog?: string; category?: string; name?: string; description?: string; tags?: string[] }) => Promise<IpcResponse>
+  storePublishPreview: (input: { appId: string; author?: string; name?: string }) => Promise<IpcResponse<{ slug: string; localVersion: string; storeVersion: string | null }>>
+  storeFindAppByPublishSlug: (input: { slug: string; type?: AppType; author?: string }) => Promise<IpcResponse<{ appId: string | null }>>
   storeExportDhpkg: (input: { appId: string }) => Promise<IpcResponse<{ path: string }>>
+  storeExportSkill: (input: { appId: string }) => Promise<IpcResponse<{ path: string }>>
   storeImportDhpkg: (input?: { filePath?: string; spaceId?: string | null }) => Promise<IpcResponse<{ appId: string }>>
+  storeGetCapabilities: () => Promise<IpcResponse<StoreCapabilities>>
+  storeGetCategoryTaxonomy: () => Promise<IpcResponse<CategoryTaxonomy>>
+  storeGetDiscoverPage: (input?: { locale?: string; pageSize?: number }) => Promise<IpcResponse<ResolvedDiscover>>
+  storeRevalidate: () => Promise<IpcResponse<{ changed: boolean }>>
+  storeEnsureSignedIn: (input?: { force?: boolean }) => Promise<IpcResponse<boolean>>
+  storeGetIdentity: () => Promise<IpcResponse<{ uid: string; name: string } | null>>
+  storeGetSignInStatus: () => Promise<IpcResponse<StoreSignInStatus>>
+  storeGetMyPublications: () => Promise<IpcResponse<MyPublication[]>>
+  storeUnpublish: (input: { slug: string }) => Promise<IpcResponse<null>>
+  storeIgnoreVersion: (input: { appId: string; version: string }) => Promise<IpcResponse<null>>
   onStoreSyncStatusChanged: (callback: (data: { registryId: string; status: string; appCount: number; error?: string }) => void) => () => void
   onStoreUpgradeAvailable: (callback: (data: { appId: string; currentVersion: string; latestVersion: string; strategy: 'auto' | 'notify' | 'manual'; severity: 'patch' | 'minor' | 'major' }) => void) => () => void
 

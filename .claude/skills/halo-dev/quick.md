@@ -89,7 +89,16 @@
     - Log all process stages with timestamps and context information.
     - Include error stack traces. Keep logging lightweight.
 
-13. **IM providers are plug-ins, not first-class code.**
+13. **Chat turn-level features must cover every chat entry point.**
+    - Cross-cutting turn behavior (images/attachments, thinking, context injection, message assembly) must live in a shared module under `services/agent/` (the `message-utils.ts` / `image-attachments.ts` pattern); entry points only add thin wiring.
+    - Entry-point checklist — verify each one when adding/changing a turn feature:
+      - `services/agent/send-message.ts` — space (main) chat
+      - `apps/runtime/app-chat.ts` — digital-human chat (IM inbound converges here via `dispatch-inbound.ts`)
+      - `apps/runtime/execute.ts` — automation runs
+    - Request shapes crossing renderer→main must use a shared type; never re-declare them inline per surface (the `media_type`/`mediaType` shape fork shipped a broken field for months because three inline declarations drifted).
+    - A feature that works in space chat but not digital-human chat is a bug, not a scope decision — unless the exclusion is explicit and documented.
+
+14. **IM providers are plug-ins, not first-class code.**
     - Adding support for a new IM = create one new `<brand>.provider.ts` under `src/main/apps/runtime/im-channels/`.
     - Never modify `ImChannelManager`, `dispatch-inbound.ts`, or any existing provider when adding support.
     - Never introduce provider-specific branches (`if (type === 'xxx')`) in generic code paths — put the logic in a provider method.
@@ -112,8 +121,10 @@
 | Add event source/filter behavior | `src/main/platform/event/*` | `src/main/bootstrap/extended.ts` |
 | Change memory behavior/tools | `src/main/platform/memory/index.ts` | `memory/tools.ts`, `memory/prompt.ts`, `tests/unit/platform/memory/*` |
 | Change agent engine (session / stream / prompt / subagent / permissions / MCP) | **Read `src/main/services/agent/DESIGN.md` first**, then jump to named file | Co-edits depend on the exact concern — see DESIGN.md routing |
+| **Add a chat turn-level feature** (attachments, thinking, context injection, ...) | Shared module under `services/agent/` first | Then wire EVERY entry point per hard rule 13: `send-message.ts`, `apps/runtime/app-chat.ts`, `apps/runtime/execute.ts` |
 | **Support a new IM platform** | New file: `src/main/apps/runtime/im-channels/<brand>.provider.ts` | Register in `runtime/index.ts`, extend `ImChannelType` in `shared/types/im-channel.ts`. **Do NOT touch `manager.ts` / `dispatch-inbound.ts`.** Only add `ipc/<brand>.ts` if the brand has unique setup/auth flow. |
 | Change generic IM channel lifecycle / session mgmt | `src/main/apps/runtime/im-channels/manager.ts` / `dispatch-inbound.ts` | `ipc/im-channels.ts`, `ipc/im-sessions.ts`, `shared/types/im-channel.ts`. Must remain provider-agnostic. |
+| **Support a new registry source protocol** | **Read `src/main/store/DESIGN.md` first**, then new file: `src/main/store/adapters/<protocol>.adapter.ts` | One `case` in `adapters/index.ts`, one entry in `STORE_SOURCE_TYPES` (`shared/store/store-types.ts` — the type and the config-validation enum both derive from it). **Do NOT branch on source id/name/type anywhere above `adapters/`** (two registered exceptions, see DESIGN.md §3.9). |
 
 ### Renderer / UI
 

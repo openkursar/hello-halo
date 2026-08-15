@@ -74,15 +74,23 @@ const normalizeSystemPrompt = vi.fn((request: unknown) => ({ request, modified: 
 vi.mock('../../../src/main/openai-compat-router/utils', () => ({
   isNativeAnthropicHost: (...a: unknown[]) => isNativeAnthropicHost(...a),
   normalizeSystemPrompt: (...a: unknown[]) => normalizeSystemPrompt(...a),
+  safeJsonParse: (input: string) => {
+    try {
+      return JSON.parse(input)
+    } catch {
+      return null
+    }
+  },
 }))
 
 vi.mock('../../../src/main/openai-compat-router/utils/token-counter', () => ({
   countTokens: vi.fn(() => 7),
 }))
 
+const fillResponseUsageFallback = vi.fn()
 vi.mock('../../../src/main/openai-compat-router/utils/usage-estimator', () => ({
   deferInputTokensEstimate: vi.fn(() => async () => 0),
-  fillResponseUsageFallback: vi.fn(),
+  fillResponseUsageFallback: (...a: unknown[]) => fillResponseUsageFallback(...a),
 }))
 
 import { handleMessagesRequest } from '../../../src/main/openai-compat-router/server/request-handler'
@@ -395,6 +403,69 @@ describe('anthropic passthrough header merge', () => {
   it('injects x-api-key when no Authorization header is present', async () => {
     const headers = await runPassthrough({ sdkHeaders: {} })
     expect(headers['x-api-key']).toBe('sk-test')
+  })
+})
+
+describe('anthropic passthrough non-streaming usage repair', () => {
+  async function runNonStream(upstreamBody: string) {
+    const req = anthReq()
+    runInterceptors.mockResolvedValue({ intercepted: false, request: req })
+    proxyFetch.mockResolvedValue(fakeResponse({ ok: true, text: upstreamBody }))
+    const res = makeRes()
+    await handleMessagesRequest(
+      req,
+      baseConfig({ apiType: 'anthropic_passthrough', url: 'https://third-party/v1/messages' }),
+      res as unknown as ExpressResponse,
+    )
+    return res
+  }
+
+  function messageBody(usage?: unknown) {
+    return JSON.stringify({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'hi' }],
+      model: 'glm-5',
+      stop_reason: 'end_turn',
+      stop_sequence: null,
+      ...(usage === undefined ? {} : { usage }),
+    })
+  }
+
+  it('forwards a well-formed body byte-for-byte', async () => {
+    const body = messageBody({ input_tokens: 12, output_tokens: 3 })
+    const res = await runNonStream(body)
+    expect(res.ended).toBe(body)
+    expect(fillResponseUsageFallback).not.toHaveBeenCalled()
+  })
+
+  it('fills usage when the upstream omitted the object', async () => {
+    fillResponseUsageFallback.mockImplementation((response: { usage?: unknown }) => {
+      response.usage = { input_tokens: 42, output_tokens: 7 }
+    })
+    const res = await runNonStream(messageBody())
+
+    expect(fillResponseUsageFallback).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(res.ended as string).usage).toEqual({ input_tokens: 42, output_tokens: 7 })
+  })
+
+  it('fills usage when the upstream reported zeros', async () => {
+    await runNonStream(messageBody({ input_tokens: 0, output_tokens: 0 }))
+    expect(fillResponseUsageFallback).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves a non-message body untouched', async () => {
+    const body = JSON.stringify({ type: 'error', error: { message: 'nope' } })
+    const res = await runNonStream(body)
+    expect(res.ended).toBe(body)
+    expect(fillResponseUsageFallback).not.toHaveBeenCalled()
+  })
+
+  it('leaves an unparseable body untouched', async () => {
+    const res = await runNonStream('not json at all')
+    expect(res.ended).toBe('not json at all')
+    expect(fillResponseUsageFallback).not.toHaveBeenCalled()
   })
 })
 

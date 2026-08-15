@@ -461,6 +461,32 @@ acceptable because AI context is only ever consumed by a run, and runs are
 inbound-triggered. Deep history beyond the quote requires the AI to Read/Grep
 the source transcript, reusing existing tools instead of a new query API.
 
+### 2.15 Knowledge Base Injection Mirrored Across Both Prompt Builders
+
+**Decision**: `prompt.ts`'s `buildAppSystemPrompt()` (automation/headless
+runs) and `prompt/identity.ts`'s `buildIdentityFragments()` (app-chat runs)
+each independently call `getKBReferencesForApp(appId)` and render the same
+`# Knowledge` section. There is no shared "add KB context" helper between
+them.
+
+**Rationale**: The two builders already have separate call signatures and
+separate `promptCtx` shapes (§2.12 vs the headless template in `prompt.ts`)
+by design — collapsing them into one shared entry point was rejected when
+that layering was established, to keep the headless path free of app-chat's
+channel/session concerns. Duplicating the three-line KB lookup + render is
+cheaper than reintroducing coupling between the two paths for one shared
+concern. Both call sites read the same `kb.appIds` binding
+(`services/tlon`), so the two prompts never disagree about *which* KBs are
+bound — only how the surrounding prompt is assembled.
+
+**Trap for future readers**: any test that fully replaces (not
+`importOriginal`-partial-mocks) `foundation/config.service` and then invokes
+the real (unmocked) `buildAppSystemPrompt` must include a `getHaloDir` mock,
+since `getKBReferencesForApp` resolves the KB index path through it. Omitting
+it throws `No "getHaloDir" export is defined on the ... mock` the moment a
+KB-aware code path runs, even in tests that never touch knowledge bases
+directly.
+
 ---
 
 ## 3. SQLite Schema

@@ -63,6 +63,12 @@ export * from './artifact'
 // Notification channel types (shared between main process and renderer)
 export * from './notification-channels'
 
+// In-app toast contract (main -> renderer, incl. remote/mobile over WebSocket)
+export * from './notification'
+
+// Announcement feed contract (remote JSON -> main)
+export * from './announcement'
+
 // Inbound message types (IM channel adapter boundary types)
 export * from './inbound-message'
 
