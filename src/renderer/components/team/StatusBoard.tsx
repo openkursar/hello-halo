@@ -11,7 +11,7 @@
  */
 
 import { useMemo } from 'react'
-import { CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File, Send, Clock, BellOff, Flag } from 'lucide-react'
+import { CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File, Send, Clock, BellOff, Flag, Hourglass } from 'lucide-react'
 import type { TeamDetail, RosterMember, BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamEdge, TeamStatus, EpochOutcome, TeamRunTriggerType } from '../../../shared/apps/team-types'
 import { awaitsOurDecision } from '../../../shared/apps/team-types'
 import type { Thought } from '../../types'
@@ -82,9 +82,8 @@ export function StatusBoard({ detail, board, activeFlows, onSelectMember, editin
 
   return (
     <div className="flex flex-col gap-5 p-3 sm:gap-6 sm:p-6">
-      {/* Decisions awaiting a person. Ours are prominent and actionable (click a
-          member to open its chat, where the decision panel is shown inline);
-          a teammate's is stated quietly so the floor doesn't look stalled. */}
+      {/* Who the floor is waiting on. Clicking a member opens its chat, where the
+          decision panel is — the one place a decision is actually answered. */}
       <PendingDecisions roster={board.roster} onSelectMember={onSelectMember} />
 
       {/* ── Office topology: read-only auto-laid-out canvas (React Flow + dagre).
@@ -233,61 +232,45 @@ function LiveActivityFeed({ roster, teamId, epochId, onSelectMember }: LiveActiv
 // ──────────────────────────────────────────────
 
 /**
- * A member awaiting a decision is a call to action for exactly one person: the
- * one whose digital human raised it. Everyone else needs the fact (otherwise the
- * office just looks stalled) without being asked to act on it — so the two are
- * told apart here and rendered in different registers.
+ * Who the office is waiting on — one statement, read the same by everyone on the
+ * floor. A decision belongs to exactly one person (the one whose digital human
+ * raised it), and answering it lives in exactly one place: that member's panel.
+ * So this states the fact and routes there; it does not offer a second way to
+ * answer, and it stays in the resting palette so amber keeps meaning "yours to
+ * do" — the member panel and the attention banner are where it is asked of you.
  */
 function PendingDecisions({ roster, onSelectMember }: { roster: RosterMember[]; onSelectMember: (m: RosterMember) => void }) {
   const { t } = useTranslation()
   const waiting = roster.filter(m => m.status === 'waiting_user')
-  const ours = waiting.filter(awaitsOurDecision)
-  const theirs = waiting.filter(m => !awaitsOurDecision(m))
   if (waiting.length === 0) return null
 
   const unnamedOwner = t('a teammate')
 
   return (
-    <div className="flex flex-col gap-2">
-      {ours.length > 0 && (
-        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 sm:px-4">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-500" />
-            <span className="text-sm font-medium text-foreground">{t('Waiting for your decision')}</span>
-          </div>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {ours.map(m => (
-              <button
-                key={m.appId}
-                onClick={() => onSelectMember(m)}
-                className="inline-flex items-center gap-1 rounded-lg border border-amber-500/40 bg-background px-2.5 py-1 text-sm text-foreground transition-colors hover:bg-amber-500/10"
-              >
-                {m.isLead && <Star className="h-3 w-3 fill-current text-amber-500" />}
-                {m.memberName}
-                <span className="text-xs text-amber-600 dark:text-amber-400">{t('Respond')}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {theirs.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-xs text-muted-foreground">
-          {theirs.map(m => (
-            <button
-              key={m.appId}
-              onClick={() => onSelectMember(m)}
-              className="inline-flex items-center gap-1 rounded-md px-1 py-0.5 transition-colors hover:bg-secondary/60 hover:text-foreground"
-            >
-              <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-muted-foreground/50" />
-              {t('{{member}} is waiting on {{owner}}', {
-                member: m.memberName,
-                owner: m.owner || unnamedOwner,
-              })}
-            </button>
-          ))}
-        </div>
-      )}
+    <div className="rounded-xl border border-border bg-secondary/40 px-3 py-2.5 sm:px-4">
+      <div className="flex items-center gap-2">
+        <Hourglass className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+        <span className="text-sm font-medium text-foreground">{t('Waiting on a decision')}</span>
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {waiting.map(m => (
+          <button
+            key={m.appId}
+            onClick={() => onSelectMember(m)}
+            className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-lg border border-border bg-background px-2.5 py-1 text-sm text-foreground transition-colors hover:bg-secondary"
+          >
+            {m.isLead && <Star className="h-3 w-3 flex-shrink-0 fill-current text-amber-500" />}
+            <span className="truncate">
+              {awaitsOurDecision(m)
+                ? t('{{member}} is waiting on you', { member: m.memberName })
+                : t('{{member}} is waiting on {{owner}}', {
+                    member: m.memberName,
+                    owner: m.owner || unnamedOwner,
+                  })}
+            </span>
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

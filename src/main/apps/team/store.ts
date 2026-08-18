@@ -87,6 +87,7 @@ function rowToMember(row: TeamMemberRow): TeamMember {
     duty: row.duty ?? null,
     delegatedPolicy: parsePolicy(row.delegated_policy_json),
     acceptsChecks: row.accepts_checks !== 0,
+    awaitingDecision: row.awaiting_decision === 1,
   }
 }
 
@@ -321,10 +322,12 @@ export class TeamStore implements ITeamStore {
     this.stmtAddMember = db.prepare(`
       INSERT INTO team_members (
         team_id, app_id, member_name, role, is_lead, ai_provisioned, added_at, owner_display_name,
-        owner_node_id, origin, member_identity, scope_json, duty, delegated_policy_json, accepts_checks
+        owner_node_id, origin, member_identity, scope_json, duty, delegated_policy_json, accepts_checks,
+        awaiting_decision
       ) VALUES (
         @team_id, @app_id, @member_name, @role, @is_lead, @ai_provisioned, @added_at, @owner_display_name,
-        @owner_node_id, @origin, @member_identity, @scope_json, @duty, @delegated_policy_json, @accepts_checks
+        @owner_node_id, @origin, @member_identity, @scope_json, @duty, @delegated_policy_json, @accepts_checks,
+        @awaiting_decision
       )
     `)
     this.stmtSetMemberScope = db.prepare(`
@@ -654,6 +657,7 @@ export class TeamStore implements ITeamStore {
       duty: member.duty ?? null,
       delegated_policy_json: member.delegatedPolicy ? JSON.stringify(member.delegatedPolicy) : null,
       accepts_checks: member.acceptsChecks === false ? 0 : 1,
+      awaiting_decision: member.awaitingDecision ? 1 : 0,
     })
   }
 
@@ -679,6 +683,10 @@ export class TeamStore implements ITeamStore {
     if (fields.acceptsChecks !== undefined) {
       sets.push('accepts_checks = @accepts_checks')
       params.accepts_checks = fields.acceptsChecks ? 1 : 0
+    }
+    if (fields.awaitingDecision !== undefined) {
+      sets.push('awaiting_decision = @awaiting_decision')
+      params.awaiting_decision = fields.awaitingDecision ? 1 : 0
     }
     if (sets.length === 0) return
     this.db
@@ -850,6 +858,10 @@ export class TeamStore implements ITeamStore {
           duty: mine ? mine.duty : m.duty ?? null,
           delegated_policy_json: mine ? mine.delegated_policy_json : null,
           accepts_checks: mine ? mine.accepts_checks : m.acceptsChecks === false ? 0 : 1,
+          // Only this machine can answer its own members, so its own bit is the
+          // truth; for everyone else's members the live status in the roster
+          // snapshot carries the same fact and this row stays clear.
+          awaiting_decision: mine ? mine.awaiting_decision : 0,
         })
       }
 

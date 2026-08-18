@@ -451,12 +451,12 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
 
   /**
    * Record the FATE of a message whose turn has ended, only when that fate is a
-   * failure. Recording a turn end as a 'reply' would satisfy
-   * `answeredCorrelationIds` and switch off the digest's "you asked X and nothing
-   * came back" safety net — the very silence it exists to catch.
+   * failure — the endings the sender cannot learn any other way. A turn that ran
+   * reports itself, and filing its closing line here would quote it back at the
+   * sender as if it were an answer.
    *
-   * Append-only, keyed by correlationId, so "answered / awaiting reply" stays
-   * derivable and replication stays one idempotent insert.
+   * Append-only, keyed by correlationId, so replication stays one idempotent
+   * insert.
    */
   function recordReply(trigger: TeamTriggerContext, finisherAppId: string, outcome: TurnCompletion): void {
     if (!trigger.fromAppId || trigger.kind !== 'message') return
@@ -769,9 +769,9 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       if (pending.toAppId !== appId) continue
       clearTimeout(pending.timer)
       pendingWaits.delete(corr)
-      // This path only fires on a confirmed failure, so the record must close the
-      // message or the sender's digest keeps reporting it as "still waiting". A
-      // person's wait has no message row to close.
+      // This path only fires on a confirmed failure, and that failure is the one
+      // thing the sender cannot learn from its own turn. A person's wait has no
+      // message row to file it against.
       if (pending.fromAppId && isRecordableFate(outcome)) {
         recordActivity({
           teamId: pending.teamId,

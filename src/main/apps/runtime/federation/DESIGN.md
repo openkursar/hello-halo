@@ -82,8 +82,9 @@ office it joined; both wrap a `Federation` (coordinator + link).
 **Office-shared rows outside the board**
 
 Some office-shared state belongs to the TEAM layer rather than the blackboard: a
-member's owner-authored profile (`member_profile` — its team duty and whether it
-accepts periodic checks) and periodic checks (`check_upsert` / `check_delete`).
+member's owner-authored profile (`member_profile` — its team duty, whether it
+accepts periodic checks, and whether it is waiting on its owner to decide) and
+periodic checks (`check_upsert` / `check_delete`).
 They ride the same single-writer log as tasks and epochs — `routeSharedWrite` is
 the one implementation of "authority captures locally, joiner sends to the host,
 a single machine needs neither" — but their apply is injected as
@@ -91,6 +92,24 @@ a single machine needs neither" — but their apply is injected as
 member's *delegated policy* is deliberately NOT among them: it guards one
 person's machine, so only that machine holds it; just the accepts-checks bit
 travels, on the roster snapshot.
+
+**Who may write what (`office-authority.admitMemberWrite`)**
+
+A write from another node is admitted only for a member that node owns, resolved
+from the AUTHENTICATED sender plus the author field the payload carries — never
+from an unauthenticated claim. Two consequences worth stating, because both were
+learned the hard way:
+
+- *Every op that has an author must name it.* An op that carries none is refused
+  outright on any node owning more than one member, non-retryably, and the writer
+  silently rolls back a row its user already saw. `update_task` shipped without
+  one, so a busy machine could not move a task it was working.
+- *Some writes have no member author at all* (`NODE_SCOPED_WRITE_OPS`): a
+  conversation's lifecycle (`epoch_upsert`) belongs to the node, and stopping a
+  periodic check (`check_delete`) is explicitly allowed to anyone, so the row
+  names people the stopping machine need not own. These are admitted per-node —
+  the sender must still own a member allowed to make coordination writes, so a
+  read-only participant gains nothing.
 
 **The office record (`post_activity`)**
 

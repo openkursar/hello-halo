@@ -102,7 +102,7 @@ export function ConversationTab({ detail, onOpenLive }: ConversationTabProps) {
           <button
             onClick={() => onOpenLive(selected?.epochId ?? '')}
             className="flex flex-shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-            title={t('Watch the team work on the floor')}
+            title={t('Watch the team work live')}
           >
             <Radar className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">{t('Live')}</span>
@@ -236,7 +236,7 @@ function ConversationChat({ detail, conversation, targetAppId, targetMember, onO
     >
       <Zap className="h-3.5 w-3.5 flex-shrink-0 text-emerald-500" />
       <span className="flex-1">
-        {t('{{count}} digital humans are working on this · view the floor →', { count: busyCount })}
+        {t('{{count}} digital humans are working on this · view live →', { count: busyCount })}
       </span>
     </button>
   ) : null

@@ -147,6 +147,13 @@ export interface Orchestration {
    */
   noteMemberStatusChanged(teamId: string): void
   /**
+   * Re-derive whether a member owned by THIS machine still owes its own person
+   * an answer, and share the result with the office. Idempotent and safe to call
+   * on any turn end: the truth is the persisted escalation, not the code path
+   * the turn happened to take.
+   */
+  reconcileAwaitingDecision(appId: string): void
+  /**
    * Resume a team turn after the user answered a member's escalation. Returns
    * false when the team/epoch is gone (caller must NOT fall back to a solo run).
    */
@@ -197,6 +204,15 @@ export interface OrchestrationDeps {
    * the subscriber's job. Never thrown into the turn path.
    */
   onMemberStatusChanged?: (teamId: string) => void
+  /**
+   * A member's owner-authored profile changed and has to reach the rest of the
+   * office — the same channel a duty edit rides. Used here for "waiting on its
+   * owner": the question can only be answered on this machine, so unless the
+   * fact travels, every other machine reads the member as idle and the office
+   * looks stopped instead of blocked on a person. Absent → single-machine team,
+   * nothing to publish.
+   */
+  onMemberProfileChanged?: (teamId: string, appId: string) => void
   /**
    * Replication capture for epoch lifecycle writes (open / seal / reopen /
    * rename / outcome). Fired AFTER the authoritative local store write with the
@@ -457,7 +473,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         // The turn ended → clear the viewer-side pulse (working → idle/alert).
         notifyMemberStatusChanged(teamId)
         if (outcome.kind === 'escalation') {
-          routeEscalation(teamId, epochId, appId, outcome.content)
+          markEscalationToUser(teamId, epochId, appId)
         }
         bus.completeTurn({ sessionKey, trigger, outcome })
 
@@ -642,37 +658,56 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     return withDigest(`[Team message from ${fromName}]\n\n${envelope.body}`, envelope)
   }
 
-  // ── Escalation routing ──────────────────────────────────────────────────────
+  /**
+   * Record — and share with the office — that this member is (or is no longer)
+   * waiting on its owner. Only the owning machine writes it: everywhere else the
+   * row is a replica, and a second writer would fight the owner over a fact only
+   * the owner can observe. Idempotent, so a repeated wake publishes nothing;
+   * returns whether anything actually moved.
+   */
+  function publishAwaitingDecision(teamId: string, appId: string, awaiting: boolean): boolean {
+    const member = store.getMember(teamId, appId)
+    if (!member || isRemoteMember(member)) return false
+    if (!!member.awaitingDecision === awaiting) return false
+    store.updateMemberFields(teamId, appId, { awaitingDecision: awaiting })
+    try {
+      deps.onMemberProfileChanged?.(teamId, appId)
+    } catch (err) {
+      console.error(`${LOG_TAG} publishing awaiting-decision failed:`, err)
+    }
+    return true
+  }
 
   /**
-   * Under 'lead' routing a member's escalation goes to the lead first (report-tool
-   * suppressed the user-facing entry). Otherwise it is user-bound: report-tool
-   * already created the entry, so here we only mark the team view 'waiting_user'.
+   * Recompute from the record whether this member still owes its own person an
+   * answer, on the machine that owns it, and tell the office either way.
+   *
+   * The mark cannot be written only where an escalation is raised — that happens
+   * inside `wakeTarget`'s completion, and most turns never pass through it: a
+   * member woken by a teammate on another machine, an IM-backed team turn, a
+   * person chatting a member 1:1. Each of those left a member that was blocked
+   * on a human reading as idle everywhere, including on the one screen that
+   * could have answered it. So the fact is DERIVED here from the persisted
+   * escalation (which already outlives a seal and a restart) and a caller only
+   * has to say "this member may have moved".
+   *
+   * Idempotent: nothing is written, published or announced when the answer is
+   * unchanged, so it is safe on every turn end.
    */
-  function routeEscalation(teamId: string, epochId: string, fromAppId: string, content: string): void {
-    const team = store.getTeamById(teamId)
-    if (!team) return
-
-    const isLead = team.leadAppId === fromAppId
-    if (team.escalationRouting === 'lead' && !isLead && team.leadAppId) {
-      const leadMember = store.getMember(teamId, team.leadAppId)
-      if (!leadMember) return
-      const fromName = memberName(teamId, fromAppId)
-      void bus
-        .send({
-          teamId,
-          epochId,
-          fromAppId,
-          to: leadMember.memberName,
-          message: `[Escalation from ${fromName}] ${content}`,
-        })
-        .catch((err) => {
-          console.error(`${LOG_TAG} Failed to route escalation to lead:`, err)
-        })
-      return
+  function reconcileAwaitingDecision(appId: string): void {
+    // With no persisted record there is nothing to reconcile AGAINST, and
+    // clearing a mark out of ignorance is worse than leaving it alone.
+    if (!deps.hasPendingEscalation) return
+    for (const member of store.listMembersByAppId(appId)) {
+      if (isRemoteMember(member)) continue
+      const awaiting = deps.hasPendingEscalation(appId, member.teamId)
+      if (!publishAwaitingDecision(member.teamId, appId, awaiting)) continue
+      console.log(
+        `${LOG_TAG} awaiting-decision reconciled: team=${member.teamId} app=${appId} awaiting=${awaiting}`
+      )
+      emitTeamUpdated(member.teamId)
+      notifyMemberStatusChanged(member.teamId)
     }
-
-    markEscalationToUser(teamId, epochId, fromAppId)
   }
 
   /**
@@ -693,6 +728,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       store.updateTeamStatus(teamId, 'waiting_user')
     }
     console.log(`${LOG_TAG} escalation awaiting user: team=${teamId} epoch=${epochId} app=${appId}`)
+    publishAwaitingDecision(teamId, appId, true)
     emitTeamUpdated(teamId)
     // waiting_user is a member-status flip too → push it to viewers.
     notifyMemberStatusChanged(teamId)
@@ -726,6 +762,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     if (epoch.lifecycle === 'run' && team.status === 'waiting_user') {
       store.updateTeamStatus(teamId, 'running')
     }
+    publishAwaitingDecision(teamId, appId, false)
     emitTeamUpdated(teamId)
     notifyMemberStatusChanged(teamId)
 
@@ -1146,6 +1183,9 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       // Awaiting a user decision takes precedence over working/idle — and it
       // SURVIVES a run seal (P0-5): the persisted activity entry is the truth,
       // the in-memory waiter set the live-window mirror (covers sealed epochs).
+      // The owner's own record first: it is the only machine that can see the
+      // question, and this is what the authority projects to everyone else.
+      if (m.awaitingDecision) return 'waiting_user'
       if (deps.hasPendingEscalation?.(appId, m.teamId)) return 'waiting_user'
       for (const [epochId, waiters] of escalationWaiters) {
         if (waiters.has(appId) && store.getEpochById(epochId)?.teamId === m.teamId) {
@@ -1227,6 +1267,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     getMemberStatus,
     getMemberBusy,
     noteMemberStatusChanged: notifyMemberStatusChanged,
+    reconcileAwaitingDecision,
     resumeFromEscalation,
   }
 }

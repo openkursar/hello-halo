@@ -245,12 +245,16 @@ function buildTeamRules(ctx: TeamPromptContext): string {
   }
 
   lines.push(
+    // A preference, not a gate: `report(type:"escalation")` always reaches the
+    // human. Which door to try first is the model's call, so it is stated here
+    // rather than enforced by intercepting the call.
     ctx.escalationRouting === 'lead'
-      ? '- Escalation routing: a `report(type:"escalation")` is routed to the team' +
-          ' lead first. The lead will try to resolve it and only involve the human' +
-          ' if it cannot.'
-      : '- Escalation routing: a `report(type:"escalation")` is routed directly to' +
-          ' the human user for a decision.',
+      ? '- Escalation preference: this office wants blockers taken to the team lead' +
+          ' FIRST, with `team_send`. Call `report(type:"escalation", ...)` only once' +
+          ' the lead cannot resolve it, or when the decision is plainly the human’s' +
+          ' to make. It always reaches the human, so use it sparingly.'
+      : '- Escalation preference: take blockers straight to the human with' +
+          ' `report(type:"escalation", ...)`; no need to try the lead first.',
     '- No silent failure: if you are blocked, lack data, or cannot complete the',
     '  task, say so — and say it TO the teammate who is waiting, with `team_send`.',
     '  Describing the blocker only in your own output tells them nothing. If a',

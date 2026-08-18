@@ -369,15 +369,15 @@ export function TeamCreateDialog({ owningSpaceId, onClose, onCreated, onCreateMe
                 <Field label={t('When members need help')}>
                   <RadioRow
                     checked={escalationRouting === 'lead'}
-                    label={t('AI Lead handles first')}
-                    hint={t('The AI Lead will try to resolve issues before involving you.')}
+                    label={t('Ask the AI Lead first')}
+                    hint={t('Members are asked to bring blockers to the AI Lead before involving you. One can still reach you directly when the decision is clearly yours.')}
                     badge={t('Recommended')}
                     onSelect={() => setEscalationRouting('lead')}
                   />
                   <RadioRow
                     checked={escalationRouting === 'user'}
                     label={t('Notify me directly')}
-                    hint={t('You will be notified immediately when any member is stuck.')}
+                    hint={t('Members are asked to bring blockers straight to you.')}
                     onSelect={() => setEscalationRouting('user')}
                   />
                 </Field>

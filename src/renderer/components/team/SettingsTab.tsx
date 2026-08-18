@@ -248,13 +248,13 @@ function CollaborationSection({ team, readOnly }: { team: TeamDetail['team']; re
       <div className="mt-4 space-y-2">
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-medium text-muted-foreground">{t('When members need help')}</span>
-          <Tooltip text={t('Controls who gets notified first when a member is stuck. "AI Lead handles first" is recommended — you are only involved when the AI Lead cannot resolve it.')} />
+          <Tooltip text={t('Who members are asked to turn to first when they are stuck. This guides them — a member can still reach you directly when the decision is clearly yours.')} />
         </div>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <OptionCard
             icon={<Bot className="h-4 w-4" />}
-            label={t('AI Lead handles first')}
-            description={t('The AI Lead will try to resolve issues before involving you.')}
+            label={t('Ask the AI Lead first')}
+            description={t('Members are asked to bring blockers to the AI Lead before involving you.')}
             selected={team.escalationRouting === 'lead'}
             onClick={() => void updateTeam(team.id, { escalationRouting: 'lead' })}
             badge={t('Recommended')}
@@ -263,7 +263,7 @@ function CollaborationSection({ team, readOnly }: { team: TeamDetail['team']; re
           <OptionCard
             icon={<UserCircle className="h-4 w-4" />}
             label={t('Notify me directly')}
-            description={t('You will be notified immediately when any member is stuck.')}
+            description={t('Members are asked to bring blockers straight to you.')}
             selected={team.escalationRouting === 'user'}
             onClick={() => void updateTeam(team.id, { escalationRouting: 'user' })}
             disabled={readOnly}

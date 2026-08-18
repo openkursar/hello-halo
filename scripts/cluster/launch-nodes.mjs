@@ -39,6 +39,14 @@
  *   HALO_TEST_API_URL  / HALO_TEST_MODEL_BASE_URL  - base URL (OpenAI-compatible)
  *   HALO_TEST_MODEL    / HALO_TEST_MODEL_ID        - model id
  *   HALO_TEST_PROVIDER / HALO_TEST_MODEL_PROVIDER  - source provider id
+ *
+ * Signing the nodes in instead of handing them a key:
+ *   HALO_TEST_SIGNED_IN_SOURCE - a JSON AI source as the app stores it (copy one
+ *     out of an installed Halo's config). Seeded before launch, so each node's
+ *     window opens signed in and one launch is enough. Takes the current slot;
+ *     an API-key source may be seeded alongside it and is left untouched.
+ *   HALO_TEST_FEDERATION_GATEWAY - federation gateway base URL. Nodes then join
+ *     offices through the relay instead of dialling each other on the LAN.
  */
 
 import { spawn, spawnSync } from 'child_process'
@@ -113,6 +121,7 @@ function loadEnvLocal() {
 // ── Model source (from .env.local / env, never hardcoded) ────────────────────
 
 function resolveModelSource() {
+  const signedIn = resolveSignedInSource()
   const apiKey = process.env.HALO_TEST_MODEL_API_KEY || process.env.HALO_TEST_API_KEY || ''
   const baseUrl =
     process.env.HALO_TEST_MODEL_BASE_URL ||
@@ -120,13 +129,52 @@ function resolveModelSource() {
     'https://open.bigmodel.cn/api/coding/paas/v4'
   const modelId = process.env.HALO_TEST_MODEL_ID || process.env.HALO_TEST_MODEL || 'glm-5.2'
   const provider = process.env.HALO_TEST_MODEL_PROVIDER || process.env.HALO_TEST_PROVIDER || 'custom'
-  if (!apiKey) {
+  if (!apiKey && !signedIn) {
     WARN(
       'No model API key found (HALO_TEST_API_KEY / HALO_TEST_MODEL_API_KEY).\n' +
       '          Set it in .env.local — nodes will start but agents cannot run without it.'
     )
   }
-  return { apiKey, baseUrl, modelId, provider }
+  return { apiKey, baseUrl, modelId, provider, signedIn }
+}
+
+/**
+ * An already signed-in account to seed (HALO_TEST_SIGNED_IN_SOURCE, a JSON AI
+ * source as the app stores it — the shape `HALO_TEST_OAUTH_SOURCE` uses in E2E).
+ *
+ * Seeded BEFORE the node starts, so its window opens signed in. Injecting the
+ * account over HTTP afterwards leaves the window on the sign-in screen (it
+ * decided there was no account while it was loading) and costs a second launch
+ * to clear. Credentials the app stores encrypted stay encrypted here: this
+ * copies the stored value verbatim, and any node of the same build reads it.
+ *
+ * Absent → nothing seeded, and an API-key source behaves exactly as before.
+ */
+function resolveSignedInSource() {
+  const raw = process.env.HALO_TEST_SIGNED_IN_SOURCE || process.env.HALO_TEST_OAUTH_SOURCE
+  if (!raw || !raw.trim()) return null
+  try {
+    const source = JSON.parse(raw)
+    if (!source || typeof source !== 'object' || !source.provider) {
+      WARN('HALO_TEST_SIGNED_IN_SOURCE is not an AI source object; ignoring it.')
+      return null
+    }
+    return source
+  } catch (err) {
+    WARN(`HALO_TEST_SIGNED_IN_SOURCE is not valid JSON (${err.message}); ignoring it.`)
+    return null
+  }
+}
+
+/**
+ * The federation gateway these nodes ride (HALO_TEST_FEDERATION_GATEWAY).
+ * Seeded with the rest of the settings so a joiner reaches the office the way it
+ * does in the field — machines that cannot dial each other directly. Absent →
+ * LAN-only, unchanged.
+ */
+function resolveGatewayUrl() {
+  const url = process.env.HALO_TEST_FEDERATION_GATEWAY
+  return url && url.trim() ? url.trim() : null
 }
 
 // ── Paths & build ────────────────────────────────────────────────────────────
@@ -181,7 +229,7 @@ function nodePin(index) {
   return `HaloNode-${index}-Aa1!`
 }
 
-function seedNodeConfig(nodeDir, index, port, model) {
+function seedNodeConfig(nodeDir, index, port, model, gatewayUrl) {
   const haloDir = path.join(nodeDir, '.halo')
   fs.mkdirSync(path.join(haloDir, 'temp', 'artifacts'), { recursive: true })
   fs.mkdirSync(path.join(haloDir, 'temp', 'conversations'), { recursive: true })
@@ -200,6 +248,17 @@ function seedNodeConfig(nodeDir, index, port, model) {
       model: model.modelId,
       availableModels: [{ id: model.modelId, name: model.modelId }],
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+  }
+  // A signed-in account leads: it is the one the caller asked these nodes to use,
+  // and `currentId` follows the first entry. Each node gets its own id so a later
+  // per-node edit cannot collide.
+  if (model.signedIn) {
+    sources.unshift({
+      ...model.signedIn,
+      id: crypto.randomUUID(),
+      ...(model.modelId && model.signedIn.model === undefined ? { model: model.modelId } : {}),
       updatedAt: new Date().toISOString(),
     })
   }
@@ -232,6 +291,7 @@ function seedNodeConfig(nodeDir, index, port, model) {
     onboarding: { completed: true },
     mcpServers: {},
     isFirstLaunch: false,
+    ...(gatewayUrl ? { federation: { gatewayUrl } } : {}),
   }
 
   fs.writeFileSync(path.join(haloDir, 'config.json'), JSON.stringify(config, null, 2))
@@ -520,6 +580,7 @@ async function cmdStart(args) {
   const basePort = Number(args['base-port'] || 3460)
   const dir = clusterDir(args)
   const model = resolveModelSource()
+  const gatewayUrl = resolveGatewayUrl()
 
   if (args.build) runBuild()
   const appEntry = getAppEntryPath()
@@ -538,7 +599,7 @@ async function cmdStart(args) {
     const port = basePort + i
     const nodeDir = path.join(dir, `node-${i}`)
     fs.mkdirSync(nodeDir, { recursive: true })
-    seedNodeConfig(nodeDir, i, port, model)
+    seedNodeConfig(nodeDir, i, port, model, gatewayUrl)
     ensureSdkSymlink(nodeDir, appEntry)
 
     const logFile = path.join(nodeDir, 'node.log')

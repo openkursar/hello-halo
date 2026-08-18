@@ -100,4 +100,19 @@ export const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 5,
+    description: 'Index unanswered escalations so the open-question lookup stays cheap',
+    // "Which questions are still waiting on a person" is read at every team turn
+    // end and once per owned member at startup, and it scanned every activity row
+    // ever written. A partial index keeps the cost proportional to the handful of
+    // open questions rather than to the whole history.
+    up(db) {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_entries_pending_escalation
+          ON activity_entries(ts)
+          WHERE type = 'escalation' AND user_response_json IS NULL
+      `)
+    },
+  },
 ]

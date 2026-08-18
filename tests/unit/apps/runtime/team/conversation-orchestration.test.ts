@@ -65,6 +65,7 @@ describe('conversation + outcome orchestration', () => {
   let bus: MessageBus
   let active: Set<string>
   const epochMutations: TeamEpoch[] = []
+  const profilePublishes: { teamId: string; appId: string }[] = []
 
   function build(pending?: Set<string>): Orchestration {
     active = new Set<string>()
@@ -78,6 +79,7 @@ describe('conversation + outcome orchestration', () => {
       store, bus, session,
       onEpochMutation: (e) => epochMutations.push(e),
       hasPendingEscalation: (appId) => pending?.has(appId) ?? false,
+      onMemberProfileChanged: (teamId, appId) => profilePublishes.push({ teamId, appId }),
     })
     return orch
   }
@@ -89,6 +91,7 @@ describe('conversation + outcome orchestration', () => {
     store = new TeamStore(db)
     seedTeam(store)
     epochMutations.length = 0
+    profilePublishes.length = 0
     broadcastToAll.mockClear()
     sendToRenderer.mockClear()
   })
@@ -236,4 +239,105 @@ describe('conversation + outcome orchestration', () => {
     expect(store.getCurrentEpochForTeam(TEAM_ID)).toBeNull()
     expect(orch.getMemberStatus(RESEARCHER_APP)).toBe('waiting_user')
   })
+
+  it('reads "waiting on its owner" from the member row, so every machine shows it', async () => {
+    const orch = build()
+    await orch.startEpoch(TEAM_ID)
+
+    // The owner's machine recorded the question; on any other machine this row
+    // is the replicated copy. Either way the office must read it as blocked on
+    // a person rather than as an idle member.
+    store.updateMemberFields(TEAM_ID, RESEARCHER_APP, { awaitingDecision: true })
+
+    expect(orch.getMemberStatus(RESEARCHER_APP)).toBe('waiting_user')
+    // The run's opening wake is still in flight; let it land before the db closes.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  })
+
+  it('marks a member whose question is on the record, whatever path its turn took', () => {
+    // The turn that asked may have been started by a teammate on another
+    // machine, by an IM message, or by a person typing — none of those routes an
+    // escalation, so the fact has to be derived rather than pushed.
+    const pending = new Set<string>([RESEARCHER_APP])
+    const orch = build(pending)
+
+    orch.reconcileAwaitingDecision(RESEARCHER_APP)
+
+    expect(store.getMember(TEAM_ID, RESEARCHER_APP)?.awaitingDecision).toBe(true)
+    expect(profilePublishes).toContainEqual({ teamId: TEAM_ID, appId: RESEARCHER_APP })
+  })
+
+  it('publishes nothing when the answer has not changed', () => {
+    const pending = new Set<string>([RESEARCHER_APP])
+    const orch = build(pending)
+
+    orch.reconcileAwaitingDecision(RESEARCHER_APP)
+    profilePublishes.length = 0
+    // Runs on every turn end — a second look at an unchanged fact must cost the
+    // office nothing.
+    orch.reconcileAwaitingDecision(RESEARCHER_APP)
+
+    expect(profilePublishes).toEqual([])
+  })
+
+  it('clears the mark once the question leaves the record', () => {
+    const pending = new Set<string>([RESEARCHER_APP])
+    const orch = build(pending)
+    orch.reconcileAwaitingDecision(RESEARCHER_APP)
+    profilePublishes.length = 0
+
+    pending.delete(RESEARCHER_APP)
+    orch.reconcileAwaitingDecision(RESEARCHER_APP)
+
+    expect(store.getMember(TEAM_ID, RESEARCHER_APP)?.awaitingDecision).toBe(false)
+    expect(profilePublishes).toContainEqual({ teamId: TEAM_ID, appId: RESEARCHER_APP })
+  })
+
+  it('marks lead and non-lead alike — the escalation preference is not a second rule here', () => {
+    // The preference shapes the prompt, it does not decide who answers. Reading
+    // it here once gave the persisted mark and the live status opposite answers
+    // for the same member: the office saw idle while its own screen said waiting.
+    store.updateTeamFields(TEAM_ID, { escalationRouting: 'lead' })
+    const pending = new Set<string>([RESEARCHER_APP, LEAD_APP])
+    const orch = build(pending)
+
+    orch.reconcileAwaitingDecision(RESEARCHER_APP)
+    orch.reconcileAwaitingDecision(LEAD_APP)
+
+    expect(store.getMember(TEAM_ID, RESEARCHER_APP)?.awaitingDecision).toBe(true)
+    expect(store.getMember(TEAM_ID, LEAD_APP)?.awaitingDecision).toBe(true)
+    // The persisted mark and the live projection must never disagree.
+    expect(orch.getMemberStatus(RESEARCHER_APP)).toBe('waiting_user')
+  })
+
+  it('never writes the mark for a member another machine owns', () => {
+    // That row is a replica of a fact only its owner can observe; writing it
+    // here would fight the owner over it.
+    const REMOTE_APP = 'app-remote'
+    store.addMember({
+      teamId: TEAM_ID, appId: REMOTE_APP, memberName: 'remote', role: 'R', isLead: false,
+      aiProvisioned: false, addedAt: Date.now(), origin: 'remote', ownerNodeId: 'node-b',
+    })
+    const orch = build(new Set<string>([REMOTE_APP]))
+
+    orch.reconcileAwaitingDecision(REMOTE_APP)
+
+    expect(store.getMember(TEAM_ID, REMOTE_APP)?.awaitingDecision).toBe(false)
+    expect(profilePublishes).toEqual([])
+  })
+
+  it('clears it when the person answers, and tells the office', async () => {
+    const orch = build()
+    const epoch = await orch.startEpoch(TEAM_ID)
+    store.updateMemberFields(TEAM_ID, RESEARCHER_APP, { awaitingDecision: true })
+    profilePublishes.length = 0
+
+    orch.resumeFromEscalation({ teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'yes' })
+
+    expect(store.getMember(TEAM_ID, RESEARCHER_APP)?.awaitingDecision).toBe(false)
+    expect(profilePublishes).toContainEqual({ teamId: TEAM_ID, appId: RESEARCHER_APP })
+    // The answer wakes the member; let that turn settle before the db closes.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  })
+
 })

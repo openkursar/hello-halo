@@ -8,53 +8,34 @@
  * input, which is read by construction, and stays silent when there is nothing
  * to say so that its appearing means something.
  *
- * Two halves, and they answer different questions:
- *   - what CHANGED since this member last looked (a delta, per-member watermark);
- *   - what has NOT changed but should have — its own tasks sitting still, its own
- *     messages with no answer. A pure delta can never surface these: "nothing
- *     happened" is not an event, and it is exactly the failure this module is
- *     here to catch.
+ * It reports one thing and nothing else: what CHANGED on the board since this
+ * member last looked, as a delta against a per-member watermark. Every line is
+ * an act somebody actually filed.
  *
- * The delta half is ranked, not truncated by recency: its budget belongs to the
- * facts that reach the member nowhere else.
+ * It deliberately does NOT judge — no "that task looks stalled", no "nobody
+ * answered you". Those are inferences drawn from absence, and absence is not
+ * evidence here: the record can prove something WAS written down, never that
+ * something did not happen. An inference that cannot be made reliably, repeated
+ * every turn, teaches the reader to skip the whole block — taking the facts down
+ * with it.
  *
- * What it must never do is turn absence into a verdict. It reports the two facts
- * side by side ("they answered you; that task is still open") and leaves the
- * inference to the reader — the record can prove something WAS recorded, never
- * that something did not happen.
+ * The delta is ranked, not truncated by recency: its budget belongs to the facts
+ * that reach the member nowhere else.
  */
 
-import {
-  answeredCorrelationIds,
-  isAwaitingReply,
-  type TeamActivity,
-  type TeamMemberRuntimeStatus,
-} from '../../../../shared/apps/team-types'
+import type { TeamActivity } from '../../../../shared/apps/team-types'
 import type { TeamStore } from '../../team'
 
 const LOG_TAG = '[BoardDigest]'
 
-/** A task or a message untouched for this long is worth mentioning. */
-const DEFAULT_STALE_AFTER_MS = 30 * 60 * 1000
-
 /**
- * Cap on lines per section. The digest is a pointer to the board, not a copy of
- * it: past a handful of lines it stops being scanned and starts being skipped.
+ * Cap on lines. The digest is a pointer to the board, not a copy of it: past a
+ * handful of lines it stops being scanned and starts being skipped.
  */
-const MAX_LINES_PER_SECTION = 6
-
-const TERMINAL_TASK_STATUS = new Set(['done', 'rejected'])
+const MAX_LINES = 6
 
 export interface BoardDigestDeps {
   store: TeamStore
-  /**
-   * Live status of a member. A task whose assignee is mid-turn is being worked
-   * on, not stalled — reporting it would train the reader to ignore the section.
-   * Absent → nobody is treated as working.
-   */
-  getMemberStatus?: (appId: string) => TeamMemberRuntimeStatus
-  now?: () => number
-  staleAfterMs?: number
 }
 
 export interface BoardDigest {
@@ -69,8 +50,6 @@ export interface BoardDigest {
 
 export function createBoardDigest(deps: BoardDigestDeps): BoardDigest {
   const { store } = deps
-  const now = deps.now ?? (() => Date.now())
-  const staleAfterMs = deps.staleAfterMs ?? DEFAULT_STALE_AFTER_MS
 
   /**
    * Per (epoch, member) high-water mark of what has been shown. In memory and
@@ -145,7 +124,7 @@ export function createBoardDigest(deps: BoardDigestDeps): BoardDigest {
     const direct = fresh.filter((a) => !isSideChatter(a, viewerAppId))
 
     const lines: string[] = []
-    const roomLeft = (): number => MAX_LINES_PER_SECTION - lines.length
+    const roomLeft = (): number => MAX_LINES - lines.length
     // Rendered before the cap so an act that renders to nothing cannot spend a
     // line another would have filled; the tail is what the member has least
     // accounted for.
@@ -165,37 +144,6 @@ export function createBoardDigest(deps: BoardDigestDeps): BoardDigest {
     return lines
   }
 
-  /**
-   * This member's tasks that nothing has moved. Excludes tasks whose assignee is
-   * mid-turn: work in flight is not work stalled.
-   */
-  function stalledTasks(teamId: string, epochId: string, viewerAppId: string): string[] {
-    if (deps.getMemberStatus?.(viewerAppId) === 'working') return []
-    const cutoff = now() - staleAfterMs
-    return store
-      .listTasksByEpoch(teamId, epochId)
-      .filter(
-        (t) =>
-          t.assigneeAppId === viewerAppId && !TERMINAL_TASK_STATUS.has(t.status) && t.updatedAt < cutoff
-      )
-      .slice(0, MAX_LINES_PER_SECTION)
-      .map((t) => `"${t.title}" is still ${t.status} — untouched for ${describeAge(now() - t.updatedAt)}`)
-  }
-
-  /** Messages this member sent that nothing has answered yet. */
-  function unansweredSends(acts: readonly TeamActivity[], viewerAppId: string, names: Map<string, string>): string[] {
-    const cutoff = now() - staleAfterMs
-    const answered = answeredCorrelationIds(acts)
-    return acts
-      .filter((a) => a.kind === 'message' && a.actorAppId === viewerAppId)
-      .filter((a) => a.createdAt < cutoff && isAwaitingReply(a, answered))
-      .slice(0, MAX_LINES_PER_SECTION)
-      .map((a) => {
-        const to = a.targetAppId ? names.get(a.targetAppId) ?? a.targetAppId : 'a teammate'
-        return `you asked ${to} "${a.subject}" ${describeAge(now() - a.createdAt)} ago and nothing has come back`
-      })
-  }
-
   function render(params: { teamId: string; epochId: string; viewerAppId: string }): string | null {
     const { teamId, epochId, viewerAppId } = params
     try {
@@ -203,8 +151,6 @@ export function createBoardDigest(deps: BoardDigestDeps): BoardDigest {
       const acts = store.listActivityByEpoch(teamId, epochId)
       const since = watermarks.get(key(epochId, viewerAppId)) ?? 0
       const changes = changesFor(acts, viewerAppId, since, names)
-      const stalled = stalledTasks(teamId, epochId, viewerAppId)
-      const waiting = unansweredSends(acts, viewerAppId, names)
       // Advance to the newest act actually accounted for, NOT to wall-clock: two
       // acts can share a millisecond, and a clock-based mark would silently skip
       // the second one forever. Acts deliberately not shown (the member's own)
@@ -212,10 +158,10 @@ export function createBoardDigest(deps: BoardDigestDeps): BoardDigest {
       const newest = acts.reduce((max, a) => Math.max(max, a.createdAt), since)
       watermarks.set(key(epochId, viewerAppId), newest)
 
-      if (changes.length === 0 && stalled.length === 0 && waiting.length === 0) return null
+      if (changes.length === 0) return null
 
       const lines = ['---', 'Board — recorded since you last looked:']
-      for (const line of [...changes, ...stalled, ...waiting]) lines.push(`- ${line}`)
+      for (const line of changes) lines.push(`- ${line}`)
       lines.push(
         'This is what has been WRITTEN DOWN, not everything that happened — someone may ' +
           'have done the work and not recorded it. Call team_read_board() for the full board.'
@@ -279,14 +225,4 @@ function foldChatter(acts: readonly TeamActivity[], names: Map<string, string>):
       const other = names.get(second) ?? second
       return `${one} and ${other} exchanged ${count} message${count === 1 ? '' : 's'}`
     })
-}
-
-/** Coarse, human age ("40 minutes", "2 hours") — precision here is noise. */
-function describeAge(ms: number): string {
-  const minutes = Math.floor(ms / 60_000)
-  if (minutes < 60) return `${Math.max(1, minutes)} minutes`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'}`
-  const days = Math.floor(hours / 24)
-  return `${days} day${days === 1 ? '' : 's'}`
 }

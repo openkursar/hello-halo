@@ -21,7 +21,7 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 import { useTranslation } from '../../i18n'
 import { StatusBoard, type BoardView } from './StatusBoard'
 import { EventSidebar } from './EventSidebar'
-import { triggerLabel, formatRunTime, runEventTitle, conversationLabel, epochLabel, outcomeMeta } from './run-history'
+import { triggerLabel, formatRunTime, runEventTitle, conversationLabel, epochLabel, outcomeMeta, replayRoster } from './run-history'
 
 /** Fetched snapshot first, then rows pushed live for the same epoch — later wins per id. */
 function mergeById<T extends { id: string }>(snapshot: T[], live: T[]): T[] {
@@ -118,9 +118,7 @@ export function LiveTab({ detail, onSelectMember, editingStructure, onExitEditin
       }
     }
     if (isPastRun && epochBoard) {
-      const roster: RosterMember[] = epochBoard.members.map(m => ({
-        appId: m.appId, memberName: m.memberName, role: m.role, isLead: m.isLead, spaceId: null, status: 'idle' as const,
-      }))
+      const roster = replayRoster(epochBoard.members, detail.roster)
       return {
         mode: 'replay', epochId: focused,
         kind: epochBoard.epoch.lifecycle === 'conversation' ? 'conversation' : 'run',

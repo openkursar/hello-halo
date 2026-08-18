@@ -104,8 +104,20 @@ Automation does NOT use this broker or the meta server. Enabled toolsets are
 creation, and their usage guides appended in `prompt.ts` / `prompt/identity.ts`.
 Capabilities are toggled in `AppCapabilitiesSection.tsx` (grant/revoke-permission).
 All built-in capabilities default ON (only an explicit user deny turns one off —
-see PROTOCOL.md §13); `ai-terminal` is still excluded for guests
-(conservative allowlist in `apps/runtime/capability-policy.ts` `filterMcpServersByPolicy`, strict mode).
+see PROTOCOL.md §13). A caller who is NOT the owner (IM guest, teammate) is held
+to the capability policy on top of that: `filterMcpServersByPolicy` in
+`apps/runtime/capability-policy.ts` injects only what the policy tables classify,
+so a server absent from those tables reaches neither a guest nor a teammate.
+`ai-terminal` is a listed capability with one extra rule, carried by
+`followsBuiltin` on the toggle table: for a TEAMMATE (where an unstated permission
+means "granted"), an untouched terminal switch follows the built-in command tool —
+the two are the same door onto the owner's machine, and withholding commands while
+leaving the terminal reachable is the gap that rule closes. For a GUEST (where
+silence means "denied") nothing is inherited: their policies were saved before the
+terminal switch existed, so inheriting would grant a capability the owner was
+never shown — and there is no second gate behind it, since `canUseTool` only fires
+for interactive tools and `disallowedTools` covers built-ins, not MCP servers.
+Injection IS the grant.
 
 ## 7) Session rebuild contract
 

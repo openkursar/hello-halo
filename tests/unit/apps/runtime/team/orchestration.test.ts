@@ -731,7 +731,10 @@ describe('TeamOrchestration', () => {
   // ===========================================================================
 
   describe('escalation routing', () => {
-    it("escalationRouting='lead' delivers a member escalation to the lead's mailbox", async () => {
+    it("escalationRouting='lead' never re-routes the question — it only shapes the prompt", async () => {
+      // The preference tells a member to try its lead first; it must not take a
+      // question the member addressed to a person and hand it to the lead. That
+      // left both of them answering while the member had stopped waiting.
       seedTeam(store, { collabMode: 'free', escalationRouting: 'lead' })
       const epoch = makeEpoch(store)
       const { deps, pendings } = makeSession()
@@ -745,25 +748,10 @@ describe('TeamOrchestration', () => {
       pendings[0].resolve()
       await flush()
 
-      // A new wake should target the LEAD's session carrying the escalation.
-      const leadWake = pendings.find((p) => p.conversationId === buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id))
-      expect(leadWake).toBeTruthy()
-    })
-
-    it("escalationRouting='user' does NOT re-route the escalation to the lead", async () => {
-      seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
-      const epoch = makeEpoch(store)
-      const { deps, pendings } = makeSession()
-      const orch = build(deps)
-
-      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'go', wait: false })
-      const corr = pendings[0].teamContext.correlationId
-      orch.captureReport(corr, { kind: 'escalation', content: 'need a decision' })
-      pendings[0].resolve()
-      await flush()
-
       const leadWake = pendings.find((p) => p.conversationId === buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id))
       expect(leadWake).toBeUndefined()
+      // …and the person is the one shown as owing an answer, on every board.
+      expect(orch.getMemberStatus(RESEARCHER_APP)).toBe('waiting_user')
     })
 
     it("escalationRouting='user' flips the team to waiting_user and marks the member", async () => {

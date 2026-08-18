@@ -70,18 +70,15 @@ export function useMemberView(
       : t('Busy with the team run')
     : ''
 
-  // Kept out of the sentence's own t(): the extractor skips a t() call passed as
-  // an argument to another one, which would ship this fallback untranslated.
-  const ownerName = presence.ownerName || t('its owner')
-
+  // "Waiting on X" is the badge's sentence (both skins render it from
+  // `waitsOnOwner`), so the summary must not say it a second time on the same
+  // card — it falls back to the role, as it does at rest.
   const summary =
     member.status === 'working'
       ? elsewhereLabel || member.currentTaskTitle || ''
       : member.status === 'error'
         ? member.currentTaskTitle || ''
-        : waitsOnOwner
-          ? t('Waiting on {{owner}}', { owner: ownerName })
-          : member.role || ''
+        : member.role || ''
 
   return { member, presence, isLead, isUnreachable, isWorking, isAlert, waitsOnOwner, summary, checkCount }
 }

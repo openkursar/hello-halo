@@ -81,10 +81,12 @@ export function filterMcpServersByPolicy(
       if (allowsCapability(policy, toggle, mode)) result[name] = server
       continue
     }
-    // A server nobody has classified yet. In strict mode it stays out (a guest
-    // gets only what was granted); in permissive mode it stays in (a teammate
-    // loses only what the owner switched off).
-    if (mode === 'permissive') result[name] = server
+    // A server nobody has classified yet stays out in BOTH modes. The tables
+    // above are what an owner is shown, so an unlisted server is a capability
+    // they were never offered a switch for — granting it by default means every
+    // new server silently widens what a caller can already do (that is how the
+    // interactive terminal stayed reachable after its owner withheld commands).
+    // Adding a server to `CAPABILITY_MCP_TOGGLES` is what makes it grantable.
   }
 
   return result

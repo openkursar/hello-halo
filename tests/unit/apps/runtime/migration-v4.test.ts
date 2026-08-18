@@ -86,7 +86,8 @@ describe('apps/runtime migration v4 (activity_entries rebuild)', () => {
     const row = db
       .prepare('SELECT version FROM _migrations WHERE namespace = ?')
       .get(RUNTIME_NAMESPACE) as { version: number }
-    expect(row.version).toBe(4)
+    // The orphan must not stop the chain: every migration lands, not just v4.
+    expect(row.version).toBe(Math.max(...runtimeMigrations.map((m) => m.version)))
   })
 
   it('keeps valid entries and drops orphans', () => {

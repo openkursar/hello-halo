@@ -292,6 +292,27 @@ async function buildSessionMemoryPreamble(scope: MemoryCallerScope, appId: strin
 /**
  * Send a chat message to an automation App's AI agent.
  *
+ * Setup failures (the app is gone, services not up, credentials unusable) happen
+ * before the turn exists to report them, and every transport that calls this does
+ * so fire-and-forget — so they are reported on the same error channel a failed
+ * turn uses, then rethrown for the caller's own logging. Without it, sending to a
+ * digital human that no longer exists looks exactly like sending to one that does.
+ */
+export async function sendAppChatMessage(request: AppChatRequest): Promise<void> {
+  const conversationId = request.conversationId ?? getAppChatConversationId(request.appId)
+  try {
+    await runAppChatTurn(request)
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error(`[AppChat][${request.appId}] Chat could not start: ${message}`)
+    emitAgentEvent('agent:error', request.spaceId, conversationId, { type: 'error', error: message })
+    throw error
+  }
+}
+
+/**
+ * One chat turn against an automation App's AI agent.
+ *
  * This provides real-time streaming with the same capabilities as the main
  * conversation agent: thinking, tool use, token tracking, interruption.
  *
@@ -300,7 +321,7 @@ async function buildSessionMemoryPreamble(scope: MemoryCallerScope, appId: strin
  *
  * @param request - Chat request parameters
  */
-export async function sendAppChatMessage(
+async function runAppChatTurn(
   request: AppChatRequest
 ): Promise<void> {
   const {
@@ -904,6 +925,16 @@ export async function sendAppChatMessage(
     // A TEAM-session turn ended — bus-driven, human 1:1, or IM alike.
     const endedTeamSession = parseTeamSessionKey(conversationId)
     if (endedTeamSession) {
+      // Whether this member still owes its own person an answer is recomputed
+      // here, not pushed from wherever the escalation was routed: this is the one
+      // point every team-turn path converges on, and most of them (a teammate's
+      // wake landing from another machine, an IM-backed turn, a 1:1 chat) never
+      // touch that routing at all.
+      try {
+        getActiveTeamRuntime()?.reconcileAwaitingDecision(endedTeamSession.appId)
+      } catch (err) {
+        console.error(`[AppChat][${appId}] awaiting-decision reconcile failed:`, err)
+      }
       // Only bus-driven turns get orchestration's own pulse, and only a HOSTED
       // office is re-baselined periodically, so a 1:1 turn would otherwise leave
       // the member's own machine showing it as working forever.

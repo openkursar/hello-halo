@@ -233,6 +233,25 @@ async function initPlatformAndApps(): Promise<void> {
       getWorkDirForApp: resolveAppWorkDir,
     })
 
+    /**
+     * Send a member's owner-authored profile (duty, whether it accepts checks,
+     * whether it is waiting on its owner) to the rest of the office. Only the
+     * owner holds these facts, and on a joined office the roster travels
+     * host→joiners only, so they have to go up the other way. No-op off a
+     * federated office.
+     */
+    const publishMemberProfile = (teamId: string, appId: string) => {
+      const member = teamStore.getMember(teamId, appId)
+      if (!member) return
+      getFederationManager()?.routeOfficeStateWrite(teamId, 'member_profile', {
+        teamId,
+        appId,
+        duty: member.duty ?? null,
+        acceptsChecks: member.acceptsChecks !== false,
+        awaitingDecision: member.awaitingDecision === true,
+      })
+    }
+
     // Federation manager: per-office host/joiner coordinators. Bootstrap is the
     // only tier bridging http and apps, so the http send/listing + credential
     // verifier are injected here. Owner role runs a brought member's turn via
@@ -276,11 +295,18 @@ async function initPlatformAndApps(): Promise<void> {
       ) => {
         try {
           if (op === 'member_profile') {
-            const p = payload as { teamId?: string; appId?: string; duty?: string | null; acceptsChecks?: boolean }
+            const p = payload as {
+              teamId?: string
+              appId?: string
+              duty?: string | null
+              acceptsChecks?: boolean
+              awaitingDecision?: boolean
+            }
             if (!p.teamId || !p.appId) return
             teamStore.updateMemberFields(p.teamId, p.appId, {
               duty: p.duty ?? null,
               acceptsChecks: p.acceptsChecks !== false,
+              awaitingDecision: p.awaitingDecision === true,
             })
             const team = teamStore.getTeamById(p.teamId)
             const event = team ? { teamId: p.teamId, team } : { teamId: p.teamId }
@@ -851,6 +877,9 @@ async function initPlatformAndApps(): Promise<void> {
         // coalesced roster refresh — without it a viewer's board froze on the
         // last projected status until an unrelated write refreshed the roster.
         onMemberStatusChanged: (teamId) => getFederationManager()?.scheduleRosterRefresh(teamId),
+        // "Waiting on its owner" is authored here and read by the whole office —
+        // same channel a duty edit takes up to the authority.
+        onMemberProfileChanged: (teamId, appId) => publishMemberProfile(teamId, appId),
         wrapBlackboard: fedManager
           ? (base) =>
               createLocationAwareBlackboard({
@@ -921,16 +950,7 @@ async function initPlatformAndApps(): Promise<void> {
       // A duty (and whether the member accepts periodic checks) is authored by
       // its owner, but read by the whole office — on a joined office the roster
       // only travels host→joiners, so the edit has to go up the other way.
-      onMemberProfileChanged: (teamId, appId) => {
-        const member = teamStore.getMember(teamId, appId)
-        if (!member) return
-        getFederationManager()?.routeOfficeStateWrite(teamId, 'member_profile', {
-          teamId,
-          appId,
-          duty: member.duty ?? null,
-          acceptsChecks: member.acceptsChecks !== false,
-        })
-      },
+      onMemberProfileChanged: (teamId, appId) => publishMemberProfile(teamId, appId),
       onMemberRemoved: (teamId, appId) => {
         const mgr = getFederationManager()
         mgr?.projectMemberRemoved(teamId, appId)
@@ -972,6 +992,30 @@ async function initPlatformAndApps(): Promise<void> {
     const teamChecks = getActiveTeamRuntime()?.checks
     teamChecks?.registerHandler()
     teamChecks?.rehydrate()
+
+    // Re-derive who is blocked on a person. The mark lives on the member row and
+    // is shared office-wide, so a question raised — or answered — while this
+    // machine was down would otherwise leave every other board reading the
+    // member as idle, or as still waiting on an answer it already got.
+    const teamRuntime = getActiveTeamRuntime()
+    if (teamRuntime) {
+      // Only members this machine owns: the mark is theirs to write, and a row
+      // belonging to another node is a replica the reconcile would skip anyway.
+      const ownAppIds = new Set(
+        teamStore
+          .listTeams()
+          .flatMap((team) => teamStore.listMembersByTeam(team.id))
+          .filter((m) => m.origin !== 'remote')
+          .map((m) => m.appId)
+      )
+      for (const appId of ownAppIds) {
+        try {
+          teamRuntime.reconcileAwaitingDecision(appId)
+        } catch (err) {
+          console.error('[Bootstrap] awaiting-decision reconcile failed:', err)
+        }
+      }
+    }
   } else {
     console.warn('[Bootstrap] Team store unavailable; team service not initialized')
   }

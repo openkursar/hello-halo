@@ -291,7 +291,15 @@ export function createLocationAwareBlackboard(deps: LocationAwareBlackboardDeps)
       {
         teamId: input.teamId,
         op: 'update_task',
-        payload: { taskId: input.taskId, ...patch, updatedAt: now },
+        // callerAppId is what lets the authority resolve WHO this write acts for;
+        // without it the write is refused on any machine that owns more than one
+        // member, and the refusal is non-retryable.
+        payload: {
+          taskId: input.taskId,
+          ...patch,
+          updatedAt: now,
+          ...(input.callerAppId ? { callerAppId: input.callerAppId } : {}),
+        },
         taskId: input.taskId,
         fid: randomUUID(),
       },

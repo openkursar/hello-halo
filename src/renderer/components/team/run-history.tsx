@@ -10,7 +10,14 @@
  */
 
 import { Sparkles, AlertTriangle, MinusCircle, Clock, Play } from 'lucide-react'
-import type { TeamEpochSummary, EpochOutcome, TeamRunTriggerType, TeamConversation } from '../../../shared/apps/team-types'
+import type {
+  TeamEpochSummary,
+  EpochOutcome,
+  TeamRunTriggerType,
+  TeamConversation,
+  TeamMember,
+  RosterMember,
+} from '../../../shared/apps/team-types'
 
 type LucideIcon = typeof Sparkles
 
@@ -60,6 +67,35 @@ export function outcomeMeta(
     default:
       return { Icon: MinusCircle, cls: 'text-muted-foreground', label: t('No action needed') }
   }
+}
+
+/**
+ * The roster a REPLAYED run renders: who took part, drawn at rest — a past run
+ * has no live pulse, and showing today's working state on yesterday's shape
+ * would claim work happened there that did not.
+ *
+ * One state is carried forward from the live roster, because it is not a fact
+ * about the past run at all: a decision still unanswered is a person's open
+ * question, true right now. Resting it too made "who is waiting on whom"
+ * disappear the moment a past run was focused — the exact moment someone is
+ * looking for what stalled. A member no longer on the team simply rests.
+ */
+export function replayRoster(members: TeamMember[], liveRoster: RosterMember[]): RosterMember[] {
+  return members.map(m => {
+    const live = liveRoster.find(r => r.appId === m.appId)
+    const stillWaiting = live?.status === 'waiting_user'
+    return {
+      appId: m.appId,
+      memberName: m.memberName,
+      role: m.role,
+      isLead: m.isLead,
+      spaceId: null,
+      status: stillWaiting ? 'waiting_user' : 'idle',
+      // Who the question belongs to travels with it: without these the statement
+      // cannot tell the reader from a teammate, and defaults to addressing them.
+      ...(stillWaiting ? { owner: live?.owner ?? null, sameMachine: live?.sameMachine } : {}),
+    }
+  })
 }
 
 /** Human name for what started a run (§8.3). */

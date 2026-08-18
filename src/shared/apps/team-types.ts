@@ -118,6 +118,13 @@ export interface TeamMember {
    * clear message instead of discovering it only at the owner. Absent = yes.
    */
   acceptsChecks?: boolean
+  /**
+   * Whether this member has asked its owner something and is waiting for the
+   * answer. Written by the owner (the only machine where the question can be
+   * answered) and shared with the office, so the rest of the office sees work
+   * blocked on a person rather than a member that mysteriously went quiet.
+   */
+  awaitingDecision?: boolean
 }
 
 /**
@@ -239,30 +246,6 @@ export function toActivitySubject(text: string, max = TEAM_ACTIVITY_SUBJECT_MAX)
   const firstLine = text.split('\n').find((l) => l.trim().length > 0)?.trim() ?? ''
   const collapsed = firstLine.replace(/\s+/g, ' ')
   return collapsed.length > max ? `${collapsed.slice(0, max - 1)}…` : collapsed
-}
-
-/**
- * The correlation ids that already have an answer. Shared by the board digest
- * (main) and the activity feed (renderer) so "answered / awaiting reply" is
- * decided by one rule in one place.
- */
-export function answeredCorrelationIds(activities: readonly TeamActivity[]): Set<string> {
-  const answered = new Set<string>()
-  for (const a of activities) {
-    if (a.kind === 'reply' && a.correlationId) answered.add(a.correlationId)
-  }
-  return answered
-}
-
-/**
- * Whether a sent message is still waiting. An undelivered message is NOT waiting
- * — it never arrived, so there is nobody to answer it, and telling the sender to
- * expect a reply would be a lie.
- */
-export function isAwaitingReply(activity: TeamActivity, answered: ReadonlySet<string>): boolean {
-  if (activity.kind !== 'message') return false
-  if (activity.status === 'undelivered') return false
-  return !activity.correlationId || !answered.has(activity.correlationId)
 }
 
 export interface TeamEpoch {

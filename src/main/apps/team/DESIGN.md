@@ -49,9 +49,9 @@ under the isolated migration namespace `app_team`.
 Epoch-scoped rows are never auto-deleted on seal — they remain as the durable,
 observable record of a run (技术 §8.2 persistence layering).
 
-### Member-owned columns (v10)
+### Member-owned columns (v10, extended in v13)
 
-Three `team_members` columns are written by the member's OWNER and by nobody
+Four `team_members` columns are written by the member's OWNER and by nobody
 else:
 
 - `duty` — what the member is responsible for **in this team**. Office-shared:
@@ -66,9 +66,20 @@ else:
 - `accepts_checks` — the single bit of that policy other nodes do need, so a
   teammate is refused a periodic check early and readably instead of at the far
   end. Derived from the policy on write.
+- `awaiting_decision` (v13) — the member asked its own person something and is
+  waiting. The question is answerable only on the owner's machine, so without
+  sharing this the rest of the office reads the member as idle and the work looks
+  stopped rather than blocked on a human. Written only by the owning machine, and
+  DERIVED rather than pushed: the runtime recomputes it from the persisted
+  escalation at every team turn end, when an answer is recorded, and at startup
+  (`orchestration.reconcileAwaitingDecision`) — a mark written only where an
+  escalation is routed missed every turn path that does not route one. Projected
+  into the member's roster status as `waiting_user`, office-shared through
+  `member_profile`, and persisted because an unanswered question outlives a
+  restart.
 
 `materializeJoinedOffice` replaces the roster wholesale (the authority is the
-single writer) but exempts these three for members owned by THIS node: a snapshot
+single writer) but exempts these for members owned by THIS node: a snapshot
 taken before the owner's latest edit reached the authority must not undo it.
 
 ### Schema notes / deviations from 技术 §8.2
@@ -104,9 +115,10 @@ taken before the owner's latest edit reached the authority must not undo it.
   `INSERT OR IGNORE`, since the same immutable row arrives twice on the
   replication paths), `deleteActivity` (shadow-write rollback / snapshot
   reconcile), `listActivityByEpoch`, `listActivityByTeam` (replication snapshot).
-  There is deliberately no "has this been answered?" query: every reader already
-  holds the epoch's acts, and deriving it from them (`answeredCorrelationIds` in
-  `shared/apps/team-types`) keeps one rule rather than two that can disagree.
+  There is deliberately no "has this been answered?" query, and no derivation of
+  one either: a successful reply is a fresh `message` act with its own correlation
+  id, never a `reply` act, so these rows can show that a message FAILED but never
+  that one was answered. Do not build "is this still waiting?" on top of them.
 - **team_epochs**: `insertEpoch`, `getEpochById`, `endEpoch` (seal),
   `touchEpoch` (stamp `last_activity_at`, monotonic), `listEpochsByTeam`,
   `getCurrentEpochForTeam` (open epoch, or null when idle).

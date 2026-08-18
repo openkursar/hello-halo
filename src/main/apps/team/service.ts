@@ -549,7 +549,11 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         members,
         edges,
         roster: members.map((m) => {
-          const status = statuses.get(m.appId) ?? 'idle'
+          // A decision of our own outranks the authority's projection: the
+          // question lives on this machine, so we know it first (and still know
+          // it while the authority is unreachable) — without this the person
+          // being waited on is the one person who cannot see the ask.
+          const status = m.awaitingDecision ? 'waiting_user' : statuses.get(m.appId) ?? 'idle'
           const taskTitle = status === 'working' ? store.getJoinedMemberTaskTitle(teamId, m.appId) : undefined
           const busy = store.getJoinedMemberBusy(teamId, m.appId)
           return {

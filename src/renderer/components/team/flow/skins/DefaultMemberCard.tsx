@@ -7,6 +7,7 @@
 import { Star, Loader2, AlertTriangle, Timer } from 'lucide-react'
 import type { TeamMemberRuntimeStatus } from '../../../../../shared/apps/team-types'
 import { MemberPresenceChip, OwnerLabel } from '../../MemberPresenceChip'
+import { WaitingOnOwnerBadge } from './WaitingOnOwnerBadge'
 import { useTranslation } from '../../../../i18n'
 import type { MemberView } from '../member-view'
 
@@ -21,7 +22,7 @@ function statusDotClass(status: TeamMemberRuntimeStatus): string {
 
 export function DefaultMemberCard({ view, selected, active }: { view: MemberView; selected: boolean; active: boolean }) {
   const { t } = useTranslation()
-  const { member, presence, isLead, isUnreachable, isWorking, isAlert, summary, checkCount } = view
+  const { member, presence, isLead, isUnreachable, isWorking, isAlert, waitsOnOwner, summary, checkCount } = view
 
   return (
     <div
@@ -69,9 +70,15 @@ export function DefaultMemberCard({ view, selected, active }: { view: MemberView
         </div>
       )}
 
-      <span className="truncate text-xs text-muted-foreground">
-        {summary || (isLead ? t('Team Lead') : '\u00A0')}
-      </span>
+      {/* Replaces the role/summary slot: same information, one notch louder than
+          the muted grey text it displaces. */}
+      {waitsOnOwner ? (
+        <WaitingOnOwnerBadge ownerName={presence.ownerName} className="self-start" />
+      ) : (
+        <span className="truncate text-xs text-muted-foreground">
+          {summary || (isLead ? t('Team Lead') : '\u00A0')}
+        </span>
+      )}
     </div>
   )
 }

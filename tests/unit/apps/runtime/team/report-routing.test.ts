@@ -154,12 +154,12 @@ describe('report routing (§5.3)', () => {
     expect(res.content[0].text).toMatch(/escalation sent to user/i)
   })
 
-  it('team escalation with routing=lead → captured + audited, but NOT surfaced to the user', async () => {
-    getActiveTeamRuntime.mockReturnValue({
-      captureReport: capture,
-      // A MEMBER (not the lead) under lead routing → suppressed (forwarded to lead).
-      buildPromptContext: vi.fn(() => ({ escalationRouting: 'lead', selfIsLead: false })),
-    })
+  it('a NON-lead escalation still reaches the user under lead routing — the preference never intercepts', async () => {
+    // The team's escalation preference shapes the prompt (take it to the lead
+    // first); it must not redirect a member that decided it needs a person.
+    // Redirecting here answered the question in two places at once, while the
+    // member had already been told to stop waiting for either answer.
+    getActiveTeamRuntime.mockReturnValue({ captureReport: capture })
     const { store, entries } = makeStore()
     const onEscalation = vi.fn()
     const ctx: ReportToolContext = {
@@ -178,26 +178,18 @@ describe('report routing (§5.3)', () => {
       question: 'Skip or wait?',
     })
 
-    // Still captured for the runtime to route to the lead.
     expect(capture).toHaveBeenCalledWith('corr-1', { kind: 'escalation', content: 'Data source 403' })
-    // Audit entry still written (tagged) for aggregation.
     expect(entries).toHaveLength(1)
-    expect(entries[0].type).toBe('escalation')
-    // The user is NOT prompted: no callback, no broadcast, no desktop notification.
-    expect(onEscalation).not.toHaveBeenCalled()
-    expect(broadcastToAll).not.toHaveBeenCalled()
-    expect(sendToRenderer).not.toHaveBeenCalled()
-    expect(notifyAppEvent).not.toHaveBeenCalled()
-    expect(res.content[0].text).toMatch(/routed to the team lead/i)
+    expect(onEscalation).toHaveBeenCalledWith(entries[0].id)
+    expect(broadcastToAll).toHaveBeenCalledWith(
+      'app:escalation:new',
+      expect.objectContaining({ appId: 'app-researcher', teamId: 'team-1' })
+    )
+    expect(res.content[0].text).toMatch(/escalation sent to user/i)
   })
 
-  it('the LEAD\u2019s own escalation under routing=lead → surfaced to the user (not suppressed)', async () => {
-    // The lead is the last resort before the user: when it escalates upward it
-    // must reach the user even under 'lead' routing, otherwise it is lost.
-    getActiveTeamRuntime.mockReturnValue({
-      captureReport: capture,
-      buildPromptContext: vi.fn(() => ({ escalationRouting: 'lead', selfIsLead: true })),
-    })
+  it('the LEAD\u2019s own escalation reaches the user too', async () => {
+    getActiveTeamRuntime.mockReturnValue({ captureReport: capture })
     const { store, entries } = makeStore()
     const onEscalation = vi.fn()
     const ctx: ReportToolContext = {

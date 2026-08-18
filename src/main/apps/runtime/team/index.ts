@@ -123,6 +123,15 @@ export interface TeamRuntime {
    * announce AFTER the ledger write, never before.
    */
   noteMemberStatusChanged(teamId: string): void
+  /**
+   * Re-derive whether a member owned by this machine still owes its own person
+   * an answer, and share the result with the office. Only the owner can see the
+   * question, and only some turn paths route an escalation — so the fact is
+   * recomputed from the persisted record wherever a turn ends (and at startup)
+   * rather than written where the escalation happened to be raised. Idempotent:
+   * an unchanged answer writes, publishes and announces nothing.
+   */
+  reconcileAwaitingDecision(appId: string): void
   startEpoch(teamId: string, trigger?: TeamRunTrigger): Promise<TeamEpoch>
   /** Get/create a per-chat long-lived 'conversation' epoch (message-driven entries, e.g. IM). */
   ensureConversationEpoch(teamId: string, chatKey: string, title?: string): TeamEpoch
@@ -195,6 +204,8 @@ export interface CreateTeamRuntimeDeps {
    * viewers see pulses start AND stop in step. Absent → no propagation.
    */
   onMemberStatusChanged?: (teamId: string) => void
+  /** A member's owner-authored profile changed → share it with the office. */
+  onMemberProfileChanged?: (teamId: string, appId: string) => void
   /**
    * Immediate reachability of a member's owner at send time (bootstrap wires it to
    * the federation manager). Drives the async send's honest "not delivered" gate.
@@ -249,11 +260,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
   // no message can be sent before the runtime finishes constructing.
   let board: Blackboard | null = null
 
-  const digest = createBoardDigest({
-    store,
-    // A task whose assignee is mid-turn is being worked on, not stalled.
-    getMemberStatus: (appId) => memberStatus(appId),
-  })
+  const digest = createBoardDigest({ store })
 
   const bus = createMessageBus({
     store,
@@ -278,6 +285,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     maxConcurrentTurns: deps.maxConcurrentTurns,
     onRunStateChanged: deps.onRunStateChanged,
     onMemberStatusChanged: deps.onMemberStatusChanged,
+    onMemberProfileChanged: deps.onMemberProfileChanged,
     onEpochMutation: deps.onEpochMutation,
     hasPendingEscalation: deps.hasPendingEscalation,
     describeChatKey: deps.describeChatKey,
@@ -334,6 +342,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     getMemberStatus: memberStatus,
     getMemberBusy: (appId, teamId) => orchestration!.getMemberBusy(appId, teamId),
     noteMemberStatusChanged: (teamId) => orchestration!.noteMemberStatusChanged(teamId),
+    reconcileAwaitingDecision: (appId) => orchestration!.reconcileAwaitingDecision(appId),
     startEpoch: (teamId, trigger) => orchestration!.startEpoch(teamId, trigger),
     ensureConversationEpoch: (teamId, chatKey, title) =>
       orchestration!.ensureConversationEpoch(teamId, chatKey, title),

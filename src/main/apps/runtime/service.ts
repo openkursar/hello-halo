@@ -1123,6 +1123,12 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         appManager.updateStatus(appId, 'active')
       }
 
+      // If this digital human is also in an office, what the office reads is
+      // derived from the very entry just answered — and an escalation raised
+      // outside a team turn is answered here and nowhere else, so it has to
+      // settle here too. A no-op for an app in no team.
+      getActiveTeamRuntime()?.reconcileAwaitingDecision(appId)
+
       // ── Team escalation: resume the TEAM turn, not a solo run ──────────────
       // A team member's escalation was raised inside a team-channel turn. The
       // user's answer must be delivered back into that team turn so coordination

@@ -41,21 +41,34 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   below). The agent-facing snapshot carries acts with their bodies stripped and
   only a recent tail; the full rows are for the UI, which reads the store.
 - `board-digest.ts` — what a member missed, rendered into the top of its turn.
-  Two halves, answering different questions: what CHANGED since this member last
-  looked (a delta against a per-member, in-memory watermark), and what has NOT
-  changed but should have — its own tasks sitting still, its own messages with no
-  answer. The second half exists because a pure delta structurally cannot see it:
-  "nothing happened" is not an event. The watermark advances to the newest act
-  ACCOUNTED FOR, never to wall-clock, since two acts can share a millisecond and
-  a clock-based mark would skip the second forever. The delta half is RANKED,
-  not cut off by recency: a message accepted for delivery to this member is
-  dropped outright (it arrived as the input of a turn the member took, so
-  digesting it quotes back the message being read right now), successful traffic
-  between two OTHER members is folded to one line per pair, and the budget in
-  between goes to the facts that reach the member nowhere else — a task moving, a
-  run ending, a message that never arrived. A failure is never folded away. Rendered twice — into the
-  envelope (`orchestration.withDigest`) and onto a `team_read_board` result — from
-  one implementation, so the two can never drift.
+  It answers exactly one question — what CHANGED on the board since this member
+  last looked — as a delta against a per-member, in-memory watermark. The
+  watermark advances to the newest act ACCOUNTED FOR, never to wall-clock, since
+  two acts can share a millisecond and a clock-based mark would skip the second
+  forever. The delta is RANKED, not cut off by recency: a message accepted for
+  delivery to this member is dropped outright (it arrived as the input of a turn
+  the member took, so digesting it quotes back the message being read right now),
+  successful traffic between two OTHER members is folded to one line per pair, and
+  the budget in between goes to the facts that reach the member nowhere else — a
+  task moving, a run ending, a message that never arrived. A failure is never
+  folded away. Rendered twice — into the envelope (`orchestration.withDigest`) and
+  onto a `team_read_board` result — from one implementation, so the two can never
+  drift.
+
+  It carried a second half once — "your task is still pending", "you asked X and
+  nothing has come back" — and that half is deliberately gone. Both were
+  inferences from ABSENCE, which this record cannot support: it proves what was
+  written down, never that something did not happen. The unanswered-message line
+  was worse than merely weak: a SUCCESSFUL reply is a fresh `message` act with its
+  own correlation id, never a `reply` act, so the only thing that could ever mark
+  a message answered was one of the FAILURE fates (`recordReply`). The line was
+  therefore true for every message that actually went through, for the life of the
+  epoch, and silent for exactly the ones that had failed. In practice it pinned the
+  oldest few sends to the top of every single turn, crowding out the delta it was
+  printed beside. A per-turn line that is always true carries no information and
+  trains the reader to skip the block, taking the real facts with it. If stalled
+  work needs surfacing, it belongs to something whose job is judgment (a lead's
+  sweep, a periodic check) — not to the delta.
 - `checks.ts` — periodic checks: one member's standing instruction for another
   ("from now on, every half hour, look at this"). Two rules shape it: the alarm
   is armed only on the machine that OWNS the target (so the setter can shut their
@@ -144,9 +157,18 @@ mailbox, which produced exactly what a wrong guess produces:
 So the rule is the one Claude Code's own team tooling states: *your plain output
 is not visible to other agents — to communicate you must call the tool*. The
 cost is that a model which forgets to call `team_send` leaves its colleague
-waiting. That is a real cost, paid deliberately, and it has one backstop: the
-board digest tells a sender when a message of theirs has gone unanswered (see
-"the office record" below — a turn merely ending never marks it answered).
+waiting.
+
+**This is a known gap, and nothing currently closes it.** The digest once tried
+and could not (see `board-digest.ts` above): nothing in the record distinguishes
+"nobody replied" from "the reply was a new message", so the warning fired on every
+send forever and had to go. No code has taken its place — today only a person
+reading the office record notices, and no code prompts them to look. Do not read
+the sentence "a lead will notice" into this: no sweep exists. If it needs closing,
+`checks.ts` is the infrastructure that could carry it (a standing instruction is
+already a periodic, judgment-shaped job), and the design constraint is the one
+that killed the digest attempt: whatever fires must be able to tell a missing
+reply from a reply that took another shape, or it will be ignored the same way.
 
 ## The two channels (do not conflate)
 
@@ -174,24 +196,20 @@ the same. Nowhere did "who contacted whom" exist as a fact.
 `team_activity` is that record. Three properties shape it:
 
 - **Append-only.** A `reply` act is a NEW row carrying the original's
-  `correlationId`, never an edit of the message row. So "answered / awaiting
-  reply" is derived (`answeredCorrelationIds` / `isAwaitingReply` in
-  `shared/apps/team-types`, one rule shared by the digest and the renderer),
-  replication is a single idempotent insert, and a rejected shadow write rolls
-  back to a plain delete.
+  `correlationId`, never an edit of the message row — so replication is a single
+  idempotent insert and a rejected shadow write rolls back to a plain delete.
+  Note what this does NOT give you: a normal reply is not a `reply` act at all
+  (next bullet), so the rows can tell you a message FAILED but never that one was
+  answered. Do not build "is this still waiting?" on top of them.
 - **A turn ending is not a reply** (`isRecordableFate`). `completeTurn` files a
   `reply` act only for the fates the sender cannot learn any other way — `error`,
   `timeout`, `undelivered` — because the member is not running and cannot report
   those itself. A turn that simply *ran* files nothing: its closing words went to
   whoever is watching that member's chat, and if they were meant for the sender
-  they were sent with `team_send`, which files its own `message` act.
-  Recording every turn end as a reply did two kinds of damage. It quoted the
-  member's closing line back at the sender through the digest ("X answered
-  you: …") — the same conflation as auto-delivery, moved into the record. And it
-  satisfied `answeredCorrelationIds`, switching off the digest's "you asked X and
-  nothing has come back" for the exact case that line exists to catch: a model
-  that forgot to reply. With the auto-delivery gone that backstop is the only one
-  left, so it must never be silenced by silence.
+  they were sent with `team_send`, which files its own `message` act. Recording
+  every turn end as a reply would quote the member's closing line back at the
+  sender through the digest ("X answered you: …") — the same conflation as
+  auto-delivery, moved into the record.
 - **Recorded where the system already knows.** Messages and failed fates are
   recorded by the BUS (`send`, `completeTurn`, `resolvePendingWaitsForMember`)
   because that is the one point every teammate message path converges — a
@@ -445,9 +463,10 @@ but depend on the session tier (`app-chat`, `report-tool`); they are the only
 files here allowed to.
 
 - `index.ts` — `createTeamRuntime({ store, session? })` constructs the bus +
-  blackboard + orchestration and returns `{ bus, blackboard, startEpoch,
-  ensureConversationEpoch, sealEpoch, requestSeal, captureReport,
-  buildPromptContext }`. The bus is built first with a
+  blackboard + checks + digest + orchestration and returns them behind
+  `TeamRuntime` (the epoch lifecycle, `captureReport`, `buildPromptContext`, the
+  member-status projections, `reconcileAwaitingDecision`, `resumeFromEscalation`
+  — the interface in that file is the surface, this list is not). The bus is built first with a
   thin hook shim that forwards to the orchestration once it exists (breaking the
   bus↔orchestration construction cycle). `session` defaults to an app-chat-backed
   `OrchestrationSessionDeps` (loaded via dynamic import so app-chat stays out of
@@ -464,10 +483,11 @@ files here allowed to.
   escalate-to-user + seal. Provides `captureReport` (report sink), the
   `getMemberStatus` projection (working when the member's team session is
   mid-turn), and `buildPromptContext(teamId, selfAppId)` (roster + topology).
-  Honors `escalationRouting`: a member escalation under `'lead'` is re-sent to
-  the lead's mailbox and the report-tool suppresses its user-facing emission
-  (no double-send); under `'user'` the report-tool's tagged entry stands and is
-  surfaced to the user. Its own wakes (escalation resume, quiescence nudge,
+  An escalation always marks the member as owing its own person an answer —
+  `escalationRouting` never changes that here (see "The escalation preference is
+  a prompt, not a gate"). Owns `reconcileAwaitingDecision` — what the office reads
+  about a member waiting on its own person, derived rather than pushed (see "Who
+  is waiting on whom is derived, not routed"). Its own wakes (escalation resume, quiescence nudge,
   periodic check) go out through `bus.deliverRuntimeWake`, never `wakeTarget`
   directly — the bus owns the busy gate.
 - `team-prompt.ts` — `buildTeamEntry(ctx)` / `buildTeamConstraints(ctx)`, the
@@ -516,6 +536,58 @@ order the person works through them. Three consequences the code must keep:
   The app record's single `pendingEscalationId` is only ever the newest and
   cannot express a queue; the activity store (`getAllPendingEscalations`) is the
   truth for "what is still open".
+
+### Who is waiting on whom is derived, not routed
+
+Only the owner's machine can see, or answer, its member's question — so the fact
+has to travel (`team_members.awaiting_decision`, office-shared via
+`member_profile`), or every other machine reads a blocked member as idle and the
+office looks stopped.
+
+It cannot be written only where the escalation is RAISED. That happens inside
+`wakeTarget`'s completion, and most turns never pass through it: a member woken
+by a teammate on ANOTHER machine runs through `runRelayedTurn`, an IM-backed
+team turn comes from `dispatch-inbound`, a person's 1:1 goes straight to the
+session. All three left the member unmarked — the office saw nothing, and so did
+the one screen that could have answered.
+
+So `reconcileAwaitingDecision(appId)` recomputes it instead, from the persisted
+escalation (`hasPendingEscalation`), on the machine that owns the member. It is
+idempotent — an unchanged answer writes, publishes and announces nothing — which
+is what lets it run at every team turn end (`app-chat`, the one point every path
+converges on), when an answer is recorded, and at startup for every locally
+owned member, so a restart re-converges. Consuming `capturedEscalations` outside
+`wakeTarget` would have been the shorter route and is wrong: `sendAppChatMessage`
+resolves BEFORE that completion handler, so a second consumer steals the entry
+and hands the waiting teammate a plain `result` where an escalation happened.
+
+There is deliberately NO exclusion here — every pending escalation counts, lead or
+not, whatever the team's escalation preference. An earlier version excluded a
+non-lead's question under `'lead'` routing, which put two opposite answers in the
+codebase for one question: the persisted mark said "not waiting" while the live
+projection (`getMemberStatus` → `hasPendingEscalation`) and the pending-decision
+list the banner reads (`pendingEscalationsForTeam`) both said "waiting". The
+office showed idle, the owner's own screen showed a decision it could not clear.
+One question, one answer: if the record holds an unanswered escalation for this
+member, its person owes an answer.
+
+### The escalation preference is a prompt, not a gate
+
+`escalationRouting` shapes what a member is TOLD (`team-prompt.ts`): under
+`'lead'`, take blockers to the lead first and reserve `report(type:"escalation")`
+for what the lead cannot settle. It does not intercept the call.
+
+It used to. A non-lead's escalation under `'lead'` was redirected into the lead's
+mailbox and the user-facing emission suppressed — and the result was worse than
+either design on its own: the banner still lit (the audit entry feeds the same
+pending-decision list), so the lead AND the person were both answering, while the
+member had been told "routed to the lead, end your turn" and was waiting for
+neither. Nothing carried the person's answer back to it.
+
+The rule now: a member that asks for a person reaches that person. Which door to
+try first is a judgment, so it is stated in the prompt and left to the model —
+the same treatment `collabMode` gets. The cost is that a member inclined to ask
+humans will ask more often; that is a prompt to tune, not a call to intercept.
 
 ## Triggers & entries — a team is triggerable like a digital human
 
@@ -652,7 +724,12 @@ Two facts about a member are per-TEAM and owner-authored, and they live on the
 The shared vocabulary (which tools exist, what an unstated permission means) is
 `shared/apps/capability-policy.ts`, and the enforcement is
 `apps/runtime/capability-policy.ts` — the same pair the IM guest path uses, so
-the two scenarios cannot drift.
+the two scenarios cannot drift. A capability the vocabulary does not list is
+never injected for either caller: an owner cannot switch off what they were never
+shown, so defaulting an unlisted server ON widened the lend every time a new one
+was added. The interactive terminal is why this rule exists — it sat outside the
+tables while the command tool was switchable, and a teammate could run commands
+on a machine whose owner believed they had withheld exactly that.
 
 ## One turn per session — the only lock in the design
 

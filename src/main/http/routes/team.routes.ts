@@ -379,14 +379,14 @@ export function registerTeamRoutes(app: Express): void {
       // epochId defaults to the team's current run when the body omits it, and
       // falls back to the latest (possibly sealed) epoch so ad-hoc 1:1 chat keeps
       // working after a run finished — sendToMember reactivates it before sending.
+      // An office where nothing has run yet resolves to none: passed through as
+      // empty, because the service opens the member's long-lived chat itself.
+      // Rejecting it here made a brand-new office unaddressable over HTTP while
+      // the desktop path — same service, same office — worked.
       const epochId =
         (typeof req.body?.epochId === 'string' && req.body.epochId
           ? req.body.epochId
           : (store.getCurrentEpochForTeam(teamId)?.id ?? store.listEpochsByTeam(teamId)[0]?.id)) ?? ''
-      if (!epochId) {
-        res.status(400).json({ success: false, error: 'No run has started for this team yet' })
-        return
-      }
 
       const result = await service.sendToMember({ teamId, appId: targetAppId, epochId, message, images, thinkingEnabled })
       res.json({ success: true, data: result })

@@ -12,6 +12,7 @@
 
 import { Star, Timer } from 'lucide-react'
 import { MemberPresenceChip, OwnerLabel } from '../../MemberPresenceChip'
+import { WaitingOnOwnerBadge } from './WaitingOnOwnerBadge'
 import { useTranslation } from '../../../../i18n'
 import type { MemberView } from '../member-view'
 
@@ -163,12 +164,7 @@ function StatusBadge({ view }: { view: MemberView }) {
   // Blocked, but on someone else's word — stated plainly, in the resting palette
   // so it never reads as this reader's to clear.
   if (waitsOnOwner) {
-    const owner = presence.ownerName || t('its owner')
-    return (
-      <span className="absolute right-2 top-2 inline-flex max-w-[85%] items-center gap-1 truncate rounded-full border border-border bg-secondary/70 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-        {t('Waiting on {{owner}}', { owner })}
-      </span>
-    )
+    return <WaitingOnOwnerBadge ownerName={presence.ownerName} className="absolute right-2 top-2 max-w-[85%]" />
   }
   if (isUnreachable) return null
   return (

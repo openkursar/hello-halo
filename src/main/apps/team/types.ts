@@ -111,6 +111,8 @@ export interface TeamMemberRow {
   delegated_policy_json: string | null
   /** Whether teammates may set a periodic check; added in migration v10. */
   accepts_checks: number
+  /** Whether this member is waiting on its owner to decide; added in migration v13. */
+  awaiting_decision: number
 }
 
 /** Row shape from the `team_checks` table. */
@@ -231,6 +233,7 @@ export interface MemberFieldUpdate {
   duty?: string | null
   delegatedPolicyJson?: string | null
   acceptsChecks?: boolean
+  awaitingDecision?: boolean
 }
 
 /** Fields a member or the lead may change on a single blackboard task. */

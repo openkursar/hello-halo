@@ -50,6 +50,14 @@ export interface UpdateTaskInput {
   status: TaskStatus
   resultRef?: string
   note?: string
+  /**
+   * The member moving the task — not necessarily its assignee. The office admits
+   * a write from another machine only when it names a member that machine owns,
+   * so an update with no author is refused outright on any machine that owns more
+   * than one member. Absent only for the authority's own maintenance writes,
+   * which never cross that gate.
+   */
+  callerAppId?: string
 }
 
 export interface PostFindingInput {

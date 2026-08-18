@@ -312,6 +312,7 @@ function buildUpdateTaskTool(ctx: TeamMcpContext) {
           status: input.status as TaskStatus,
           resultRef,
           note: input.note,
+          callerAppId: ctx.callerAppId,
         })
         // The task row keeps only its latest state, so without this act the fact
         // that someone moved it — and when — is gone the moment it moves again.

@@ -33,6 +33,13 @@ export interface CapabilityPolicy {
   allowFileSend?: boolean
   /** On-device OCR reads arbitrary local paths, so it is gated like the rest. */
   allowOcr?: boolean
+  /**
+   * Interactive terminals. A second way to run commands on the owner's machine,
+   * so it belongs to the same decision as the built-in command tool — withholding
+   * one while granting the other leaves the owner believing they closed a door
+   * that is still open.
+   */
+  allowTerminal?: boolean
 
   /** User-installed MCP server ids (specId) this caller may use. */
   allowedUserMcp?: string[]
@@ -46,6 +53,7 @@ export type CapabilityToggleKey =
   | 'allowApps'
   | 'allowFileSend'
   | 'allowOcr'
+  | 'allowTerminal'
 
 // ── Built-in tool universe ──
 
@@ -109,15 +117,35 @@ export const CAPABILITY_TOOL_GROUPS: readonly CapabilityToolGroup[] = ['file', '
 /** Halo MCP servers always available: read-only, no side effects, no local reach. */
 export const CAPABILITY_SAFE_MCP: readonly string[] = ['web-search', 'halo-memory']
 
-/** Halo MCP servers gated by a policy toggle, in display order. */
-export const CAPABILITY_MCP_TOGGLES: readonly { server: string; key: CapabilityToggleKey; label: string }[] = [
+/**
+ * Halo MCP servers gated by a policy toggle, in display order.
+ *
+ * `followsBuiltin` names the built-in tool a capability inherits from when its
+ * own switch was never touched — for a capability that is a second door into the
+ * same room, so withholding the first door withholds both. Inheriting only ever
+ * *grants*, so it applies solely where silence already means yes; where the rule
+ * is "nothing unless stated", nothing is inherited either.
+ */
+export const CAPABILITY_MCP_TOGGLES: readonly {
+  server: string
+  key: CapabilityToggleKey
+  label: string
+  followsBuiltin?: string
+}[] = [
   { server: 'ai-browser', key: 'allowAiBrowser', label: 'AI Browser' },
   { server: 'halo-email', key: 'allowEmail', label: 'Email' },
   { server: 'halo-notify', key: 'allowNotify', label: 'Notifications' },
   { server: 'halo-apps', key: 'allowApps', label: 'Digital Humans' },
   { server: 'im-file-send', key: 'allowFileSend', label: 'File Send' },
   { server: 'ocr', key: 'allowOcr', label: 'Text Extraction (OCR)' },
+  // A terminal is a second way onto the owner's machine, so it follows the
+  // command tool: withholding commands withholds it too.
+  { server: 'ai-terminal', key: 'allowTerminal', label: 'Terminal', followsBuiltin: 'Bash' },
 ]
+
+const CAPABILITY_FOLLOWS_BUILTIN: ReadonlyMap<CapabilityToggleKey, string> = new Map(
+  CAPABILITY_MCP_TOGGLES.flatMap((t) => (t.followsBuiltin ? [[t.key, t.followsBuiltin] as const] : []))
+)
 
 // ── Enforcement mode ──
 
@@ -166,7 +194,14 @@ export function allowsCapability(
   mode: CapabilityMode
 ): boolean {
   const value = policy?.[key]
-  return mode === 'permissive' ? value !== false : value === true
+  if (typeof value === 'boolean') return value
+  // Silence means no, and stays meaning no: inheriting from another switch here
+  // would hand a stranger a capability whose switch the owner was never shown.
+  if (mode !== 'permissive') return false
+  // Silence means yes, so the only question is whether a related switch was
+  // turned OFF — see `followsBuiltin` on the toggle table.
+  const follows = CAPABILITY_FOLLOWS_BUILTIN.get(key)
+  return follows ? allowsBuiltin(policy, follows, mode) : true
 }
 
 /** Whether a user-installed MCP server is granted under this policy. */
@@ -190,5 +225,6 @@ export function fullCapabilityPolicy(): CapabilityPolicy {
     allowApps: true,
     allowFileSend: true,
     allowOcr: true,
+    allowTerminal: true,
   }
 }

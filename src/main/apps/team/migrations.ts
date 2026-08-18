@@ -299,5 +299,18 @@ export const migrations: Migration[] = [
           ON team_activity(correlation_id)
       `)
     }
+  },
+  {
+    version: 13,
+    description: 'Add team_members.awaiting_decision so the office can see who a member is waiting on',
+    up(db) {
+      // A question a digital human asks its own person is answerable only on that
+      // person's machine, so every other machine — the host included — saw the
+      // member as idle and the office looked stopped rather than blocked on a
+      // human. The owner writes this bit and it travels with the office-shared
+      // member profile. Persisted rather than in-memory because an unanswered
+      // question outlives a restart.
+      db.exec(`ALTER TABLE team_members ADD COLUMN awaiting_decision INTEGER NOT NULL DEFAULT 0`)
+    }
   }
 ]

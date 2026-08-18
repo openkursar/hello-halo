@@ -55,6 +55,21 @@ const WRITE_SUBJECT_FIELDS = [
   'appId', // member_profile
 ] as const
 
+/**
+ * Writes that belong to the NODE, not to one of its members, and therefore carry
+ * no author it could own:
+ *   - `epoch_upsert` — a conversation's lifecycle: opened by a person, shared by
+ *     the office. Refusing it left a conversation started on a joiner invisible
+ *     everywhere else.
+ *   - `check_delete` — stopping a periodic check. Any member may stop one it did
+ *     not set, so the row names the setter and the target, neither of which the
+ *     stopping machine need own.
+ *
+ * They are admitted per-node: the sender must still own a member that may make
+ * coordination writes, so a read-only participant gains nothing.
+ */
+const NODE_SCOPED_WRITE_OPS: ReadonlySet<string> = new Set(['epoch_upsert', 'check_delete'])
+
 export interface OfficeAuthorityDeps {
   officeId: string
   selfNodeId: NodeId
@@ -233,7 +248,9 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
       // author fields to borrow the open default.
       const payload = frame.payload as { teamId?: string }
       const teamId = typeof payload.teamId === 'string' ? payload.teamId : officeId
-      const subjectAppId = resolveWriteSubjectAppId(teamId, frame)
+      const subjectAppId =
+        resolveWriteSubjectAppId(teamId, frame) ??
+        (NODE_SCOPED_WRITE_OPS.has(frame.op) ? resolveWritingMemberOfNode(teamId, frame.fromNode) : null)
       // A refusal here is non-retryable — the writer discards a row it already
       // showed its user — and this is the only place that knows why, so the
       // resolved subject (or its absence) has to be logged here.
@@ -353,6 +370,18 @@ export function createOfficeAuthority(deps: OfficeAuthorityDeps): OfficeAuthorit
     // No self-report: a single-owner node is unambiguous; a multi-owner node is
     // ambiguous and must name its subject → deny.
     return ownedByNode.length === 1 ? ownedByNode[0].appId : null
+  }
+
+  /**
+   * The subject for a write that belongs to the NODE rather than to one member
+   * (see {@link NODE_SCOPED_WRITE_OPS}): any member it owns that may make
+   * coordination writes. Null when it owns none — a read-only participant stays
+   * read-only, which is the property the per-member gate exists to protect.
+   */
+  function resolveWritingMemberOfNode(teamId: string, fromNode: NodeId): string | null {
+    if (fromNode === selfNodeId) return null
+    const owned = teamStore.listMembersByTeam(teamId).filter((m) => m.ownerNodeId === fromNode)
+    return owned.find((m) => scopeGate.canCoordinationWrite(teamId, m.appId))?.appId ?? null
   }
 
   /**

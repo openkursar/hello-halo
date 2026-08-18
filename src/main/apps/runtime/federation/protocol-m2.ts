@@ -191,9 +191,10 @@ export type ReplicationOp =
   | 'epoch_upsert'
   /**
    * Owner-authored member facts the whole office needs: what a member is
-   * responsible for here, and whether its owner accepts periodic checks on it.
+   * responsible for here, whether its owner accepts periodic checks on it, and
+   * whether it is currently waiting on its owner to decide something.
    * Only the node that OWNS the member may write them; everyone else reads.
-   * Payload = `{ teamId, appId, duty, acceptsChecks }`.
+   * Payload = `{ teamId, appId, duty, acceptsChecks, awaitingDecision }`.
    */
   | 'member_profile'
   /**
