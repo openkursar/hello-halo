@@ -108,7 +108,7 @@ describe('report routing (§5.3)', () => {
       teamContext: TRIGGER,
     }
     const handler = getReportHandler(ctx, store)
-    const res = await handler({ type: 'run_complete', summary: 'T1 done', data: 'see out.md' })
+    const res = await handler({ type: 'run_complete', message: 'T1 done', data: 'see out.md' })
 
     // The result is the turn's final message — report does NOT carry it.
     expect(capture).not.toHaveBeenCalled()
@@ -131,15 +131,14 @@ describe('report routing (§5.3)', () => {
     const handler = getReportHandler(ctx, store)
     const res = await handler({
       type: 'escalation',
-      summary: 'Data source 403',
-      question: 'Skip or wait?',
+      message: 'Data source 403 — skip or wait?',
       choices: ['skip', 'wait'],
     })
 
     // Captured for orchestration routing.
     expect(capture).toHaveBeenCalledWith('corr-1', {
       kind: 'escalation',
-      content: 'Data source 403',
+      content: 'Data source 403 — skip or wait?',
     })
     // Entry written, tagged with teamContext for aggregation.
     expect(entries).toHaveLength(1)
@@ -174,11 +173,10 @@ describe('report routing (§5.3)', () => {
     const handler = lastCall[3] as (input: any) => Promise<any>
     const res = await handler({
       type: 'escalation',
-      summary: 'Data source 403',
-      question: 'Skip or wait?',
+      message: 'Data source 403 — skip or wait?',
     })
 
-    expect(capture).toHaveBeenCalledWith('corr-1', { kind: 'escalation', content: 'Data source 403' })
+    expect(capture).toHaveBeenCalledWith('corr-1', { kind: 'escalation', content: 'Data source 403 — skip or wait?' })
     expect(entries).toHaveLength(1)
     expect(onEscalation).toHaveBeenCalledWith(entries[0].id)
     expect(broadcastToAll).toHaveBeenCalledWith(
@@ -202,7 +200,7 @@ describe('report routing (§5.3)', () => {
     createReportToolServer(store, ctx, onEscalation)
     const lastCall = toolMock.mock.calls[toolMock.mock.calls.length - 1]
     const handler = lastCall[3] as (input: any) => Promise<any>
-    const res = await handler({ type: 'escalation', summary: 'Cannot resolve', question: 'Your call?' })
+    const res = await handler({ type: 'escalation', message: 'Your call?' })
 
     // Surfaced to the user: callback + broadcast fire, entry tagged with teamId.
     expect(onEscalation).toHaveBeenCalledWith(entries[0].id)
@@ -223,7 +221,7 @@ describe('report routing (§5.3)', () => {
       teamContext: TRIGGER,
     }
     const handler = getReportHandler(ctx, store)
-    const res = await handler({ type: 'escalation', summary: 'Data source 403', question: 'Skip or wait?' })
+    const res = await handler({ type: 'escalation', message: 'Skip or wait?' })
 
     // A member believing it is suspended reads the next unrelated wake as its answer.
     const text = res.content[0].text as string
@@ -242,8 +240,8 @@ describe('report routing (§5.3)', () => {
       teamContext: TRIGGER,
     }
     const handler = getReportHandler(ctx, store)
-    await handler({ type: 'escalation', summary: 'first', question: 'Which test account\nshould I use?' })
-    const res = await handler({ type: 'escalation', summary: 'second', question: 'Ship without the VDI?' })
+    await handler({ type: 'escalation', message: 'Which test account\nshould I use?' })
+    const res = await handler({ type: 'escalation', message: 'Ship without the VDI?' })
 
     expect(entries).toHaveLength(2)
     const text = res.content[0].text as string
@@ -263,7 +261,7 @@ describe('report routing (§5.3)', () => {
       teamContext: TRIGGER,
     }
     const handler = getReportHandler(ctx, store)
-    const res = await handler({ type: 'escalation', summary: 'only one', question: 'Go?' })
+    const res = await handler({ type: 'escalation', message: 'Go?' })
 
     expect(res.content[0].text as string).not.toMatch(/still unanswered/i)
   })
@@ -278,7 +276,7 @@ describe('report routing (§5.3)', () => {
       // no teamContext
     }
     const handler = getReportHandler(ctx, store)
-    const res = await handler({ type: 'run_complete', summary: 'done' })
+    const res = await handler({ type: 'run_complete', message: 'done' })
 
     expect(capture).not.toHaveBeenCalled()
     expect(entries).toHaveLength(1)

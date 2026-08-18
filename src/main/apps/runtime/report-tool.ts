@@ -112,18 +112,21 @@ export function createReportToolServer(
   const baseDescription =
     'Write an entry to the Activity Thread so the user knows what happened. ' +
     'ALWAYS call this at the end of every execution.\n\n' +
-    'Example call: { "type": "run_complete", "summary": "💧 Time to drink water! Stay hydrated." }\n\n' +
-    'type values:\n' +
-    '- "run_complete": Task finished (use this most of the time)\n' +
-    '- "run_skipped": Nothing to do this time\n' +
-    '- "milestone": Important finding mid-task\n' +
-    '- "escalation": Need user decision before continuing\n' +
-    '- "output": Produced a file or report\n\n' +
-    'For escalation: also provide "question" field. After escalation, stop execution.\n\n' +
-    'For detailed content (plans, proposals, long reports):\n' +
-    '1. Write content to a .md file first (use Write tool)\n' +
-    '2. Pass the absolute file path as data_path\n' +
-    'This keeps the tool call lightweight and lets you Edit the file for revisions.'
+    '`message` is what the user reads — plain markdown, written for a human.\n' +
+    'For an escalation, `message` IS the question: one concrete thing to decide.\n' +
+    'Add `choices` when the answers are obvious. End your turn after the call.\n\n' +
+    'type:\n' +
+    '- run_complete — the run finished and needs nothing from the user. ' +
+    'Errors count too: say what broke.\n' +
+    '- run_skipped — there was nothing to run this time.\n' +
+    '- milestone — notifies the user of an important event; the run continues.\n' +
+    '- escalation — a human decision or approval is required. ' +
+    'Ends the run; it resumes when the user answers.\n' +
+    '- output — a file or report was produced; say what it is and where.\n\n' +
+    'App instructions that say to alert or notify the user about something mean ' +
+    'a milestone or an escalation, not a line in the final report.\n\n' +
+    'Plans, proposals and long reports go in a .md file: pass its absolute path ' +
+    'as `data_path` and Edit that file to revise.'
 
   // Inject the concrete plans directory path so the AI knows exactly where to write
   const plansDirGuidance = runContext.plansDir
@@ -141,9 +144,14 @@ export function createReportToolServer(
         'escalation',
         'output',
       ]).describe(
-        'Entry type. Use "run_complete" for normal task completion. REQUIRED — must be one of the listed values.'
+        'Entry type. Use "run_complete" for normal task completion, or pick by ' +
+        'what the entry needs from the user. The five values are described in ' +
+        'the tool description.'
       ),
-      summary: z.string().describe(
+      // Optional in the schema so a missing value reaches the handler, which can
+      // answer with an instruction the model acts on rather than a schema dump.
+      // The requirement itself is carried by the description.
+      message: z.string().optional().describe(
         'REQUIRED. Briefly tell the user what happened in clear markdown. ' +
         'Example: "💧 Drink water reminder: Stay hydrated! It\'s been 1 hour since your last reminder." ' +
         'Do not include raw JSON or code blocks — unless the user explicitly requires it.'
@@ -156,9 +164,6 @@ export function createReportToolServer(
         'Use this instead of "data" for detailed plans, proposals, or long reports. ' +
         'To revise content later, Edit the file and re-escalate with the same path.'
       ),
-      question: z.string().optional().describe(
-        'Only for escalation: the question to ask the user.'
-      ),
       choices: z.array(z.string()).optional().describe(
         'Only for escalation: preset answer choices (user can also type freely).'
       ),
@@ -168,31 +173,34 @@ export function createReportToolServer(
       const now = Date.now()
       const runTag = runContext.runId.slice(0, 8)
 
-      // DEBUG: dump raw input to diagnose SDK tool input delivery
-      console.log(
-        `[Runtime][${runTag}] report_to_user RAW input: ${JSON.stringify(input)}`
-      )
+      // `message` is optional in the schema so that its absence lands here
+      // instead of being rejected upstream as a schema dump the model cannot
+      // act on. Nothing is written: the run has not been reported yet, and a
+      // placeholder entry would spend the user's attention on nothing.
+      if (!input.message) {
+        return textResult(
+          'No message was sent. `message` is what the user reads in the ' +
+          'Activity Thread — required on every call. Call again with it.',
+          true
+        )
+      }
 
-      // Defensive defaults: SDK tool() does not enforce Zod at runtime,
-      // non-Anthropic models may omit required fields.
+      // Non-Anthropic models occasionally send a type outside the enum.
       const VALID_TYPES = ['run_complete', 'run_skipped', 'milestone', 'escalation', 'output'] as const
       const safeType = (VALID_TYPES as readonly string[]).includes(input.type)
         ? input.type
         : 'run_complete'
-      const safeSummary = input.summary ?? 'Task completed.'
 
-      const summaryPreview = safeSummary.slice(0, 80)
       console.log(
         `[Runtime][${runTag}] report_to_user called: type=${safeType}${input.type !== safeType ? ` (original: ${input.type})` : ''}, ` +
-        `summary="${summaryPreview}"` +
+        `message="${input.message.slice(0, 80)}"` +
         (input.data_path ? `, data_path="${input.data_path}"` : '') +
-        (input.question ? `, question="${input.question.slice(0, 60)}"` : '') +
         (input.choices ? `, choices=${input.choices.length}` : '')
       )
 
       // Build content
       const content: ActivityEntryContent = {
-        summary: safeSummary,
+        summary: input.message,
       }
 
       // Map type to status
@@ -205,7 +213,6 @@ export function createReportToolServer(
       // Optional fields
       if (input.data) content.data = input.data
       if (input.data_path) content.dataPath = input.data_path
-      if (input.question) content.question = input.question
       if (input.choices) content.choices = input.choices
 
       // ── Team-channel routing ────────────────────────────────────────────────
@@ -220,7 +227,7 @@ export function createReportToolServer(
       // itself had already stopped waiting for either answer.
       const team = runContext.teamContext
       if (team && safeType === 'escalation') {
-        const reportText = input.data ? `${safeSummary}\n\n${input.data}` : safeSummary
+        const reportText = input.data ? `${input.message}\n\n${input.data}` : input.message
         // Tag the escalation entry so the team view aggregates it.
         content.teamContext = {
           teamId: team.teamId,
@@ -273,7 +280,7 @@ export function createReportToolServer(
         level === 'all' ||
         (level === 'important' && (safeType === 'escalation' || safeType === 'milestone' || safeType === 'output'))
       if (shouldNotify) {
-        notifyAppEvent(runContext.appName, safeSummary, {
+        notifyAppEvent(runContext.appName, input.message, {
           appId: runContext.appId,
           // External channels are now AI-driven via notify_channel tool
         })
@@ -291,7 +298,7 @@ export function createReportToolServer(
         const escalationEvent = {
           appId: runContext.appId,
           entryId,
-          question: input.question ?? content.summary,
+          question: content.summary,
           choices: input.choices ?? [],
           ...(content.teamContext
             ? { teamId: content.teamContext.teamId, epochId: content.teamContext.epochId }
