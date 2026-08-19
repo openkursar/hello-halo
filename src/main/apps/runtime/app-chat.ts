@@ -562,6 +562,7 @@ async function runAppChatTurn(
               : {}),
             checks: getActiveTeamRuntime()!.checks,
             digest: getActiveTeamRuntime()!.digest,
+            archive: getActiveTeamRuntime()!.archive,
             // Stamped onto the messages this turn sends, so the circuit
             // breaker's depth limit spans hops.
             forwardDepth: teamContext.forwardDepth,

@@ -9,8 +9,10 @@ import { createBlackboard } from './blackboard'
 import { createOrchestration } from './orchestration'
 import { createTeamChecks } from './checks'
 import { createBoardDigest } from './board-digest'
+import { createBoardArchive } from './board-archive'
 import type { TeamChecks } from './checks'
 import type { BoardDigest } from './board-digest'
+import type { BoardArchive } from './board-archive'
 import type { Orchestration, OrchestrationSessionDeps } from './orchestration'
 import type { MessageBus, TurnCompletion, CircuitLimits } from './message-bus'
 import type { Blackboard, BlackboardWriteRecord } from './blackboard'
@@ -98,6 +100,8 @@ export interface TeamRuntime {
   checks: TeamChecks
   /** What a member missed, rendered into its turn input and its board reads. */
   digest: BoardDigest
+  /** The full record behind a bounded board read, exported when one is truncated. */
+  archive: BoardArchive
   /**
    * What a TEAMMATE may make this member do, as its owner set it. Null =
    * unrestricted. Read by the chat entry point when a turn was started by
@@ -261,6 +265,10 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
   let board: Blackboard | null = null
 
   const digest = createBoardDigest({ store })
+  const archive = createBoardArchive({ store })
+  // Printouts are regenerated on demand, so anything left from an earlier run is
+  // dead weight — cleared here rather than on a timer nobody would own.
+  archive.sweep()
 
   const bus = createMessageBus({
     store,
@@ -293,6 +301,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     onEpochArchived: (teamId, epochId) => {
       checks?.clearEpoch(teamId, epochId)
       digest.clearEpoch(epochId)
+      archive.clearEpoch(epochId)
     },
   })
 
@@ -337,6 +346,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     blackboard,
     checks,
     digest,
+    archive,
     getDelegatedPolicy: (teamId, appId) => store.getMember(teamId, appId)?.delegatedPolicy ?? null,
     ...(deps.readArtifact ? { readArtifact: deps.readArtifact } : {}),
     getMemberStatus: memberStatus,
@@ -437,3 +447,6 @@ export { TEAM_CHECK_JOB_KIND, TeamCheckError, describeSchedule, renderCheckWake 
 export type { TeamChecks } from './checks'
 export { createBoardDigest } from './board-digest'
 export type { BoardDigest } from './board-digest'
+export { createBoardArchive } from './board-archive'
+export type { BoardArchive } from './board-archive'
+export { renderBoardMarkdown } from './board-render'

@@ -39,7 +39,56 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   `BlackboardSnapshot`. Roster live status is injected via `getMemberStatus`.
   Besides tasks and findings it owns `postActivity` — the office RECORD (see
   below). The agent-facing snapshot carries acts with their bodies stripped and
-  only a recent tail; the full rows are for the UI, which reads the store.
+  only a recent tail (`SNAPSHOT_ACTIVITY_LIMIT`); the full rows are for the UI,
+  which reads the store.
+
+  The tail is a bound on ONE READ, never on what a member can learn — the tool
+  layer says how many acts it is withholding and hands over a file holding all of
+  them (`board-archive.ts`). Tasks and findings are NOT bounded and must not be:
+  they are current state, and a member that cannot see an open task duplicates it.
+- `board-render.ts` — the board as the agent reads it: markdown tables, not
+  `JSON.stringify`. The JSON spent most of its budget on what the reader cannot
+  use — every field name repeated per row, the team/epoch ids it asked with, the
+  app ids behind names that every tool takes instead. Two rules keep the
+  compression honest: nothing is truncated (long text is reflowed onto one line,
+  a table cell holding no newline), and only unusable identifiers are dropped (a
+  task id stays — `team_update_task` needs it verbatim; activity/finding row ids
+  and app ids go). An empty section still prints with "None.", because a missing
+  heading reads as "not included here", which is a different claim from "there is
+  none". `renderActivityTable` is shared with the archive so a live row and an
+  archived row cannot describe an act differently.
+- `board-archive.ts` — the full record of one piece of work, exported on demand
+  so the acts outside the window stay REACHABLE. Without it the tail was not
+  merely unshown but unrecoverable: nothing pages backwards, and an act an agent
+  cannot see is indistinguishable to it from one that never happened — the exact
+  inference the board's own contract forbids ("what is on it is reliable"). A
+  file, rather than a paging parameter, because the real question is "did anyone
+  ever follow this up?", which is a grep; the agent's own file tools answer it
+  better than any cursor we could design, and they need no protocol.
+
+  It is a PRINTOUT, not a second ledger — the database is the record, this is
+  regenerated from it and safe to delete at any moment. Hence: written only when
+  something is actually withheld; rewritten only when the act count moved;
+  **rebuilt whole, never appended** (acts replicate between machines and arrive
+  out of order, so a late row can sort BEFORE rows already written and any
+  offset-based delta would skip or duplicate one); carrying the same fields the
+  snapshot carries, message bodies included in neither (this changes what an
+  agent can reach, and must not quietly widen what it can see); and living in a
+  scratch dir, since it is regenerable and its only reader is the agent that was
+  just handed the path.
+
+  That scratch dir is shared by every Halo instance on the machine — the
+  decentralized test tier boots several, and a dev build sits beside an installed
+  one — each holding its own replica of the SAME work. Two consequences, and
+  neither is optional: the file name carries the writing instance (otherwise they
+  overwrite each other's printout, and silently, since each remembers writing it
+  and skips the rewrite — leaving a reader told "240 acts" holding someone else's
+  210), and startup sweeps by AGE rather than wiping the directory (a blanket
+  wipe would take a sibling's live file). The write itself is a rename over the
+  printout, never a truncate-and-refill: the reader is a separate process and can
+  open it at any moment, including while a concurrent turn triggers a rewrite,
+  and half a record reads as "this never happened" — the one conclusion this file
+  exists to prevent.
 - `board-digest.ts` — what a member missed, rendered into the top of its turn.
   It answers exactly one question — what CHANGED on the board since this member
   last looked — as a delta against a per-member, in-memory watermark. The
@@ -228,6 +277,16 @@ the same. Nowhere did "who contacted whom" exist as a fact.
 Reads (`team_read_board`, `team_read_artifact`) are deliberately NOT recorded:
 they change nothing, they are frequent, and they would push the acts that matter
 off the feed. "Who has seen what" is the digest's watermark, not a row.
+
+**A bounded read must say that it is bounded.** The record outgrows any window
+worth putting in a turn, so the snapshot carries a recent tail — but a cut that is
+silent AND unrecoverable is not a cheaper read, it is a false one: it hands the
+agent a fragment shaped exactly like the whole, and the board's own contract
+("what is on it is reliable") stops holding for the one reader that cannot open
+the UI. So the two go together and neither ships without the other: the read
+states the total and the number withheld, and `board-archive.ts` puts all of them
+in a file the agent can read and grep. The UI is unaffected — it reads the store
+directly and always showed everything.
 
 Office-shared: it rides the same single-writer replication plane as tasks and
 findings (`ReplicationOp: 'post_activity'`), because a shared conversation record
@@ -439,6 +498,8 @@ the store — keeping the blackboard decoupled from session state.
 (`report` is the existing report_to_user, owned by the session layer — NOT here).
 `team_read_board`'s snapshot carries the epoch's periodic `checks`, so the tool
 that answers "what is already assigned" also answers "what is already watched".
+It renders through `board-render.ts` (markdown, not JSON) and, when its history
+window withholds anything, exports the rest through `archive` and points at it.
 
 ```ts
 interface TeamMcpContext {
@@ -449,6 +510,8 @@ interface TeamMcpContext {
   bus: MessageBus
   blackboard: Blackboard
   checks?: TeamChecks
+  digest?: BoardDigest
+  archive?: BoardArchive
 }
 ```
 
@@ -463,7 +526,7 @@ but depend on the session tier (`app-chat`, `report-tool`); they are the only
 files here allowed to.
 
 - `index.ts` — `createTeamRuntime({ store, session? })` constructs the bus +
-  blackboard + checks + digest + orchestration and returns them behind
+  blackboard + checks + digest + archive + orchestration and returns them behind
   `TeamRuntime` (the epoch lifecycle, `captureReport`, `buildPromptContext`, the
   member-status projections, `reconcileAwaitingDecision`, `resumeFromEscalation`
   — the interface in that file is the surface, this list is not). The bus is built first with a

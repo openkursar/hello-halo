@@ -258,6 +258,7 @@ export class TeamStore implements ITeamStore {
   private readonly stmtDeleteActivity: Database.Statement
   private readonly stmtListActivityByEpoch: Database.Statement
   private readonly stmtListActivityByTeam: Database.Statement
+  private readonly stmtCountActivityByEpoch: Database.Statement
   // team_epochs
   private readonly stmtInsertEpoch: Database.Statement
   private readonly stmtGetEpochById: Database.Statement
@@ -448,6 +449,9 @@ export class TeamStore implements ITeamStore {
     `)
     this.stmtListActivityByTeam = db.prepare(`
       SELECT * FROM team_activity WHERE team_id = ? ORDER BY created_at ASC, rowid ASC
+    `)
+    this.stmtCountActivityByEpoch = db.prepare(`
+      SELECT COUNT(*) AS n FROM team_activity WHERE team_id = ? AND epoch_id = ?
     `)
     // ── team_epochs ───────────────────────────────
     this.stmtInsertEpoch = db.prepare(`
@@ -1065,6 +1069,10 @@ export class TeamStore implements ITeamStore {
 
   listActivityByTeam(teamId: string): TeamActivity[] {
     return (this.stmtListActivityByTeam.all(teamId) as TeamActivityRow[]).map(rowToActivity)
+  }
+
+  countActivityByEpoch(teamId: string, epochId: string): number {
+    return (this.stmtCountActivityByEpoch.get(teamId, epochId) as { n: number }).n
   }
 
   // ── team_epochs ─────────────────────────────────

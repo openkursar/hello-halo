@@ -345,6 +345,12 @@ export interface TeamStore {
   listActivityByEpoch(teamId: string, epochId: string): TeamActivity[]
   /** Every act of a team, across epochs — the replication snapshot's source. */
   listActivityByTeam(teamId: string): TeamActivity[]
+  /**
+   * How many acts an epoch holds, without loading them. Lets a bounded reader
+   * state how much it is NOT showing, which is the difference between a reader
+   * that knows its own blind spot and one that mistakes a window for the whole.
+   */
+  countActivityByEpoch(teamId: string, epochId: string): number
 
   // ── team_epochs ───────────────────────────────
   insertEpoch(epoch: TeamEpoch, triggerType?: TeamRunTriggerType): void

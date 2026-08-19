@@ -9,10 +9,12 @@ import { TEAM_MCP_SERVER_NAME, TEAM_TOOL_NAMES, toActivitySubject } from '../../
 import { TeamBusError } from './message-bus'
 import { TeamCheckError, describeSchedule } from './checks'
 import { resolveArtifactRef, explainArtifactRefRejection, formatArtifactSize } from './artifact-path'
+import { renderBoardMarkdown } from './board-render'
 import type { MessageBus } from './message-bus'
 import type { Blackboard, PostActivityInput, PublishedRefClaim } from './blackboard'
 import type { TeamChecks } from './checks'
 import type { BoardDigest } from './board-digest'
+import type { BoardArchive } from './board-archive'
 import type { ReadTeamArtifact } from './index'
 import type { CollabMode, TaskStatus, TeamCheckSchedule } from '../../../../shared/apps/team-types'
 
@@ -51,6 +53,12 @@ export interface TeamMcpContext {
    * read returns the snapshot alone.
    */
   digest?: BoardDigest
+  /**
+   * Exports the acts a board read leaves out, so the reader can reach them. Absent
+   * → a long history is still reported as partial, but with nowhere to go for the
+   * rest (test runtimes).
+   */
+  archive?: BoardArchive
   /**
    * Forward depth of the turn these tools serve. A `team_send` inherits it so the
    * circuit breaker sees one chain across hops instead of a fresh chain per
@@ -398,6 +406,9 @@ function buildReadBoardTool(ctx: TeamMcpContext) {
       '`checks` lists the periodic checks running in this piece of work: who set ' +
       'each one, who it wakes, what it says and how many rounds it has run. Read ' +
       'it before setting one (so you do not duplicate) and to find the one to stop.\n\n' +
+      'Recent activity is a bounded window. When there is more, the result says so ' +
+      'and gives you a file holding the complete record — Read or Grep that file ' +
+      'before deciding that something was never done.\n\n' +
       'Optional filters: { "mine": true } for tasks assigned to you, ' +
       '{ "status": "pending" } for tasks in a given state.',
     {
@@ -417,6 +428,10 @@ function buildReadBoardTool(ctx: TeamMcpContext) {
           mine: input.mine,
           status: input.status as TaskStatus | undefined,
         })
+        // Only what the snapshot could not carry gets exported, and only then:
+        // a board whose history fits needs no file and writes none.
+        const history = ctx.archive?.materialize(ctx.teamId, ctx.epochId, snapshot.activities.length) ?? null
+        const board = renderBoardMarkdown(snapshot, { now: Date.now(), history })
         // The same lines the turn's input carries, offered again at the moment
         // the member has actually chosen to think about the board — which is
         // when it is most likely to act on them.
@@ -425,7 +440,7 @@ function buildReadBoardTool(ctx: TeamMcpContext) {
           epochId: ctx.epochId,
           viewerAppId: ctx.callerAppId,
         })
-        return textResult(digest ? `${JSON.stringify(snapshot)}\n\n${digest}` : JSON.stringify(snapshot))
+        return textResult(digest ? `${board}\n\n${digest}` : board)
       } catch (err) {
         return busErrorResult(err)
       }

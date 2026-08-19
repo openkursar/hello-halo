@@ -29,10 +29,17 @@ const LOG_TAG = '[Blackboard]'
 
 /**
  * How many acts the AGENT-facing snapshot carries. A long-running epoch
- * accumulates hundreds; the whole point of the record is that the digest and
- * the UI can reach it, not that every turn re-reads it in full.
+ * accumulates hundreds, and re-reading them all every turn is what the window
+ * exists to prevent.
+ *
+ * The window is a bound on one read, NOT on what the agent can ever learn: the
+ * tool layer states how many acts it is withholding and hands over a file
+ * holding all of them (`board-archive.ts`). That pairing is load-bearing — a cut
+ * that is silent and unrecoverable turns "what is on the board is reliable" into
+ * a lie for the one reader that cannot open the UI, and an agent that cannot
+ * see an act cannot tell it apart from one that never happened.
  */
-const SNAPSHOT_ACTIVITY_LIMIT = 60
+export const SNAPSHOT_ACTIVITY_LIMIT = 99
 
 export interface PostTaskInput {
   teamId: string
