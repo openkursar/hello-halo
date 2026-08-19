@@ -17,7 +17,7 @@
  * new fields is safe — renderer fallbacks tolerate missing flags.
  */
 
-export type EngineId = 'anthropic' | 'halo' | 'codex'
+export type EngineId = 'anthropic' | 'halo' | 'codex' | 'dsh'
 
 /**
  * Logical tool kinds Halo's UI knows how to render. The renderer maps tool
@@ -169,13 +169,15 @@ export const HALO_CAPABILITIES: EngineCapabilities = {
 }
 
 /**
- * Codex (app-server) — see codex/capabilities.ts for the canonical definition.
- * Re-exported here so callers don't need to touch the codex/ subtree to get
- * the descriptor.
+ * Codex (app-server) and DeepSeek Harness — see the adapter subtrees for the
+ * canonical definitions. Re-exported here so callers don't need to reach into
+ * an adapter subtree to get a descriptor.
  */
 export { CODEX_CAPABILITIES } from './codex/capabilities'
+export { DSH_CAPABILITIES } from './dsh/capabilities'
 
 import { CODEX_CAPABILITIES } from './codex/capabilities'
+import { DSH_CAPABILITIES } from './dsh/capabilities'
 
 /**
  * Resolve capabilities for an engine id. Used by `getEngineCapabilities()`
@@ -186,5 +188,6 @@ export function defaultCapabilitiesFor(engineId: EngineId): EngineCapabilities {
     case 'anthropic': return ANTHROPIC_CAPABILITIES
     case 'halo': return HALO_CAPABILITIES
     case 'codex': return CODEX_CAPABILITIES
+    case 'dsh': return DSH_CAPABILITIES
   }
 }

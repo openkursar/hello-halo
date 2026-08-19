@@ -114,7 +114,7 @@ export interface ConversationMeta {
    * Conversation object by `toMeta()` so the conversation list can render
    * the engine badge without loading the full conversation.
    */
-  engineId?: 'anthropic' | 'halo' | 'codex' | null
+  engineId?: 'anthropic' | 'halo' | 'codex' | 'dsh' | null
 }
 
 interface Conversation extends ConversationMeta {
@@ -130,7 +130,7 @@ interface Conversation extends ConversationMeta {
    * for UI display (EngineBadge) — engine selection at runtime is still
    * process-bound (see resolved-sdk.ts), changing it requires a restart.
    */
-  engineId?: 'anthropic' | 'halo' | 'codex' | null
+  engineId?: 'anthropic' | 'halo' | 'codex' | 'dsh' | null
 }
 
 // Thoughts file structure
@@ -666,11 +666,11 @@ export function createConversation(spaceId: string, title?: string): Conversatio
   // Stamp the conversation with the engine that created it. Cheap to read
   // (single config field) and avoids needing a separate IPC call from
   // the renderer when displaying the engine badge.
-  let engineId: 'anthropic' | 'halo' | 'codex' = 'anthropic'
+  let engineId: 'anthropic' | 'halo' | 'codex' | 'dsh' = 'anthropic'
   try {
     const cfg = getConfig()
     const cfgEngine = cfg?.agent?.sdkEngine
-    if (cfgEngine === 'halo' || cfgEngine === 'codex') engineId = cfgEngine
+    if (cfgEngine === 'halo' || cfgEngine === 'codex' || cfgEngine === 'dsh') engineId = cfgEngine
   } catch {
     // getConfig() may throw if config service hasn't initialized — fall
     // back to the documented default.

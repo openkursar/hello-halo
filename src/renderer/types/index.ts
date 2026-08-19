@@ -125,7 +125,7 @@ export interface SystemConfig {
 export interface AgentConfig {
   maxTurns: number;         // Maximum tool call turns per message
   promptProfile?: 'official' | 'halo';  // System prompt profile
-  sdkEngine?: 'anthropic' | 'halo' | 'codex';  // Agent SDK engine (requires restart)
+  sdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh';  // Agent SDK engine (requires restart)
   configDirMode?: 'halo' | 'cc' | 'custom';  // Claude CLI config directory mode
   customConfigDir?: string;  // Custom config dir path (when configDirMode === 'custom')
   enableTeams?: boolean;    // Enable Agent Teams (multi-agent collaboration)
@@ -326,7 +326,7 @@ export interface CreateSpaceInput {
 // ============================================
 
 /** Agent engine that owns a conversation. Used for the EngineBadge UI. */
-export type EngineId = 'anthropic' | 'halo' | 'codex';
+export type EngineId = 'anthropic' | 'halo' | 'codex' | 'dsh';
 
 // Lightweight metadata for conversation list (no messages)
 // Used by listConversations for fast loading
@@ -406,6 +406,14 @@ export interface EngineCapabilities {
     sessionResume: boolean; midTurnInjection: boolean; interrupt: boolean;
     multimodalImage: boolean; contextCompaction: boolean; askUserQuestion: boolean;
   };
+}
+
+/** Whether this build ships a runtime the engine can run on. */
+export interface EngineAvailability {
+  engineId: EngineId;
+  available: boolean;
+  /** Diagnostic detail (not localized) shown when an engine cannot be selected. */
+  reason?: string;
 }
 
 // ============================================

@@ -140,4 +140,13 @@ export const agentApi = {
     return httpRequest('GET', '/api/agent/engine-capabilities')
   },
 
+  // Which engines this build can actually run. Settings reads it to gate
+  // engine selection on the runtime being present.
+  getEngineAvailability: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.getEngineAvailability()
+    }
+    return httpRequest('GET', '/api/agent/engine-availability')
+  },
+
 }

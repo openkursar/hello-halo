@@ -246,6 +246,11 @@ export interface V2SessionInfo {
   // Credentials generation at session creation time
   // Used to detect stale credentials (session created before config change)
   credentialsGeneration: number
+  // Permission surface the subprocess was started with (tool allow/deny lists,
+  // permission mode, injected MCP servers). A conversation is shared by every
+  // sender in a group chat, so reuse must be keyed on this as well — otherwise
+  // a guest inherits the permissions of whoever's message created the session.
+  permissionSignature: string
 }
 
 // ============================================

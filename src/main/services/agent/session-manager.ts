@@ -33,6 +33,7 @@ import { registerProcess, unregisterProcess, getCurrentInstanceId } from '../hea
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from './sdk-config'
 import { createHaloAppsMcpServer } from '../app-bridge'
 import { createWebSearchMcpServer } from '../web-search'
+import { computePermissionSignature } from './permission-handler'
 import { startConsumer, type ConsumerHandle } from './session-consumer'
 import { hasActiveTeamTasks } from './subagent-handler'
 
@@ -473,10 +474,12 @@ export async function getOrCreateV2Session(
       // This catches race conditions where session was created with stale credentials
       // (e.g., warm-up started before config save completed)
       const currentGen = getCredentialsGeneration()
+      const permissionSignature = computePermissionSignature(sdkOptions)
       const needsCredentialRebuild = existing.credentialsGeneration !== currentGen
+      const needsPermissionRebuild = existing.permissionSignature !== permissionSignature
       const needsConfigRebuild = config && needsSessionRebuild(existing, config)
 
-      if (needsCredentialRebuild || needsConfigRebuild) {
+      if (needsCredentialRebuild || needsPermissionRebuild || needsConfigRebuild) {
         const consumer = consumers.get(conversationId)
 
         // Guard 1: Consumer is actively processing a turn (mid-API-call, mid-tool, etc.)
@@ -484,8 +487,12 @@ export async function getOrCreateV2Session(
         // Instead, mark for deferred rebuild: the consumer checks pendingConsumerRebuilds
         // after each turn completes (session-consumer.ts consumePendingRebuild) and breaks
         // its loop, triggering a clean rebuild on the next sendMessage.
+        // A permission change is never deferred: deferring returns the running
+        // session, which is the one holding the permissions we are trying to
+        // replace. The in-flight turn is worth less than running a sender's
+        // message under someone else's permissions.
         const isActivelyProcessing = consumer?.isRunning && consumer.getActiveSessionState() !== null
-        if (isActivelyProcessing) {
+        if (isActivelyProcessing && !needsPermissionRebuild) {
           pendingConsumerRebuilds.add(conversationId)
           const reason = needsCredentialRebuild
             ? `gen ${existing.credentialsGeneration}→${currentGen}`
@@ -502,7 +509,7 @@ export async function getOrCreateV2Session(
         // Their results arrive as a future autonomous turn. Killing the session now would
         // abort all in-flight agent tasks.
         const isIdleBetweenTurns = consumer?.isRunning && !consumer.getActiveSessionState()
-        if (isIdleBetweenTurns && hasActiveTeamTasks(consumer!.getLastTurnThoughts())) {
+        if (isIdleBetweenTurns && !needsPermissionRebuild && hasActiveTeamTasks(consumer!.getLastTurnThoughts())) {
           // Clear the flag that invalidateAllSessions may have set — we don't want
           // the consumer to break after the next team turn while messages are queued.
           pendingConsumerRebuilds.delete(conversationId)
@@ -518,6 +525,8 @@ export async function getOrCreateV2Session(
         // No active processing and no team agents — safe to rebuild now.
         if (needsCredentialRebuild) {
           console.log(`[Agent][${conversationId}] Credentials changed (gen ${existing.credentialsGeneration} → ${currentGen}), recreating session`)
+        } else if (needsPermissionRebuild) {
+          console.log(`[Agent][${conversationId}] Permission surface changed, rebuilding session`)
         } else {
           console.log(`[Agent][${conversationId}] Config changed (aiBrowser: ${existing.config.aiBrowserEnabled} → ${config!.aiBrowserEnabled}), rebuilding session...`)
         }
@@ -596,7 +605,8 @@ export async function getOrCreateV2Session(
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
     config: config || { aiBrowserEnabled: false },
-    credentialsGeneration: getCredentialsGeneration()
+    credentialsGeneration: getCredentialsGeneration(),
+    permissionSignature: computePermissionSignature(sdkOptions)
   })
 
   // Start cleanup if not already running

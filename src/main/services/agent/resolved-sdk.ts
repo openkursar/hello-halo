@@ -5,8 +5,8 @@
  * ║  SINGLE ENTRY POINT FOR ALL SDK IMPORTS                          ║
  * ║                                                                   ║
  * ║  Rule: No other file may import directly from                    ║
- * ║    @anthropic-ai/claude-agent-sdk, @hello-halo/agent-sdk, or      ║
- * ║    @openai/codex-sdk                                           ║
+ * ║    @anthropic-ai/claude-agent-sdk, @hello-halo/agent-sdk,         ║
+ * ║    @openai/codex-sdk, or a dsh runtime package                    ║
  * ║  All SDK access must go through this file.                       ║
  * ╚═══════════════════════════════════════════════════════════════════╝
  *
@@ -23,15 +23,21 @@
  * │  • Delete Halo SDK package   → system runs on CC/Codex only     │
  * │  • Delete Codex SDK package  → system runs on CC/Halo only      │
  * │                                                                  │
- * │  No fallback. Engine is a hard constraint. If the configured    │
- * │  SDK is not available, startup fails immediately with a clear   │
- * │  error message.                                                  │
+ * │  The three engines above are a hard constraint: if the          │
+ * │  configured SDK is not available, startup fails immediately     │
+ * │  with a clear error message.                                     │
+ * │                                                                  │
+ * │  'dsh' is the exception. Its runtime is an optional package     │
+ * │  that most builds do not ship, so a missing runtime degrades    │
+ * │  to the first available engine in FALLBACK_ORDER instead of     │
+ * │  bricking startup for a user who only wanted to try it.         │
  * └─────────────────────────────────────────────────────────────────┘
  *
  * SDK engine values (config.agent.sdkEngine):
  *   'anthropic' (default) → @anthropic-ai/claude-agent-sdk (CC SDK)
  *   'halo'                → @hello-halo/agent-sdk (Halo SDK)
  *   'codex'               → @openai/codex-sdk through CC protocol adapter
+ *   'dsh'                 → @deepseek-ai/dsh runtime through CC protocol adapter
  *
  * Startup requirement:
  *   initSdk() must be called once during app bootstrap, before any
@@ -48,6 +54,26 @@ import {
   type EngineCapabilities,
   type EngineId,
 } from './capabilities'
+import { probeEngine } from './engine-availability'
+
+// ============================================
+// Engine Registry
+// ============================================
+
+/** Log/diagnostic label per engine. User-facing names come from capabilities. */
+export const ENGINE_LABELS: Record<EngineId, string> = {
+  anthropic: 'CC SDK (@anthropic-ai/claude-agent-sdk)',
+  halo: 'Halo SDK (@hello-halo/agent-sdk)',
+  codex: 'Codex SDK (@openai/codex-sdk adapter)',
+  dsh: 'DeepSeek Harness (@deepseek-ai/dsh runtime adapter)',
+}
+
+/**
+ * Order in which a degraded boot picks a replacement engine. `dsh` is absent
+ * on purpose: it is opt-in only and must never be selected on the user's
+ * behalf.
+ */
+export const FALLBACK_ORDER: EngineId[] = ['anthropic', 'halo', 'codex']
 
 // ============================================
 // SDK Module Interface
@@ -103,10 +129,22 @@ export async function initSdk(): Promise<void> {
 }
 
 async function doInitSdk(): Promise<void> {
-  const engine = getConfig().agent?.sdkEngine ?? 'anthropic'
+  let engine: EngineId = (getConfig().agent?.sdkEngine ?? 'anthropic') as EngineId
   console.log(`[SDK] Initializing engine: ${engine}`)
 
   const startTime = performance.now()
+
+  if (engine === 'dsh') {
+    const dshSdk = await loadDshSdk()
+    if (dshSdk) {
+      _sdk = dshSdk
+      _engine = 'dsh'
+      logActiveEngine('dsh', startTime)
+      return
+    }
+    engine = firstAvailableEngine()
+    console.warn(`[SDK] Degrading to ${ENGINE_LABELS[engine]} for this run. Engine setting is unchanged.`)
+  }
 
   if (engine === 'halo') {
     _sdk = await loadHaloSdk()
@@ -116,27 +154,40 @@ async function doInitSdk(): Promise<void> {
     if (typeof (_sdk as any).setLogger === 'function') {
       installSdkLogger((_sdk as any).setLogger)
     }
-    const duration = (performance.now() - startTime).toFixed(1)
-    console.log(`[SDK] Active engine: Halo SDK (@hello-halo/agent-sdk) [${duration}ms]`)
+    logActiveEngine('halo', startTime)
     return
   }
 
   if (engine === 'codex') {
     _sdk = await loadCodexSdk()
     _engine = 'codex'
-    const duration = (performance.now() - startTime).toFixed(1)
-    console.log(`[SDK] Active engine: Codex SDK (@openai/codex-sdk adapter) [${duration}ms]`)
+    logActiveEngine('codex', startTime)
     return
   }
 
   if (engine !== 'anthropic') {
-    throw new Error(`[SDK] Unknown SDK engine "${engine}". Expected "anthropic", "halo", or "codex".`)
+    throw new Error(
+      `[SDK] Unknown SDK engine "${engine}". Expected "anthropic", "halo", "codex", or "dsh".`
+    )
   }
 
   _sdk = await loadCcSdk()
   _engine = 'anthropic'
+  logActiveEngine('anthropic', startTime)
+}
+
+function logActiveEngine(engine: EngineId, startTime: number): void {
   const duration = (performance.now() - startTime).toFixed(1)
-  console.log(`[SDK] Active engine: CC SDK (@anthropic-ai/claude-agent-sdk) [${duration}ms]`)
+  console.log(`[SDK] Active engine: ${ENGINE_LABELS[engine]} [${duration}ms]`)
+}
+
+/**
+ * First engine in FALLBACK_ORDER whose package is present. Falls back to the
+ * default engine when nothing probes positive, so bootstrap always has a
+ * loader to run — the loader itself still reports a missing package.
+ */
+function firstAvailableEngine(): EngineId {
+  return FALLBACK_ORDER.find((id) => probeEngine(id).available) ?? 'anthropic'
 }
 
 // ============================================
@@ -181,6 +232,32 @@ async function loadCodexSdk(): Promise<SdkModule> {
       '  2. Change config.agent.sdkEngine to "anthropic" or "halo" and restart'
     console.error(message, error)
     throw new Error(message)
+  }
+}
+
+/**
+ * Load the dsh adapter, or return null if this build cannot run it.
+ *
+ * Unlike its siblings this loader never throws: the dsh runtime is optional,
+ * and a user who selected the engine on a build that does not ship it must
+ * still get a working app rather than a failed bootstrap. The caller degrades
+ * to `FALLBACK_ORDER`.
+ */
+async function loadDshSdk(): Promise<SdkModule | null> {
+  const availability = probeEngine('dsh')
+  if (!availability.available) {
+    console.warn(
+      `[SDK] DeepSeek Harness runtime unavailable: ${availability.reason ?? 'unknown reason'}.`
+    )
+    return null
+  }
+
+  try {
+    const { createDshSdkModule } = await import('./dsh')
+    return createDshSdkModule() as unknown as SdkModule
+  } catch (error) {
+    console.error('[SDK] Failed to load the DeepSeek Harness adapter.', error)
+    return null
   }
 }
 

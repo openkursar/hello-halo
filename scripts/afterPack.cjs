@@ -55,6 +55,15 @@ const CODEX_TARGETS = {
   'linux-x64':    { packageName: 'codex-linux-x64', targetTriple: 'x86_64-unknown-linux-musl', binaryName: 'codex' },
 };
 
+// Maps platform-arch to the @vscode/ripgrep platform package required at
+// runtime by the dsh engine's glob and grep tools.
+const RIPGREP_TARGETS = {
+  'darwin-arm64': { packageName: 'ripgrep-darwin-arm64', binaryName: 'rg' },
+  'darwin-x64':   { packageName: 'ripgrep-darwin-x64', binaryName: 'rg' },
+  'win32-x64':    { packageName: 'ripgrep-win32-x64', binaryName: 'rg.exe' },
+  'linux-x64':    { packageName: 'ripgrep-linux-x64', binaryName: 'rg' },
+};
+
 /**
  * Resolve the app.asar.unpacked directory from electron-builder context.
  *
@@ -272,6 +281,54 @@ function cleanAndValidateCodexNativePackage(context) {
 }
 
 /**
+ * Keep only the ripgrep binary for the target platform and fail early if it is
+ * missing. The dsh engine resolves it at the first search call rather than at
+ * load, so without this check a build without the target package would ship
+ * glob and grep as tools that are offered to the model and fail every time.
+ */
+function cleanAndValidateRipgrepPackage(context) {
+  const platform = context.electronPlatformName;
+  const archStr = ARCH_NAMES[context.arch] || String(context.arch);
+  const key = `${platform}-${archStr}`;
+  const target = RIPGREP_TARGETS[key];
+
+  if (!target) {
+    console.warn(`[afterPack] No ripgrep package mapping for ${key}, skipping cleanup`);
+    return;
+  }
+
+  const unpackedDir = getUnpackedDir(context);
+  const vscodeDir = path.join(unpackedDir, 'node_modules', '@vscode');
+  if (!fs.existsSync(vscodeDir)) {
+    console.warn(`[afterPack] No @vscode dir in unpacked output, skipping ripgrep cleanup`);
+    return;
+  }
+
+  const targetBinary = path.join(vscodeDir, target.packageName, 'bin', target.binaryName);
+  if (!fs.existsSync(targetBinary)) {
+    console.error(`[afterPack] ${key}: missing ripgrep binary: ${targetBinary}`);
+    console.error(`[afterPack] Run "npm run prepare:all" before cross-platform/cross-arch packaging`);
+    throw new Error(`Missing @vscode/${target.packageName} binary for ${key}`);
+  }
+
+  const entries = fs.readdirSync(vscodeDir, { withFileTypes: true });
+  const removed = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (!/^ripgrep-(darwin|linux|win32)-/.test(entry.name)) continue;
+    if (entry.name === target.packageName) continue;
+
+    fs.rmSync(path.join(vscodeDir, entry.name), { recursive: true });
+    removed.push(entry.name);
+  }
+
+  if (removed.length > 0) {
+    console.log(`[afterPack] ${key}: removed ${removed.length} non-target ripgrep package(s): ${removed.join(', ')}`);
+  }
+  console.log(`[afterPack] ${key}: keeping @vscode/${target.packageName}`);
+}
+
+/**
  * Ensure all native binaries in the unpacked output have executable permission.
  *
  * npm packages occasionally ship tarballs with missing +x on vendored binaries
@@ -389,6 +446,9 @@ module.exports = async function(context) {
 
   // Ensure the packaged app contains the Codex native binary for this arch.
   cleanAndValidateCodexNativePackage(context);
+
+  // Ensure the packaged app contains the ripgrep binary for this platform.
+  cleanAndValidateRipgrepPackage(context);
 
   // Ensure all native binaries in unpacked output have +x permission.
   // Defends against upstream npm packages shipping broken permissions

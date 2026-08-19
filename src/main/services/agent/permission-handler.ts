@@ -44,6 +44,34 @@ interface CanUseToolDeps {
 }
 
 // ============================================
+// Permission Surface Identity
+// ============================================
+
+/**
+ * Signature of the SDK-level permission surface a session was started with.
+ *
+ * The SDK fixes these when the subprocess starts — a running session cannot be
+ * re-permissioned — so session reuse has to be keyed on them. A conversation is
+ * shared by every sender in an IM group chat, and without this a guest's message
+ * runs on the session whichever sender created it, permissions included.
+ *
+ * Derived from the built sdkOptions rather than declared by the caller, so no
+ * call site can grant something the reuse key does not know about.
+ */
+export function computePermissionSignature(sdkOptions: Record<string, any>): string {
+  const sorted = (value: unknown): string =>
+    Array.isArray(value) ? [...value].sort().join(',') : ''
+
+  return [
+    sdkOptions.permissionMode ?? '',
+    'dangerously-skip-permissions' in (sdkOptions.extraArgs ?? {}) ? 'skip' : '',
+    sorted(sdkOptions.allowedTools),
+    sorted(sdkOptions.disallowedTools),
+    Object.keys(sdkOptions.mcpServers ?? {}).sort().join(','),
+  ].join('|')
+}
+
+// ============================================
 // Pending Questions Registry
 // ============================================
 

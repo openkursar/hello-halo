@@ -45,6 +45,17 @@ const log = {
   error: (msg) => console.log(`${colors.red}[ERROR]${colors.reset} ${msg}`)
 }
 
+/** Every platform's ripgrep is one self-contained executable of the same shape. */
+function validateRipgrep(filePath) {
+  try {
+    const stats = fs.statSync(filePath)
+    const sizeMB = (stats.size / 1024 / 1024).toFixed(1)
+    return { valid: stats.size > 1024 * 1024, info: `${sizeMB} MB` }
+  } catch {
+    return { valid: false, info: 'cannot read file' }
+  }
+}
+
 /**
  * Binary dependency definitions
  * Each dependency specifies:
@@ -292,6 +303,40 @@ const BINARY_DEPENDENCIES = [
         return { valid: false, info: 'cannot read file' }
       }
     }
+  },
+
+  // @vscode/ripgrep - search binary behind the dsh engine's glob and grep tools.
+  // npm installs only the host's optional platform package, and the binary is
+  // resolved at the first search call rather than at load, so a build missing
+  // the target package ships both tools as guaranteed runtime failures.
+  // prepare-binaries.mjs fetches the target package.
+  {
+    name: 'Mac arm64 @vscode/ripgrep',
+    path: 'node_modules/@vscode/ripgrep-darwin-arm64/bin/rg',
+    platform: 'mac-arm64',
+    fix: 'npm run prepare:all',
+    validate: validateRipgrep
+  },
+  {
+    name: 'Mac x64 @vscode/ripgrep',
+    path: 'node_modules/@vscode/ripgrep-darwin-x64/bin/rg',
+    platform: 'mac-x64',
+    fix: 'npm run prepare:all',
+    validate: validateRipgrep
+  },
+  {
+    name: 'Windows x64 @vscode/ripgrep',
+    path: 'node_modules/@vscode/ripgrep-win32-x64/bin/rg.exe',
+    platform: 'win',
+    fix: 'npm run prepare:all',
+    validate: validateRipgrep
+  },
+  {
+    name: 'Linux x64 @vscode/ripgrep',
+    path: 'node_modules/@vscode/ripgrep-linux-x64/bin/rg',
+    platform: 'linux',
+    fix: 'npm run prepare:all',
+    validate: validateRipgrep
   }
 ]
 

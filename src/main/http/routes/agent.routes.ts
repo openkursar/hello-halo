@@ -85,4 +85,15 @@ export function registerAgentRoutes(app: Express): void {
     }
   })
 
+  // Engine availability — mirrors the IPC surface so remote clients gate
+  // engine selection the same way the desktop settings screen does.
+  app.get('/api/agent/engine-availability', async (_req: Request, res: Response) => {
+    try {
+      const { probeAllEngines } = await import('../../services/agent/engine-availability')
+      res.json({ success: true, data: probeAllEngines() })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
 }

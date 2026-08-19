@@ -8,7 +8,7 @@
  */
 
 import { CodexAppServerSession } from './session-adapter'
-import { tool, createSdkMcpServer } from './mcp-server'
+import { tool, createSdkMcpServer } from '../mcp/sdk-server'
 import { CODEX_CAPABILITIES } from './capabilities'
 import type { CodexSdkModule } from './types'
 

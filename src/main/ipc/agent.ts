@@ -19,6 +19,7 @@ import {
 } from '../services/agent'
 import { getEngineCapabilities, getActiveEngine } from '../services/agent/resolved-sdk'
 import { defaultCapabilitiesFor } from '../services/agent/capabilities'
+import { probeAllEngines } from '../services/agent/engine-availability'
 import { resolveCodexPendingQuestion } from '../services/agent/codex'
 import { getMainWindow } from '../foundation/window.service'
 import { broadcastToWebSocket, broadcastToAll } from '../http/websocket'
@@ -191,6 +192,18 @@ export function registerAgentHandlers(): void {
         if (caps) return { success: true, data: caps }
         const engine = getActiveEngine() ?? 'anthropic'
         return { success: true, data: defaultCapabilitiesFor(engine) }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
+
+    // Reports which engines this build can actually run. Settings uses it to
+    // stop the user from selecting an engine whose runtime is missing, which
+    // would otherwise only surface as a degraded boot after a restart.
+    getEngineAvailability: async () => {
+      try {
+        return { success: true, data: probeAllEngines() }
       } catch (error: unknown) {
         const err = error as Error
         return { success: false, error: err.message }

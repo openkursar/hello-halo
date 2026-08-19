@@ -1,15 +1,23 @@
 /**
- * Minimal in-process MCP server implementation for engines that do not expose
- * Claude Agent SDK's tool() / createSdkMcpServer() helpers.
+ * `tool()` and `createSdkMcpServer()` for engines that do not ship the Claude
+ * Agent SDK's own helpers.
  *
- * The returned shape intentionally matches the SDK MCP server contract already
- * used by Halo's built-in tools, so application code can stay engine-agnostic.
+ * Halo builds its whole in-process tool set — AI Browser, memory, web search,
+ * the Apps surface, notifications — through these two functions, before it
+ * knows which engine will run them, so every engine must supply them. The
+ * result matches the SDK's server contract, which is what lets the call sites
+ * stay engine-agnostic and what `sdk-bridge.ts` serves over loopback.
+ *
+ * Building descriptors without their handlers is not an option, however
+ * unreachable a handler may look for a given engine: the bridge makes them all
+ * reachable, and a server that lists a tool it cannot run gives the model a
+ * tool that always fails.
  */
 
 import type {
-  SdkMcpServerConfigWithInstance,
-  SdkMcpToolDefinition,
+  SdkMcpServerConfig,
   SdkMcpServerInstance,
+  SdkMcpToolDefinition,
 } from './types'
 
 export function tool<Schema extends Record<string, any>>(
@@ -41,13 +49,12 @@ export function createSdkMcpServer(options: {
   name: string
   version?: string
   tools?: SdkMcpToolDefinition[]
-}): SdkMcpServerConfigWithInstance {
+}): SdkMcpServerConfig {
   const { name, version = '1.0.0', tools = [] } = options
 
   const instance: SdkMcpServerInstance = {
     name,
     version,
-    tools,
     async callTool(toolName: string, args: Record<string, unknown>) {
       const def = tools.find((candidate) => candidate.name === toolName)
       if (!def) return undefined
@@ -63,13 +70,16 @@ export function createSdkMcpServer(options: {
     },
   }
 
-  return {
-    type: 'sdk',
-    name,
-    instance,
-  }
+  return { type: 'sdk', name, instance }
 }
 
+/**
+ * Call sites declare a field map of zod schemas, which is what the Claude SDK
+ * takes. Anything crossing a process boundary needs JSON Schema instead, and
+ * only the shapes Halo's own tools use are translated — an unrecognized field
+ * becomes a string rather than an error, because a tool with one exotic
+ * parameter should lose that parameter's typing, not the whole server.
+ */
 function schemaToJson(schema: Record<string, any>): Record<string, unknown> {
   const properties: Record<string, unknown> = {}
   const required: string[] = []
@@ -79,12 +89,7 @@ function schemaToJson(schema: Record<string, any>): Record<string, unknown> {
     if (!isOptionalZodLike(value)) required.push(key)
   }
 
-  return {
-    type: 'object',
-    properties,
-    required,
-    additionalProperties: false,
-  }
+  return { type: 'object', properties, required, additionalProperties: false }
 }
 
 function zodLikeToJsonSchema(value: any): Record<string, unknown> {
@@ -105,5 +110,7 @@ function zodLikeToJsonSchema(value: any): Record<string, unknown> {
 
 function isOptionalZodLike(value: any): boolean {
   const def = value?._def
-  return def?.typeName === 'ZodOptional' || def?.type === 'optional' || typeof value?.isOptional === 'function' && value.isOptional()
+  return def?.typeName === 'ZodOptional'
+    || def?.type === 'optional'
+    || (typeof value?.isOptional === 'function' && value.isOptional())
 }

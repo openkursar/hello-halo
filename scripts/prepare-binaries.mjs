@@ -68,6 +68,17 @@ const CODEX_PACKAGES = {
   'linux': { pkg: '@openai/codex-linux-x64', targetTriple: 'x86_64-unknown-linux-musl', binary: 'codex' }
 }
 
+// @vscode/ripgrep platform packages, the search binary behind the dsh engine's
+// glob and grep tools. Resolution happens at the first search call rather than
+// at load, so a build without the target package still advertises both tools
+// and fails every use of them — the absence has to be caught here.
+const RIPGREP_PACKAGES = {
+  'mac-arm64': { pkg: '@vscode/ripgrep-darwin-arm64', binary: 'rg' },
+  'mac-x64': { pkg: '@vscode/ripgrep-darwin-x64', binary: 'rg' },
+  'win': { pkg: '@vscode/ripgrep-win32-x64', binary: 'rg.exe' },
+  'linux': { pkg: '@vscode/ripgrep-linux-x64', binary: 'rg' }
+}
+
 // better-sqlite3 prebuild configuration
 // Prebuilds are platform-specific .node binaries downloaded from GitHub releases.
 // They are stored in node_modules/better-sqlite3/prebuilds/{os}-{arch}/ and
@@ -418,6 +429,60 @@ function installWatcher(platform) {
   }
 }
 
+function getRipgrepVersion() {
+  const pkgPath = path.join(PROJECT_ROOT, 'node_modules', '@vscode', 'ripgrep', 'package.json')
+  return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
+}
+
+function checkRipgrep(platform) {
+  const target = RIPGREP_PACKAGES[platform]
+  const binaryPath = path.join(PROJECT_ROOT, 'node_modules', target.pkg, 'bin', target.binary)
+  if (!fs.existsSync(binaryPath)) {
+    return { exists: false }
+  }
+  const stats = fs.statSync(binaryPath)
+  return { exists: true, valid: stats.size > 1024 * 1024, size: stats.size }
+}
+
+/**
+ * Install the @vscode/ripgrep platform package for a target platform.
+ * Downloads the tarball directly from the registry to bypass the os/cpu
+ * fields that stop npm installing another platform's optional dependency.
+ */
+function installRipgrep(platform) {
+  const target = RIPGREP_PACKAGES[platform]
+  const version = getRipgrepVersion()
+  const pkgName = target.pkg.replace('@vscode/', '')
+  const registry = execSync('npm config get registry', { encoding: 'utf8' }).trim().replace(/\/+$/, '')
+  const tarballUrl = `${registry}/@vscode/${pkgName}/-/${pkgName}-${version}.tgz`
+  const destDir = path.join(PROJECT_ROOT, 'node_modules', target.pkg)
+  const tmpTgz = path.join(PROJECT_ROOT, `node_modules/.${pkgName}.tgz`)
+
+  log.info(`Installing ${target.pkg}@${version} from registry...`)
+
+  try {
+    if (fs.existsSync(destDir)) {
+      fs.rmSync(destDir, { recursive: true })
+    }
+    fs.mkdirSync(destDir, { recursive: true })
+
+    curlDownload(tarballUrl, tmpTgz)
+    execSync(`tar -xzf "${tmpTgz}" -C "${destDir}" --strip-components=1`, { stdio: 'pipe' })
+    fs.unlinkSync(tmpTgz)
+
+    const status = checkRipgrep(platform)
+    if (!status.exists || !status.valid) {
+      throw new Error(`No valid ripgrep binary found in downloaded ${target.pkg}`)
+    }
+
+    log.success(`Installed ${target.pkg}@${version}`)
+  } catch (err) {
+    if (fs.existsSync(tmpTgz)) fs.unlinkSync(tmpTgz)
+    log.error(`Failed to install ${target.pkg}: ${err.message}`)
+    throw err
+  }
+}
+
 function getCodexVersion() {
   const pkgPath = path.join(PROJECT_ROOT, 'node_modules', '@openai', 'codex', 'package.json')
   return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
@@ -515,6 +580,14 @@ function preparePlatform(platform) {
     installCodex(platform)
   } else {
     log.success(`@openai/codex native package already exists for ${platform}`)
+  }
+
+  // Check and install the @vscode/ripgrep platform package
+  const ripgrepStatus = checkRipgrep(platform)
+  if (!ripgrepStatus.exists || !ripgrepStatus.valid) {
+    installRipgrep(platform)
+  } else {
+    log.success(`@vscode/ripgrep platform package already exists for ${platform}`)
   }
 
   // node-pty: mac/win prebuilds ship with the npm package automatically.

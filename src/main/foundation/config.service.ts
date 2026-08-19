@@ -483,8 +483,8 @@ interface HaloConfig {
     promptProfile?: 'official' | 'halo'
     configDirMode?: 'halo' | 'cc' | 'custom'
     customConfigDir?: string
-    /** Experimental: switch agent engine. 'anthropic' = Claude Code SDK (default), 'halo' = Halo SDK, 'codex' = Codex SDK adapter. */
-    sdkEngine?: 'anthropic' | 'halo' | 'codex'
+    /** Experimental: switch agent engine. 'anthropic' = Claude Code SDK (default), 'halo' = Halo SDK, 'codex' = Codex SDK adapter, 'dsh' = DeepSeek Harness adapter. */
+    sdkEngine?: 'anthropic' | 'halo' | 'codex' | 'dsh'
     enableTeams?: boolean
     /** Enable Digital Humans MCP tools (automation app management) */
     enableDigitalHumans?: boolean

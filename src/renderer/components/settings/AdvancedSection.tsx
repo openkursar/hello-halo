@@ -3,11 +3,11 @@
  * Developer-level settings: SDK engine, extended capabilities, max turns, CLI integration
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertTriangle, ChevronDown, ChevronUp, Cpu, Puzzle, RefreshCw, Terminal } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
-import type { HaloConfig } from '../../types'
+import type { EngineAvailability, EngineId, HaloConfig } from '../../types'
 import { CLIConfigSection } from './CLIConfigSection'
 import { Switch } from '../ui/Switch'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
@@ -91,13 +91,17 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   const { showConfirm, DialogComponent: RestartDialogComponent } = useConfirmDialog()
 
   const [maxTurns, setMaxTurnsState] = useState(config?.agent?.maxTurns ?? 50)
-  const [sdkEngine, setSdkEngineState] = useState<'anthropic' | 'halo' | 'codex'>(
+  const [sdkEngine, setSdkEngineState] = useState<EngineId>(
     config?.agent?.sdkEngine ?? 'anthropic'
   )
   // Track whether the SDK engine was changed from the initial value (needs restart)
-  const [sdkEngineInitial] = useState<'anthropic' | 'halo' | 'codex'>(
+  const [sdkEngineInitial] = useState<EngineId>(
     config?.agent?.sdkEngine ?? 'anthropic'
   )
+  // Engines whose runtime this build does not ship cannot be selected — the
+  // choice would only fail after a restart. Unknown = selectable, so a probe
+  // failure never blocks the user.
+  const [engineAvailability, setEngineAvailability] = useState<Record<string, EngineAvailability>>({})
   const [disabledTools, setDisabledToolsState] = useState<string[]>(
     config?.agent?.disabledTools ?? DEFAULT_DISABLED_TOOLS
   )
@@ -115,6 +119,54 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   const [capsPanelOpen, setCapsPanelOpen] = useState(false)
 
   const sdkEngineChanged = sdkEngine !== sdkEngineInitial
+
+  useEffect(() => {
+    let cancelled = false
+    void api.getEngineAvailability().then((result) => {
+      if (cancelled || !result?.success || !Array.isArray(result.data)) return
+      const byId: Record<string, EngineAvailability> = {}
+      for (const entry of result.data as EngineAvailability[]) byId[entry.engineId] = entry
+      setEngineAvailability(byId)
+    }).catch(() => {
+      // Probe unavailable (remote client, older backend) — leave every engine
+      // selectable rather than locking the user out of the setting.
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  // ─── Engine options ─────────────────────────────────────────────────────────
+
+  // Built inside the component so every string stays a literal `t(...)` call
+  // and reaches the extractor.
+  const engineOptions: {
+    id: EngineId
+    title: string
+    description: string
+    /** Hard limits the user should know before switching, shown inline. */
+    limitation?: string
+  }[] = [
+    {
+      id: 'anthropic',
+      title: t('Claude Code SDK'),
+      description: t('Powered by the official Anthropic Claude Code engine. Works with a wide range of frontier models. (Default)'),
+    },
+    {
+      id: 'halo',
+      title: t('Halo SDK'),
+      description: t('The official Halo agent engine. Lightweight on resources, faster startup, optimized for open-source models. Experimental.'),
+    },
+    {
+      id: 'codex',
+      title: t('Codex SDK'),
+      description: t('Powered by the official OpenAI Codex SDK. Better suited for GPT-family models. Experimental.'),
+    },
+    {
+      id: 'dsh',
+      title: t('DeepSeek Harness'),
+      description: t('Powered by the open-source DeepSeek Harness runtime, running as a separate process with one provider and model fixed at startup. Experimental.'),
+      limitation: t("Halo's built-in tools, MCP servers, skills and approval prompts do not reach this engine — it only runs the tools its own runtime configures. Stopping a reply restarts the engine process and ends the session."),
+    },
+  ]
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -137,7 +189,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
 
   // ─── Handlers ───────────────────────────────────────────────────────────────
 
-  const handleSdkEngineChange = async (engine: 'anthropic' | 'halo' | 'codex') => {
+  const handleSdkEngineChange = async (engine: EngineId) => {
     if (engine === sdkEngine) return
     setSdkEngineState(engine)
     try {
@@ -251,53 +303,43 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
           </p>
 
           <div className="space-y-2">
-            {/* Claude Code SDK */}
-            <label className="flex items-start gap-3 p-3 rounded-lg border border-border cursor-pointer hover:bg-muted/50 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-              <input
-                type="radio"
-                name="sdkEngine"
-                value="anthropic"
-                checked={sdkEngine === 'anthropic'}
-                onChange={() => handleSdkEngineChange('anthropic')}
-                className="mt-0.5 accent-primary"
-              />
-              <div>
-                <p className="font-medium text-sm">{t('Claude Code SDK')}</p>
-                <p className="text-xs text-muted-foreground">{t('Powered by the official Anthropic Claude Code engine. Works with a wide range of frontier models. (Default)')}</p>
-              </div>
-            </label>
-
-            {/* Halo SDK */}
-            <label className="flex items-start gap-3 p-3 rounded-lg border border-border cursor-pointer hover:bg-muted/50 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-              <input
-                type="radio"
-                name="sdkEngine"
-                value="halo"
-                checked={sdkEngine === 'halo'}
-                onChange={() => handleSdkEngineChange('halo')}
-                className="mt-0.5 accent-primary"
-              />
-              <div>
-                <p className="font-medium text-sm">{t('Halo SDK')}</p>
-                <p className="text-xs text-muted-foreground">{t('The official Halo agent engine. Lightweight on resources, faster startup, optimized for open-source models. Experimental.')}</p>
-              </div>
-            </label>
-
-            {/* Codex SDK */}
-            <label className="flex items-start gap-3 p-3 rounded-lg border border-border cursor-pointer hover:bg-muted/50 transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5">
-              <input
-                type="radio"
-                name="sdkEngine"
-                value="codex"
-                checked={sdkEngine === 'codex'}
-                onChange={() => handleSdkEngineChange('codex')}
-                className="mt-0.5 accent-primary"
-              />
-              <div>
-                <p className="font-medium text-sm">{t('Codex SDK')}</p>
-                <p className="text-xs text-muted-foreground">{t('Powered by the official OpenAI Codex SDK. Better suited for GPT-family models. Experimental.')}</p>
-              </div>
-            </label>
+            {engineOptions.map((option) => {
+              const selected = sdkEngine === option.id
+              const missing = engineAvailability[option.id]?.available === false
+              // The active engine stays selectable even if its runtime went
+              // missing, so the user is never locked out of their own setting.
+              const disabled = missing && !selected
+              return (
+                <label
+                  key={option.id}
+                  className={`flex items-start gap-3 p-3 rounded-lg border border-border transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5 ${
+                    disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-muted/50'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="sdkEngine"
+                    value={option.id}
+                    checked={selected}
+                    disabled={disabled}
+                    onChange={() => handleSdkEngineChange(option.id)}
+                    className="mt-0.5 accent-primary"
+                  />
+                  <div className="min-w-0">
+                    <p className="font-medium text-sm">{option.title}</p>
+                    <p className="text-xs text-muted-foreground">{option.description}</p>
+                    {option.limitation && (
+                      <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{option.limitation}</p>
+                    )}
+                    {missing && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {t('Not available in this build — the engine runtime is not installed.')}
+                      </p>
+                    )}
+                  </div>
+                </label>
+              )
+            })}
           </div>
 
           {/* Restart required notice */}
