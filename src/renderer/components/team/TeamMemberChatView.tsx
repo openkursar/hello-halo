@@ -17,7 +17,7 @@
  */
 
 import { useMemo, useState } from 'react'
-import { X, Star, Timer, ChevronRight, Settings } from 'lucide-react'
+import { X, Star, Timer, ChevronRight, Settings, Eye, Info } from 'lucide-react'
 import { EscalationPanel } from './EscalationPanel'
 import { MemberPresenceChip, OwnerLabel } from './MemberPresenceChip'
 import { TeamSessionChat } from './TeamSessionChat'
@@ -128,11 +128,6 @@ export function TeamMemberChatView({
           ownerName={presence.ownerName}
           reachability={presence.reachability}
           readonly={presence.isRemote}
-          readonlyNotice={
-            presence.isRemote
-              ? t('To get it moving, tell your own digital human and let it do the asking.')
-              : undefined
-          }
           placeholder={t('Message {{name}}…', { name: member.memberName })}
           emptyTitle={t('No work yet in this team.')}
           emptyHint={t('Run the team, or send a message to this member.')}
@@ -140,36 +135,53 @@ export function TeamMemberChatView({
       )}
 
       {/* A pending decision belongs to the person whose digital human raised it.
-          On its owner's machine that is an answerable question; anywhere else the
-          question itself never left that machine, so the honest thing to show is
-          who the office is waiting on. */}
-      {member.status === 'waiting_user' && (
-        awaitsOurDecision(member) ? (
-          <div className="shrink-0 border-t border-amber-500/30 bg-amber-500/5 p-3">
-            <EscalationPanel member={member} />
-          </div>
-        ) : (
-          <div className="shrink-0 border-t border-border px-3 py-2 text-xs text-muted-foreground">
-            <OwnerDecisionNotice presence={presence} />
-          </div>
-        )
+          On its owner's machine that is an answerable question, so it gets the
+          panel; anywhere else the question never left that machine and the bar
+          below carries it as state instead. */}
+      {awaitsOurDecision(member) && (
+        <div className="shrink-0 border-t border-amber-500/30 bg-amber-500/5 p-3">
+          <EscalationPanel member={member} />
+        </div>
       )}
+
+      {presence.isRemote && <WatchingOnlyBar member={member} presence={presence} />}
     </div>
   )
 }
 
 /**
- * Names the person the office is actually waiting on, and — when their machine
- * is away — says so, because that is the difference between "any moment now" and
- * "not until they are back".
+ * The floor of someone else's digital human: it accounts for the missing input
+ * box, and — when the office is blocked on a decision only its owner can make —
+ * names who everyone is waiting on. Deliberately one line in every state, so the
+ * surface does not jump as the member's status changes.
  */
-function OwnerDecisionNotice({ presence }: { presence: MemberPresence }) {
+function WatchingOnlyBar({ member, presence }: { member: RosterMember, presence: MemberPresence }) {
   const { t } = useTranslation()
-  const owner = presence.ownerName || t('its owner')
+  const owner = presence.ownerName?.trim() || t('its owner')
+  const blocked = member.status === 'waiting_user' && !awaitsOurDecision(member)
 
-  return presence.reachability === 'online'
-    ? <>{t('{{owner}} needs to answer this one before it can move on.', { owner })}</>
-    : <>{t('{{owner}}\u2019s computer is offline, so this decision has to wait for them.', { owner })}</>
+  return (
+    <div className="flex shrink-0 items-center gap-1.5 border-t border-border px-3 py-2 text-xs text-muted-foreground">
+      <Eye className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 truncate">
+        {t('Watching only')}
+        {blocked && (
+          <span className="text-amber-600 dark:text-amber-500">
+            {' · '}
+            {presence.reachability === 'offline'
+              ? t('{{owner}} is offline — the decision has to wait', { owner })
+              : t('waiting on someone at {{owner}} to decide', { owner })}
+          </span>
+        )}
+      </span>
+      <span
+        className="ml-auto flex shrink-0 items-center"
+        title={t('Want to give it a task? Have your own digital human work with it.')}
+      >
+        <Info className="h-3.5 w-3.5" aria-hidden="true" />
+      </span>
+    </div>
+  )
 }
 
 /**

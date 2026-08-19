@@ -39,13 +39,12 @@ export interface TeamSessionChatProps {
   ownerName?: string | null
   /** Owner reachability: 'offline' replaces the input with a calm notice. */
   reachability?: 'online' | 'away' | 'offline'
-  /** Read-only surface (e.g. an IM chat answered elsewhere): no input. */
-  readonly?: boolean
   /**
-   * One line put where the input would be on a read-only surface, saying what to
-   * do instead. Leaving a blank space there reads as broken, not as forbidden.
+   * Read-only surface (e.g. an IM chat answered elsewhere): no input. Saying WHY
+   * it is read-only is the caller's job — that reason lives in the caller's
+   * framing, not in the chat engine.
    */
-  readonlyNotice?: string
+  readonly?: boolean
   placeholder?: string
   emptyTitle?: string
   emptyHint?: string
@@ -66,7 +65,7 @@ type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
 
 export function TeamSessionChat({
   appId, spaceId, teamId, epochId, isRemote, ownerName, reachability = 'online',
-  readonly = false, readonlyNotice, placeholder, emptyTitle, emptyHint, topSlot, aboveInput, ensureEpochId,
+  readonly = false, placeholder, emptyTitle, emptyHint, topSlot, aboveInput, ensureEpochId,
 }: TeamSessionChatProps) {
   const { t } = useTranslation()
   const conversationId = buildTeamSessionKey(appId, teamId, epochId ?? 'none')
@@ -376,13 +375,7 @@ export function TeamSessionChat({
       )}
 
       {/* Input region — hidden for read-only surfaces and offline owners. */}
-      {readonly ? (
-        readonlyNotice ? (
-          <div className="shrink-0 border-t border-border p-3">
-            <p className="px-1 text-xs text-muted-foreground">{readonlyNotice}</p>
-          </div>
-        ) : null
-      ) : reachability === 'offline' ? (
+      {readonly ? null : reachability === 'offline' ? (
         <div className="shrink-0 border-t border-border p-3">
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
             <p className="text-sm font-medium text-foreground">
