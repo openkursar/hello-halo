@@ -21,11 +21,14 @@
  */
 
 import { z } from 'zod'
+import { randomUUID } from 'crypto'
 import { tool, createSdkMcpServer } from '../../services/agent/resolved-sdk'
 import { sendToChannel, getEnabledChannels } from '../../services/notify-channels'
 import { getConfig } from '../../foundation/config.service'
 import { getActiveImChannelManager } from './im-channels'
 import { FileExportGate, FileExportDeniedError } from './file-export-gate'
+import { getPendingRelayStore, type RelaySubject } from './pending-relays'
+import { buildImSessionKey } from '../../../shared/apps/im-keys'
 import type { NotificationChannelType } from '../../../shared/types/notification-channels'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 
@@ -34,6 +37,27 @@ import type { ImSessionRecord } from '../../../shared/types/im-channel'
 // ============================================
 
 type SdkMcpServer = ReturnType<typeof createSdkMcpServer>
+
+/**
+ * Where notify_bot pushes originate — recorded into the pending-relay spool so
+ * the target session's AI later learns what was pushed to it and by whom.
+ */
+export interface RelaySourceContext {
+  /** Source conversationId (sessionKey) of the run invoking notify_bot */
+  sessionKey: string
+  /**
+   * `instanceId:chatId` of the origin chat — handed to the recipient AI as the
+   * exact notify_bot target for reporting an outcome back. Absent for
+   * automation runs, which have no origin chat.
+   */
+  contact?: string
+  /** The person whose request drives this run (absent for automation runs) */
+  subject?: RelaySubject
+  /** Whether the source run is owner-context (gates transcript exposure) */
+  isOwner: boolean
+  /** Source-context snapshot captured by the runtime (e.g. the triggering message) */
+  quote?: string
+}
 
 /** Context for the notify tool (passed when creating the server) */
 export interface NotifyToolContext {
@@ -46,6 +70,8 @@ export interface NotifyToolContext {
   usesImPush: boolean
   /** FileExportGate for validating outbound file paths (scoped to space + tmpdir) */
   exportGate: FileExportGate
+  /** Relay provenance of this run — required so pushes are traceable at the target */
+  relay: RelaySourceContext
 }
 
 // ============================================
@@ -269,11 +295,48 @@ function buildNotifyBotTool(context: NotifyToolContext) {
       }
 
       const results: string[] = []
+      let sentMessage = false
+      let sentFile: { name: string } | undefined
+
+      // Record delivered content into the pending-relay spool so the target
+      // session's AI learns about this push on its next inbound message.
+      // Skipped when pushing to the invoking session itself — there the push
+      // already lives in this run's tool history. Must never fail the tool:
+      // the push succeeded regardless of spool state.
+      const recordRelay = () => {
+        if (!sentMessage && !sentFile) return
+        try {
+          const targetKey = buildImSessionKey(
+            session.appId, session.channel, session.chatType, session.chatId
+          )
+          if (targetKey === context.relay.sessionKey) return
+          getPendingRelayStore()?.append(targetKey, {
+            kind: 'push',
+            id: randomUUID(),
+            at: Date.now(),
+            source: {
+              key: context.relay.sessionKey,
+              appId: context.appId,
+              runId: context.runId,
+              label: context.appName,
+            },
+            subject: context.relay.subject,
+            originContact: context.relay.contact,
+            sourceOwner: context.relay.isOwner,
+            message: sentMessage ? input.message : undefined,
+            file: sentFile,
+            quote: context.relay.quote,
+          })
+        } catch (err) {
+          console.error(`[Runtime][${runTag}] Failed to record relay event:`, err)
+        }
+      }
 
       // Helper: build error result that preserves prior successes.
       // When message was already sent but file fails, the AI must know
       // the message went through to avoid duplicate sends on retry.
       const errorWithContext = (errorMsg: string) => {
+        recordRelay()
         if (results.length > 0) {
           return textResult(`${results.join(' ')} However, ${errorMsg}`, true)
         }
@@ -288,6 +351,7 @@ function buildNotifyBotTool(context: NotifyToolContext) {
             const contactName = session.customName || session.displayName || chatId
             console.log(`[Runtime][${runTag}] Bot message sent to "${contactName}" (${chatId})`)
             results.push(`Message sent to "${contactName}".`)
+            sentMessage = true
           } else {
             console.warn(`[Runtime][${runTag}] Bot message failed to "${chatId}"`)
             return textResult(`Failed to send message to "${chatId}". The channel returned false.`, true)
@@ -336,6 +400,7 @@ function buildNotifyBotTool(context: NotifyToolContext) {
             const contactName = session.customName || session.displayName || chatId
             console.log(`[Runtime][${runTag}] Bot file sent to "${contactName}": ${file.displayName}`)
             results.push(`File "${file.displayName}" sent to "${contactName}".`)
+            sentFile = { name: file.displayName }
           } else {
             console.warn(`[Runtime][${runTag}] Bot file send failed to "${chatId}"`)
             return errorWithContext(`failed to send file to "${chatId}". The channel returned false.`)
@@ -347,6 +412,7 @@ function buildNotifyBotTool(context: NotifyToolContext) {
         }
       }
 
+      recordRelay()
       return textResult(results.join(' '))
     }
   )

@@ -1,16 +1,18 @@
 /**
  * Halo Auto-Updater Service
- * Handles automatic updates via GitHub Releases
  *
  * Update Strategy:
  * - Startup check: 5 seconds after app launch
  * - Periodic check: Every hour via setInterval
  * - Resume check: When system wakes from sleep
- * - Manual check: User-triggered from Settings or menu (notify only, no auto-download)
+ * - Manual check: User-triggered from Settings
  *
- * Platform Behavior:
- * - macOS: Never auto-download (no code signing), always show manual download option
- * - Windows/Linux: Auto-download in background, notify when ready to install
+ * All platforms download in the background and apply the update on user
+ * confirmation. Applying differs by platform (see INSTALL_MODE): Windows runs
+ * the NSIS installer, macOS and Linux swap the already-staged build in place.
+ *
+ * If anything fails after an update was announced, the user is offered the
+ * download page instead — a stalled progress toast is never a valid end state.
  */
 
 // Node/Electron imports
@@ -44,12 +46,17 @@ const CHECK_INTERVAL_MS = 60 * 60 * 1000
 /** Delay after system resume before checking for updates (ms) */
 const RESUME_CHECK_DELAY_MS = 3000
 
+/**
+ * How a downloaded update gets applied.
+ * - 'installer': Windows quits and runs the NSIS installer, which has its own UI.
+ * - 'restart': macOS (Squirrel swaps the staged bundle) and Linux (AppImage
+ *   replaces itself) apply in place and relaunch within seconds, no extra UI.
+ */
+const INSTALL_MODE: 'installer' | 'restart' = process.platform === 'win32' ? 'installer' : 'restart'
+
 // ============================================================================
 // State
 // ============================================================================
-
-/** Track if we're in manual check mode (no auto-download) */
-let isManualCheck = false
 
 /** Track last check time to avoid duplicate checks */
 let lastCheckTime = 0
@@ -59,6 +66,9 @@ const MIN_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 /** Cached update config for constructing download URLs */
 let cachedUpdateConfig: UpdateConfig | undefined
+
+/** Update announced to the renderer but not yet downloaded, if any. */
+let pendingUpdate: { version: string; releaseNotes: UpdateInfo['releaseNotes'] } | null = null
 
 // ============================================================================
 // Configuration
@@ -95,16 +105,8 @@ function getDownloadPageUrl(version: string): string {
 // Configure logging
 autoUpdater.logger = console
 
-// Platform-specific auto-download configuration
-// macOS: Disable auto-download (no code signing, download is useless)
-// Windows/Linux: Enable auto-download for seamless updates
-if (process.platform === 'darwin') {
-  autoUpdater.autoDownload = false
-  autoUpdater.forceDevUpdateConfig = true
-} else {
-  autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
-}
+autoUpdater.autoDownload = true
+autoUpdater.autoInstallOnAppQuit = true
 
 // ============================================================================
 // Event Handlers
@@ -136,10 +138,16 @@ export function initAutoUpdater(): void {
     console.log('[Updater] updateConfig.url is empty, auto-update disabled')
     return
   } else if (updateConfig.provider === 'generic' && updateConfig.url) {
-    // Set custom update server URL
+    // channel is pinned rather than inherited from the packaged app-update.yml,
+    // which electron-builder derives from the version ("rc" for 2.1.13-rc.3).
+    // The internal release server generates latest.yml / latest-mac.yml on the
+    // fly from whatever the newest published release is and has no per-channel
+    // files, so any other channel resolves to its catch-all route. Do not
+    // remove this: without it the updater asks for rc.yml and gets a 404.
     autoUpdater.setFeedURL({
       provider: 'generic',
-      url: updateConfig.url
+      url: updateConfig.url,
+      channel: 'latest'
     })
     console.log('[Updater] Using custom update URL:', updateConfig.url)
   }
@@ -153,28 +161,17 @@ export function initAutoUpdater(): void {
 
   autoUpdater.on('update-available', (info: UpdateInfo) => {
     console.log('[Updater] Update available:', info.version)
-
-    // Manual check or macOS: Always show manual download option (no auto-download)
-    if (isManualCheck || process.platform === 'darwin') {
-      console.log('[Updater] Showing manual download option')
-      sendUpdateStatus('manual-download', {
-        version: info.version,
-        releaseDate: info.releaseDate,
-        releaseNotes: info.releaseNotes,
-        downloadUrl: getDownloadPageUrl(info.version)
-      })
-    } else {
-      // Windows/Linux background check: Proceed with auto-download
-      sendUpdateStatus('available', {
-        version: info.version,
-        releaseDate: info.releaseDate,
-        releaseNotes: info.releaseNotes
-      })
-    }
+    pendingUpdate = { version: info.version, releaseNotes: info.releaseNotes }
+    sendUpdateStatus('available', {
+      version: info.version,
+      releaseDate: info.releaseDate,
+      releaseNotes: info.releaseNotes
+    })
   })
 
   autoUpdater.on('update-not-available', (info: UpdateInfo) => {
     console.log('[Updater] No update available, current version is latest:', info.version)
+    pendingUpdate = null
     sendUpdateStatus('not-available', { version: info.version })
   })
 
@@ -190,15 +187,31 @@ export function initAutoUpdater(): void {
 
   autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
     console.log('[Updater] Update downloaded:', info.version)
+    pendingUpdate = null
     sendUpdateStatus('downloaded', {
       version: info.version,
       releaseNotes: info.releaseNotes,
-      downloadUrl: getDownloadPageUrl(info.version)
+      installMode: INSTALL_MODE
     })
   })
 
   autoUpdater.on('error', (error) => {
-    console.error('[Updater] Error:', error.message)
+    console.error('[Updater] Error:', error.stack || error.message)
+
+    // An announced update that then fails to download or stage would otherwise
+    // leave the user on a progress toast that never completes. Hand them the
+    // download page so the release is still reachable.
+    if (pendingUpdate) {
+      const { version, releaseNotes } = pendingUpdate
+      pendingUpdate = null
+      sendUpdateStatus('manual-download', {
+        version,
+        releaseNotes,
+        downloadUrl: getDownloadPageUrl(version)
+      })
+      return
+    }
+
     sendUpdateStatus('error', { message: error.message })
   })
 
@@ -258,9 +271,8 @@ function canCheck(): boolean {
 }
 
 /**
- * Automatic background check for updates
- * - Windows/Linux: Will auto-download if update available
- * - macOS: Will show manual download option
+ * Automatic background check for updates.
+ * Downloads in the background; the user is prompted once it is ready to apply.
  */
 export async function autoCheckForUpdates(): Promise<void> {
   if (is.dev) {
@@ -272,18 +284,14 @@ export async function autoCheckForUpdates(): Promise<void> {
     return
   }
 
-  try {
-    isManualCheck = false
-    await autoUpdater.checkForUpdates()
-  } catch (error) {
-    console.error('[Updater] Failed to check for updates:', error)
-  }
+  // Rejections are already reported through the 'error' event handler.
+  await autoUpdater.checkForUpdates().catch(() => undefined)
 }
 
 /**
- * Manual check for updates (user-triggered)
- * - Never auto-downloads, only notifies user of available updates
- * - User can then choose to download/install
+ * Manual check for updates (user-triggered from Settings).
+ * Behaves like the background check so the outcome is consistent; the
+ * difference is only that the user gets immediate 'checking' feedback.
  */
 export async function manualCheckForUpdates(): Promise<void> {
   if (is.dev) {
@@ -295,28 +303,7 @@ export async function manualCheckForUpdates(): Promise<void> {
   // Manual check bypasses the time throttle
   lastCheckTime = Date.now()
 
-  // Save original autoDownload setting and disable it for manual check
-  const originalAutoDownload = autoUpdater.autoDownload
-  try {
-    isManualCheck = true
-    autoUpdater.autoDownload = false
-    await autoUpdater.checkForUpdates()
-  } catch (error) {
-    console.error('[Updater] Failed to check for updates:', error)
-    sendUpdateStatus('error', { message: 'Failed to check for updates' })
-  } finally {
-    isManualCheck = false
-    autoUpdater.autoDownload = originalAutoDownload
-  }
-}
-
-/**
- * Legacy function for backward compatibility
- * Now calls autoCheckForUpdates
- * @deprecated Use autoCheckForUpdates or manualCheckForUpdates instead
- */
-export async function checkForUpdates(): Promise<void> {
-  return autoCheckForUpdates()
+  await autoUpdater.checkForUpdates().catch(() => undefined)
 }
 
 // ============================================================================
@@ -324,20 +311,19 @@ export async function checkForUpdates(): Promise<void> {
 // ============================================================================
 
 /**
- * Quit and install update
+ * Apply the downloaded update.
  *
- * Important timing considerations for Windows NSIS:
- * 1. Add delay to ensure app fully closes before installer starts
- * 2. Use isSilent=false to show installer UI, isForceRunAfter=true to restart after install
+ * The arguments only affect Windows: isSilent=false keeps the NSIS installer
+ * visible so a multi-second install does not look like a hang, and
+ * isForceRunAfter=true reopens Halo afterwards. macOS and Linux ignore them and
+ * relaunch straight from the already-staged build.
  *
+ * The delay lets windows finish closing before the installer starts.
  * @see https://github.com/electron-userland/electron-builder/issues/1368
  */
 export function quitAndInstall(): void {
-  // Delay to ensure all windows close before installer launches
   setTimeout(() => {
     try {
-      // isSilent=false: show installer UI for user feedback
-      // isForceRunAfter=true: restart app after install completes
       autoUpdater.quitAndInstall(false, true)
     } catch (error) {
       console.error('[Updater] quitAndInstall failed:', error)
@@ -353,7 +339,6 @@ export function quitAndInstall(): void {
  * Register IPC handlers for updater
  */
 export function registerUpdaterHandlers(): void {
-  // Manual check - user triggered, no auto-download
   ipcMain.handle('updater:check', async () => {
     await manualCheckForUpdates()
   })

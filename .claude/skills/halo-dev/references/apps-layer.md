@@ -117,7 +117,29 @@ Integration:
 - Used by conversation sessions to access app management capabilities
 - Provides tools for listing, installing, and managing apps within conversations
 
-## 2.5 `apps/store-index` (planned)
+## 2.5 `apps/skill-discovery`
+
+Purpose:
+
+- enumerate the skills a digital human can actually load at runtime by scanning
+  the directories the Claude Code SDK reads (global config skills dir + the
+  space working dir `.claude/skills`)
+- deliberately disk-based, not DB-based: global/manually placed skills have no
+  installed-apps record, so the disk is the runtime source of truth
+
+Key files:
+
+- `src/main/apps/skill-discovery.ts`
+
+Integration:
+
+- IPC `app:list-available-skills` (`src/main/ipc/app.ts`) and HTTP
+  `GET /api/apps/:appId/available-skills` (`src/main/http/routes/apps.routes.ts`)
+- rendered by `src/renderer/components/apps/AppSkillsSection.tsx`
+- shares the specId→dir-name mapping with `manager/skill-sync` via
+  `src/shared/skill-naming.ts`
+
+## 2.6 `apps/store-index` (planned)
 
 Status:
 

@@ -239,19 +239,20 @@ describe('Space Service', () => {
       expect(() => touchSpaceActivity('non-existent-id')).not.toThrow()
     })
 
-    it('should affect listSpaces sort order', () => {
+    it('does not override explicit sortOrder', () => {
       const spaceA = createSpace({ name: 'Space A', icon: 'folder' })
       const spaceB = createSpace({ name: 'Space B', icon: 'folder' })
 
       // Reset activity state to avoid throttle interference
       _resetActivityState()
 
-      // Touch A after B was created — A should appear first in the list
+      // B was created after A, so it sorts first (new-first). Touching A must
+      // not reorder the list — explicit sortOrder governs, not activity.
       touchSpaceActivity(spaceA.id)
 
       const spaces = listSpaces()
       expect(spaces.length).toBe(2)
-      expect(spaces[0].id).toBe(spaceA.id)
+      expect(spaces[0].id).toBe(spaceB.id)
     })
   })
 
@@ -382,13 +383,13 @@ describe('Space Service', () => {
   })
 
   describe('reorderSpaces + sortOrder', () => {
-    it('assigns sortOrder to newly created spaces (ascending, last wins)', async () => {
+    it('assigns a smaller sortOrder to newer spaces (new sorts first)', async () => {
       const a = createSpace({ name: 'A', icon: 'folder' })
       const b = createSpace({ name: 'B', icon: 'folder' })
 
       expect(typeof a.sortOrder).toBe('number')
       expect(typeof b.sortOrder).toBe('number')
-      expect(b.sortOrder!).toBeGreaterThan(a.sortOrder!)
+      expect(b.sortOrder!).toBeLessThan(a.sortOrder!)
     })
 
     it('sorts by sortOrder when all spaces have it', async () => {
@@ -443,7 +444,7 @@ describe('Space Service', () => {
       expect(spaces.map(s => s.name)).toEqual(['C', 'B', 'A'])
     })
 
-    it('new space created after reorder sorts last', async () => {
+    it('new space created after reorder sorts first', async () => {
       const a = createSpace({ name: 'A', icon: 'folder' })
       const b = createSpace({ name: 'B', icon: 'folder' })
 
@@ -451,14 +452,14 @@ describe('Space Service', () => {
 
       const c = createSpace({ name: 'C', icon: 'folder' })
       const spaces = listSpaces()
-      expect(spaces.map(s => s.name)).toEqual(['B', 'A', 'C'])
+      expect(spaces.map(s => s.name)).toEqual(['C', 'B', 'A'])
     })
 
-    // Regression: legacy index (no sortOrder) + new space must not jump to
-    // the front. Before backfill, createSpace assigned sortOrder=0 while
-    // listSpaces fell back to activity sort (newest first), contradicting
-    // the store's append-on-create and causing a visual jump after re-sync.
-    it('new space on legacy index (no sortOrder) sorts last, not first', async () => {
+    // Regression: legacy index (no sortOrder) + new space. backfill assigns
+    // sortOrder to the legacy entry at load; createSpace then gives the new
+    // space a smaller sortOrder so it sorts first, matching the store's
+    // prepend-on-create (no visual jump after re-sync).
+    it('new space on legacy index (no sortOrder) sorts first', async () => {
       const haloDir = getHaloDir()
       const indexPath = path.join(haloDir, 'spaces-index.json')
       const idA = 'legacy-space-a'
@@ -480,16 +481,16 @@ describe('Space Service', () => {
 
       _resetSpaceRegistry()
 
-      // New space after legacy load — must sort last (matches store append)
+      // New space after legacy load — must sort first (matches store prepend)
       const b = createSpace({ name: 'New B', icon: 'folder' })
       const spaces = listSpaces()
-      expect(spaces.map(s => s.name)).toEqual(['Legacy A', 'New B'])
+      expect(spaces.map(s => s.name)).toEqual(['New B', 'Legacy A'])
 
       // Persisted sortOrder should now be present on both entries
       const persisted = JSON.parse(fs.readFileSync(indexPath, 'utf-8'))
       expect(typeof persisted.spaces[idA].sortOrder).toBe('number')
       expect(typeof persisted.spaces[b.id].sortOrder).toBe('number')
-      expect(persisted.spaces[b.id].sortOrder).toBeGreaterThan(persisted.spaces[idA].sortOrder)
+      expect(persisted.spaces[b.id].sortOrder).toBeLessThan(persisted.spaces[idA].sortOrder)
     })
   })
 })

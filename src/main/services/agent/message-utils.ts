@@ -27,14 +27,14 @@ export function formatCanvasContext(canvasContext?: CanvasContext): string {
 
   const activeTab = canvasContext.activeTab
   const tabsSummary = canvasContext.tabs
-    .map(t => `${t.isActive ? '▶ ' : '  '}${t.title} (${t.type})${t.path ? ` - ${t.path}` : ''}${t.url ? ` - ${t.url}` : ''}`)
+    .map(t => `${t.isActive ? '▶ ' : '  '}${t.title} (${t.type})${t.path ? ` - ${t.path}` : ''}${t.url ? ` - ${t.url}` : ''}${t.terminalSessionId ? ` - session: ${t.terminalSessionId}` : ''}`)
     .join('\n')
 
   return `<halo_canvas>
 Content canvas currently open in Halo:
 - Total ${canvasContext.tabCount} tabs
 - Active: ${activeTab ? `${activeTab.title} (${activeTab.type})` : 'None'}
-${activeTab?.url ? `- URL: ${activeTab.url}` : ''}${activeTab?.path ? `- File path: ${activeTab.path}` : ''}
+${activeTab?.url ? `- URL: ${activeTab.url}` : ''}${activeTab?.path ? `- File path: ${activeTab.path}` : ''}${activeTab?.terminalSessionId ? `- Terminal session id: ${activeTab.terminalSessionId} (drive it with the terminal_* tools, e.g. terminal_write)` : ''}
 
 All tabs:
 ${tabsSummary}

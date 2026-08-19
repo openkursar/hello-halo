@@ -65,6 +65,15 @@ interface ThoughtsSummaryRecord {
   duration?: number
 }
 
+/** Image attachment record — matches renderer's ImageAttachment for bubble display */
+interface ImageRecord {
+  id: string
+  type: 'image'
+  mediaType: string
+  data: string
+  name?: string
+}
+
 /**
  * Message record returned to the renderer.
  * Matches renderer's Message interface so MessageItem renders correctly.
@@ -76,6 +85,7 @@ interface MessageRecord {
   timestamp: string
   thoughts?: ThoughtRecord[]
   thoughtsSummary?: ThoughtsSummaryRecord
+  images?: ImageRecord[]
 }
 
 // ============================================
@@ -85,8 +95,12 @@ interface MessageRecord {
 export interface SessionWriter {
   /** Append a raw SDK stream event */
   writeEvent(event: Record<string, unknown>): void
-  /** Write the initial trigger message (before stream starts) */
-  writeTrigger(content: string): void
+  /**
+   * Write the initial trigger message (before stream starts). Images are
+   * stored as base64 image blocks in the trigger content (same trade-off as
+   * main-chat conversation JSON) so chat bubbles survive the JSONL reload.
+   */
+  writeTrigger(content: string, images?: Array<{ mediaType: string; data: string; name?: string }>): void
 }
 
 /** Get the directory for run session files */
@@ -127,12 +141,20 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
       appendLine({ _ts: new Date().toISOString(), ...event } as StoredEvent)
     },
 
-    writeTrigger(content: string): void {
+    writeTrigger(content, images): void {
+      const blocks: Array<Record<string, unknown>> = [{ type: 'text', text: content }]
+      for (const img of images ?? []) {
+        blocks.push({
+          type: 'image',
+          source: { type: 'base64', media_type: img.mediaType, data: img.data },
+          ...(img.name ? { _name: img.name } : {}),
+        })
+      }
       appendLine({
         _ts: new Date().toISOString(),
         type: 'user',
         _isTrigger: true,
-        message: { role: 'user', content: [{ type: 'text', text: content }] },
+        message: { role: 'user', content: blocks },
       })
     },
   }
@@ -176,6 +198,60 @@ export function readSessionMessages(spacePath: string, appId: string, runId: str
  */
 export function sessionExists(spacePath: string, appId: string, runId: string): boolean {
   return existsSync(getSessionFilePath(spacePath, appId, runId))
+}
+
+/**
+ * Resolve the on-disk transcript path for a run, or undefined when no
+ * transcript exists yet.
+ *
+ * This is the only sanctioned way for other modules to obtain a transcript
+ * location — the directory layout is this module's private rule. Callers must
+ * resolve at use time, never persist the returned path.
+ */
+export function resolveTranscriptPath(
+  spacePath: string,
+  appId: string,
+  runId: string
+): string | undefined {
+  try {
+    const filePath = getSessionFilePath(spacePath, appId, runId)
+    return existsSync(filePath) ? filePath : undefined
+  } catch {
+    // Invalid path parameters — treat as no transcript
+    return undefined
+  }
+}
+
+/**
+ * Copy a run's JSONL transcript to a new runId.
+ *
+ * Used when forking a session into a new native client session so the forked
+ * window shows the full prior history immediately. Copies the raw JSONL bytes
+ * verbatim (no re-serialization) — the display messages are reconstructed on
+ * read via convertEventsToMessages. No-op (returns false) when the source file
+ * is absent or the copy fails; the caller treats an empty transcript as a
+ * fresh window, which is an acceptable degradation.
+ *
+ * @returns true if the transcript was copied, false otherwise
+ */
+export function copySessionJsonl(
+  spacePath: string,
+  appId: string,
+  fromRunId: string,
+  toRunId: string
+): boolean {
+  const fromPath = getSessionFilePath(spacePath, appId, fromRunId)
+  if (!existsSync(fromPath)) return false
+  const toPath = getSessionFilePath(spacePath, appId, toRunId)
+  try {
+    const dir = getRunsDir(spacePath, appId)
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    writeFileSync(toPath, readFileSync(fromPath, 'utf8'), 'utf8')
+    return true
+  } catch (err) {
+    console.error(`[SessionStore] Failed to copy transcript ${fromRunId} → ${toRunId}:`, err)
+    return false
+  }
 }
 
 // ============================================
@@ -237,6 +313,12 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
   let lastTextTs = ''
   let hadSubstantiveTool = false
 
+  // ── Terminal result fallback ──
+  // Final text + timestamp from the `result` envelope; adopted as bubble
+  // content when a turn reconstructed no assistant text.
+  let pendingResultText = ''
+  let pendingResultTs = ''
+
   const streamBlocks = new Map<number, {
     type: 'text' | 'thinking' | 'tool_use'
     content: string
@@ -248,13 +330,14 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
 
   /** Flush accumulated thoughts + lastText into one assistant Message, then reset state. */
   function flush(): void {
-    if (pendingThoughts.length === 0 && !lastText) return
+    const content = lastText || pendingResultText
+    if (pendingThoughts.length === 0 && !content) return
 
     const record: MessageRecord = {
       id: `session-msg-${++msgIdx}`,
       role: 'assistant',
-      content: lastText,
-      timestamp: lastTextTs || lastThoughtTs || new Date().toISOString(),
+      content,
+      timestamp: lastTextTs || lastThoughtTs || pendingResultTs || new Date().toISOString(),
     }
 
     if (pendingThoughts.length > 0) {
@@ -270,6 +353,8 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
     lastText = ''
     lastTextTs = ''
     hadSubstantiveTool = false
+    pendingResultText = ''
+    pendingResultTs = ''
   }
 
   for (const event of events) {
@@ -298,12 +383,17 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
         // Flush the current turn before showing the user message.
         flush()
         const textContent = extractTextContent(content)
-        if (textContent) {
+        // Image blocks become bubble attachments only for trigger records (our
+        // own format) — SDK round-trip user events may carry image blocks that
+        // are tool plumbing, not something the user attached.
+        const images = event._isTrigger ? extractImageRecords(content, msgIdx + 1) : []
+        if (textContent || images.length > 0) {
           messages.push({
             id: `session-msg-${++msgIdx}`,
             role: 'user',
             content: textContent,
             timestamp: ts,
+            ...(images.length > 0 ? { images } : {}),
           })
         }
       }
@@ -495,7 +585,30 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
       continue
     }
 
-    // Skip 'result', 'system' events — they are metadata, not displayable messages
+    // ── Result events: final-text fallback for suppressed assistant text ──
+    //
+    // The Codex event normalizer suppresses the aggregate `assistant` text
+    // envelope in live-UI mode (includePartialMessages=true) so the token-
+    // level stream_event is the sole live bubble source and isn't double-
+    // counted. Digital-human chat persists only the aggregate envelopes (not
+    // stream_event), so such a turn lands in JSONL with thinking/tool
+    // aggregates but no recoverable bubble text. The engine still reports the
+    // turn's final text in `result.result`; adopt it when no text block was
+    // reconstructed. Engine-agnostic: Claude carries text in assistant events,
+    // so `lastText` is already set and this stays inert. Error results are
+    // skipped — emitTerminalError already surfaces the message as assistant text.
+    if (event.type === 'result') {
+      if (event.is_error !== true) {
+        const resultText = typeof event.result === 'string' ? event.result : ''
+        if (resultText) {
+          pendingResultText = resultText
+          pendingResultTs = ts
+        }
+      }
+      continue
+    }
+
+    // Skip 'system' and other metadata events — not displayable messages
   }
 
   // Flush any remaining turn (the common case — most runs are a single turn).
@@ -611,6 +724,20 @@ function extractTextContent(content: unknown): string {
     .filter((b: any) => b.type === 'text')
     .map((b: any) => b.text || '')
     .join('')
+}
+
+/** Rebuild ImageRecords from base64 image blocks in a trigger record's content */
+function extractImageRecords(content: unknown, msgIdx: number): ImageRecord[] {
+  if (!Array.isArray(content)) return []
+  return content
+    .filter((b: any) => b.type === 'image' && b.source?.type === 'base64' && b.source.data)
+    .map((b: any, i: number) => ({
+      id: `session-img-${msgIdx}-${i}`,
+      type: 'image' as const,
+      mediaType: b.source.media_type || 'image/png',
+      data: b.source.data,
+      ...(b._name ? { name: b._name } : {}),
+    }))
 }
 
 function extractToolResults(content: unknown): Array<{ toolUseId: string; output: string; isError: boolean }> {

@@ -2,7 +2,7 @@
  * Config IPC Handlers (v2)
  */
 
-import { getConfig, saveConfig } from '../foundation/config.service'
+import { getConfig, saveConfig, getCredentialDecodeFailures } from '../foundation/config.service'
 import { getAISourceManager } from '../services/ai-sources'
 import { decryptString } from '../foundation/secure-storage.service'
 import { maskConfigFields, unmaskSentinels } from '../foundation/config-encryption'
@@ -44,6 +44,16 @@ export function registerConfigHandlers(): void {
         const err = error as Error
         console.error('[Settings] config:get - Failed:', err.message)
         return { success: false, error: err.message }
+      }
+    },
+
+    // Credential fields that could not be decoded at rest (for the alert
+    // banner). Never returns ciphertext — only path + human label.
+    getCredentialFailures: async () => {
+      try {
+        return { success: true, data: getCredentialDecodeFailures() }
+      } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
       }
     },
 

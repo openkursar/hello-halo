@@ -1,8 +1,8 @@
 /**
  * usePresetModels — race-safe model list fetcher for preset-API gateways.
  *
- * Used by both the first-time setup flow (`ApiSetup`) and the settings
- * editor (`ProviderSelector`) so the two stay in sync on:
+ * Used by the shared provider config form (`ProviderSelector`) in both the
+ * first-run setup flow and the settings editor so the two stay in sync on:
  *   - AbortController-based cancellation when the apiKey changes mid-flight.
  *   - In-flight key validation at every state checkpoint (defense in depth).
  *   - Graceful fallback to a static model list on 401 / network / bad shape.

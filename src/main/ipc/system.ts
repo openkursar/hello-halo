@@ -7,6 +7,7 @@ import { dirname } from 'path'
 import log from 'electron-log/main.js'
 import { setAutoLaunch, getAutoLaunch } from '../foundation/config.service'
 import { getMainWindow, onMainWindowChange } from '../foundation/window.service'
+import { relaunchApp } from '../services/lifecycle'
 import { systemRpc } from '../../shared/rpc/contracts/system.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -151,8 +152,7 @@ export function registerSystemHandlers(): void {
         // Use setImmediate to allow the IPC response to reach renderer before exiting
         setImmediate(() => {
           try {
-            app.relaunch()
-            app.exit(0)
+            relaunchApp('settings-restart')
           } catch (error) {
             console.error('[Settings] system:relaunch - Relaunch failed:', (error as Error).message)
             app.exit(1)

@@ -44,7 +44,8 @@ import type {
   CustomSourceConfig,
   OAuthStartResult,
   OAuthCompleteResult,
-  AISourceUserInfo
+  AISourceUserInfo,
+  AuthQuotaSnapshot
 } from '../types'
 
 /**
@@ -170,6 +171,15 @@ export interface OAuthAISourceProvider extends AISourceProvider, OAuthProvider {
    * Get the current logged-in user info
    */
   getUserInfo(config: AISourcesConfig): AISourceUserInfo | null
+
+  /**
+   * Report the current metered quota for this source. Optional capability:
+   * absent means the provider has no quota concept and no UI is shown. Only a
+   * managed OAuth provider that owns its server can report a spendable balance.
+   *
+   * @param config Legacy format (see file header); accessToken is decrypted.
+   */
+  getQuota?(config: AISourcesConfig): Promise<ProviderResult<AuthQuotaSnapshot>>
 }
 
 /**

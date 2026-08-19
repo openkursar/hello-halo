@@ -20,15 +20,11 @@ describe('model-fetch error UI wiring', () => {
     )
   })
 
-  it('uses the shared API path and structured error in onboarding', () => {
-    const source = readComponent('setup/ApiSetup.tsx')
+  it('surfaces the structured service error in onboarding', () => {
+    const source = readComponent('setup/CustomApiSetupForm.tsx')
 
-    expect(source).toContain(
-      'const response = await api.fetchModels(apiKey, apiUrl)'
-    )
-    expect(source).toContain(
-      'formatModelFetchError(t, response.code, response.error)'
-    )
+    expect(source).toContain('await api.fetchModels(apiKey.trim(), apiUrl)')
+    expect(source).toContain('formatModelFetchError(t, res.code, res.error)')
     expect(source).not.toContain('const response = await fetch(url')
   })
 })

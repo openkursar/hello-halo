@@ -9,8 +9,9 @@
  *   1. Legacy lifecycle events (app_install, app_launch, app_update) that the
  *      Baidu/GA providers emit. Do not rename without coordinating with the
  *      analytics dashboards.
- *   2. Telemetry events (session.*, page.view, message.*, app.*) used by the
- *      self-hosted telemetry provider. These are dotted names by convention.
+ *   2. Telemetry events (session.*, page.view, message.*, app.*, store.*) used
+ *      by the self-hosted telemetry provider. These are dotted names by
+ *      convention — snake_case here would read as a legacy GA/Baidu event.
  */
 export const AnalyticsEvents = {
   // ── Legacy lifecycle events (GA / Baidu) ──────────────────────────
@@ -36,6 +37,11 @@ export const AnalyticsEvents = {
   APP_RUN_FAILED: 'app.run.failed',
   APP_RUN_REPLAY: 'app.run.replay',           // Startup catch-up batch
   INSTALLED_APPS_SNAPSHOT: 'installed_apps.snapshot', // Startup full snapshot
+
+  // ── Telemetry: store ──────────────────────────────────────────────
+  // The rest of the store funnel is renderer-emitted (see ipc/analytics.ts);
+  // this one is main-emitted because only the installer knows an install landed.
+  STORE_INSTALL_DONE: 'store.install.done',
 
   // ── Telemetry: model + tool observability ─────────────────────────
   LLM_INVOCATION: 'llm.invocation',           // Each model call (per turn)

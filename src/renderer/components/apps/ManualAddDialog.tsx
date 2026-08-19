@@ -24,8 +24,9 @@ import type { McpServerConfig } from '../../../shared/apps/spec-types'
 import {
   internalMcpServerToJsonConfig,
   keyValueLinesToRecord,
-  mcpJsonConfigToInternal,
+  parseMcpJsonInput,
   recordToKeyValueLines,
+  type NamedMcpServerConfig,
 } from '../../utils/mcpConfigCompat'
 
 const GLOBAL_SCOPE = '__global__'
@@ -245,25 +246,6 @@ function buildMcpServer(
   }
 }
 
-function buildMcpSpec(
-  name: string,
-  transport: McpTransport,
-  command: string,
-  args: string[],
-  envText: string,
-  headersText: string
-) {
-  return {
-    spec_version: '1',
-    name: name.trim(),
-    version: MANUAL_MCP_VERSION,
-    author: MANUAL_MCP_AUTHOR,
-    type: 'mcp' as const,
-    description: `MCP Server: ${name.trim()}`,
-    mcp_server: buildMcpServer(transport, command, args, envText, headersText),
-  }
-}
-
 function McpForm({ onClose, installApp, loadApps }: FormProps) {
   const { t } = useTranslation()
   const [editMode, setEditMode] = useState<EditMode>('visual')
@@ -291,6 +273,9 @@ function McpForm({ onClose, installApp, loadApps }: FormProps) {
   const [jsonName, setJsonName] = useState('')
   const [jsonText, setJsonText] = useState('{\n  "command": "npx",\n  "args": ["-y", "@example/mcp-server"]\n}')
   const [jsonError, setJsonError] = useState<string | null>(null)
+  // Parsed servers from the JSON paste; > 1 when the user pasted a whole
+  // mcpServers map (Cursor / Claude Desktop export) — installed as a batch.
+  const [jsonServers, setJsonServers] = useState<NamedMcpServerConfig[]>([])
 
   const [error, setError] = useState<string | null>(null)
   const [installing, setInstalling] = useState(false)
@@ -303,23 +288,31 @@ function McpForm({ onClose, installApp, loadApps }: FormProps) {
     setEditMode('json')
   }, [args, command, envText, headersText, jsonName, name, transport])
 
-  // Parse JSON → sync back to visual fields
+  // Parse JSON → sync back to visual fields.
+  // Accepts direct configs and wrapped pastes ({"mcpServers": {...}} / {"name": {...}}).
   const handleJsonChange = useCallback((text: string) => {
     setJsonText(text)
     try {
       const parsed = JSON.parse(text)
-      const result = mcpJsonConfigToInternal(parsed)
-      if (result.error) {
-        setJsonError(t(result.error))
+      const result = parseMcpJsonInput(parsed)
+      if (result.error || !result.servers) {
+        setJsonServers([])
+        setJsonError(t(result.error ?? 'Invalid MCP configuration'))
         return
       }
       setJsonError(null)
-      setCommand(result.data?.command ?? '')
-      setTransport(result.data?.transport ?? 'stdio')
-      setArgs(result.data?.args ?? [])
-      setEnvText(recordToKeyValueLines(result.data?.env))
-      setHeadersText(recordToKeyValueLines(result.data?.headers))
+      setJsonServers(result.servers)
+
+      const first = result.servers[0]
+      // The wrapper key is the server's canonical name — auto-fill it
+      if (first.name) setJsonName(first.name)
+      setCommand(first.config.command ?? '')
+      setTransport(first.config.transport ?? 'stdio')
+      setArgs(first.config.args ?? [])
+      setEnvText(recordToKeyValueLines(first.config.env))
+      setHeadersText(recordToKeyValueLines(first.config.headers))
     } catch (e) {
+      setJsonServers([])
       setJsonError(t('Invalid JSON: {{message}}', { message: (e as Error).message }))
     }
   }, [t])
@@ -327,49 +320,71 @@ function McpForm({ onClose, installApp, loadApps }: FormProps) {
   const isUrl = transport !== 'stdio'
 
   const handleSubmit = useCallback(async () => {
-    const effectiveName = (editMode === 'json' ? jsonName : name).trim()
-    if (!effectiveName) { setError(t('Name is required')); return }
+    // Resolve what to install: one server (visual / single JSON) or a batch
+    // (JSON paste containing a whole mcpServers map).
+    let toInstall: Array<{ name: string; mcpServer: McpServerConfig }>
 
-    let spec: ReturnType<typeof buildMcpSpec>
     if (editMode === 'json') {
+      let servers: NamedMcpServerConfig[]
       try {
-        const parsed = JSON.parse(jsonText)
-        const result = mcpJsonConfigToInternal(parsed)
-        if (result.error || !result.data) {
+        const result = parseMcpJsonInput(JSON.parse(jsonText))
+        if (result.error || !result.servers) {
           setError(t(result.error ?? 'Invalid MCP configuration'))
           return
         }
-        spec = {
-          spec_version: '1',
-          name: effectiveName,
-          version: MANUAL_MCP_VERSION,
-          author: MANUAL_MCP_AUTHOR,
-          type: 'mcp' as const,
-          description: `MCP Server: ${effectiveName}`,
-          mcp_server: result.data,
-        }
+        servers = result.servers
       } catch (e) {
         setError(t('Invalid JSON: {{message}}', { message: e instanceof Error ? e.message : String(e) }))
         return
       }
+
+      if (servers.length === 1) {
+        const effectiveName = (jsonName || servers[0].name || '').trim()
+        if (!effectiveName) { setError(t('Name is required')); return }
+        toInstall = [{ name: effectiveName, mcpServer: servers[0].config }]
+      } else {
+        // Multi-server pastes are name-keyed by construction (wrapper keys)
+        toInstall = servers.map(s => ({ name: s.name!.trim(), mcpServer: s.config }))
+      }
     } else {
+      const effectiveName = name.trim()
+      if (!effectiveName) { setError(t('Name is required')); return }
       if (!command.trim()) { setError(t('Command or URL is required')); return }
-      spec = buildMcpSpec(effectiveName, transport, command, args, envText, headersText)
+      toInstall = [{ name: effectiveName, mcpServer: buildMcpServer(transport, command, args, envText, headersText) }]
     }
 
     setError(null)
     setInstalling(true)
     try {
       const resolvedSpaceId = selectedSpaceId === GLOBAL_SCOPE ? null : selectedSpaceId
-      const appId = await installApp(resolvedSpaceId, spec)
-      if (appId) {
-        await loadApps()
+      const failures: string[] = []
+      let installedCount = 0
+
+      for (const entry of toInstall) {
+        const spec = {
+          spec_version: '1',
+          name: entry.name,
+          version: MANUAL_MCP_VERSION,
+          author: MANUAL_MCP_AUTHOR,
+          type: 'mcp' as const,
+          description: `MCP Server: ${entry.name}`,
+          mcp_server: entry.mcpServer,
+        }
+        try {
+          const appId = await installApp(resolvedSpaceId, spec)
+          if (appId) installedCount++
+          else failures.push(entry.name)
+        } catch (err) {
+          failures.push(`${entry.name} (${err instanceof Error ? err.message : String(err)})`)
+        }
+      }
+
+      if (installedCount > 0) await loadApps()
+      if (failures.length === 0) {
         onClose()
       } else {
-        setError(t('Installation failed. Please try again.'))
+        setError(t('Failed to install: {{names}}', { names: failures.join(', ') }))
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('Installation failed'))
     } finally {
       setInstalling(false)
     }
@@ -419,18 +434,20 @@ function McpForm({ onClose, installApp, loadApps }: FormProps) {
           </select>
         </div>
 
-        {/* Name — always shown */}
-        <div>
-          <label className="block text-sm font-medium mb-1">{t('Name')}</label>
-          <input
-            type="text"
-            value={editMode === 'json' ? jsonName : name}
-            onChange={e => editMode === 'json' ? setJsonName(e.target.value) : setName(e.target.value)}
-            autoFocus
-            placeholder={t('e.g. my-mcp-server')}
-            className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-colors"
-          />
-        </div>
+        {/* Name — hidden for multi-server pastes (wrapper keys are the names) */}
+        {!(editMode === 'json' && jsonServers.length > 1) && (
+          <div>
+            <label className="block text-sm font-medium mb-1">{t('Name')}</label>
+            <input
+              type="text"
+              value={editMode === 'json' ? jsonName : name}
+              onChange={e => editMode === 'json' ? setJsonName(e.target.value) : setName(e.target.value)}
+              autoFocus
+              placeholder={t('e.g. my-mcp-server')}
+              className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-colors"
+            />
+          </div>
+        )}
 
         {editMode === 'visual' ? (
           <>
@@ -535,7 +552,7 @@ function McpForm({ onClose, installApp, loadApps }: FormProps) {
               {t('Configuration (JSON)')}
             </label>
             <p className="text-xs text-muted-foreground mb-2">
-              {t('Paste config from Cursor or Claude Desktop directly.')}
+              {t('Paste config from Cursor or Claude Desktop directly — the {{key}} wrapper is handled automatically.', { key: '"mcpServers"' })}
             </p>
             <textarea
               value={jsonText}
@@ -543,12 +560,18 @@ function McpForm({ onClose, installApp, loadApps }: FormProps) {
               rows={10}
               spellCheck={false}
               className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg font-mono focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none transition-colors"
-              placeholder={'{\n  "command": "npx",\n  "args": ["-y", "@example/mcp"],\n  "env": { "API_KEY": "xxx" }\n}'}
+              placeholder={'{\n  "mcpServers": {\n    "my-server": {\n      "command": "npx",\n      "args": ["-y", "@example/mcp"]\n    }\n  }\n}'}
             />
             {jsonError && (
               <div className="mt-2 flex items-center gap-1.5 text-xs text-red-500">
                 <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
                 {jsonError}
+              </div>
+            )}
+            {!jsonError && jsonServers.length > 1 && (
+              <div className="mt-2 flex items-center gap-1.5 text-xs text-primary">
+                <Server className="w-3.5 h-3.5 flex-shrink-0" />
+                {t('{{count}} servers detected — each will be installed under its own name.', { count: jsonServers.length })}
               </div>
             )}
           </div>
@@ -576,7 +599,11 @@ function McpForm({ onClose, installApp, loadApps }: FormProps) {
             disabled={installing || (editMode === 'json' && !!jsonError)}
             className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
           >
-            {installing ? t('Installing...') : t('Install')}
+            {installing
+              ? t('Installing...')
+              : editMode === 'json' && jsonServers.length > 1
+                ? t('Install {{count}} servers', { count: jsonServers.length })
+                : t('Install')}
           </button>
         </div>
       </div>

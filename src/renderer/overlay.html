@@ -21,13 +21,10 @@
       // Apply theme from main window
       (function() {
         try {
-          var theme = localStorage.getItem('halo-theme');
-          if (theme === 'light') {
+          var theme = localStorage.getItem('halo-theme') || 'system';
+          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          if (theme === 'light' || (theme === 'system' && !prefersDark)) {
             document.documentElement.classList.add('light');
-          } else if (theme === 'system') {
-            if (!window.matchMedia('(prefers-color-scheme: dark)').matches) {
-              document.documentElement.classList.add('light');
-            }
           }
         } catch (e) {}
       })();

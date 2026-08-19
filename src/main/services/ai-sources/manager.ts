@@ -30,17 +30,26 @@ import {
   type AISourceType,
   type AISourcesConfig,
   type AISource,
+  type AISourceUser,
   type BackendRequestConfig,
+  type DirectCallEndpoint,
   type OAuthStartResult,
   type OAuthCompleteResult,
   type ModelOption,
-  type ProviderId
+  type ProviderId,
+  type AuthQuotaSnapshot
 } from '../../../shared/types'
-import { getBuiltinProvider, isAnthropicProvider, isBuiltinProvider } from '../../../shared/constants'
+import {
+  getBuiltinProvider,
+  isAnthropicProvider,
+  isBuiltinProvider,
+  resolveModelVision
+} from '../../../shared/constants'
 import { getConfig, saveConfig } from '../../foundation/config.service'
 import { getCustomProvider } from './providers/custom.provider'
 import { getGitHubCopilotProvider } from './providers/github-copilot.provider'
 import { getClaudeProvider } from './providers/claude.provider'
+import { getZhipuCodingOAuthProvider } from './providers/zhipu-coding-oauth.provider'
 import { loadAuthProvidersAsync } from './auth-loader'
 import { loadProductConfig } from '../../foundation/product-config'
 import { decryptString } from '../../foundation/secure-storage.service'
@@ -81,6 +90,7 @@ class AISourceManager {
     this.registerProvider(getCustomProvider())
     this.registerProvider(getGitHubCopilotProvider())
     this.registerProvider(getClaudeProvider())
+    this.registerProvider(getZhipuCodingOAuthProvider())
 
     // Sync saved sources' model lists with current BUILTIN_PROVIDERS
     this.syncBuiltinModels()
@@ -163,6 +173,29 @@ class AISourceManager {
   }
 
   /**
+   * Return a valid OAuth access token for a provider type, or null when no such
+   * source is signed in. Refreshes an expiring token first. Used by the
+   * store to authenticate to an identity-bound registry server.
+   */
+  async getOAuthAccessToken(providerType: ProviderId): Promise<string | null> {
+    const source = this.getDecryptedAiSources().sources.find(
+      s => s.provider === providerType && s.authType === 'oauth' && !!s.accessToken
+    )
+    if (!source) return null
+    await this.ensureValidToken(source.id)
+    const refreshed = this.getDecryptedAiSources().sources.find(s => s.id === source.id)
+    return refreshed?.accessToken ?? null
+  }
+
+  /** The signed-in OAuth user for a provider, or null when not signed in. */
+  getOAuthIdentity(providerType: ProviderId): AISourceUser | null {
+    const source = this.getDecryptedAiSources().sources.find(
+      s => s.provider === providerType && s.authType === 'oauth' && !!s.accessToken
+    )
+    return source?.user ?? null
+  }
+
+  /**
    * Get backend request configuration for the current source
    * This is the main method used by agent.service.ts
    */
@@ -201,6 +234,7 @@ class AISourceManager {
       const legacyConfig = this.buildLegacyOAuthConfig(source)
       const result = provider.getBackendConfig(legacyConfig)
       console.log(`[AISourceManager] OAuth provider returned adapterId: ${result?.adapterId || 'none'}`)
+      this.stampVisionCapability(source, result)
       return result
     }
 
@@ -238,6 +272,8 @@ class AISourceManager {
       config.apiType = source.apiType
     }
 
+    this.stampVisionCapability(source, config)
+
     console.log('[AISourceManager] getBackendConfig result:', {
       url: config.url,
       model: config.model,
@@ -248,6 +284,60 @@ class AISourceManager {
     })
 
     return config
+  }
+
+  /**
+   * Resolve the current source into a ready-to-POST descriptor for a direct,
+   * non-streaming HTTP call that bypasses the SDK and the compat router (e.g.
+   * Tlon ingest). Built on getBackendConfig() so URL normalization, wire
+   * format and auth headers are defined in one place rather than re-derived by
+   * each direct caller.
+   *
+   * `apiType` is passed through so callers can reject `responses` / `kiro`,
+   * which need the router's request/response translation and cannot be spoken
+   * directly. Returns null when no source is configured.
+   */
+  getDirectCallEndpoint(): DirectCallEndpoint | null {
+    const source = getCurrentSource(this.getDecryptedAiSources())
+    if (!source) return null
+    const backend = this.getBackendConfig()
+    if (!backend) return null
+
+    const wireFormat: 'anthropic' | 'openai' =
+      isAnthropicProvider(source.provider) || backend.apiType === 'anthropic_passthrough'
+        ? 'anthropic'
+        : 'openai'
+
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    let url = backend.url
+
+    if (wireFormat === 'anthropic') {
+      // getBackendConfig leaves a native-Anthropic url as the base (the SDK
+      // appends /v1/messages); a direct call must append it itself.
+      if (!/\/v1\/messages$/.test(url)) {
+        url = `${url.replace(/\/+$/, '')}/v1/messages`
+      }
+      headers['anthropic-version'] = '2023-06-01'
+    }
+
+    const hasAuth =
+      !!backend.headers &&
+      Object.keys(backend.headers).some(k => k.toLowerCase() === 'authorization')
+    if (hasAuth) {
+      // OAuth providers (claude/copilot) inject their own Authorization + betas.
+      Object.assign(headers, backend.headers)
+    } else if (wireFormat === 'anthropic') {
+      headers['x-api-key'] = backend.key
+    } else {
+      headers['authorization'] = `Bearer ${backend.key}`
+    }
+
+    // The [1m] suffix is an SDK-only context-window hint stripped at the router
+    // wire boundary; the real Anthropic API rejects non-canonical model ids.
+    const rawModel = backend.model || source.model
+    const model = wireFormat === 'anthropic' ? rawModel.replace(/\[1m\]$/i, '') : rawModel
+
+    return { url, headers, wireFormat, model, apiType: backend.apiType }
   }
 
   /**
@@ -310,7 +400,9 @@ class AISourceManager {
       // rationale; a post-call `config.model = modelId` patch (the previous
       // behaviour) is unsafe because it leaves derived headers stale.
       const legacyConfig = this.buildLegacyOAuthConfig(source, modelId)
-      return provider.getBackendConfig(legacyConfig)
+      const result = provider.getBackendConfig(legacyConfig)
+      this.stampVisionCapability(source, result)
+      return result
     }
 
     // API Key: build config directly. See getBackendConfig() for the rationale
@@ -338,7 +430,23 @@ class AISourceManager {
       config.apiType = source.apiType
     }
 
+    this.stampVisionCapability(source, config)
+
     return config
+  }
+
+  /**
+   * Stamp the source's effective vision capability onto a resolved backend
+   * config, so the request pipeline (image fallback, image stripping) decides
+   * from the same answer the input UI shows the user.
+   *
+   * Applies to OAuth and API-key sources alike: the OAuth branches delegate
+   * config building to the provider, which knows nothing about per-model
+   * capability, so the value has to be attached here or it is lost.
+   */
+  private stampVisionCapability(source: AISource, config: BackendRequestConfig | null): void {
+    if (!config) return
+    config.visionOverride = resolveModelVision(source, config.model)
   }
 
   // ========== Source CRUD Operations ==========
@@ -501,6 +609,7 @@ class AISourceManager {
     const availableModels: string[] = data._availableModels || []
     const modelNames: Record<string, string> = data._modelNames || {}
     const defaultModel = data._defaultModel || ''
+    const modelOverrides = data._modelOverrides as AISource['modelOverrides']
 
     const builtin = getBuiltinProvider(providerType)
     const now = new Date().toISOString()
@@ -516,6 +625,64 @@ class AISourceManager {
     }
 
     const aiSources = this.getAiSourcesConfig()
+
+    // Multi-account providers (e.g. Zhipu Coding Plan returns one entry per
+    // organization) create/update one source per account so the user can see and
+    // switch organizations from the source list. Sources are matched by the stable
+    // account id carried in user.uid. Backward compatible: providers that do not
+    // return `_accounts` fall through to the single-source path below.
+    const accounts = data._accounts as Array<{ key: string; label: string; id: string }> | undefined
+    if (Array.isArray(accounts) && accounts.length > 0) {
+      // The source list already groups by provider, so the source name is just
+      // the organization label (no redundant provider prefix). The org id is kept
+      // in user.uid to match sources across re-logins.
+      let sources = [...aiSources.sources]
+      let firstId: string | null = null
+      for (const acct of accounts) {
+        const existing = sources.find(
+          s => s.provider === providerType && s.authType === 'oauth' && s.user?.uid === acct.id
+        )
+        if (existing) {
+          const keepModel = models.some(m => m.id === existing.model) ? existing.model : (defaultModel || existing.model)
+          sources = sources.map(s => s.id === existing.id ? {
+            ...s,
+            name: acct.label,
+            accessToken: acct.key,
+            refreshToken: '',
+            tokenExpires: tokenData?.expiresAt,
+            user: { name: '', uid: acct.id },
+            model: keepModel,
+            availableModels: models.length > 0 ? models : s.availableModels,
+            modelOverrides: modelOverrides ?? s.modelOverrides,
+            updatedAt: now
+          } : s)
+          if (!firstId) firstId = existing.id
+        } else {
+          const id = uuidv4()
+          sources.push({
+            id,
+            name: acct.label,
+            provider: providerType,
+            authType: 'oauth',
+            apiUrl: '',
+            accessToken: acct.key,
+            refreshToken: '',
+            tokenExpires: tokenData?.expiresAt,
+            user: { name: '', uid: acct.id },
+            model: defaultModel,
+            availableModels: models,
+            modelOverrides,
+            createdAt: now,
+            updatedAt: now
+          })
+          if (!firstId) firstId = id
+        }
+      }
+      const newConfig: AISourcesConfig = { version: 2, currentId: firstId, sources }
+      saveConfig({ aiSources: newConfig, isFirstLaunch: false } as any)
+      console.log(`[AISourceManager] OAuth login for ${providerType} upserted ${accounts.length} account source(s)`)
+      return
+    }
 
     // Check if an OAuth source with the same provider already exists
     const existingSource = aiSources.sources.find(
@@ -541,6 +708,7 @@ class AISourceManager {
             },
             model: defaultModel || s.model,
             availableModels: models.length > 0 ? models : s.availableModels,
+            modelOverrides: modelOverrides ?? s.modelOverrides,
             updatedAt: now
           }
         }
@@ -565,6 +733,7 @@ class AISourceManager {
         },
         model: defaultModel,
         availableModels: models,
+        modelOverrides,
         createdAt: now,
         updatedAt: now
       }
@@ -723,8 +892,8 @@ class AISourceManager {
    * Delegates to the provider's refreshConfig() to fetch the latest model
    * list from the remote API, then merges the result back into stored config.
    *
-   * Only non-sensitive fields (availableModels, model, updatedAt) are written;
-   * encrypted tokens on disk are never touched.
+   * Only non-sensitive fields (availableModels, model, modelOverrides,
+   * updatedAt) are written; encrypted tokens on disk are never touched.
    */
   async refreshSourceConfig(sourceId: string): Promise<ProviderResult<void>> {
     await this.ensureInitialized()
@@ -773,12 +942,15 @@ class AISourceManager {
     const freshAiSources = this.getAiSourcesConfig()
     const now = new Date().toISOString()
 
+    const nextOverrides = providerData.modelOverrides as AISource['modelOverrides']
+
     const updatedSources = freshAiSources.sources.map(s => {
       if (s.id !== sourceId) return s
       return {
         ...s,
         availableModels: models.length > 0 ? models : s.availableModels,
         model: providerData.model || s.model,
+        modelOverrides: nextOverrides ?? s.modelOverrides,
         updatedAt: now
       }
     })
@@ -808,6 +980,53 @@ class AISourceManager {
         console.error(`[AISourceManager] Failed to refresh ${source.name}:`, error)
       }
     }
+  }
+
+  // ========== Metered Quota ==========
+
+  /**
+   * Report the current metered quota for a source. The provider owns the
+   * semantics: it queries its own server with a fresh token and returns a
+   * uniform AuthQuotaSnapshot. A provider that is not OAuth or lacks getQuota()
+   * has no quota concept and returns `data: null` (unsupported, not an error).
+   */
+  async getSourceQuota(sourceId: string): Promise<ProviderResult<AuthQuotaSnapshot | null>> {
+    await this.ensureInitialized()
+
+    // Capability check first — decide "unsupported" without an unrelated token
+    // refresh. Uses the plain (non-decrypted) config since only provider type is
+    // needed here.
+    const source = this.getAiSourcesConfig().sources.find(s => s.id === sourceId)
+    if (!source) {
+      return { success: false, error: 'Source not found' }
+    }
+
+    const provider = this.providers.get(source.provider)
+    if (!provider || !this.isOAuthProvider(provider) || !provider.getQuota) {
+      return { success: true, data: null }
+    }
+
+    // Renew an expired OAuth token before the provider calls its server;
+    // providers never retry internally.
+    const tokenResult = await this.ensureValidToken(sourceId)
+    if (!tokenResult.success) {
+      return { success: false, error: tokenResult.error || 'Token refresh failed' }
+    }
+
+    // Re-read decrypted config AFTER refresh so a rotated token is carried in.
+    const refreshed = this.getDecryptedAiSources().sources.find(s => s.id === sourceId)
+    if (!refreshed) {
+      return { success: false, error: 'Source not found' }
+    }
+
+    const legacyConfig = this.buildLegacyOAuthConfig(refreshed)
+    const result = await provider.getQuota(legacyConfig)
+    if (!result.success) {
+      console.warn(`[AISourceManager] Quota fetch failed for "${refreshed.name}":`, result.error)
+      return { success: false, error: result.error || 'Quota fetch failed' }
+    }
+
+    return { success: true, data: result.data ?? null }
   }
 
   // ========== Helper Methods ==========

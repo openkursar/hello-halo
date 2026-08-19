@@ -11,12 +11,14 @@ import { registerConfigRoutes } from './config.routes'
 import { registerAiSourcesRoutes } from './ai-sources.routes'
 import { registerSpaceRoutes } from './space.routes'
 import { registerAgentRoutes } from './agent.routes'
+import { registerTerminalRoutes } from './terminal.routes'
 import { registerArtifactRoutes } from './artifact.routes'
 import { registerNotifyRoutes } from './notify.routes'
 import { registerImRoutes } from './im.routes'
 import { registerSystemRoutes } from './system.routes'
 import { registerAppsRoutes } from './apps.routes'
 import { registerStoreRoutes } from './store.routes'
+import { registerTlonRoutes } from './tlon.routes'
 
 /**
  * Register all API routes.
@@ -26,12 +28,14 @@ export function registerApiRoutes(app: Express): void {
   registerAiSourcesRoutes(app)
   registerSpaceRoutes(app)
   registerAgentRoutes(app)
+  registerTerminalRoutes(app)
   registerArtifactRoutes(app)
   registerNotifyRoutes(app)
   registerImRoutes(app)
   registerSystemRoutes(app)
   registerAppsRoutes(app)
   registerStoreRoutes(app)
+  registerTlonRoutes(app)
 
   console.log('[HTTP] API routes registered')
 }

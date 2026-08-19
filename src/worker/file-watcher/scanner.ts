@@ -15,7 +15,8 @@ import { promises as fs, readFileSync, existsSync, type Dirent } from 'fs'
 import ignore, { type Ignore } from 'ignore'
 import {
   ALWAYS_IGNORE_DIRS,
-  BASELINE_IGNORE_PATTERNS
+  BASELINE_IGNORE_PATTERNS,
+  TREE_HIDDEN_DIRS
 } from '../../shared/constants/ignore-patterns'
 import type { CachedTreeNode, CachedArtifact } from '../../shared/types/artifact'
 
@@ -89,14 +90,15 @@ export function loadIgnoreRules(rootPath: string): Ignore {
 }
 
 /**
- * Lightweight ignore rules: ALWAYS_IGNORE_DIRS + BASELINE_IGNORE_PATTERNS only.
- * Used by tree scanning so gitignored files remain visible (matching VS Code behavior).
- * The watcher still uses full rules — gitignored files won't auto-update but will
- * appear correctly on expand/refresh.
+ * Tree scanning rules: no .gitignore, so gitignored files stay visible
+ * (matching VS Code's file explorer).
+ *
+ * Directories the watcher ignores still appear here but receive no fs events;
+ * they refresh on window focus or manual reconcile, not on expand.
  */
 export function loadTreeIgnoreRules(): Ignore {
   const ig = ignore()
-  ig.add(ALWAYS_IGNORE_DIRS)
+  ig.add(TREE_HIDDEN_DIRS)
   ig.add(BASELINE_IGNORE_PATTERNS)
   return ig
 }

@@ -13,4 +13,5 @@ export const authRpc = {
   authRefreshToken: rawRpcMethod('auth:refresh-token'),
   authCheckToken: rawRpcMethod('auth:check-token'),
   authLogout: rawRpcMethod('auth:logout'),
+  authGetQuota: rawRpcMethod('auth:get-quota'),
 }

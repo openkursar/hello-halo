@@ -6,7 +6,9 @@
  * Resolution priority (first match wins):
  *   1. Exact locale match       — e.g. "zh-CN" for user locale "zh-CN"
  *   2. Language-prefix match    — e.g. "zh-CN" for user locale "zh-TW" (shared zh-* block)
- *   3. Canonical fallback       — the top-level English name/description/config_schema fields
+ *   3. Locale-agnostic display  — `display_name`, carried by specs whose canonical
+ *                                 `name` is an identifier rather than a display string
+ *   4. Canonical fallback       — the top-level name/description/config_schema fields
  *
  * Only display text is resolved here. system_prompt, store metadata, subscriptions,
  * and all runtime behavior are never affected by i18n.
@@ -80,7 +82,7 @@ export function resolveSpecI18n(spec: AppSpec, locale: string): ResolvedSpecDisp
   // No block for this locale — return canonical fields as-is (no copy overhead)
   if (!block) {
     return {
-      name: spec.name,
+      name: spec.display_name ?? spec.name,
       description: spec.description,
       config_schema: spec.config_schema,
       browser_login: specBrowserLogin,
@@ -116,7 +118,7 @@ export function resolveSpecI18n(spec: AppSpec, locale: string): ResolvedSpecDisp
   })
 
   return {
-    name: block.name ?? spec.name,
+    name: block.name ?? spec.display_name ?? spec.name,
     description: block.description ?? spec.description,
     config_schema,
     browser_login,
@@ -151,7 +153,8 @@ export interface ResolvedEntryDisplay {
  */
 export function resolveEntryI18n(entry: RegistryEntry, locale: string): ResolvedEntryDisplay {
   const i18n = entry.i18n
-  if (!i18n) return { name: entry.name, description: entry.description }
+  const canonical = entry.display_name ?? entry.name
+  if (!i18n) return { name: canonical, description: entry.description }
 
   // Find best locale block (same logic as findLocaleBlock, but typed differently
   // because RegistryEntry.i18n only carries name/description)
@@ -165,10 +168,10 @@ export function resolveEntryI18n(entry: RegistryEntry, locale: string): Resolved
     if (matchKey) block = i18n[matchKey]
   }
 
-  if (!block) return { name: entry.name, description: entry.description }
+  if (!block) return { name: canonical, description: entry.description }
 
   return {
-    name: block.name ?? entry.name,
+    name: block.name ?? canonical,
     description: block.description ?? entry.description,
   }
 }

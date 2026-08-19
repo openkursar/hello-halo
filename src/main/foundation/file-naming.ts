@@ -1,8 +1,9 @@
 /**
- * AI Browser Download Utilities
+ * File Naming Utilities
  *
- * Shared filename sanitization and unique path resolution used by both
- * the BrowserContext download tracking and the DaemonBrowserManager.
+ * Filename sanitization and unique path resolution for any subsystem that
+ * writes a file under a name it did not choose — browser downloads, IM media
+ * staging, and anything else fed from an untrusted source.
  */
 
 import * as path from 'path'

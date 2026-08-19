@@ -15,10 +15,12 @@ import {
   checkUpgradesNow,
   publish,
   getPublishPreview,
+  findAppByPublishSlug,
   unpackDhpkg,
 } from '../../store'
 import { getAppManager } from '../../apps/manager'
 import { getAppRuntime } from '../../apps/runtime'
+import type { AppType } from '../../../shared/apps/spec-types'
 
 export function registerStoreRoutes(app: Express): void {
   // ===== Store (App Registry) Routes =====
@@ -180,6 +182,77 @@ export function registerStoreRoutes(app: Express): void {
     }
   })
 
+  // GET /api/store/capabilities — renderer-safe store capability flags
+  app.get('/api/store/capabilities', async (req: Request, res: Response) => {
+    try {
+      const result = await storeController.getStoreCapabilities()
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/store/category-taxonomy — scene-category enum for chips + publish
+  app.get('/api/store/category-taxonomy', async (req: Request, res: Response) => {
+    try {
+      const result = await storeController.getStoreCategoryTaxonomy()
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/revalidate — cheap freshness check on returning to the store
+  app.post('/api/store/revalidate', async (_req: Request, res: Response) => {
+    try {
+      res.json(await storeController.revalidateStore())
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/store/discover-page — layout with every section's data resolved
+  app.get('/api/store/discover-page', async (req: Request, res: Response) => {
+    try {
+      const locale = typeof req.query.locale === 'string' ? req.query.locale : undefined
+      const pageSize = Number(req.query.pageSize)
+      res.json(await storeController.getStoreDiscoverPage({
+        locale,
+        pageSize: Number.isFinite(pageSize) && pageSize > 0 ? pageSize : undefined,
+      }))
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/store/my-publications — the signed-in creator's published apps
+  app.get('/api/store/my-publications', async (req: Request, res: Response) => {
+    try {
+      res.json(await storeController.getStoreMyPublications())
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/unpublish — take down one of the creator's own apps
+  app.post('/api/store/unpublish', async (req: Request, res: Response) => {
+    try {
+      res.json(await storeController.unpublishStoreApp(req.body))
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/ignore-version — skip an available update version for an app
+  app.post('/api/store/ignore-version', async (req: Request, res: Response) => {
+    try {
+      const result = storeController.ignoreStoreVersion(req.body)
+      res.json(result)
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // POST /api/store/registries — add a new registry source
   app.post('/api/store/registries', async (req: Request, res: Response) => {
     try {
@@ -259,12 +332,27 @@ export function registerStoreRoutes(app: Express): void {
   // POST /api/store/publish/preview — preview publish metadata
   app.post('/api/store/publish/preview', async (req: Request, res: Response) => {
     try {
-      const { appId, author } = req.body as { appId?: string; author?: string }
+      const { appId, author, name } = req.body as { appId?: string; author?: string; name?: string }
       if (!appId) {
         res.status(400).json({ success: false, error: 'Missing appId' })
         return
       }
-      res.json({ success: true, data: getPublishPreview(appId, author) })
+      res.json({ success: true, data: await getPublishPreview(appId, author, name) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/store/publish/find-app — the installed app a publish would land
+  // on this slug (null when not uniquely determined)
+  app.post('/api/store/publish/find-app', async (req: Request, res: Response) => {
+    try {
+      const { slug, type, author } = req.body as { slug?: string; type?: AppType; author?: string }
+      if (!slug) {
+        res.status(400).json({ success: false, error: 'Missing slug' })
+        return
+      }
+      res.json({ success: true, data: { appId: findAppByPublishSlug(slug, type, author) } })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -273,12 +361,21 @@ export function registerStoreRoutes(app: Express): void {
   // POST /api/store/publish — publish an installed app to the configured registry
   app.post('/api/store/publish', async (req: Request, res: Response) => {
     try {
-      const { appId, author, version } = req.body as { appId?: string; author?: string; version?: string }
+      const { appId, author, version, changelog, category, name, description, tags } = req.body as {
+        appId?: string
+        author?: string
+        version?: string
+        changelog?: string
+        category?: string
+        name?: string
+        description?: string
+        tags?: string[]
+      }
       if (!appId) {
         res.status(400).json({ success: false, error: 'Missing appId' })
         return
       }
-      const result = await publish(appId, author, version)
+      const result = await publish(appId, { author, version, changelog, category, name, description, tags })
       res.json({
         success: result.status !== 'error',
         data: result,

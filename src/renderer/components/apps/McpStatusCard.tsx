@@ -12,13 +12,15 @@
 import { useState, useCallback } from 'react'
 import {
   Wrench, Unplug, Loader2, AlertTriangle, Pencil, X, Check,
-  Plus, Settings2, Code, AlertCircle, ChevronDown, ChevronRight
+  Plus, Settings2, Code, AlertCircle, ChevronDown, ChevronRight, PlugZap
 } from 'lucide-react'
+import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppStore } from '../../stores/app.store'
 import { AppStatusDot } from './AppStatusDot'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
+import { isSessionOnlyFailure } from '../../utils/mcpStatus'
 import {
   internalMcpServerToJsonConfig,
   keyValueLinesToRecord,
@@ -135,6 +137,10 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
   const [toggling, setToggling]       = useState(false)
   const [toggleError, setToggleError] = useState<string | null>(null)
 
+  // Connection test state (result arrives via the agent:mcp-status broadcast)
+  const [testing, setTesting]     = useState(false)
+  const [testError, setTestError] = useState<string | null>(null)
+
   // Edit state
   const [isEditing, setIsEditing] = useState(false)
   const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
@@ -173,6 +179,9 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
     }
   }
   const isError = displayStatus === 'error'
+  // Editing the token would not help here — Halo clears the leftover state and
+  // the next session picks the server up again.
+  const sessionOnlyFailure = isSessionOnlyFailure(sdkEntry)
 
   // Init edit state when entering edit mode
   const startEditing = useCallback(() => {
@@ -287,6 +296,22 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
     }
   }
 
+  // Run a native connection probe. The main process updates the shared
+  // status cache and broadcasts agent:mcp-status, which refreshes this card.
+  const handleTestConnection = async () => {
+    if (testing) return
+    setTesting(true)
+    setTestError(null)
+    try {
+      const res = await api.probeMcpApp(appId)
+      if (!res.success) setTestError(res.error ?? t('Connection test failed'))
+    } catch (e) {
+      setTestError((e as Error).message)
+    } finally {
+      setTesting(false)
+    }
+  }
+
   // Env display (masked values for security)
   const envEntries = mcpServer?.env ? Object.entries(mcpServer.env) : []
   const headerEntries = mcpServer?.headers ? Object.entries(mcpServer.headers) : []
@@ -339,13 +364,51 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
         </div>
       </div>
 
-      {/* ── Error recovery hint ── */}
-      {isError && (
-        <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-500/20">
-          <AlertTriangle className="w-3.5 h-3.5 text-red-400 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-red-400">
-            {t('The MCP server failed to connect. Toggle Enable to retry.')}
-          </p>
+      {/* ── Connection failure details + retry ── */}
+      {(isError || displayStatus === 'needs_login') && (
+        <div className={`px-3 py-2.5 rounded-lg space-y-2 ${
+          sessionOnlyFailure
+            ? 'bg-amber-500/10 border border-amber-500/20'
+            : 'bg-red-500/10 border border-red-500/20'
+        }`}>
+          <div className="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-2.5">
+            <div className="flex items-start gap-2.5 min-w-0 flex-1">
+              <AlertTriangle className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${
+                sessionOnlyFailure ? 'text-amber-400' : 'text-red-400'
+              }`} />
+              <div className="min-w-0 space-y-1">
+                <p className={`text-xs ${sessionOnlyFailure ? 'text-amber-400' : 'text-red-400'}`}>
+                  {sessionOnlyFailure
+                    ? t('This server connects fine, but the last agent session could not use it. Halo has cleared the leftover state — it will be picked up again on the next message.')
+                    : displayStatus === 'needs_login'
+                      ? t('Authentication was rejected by the MCP server. Update the token in the configuration below, then test again.')
+                      : t('The MCP server failed to connect.')}
+                </p>
+                {!sessionOnlyFailure && sdkEntry?.errorDetail && (
+                  <p className="text-[11px] font-mono text-red-400/80 break-all">
+                    {sdkEntry.errorDetail}
+                  </p>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={handleTestConnection}
+              disabled={testing}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg transition-colors
+                disabled:opacity-50 flex-shrink-0 self-start border ${
+                  sessionOnlyFailure
+                    ? 'text-amber-400 hover:text-amber-300 border-amber-400/30 hover:border-amber-400/60'
+                    : 'text-red-400 hover:text-red-300 border-red-400/30 hover:border-red-400/60'
+                }`}
+            >
+              {testing
+                ? <><Loader2 className="w-3 h-3 animate-spin" />{t('Testing...')}</>
+                : <><PlugZap className="w-3 h-3" />{t('Test connection')}</>}
+            </button>
+          </div>
+          {testError && (
+            <p className="text-[11px] text-red-400/80 pl-6">{testError}</p>
+          )}
         </div>
       )}
 
@@ -357,13 +420,27 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
               {t('Configuration')}
             </h3>
             {!isEditing && (
-              <button
-                onClick={startEditing}
-                className="flex items-center gap-1 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary rounded transition-colors"
-              >
-                <Pencil className="w-3 h-3" />
-                {t('Edit')}
-              </button>
+              <div className="flex items-center gap-1">
+                {!isPaused && (
+                  <button
+                    onClick={handleTestConnection}
+                    disabled={testing}
+                    className="flex items-center gap-1 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary rounded transition-colors disabled:opacity-50"
+                  >
+                    {testing
+                      ? <Loader2 className="w-3 h-3 animate-spin" />
+                      : <PlugZap className="w-3 h-3" />}
+                    {t('Test connection')}
+                  </button>
+                )}
+                <button
+                  onClick={startEditing}
+                  className="flex items-center gap-1 px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary rounded transition-colors"
+                >
+                  <Pencil className="w-3 h-3" />
+                  {t('Edit')}
+                </button>
+              </div>
             )}
           </div>
 
@@ -613,7 +690,7 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
             <p className="text-xs text-muted-foreground italic pl-5">
               {isPaused
                 ? t('Enable this server to load its tools.')
-                : t('Tool list is available after the MCP server connects.')}
+                : t('No tools loaded yet — use "Test connection" to fetch the tool list.')}
             </p>
           )
         )}

@@ -1,6 +1,6 @@
 ---
 name: halo-dev
-description: important!!! Must read before writing/editing any code, and follow it. Covers architecture, conventions, quality standards, and responsive design requirements.
+description: important!!! Must read and follow before writing or editing any code, and equally before planning, designing, or discussing architecture for this codebase (module placement, directory layout, IPC channels, theme, i18n) — decisions made while planning are what the later edit is bound by. Entry point to CONTEXT.md / ARCHITECTURE.md / quick.md. Covers architecture, conventions, quality standards, and responsive design requirements.
 allowed-tools: Read, Write, Edit, Bash
 user-invocable: true
 ---

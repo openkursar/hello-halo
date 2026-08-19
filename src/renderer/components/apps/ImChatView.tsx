@@ -10,9 +10,11 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Loader2, AlertCircle, Radio, Eraser } from 'lucide-react'
+import { Loader2, AlertCircle, Radio, Eraser, Square, ArrowRightToLine } from 'lucide-react'
 import { api } from '../../api'
 import { useChatStore } from '../../stores/chat.store'
+import { useAppsPageStore } from '../../stores/apps-page.store'
+import { useEngineCapabilities } from '../../stores/engine.store'
 import { MessageList } from '../chat/MessageList'
 import type { MessageListHandle } from '../chat/MessageList'
 import { ScrollToBottomButton } from '../chat/ScrollToBottomButton'
@@ -20,7 +22,7 @@ import { useRemoteSubscription } from '../../hooks/useRemoteSubscription'
 import { useWsRecovery } from '../../hooks/useWsRecovery'
 import { useTranslation } from '../../i18n'
 import type { Message } from '../../types'
-import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import type { ImSessionRecord, SessionSource } from '../../../shared/types/im-channel'
 import { buildImSessionKey } from '../../../shared/apps/im-keys'
 import { CHANNEL_LABELS } from './im-channel-labels'
 
@@ -150,6 +152,30 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
   const resetSession = useChatStore(s => s.resetSession)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
 
+  // ── Stop generation (with confirmation) ──
+  // Aborts the current turn only; history is preserved.
+  const markSessionStopped = useChatStore(s => s.markSessionStopped)
+  const [showStopConfirm, setShowStopConfirm] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
+
+  const handleStopSession = useCallback(async () => {
+    if (isStopping) return
+    setIsStopping(true)
+    try {
+      const res = await api.appImChatStop(appId, spaceId, session.channel, session.chatType, session.chatId)
+      if (res.success) {
+        markSessionStopped(conversationId)
+      } else {
+        console.error('[ImChatView] Stop session error:', res.error)
+      }
+    } catch (err) {
+      console.error('[ImChatView] Stop session error:', err)
+    } finally {
+      setIsStopping(false)
+      setShowStopConfirm(false)
+    }
+  }, [appId, spaceId, session.channel, session.chatType, session.chatId, conversationId, isStopping, markSessionStopped])
+
   const handleClearSession = useCallback(async () => {
     try {
       const res = await api.appImChatClear(appId, spaceId, session.channel, session.chatType, session.chatId)
@@ -165,6 +191,28 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
     }
   }, [appId, spaceId, session.channel, session.chatType, session.chatId, conversationId, resetSession])
 
+  // ── Continue in client: fork this session into a native local chat ──
+  // Only offered when the active engine can branch a session to a new id
+  // (sessionFork capability). Forks the full context into a client session and
+  // navigates to it, leaving this IM session untouched.
+  const capabilities = useEngineCapabilities()
+  const canFork = !!capabilities?.features.sessionFork
+  const selectImSession = useAppsPageStore(s => s.selectImSession)
+  const fetchImSessions = useAppsPageStore(s => s.fetchImSessions)
+
+  const handleForkToClient = useCallback(async () => {
+    try {
+      const res = await api.appSessionFork(appId, spaceId, conversationId)
+      if (res.success && res.data) {
+        const record = (res.data as { record: ImSessionRecord }).record
+        await fetchImSessions(appId)
+        selectImSession(record)
+      }
+    } catch (err) {
+      console.error('[ImChatView] Continue in client error:', err)
+    }
+  }, [appId, spaceId, conversationId, fetchImSessions, selectImSession])
+
   const displayName = session.customName || session.displayName || session.chatId
   const channelLabel = CHANNEL_LABELS[session.channel] ?? session.channel
   const chatTypeLabel = session.chatType === 'group' ? t('Group') : t('Direct')
@@ -174,7 +222,7 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
   if (loadState === 'loading') {
     return (
       <div className="flex flex-col h-full">
-        <ImChatInfoBar name={displayName} channel={channelLabel} chatType={chatTypeLabel} isGenerating={false} hasMessages={false} showClearConfirm={false} onClearClick={() => {}} onClearConfirm={() => {}} onClearCancel={() => {}} t={t} />
+        <ImChatInfoBar name={displayName} channel={channelLabel} chatType={chatTypeLabel} source={session.source} isGenerating={false} hasMessages={false} showClearConfirm={false} onClearClick={() => {}} onClearConfirm={() => {}} onClearCancel={() => {}} showStopConfirm={false} isStopping={false} onStopClick={() => {}} onStopConfirm={() => {}} onStopCancel={() => {}} t={t} />
         <div className="flex-1 flex items-center justify-center">
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -189,7 +237,7 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
   if (loadState === 'error') {
     return (
       <div className="flex flex-col h-full">
-        <ImChatInfoBar name={displayName} channel={channelLabel} chatType={chatTypeLabel} isGenerating={false} hasMessages={false} showClearConfirm={false} onClearClick={() => {}} onClearConfirm={() => {}} onClearCancel={() => {}} t={t} />
+        <ImChatInfoBar name={displayName} channel={channelLabel} chatType={chatTypeLabel} source={session.source} isGenerating={false} hasMessages={false} showClearConfirm={false} onClearClick={() => {}} onClearConfirm={() => {}} onClearCancel={() => {}} showStopConfirm={false} isStopping={false} onStopClick={() => {}} onStopConfirm={() => {}} onStopCancel={() => {}} t={t} />
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <AlertCircle className="w-5 h-5 text-destructive" />
@@ -206,12 +254,18 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
         name={displayName}
         channel={channelLabel}
         chatType={chatTypeLabel}
+        source={session.source}
         isGenerating={isGenerating}
         hasMessages={messages.length > 0}
         showClearConfirm={showClearConfirm}
         onClearClick={() => setShowClearConfirm(true)}
         onClearConfirm={handleClearSession}
         onClearCancel={() => setShowClearConfirm(false)}
+        showStopConfirm={showStopConfirm}
+        isStopping={isStopping}
+        onStopClick={() => setShowStopConfirm(true)}
+        onStopConfirm={handleStopSession}
+        onStopCancel={() => setShowStopConfirm(false)}
         t={t}
       />
 
@@ -247,6 +301,27 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
           onClick={() => messageListRef.current?.scrollToBottom('auto')}
         />
       </div>
+
+      {/* Styled like a disabled composer so it occupies the input slot. */}
+      {(messages.length > 0 || hasStreamingContent) && (
+        <div className="flex-shrink-0 px-3 py-2.5 sm:px-4">
+          <div className="flex items-center gap-2 rounded-2xl border border-border bg-muted/40 px-3 py-2">
+            <span className="flex-1 min-w-0 truncate text-xs text-muted-foreground">
+              {t('Read-only IM session · copy the context to continue in a client chat')}
+            </span>
+            {canFork && (
+              <button
+                onClick={handleForkToClient}
+                className="flex-shrink-0 flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
+                title={t('Continue this conversation in a client chat')}
+              >
+                <span>{t('Continue in client')}</span>
+                <ArrowRightToLine className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -257,16 +332,25 @@ interface ImChatInfoBarProps {
   name: string
   channel: string
   chatType: string
+  source: SessionSource
   isGenerating: boolean
   hasMessages: boolean
   showClearConfirm: boolean
   onClearClick: () => void
   onClearConfirm: () => void
   onClearCancel: () => void
+  showStopConfirm: boolean
+  isStopping: boolean
+  onStopClick: () => void
+  onStopConfirm: () => void
+  onStopCancel: () => void
   t: (key: string) => string
 }
 
-function ImChatInfoBar({ name, channel, chatType, isGenerating, hasMessages, showClearConfirm, onClearClick, onClearConfirm, onClearCancel, t }: ImChatInfoBarProps) {
+function ImChatInfoBar({ name, channel, chatType, source, isGenerating, hasMessages, showClearConfirm, onClearClick, onClearConfirm, onClearCancel, showStopConfirm, isStopping, onStopClick, onStopConfirm, onStopCancel, t }: ImChatInfoBarProps) {
+  const interactionNotice = source === 'http'
+    ? t('Read-only · Interact via API')
+    : t('Read-only · Interact via IM channel')
   return (
     <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-muted/30 flex-shrink-0">
       <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -277,7 +361,25 @@ function ImChatInfoBar({ name, channel, chatType, isGenerating, hasMessages, sho
       </div>
       <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
         {isGenerating && <Radio className="w-3 h-3 text-primary animate-pulse" />}
-        {showClearConfirm ? (
+        {showStopConfirm ? (
+          <div className="flex items-center gap-1.5">
+            <span className="text-muted-foreground/80">{t('Stop?')}</span>
+            <button
+              onClick={onStopConfirm}
+              disabled={isStopping}
+              className="px-1.5 py-0.5 text-destructive hover:bg-destructive/10 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isStopping ? t('Stopping...') : t('Confirm')}
+            </button>
+            <button
+              onClick={onStopCancel}
+              disabled={isStopping}
+              className="px-1.5 py-0.5 text-muted-foreground hover:bg-secondary rounded transition-colors disabled:opacity-50"
+            >
+              {t('Cancel')}
+            </button>
+          </div>
+        ) : showClearConfirm ? (
           <div className="flex items-center gap-1.5">
             <span className="text-muted-foreground/80">{t('Clear?')}</span>
             <button
@@ -295,6 +397,15 @@ function ImChatInfoBar({ name, channel, chatType, isGenerating, hasMessages, sho
           </div>
         ) : (
           <>
+            {isGenerating && (
+              <button
+                onClick={onStopClick}
+                className="p-1 rounded hover:bg-secondary transition-colors"
+                title={t('Stop generation')}
+              >
+                <Square className="w-3.5 h-3.5 text-destructive/80 hover:text-destructive" fill="currentColor" />
+              </button>
+            )}
             {hasMessages && !isGenerating && (
               <button
                 onClick={onClearClick}
@@ -304,7 +415,7 @@ function ImChatInfoBar({ name, channel, chatType, isGenerating, hasMessages, sho
                 <Eraser className="w-3.5 h-3.5 text-muted-foreground/60 hover:text-muted-foreground" />
               </button>
             )}
-            <span>{t('Read-only · Interact via IM channel')}</span>
+            <span>{interactionNotice}</span>
           </>
         )}
       </div>

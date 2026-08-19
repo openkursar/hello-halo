@@ -26,6 +26,23 @@ const RENDERER_ALLOWED_EVENTS = new Set([
   'page.view',
   'message.sent',
   'message.received',
+  // Store funnel. `store.install.done` is deliberately absent: it is emitted by
+  // the main-process installer, so accepting it from the renderer would let the
+  // UI report installs that never happened.
+  'store.view',
+  'store.detail.view',
+  'store.card.click',
+  'store.search',
+  'store.category.filter',
+  'store.install.click',
+  'store.empty_state',
+  'store.update.overwrite',
+  'store.update.keep_current',
+  'store.featured.view',
+  'store.publish.open',
+  'store.publish.submit',
+  'store.mine.view',
+  'store.unpublish',
 ])
 
 /**

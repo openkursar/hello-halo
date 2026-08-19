@@ -42,6 +42,7 @@ import { Semaphore } from './concurrency'
 import { executeRun } from './execute'
 import { injectIntoActiveRun, isRunActive } from './active-runs'
 import { readSessionMessages } from './session-store'
+import { truncateUtf16Safe } from './text-truncate'
 import { getSpace } from '../../services/space.service'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { broadcastToAll } from '../../http/websocket'
@@ -266,8 +267,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       const lines: string[] = []
 
       for (const turn of recentTurns) {
-        const userLine = turn.user.slice(0, IM_MESSAGE_TRUNCATE)
-        const botLine = `[bot] ${turn.botFinal.slice(0, IM_MESSAGE_TRUNCATE)}`
+        const userLine = truncateUtf16Safe(turn.user, IM_MESSAGE_TRUNCATE)
+        const botLine = `[bot] ${truncateUtf16Safe(turn.botFinal, IM_MESSAGE_TRUNCATE)}`
         const turnText = `${userLine}\n${botLine}`
         totalChars += turnText.length
         if (totalChars > IM_HISTORY_MAX_CHARS) break

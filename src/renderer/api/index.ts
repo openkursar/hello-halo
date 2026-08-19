@@ -23,6 +23,7 @@ import { perfApi } from './perf.api'
 import { healthApi } from './health.api'
 import { appsApi } from './apps.api'
 import { storeApi } from './store.api'
+import { tlonApi } from './tlon.api'
 import { eventsApi } from './events.api'
 
 /**
@@ -46,6 +47,7 @@ export const api = {
   ...healthApi,
   ...appsApi,
   ...storeApi,
+  ...tlonApi,
   ...eventsApi,
 }
 

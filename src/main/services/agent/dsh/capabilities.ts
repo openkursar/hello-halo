@@ -91,9 +91,8 @@ export const DSH_CAPABILITIES: EngineCapabilities = {
     // so a resumed conversation is not guaranteed to keep its context.
     // Provider, model and cwd are pinned for the life of the process.
     sessionResume: false,
-    // A prompt is a durable enqueue receipt with no relationship to the turn
-    // in flight, so Halo cannot promise the message lands in it.
-    midTurnInjection: false,
+    // Forking presupposes a resumable session to branch from.
+    sessionFork: false,
     // No cancel method. Stopping means killing the runtime and losing the
     // session with it — a restart, not an interrupt.
     interrupt: false,

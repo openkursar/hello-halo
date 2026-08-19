@@ -51,6 +51,19 @@ const CLOUDFLARED_PATHS = {
   'linux': 'node_modules/cloudflared/bin/cloudflared-linux-x64'
 }
 
+// Portable Git self-extracting archive, bundled into the Windows build so
+// Git Bash setup works on offline/intranet machines (git-bash/installer.ts
+// extracts it locally instead of downloading). Globbed by filename pattern at
+// runtime, so bumping the version here is enough.
+const PORTABLE_GIT_VERSION = '2.47.1'
+const PORTABLE_GIT_FILENAME = `PortableGit-${PORTABLE_GIT_VERSION}-64-bit.7z.exe`
+const PORTABLE_GIT_DEST = `resources/git-bash/${PORTABLE_GIT_FILENAME}`
+const PORTABLE_GIT_URLS = [
+  `https://registry.npmmirror.com/-/binary/git-for-windows/v${PORTABLE_GIT_VERSION}.windows.1/${PORTABLE_GIT_FILENAME}`,
+  `https://mirrors.huaweicloud.com/git-for-windows/v${PORTABLE_GIT_VERSION}.windows.1/${PORTABLE_GIT_FILENAME}`,
+  `https://github.com/git-for-windows/git/releases/download/v${PORTABLE_GIT_VERSION}.windows.1/${PORTABLE_GIT_FILENAME}`
+]
+
 // @parcel/watcher packages per platform
 const WATCHER_PACKAGES = {
   'mac-arm64': '@parcel/watcher-darwin-arm64',
@@ -68,10 +81,24 @@ const CODEX_PACKAGES = {
   'linux': { pkg: '@openai/codex-linux-x64', targetTriple: 'x86_64-unknown-linux-musl', binary: 'codex' }
 }
 
-// @vscode/ripgrep platform packages, the search binary behind the dsh engine's
-// glob and grep tools. Resolution happens at the first search call rather than
-// at load, so a build without the target package still advertises both tools
-// and fails every use of them — the absence has to be caught here.
+// @img/sharp-* prebuilt binaries, used by the Claude engines to downscale
+// oversized images before sending them to a model. Declared as optional
+// dependencies of @anthropic-ai/claude-code, so npm installs the host's package
+// only and a cross-platform build would ship none — the app then fails on any
+// image wider than the model limit with "Unable to resize image".
+// Each package pulls its libvips sibling from its own optionalDependencies
+// (win32 has none: the DLLs are inside the package).
+const SHARP_PACKAGES = {
+  'mac-arm64': '@img/sharp-darwin-arm64',
+  'mac-x64': '@img/sharp-darwin-x64',
+  'win': '@img/sharp-win32-x64',
+  'linux': '@img/sharp-linux-x64'
+}
+
+// @vscode/ripgrep platform packages — the search binary behind the dsh engine's
+// glob and grep tools. dsh resolves it at the first search call rather than at
+// load, so a build without the target package still advertises both tools and
+// fails every use of them; the absence has to be caught here.
 const RIPGREP_PACKAGES = {
   'mac-arm64': { pkg: '@vscode/ripgrep-darwin-arm64', binary: 'rg' },
   'mac-x64': { pkg: '@vscode/ripgrep-darwin-x64', binary: 'rg' },
@@ -429,58 +456,48 @@ function installWatcher(platform) {
   }
 }
 
-function getRipgrepVersion() {
-  const pkgPath = path.join(PROJECT_ROOT, 'node_modules', '@vscode', 'ripgrep', 'package.json')
-  return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
-}
-
-function checkRipgrep(platform) {
-  const target = RIPGREP_PACKAGES[platform]
-  const binaryPath = path.join(PROJECT_ROOT, 'node_modules', target.pkg, 'bin', target.binary)
-  if (!fs.existsSync(binaryPath)) {
+/**
+ * Check if the bundled Portable Git archive exists and looks valid.
+ * The .7z.exe is a self-extracting PE, so it must start with the MZ magic.
+ */
+function checkPortableGit() {
+  const filePath = path.join(PROJECT_ROOT, PORTABLE_GIT_DEST)
+  if (!fs.existsSync(filePath)) {
     return { exists: false }
   }
-  const stats = fs.statSync(binaryPath)
-  return { exists: true, valid: stats.size > 1024 * 1024, size: stats.size }
+  const stats = fs.statSync(filePath)
+  const valid = stats.size > 40 * 1024 * 1024 && detectBinaryPlatform(filePath) === 'win'
+  if (!valid) {
+    log.warn(`Portable Git archive invalid (${(stats.size / 1024 / 1024).toFixed(1)} MB), will re-download`)
+  }
+  return { exists: true, valid }
 }
 
 /**
- * Install the @vscode/ripgrep platform package for a target platform.
- * Downloads the tarball directly from the registry to bypass the os/cpu
- * fields that stop npm installing another platform's optional dependency.
+ * Download the Portable Git self-extracting archive (mirrors first, GitHub fallback).
  */
-function installRipgrep(platform) {
-  const target = RIPGREP_PACKAGES[platform]
-  const version = getRipgrepVersion()
-  const pkgName = target.pkg.replace('@vscode/', '')
-  const registry = execSync('npm config get registry', { encoding: 'utf8' }).trim().replace(/\/+$/, '')
-  const tarballUrl = `${registry}/@vscode/${pkgName}/-/${pkgName}-${version}.tgz`
-  const destDir = path.join(PROJECT_ROOT, 'node_modules', target.pkg)
-  const tmpTgz = path.join(PROJECT_ROOT, `node_modules/.${pkgName}.tgz`)
+function downloadPortableGit() {
+  const outputPath = path.join(PROJECT_ROOT, PORTABLE_GIT_DEST)
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true })
 
-  log.info(`Installing ${target.pkg}@${version} from registry...`)
-
-  try {
-    if (fs.existsSync(destDir)) {
-      fs.rmSync(destDir, { recursive: true })
+  let lastError = null
+  for (const url of PORTABLE_GIT_URLS) {
+    log.info(`Downloading Portable Git ${PORTABLE_GIT_VERSION}: ${url}`)
+    try {
+      curlDownload(url, outputPath)
+      const stats = fs.statSync(outputPath)
+      if (stats.size <= 40 * 1024 * 1024 || detectBinaryPlatform(outputPath) !== 'win') {
+        fs.unlinkSync(outputPath)
+        throw new Error(`invalid archive (${(stats.size / 1024 / 1024).toFixed(1)} MB)`)
+      }
+      log.success(`Downloaded Portable Git (${(stats.size / 1024 / 1024).toFixed(1)} MB)`)
+      return
+    } catch (err) {
+      lastError = err
+      log.warn(`Source failed: ${err.message}`)
     }
-    fs.mkdirSync(destDir, { recursive: true })
-
-    curlDownload(tarballUrl, tmpTgz)
-    execSync(`tar -xzf "${tmpTgz}" -C "${destDir}" --strip-components=1`, { stdio: 'pipe' })
-    fs.unlinkSync(tmpTgz)
-
-    const status = checkRipgrep(platform)
-    if (!status.exists || !status.valid) {
-      throw new Error(`No valid ripgrep binary found in downloaded ${target.pkg}`)
-    }
-
-    log.success(`Installed ${target.pkg}@${version}`)
-  } catch (err) {
-    if (fs.existsSync(tmpTgz)) fs.unlinkSync(tmpTgz)
-    log.error(`Failed to install ${target.pkg}: ${err.message}`)
-    throw err
   }
+  throw new Error(`All Portable Git download sources failed: ${lastError?.message}`)
 }
 
 function getCodexVersion() {
@@ -545,6 +562,143 @@ function installCodex(platform) {
 }
 
 /**
+ * Sharp release to install for every target platform, read from whichever
+ * @img/sharp-* package npm resolved for this host. Pinning all platforms to the
+ * host's version keeps one sharp release across the whole build matrix.
+ */
+function getSharpVersion() {
+  const imgDir = path.join(PROJECT_ROOT, 'node_modules', '@img')
+  const hostPkg = fs.existsSync(imgDir)
+    ? fs.readdirSync(imgDir).find(name => name.startsWith('sharp-') && !name.startsWith('sharp-libvips-'))
+    : undefined
+
+  if (!hostPkg) {
+    throw new Error('No @img/sharp-* package in node_modules, run "npm install" first')
+  }
+  return JSON.parse(fs.readFileSync(path.join(imgDir, hostPkg, 'package.json'), 'utf8')).version
+}
+
+/**
+ * Download an npm package tarball straight into node_modules, bypassing the
+ * host os/cpu checks that make npm refuse a foreign-platform package.
+ */
+function installFromRegistry(pkg, version) {
+  const shortName = pkg.split('/').pop()
+  const registry = execSync('npm config get registry', { encoding: 'utf8' }).trim().replace(/\/+$/, '')
+  const tarballUrl = `${registry}/${pkg}/-/${shortName}-${version}.tgz`
+  const destDir = path.join(PROJECT_ROOT, 'node_modules', ...pkg.split('/'))
+  const tmpTgz = path.join(PROJECT_ROOT, `node_modules/.${shortName}.tgz`)
+
+  try {
+    if (fs.existsSync(destDir)) {
+      fs.rmSync(destDir, { recursive: true })
+    }
+    fs.mkdirSync(destDir, { recursive: true })
+
+    curlDownload(tarballUrl, tmpTgz)
+    execSync(`tar -xzf "${tmpTgz}" -C "${destDir}" --strip-components=1`, { stdio: 'pipe' })
+    fs.unlinkSync(tmpTgz)
+  } catch (err) {
+    if (fs.existsSync(tmpTgz)) fs.unlinkSync(tmpTgz)
+    throw err
+  }
+
+  return destDir
+}
+
+function checkSharp(platform) {
+  const pkg = SHARP_PACKAGES[platform]
+  const pkgDir = path.join(PROJECT_ROOT, 'node_modules', ...pkg.split('/'))
+  const manifestPath = path.join(pkgDir, 'package.json')
+
+  if (!fs.existsSync(manifestPath)) {
+    return { exists: false }
+  }
+
+  const libDir = path.join(pkgDir, 'lib')
+  if (!fs.existsSync(libDir) || !fs.readdirSync(libDir).some(f => f.endsWith('.node'))) {
+    return { exists: true, valid: false }
+  }
+
+  // The libvips sibling carries the shared library the .node links against,
+  // so the package alone is not enough on platforms that declare one.
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+  const siblings = Object.keys(manifest.optionalDependencies || {})
+  const valid = siblings.every(dep =>
+    fs.existsSync(path.join(PROJECT_ROOT, 'node_modules', ...dep.split('/'), 'package.json'))
+  )
+  return { exists: true, valid }
+}
+
+/**
+ * Install the @img/sharp-* package for a target platform, plus the libvips
+ * sibling it declares.
+ */
+function installSharp(platform) {
+  const pkg = SHARP_PACKAGES[platform]
+  const version = getSharpVersion()
+
+  log.info(`Installing ${pkg}@${version} from registry...`)
+
+  try {
+    const destDir = installFromRegistry(pkg, version)
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(destDir, 'package.json'), 'utf8'))
+    for (const [dep, range] of Object.entries(manifest.optionalDependencies || {})) {
+      const depVersion = range.replace(/^[^0-9]*/, '')
+      log.info(`Installing ${dep}@${depVersion} for ${pkg}...`)
+      installFromRegistry(dep, depVersion)
+    }
+
+    const status = checkSharp(platform)
+    if (!status.exists || !status.valid) {
+      throw new Error(`No valid sharp binary found in downloaded ${pkg}`)
+    }
+
+    log.success(`Installed ${pkg}@${version}`)
+  } catch (err) {
+    log.error(`Failed to install ${pkg}: ${err.message}`)
+    throw err
+  }
+}
+
+function getRipgrepVersion() {
+  const pkgPath = path.join(PROJECT_ROOT, 'node_modules', '@vscode', 'ripgrep', 'package.json')
+  return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version
+}
+
+function checkRipgrep(platform) {
+  const target = RIPGREP_PACKAGES[platform]
+  const binaryPath = path.join(PROJECT_ROOT, 'node_modules', ...target.pkg.split('/'), 'bin', target.binary)
+  if (!fs.existsSync(binaryPath)) {
+    return { exists: false }
+  }
+  return { exists: true, valid: fs.statSync(binaryPath).size > 1024 * 1024 }
+}
+
+/** Install the @vscode/ripgrep-* package for a target platform. */
+function installRipgrep(platform) {
+  const { pkg } = RIPGREP_PACKAGES[platform]
+  const version = getRipgrepVersion()
+
+  log.info(`Installing ${pkg}@${version} from registry...`)
+
+  try {
+    installFromRegistry(pkg, version)
+
+    const status = checkRipgrep(platform)
+    if (!status.exists || !status.valid) {
+      throw new Error(`No valid ripgrep binary found in downloaded ${pkg}`)
+    }
+
+    log.success(`Installed ${pkg}@${version}`)
+  } catch (err) {
+    log.error(`Failed to install ${pkg}: ${err.message}`)
+    throw err
+  }
+}
+
+/**
  * Prepare all binaries for a platform
  */
 function preparePlatform(platform) {
@@ -582,12 +736,30 @@ function preparePlatform(platform) {
     log.success(`@openai/codex native package already exists for ${platform}`)
   }
 
-  // Check and install the @vscode/ripgrep platform package
+  // Check and install the @img/sharp-* prebuilt image resizer
+  const sharpStatus = checkSharp(platform)
+  if (!sharpStatus.exists || !sharpStatus.valid) {
+    installSharp(platform)
+  } else {
+    log.success(`@img/sharp native package already exists for ${platform}`)
+  }
+
+  // Check and install the @vscode/ripgrep-* search binary (dsh glob/grep)
   const ripgrepStatus = checkRipgrep(platform)
   if (!ripgrepStatus.exists || !ripgrepStatus.valid) {
     installRipgrep(platform)
   } else {
     log.success(`@vscode/ripgrep platform package already exists for ${platform}`)
+  }
+
+  // Portable Git: bundled into the Windows build for offline Git Bash setup
+  if (platform === 'win') {
+    const gitStatus = checkPortableGit()
+    if (!gitStatus.exists || !gitStatus.valid) {
+      downloadPortableGit()
+    } else {
+      log.success('Portable Git archive already exists')
+    }
   }
 
   // node-pty: mac/win prebuilds ship with the npm package automatically.

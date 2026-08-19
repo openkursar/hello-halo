@@ -15,8 +15,8 @@ describe('password-policy', () => {
       expect(result.error).toContain('at least 8')
     })
 
-    it('accepts exactly 8 characters when all four classes present', () => {
-      expect(validatePassword('Aa1!Aa1!').ok).toBe(true)
+    it('accepts exactly 8 characters covering upper/lower/digit', () => {
+      expect(validatePassword('Abcdef12').ok).toBe(true)
     })
 
     it('rejects passwords longer than 64 characters', () => {
@@ -39,15 +39,9 @@ describe('password-policy', () => {
     })
 
     it('rejects when digit is missing', () => {
-      const result = validatePassword('Abcdefg!')
+      const result = validatePassword('Abcdefgh')
       expect(result.ok).toBe(false)
       expect(result.error).toContain('digit')
-    })
-
-    it('rejects when special character is missing', () => {
-      const result = validatePassword('Abcdef12')
-      expect(result.ok).toBe(false)
-      expect(result.error).toContain('special')
     })
 
     it('lists all missing classes in the error', () => {
@@ -55,14 +49,13 @@ describe('password-policy', () => {
       expect(result.ok).toBe(false)
       expect(result.error).toContain('uppercase')
       expect(result.error).toContain('digit')
-      expect(result.error).toContain('special')
     })
 
-    it('accepts a wide range of ASCII specials', () => {
-      // Cover the four ranges in the regex (!-/, :-@, [-`, {-~)
+    it('allows special characters without requiring them', () => {
+      // Symbols stay valid; they are simply no longer mandatory.
+      expect(validatePassword('Abcdef12').ok).toBe(true) // no symbol
       expect(validatePassword('Abcdef1#').ok).toBe(true) // #
       expect(validatePassword('Abcdef1@').ok).toBe(true) // @
-      expect(validatePassword('Abcdef1[').ok).toBe(true) // [
       expect(validatePassword('Abcdef1{').ok).toBe(true) // {
     })
   })

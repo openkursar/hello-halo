@@ -7,4 +7,4 @@
 export * from './display-scale'
 export * from './providers'
 export * from './model-runtime-limits'
-export { supportsVision } from './model-capabilities'
+export { supportsVision, resolveModelVision } from './model-capabilities'

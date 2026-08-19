@@ -514,7 +514,10 @@ describe('parseAndValidateAppSpec - full skill example', () => {
     expect(spec.config_schema![0].type).toBe('select')
     expect(spec.config_schema![0].options).toHaveLength(3)
     expect(spec.permissions).toEqual(['filesystem.read'])
-    expect(spec.output!.format).toContain('{file}')
+    // system_prompt and output are automation-only fields; the skill schema
+    // strips them, so they are absent on a validated skill spec.
+    expect((spec as { system_prompt?: unknown }).system_prompt).toBeUndefined()
+    expect((spec as { output?: unknown }).output).toBeUndefined()
   })
 })
 

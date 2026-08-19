@@ -14,6 +14,7 @@ import {
   onEvent,
   onWsStateChange,
   restoreServerUrl,
+  sendWsMessage,
   setServerUrl,
   subscribeToConversation,
   unsubscribeFromConversation,
@@ -45,8 +46,18 @@ export const eventsApi = {
     onEvent('agent:session-info', callback),
   onAgentTurnStart: (callback: (data: unknown) => void) =>
     onEvent('agent:turn-start', callback),
+  onToolsetsChanged: (callback: (data: unknown) => void) =>
+    onEvent('toolsets:changed', callback),
+  onToolsetsRequested: (callback: (data: unknown) => void) =>
+    onEvent('toolsets:requested', callback),
+  onTerminalData: (callback: (data: unknown) => void) =>
+    onEvent('terminal:data', callback),
+  onTerminalLifecycle: (callback: (data: unknown) => void) =>
+    onEvent('terminal:lifecycle', callback),
   onRemoteStatusChange: (callback: (data: unknown) => void) =>
     onEvent('remote:status-change', callback),
+  onCredentialDecryptFailed: (callback: (data: unknown) => void) =>
+    onEvent('credential:decrypt-failed', callback),
 
   // ===== Server URL Management (Capacitor) =====
   setServerUrl,
@@ -63,6 +74,7 @@ export const eventsApi = {
   unsubscribeFromConversation,
   onWsStateChange,
   onEvent,
+  sendWsMessage,
 
   // ===== Telemetry (fire-and-forget) =====
   /**

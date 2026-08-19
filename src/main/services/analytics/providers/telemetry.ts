@@ -134,6 +134,23 @@ const EVENT_WHITELIST: Record<string, readonly string[]> = {
   'session.end':    ['view', 'platform', 'durationMs'],
   'page.view':      ['view', 'from'],
 
+  // Store funnel (identifiers only — slug/type, never user content)
+  'store.view':                ['tab', 'ref'],
+  'store.detail.view':         ['appId', 'appType', 'installedState', 'source'],
+  'store.card.click':          ['appId', 'appType', 'source'],
+  'store.search':              ['resultCount', 'tabScope'],
+  'store.category.filter':     ['cat', 'appType'],
+  'store.install.click':       ['appId', 'appType', 'source'],
+  'store.install.done':        ['appId', 'appType', 'source'],
+  'store.empty_state':         ['scene'],
+  'store.update.overwrite':    ['appId', 'toVersion'],
+  'store.update.keep_current': ['appId', 'toVersion'],
+  'store.featured.view':       ['count'],
+  'store.publish.open':        ['appType', 'entry'],
+  'store.publish.submit':      ['appType', 'result', 'entry', 'isUpdate'],
+  'store.mine.view':           [],
+  'store.unpublish':           ['appId'],
+
   // Chat message counts (identifiers only — never content)
   'message.sent':     ['source', 'appId', 'specId', 'channel', 'instanceId', 'conversationId', 'spaceId', 'hasImages',
                        'modelProvider', 'modelName', 'engine', 'replyDurationMs'],

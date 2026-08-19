@@ -94,11 +94,11 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
       if (response.success && response.data) {
         const newSpace = response.data as Space
 
-        // Add to spaces list. New spaces have the highest sortOrder (server
-        // assigns max+1), so append to match the persisted order and avoid a
+        // Add to spaces list. New spaces have the smallest sortOrder (server
+        // assigns min-1), so prepend to match the persisted order and avoid a
         // flicker when loadSpaces re-syncs.
         set((state) => ({
-          spaces: [...state.spaces, newSpace]
+          spaces: [newSpace, ...state.spaces]
         }))
 
         return newSpace

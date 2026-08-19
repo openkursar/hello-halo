@@ -20,6 +20,7 @@ export type {
   CustomSourceConfig,
   LegacyAISourcesConfig,
   BackendRequestConfig,
+  DirectCallEndpoint,
   OAuthLoginState,
   OAuthStartResult,
   OAuthCompleteResult,
@@ -27,13 +28,16 @@ export type {
   AISourceUserInfo,
   LocalizedText,
   PresetApiConfig,
-  AuthProviderConfig
+  AuthProviderConfig,
+  ProviderDocsLink,
+  AuthQuotaSnapshot
 } from './ai-sources'
 
 // AI Sources - export constants and functions
 export {
   AVAILABLE_MODELS,
   DEFAULT_MODEL,
+  resolveModelId,
   createEmptyAISourcesConfig,
   getCurrentSource,
   getSourceById,
@@ -59,11 +63,20 @@ export * from './artifact'
 // Notification channel types (shared between main process and renderer)
 export * from './notification-channels'
 
+// In-app toast contract (main -> renderer, incl. remote/mobile over WebSocket)
+export * from './notification'
+
+// Announcement feed contract (remote JSON -> main)
+export * from './announcement'
+
 // Inbound message types (IM channel adapter boundary types)
 export * from './inbound-message'
 
 // IM channel types (proactive push adapter + session records)
 export * from './im-channel'
+
+// Tlon knowledge base types (cross-process)
+export * from './tlon'
 
 // Agent definition types (for custom subagent configurations)
 export type { AgentDefinition, AgentMcpServerSpec, PermissionMode, McpServerConfigForProcessTransport } from './agent-definition'

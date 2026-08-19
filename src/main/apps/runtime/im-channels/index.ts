@@ -15,6 +15,7 @@ export { WecomBotProvider } from './wecom-bot.provider'
 export { WeixinIlinkBotProvider } from './weixin-ilink.provider'
 
 import { cleanupWecomTempFiles } from './wecom-bot.provider'
+import { cleanupWeixinIlinkTempFiles } from './weixin-ilink.provider'
 import type { ImChannelManager } from './manager'
 
 /**
@@ -26,6 +27,7 @@ import type { ImChannelManager } from './manager'
  */
 export function cleanupImChannelTempFiles(): void {
   cleanupWecomTempFiles()
+  cleanupWeixinIlinkTempFiles()
   // Future: cleanupFeishuTempFiles(), cleanupDingTalkTempFiles()
 }
 

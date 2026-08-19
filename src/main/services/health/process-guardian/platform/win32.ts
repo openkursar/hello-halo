@@ -26,6 +26,8 @@ export class Win32ProcessOps implements PlatformProcessOps {
       // Get-WmiObject provides access to full command line
       const psCommand = `powershell -NoProfile -Command "Get-WmiObject Win32_Process | Where-Object { $_.CommandLine -like '*${pattern}*' } | Select-Object ProcessId, Name, CommandLine | ConvertTo-Json -Compress"`
 
+      // windowsHide prevents a console window from flashing when this GUI app
+      // shells out via cmd.exe on Windows.
       const { stdout } = await execAsync(psCommand, { timeout: 10000, windowsHide: true })
 
       if (!stdout.trim()) {

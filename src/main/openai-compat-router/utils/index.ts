@@ -5,6 +5,8 @@
 export * from './id'
 export * from './config'
 export * from './url'
+export * from './normalize-system-prompt'
+export * from './session-affinity'
 
 /**
  * Safe JSON parse with fallback

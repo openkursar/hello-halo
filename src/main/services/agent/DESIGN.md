@@ -11,16 +11,20 @@
 | Session lifecycle (create / reuse / destroy / batch-invalidate on config change) | `session-manager.ts` | Largest file. V2 Session model. Registers callback on `config.service.ts` to auto-clean when API config changes. |
 | SDK stream → Thought[] translation | `stream-processor.ts` | Second largest. Incremental push, partial tool calls, interruption recovery. |
 | SDK invocation & configuration | `sdk-config.ts`, `resolved-sdk.ts`, `codex/`, `dsh/` | Provider selection, model resolution, SDK option assembly. Alternate SDK engines are loaded only through `resolved-sdk.ts`; engine-specific translation is isolated under `codex/` and `dsh/`. |
-| Engine availability probing | `engine-availability.ts` | Filesystem-only check of whether a build ships each engine's runtime. Read by `resolved-sdk.ts` (degraded boot) and by Settings via `agent:get-engine-availability`. |
-| System prompt composition | `system-prompt.ts` | Space context, conversation context, tool availability injection. |
+| Engine availability probe | `engine-availability.ts` | Detects which engine runtimes shipped in this build (manifest + entry file, platform binary for Codex, interpreter version for dsh) so `resolved-sdk.ts` can fall back instead of crashing at startup. Result is cached per process; exposed via `agent:get-engine-availability`. |
+| System prompt composition | `system-prompt.ts` | Space context, conversation context, tool availability injection. `buildKnowledgeSection` is exported separately for creation-time append. |
+| Knowledge context resolution | `knowledge-context.ts` | Conversation `knowledgeBaseIds` → injectable `KBReference[]` (agent→tlon dependency collector). Cheap id-only variant feeds the session knowledge fingerprint. |
 | Subagent orchestration | `subagent-handler.ts` | Nested agent invocations — Halo supports agents spawning agents. |
 | Permission gating | `permission-handler.ts` | AskUserQuestion, tool approval, permission mode resolution. |
-| MCP server routing | `mcp-manager.ts` | Registration, discovery, per-session MCP bindings. |
+| MCP server routing | `mcp-manager.ts` | Registration, discovery, per-session MCP bindings. Owns the shared status cache (`agent:mcp-status` broadcast). |
+| MCP connection probe | `mcp-probe.ts` | Native initialize+tools/list handshake via `@modelcontextprotocol/sdk` — no agent session, no token cost. Classifies failures (401→needs-auth, refused/timeout→failed + `errorDetail`). Triggered by app lifecycle events (install/resume/spec-update, wired in `apps/runtime`), by SDK-reported `failed`/`needs-auth` (stream-processor follow-up), and manually via `agent:probe-mcp` IPC. A probe that connects also clears the server's CC auth record. |
+| CC MCP auth state | `mcp-auth-state.ts` | Removes stale OAuth records CC persists under `CLAUDE_CONFIG_DIR` after any 4xx from a URL-based MCP server. Such a record has no expiry and makes CC skip the server entirely, so it is cleared before session creation and after a successful probe. Mirrors CC-internal formats; a mismatch degrades to a no-op. |
 | MCP for out-of-process engines | `mcp/` | Engine-neutral. `partition.ts` splits `mcpServers` into in-process instances and external records, normalizing the latter; `sdk-bridge.ts` publishes the in-process ones on loopback so a child can dial them. Each engine keeps only a renderer from the normalized shape into its own dialect — `codex/mcp-config.ts`, `dsh/runtime/mcp-plugins.ts`. Do NOT add a second bridge. |
 | Skill locations | `skills.ts` | The two roots `apps/manager/skill-sync.ts` writes to. The default engine finds them through SDK discovery; a child process has to be told where they are. |
 | External message injection | `inject-message.ts` | Entry point for IM inbound / programmatic triggers to push messages into a session. |
 | Session control | `control.ts` | Interrupt / pause / switch-model mid-session. |
 | Outbound message composition | `send-message.ts`, `message-utils.ts` | User message assembly, attachment handling, token counting. |
+| Non-vision image fallback | `image-attachments.ts` | For models without vision: persists pasted images into the space's `attachments/` dir (content-addressed, mirrors the conversation-dir layout) and replaces the outbound image blocks with a `<halo_attachments>` path block for the `ocr_image` tool. Vision models bypass it entirely. Broker-free by design — ensuring ocr_image is present is the caller's concern: `send-message.ts` auto-opens the OCR toolset (opener `system`, before session creation so the rebuild seeds the same turn); app chat (`apps/runtime/app-chat.ts`) seeds the OCR MCP server unconditionally. |
 | Session consumption loop | `session-consumer.ts` | Iterator over SDK events; dispatches into stream-processor. |
 | Top-level orchestration | `agents.ts`, `index.ts` | Public surface; wires everything together. |
 | Constants & shared types | `constants.ts`, `types.ts`, `events.ts`, `helpers.ts` | — |
@@ -29,18 +33,21 @@
 
 - **Session state (thoughts, tool calls, token usage) is authoritative in the main process.** The renderer consumes events and must not persist agent state independently.
 - **API config changes invalidate sessions in bulk.** `config.service.ts` exposes `onApiConfigChange(callback)`. `services/agent` registers that callback at module load. On change, all V2 Sessions are destroyed; the next user message creates a fresh Session with updated config. Do not attempt to mutate live sessions.
-- **A session is reused only by a caller it was built for.** `getOrCreateV2Session` keys reuse on `conversationId`, but a conversation is shared — an IM group chat routes every sender through one. Anything the SDK fixes at subprocess startup must therefore join the reuse key, or a later caller silently runs on an earlier caller's process. Today that key is `credentialsGeneration`, `SessionConfig`, and `permissionSignature` (`permission-handler.ts`, covering permission mode, tool allow/deny lists and injected MCP servers). Adding a process-level SDK option means extending it. A permission mismatch is the one trigger that is never deferred: deferring hands back the very session being replaced.
+- **Model selection is per-conversation.** A conversation pins its own `{ modelSourceId, modelId }` (Cursor-style), stamped at creation from the active global selection and resolved at send/warm time by `helpers.ts getApiCredentialsForConversation` (falls back to the global selection for legacy/unavailable pins). Because the model is baked into the encoded credentials at session creation (see `sdk-config.ts`), a pin change is detected by the per-conversation `credentialsFingerprint` on `V2SessionInfo` and rebuilds only that conversation's session; the fingerprint is what lets a conversation whose pin differs from the global selection resolve and rebuild independently. Note the desktop `ModelSelector` also writes the choice to the global selection — the "last-used" seed for new conversations and non-chat surfaces (apps use their own `userOverrides`) — and a global model change still bumps `credentialsGeneration`, invalidating all sessions (unchanged pre-pin behavior; sessions resume transparently via their `sessionId`).
+- **Session identity & rebuild triggers.** A conversation's live session is keyed by `conversationId` and rebuilt when any of three dimensions diverge from what was captured at creation: `credentialsGeneration` (global API-config epoch), `credentialsFingerprint` (this conversation's model/env — see above), and `knowledgeFingerprint` (the RESOLVED knowledge-base set + workDir, computed cheaply per send via `knowledge-context.ts resolveConversationKnowledgeBaseIds`; resolved-not-declared so a KB whose indexing finishes after creation triggers a rebuild instead of staying invisible forever, and workDir so KB-chat vs normal turns never share a mis-rooted session). Rebuild requests converge on `pendingConsumerRebuilds` and are applied at safe points only: turn end (consumer), idle reuse (`hasConsumablePendingRebuild`), or immediately when no consumer is active. Busy windows that defer a rebuild: an active turn, running team agents, mid-creation (`sessionsUnderCreation`), and a dispatched-but-unacknowledged turn (`turnsAwaitingInit`, marked by send-message before `session.send()` and cleared at `system:init`).
+- **Creation-time assembly is deferred and owned by the creation path.** `getOrCreateV2Session` deduplicates concurrent calls per conversation (in-flight promise map — a warm-up racing a send must never spawn two CC processes). Expensive/stateful inputs are passed as thunks and materialized only when a session is actually created, after any cleanup of the previous one: `buildMcpServers` (in-process MCP instances bind to exactly one session transport; a pre-built record could carry instances still bound to a torn-down session, whose connect failure the SDK swallows — tools silently vanish) and `resolveKnowledgeBases` (index.md reads + `# Knowledge` prompt section; deferred for cost — a reused session throws the resolution away).
+- **A session is reused only by a caller it was built for.** `getOrCreateV2Session` keys reuse on `conversationId`, but a conversation is shared — an IM group chat routes every sender through one. Anything the SDK fixes at subprocess startup must therefore join the reuse key, or a later caller silently runs on an earlier caller's process. Alongside the fingerprints above, that key carries `permissionSignature` (`permission-handler.ts`, covering permission mode, tool allow/deny lists and injected MCP servers) — the dimension `inputsFingerprint` cannot cover, because main chat leaves it undefined. Adding a process-level SDK option means extending it. A permission mismatch is the one trigger that is never deferred: deferring hands back the very session being replaced.
 
 - **SDK protocol boundary.** `@anthropic-ai/claude-agent-sdk` is the default engine and defines Halo's internal stream/session protocol. `@hello-halo/agent-sdk`, `@openai/codex-sdk`, `@deepseek-ai/dsh`, and future engines must expose the same `tool` / `createSdkMcpServer` / `createSession` / `query` surface through `resolved-sdk.ts`. Native engine events must be normalized before they reach `session-consumer.ts` or `stream-processor.ts`.
 
-  | Engine (`config.agent.sdkEngine`) | Runtime | Adapter | Missing runtime |
-  |---|---|---|---|
-  | `anthropic` (default) | `@anthropic-ai/claude-agent-sdk` in-process | — (canonical protocol) | Startup fails |
-  | `halo` | `@hello-halo/agent-sdk` in-process | — (same protocol surface) | Startup fails |
-  | `codex` | `codex app-server` child process (binary from `@openai/codex`) | `codex/` | Startup fails |
-  | `dsh` | `@deepseek-ai/dsh` child process, stdio JSON-RPC | `dsh/` | Degrades to `FALLBACK_ORDER` |
+  | Engine (`config.agent.sdkEngine`) | Runtime | Adapter |
+  |---|---|---|
+  | `anthropic` (default) | `@anthropic-ai/claude-agent-sdk` in-process | — (canonical protocol) |
+  | `halo` | `@hello-halo/agent-sdk` in-process | — (same protocol surface) |
+  | `codex` | `codex app-server` child process (binary from `@openai/codex`) | `codex/` |
+  | `dsh` | `@deepseek-ai/dsh` child process, stdio JSON-RPC | `dsh/` |
 
-  `dsh` degrades instead of failing because its runtime is an optional package most builds do not ship; selecting it must not brick startup. Its protocol has no cancel method and never sends a request back to Halo, so interrupt is a process kill and there is no approval prompt. That missing reverse channel does NOT rule out Halo's in-process MCP tools: the bridge in `mcp/sdk-bridge.ts` inverts the direction, and the runtime's own MCP client dials in. Everything the model can do is a plugin `dsh/runtime/cordis-config.ts` composes — including the MCP client and the skill provider — so that file, not the protocol, is where a dsh capability is granted or withheld. The limits that remain are declared in `dsh/capabilities.ts` and surfaced in Settings.
+  A configured engine whose runtime did not ship degrades to the first available entry of `FALLBACK_ORDER` rather than aborting startup. `dsh` is deliberately absent from that order: it is opt-in and most builds do not carry it, so it is only ever loaded when named, never as someone else's fallback. Its protocol has no cancel method and never sends a request back to Halo, so interrupt is a process kill and there is no approval prompt. That missing reverse channel does NOT rule out Halo's in-process MCP tools: the bridge in `mcp/sdk-bridge.ts` inverts the direction, and the runtime's own MCP client dials in. Everything the model can do is a plugin `dsh/runtime/cordis-config.ts` composes — including the MCP client and the skill provider — so that file, not the protocol, is where a dsh capability is granted or withheld. The limits that remain are declared in `dsh/capabilities.ts` and surfaced in Settings.
 
   **An out-of-process engine's MCP tools do not exist when its runtime first answers.** The client dials after the runtime is already accepting requests, so a session handed out at that moment accepts a prompt the model answers without them. `SdkMcpBridge.whenDialled()` is the evidence that discovery finished; adapters await it before reporting the session started. Servers an engine connects to directly are outside that signal.
 
@@ -105,7 +112,7 @@ Injection rules:
 | If you need to... | Start here |
 |---|---|
 | Change how the SDK is invoked or configured | `sdk-config.ts` / `resolved-sdk.ts` |
-| Add an engine, or change engine selection / fallback | `capabilities.ts` (`EngineId`), `resolved-sdk.ts` (loader, `ENGINE_LABELS`, `FALLBACK_ORDER`), `engine-availability.ts` |
+| Add an engine, or change engine selection / fallback | `capabilities.ts` (`EngineId`), `resolved-sdk.ts` (loader, `ENGINE_LABELS`, `FALLBACK_ORDER`), `engine-availability.ts`, `scripts/engine-runtimes.cjs` |
 | Change what an engine claims it can do | `<engine>/capabilities.ts` — never by sniffing tool names or engine ids in consumers |
 | Change how SDK events become thoughts | `stream-processor.ts` |
 | Change session lifecycle or invalidation rules | `session-manager.ts` |
@@ -116,6 +123,8 @@ Injection rules:
 | Change subagent behavior | `subagent-handler.ts` |
 | Register a new MCP server source | `mcp-manager.ts` |
 | Give a new out-of-process engine MCP or skills | `mcp/partition.ts` + `mcp/sdk-bridge.ts` (reuse as-is) and `skills.ts`; write only the engine's own config renderer |
+| Change MCP connectivity checks / failure classification | `mcp-probe.ts` |
+| Touch CC's credential store / MCP auth records | `mcp-auth-state.ts` (never inline elsewhere) |
 
 ## 8) Hard Rules
 
@@ -123,4 +132,5 @@ Injection rules:
 2. **Never re-implement injection paths.** All external triggers go through `inject-message.ts`.
 3. **Never bypass `stream-processor`** when translating SDK events — subagent-handler and permission-handler compose with it, not around it.
 4. **Do not weaken the config-change invalidation contract.** Partial in-place session updates are forbidden; batch destroy + recreate is the only supported path.
-5. **Guard every `mainWindow` access** in async callbacks with `!mainWindow.isDestroyed()`.
+5. **Mirrors of CC-internal formats stay in one module and fail closed.** `mcp-auth-state.ts` reproduces CC's entry-key derivation and keychain naming; a CC upgrade that changes either must make the lookup miss, never make it match the wrong record. Revalidate when bumping `@anthropic-ai/claude-agent-sdk`.
+6. **Guard every `mainWindow` access** in async callbacks with `!mainWindow.isDestroyed()`.

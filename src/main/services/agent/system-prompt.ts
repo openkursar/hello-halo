@@ -13,6 +13,7 @@
 
 import os from 'os'
 import { getDataFolderName } from '../../foundation/product-config'
+import type { KBReference } from '../../../shared/types/tlon'
 
 // ============================================
 // Constants
@@ -63,10 +64,18 @@ export interface SystemPromptContext {
   promptProfile?: PromptProfile
   /** Claude config directory path (defaults to platform-specific path) */
   claudeConfigDir?: string
-  /** Whether AI Browser is currently enabled (controls capability description) */
-  aiBrowserEnabled?: boolean
   /** Whether Digital Humans MCP tools are enabled */
   digitalHumansEnabled?: boolean
+  /**
+   * Capability index for toolset-broker sessions (see agent/toolsets).
+   * When set (even to ''), the session appends the usage guides of currently
+   * enabled optional toolsets; awareness of disabled ones lives in the
+   * request_toolset tool description. Undefined for sessions that manage their
+   * own capability guidance (e.g. digital-human prompts).
+   */
+  toolsetIndex?: string
+  /** Knowledge bases bound to this session's space/app (Tlon) */
+  knowledgeBases?: KBReference[]
 }
 
 // ============================================
@@ -496,17 +505,61 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
 
   let prompt = applyTemplateVariables(template, ctx)
 
-  // When AI Browser is NOT enabled, append guidance so the AI can direct users to enable it.
-  // When enabled, AI_BROWSER_SYSTEM_PROMPT is appended via buildSystemPromptWithAIBrowser instead.
-  if (!ctx.aiBrowserEnabled) {
-    prompt += '\n\n'
-      + '# AI Browser (Not Enabled)\n'
-      + 'You do NOT have browser automation tools in this session. '
-      + 'If the user asks you to browse the web, fill forms, scrape pages, or perform any browser interaction, '
-      + 'tell them to enable AI Browser via the toggle in the bottom-left of the input area, then retry.'
-  }
+  // Toolset-broker sessions (main chat): append the usage guides of currently-
+  // enabled optional toolsets. Awareness of disabled ones lives in the
+  // request_toolset tool description, not here. Sessions that manage their own
+  // capability guidance (digital-human prompts — see apps/runtime/prompt) leave
+  // toolsetIndex undefined and inject their own "disabled capabilities" fragment;
+  // this function stays capability-hint free for them.
+  if (ctx.toolsetIndex) prompt += '\n\n' + ctx.toolsetIndex.trim()
+
+  prompt += buildKnowledgeSection(ctx.knowledgeBases)
 
   return prompt
+}
+
+/**
+ * The "# Knowledge" system-prompt section for a set of resolved knowledge
+ * bases; '' when there are none. Exported separately from buildSystemPrompt so
+ * chat sessions can defer the expensive part (each KB's index.md content) to
+ * actual session creation and append it there — a reused session never reads
+ * or formats KB content (see getOrCreateV2Session's resolveKnowledgeBases).
+ */
+export function buildKnowledgeSection(knowledgeBases?: KBReference[]): string {
+  if (!knowledgeBases?.length) return ''
+  let section = '\n\n# Knowledge\n\n'
+    + 'You have knowledge bases of source documents. Search them on demand to '
+    + 'answer, like a colleague who knows where everything is:\n'
+    + '- To answer from a knowledge base, Grep/Glob the listed document files for '
+    + 'relevant passages and Read the matching ones — refine your search and look '
+    + 'again until you have what you need. Do not answer from memory when a document '
+    + 'can be checked.\n'
+    + '- Answer in your own words and attribute what you use to the source document '
+    + 'by name (e.g. "your PCB survey"), never to a file path. Be proactive: surface '
+    + 'relevant context, draw cross-document links, and flag tensions worth knowing.\n'
+    + '- Search exhaustively before enumerating or concluding absence: try several '
+    + 'Grep patterns (synonyms, translations, spelling variants) — one pattern '
+    + 'finding nothing does not mean the corpus lacks it.\n'
+    + '- If the documents do not actually cover the question, say so plainly rather '
+    + 'than forcing a connection.\n'
+    + '- Each entry below is a document with a one-line synopsis and the path of its '
+    + 'extracted text to Grep/Read.\n\n'
+  for (const kb of knowledgeBases) {
+    section += `## ${kb.name}\n\n${truncateIndexContent(kb.indexContent)}\n\n`
+  }
+  return section
+}
+
+// Last-resort guard against a pathologically large document map blowing up the
+// prompt; rebuildIndexMd already caps the doc count at the source.
+const KB_INDEX_MAX_CHARS = 24_000
+
+function truncateIndexContent(indexContent: string): string {
+  if (indexContent.length <= KB_INDEX_MAX_CHARS) return indexContent
+  // Cut on a line boundary so no half-written entry misleads the agent.
+  const cut = indexContent.lastIndexOf('\n', KB_INDEX_MAX_CHARS)
+  return indexContent.slice(0, cut > 0 ? cut : KB_INDEX_MAX_CHARS)
+    + '\n\n(Document list truncated — Glob the text directory above to list all documents.)'
 }
 
 /**

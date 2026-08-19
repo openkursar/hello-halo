@@ -30,6 +30,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pulseReadAt: new Map<string, { readAt: number; originalStatus: 'completed-unseen' | 'error'; spaceId: string; title: string }>(),
   currentSpaceId: null,
   pendingPulseNavigation: null,
+  pendingComposerInput: null,
   artifacts: [],
   isLoading: false,
   isLoadingConversation: false,

@@ -98,7 +98,7 @@ describe('publish/http-registry', () => {
 
   it('returns error when the registry responds non-2xx', async () => {
     const mockFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ comment: 'auth required' }), { status: 401 }),
+      new Response(JSON.stringify({ comment: 'server error' }), { status: 500 }),
     )
     ;(globalThis as { fetch: typeof fetch }).fetch = mockFetch as unknown as typeof fetch
 
@@ -110,7 +110,7 @@ describe('publish/http-registry', () => {
         { token: 'secret' },
       )
       expect(res.status).toBe('error')
-      expect(res.details).toMatch(/HTTP 401/)
+      expect(res.details).toMatch(/HTTP 500/)
     } finally {
       ;(globalThis as { fetch: typeof fetch }).fetch = realFetch
     }

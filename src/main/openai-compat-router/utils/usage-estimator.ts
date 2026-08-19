@@ -139,16 +139,20 @@ export function deferInputTokensEstimate(request: AnthropicRequest): () => Promi
 }
 
 /**
- * Non-streaming fallback: fill zero usage fields on a converted Anthropic
- * response in place. Runs synchronously — the response is fully buffered at
- * this point and the path is not latency-critical.
+ * Non-streaming fallback: fill zero usage fields on an Anthropic response in
+ * place, creating the usage object when the upstream omitted it entirely
+ * (passthrough bodies are not built by our converters, so the field can be
+ * absent). Runs synchronously — the response is fully buffered at this point
+ * and the path is not latency-critical.
  */
 export function fillResponseUsageFallback(
   response: AnthropicMessageResponse,
   request: AnthropicRequest
 ): void {
+  if (!response.usage) {
+    response.usage = { input_tokens: 0, output_tokens: 0 }
+  }
   const usage = response.usage
-  if (!usage) return
 
   const needInput = !usage.input_tokens
   const needOutput = !usage.output_tokens

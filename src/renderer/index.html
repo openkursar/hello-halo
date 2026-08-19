@@ -14,19 +14,14 @@
       html.light, html.light body, html.light #root { background-color: #ffffff; }
     </style>
     <script>
-      // Anti-flash: apply theme before render (default: dark)
+      // Anti-flash: apply theme before render (default: follow OS)
       (function() {
         try {
-          var theme = localStorage.getItem('halo-theme');
-          if (theme === 'light') {
+          var theme = localStorage.getItem('halo-theme') || 'system';
+          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          if (theme === 'light' || (theme === 'system' && !prefersDark)) {
             document.documentElement.classList.add('light');
-          } else if (theme === 'system') {
-            // system: check preference
-            if (!window.matchMedia('(prefers-color-scheme: dark)').matches) {
-              document.documentElement.classList.add('light');
-            }
           }
-          // default (no localStorage or 'dark'): stay dark, do nothing
         } catch (e) {}
         // Platform class for conditional CSS (e.g. backdrop-filter only on GPU-enabled platforms)
         if (navigator.userAgent.indexOf('Windows') !== -1) {

@@ -44,8 +44,43 @@ interface OAuthAISourceProvider extends AISourceProvider {
 
   // User info
   getUserInfo(config: AISourcesConfig): AISourceUserInfo | null
+
+  // Optional: metered quota (see below)
+  getQuota?(config: AISourcesConfig): Promise<ProviderResult<AuthQuotaSnapshot>>
 }
 ```
+
+#### Optional: `getQuota?` (metered quota)
+
+Implement `getQuota` when your service exposes a spendable balance (credits,
+subscription quota, a wallet, ...) that should surface in the app header. The
+provider queries its own server and translates the result into the uniform
+`AuthQuotaSnapshot` view-model; the renderer only draws it. Providers that omit
+this method have no quota concept and no quota UI is shown — this is the default.
+
+Quota is an OAuth-provider capability: only a managed provider that owns its
+server can report a spendable balance. API-key sources are arbitrary
+OpenAI-compatible gateways with no quota concept, so `getQuota` lives on
+`OAuthAISourceProvider` rather than the base interface.
+
+```typescript
+interface AuthQuotaSnapshot {
+  remaining: number                                  // number shown on the pill
+  total: number                                      // progress = remaining / total
+  used: number
+  unit?: LocalizedText                               // suffix label, e.g. { en: 'credits', 'zh-CN': '积分' }
+  symbol?: string                                    // currency prefix, e.g. "$" (mutually exclusive with unit)
+  nextResetTime?: number                             // epoch seconds; renders a countdown
+  segments?: { label: LocalizedText; value: number }[] // breakdown rows in the popover
+  detailsUrl?: string                                // external top-up page (system browser)
+  detailsLabel?: LocalizedText                       // button label for detailsUrl
+}
+```
+
+The manager renews an expired OAuth token before calling `getQuota`, so the
+`config` you receive already carries a valid, decrypted access token. On failure
+return `{ success: false, error }` — the app keeps the previous value and marks
+it stale rather than surfacing an error.
 
 ## Required Types Reference
 

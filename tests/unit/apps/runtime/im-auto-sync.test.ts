@@ -41,6 +41,7 @@ function makeSession(overrides: Partial<ImSessionRecord> = {}): ImSessionRecord 
   return {
     appId: 'app-1',
     channel: 'wecom-bot',
+    source: 'im',
     instanceId: 'inst-1',
     chatId: 'chat-1',
     chatType: 'group',

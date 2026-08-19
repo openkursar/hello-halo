@@ -7,6 +7,9 @@
 // Main canvas component
 export { ContentCanvas, CollapsibleCanvas, CanvasToggleButton } from './ContentCanvas'
 
+// Terminal pty close policy (mounted once at the space level, always active)
+export { TerminalCloseGuard } from './TerminalCloseGuard'
+
 // Tab bar
 export { CanvasTabs, CanvasTabBar } from './CanvasTabs'
 

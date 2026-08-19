@@ -20,4 +20,14 @@ export interface PublishResult {
   url?: string
   /** Optional verdict from the registry (approved/needs_review/rejected). */
   verdict?: string
+  /** Structured review findings from a rejected publish, so the renderer can
+   * show a localized, user-friendly reason instead of the raw report text. */
+  findings?: ReviewFinding[]
+}
+
+/** One review rule outcome surfaced to the renderer. */
+export interface ReviewFinding {
+  rule: string
+  severity: string
+  message: string
 }

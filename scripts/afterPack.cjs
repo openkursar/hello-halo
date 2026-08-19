@@ -13,17 +13,23 @@
 //    with the prebuild matching the target platform. Prebuilds are downloaded
 //    by prepare-binaries.mjs and stored in node_modules/better-sqlite3/prebuilds/.
 //
-// 3. Ensure executable permissions on all native binaries in the unpacked
+// 3. Keep only the target platform's @img/sharp-* package (plus its libvips
+//    sibling) and fail the build if its prebuilt binary is absent. Same
+//    rationale as @parcel/watcher, with an assertion because a missing sharp
+//    binary only surfaces at runtime, on the first oversized image.
+//
+// 4. Ensure executable permissions on all native binaries in the unpacked
 //    output. Some npm packages (e.g. @anthropic-ai/claude-code v2.1.89)
 //    ship tarballs with missing +x on vendored binaries. This step detects
 //    ELF and Mach-O files by magic bytes and adds +x if missing.
 //
-// 4. macOS ad-hoc signing (prevents "damaged app" prompts on unsigned builds).
+// 5. macOS ad-hoc signing (prevents "damaged app" prompts on unsigned builds).
 // ============================================================================
 
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { ENGINE_RUNTIMES, VALID_ENGINES, entryCandidates } = require('./engine-runtimes.cjs');
 
 // electron-builder Arch enum: 0=ia32, 1=x64, 2=armv7l, 3=arm64, 4=universal
 const ARCH_NAMES = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64', 4: 'universal' };
@@ -47,6 +53,45 @@ const NODE_PTY_PREBUILD_TARGETS = {
   'win32-x64':    'win32-x64',
 };
 
+// Packages that vendor per-platform binaries under vendor/<tool>/{arch}-{platform}/.
+// Their runtime resolves paths via `${process.arch}-${process.platform}`, so only
+// the target directory is needed; the other 5 platform directories are dead weight.
+const ANTHROPIC_VENDOR_PACKAGES = [
+  '@anthropic-ai/claude-agent-sdk',
+  '@anthropic-ai/claude-code',
+];
+
+// Maps platform-arch to the cloudflared binary variant stored by
+// prepare-binaries.mjs in node_modules/cloudflared/bin/. At runtime the
+// cloudflared lib only reads bin/cloudflared (bin/cloudflared.exe on Windows),
+// so afterPack installs the target variant under that name and removes the rest.
+const CLOUDFLARED_VARIANTS = {
+  'darwin-arm64': 'cloudflared',
+  'darwin-x64':   'cloudflared-darwin-x64',
+  'win32-x64':    'cloudflared.exe',
+  'linux-x64':    'cloudflared-linux-x64',
+};
+
+// Maps platform-arch to the @img/sharp-* package required at runtime. The
+// Claude engines resize oversized images through sharp, which dlopens the
+// prebuilt .node from this package; the libvips sibling it declares is resolved
+// from the same @img directory and kept alongside it.
+const SHARP_TARGETS = {
+  'darwin-arm64': 'sharp-darwin-arm64',
+  'darwin-x64':   'sharp-darwin-x64',
+  'win32-x64':    'sharp-win32-x64',
+  'linux-x64':    'sharp-linux-x64',
+};
+
+// Maps platform-arch to the @vscode/ripgrep platform package the dsh engine's
+// glob and grep tools shell out to at runtime.
+const RIPGREP_TARGETS = {
+  'darwin-arm64': { packageName: 'ripgrep-darwin-arm64', binaryName: 'rg' },
+  'darwin-x64':   { packageName: 'ripgrep-darwin-x64', binaryName: 'rg' },
+  'win32-x64':    { packageName: 'ripgrep-win32-x64', binaryName: 'rg.exe' },
+  'linux-x64':    { packageName: 'ripgrep-linux-x64', binaryName: 'rg' },
+};
+
 // Maps platform-arch to the @openai/codex native package required at runtime.
 const CODEX_TARGETS = {
   'darwin-arm64': { packageName: 'codex-darwin-arm64', targetTriple: 'aarch64-apple-darwin', binaryName: 'codex' },
@@ -55,27 +100,25 @@ const CODEX_TARGETS = {
   'linux-x64':    { packageName: 'codex-linux-x64', targetTriple: 'x86_64-unknown-linux-musl', binaryName: 'codex' },
 };
 
-// Maps platform-arch to the @vscode/ripgrep platform package required at
-// runtime by the dsh engine's glob and grep tools.
-const RIPGREP_TARGETS = {
-  'darwin-arm64': { packageName: 'ripgrep-darwin-arm64', binaryName: 'rg' },
-  'darwin-x64':   { packageName: 'ripgrep-darwin-x64', binaryName: 'rg' },
-  'win32-x64':    { packageName: 'ripgrep-win32-x64', binaryName: 'rg.exe' },
-  'linux-x64':    { packageName: 'ripgrep-linux-x64', binaryName: 'rg' },
-};
+/**
+ * Resolve the app resources directory from electron-builder context.
+ *
+ * macOS:       <appOutDir>/<ProductName>.app/Contents/Resources
+ * win32/linux: <appOutDir>/resources
+ */
+function getResourcesDir(context) {
+  if (context.electronPlatformName === 'darwin') {
+    const appName = context.packager.appInfo.productFilename;
+    return path.join(context.appOutDir, `${appName}.app`, 'Contents', 'Resources');
+  }
+  return path.join(context.appOutDir, 'resources');
+}
 
 /**
  * Resolve the app.asar.unpacked directory from electron-builder context.
- *
- * macOS:       <appOutDir>/<ProductName>.app/Contents/Resources/app.asar.unpacked
- * win32/linux: <appOutDir>/resources/app.asar.unpacked
  */
 function getUnpackedDir(context) {
-  if (context.electronPlatformName === 'darwin') {
-    const appName = context.packager.appInfo.productFilename;
-    return path.join(context.appOutDir, `${appName}.app`, 'Contents', 'Resources', 'app.asar.unpacked');
-  }
-  return path.join(context.appOutDir, 'resources', 'app.asar.unpacked');
+  return path.join(getResourcesDir(context), 'app.asar.unpacked');
 }
 
 /**
@@ -281,10 +324,75 @@ function cleanAndValidateCodexNativePackage(context) {
 }
 
 /**
- * Keep only the ripgrep binary for the target platform and fail early if it is
- * missing. The dsh engine resolves it at the first search call rather than at
- * load, so without this check a build without the target package would ship
- * glob and grep as tools that are offered to the model and fail every time.
+ * Keep only the target platform's @img/sharp-* package (and the libvips sibling
+ * it declares) in the unpacked output, and fail the build when its prebuilt
+ * binary is missing.
+ *
+ * The binary must live outside the asar archive: a .node cannot be dlopened
+ * from inside the archive, and sharp's only fallback is to give up, which
+ * surfaces to the user as "Unable to resize image" on any oversized image.
+ */
+function cleanAndValidateSharpNativePackage(context) {
+  const platform = context.electronPlatformName;
+  const archStr = ARCH_NAMES[context.arch] || String(context.arch);
+  const key = `${platform}-${archStr}`;
+  const targetPkg = SHARP_TARGETS[key];
+
+  if (!targetPkg) {
+    console.warn(`[afterPack] No sharp package mapping for ${key}, skipping cleanup`);
+    return;
+  }
+
+  const unpackedDir = getUnpackedDir(context);
+  const imgDir = path.join(unpackedDir, 'node_modules', '@img');
+  const targetDir = path.join(imgDir, targetPkg);
+  const targetLibDir = path.join(targetDir, 'lib');
+
+  const hasBinary = fs.existsSync(targetLibDir)
+    && fs.readdirSync(targetLibDir).some(f => f.endsWith('.node'));
+
+  if (!hasBinary) {
+    console.error(`[afterPack] ${key}: missing sharp native binary: ${targetLibDir}`);
+    console.error(`[afterPack] Run "npm run prepare:all" before cross-platform/cross-arch packaging`);
+    console.error(`[afterPack] Also check that asarUnpack includes "node_modules/@img/**/*"`);
+    throw new Error(`Missing @img/${targetPkg} native binary for ${key}`);
+  }
+
+  // The .node links against libvips through an @rpath/RUNPATH pointing at a
+  // sibling directory under @img, so the sibling must survive the cleanup.
+  const manifest = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf-8'));
+  const siblings = Object.keys(manifest.optionalDependencies || {}).map(dep => dep.split('/').pop());
+
+  const missingSiblings = siblings.filter(name => !fs.existsSync(path.join(imgDir, name, 'lib')));
+  if (missingSiblings.length > 0) {
+    console.error(`[afterPack] ${key}: @img/${targetPkg} needs ${missingSiblings.join(', ')}, not in the unpacked output`);
+    console.error(`[afterPack] Run "npm run prepare:all" to install the libvips sibling`);
+    throw new Error(`Missing libvips package(s) for ${key}: ${missingSiblings.join(', ')}`);
+  }
+
+  const keep = new Set([targetPkg, ...siblings]);
+  const removed = [];
+  for (const entry of fs.readdirSync(imgDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (keep.has(entry.name)) continue;
+
+    fs.rmSync(path.join(imgDir, entry.name), { recursive: true });
+    removed.push(entry.name);
+  }
+
+  if (removed.length > 0) {
+    console.log(`[afterPack] ${key}: removed ${removed.length} non-target sharp package(s): ${removed.join(', ')}`);
+  }
+  console.log(`[afterPack] ${key}: keeping ${[...keep].map(name => `@img/${name}`).join(', ')}`);
+}
+
+/**
+ * Keep only the target platform's @vscode/ripgrep-* package in the unpacked
+ * output, and fail the build when its binary is missing.
+ *
+ * The dsh engine resolves ripgrep at the first search call rather than at load,
+ * so without this check a build missing the target package would offer glob and
+ * grep to the model and fail every single call.
  */
 function cleanAndValidateRipgrepPackage(context) {
   const platform = context.electronPlatformName;
@@ -311,9 +419,8 @@ function cleanAndValidateRipgrepPackage(context) {
     throw new Error(`Missing @vscode/${target.packageName} binary for ${key}`);
   }
 
-  const entries = fs.readdirSync(vscodeDir, { withFileTypes: true });
   const removed = [];
-  for (const entry of entries) {
+  for (const entry of fs.readdirSync(vscodeDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     if (!/^ripgrep-(darwin|linux|win32)-/.test(entry.name)) continue;
     if (entry.name === target.packageName) continue;
@@ -326,6 +433,143 @@ function cleanAndValidateRipgrepPackage(context) {
     console.log(`[afterPack] ${key}: removed ${removed.length} non-target ripgrep package(s): ${removed.join(', ')}`);
   }
   console.log(`[afterPack] ${key}: keeping @vscode/${target.packageName}`);
+}
+
+/**
+ * Identify an executable's target platform-arch from its file header.
+ * Returns a `${platform}-${arch}` key (win32/linux assume x64, matching the
+ * only shipped targets) or null if unrecognized.
+ */
+function detectExecutableTarget(filePath) {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const header = Buffer.alloc(8);
+    if (fs.readSync(fd, header, 0, 8, 0) < 8) return null;
+
+    // ELF: 0x7F 'E' 'L' 'F'
+    if (header[0] === 0x7F && header[1] === 0x45 && header[2] === 0x4C && header[3] === 0x46) {
+      return 'linux-x64';
+    }
+    // PE: 'M' 'Z'
+    if (header[0] === 0x4D && header[1] === 0x5A) {
+      return 'win32-x64';
+    }
+    // Mach-O 64-bit LE: CF FA ED FE, cputype at offset 4
+    if (header[0] === 0xCF && header[1] === 0xFA && header[2] === 0xED && header[3] === 0xFE) {
+      const cpuType = header.readUInt32LE(4);
+      if (cpuType === 0x0100000C) return 'darwin-arm64';
+      if (cpuType === 0x01000007) return 'darwin-x64';
+    }
+    return null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Keep only the target {arch}-{platform} directory in the vendored binary
+ * trees of @anthropic-ai/claude-agent-sdk and @anthropic-ai/claude-code
+ * (vendor/ripgrep, vendor/audio-capture). Non-directory files (e.g. COPYING)
+ * are preserved.
+ */
+function cleanAnthropicVendorBinaries(context) {
+  const platform = context.electronPlatformName;
+  const archStr = ARCH_NAMES[context.arch] || String(context.arch);
+  const targetDir = `${archStr}-${platform}`;
+
+  const unpackedDir = getUnpackedDir(context);
+
+  for (const pkg of ANTHROPIC_VENDOR_PACKAGES) {
+    const vendorDir = path.join(unpackedDir, 'node_modules', pkg, 'vendor');
+    if (!fs.existsSync(vendorDir)) {
+      console.warn(`[afterPack] No vendor dir for ${pkg} in unpacked output, skipping cleanup`);
+      continue;
+    }
+
+    const removed = [];
+    let targetFound = false;
+
+    for (const tool of fs.readdirSync(vendorDir, { withFileTypes: true })) {
+      if (!tool.isDirectory()) continue;
+      const toolDir = path.join(vendorDir, tool.name);
+
+      for (const entry of fs.readdirSync(toolDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name === targetDir) {
+          targetFound = true;
+          continue;
+        }
+        fs.rmSync(path.join(toolDir, entry.name), { recursive: true });
+        removed.push(`${tool.name}/${entry.name}`);
+      }
+    }
+
+    if (!targetFound) {
+      console.warn(`[afterPack] ${pkg}: no ${targetDir} vendor binaries found in unpacked output`);
+    }
+    console.log(`[afterPack] ${pkg}: removed ${removed.length} non-target vendor dir(s), keeping */${targetDir}`);
+  }
+}
+
+/**
+ * Install the target-platform cloudflared binary under its runtime name and
+ * remove all other variants.
+ *
+ * prepare-binaries.mjs stores per-platform variants in the project's
+ * node_modules/cloudflared/bin/ (see CLOUDFLARED_VARIANTS). The copy goes from
+ * the project node_modules (source of truth) into the unpacked output, so the
+ * result is deterministic regardless of which variants electron-builder packed.
+ */
+function installCloudflaredBinary(context) {
+  const platform = context.electronPlatformName;
+  const archStr = ARCH_NAMES[context.arch] || String(context.arch);
+  const key = `${platform}-${archStr}`;
+  const variant = CLOUDFLARED_VARIANTS[key];
+
+  if (!variant) {
+    console.warn(`[afterPack] No cloudflared variant mapping for ${key}, skipping`);
+    return;
+  }
+
+  const projectRoot = path.resolve(__dirname, '..');
+  const srcBinary = path.join(projectRoot, 'node_modules/cloudflared/bin', variant);
+
+  if (!fs.existsSync(srcBinary) || fs.statSync(srcBinary).size < 10 * 1024 * 1024) {
+    console.error(`[afterPack] ${key}: missing or invalid cloudflared binary: ${srcBinary}`);
+    console.error(`[afterPack] Run "npm run prepare:all" to download cloudflared for all platforms`);
+    throw new Error(`Missing cloudflared binary for ${key}`);
+  }
+
+  // Arch/format check via magic bytes. Local bin/ files can be polluted by
+  // manual swaps (e.g. an x64 binary left under the arm64 name), which would
+  // otherwise ship silently and break tunnels on the target machine.
+  const detected = detectExecutableTarget(srcBinary);
+  if (detected !== key) {
+    console.error(`[afterPack] ${key}: cloudflared binary is ${detected || 'unrecognized'}: ${srcBinary}`);
+    console.error(`[afterPack] Delete it and run "npm run prepare:all" to re-download`);
+    throw new Error(`cloudflared binary mismatch for ${key} (got ${detected || 'unknown'})`);
+  }
+
+  const runtimeName = platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
+  const destDir = path.join(getUnpackedDir(context), 'node_modules', 'cloudflared', 'bin');
+  fs.mkdirSync(destDir, { recursive: true });
+
+  fs.copyFileSync(srcBinary, path.join(destDir, runtimeName));
+  if (platform !== 'win32') {
+    fs.chmodSync(path.join(destDir, runtimeName), 0o755);
+  }
+
+  const removed = [];
+  for (const entry of fs.readdirSync(destDir)) {
+    if (entry === runtimeName) continue;
+    if (!entry.startsWith('cloudflared')) continue;
+    fs.rmSync(path.join(destDir, entry), { recursive: true });
+    removed.push(entry);
+  }
+
+  const sizeMB = (fs.statSync(path.join(destDir, runtimeName)).size / 1024 / 1024).toFixed(1);
+  console.log(`[afterPack] ${key}: installed cloudflared as bin/${runtimeName} (${sizeMB} MB)` +
+    (removed.length > 0 ? `, removed ${removed.length} variant(s): ${removed.join(', ')}` : ''));
 }
 
 /**
@@ -434,6 +678,168 @@ function ensureNativeBinaryPermissions(context) {
   }
 }
 
+// ============================================================================
+// Packaged artifact assertions
+//
+// Everything above operates on files the build machine happened to have. These
+// checks read the artifact itself and refuse to hand back a package that is
+// missing something the app needs at runtime — the only place that can catch a
+// dependency which was installed but excluded from the package, or never
+// installed at all because it was optional.
+// ============================================================================
+
+/**
+ * Reader over the packaged app, whether it was written as an asar archive or a
+ * plain directory. `exists` also consults app.asar.unpacked, since asarUnpack
+ * moves matching files out of the archive.
+ */
+function createPackageReader(context) {
+  const resourcesDir = getResourcesDir(context);
+  const asarPath = path.join(resourcesDir, 'app.asar');
+  const unpackedDir = path.join(resourcesDir, 'app.asar.unpacked');
+
+  if (!fs.existsSync(asarPath)) {
+    const appDir = path.join(resourcesDir, 'app');
+    if (!fs.existsSync(appDir)) {
+      throw new Error(`[afterPack] Packaged app not found (looked for ${asarPath} and ${appDir})`);
+    }
+    return {
+      exists: (relPath) => fs.existsSync(path.join(appDir, relPath)),
+      read: (relPath) => fs.readFileSync(path.join(appDir, relPath)),
+    };
+  }
+
+  const asar = require('@electron/asar');
+  // listPackage builds entries with path.join, so on Windows they use
+  // backslashes — normalize to forward slashes for lookups.
+  const entries = new Set(
+    asar.listPackage(asarPath).map(entry => entry.replace(/^[\\/]/, '').split(path.sep).join('/'))
+  );
+
+  return {
+    exists: (relPath) => {
+      const normalized = relPath.split(path.sep).join('/');
+      return entries.has(normalized) || fs.existsSync(path.join(unpackedDir, relPath));
+    },
+    read: (relPath) => {
+      const unpacked = path.join(unpackedDir, relPath);
+      if (fs.existsSync(unpacked)) return fs.readFileSync(unpacked);
+      // extractFile traverses the archive tree by splitting on path.sep, so it
+      // needs the platform-native relPath, not a forward-slash one.
+      return asar.extractFile(asarPath, relPath);
+    },
+  };
+}
+
+/**
+ * Engines the artifact must contain, from HALO_REQUIRE_ENGINES (comma
+ * separated). Release scripts set it; ad-hoc builds leave it unset and only get
+ * an inventory report.
+ */
+function getRequiredEngines() {
+  const raw = process.env.HALO_REQUIRE_ENGINES;
+  if (!raw) return [];
+  const requested = raw.split(',').map(e => e.trim()).filter(Boolean);
+  const unknown = requested.filter(e => !VALID_ENGINES.includes(e));
+  if (unknown.length > 0) {
+    throw new Error(
+      `[afterPack] HALO_REQUIRE_ENGINES names unknown engine(s): ${unknown.join(', ')}. ` +
+      `Valid engines: ${VALID_ENGINES.join(', ')}`
+    );
+  }
+  return requested;
+}
+
+function validateEngineRuntimes(pkg) {
+  const required = getRequiredEngines();
+  const missing = [];
+
+  for (const engineId of VALID_ENGINES) {
+    const { name, packageId, fix } = ENGINE_RUNTIMES[engineId];
+    const pkgDir = path.join('node_modules', ...packageId.split('/'));
+    const manifestPath = path.join(pkgDir, 'package.json');
+
+    let reason = null;
+    if (!pkg.exists(manifestPath)) {
+      reason = 'package not in the artifact';
+    } else {
+      const manifest = JSON.parse(pkg.read(manifestPath).toString('utf-8'));
+      const entry = entryCandidates(manifest).find(candidate => pkg.exists(path.join(pkgDir, candidate)));
+      if (!entry) {
+        reason = 'package present but its entry file was excluded';
+      } else {
+        console.log(`[afterPack] Engine bundled: ${name} v${manifest.version ?? 'unknown'}`);
+      }
+    }
+
+    if (!reason) continue;
+    if (required.includes(engineId)) {
+      missing.push(`${name} (${packageId}): ${reason}. Fix: ${fix}`);
+    } else {
+      console.log(`[afterPack] Engine not bundled: ${name} — ${reason} (not required by this build)`);
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      '[afterPack] Required agent engine(s) are missing from the packaged app:\n  ' +
+      missing.join('\n  ')
+    );
+  }
+}
+
+/**
+ * `app-update.yml` is written by electron-builder only when a publish target is
+ * configured. Without it electron-updater can check for updates but fails to
+ * download them, so a build that advertises updates must carry the file.
+ */
+function validateUpdaterConfig(context) {
+  const publish = context.packager.config && context.packager.config.publish;
+  const configured = Array.isArray(publish) ? publish.length > 0 : Boolean(publish);
+  if (!configured) {
+    console.log('[afterPack] No publish target configured — skipping app-update.yml check');
+    return;
+  }
+
+  const updateConfigPath = path.join(getResourcesDir(context), 'app-update.yml');
+  if (!fs.existsSync(updateConfigPath)) {
+    throw new Error(
+      '[afterPack] A publish target is configured but app-update.yml is missing from resources. ' +
+      'Auto-update would fail at download time with ENOENT.'
+    );
+  }
+  console.log('[afterPack] app-update.yml present');
+}
+
+/**
+ * product.json drives auth providers and data-folder isolation. When it is
+ * absent the app silently falls back to open-source defaults, which strips
+ * every enterprise login option from the setup screen.
+ */
+function validateProductConfig(pkg) {
+  if (!pkg.exists('product.json')) {
+    throw new Error('[afterPack] product.json is missing from the packaged app');
+  }
+
+  const product = JSON.parse(pkg.read('product.json').toString('utf-8'));
+  if (!Array.isArray(product.authProviders) || product.authProviders.length === 0) {
+    throw new Error('[afterPack] product.json in the packaged app declares no authProviders');
+  }
+  console.log(
+    `[afterPack] product.json present (dataFolderName=${product.dataFolderName ?? 'halo'}, ` +
+    `authProviders=${product.authProviders.length})`
+  );
+}
+
+function validatePackagedArtifact(context) {
+  console.log('[afterPack] Validating packaged artifact...');
+  const pkg = createPackageReader(context);
+  validateEngineRuntimes(pkg);
+  validateProductConfig(pkg);
+  validateUpdaterConfig(context);
+  console.log('[afterPack] Packaged artifact validation passed');
+}
+
 module.exports = async function(context) {
   // Clean non-target watcher packages from unpacked output
   cleanNonTargetWatchers(context);
@@ -447,23 +853,47 @@ module.exports = async function(context) {
   // Ensure the packaged app contains the Codex native binary for this arch.
   cleanAndValidateCodexNativePackage(context);
 
+  // Ensure the packaged app contains the sharp native binary for this arch.
+  cleanAndValidateSharpNativePackage(context);
+
   // Ensure the packaged app contains the ripgrep binary for this platform.
   cleanAndValidateRipgrepPackage(context);
+
+  // Keep only target-platform binaries in @anthropic-ai vendored trees.
+  cleanAnthropicVendorBinaries(context);
+
+  // Install the target cloudflared binary under its runtime name.
+  installCloudflaredBinary(context);
 
   // Ensure all native binaries in unpacked output have +x permission.
   // Defends against upstream npm packages shipping broken permissions
   // (e.g. @anthropic-ai/claude-code v2.1.89 ripgrep EACCES bug).
   ensureNativeBinaryPermissions(context);
 
-  // macOS ad-hoc signing (other platforms skip)
+  // Last gate before the artifact leaves the packer: assert it actually
+  // contains the engines, product config and updater metadata it needs.
+  // Throwing here fails the build, which is the point — a broken package must
+  // never reach a user.
+  validatePackagedArtifact(context);
+
+  // macOS signing (other platforms skip)
   if (context.electronPlatformName !== 'darwin') {
+    return;
+  }
+
+  // Developer ID mode: electron-builder performs real Developer ID signing and
+  // notarization in its own later step. Ad-hoc signing here would overwrite that
+  // with an unnotarizable signature, so skip it entirely.
+  if (process.env.HALO_MAC_SIGN_MODE === 'developer-id') {
+    console.log('[afterPack] \u2705 Developer ID signing mode \u2014 skipping ad-hoc; electron-builder will sign & notarize');
     return;
   }
 
   const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
   const entitlementsPath = path.join(__dirname, '..', 'resources', 'entitlements.mac.plist');
 
-  console.log(`[afterPack] Professional ad-hoc signing: ${appPath}`);
+  console.warn('[afterPack] \u26a0\ufe0f AD-HOC signing (NOT notarized \u2014 will be blocked by macOS 26.5+ Gatekeeper/XProtect)');
+  console.log(`[afterPack] Ad-hoc signing: ${appPath}`);
 
   try {
     // 1. Remove quarantine attribute (if exists)

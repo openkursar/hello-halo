@@ -10,6 +10,7 @@ import {
   hasAnyAISource
 } from '../../shared/types/ai-sources';
 import { NotificationChannelsConfig }  from '../../shared/types/notification-channels';
+import type { KBSource } from '../../shared/types/tlon';
 // Re-export them
 export { DEFAULT_MODEL, getCurrentModelName, hasAnyAISource };
 
@@ -42,6 +43,7 @@ export {
   AVAILABLE_MODELS,
   createEmptyAISourcesConfig,
   getCurrentSource,
+  getModelDisplayName,
   getSourceById,
   isSourceConfigured,
   createSource,
@@ -70,7 +72,7 @@ export {
 } from '../../shared/constants/providers';
 
 // Re-export model capabilities
-export { supportsVision } from '../../shared/constants/model-capabilities';
+export { resolveModelVision } from '../../shared/constants/model-capabilities';
 
 // Permission Level
 export type PermissionLevel = 'allow' | 'ask' | 'deny';
@@ -222,12 +224,22 @@ export type McpServerConfig = McpStdioServerConfig | McpHttpServerConfig | McpSs
 // MCP servers map (key is server name)
 export type McpServersConfig = Record<string, McpServerConfig>;
 
-// MCP server status (from SDK)
+// MCP server status
 export type McpServerStatusType = 'connected' | 'failed' | 'needs-auth' | 'pending';
 
+/**
+ * Mirrors main's McpServerStatusInfo. `status` is derived from the two
+ * producers below; read it for the overall verdict and compare the two when
+ * the difference matters (a configuration that probes fine but which the last
+ * agent session could not use).
+ */
 export interface McpServerStatus {
   name: string;
   status: McpServerStatusType;
+  /** Last native probe verdict — whether this configuration is usable now. */
+  probeStatus?: 'connected' | 'failed' | 'needs-auth';
+  /** Last agent session verdict. Cleared once a probe reconnects. */
+  sessionStatus?: McpServerStatusType;
   serverInfo?: {
     name: string;
     version: string;
@@ -235,6 +247,10 @@ export interface McpServerStatus {
   error?: string;
   /** Short tool names provided by this server (without mcp__ prefix) */
   tools?: string[];
+  /** Human-readable failure reason from the native connection probe */
+  errorDetail?: string;
+  /** Epoch ms of the last probe/SDK report that produced this entry */
+  lastCheckedAt?: number;
 }
 
 export interface NotificationConfig {
@@ -372,6 +388,16 @@ export interface Conversation extends ConversationMeta {
   messages: Message[];
   sessionId?: string;
   version?: number;  // Format version: 2 = thoughts separated into .thoughts.json
+  /**
+   * Per-conversation model pin (Cursor-style): the AI source + model this
+   * conversation uses, independent of the global selection. Stamped at creation
+   * from the active selection; read with a fallback to the global selection.
+   * `modelSourceId` is the AISource.id, `modelId` the wire model id.
+   */
+  modelSourceId?: string;
+  modelId?: string;
+  /** Knowledge bases (Tlon) loaded into this conversation; injected per turn. */
+  knowledgeBaseIds?: string[];
 }
 
 // ============================================
@@ -403,17 +429,28 @@ export interface EngineCapabilities {
   subAgent: { model: 'declarative' | 'imperative' | 'none'; visibleLifecycle: boolean };
   features: {
     skills: boolean; mcp: boolean; hooks: boolean;
-    sessionResume: boolean; midTurnInjection: boolean; interrupt: boolean;
+    sessionResume: boolean; sessionFork: boolean; interrupt: boolean;
     multimodalImage: boolean; contextCompaction: boolean; askUserQuestion: boolean;
   };
 }
 
-/** Whether this build ships a runtime the engine can run on. */
+/** Whether one engine's runtime shipped in this build. Mirrors main's EngineAvailability. */
 export interface EngineAvailability {
   engineId: EngineId;
   available: boolean;
-  /** Diagnostic detail (not localized) shown when an engine cannot be selected. */
+  version: string;
+  fingerprint: string;
+  /** Why the engine is unavailable, for Settings. Not localized. */
   reason?: string;
+}
+
+/** Payload of `agent:get-engine-availability`. */
+export interface EngineAvailabilityReport {
+  engines: EngineAvailability[];
+  /** Engine actually running; null when no engine could be loaded. */
+  activeEngine: EngineId | null;
+  /** Configured engine when startup degraded away from it; null otherwise. */
+  degradedFrom: EngineId | null;
 }
 
 // ============================================
@@ -494,6 +531,7 @@ export interface Message {
   };
   error?: string;  // Error message when assistant response failed (e.g., 429 rate limit)
   source?: 'injection';  // How the message entered the conversation (SDK-agnostic)
+  sources?: KBSource[];  // Knowledge-base documents the agent Read this turn (clickable citations)
 }
 
 // ============================================
@@ -616,16 +654,18 @@ export interface CanvasContext {
   isOpen: boolean;
   tabCount: number;
   activeTab: {
-    type: string;  // 'browser' | 'code' | 'markdown' | 'image' | 'pdf' | 'text' | 'json' | 'csv'
+    type: string;  // 'browser' | 'code' | 'markdown' | 'image' | 'pdf' | 'text' | 'json' | 'csv' | 'terminal'
     title: string;
     url?: string;   // For browser/pdf tabs
     path?: string;  // For file tabs
+    terminalSessionId?: string;  // For terminal tabs - the pty session id the AI drives via terminal_* tools
   } | null;
   tabs: Array<{
     type: string;
     title: string;
     url?: string;
     path?: string;
+    terminalSessionId?: string;  // For terminal tabs - the pty session id the AI drives via terminal_* tools
     isActive: boolean;
   }>;
 }
@@ -744,7 +784,7 @@ export type AgentEvent =
 // App State Types
 // ============================================
 
-export type AppView = 'splash' | 'gitBashSetup' | 'setup' | 'home' | 'space' | 'settings' | 'apps' | 'serverConnect' | 'serverList';
+export type AppView = 'splash' | 'gitBashSetup' | 'setup' | 'home' | 'space' | 'settings' | 'apps' | 'tlon' | 'serverConnect' | 'serverList';
 
 export interface AppState {
   view: AppView;

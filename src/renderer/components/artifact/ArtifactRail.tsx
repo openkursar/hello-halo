@@ -19,10 +19,11 @@ import { useSpaceStore } from '../../stores/space.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
 import { useCanvasLifecycle } from '../../hooks/useCanvasLifecycle'
 import { useCanvasStore } from '../../stores/canvas.store'
-import { ChevronRight, FolderOpen, Monitor, LayoutGrid, FolderTree, X, Globe } from 'lucide-react'
+import { ChevronRight, FolderOpen, Monitor, LayoutGrid, FolderTree, X, Globe, TerminalSquare, Loader2 } from 'lucide-react'
 import { ONBOARDING_ARTIFACT_NAME } from '../onboarding/onboardingData'
 import { useTranslation } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
+import { useUserTerminal } from '../../hooks/useUserTerminal'
 import { getBrowserHomepage } from '../../utils/browser-homepage'
 import { copyToClipboard } from '../../utils/clipboard'
 
@@ -37,6 +38,8 @@ const MIN_WIDTH = 200
 const MAX_WIDTH = 400
 const DEFAULT_WIDTH = 300
 const COLLAPSED_WIDTH = 48
+// Below this rail width the footer drops button labels and shows icons only.
+const FOOTER_LABELS_MIN_WIDTH = 280
 const clampWidth = (v: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, v))
 
 interface ArtifactRailProps {
@@ -124,6 +127,11 @@ export function ArtifactRail({
   const isGenerating = useIsGenerating()
   const { isActive: isOnboarding, currentStep, completeOnboarding } = useOnboardingStore()
   const isMobile = useIsMobile()
+  const {
+    available: terminalAvailable,
+    creating: terminalCreating,
+    createAndOpen: handleOpenTerminal
+  } = useUserTerminal()
 
   // ── Callbacks ──
 
@@ -448,42 +456,62 @@ export function ArtifactRail({
     </div>
   )
 
-  // Shared footer renderer with folder and browser buttons
-  // flex-shrink-0 ensures footer doesn't compress, allowing content to take remaining space
-  const renderFooter = () => (
+  // Shared footer with space-scoped tool entries (folder / browser / terminal).
+  // `compact` drops labels when the rail is too narrow for three labeled buttons.
+  // Terminal works over remote transport, so its entry survives Web mode where
+  // folder/browser (local-only) are replaced by the desktop-client hint.
+  const renderFooter = (compact: boolean) => (
     <div className="flex-shrink-0 p-2 border-t border-border">
       {viewMode === 'card' && artifacts.length > 0 && (
         <p className="text-xs text-muted-foreground text-center mb-2">
           {artifacts.length} {t('artifacts')}
         </p>
       )}
-      {isWebMode ? (
-        <div className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs text-muted-foreground/50 rounded-lg cursor-not-allowed">
-          <Monitor className="w-4 h-4" />
-          <span>{t('Please open folder in client')}</span>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2">
-          {/* Open folder button */}
-          <button
-            onClick={handleOpenFolder}
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground rounded-lg transition-colors"
-            title={t('Open folder (⌘⇧F)')}
+      <div className="flex items-center gap-2">
+        {isWebMode ? (
+          <div
+            className="flex-1 min-w-0 flex items-center justify-center gap-2 px-3 py-2 text-xs text-muted-foreground/50 rounded-lg cursor-not-allowed"
+            title={t('Please open folder in client')}
           >
-            <FolderOpen className="w-4 h-4 text-amber-500" />
-            <span>{t('Open folder')}</span>
-          </button>
-          {/* Open browser button */}
+            <Monitor className="w-4 h-4 flex-shrink-0" />
+            <span className="truncate">{t('Please open folder in client')}</span>
+          </div>
+        ) : (
+          <>
+            <button
+              onClick={handleOpenFolder}
+              className="flex-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground rounded-lg transition-colors"
+              title={t('Open folder')}
+            >
+              <FolderOpen className="w-4 h-4 flex-shrink-0 text-amber-500" />
+              {!compact && <span className="truncate">{t('Folder')}</span>}
+            </button>
+            <button
+              onClick={handleOpenBrowser}
+              className="flex-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground rounded-lg transition-colors"
+              title={t('Open browser')}
+            >
+              <Globe className="w-4 h-4 flex-shrink-0 text-blue-500" />
+              {!compact && <span className="truncate">{t('Browser')}</span>}
+            </button>
+          </>
+        )}
+        {terminalAvailable && (
           <button
-            onClick={handleOpenBrowser}
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground rounded-lg transition-colors"
-            title={t('Open browser (⌘⇧B)')}
+            onClick={handleOpenTerminal}
+            disabled={terminalCreating}
+            className="flex-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground rounded-lg transition-colors disabled:opacity-60"
+            title={t('Open terminal')}
           >
-            <Globe className="w-4 h-4 text-blue-500" />
-            <span>{t('Open browser')}</span>
+            {terminalCreating ? (
+              <Loader2 className="w-4 h-4 flex-shrink-0 animate-spin" />
+            ) : (
+              <TerminalSquare className="w-4 h-4 flex-shrink-0 text-violet-500" />
+            )}
+            {!compact && <span className="truncate">{t('Terminal')}</span>}
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 
@@ -568,7 +596,7 @@ export function ArtifactRail({
               {renderContent()}
 
               {/* Footer */}
-              {renderFooter()}
+              {renderFooter(false)}
             </div>
           </div>
         )}
@@ -633,10 +661,10 @@ export function ArtifactRail({
       {/* Content + Footer — CSS-hidden when collapsed to preserve ArtifactTree folder expansion state */}
       <div className={`flex-1 flex flex-col overflow-hidden${isExpanded ? '' : ' hidden'}`}>
         {renderContent()}
-        {renderFooter()}
+        {renderFooter(width < FOOTER_LABELS_MIN_WIDTH)}
       </div>
 
-      {/* Collapsed state - show both folder and browser icons */}
+      {/* Collapsed state - icon-only column of the footer tool entries */}
       {!isExpanded && (
         <div className="flex-1 flex flex-col items-center py-4 gap-2">
           {isWebMode ? (
@@ -663,6 +691,20 @@ export function ArtifactRail({
                 <Globe className="w-5 h-5 text-blue-500" />
               </button>
             </>
+          )}
+          {terminalAvailable && (
+            <button
+              onClick={handleOpenTerminal}
+              disabled={terminalCreating}
+              className="p-2 hover:bg-secondary rounded-lg transition-colors disabled:opacity-60"
+              title={t('Open terminal')}
+            >
+              {terminalCreating ? (
+                <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+              ) : (
+                <TerminalSquare className="w-5 h-5 text-violet-500" />
+              )}
+            </button>
           )}
         </div>
       )}

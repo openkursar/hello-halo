@@ -46,14 +46,51 @@ function validateStringRecord(value: unknown, fieldName: string): string | null 
   return null
 }
 
-function detectNestedConfigError(config: Record<string, unknown>): string | null {
-  for (const [key, value] of Object.entries(config)) {
-    if (!isRecord(value)) continue
-    if ('command' in value || 'type' in value || 'transport' in value || 'url' in value) {
-      return `Invalid format: detected nested "${key}". Configure the MCP server object directly without extra nesting.`
+function looksLikeServerConfig(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && ('command' in value || 'url' in value || 'type' in value || 'transport' in value)
+}
+
+/**
+ * Canonicalize external `type` variants seen in the wild:
+ * `streamable_http` / `Streamable-HTTP` → `streamable-http`, etc.
+ */
+function canonicalExternalType(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  return value.trim().toLowerCase().replace(/_/g, '-')
+}
+
+/** A server config plus the name recovered from its wrapper key, if any */
+export interface UnwrappedMcpServer {
+  name?: string
+  config: Record<string, unknown>
+}
+
+/**
+ * Tolerant unwrapping of pasted MCP JSON. Accepts every clipboard shape the
+ * ecosystem produces (see issue #126):
+ * - direct server config:        `{ "command": ... }` / `{ "type": "http", "url": ... }`
+ * - Cursor / Claude Desktop:     `{ "mcpServers": { "name": { ... } } }` (1..n servers)
+ * - bare name-keyed wrapper:     `{ "name": { ... } }` (1..n servers)
+ */
+export function unwrapMcpJson(parsed: unknown): { servers?: UnwrappedMcpServer[]; error?: string } {
+  if (!isRecord(parsed)) {
+    return { error: 'Configuration must be an object' }
+  }
+
+  // Direct config takes precedence — its top-level keys identify it unambiguously.
+  if (looksLikeServerConfig(parsed)) {
+    return { servers: [{ config: parsed }] }
+  }
+
+  const map = isRecord(parsed.mcpServers) ? parsed.mcpServers : parsed
+  const entries = Object.entries(map)
+  if (entries.length > 0 && entries.every(([, value]) => looksLikeServerConfig(value))) {
+    return {
+      servers: entries.map(([name, config]) => ({ name, config: config as Record<string, unknown> }))
     }
   }
-  return null
+
+  return { error: 'Invalid format: requires command (stdio) or type + url (http/sse)' }
 }
 
 function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
@@ -81,7 +118,7 @@ function normalizeInternalConfig(config: Record<string, unknown>): McpServerConf
 }
 
 function normalizeExternalConfig(config: Record<string, unknown>): McpServerConfig {
-  const type = config.type as 'stdio' | 'sse' | 'http' | 'streamable-http' | undefined
+  const type = canonicalExternalType(config.type) as 'stdio' | 'sse' | 'http' | 'streamable-http' | undefined
   if (type === 'sse' || type === 'http' || type === 'streamable-http') {
     return {
       transport: type === 'sse' ? 'sse' : 'streamable-http',
@@ -128,7 +165,7 @@ function validateInternalConfig(config: Record<string, unknown>): string | null 
 }
 
 function validateExternalConfig(config: Record<string, unknown>): string | null {
-  const type = config.type
+  const type = canonicalExternalType(config.type)
   if (type !== undefined && type !== 'stdio' && type !== 'sse' && type !== 'http' && type !== 'streamable-http') {
     return 'type must be one of: stdio, sse, http, streamable-http'
   }
@@ -167,9 +204,6 @@ export function validateMcpJsonConfig(config: unknown): string | null {
     return 'Configuration must be an object'
   }
 
-  const nestedError = detectNestedConfigError(config)
-  if (nestedError) return nestedError
-
   if ('transport' in config) {
     return validateInternalConfig(config)
   }
@@ -185,15 +219,55 @@ export function validateMcpJsonConfig(config: unknown): string | null {
   return 'Invalid format: requires command (stdio) or type + url (http/sse)'
 }
 
-export function mcpJsonConfigToInternal(config: unknown): { data?: McpServerConfig; error?: string } {
+function convertSingleConfig(config: Record<string, unknown>): { data?: McpServerConfig; error?: string } {
   const error = validateMcpJsonConfig(config)
   if (error) return { error }
 
-  const record = config as Record<string, unknown>
-  if ('transport' in record) {
-    return { data: normalizeInternalConfig(record) }
+  if ('transport' in config) {
+    return { data: normalizeInternalConfig(config) }
   }
-  return { data: normalizeExternalConfig(record) }
+  return { data: normalizeExternalConfig(config) }
+}
+
+/** An internal server config plus the name recovered from its wrapper key, if any */
+export interface NamedMcpServerConfig {
+  name?: string
+  config: McpServerConfig
+}
+
+/**
+ * Parse arbitrary pasted MCP JSON into internal server configs.
+ * Accepts wrapped and direct shapes (see unwrapMcpJson); may yield multiple
+ * servers when the paste contains a whole `mcpServers` map.
+ */
+export function parseMcpJsonInput(parsed: unknown): { servers?: NamedMcpServerConfig[]; error?: string } {
+  const unwrapped = unwrapMcpJson(parsed)
+  if (unwrapped.error || !unwrapped.servers) return { error: unwrapped.error }
+
+  const servers: NamedMcpServerConfig[] = []
+  for (const { name, config } of unwrapped.servers) {
+    const result = convertSingleConfig(config)
+    if (result.error || !result.data) {
+      return { error: name ? `${name}: ${result.error}` : result.error }
+    }
+    servers.push({ name, config: result.data })
+  }
+  return { servers }
+}
+
+/**
+ * Single-server variant used where the server identity is fixed (editing an
+ * installed server). Tolerates a wrapper as long as it contains exactly one
+ * server; `name` carries the wrapper key when present.
+ */
+export function mcpJsonConfigToInternal(config: unknown): { data?: McpServerConfig; name?: string; error?: string } {
+  const parsed = parseMcpJsonInput(config)
+  if (parsed.error || !parsed.servers) return { error: parsed.error }
+  if (parsed.servers.length > 1) {
+    return { error: 'Configuration contains multiple servers. Paste a single server config here.' }
+  }
+  const [first] = parsed.servers
+  return { data: first.config, ...(first.name ? { name: first.name } : {}) }
 }
 
 export function internalMcpServerToJsonConfig(config: McpServerConfig): McpJsonConfig {

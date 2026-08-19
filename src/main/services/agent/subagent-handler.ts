@@ -35,11 +35,25 @@ export interface SubAgentContext {
 // ============================================
 
 /**
+ * True for the thoughts hasActiveTeamTasks keys off: team spawns (Agent
+ * tool_use with team_name) and TeamDelete calls. The session consumer carries
+ * these across turn boundaries so team liveness survives between turns — a
+ * team spawned in an earlier turn must keep blocking session rebuilds and
+ * idle cleanup until it is disbanded.
+ */
+export function isTeamLifecycleThought(t: Thought): boolean {
+  if (t.type !== 'tool_use') return false
+  if (t.toolName === 'TeamDelete') return true
+  return t.toolName === 'Agent' && !!(t.toolInput as Record<string, unknown>)?.team_name
+}
+
+/**
  * Check if any Agent Team tasks are still running.
  *
  * Used by:
  * - stream-processor: decide whether to re-enter stream() for continuation turns
  * - control: decide whether to close() the entire CC subprocess on stop
+ * - session-manager / session-consumer: defer session rebuilds while a team works
  *
  * Detection logic: a thought is a team agent if it's a tool_use for the Agent tool
  * with a team_name in its input. It's "active" if it has no taskProgress yet

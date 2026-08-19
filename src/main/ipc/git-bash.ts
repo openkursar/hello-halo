@@ -4,9 +4,13 @@
 
 import { ipcMain } from 'electron'
 import open from 'open'
-import { resolveGitBashAvailability, setGitBashPathEnv } from '../services/git-bash.service'
-import { downloadAndInstallGitBash } from '../services/git-bash-installer.service'
-import { createMockBash, cleanupMockBash } from '../services/mock-bash.service'
+import {
+  resolveGitBashAvailability,
+  setGitBashPathEnv,
+  downloadAndInstallGitBash,
+  createMockBash,
+  cleanupMockBash,
+} from '../services/git-bash'
 import { getConfig, saveConfig } from '../foundation/config.service'
 import { getMainWindow } from '../foundation/window.service'
 import { gitBashRpc } from '../../shared/rpc/contracts/git-bash.contract'

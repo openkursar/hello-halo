@@ -1,16 +1,19 @@
 /**
  * Update Notification Listener
  *
- * Listens for updater IPC events and pushes toasts into the unified
- * notification store. No longer renders its own UI — the global
- * NotificationToast component handles all rendering.
+ * Surfaces exactly one toast, and only once the update has stopped needing the
+ * user's patience: either it is staged and ready to apply, or it failed and the
+ * download page is the way out. Checking and downloading stay silent — the user
+ * cannot pause, cancel or speed up a background download, so a progress toast
+ * would occupy a corner of the screen for minutes while offering no action.
  *
- * Behavior:
- * - 'downloaded': Update ready to install (Windows: auto-install, macOS: manual download)
- * - 'manual-download': Need manual download (macOS platform or auto-download failed)
+ * 'manual-download' is the degraded path: the main process emits it when an
+ * announced update could not be downloaded or staged, so the user is handed the
+ * download page instead of a progress bar that never finishes.
  *
- * The toast is sticky (duration=0) since updates are important and
- * should not auto-dismiss. Uses the 'success' variant with emerald accent.
+ * The prompt is sticky — the user either applies the update or defers it for the
+ * day. Deferral is remembered per version so the hourly re-check does not
+ * re-open a prompt the user already answered.
  */
 
 import { useEffect, useRef } from 'react'
@@ -18,73 +21,113 @@ import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { useNotificationStore } from '../../stores/notification.store'
 
-const isMac = navigator.platform.includes('Mac')
+// Stable toast ID so lifecycle events replace rather than duplicate
+const UPDATE_TOAST_ID = 'updater-lifecycle'
 
-// Stable toast ID so repeated events replace rather than duplicate
-const UPDATE_TOAST_ID = 'updater-download-ready'
+const SNOOZE_STORAGE_KEY = 'halo-update-snooze'
 
-// Parse release notes to a single summary string
+function today(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function isSnoozed(version: string): boolean {
+  try {
+    return localStorage.getItem(SNOOZE_STORAGE_KEY) === `${version}|${today()}`
+  } catch {
+    return false
+  }
+}
+
+function snooze(version: string): void {
+  try {
+    localStorage.setItem(SNOOZE_STORAGE_KEY, `${version}|${today()}`)
+  } catch {
+    /* private mode or quota — deferral just does not persist */
+  }
+}
+
+/**
+ * Normalize release notes into a markdown list.
+ *
+ * The feed carries either a plain string (one change per line, bulleted or not)
+ * or electron-updater's per-version array. Re-bulleting every line makes the
+ * two shapes render identically instead of depending on how the release was
+ * authored. Tags are stripped because the GitHub provider falls back to the raw
+ * release body, which can carry markup the restricted renderer would drop
+ * mid-sentence.
+ */
 function formatReleaseNotes(notes: string | { version: string; note: string }[] | undefined): string {
   if (!notes) return ''
 
-  let lines: string[] = []
-  if (typeof notes === 'string') {
-    lines = notes
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
-      .map(line => line.replace(/^[-*]\s*/, ''))
-  } else if (Array.isArray(notes)) {
-    lines = notes.map(item => item.note)
-  }
+  const lines = typeof notes === 'string'
+    ? notes.split('\n')
+    : Array.isArray(notes)
+      ? notes.map(item => item.note)
+      : []
 
-  return lines.length > 0 ? lines.join(' · ') : ''
+  return lines
+    .map(line => line.replace(/<[^>]*>/g, '').trim())
+    .filter(line => line.length > 0)
+    .map(line => `- ${line.replace(/^[-*+]\s*/, '')}`)
+    .join('\n')
 }
 
 export function UpdateNotification() {
   const { t } = useTranslation()
   const show = useNotificationStore((s) => s.show)
 
-  // Keep a ref to the latest closure values for the action callbacks
-  const stateRef = useRef<{ isManualDownload: boolean; downloadUrl: string }>({
-    isManualDownload: false,
-    downloadUrl: '',
-  })
+  // Keeps the latest values available to the action callbacks without
+  // resubscribing the IPC listener on every event.
+  const stateRef = useRef({ downloadUrl: '' })
 
   useEffect(() => {
     const unsubscribe = api.onUpdaterStatus((data) => {
-      console.log('[UpdateNotification] Received update status:', data)
+      const version = data.version
+      if (!version || isSnoozed(version)) return
 
-      if ((data.status === 'downloaded' || data.status === 'manual-download') && data.version) {
-        const isManual = data.status === 'manual-download'
-        const url = (data as { downloadUrl?: string }).downloadUrl || ''
+      const title = t('New version Halo {{version}} available', { version })
+      const deferAction = {
+        label: t("Don't remind me today"),
+        onClick: () => snooze(version),
+      }
+      const notes = formatReleaseNotes(data.releaseNotes)
 
-        // Store for action callback
-        stateRef.current = { isManualDownload: isManual, downloadUrl: url }
-
-        const notes = formatReleaseNotes(data.releaseNotes)
-
+      if (data.status === 'downloaded') {
+        const isInstaller = data.installMode === 'installer'
         show({
           id: UPDATE_TOAST_ID,
-          title: t('New version Halo {{version}} available', { version: data.version }),
-          body: notes || (isManual || isMac ? t('Click to download') : t('Click to restart and complete update')),
+          title,
+          body: notes || (isInstaller
+            ? t('Halo will close and the installer will guide you through it')
+            : t('Applies in a few seconds, then Halo reopens')),
+          bodyFormat: notes ? 'markdown' : 'text',
           variant: 'success',
-          duration: 0, // Sticky — user must act or dismiss
+          duration: 0,
           action: {
-            label: isManual || isMac ? t('Go to download') : t('Restart now'),
+            label: isInstaller ? t('Install now') : t('Restart now'),
+            onClick: () => { api.installUpdate() },
+          },
+          secondaryAction: deferAction,
+        })
+        return
+      }
+
+      if (data.status === 'manual-download') {
+        stateRef.current.downloadUrl = data.downloadUrl ?? ''
+        show({
+          id: UPDATE_TOAST_ID,
+          title,
+          body: t('Could not update automatically — you can download this version manually'),
+          variant: 'warning',
+          duration: 0,
+          action: {
+            label: t('Go to download'),
             onClick: () => {
-              const { isManualDownload, downloadUrl } = stateRef.current
-              if (isManualDownload || isMac) {
-                if (downloadUrl) window.open(downloadUrl, '_blank')
-              } else {
-                api.installUpdate()
-              }
+              const { downloadUrl } = stateRef.current
+              if (downloadUrl) window.open(downloadUrl, '_blank')
             },
           },
-          secondaryAction: {
-            label: t('Later'),
-            onClick: () => { /* dismiss is handled by NotificationToast */ },
-          },
+          secondaryAction: deferAction,
         })
       }
     })
@@ -92,6 +135,6 @@ export function UpdateNotification() {
     return () => { unsubscribe() }
   }, [show, t])
 
-  // No longer renders its own UI — the unified NotificationToast handles it
+  // Rendering is handled by the global NotificationToast
   return null
 }

@@ -217,25 +217,30 @@ Shutdown (`cleanupExtendedServices`):
 | `lastSnapshotRunId`  | Watermark for `app.run.replay` — most recent replayed runId         |
 | `lastSnapshotTs`     | Watermark for `app.run.replay` — most recent replayed finishedAt    |
 
-Build-time constants (injected in `electron.vite.config.ts`, read from
-`.env.local`):
+Provider identifiers (read from `product.json` at runtime via
+`getAnalyticsConfig()` / `getTelemetryConfig()` — per-variant configuration
+committed in the variant repo, never build-time env injection):
 
-| Constant                       | Provider  |
-|--------------------------------|-----------|
-| `__HALO_GA_MEASUREMENT_ID__`   | GA4       |
-| `__HALO_GA_API_SECRET__`       | GA4       |
-| `__HALO_BAIDU_SITE_ID__`       | Baidu     |
-| `__HALO_TELEMETRY_ENDPOINT__`  | Telemetry |
-| `__HALO_TELEMETRY_API_KEY__`   | Telemetry |
+| product.json field         | Provider  |
+|----------------------------|-----------|
+| `analytics.ga.measurementId` | GA4     |
+| `analytics.ga.apiSecret`     | GA4     |
+| `analytics.baidu.siteId`     | Baidu   |
+| `telemetry.endpoint`         | Telemetry |
+| `telemetry.apiKey`           | Telemetry |
 
-An empty credential disables the corresponding provider cleanly — its
+A missing/empty value disables the corresponding provider cleanly — its
 `init()` sets `_initialized = false` and `track()` becomes a no-op.
+Open-source builds omit both blocks entirely. Release builds validate the
+fields via `scripts/release/verify-inputs.mjs` (declared per variant in
+`build-manifest.json.requiredProductFields`).
 
 ## Extension points
 
 - **Adding a provider**: implement `AnalyticsProvider`, register in
-  `AnalyticsService.initProviders()`, add its build-time constants, add
-  its config block to `PROVIDER_CONFIG`.
+  `AnalyticsService.initProviders()`, add its identifier fields to the
+  `product.json` schema/`ProductConfig` and read them in
+  `loadProviderConfig()`.
 - **Adding a renderer event**: extend `RENDERER_ALLOWED_EVENTS` in
   `ipc/analytics.ts` and add a whitelist entry in
   `providers/telemetry.ts#EVENT_WHITELIST`. Update `useTelemetry` hook if

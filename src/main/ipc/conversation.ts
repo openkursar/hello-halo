@@ -13,6 +13,7 @@ import {
   getMessageThoughts,
   toggleStarConversation
 } from '../services/conversation.service'
+import { closeV2Session } from '../services/agent'
 import { conversationRpc } from '../../shared/rpc/contracts/conversation.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -65,6 +66,9 @@ export function registerConversationHandlers(): void {
     // Delete a conversation
     deleteConversation: async (spaceId: string, conversationId: string) => {
       try {
+        // Close the conversation's CC session (idempotent) so the subprocess
+        // dies with the record instead of lingering until the idle sweep.
+        closeV2Session(conversationId)
         const result = deleteConversation(spaceId, conversationId)
         return { success: true, data: result }
       } catch (error: unknown) {

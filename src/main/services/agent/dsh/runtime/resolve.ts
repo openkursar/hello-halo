@@ -25,7 +25,7 @@
 import { execFileSync } from 'child_process'
 import { existsSync } from 'fs'
 import path from 'path'
-import { detectGitBash } from '../../../git-bash.service'
+import { detectGitBash } from '../../../git-bash'
 import { getHeadlessElectronPath } from '../../helpers'
 
 /**

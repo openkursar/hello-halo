@@ -51,7 +51,7 @@ npm run test:e2e
 
 ## Pre-release Checklist
 
-The deploy script (`scripts/deploy_local_M4.sh`) automatically runs:
+The release deploy script automatically runs:
 1. `test:check` - Verify binary dependencies
 2. `test:unit` - Run unit tests
 3. Build the application

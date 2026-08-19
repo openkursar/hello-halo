@@ -31,6 +31,7 @@ import { getSpace } from '../../services/space.service'
 import { getHaloDir } from '../../foundation/config.service'
 import { AppManagerStore } from './store'
 import { createAppManagerService } from './service'
+import { reconcileGlobalSkillsLocation } from './skill-sync'
 import { MIGRATION_NAMESPACE, migrations } from './migrations'
 import type { AppManagerService } from './types'
 
@@ -153,6 +154,17 @@ export async function initAppManager(
     }
   } catch (err) {
     console.warn('[AppManager] Failed to prune uninstalled apps:', err)
+  }
+
+  // Move global skills stranded at the legacy fixed path (pre-configDirMode
+  // writes) into the directory the SDK reads. No-op in the default mode.
+  try {
+    reconcileGlobalSkillsLocation(
+      service.listApps({ spaceId: null, type: 'skill' }),
+      getSpacePath
+    )
+  } catch (err) {
+    console.warn('[AppManager] Failed to reconcile global skills location:', err)
   }
 
   const duration = performance.now() - start

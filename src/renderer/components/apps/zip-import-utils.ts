@@ -3,14 +3,14 @@
  *
  * Pure utility module for Digital Human bundle import.
  * Supports two input modes:
- *   1. ZIP file  → parseDigitalHumanZip(file)
- *   2. Folder    → parseDigitalHumanFolder(files)
+ *   1. Archive (.zip / .dhpkg) → parseDigitalHumanZip(file)
+ *   2. Folder                  → parseDigitalHumanFolder(files)
  *
  * Both converge on the same Layer 2 (structure) → Layer 3 (schema)
  * validation pipeline. Layer 4 (Zod) runs on the backend at install time.
  *
  * Bundle Format:
- *   my-digital-human/            (or .zip)
+ *   my-digital-human/            (or .zip / .dhpkg)
  *   ├── spec.yaml            ← required, the automation spec
  *   └── skills/              ← optional, bundled skills
  *       ├── skill-a/
@@ -25,18 +25,15 @@
  */
 
 import { parse as parseYaml } from 'yaml'
+import { isIgnoredPackagePath, unwrapPackageFolder, canonicalizePackageEntry } from './package-paths'
+import { readArchiveEntries, MAX_ARCHIVE_BYTES } from './package-archive'
 
 // ─────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────
 
-/** Maximum allowed ZIP file size in bytes (10 MB) */
-const MAX_ZIP_SIZE = 10 * 1024 * 1024
-
-/** macOS metadata path segments to ignore */
-const MACOS_IGNORED = (path: string): boolean =>
-  path.startsWith('__MACOSX/') ||
-  path.split('/').some(seg => seg === '.DS_Store' || seg.startsWith('._'))
+/** `.dhpkg` is a zip under another name (see main/store/dhpkg), so it parses here too. */
+const ARCHIVE_EXTENSIONS = ['.zip', '.dhpkg']
 
 // ─────────────────────────────────────────────────────────
 // Public types
@@ -101,17 +98,18 @@ function validateFileLayer(file: File): ZipValidationError[] {
   const errors: ZipValidationError[] = []
 
   // Check extension
-  if (!file.name.toLowerCase().endsWith('.zip')) {
+  const lowerName = file.name.toLowerCase()
+  if (!ARCHIVE_EXTENSIONS.some(ext => lowerName.endsWith(ext))) {
     errors.push({
       location: file.name,
-      expected: '.zip',
+      expected: '.zip or .dhpkg',
       actual: file.name.split('.').pop() || '(none)',
-      suggestion: 'Please select a .zip archive file.',
+      suggestion: 'Please select a .zip or .dhpkg archive file.',
     })
   }
 
   // Check size
-  if (file.size > MAX_ZIP_SIZE) {
+  if (file.size > MAX_ARCHIVE_BYTES) {
     const sizeMB = (file.size / (1024 * 1024)).toFixed(1)
     errors.push({
       location: file.name,
@@ -149,25 +147,24 @@ interface StructureResult {
 }
 
 function validateStructureLayer(
-  rawFiles: Record<string, string>
+  rawFiles: Record<string, string>,
+  sourceName: string
 ): { ok: true; result: StructureResult } | { ok: false; errors: ZipValidationError[] } {
   const errors: ZipValidationError[] = []
   const warnings: ZipValidationWarning[] = []
 
-  // Filter out macOS metadata
   const cleanFiles: Record<string, string> = {}
   for (const [path, content] of Object.entries(rawFiles)) {
-    if (path.endsWith('/')) continue // directory entry
-    if (MACOS_IGNORED(path)) continue
+    if (isIgnoredPackagePath(path)) continue
     cleanFiles[path] = content
   }
 
   if (Object.keys(cleanFiles).length === 0) {
     errors.push({
-      location: 'ZIP archive',
+      location: sourceName,
       expected: 'At least spec.yaml',
-      actual: 'Empty archive (no valid files)',
-      suggestion: 'The ZIP archive contains no usable files.',
+      actual: 'No usable files (only empty folders or system metadata)',
+      suggestion: 'Select the folder that directly contains spec.yaml.',
     })
     return { ok: false, errors }
   }
@@ -185,27 +182,7 @@ function validateStructureLayer(
   }
   if (errors.length > 0) return { ok: false, errors }
 
-  // Detect wrapped format (single top-level folder)
-  let normalizedFiles = cleanFiles
-  const topDirs = new Set(
-    Object.keys(cleanFiles)
-      .map(p => p.split('/')[0])
-      .filter(Boolean)
-  )
-
-  if (topDirs.size === 1) {
-    const prefix = Array.from(topDirs)[0] + '/'
-    const allInPrefix = Object.keys(cleanFiles).every(p => p.startsWith(prefix))
-    if (allInPrefix) {
-      // Wrapped format — strip the top-level folder
-      const stripped: Record<string, string> = {}
-      for (const [path, content] of Object.entries(cleanFiles)) {
-        const rest = path.slice(prefix.length)
-        if (rest) stripped[rest] = content
-      }
-      normalizedFiles = stripped
-    }
-  }
+  const normalizedFiles = unwrapPackageFolder(cleanFiles)
 
   // Locate spec.yaml
   const specPaths = Object.keys(normalizedFiles).filter(
@@ -214,22 +191,22 @@ function validateStructureLayer(
 
   if (specPaths.length === 0) {
     errors.push({
-      location: 'ZIP root',
+      location: sourceName,
       expected: 'spec.yaml',
       actual: 'Not found',
       suggestion:
-        'Add a spec.yaml file at the root of the ZIP archive. ' +
-        'For single .yaml import, use the "Import" tab instead.',
+        'The digital human package must have a spec.yaml at its root. ' +
+        'For a single .yaml file, use the "Import" tab instead.',
     })
     return { ok: false, errors }
   }
 
   if (specPaths.length > 1) {
     errors.push({
-      location: 'ZIP root',
+      location: sourceName,
       expected: 'Exactly one spec.yaml',
       actual: `Found ${specPaths.length}: ${specPaths.join(', ')}`,
-      suggestion: 'A ZIP bundle must contain exactly one spec.yaml.',
+      suggestion: 'A digital human package must contain exactly one spec.yaml.',
     })
     return { ok: false, errors }
   }
@@ -252,13 +229,14 @@ function validateStructureLayer(
 
   for (const dirName of Array.from(skillDirs)) {
     const prefix = `skills/${dirName}/`
-    const files: Record<string, string> = {}
+    const collected: Record<string, string> = {}
     for (const [path, content] of Object.entries(normalizedFiles)) {
       if (path.startsWith(prefix)) {
-        files[path.slice(prefix.length)] = content
+        collected[path.slice(prefix.length)] = content
       }
     }
 
+    const files = canonicalizePackageEntry(collected, 'SKILL.md')
     if (!files['SKILL.md']) {
       warnings.push({
         location: `skills/${dirName}/`,
@@ -424,7 +402,7 @@ function validateAndBuildResult(
   sourceName: string
 ): ZipParseOutcome {
   // Layer 2 — Structure validation
-  const structureResult = validateStructureLayer(rawFiles)
+  const structureResult = validateStructureLayer(rawFiles, sourceName)
   if (!structureResult.ok) {
     return { ok: false, errors: structureResult.errors }
   }
@@ -468,12 +446,11 @@ export async function parseDigitalHumanZip(file: File): Promise<ZipParseOutcome>
     return { ok: false, errors: fileErrors }
   }
 
-  // Extract ZIP
-  const { unzipSync } = await import('fflate')
+  // Extract ZIP — Layer 1 already refused an oversized archive, so the read's
+  // own ceiling cannot fire here.
   let entries: Record<string, Uint8Array>
   try {
-    const buffer = await file.arrayBuffer()
-    entries = unzipSync(new Uint8Array(buffer))
+    entries = await readArchiveEntries(file)
   } catch {
     return {
       ok: false,
@@ -490,7 +467,7 @@ export async function parseDigitalHumanZip(file: File): Promise<ZipParseOutcome>
   const decoder = new TextDecoder('utf-8')
   const rawFiles: Record<string, string> = {}
   for (const [path, bytes] of Object.entries(entries)) {
-    if (path.endsWith('/')) continue // directory entry
+    if (isIgnoredPackagePath(path)) continue
     rawFiles[path] = decoder.decode(bytes)
   }
 

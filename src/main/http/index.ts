@@ -2,6 +2,6 @@
  * HTTP Module Index - Export all HTTP server components
  */
 
-export { startHttpServer, stopHttpServer, isServerRunning, getServerInfo, getExpressApp } from './server'
+export { startHttpServer, stopHttpServer, isServerRunning, getServerInfo, getWebhookIngressRouter } from './server'
 export { initWebSocket, shutdownWebSocket, broadcastToWebSocket, broadcastToAll, getClientCount } from './websocket'
 export { authMiddleware, generateAccessToken, getAccessToken, clearAccessToken, validateToken } from './auth/index'

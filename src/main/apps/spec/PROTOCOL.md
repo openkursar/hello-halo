@@ -174,8 +174,11 @@ source:
 | `path` | string | Webhook path, mounted under `/hooks/{path}`. Triggers on POST requests to this path. When omitted, all paths are accepted. |
 | `secret` | string | HMAC-SHA256 signing secret. When provided, the `x-hub-signature-256` or `x-webhook-signature` request header is verified. Returns 401 if verification fails. |
 
-> **Runtime behavior**: `WebhookSource` registers a `POST /hooks/*` route on the Express server and
+> **Runtime behavior**: `WebhookSource` registers its POST route on the webhook ingress router
+> (mounted at `/hooks` by the HTTP server ahead of auth middleware and frontend fallbacks) and
 > produces `webhook.received` events. `path` matches against `payload.path` (exact match).
+> Only JSON payloads are supported, up to 256KB; HMAC verification runs against the raw
+> request bytes.
 
 ---
 
@@ -354,7 +357,7 @@ Each element is a `McpDependency`:
 
 > **Note**: `ai-browser` is a built-in MCP. When declared, the runtime automatically injects AI
 > Browser tools. Even without an explicit declaration, it is injected by default (`resolvePermission`
-> uses `defaultValue=true`). Use `permissions` to explicitly opt out.
+> uses `defaultValue=true`). Only an explicit user deny from the UI turns it off (see Section 13).
 
 ### Skill Dependencies (`requires.skills`)
 
@@ -514,11 +517,11 @@ escalation:
 
 | Field | Type | Description |
 |---|---|---|
-| `enabled` | `boolean` | Defaults to `true`. The AI can call `report_to_user(type="escalation")` to pause execution and ask the user a question. Set to `false` to disable escalation (the AI must make decisions autonomously). |
+| `enabled` | `boolean` | Defaults to `true`. When enabled, the AI may pause execution to ask the user a question and resume once they respond. Set to `false` to disable escalation (the AI must make decisions autonomously). |
 | `timeout_hours` | `number` (positive) | If the user does not respond within this many hours, the escalation is automatically closed and the App status switches to `error`. Defaults to 24 hours. |
 
 > **App status flow**:
-> - AI calls `report_to_user(type="escalation")` → App status: `waiting_user`
+> - AI raises an escalation → App status: `waiting_user`
 > - User responds → follow-up run continues
 > - Timeout with no response → App status: `error`, desktop notification pushed
 
@@ -660,16 +663,23 @@ permissions:
 
 | Permission identifier | Description |
 |---|---|
-| `ai-browser` | Allows the App to use AI Browser (web automation capability) at runtime. Default behavior: enabled for all automation Apps; users can revoke it from the UI. |
+| `ai-browser` | AI Browser tools (web automation). |
+| `ai-terminal` | Shell commands and interactive terminals (only when the platform terminal is available). |
+| `email` | Email/calendar tools (only injected when the user has configured an email channel). |
+| `im-push` | Proactively send messages to IM contacts. |
 
 > **Permission resolution priority** (`resolvePermission` function):
 > 1. Permission is in `app.permissions.denied` → **Denied**
 > 2. Permission is in `app.permissions.granted` → **Allowed**
 > 3. Permission is declared in `spec.permissions` → **Allowed**
-> 4. None of the above → uses `defaultValue` (`ai-browser` defaults to `true`)
+> 4. None of the above → uses `defaultValue` (defaults to `true`)
 >
-> Users can manually grant or revoke permissions after installation via the UI
-> (stored in `InstalledApp.permissions.granted` / `InstalledApp.permissions.denied`).
+> All built-in capabilities are **enabled by default** (deliberate product
+> decision): a spec's `permissions` list only *adds* capability and never turns
+> one off. The only way a capability ends up off is an explicit user opt-out
+> from the UI (stored in `InstalledApp.permissions.denied`; grants in
+> `InstalledApp.permissions.granted`). `email` and `im-push` are additionally
+> gated at runtime on the corresponding channel being configured.
 
 ---
 
@@ -758,8 +768,7 @@ system_prompt: |
   You are a professional price-comparison agent.
   Check all price variants (official, third-party, coupons, membership) and compare against
   the 30-day price trend to determine whether the current price is at a low point.
-  When a price drop meets the user's threshold, report via report_to_user(type="milestone").
-  Always call report_to_user(type="run_complete") at the end of each run.
+  Flag when a price drop meets the user's threshold.
 
 requires:
   mcps:
@@ -845,7 +854,6 @@ system_prompt: |
   1. Open https://news.ycombinator.com and retrieve today's Top 10 stories
   2. Write a concise summary for each (2–3 sentences)
   3. Send an email notification
-  4. Call report_to_user to report completion
 
 subscriptions:
   - source:

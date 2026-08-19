@@ -136,6 +136,8 @@ async function performFallbackCheck(): Promise<void> {
     // ========================================
     const memUsage = process.memoryUsage()
     const heapUsedMB = memUsage.heapUsed / (1024 * 1024)
+    const heapTotalMB = memUsage.heapTotal / (1024 * 1024)
+    const rssMB = memUsage.rss / (1024 * 1024)
     if (heapUsedMB > MEMORY_CRITICAL_THRESHOLD_MB) {
       issues.push(`Critical memory usage: ${heapUsedMB.toFixed(0)}MB`)
     } else if (heapUsedMB > MEMORY_WARNING_THRESHOLD_MB) {
@@ -165,7 +167,12 @@ async function performFallbackCheck(): Promise<void> {
       lastKnownStatus = newStatus
     }
 
-    console.log(`[Health][Runtime] Passive check complete: ${newStatus}`)
+    // Always log memory numbers (heap used/total, rss) so the trajectory toward an
+    // OOM is visible across cycles, and the reasons behind a non-healthy status —
+    // otherwise a status that stays 'degraded' for hours is logged without any cause.
+    const memInfo = `heap=${heapUsedMB.toFixed(0)}/${heapTotalMB.toFixed(0)}MB rss=${rssMB.toFixed(0)}MB`
+    const reasonInfo = issues.length > 0 ? `; reasons: ${issues.join('; ')}` : ''
+    console.log(`[Health][Runtime] Passive check complete: ${newStatus} (${memInfo}${reasonInfo})`)
   } catch (error) {
     console.error('[Health][Runtime] Passive check error:', error)
   }

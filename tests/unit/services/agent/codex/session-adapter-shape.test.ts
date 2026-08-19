@@ -71,7 +71,6 @@ describe('CodexAppServerSession contract shape', () => {
     expect(typeof a.stream).toBe('function')
     expect(typeof a.close).toBe('function')
     expect(typeof a.interrupt).toBe('function')
-    expect(typeof a.setModel).toBe('function')
     expect(typeof a.setMaxThinkingTokens).toBe('function')
     expect(typeof a.setPermissionMode).toBe('function')
   })

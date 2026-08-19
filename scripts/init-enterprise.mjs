@@ -82,7 +82,8 @@ const Vendor = vendor.charAt(0).toUpperCase() + vendor.slice(1)
 
 const productJson = {
   $schema: '../../../product.schema.json',
-  name: `Halo ${Vendor}`,
+  name: `Halo-${Vendor}`,
+  appId: `com.halo.${vendor}`,
   dataFolderName: `halo-${vendor}`,
   version: '1.0.0',
   updateConfig: {
@@ -137,31 +138,24 @@ const productJson = {
 const electronBuilderCjs = `/**
  * ${Vendor} enterprise electron-builder overlay.
  *
- * Reads hello-halo public package.json#build as base, does not modify
- * it, only appends what ${Vendor} needs on top.
+ * Identity (productName, appId, update feed) is not declared here — it comes
+ * from product.${vendor}.json through the root config, so this file cannot drift
+ * from the variant it packages. Only add packaging that is specific to
+ * ${Vendor} below.
  *
  * Usage (from hello-halo repo root):
  *   electron-builder --mac --config halo-local/${vendor}/electron-builder.${vendor}.cjs
  */
 'use strict'
 
-const fs = require('node:fs')
 const path = require('node:path')
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..')
 
-function loadBaseConfig() {
-  const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf-8'))
-  if (!pkg.build) throw new Error('[${vendor}] hello-halo package.json has no "build" section')
-  return JSON.parse(JSON.stringify(pkg.build))
-}
-
-const base = loadBaseConfig()
+const base = require(path.join(REPO_ROOT, 'electron-builder.cjs'))
 
 module.exports = {
   ...base,
-  // Never publish to a public registry — enterprise artifacts ship via internal channels.
-  publish: null,
   // If you later add a private Provider compiled output, append its glob here:
   //   files: [...(base.files ?? []), 'halo-local/${vendor}/build/dist/**/*'],
 }
@@ -197,16 +191,11 @@ npm run build
 export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/   # mainland mirror
 export CSC_IDENTITY_AUTO_DISCOVERY=false                         # skip code signing
 
-PRODUCT_NAME="Halo-${Vendor}"
-APP_ID="com.${vendor}.halo"
-
 PLATFORMS="$@"
 [ -z "$PLATFORMS" ] && PLATFORMS="--mac"
 
-npx electron-builder $PLATFORMS \\
-  --config "$CONFIG_PATH" \\
-  -c.productName="$PRODUCT_NAME" \\
-  -c.appId="$APP_ID"
+# productName / appId / update feed come from the product.json swapped in above.
+npx electron-builder $PLATFORMS --config "$CONFIG_PATH"
 
 echo ""
 echo "Build done. Artifacts:"

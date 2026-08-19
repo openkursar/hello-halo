@@ -193,7 +193,7 @@ export async function initArtifactWatcher(spaceId: string): Promise<void> {
  */
 export async function reconcileArtifacts(spaceId: string): Promise<void> {
   console.log(`[Artifact] reconcileArtifacts for space: ${spaceId}`)
-  await reconcileLoadedDirs(spaceId)
+  await reconcileLoadedDirs(spaceId, 'artifact-api')
 }
 
 /**

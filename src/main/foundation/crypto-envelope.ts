@@ -4,12 +4,24 @@
  * - Open-source (`credentialAtRestSafe` off): credential stored as plain
  *   string. `encodeForStorage` and `decodeFromStorage` are identity.
  * - Enterprise (`credentialAtRestSafe` on): SM4-CBC + HMAC-SM3 under a KEK
- *   derived via HKDF-SHA-256 from a persisted random master key.
- *   Encrypt-then-MAC.
+ *   derived via HKDF-SHA-256 from a build-deterministic static product key
+ *   (`credential-key.ts`). Encrypt-then-MAC.
  *
- * Storage marker is `gmcred:v1:` followed by base64. Anything else is
- * treated as legacy plaintext on read, which gives existing installs a
- * seamless silent migration on the next save.
+ * Two invariants drive the design:
+ *   - must not fail: the at-rest key is a pure function of the build, so
+ *     whatever this build writes it can always read back. Restarts, hardware
+ *     changes, VPNs and roaming profiles cannot orphan a credential.
+ *   - fail without loss: a decrypt failure is reported as such (never a silent
+ *     empty string from the crypto layer); the caller keeps the original
+ *     ciphertext on disk and surfaces the failure.
+ *
+ * Storage markers (all 10 chars, `gmcred:vN:` + base64 payload):
+ *   - `gmcred:v2:` — static product key. The only format ever written.
+ *   - `gmcred:v1:` — persisted master key (cred.key) or machine seed. Read-only;
+ *     re-encrypted to v2 on the next save.
+ *   - `enc:`       — Electron safeStorage. Migrated in config.service; treated
+ *     here as an undecodable failure.
+ *   - anything else — plaintext, accepted on read in both modes.
  */
 
 import { hkdfSync, randomBytes, timingSafeEqual } from 'crypto'
@@ -21,8 +33,19 @@ import smCrypto from 'sm-crypto'
 const { sm3, sm4 } = smCrypto
 
 import { isCredentialAtRestSafe } from './credential-safety'
+import { getStaticProductKey, __resetStaticKeyCacheForTests } from './credential-key'
 
-const MARKER = 'gmcred:v1:'
+const MARKER_V1 = 'gmcred:v1:'
+const MARKER_V2 = 'gmcred:v2:'
+// Both markers are the same fixed width, so payload extraction is marker-
+// agnostic. Asserted once so a future marker rename can't silently desync.
+const MARKER_LEN = MARKER_V2.length
+if (MARKER_V1.length !== MARKER_LEN) {
+  throw new Error('[Auth] credential markers must share a fixed width')
+}
+
+const ENC_PREFIX = 'enc:'
+
 const SALT_LEN = 16
 const IV_LEN = 16 // SM4 block size
 const HMAC_LEN = 32 // SM3 output
@@ -32,25 +55,23 @@ const HMAC_KEY_LEN = 32
 // --------------------------------------------------------------------------
 // Key material
 //
-// Two sources, tried in priority order on decrypt:
-//   1. Persisted random master key (userData/cred.key) — STABLE across
-//      restarts, network changes, and hardware reconfiguration. All NEW
-//      ciphertext is written under this key.
-//   2. Legacy machine-derived seed — kept ONLY to decrypt ciphertext written
-//      by older builds that derived the KEK from hostname + first MAC.
-//      Reading such a value triggers re-encryption under the master key (see
-//      needsKeyMigration / migrateCredentialEncryption).
+// WRITE path: always the static product key (`gmcred:v2:`), build-deterministic
+// and never absent, so there is no fallback that could write undecodable data.
 //
-// Why the change: the legacy seed mixed in the first non-internal MAC and the
-// hostname. Both are unstable in real deployments (dock/undock, VPN, virtual
-// adapters, DHCP renames), so the derived KEK changed between runs, the MAC
-// check failed, and the stored API key was wiped — surfacing as "No AI source
-// configured". A persisted random key removes every volatile input.
+// READ path candidates, by marker:
+//   - v2 → static product key.
+//   - v1 → persisted master key (cred.key), then the machine seed. Both are
+//     retained ONLY to decrypt pre-v2 ciphertext; a successful v1 read flags the
+//     value for re-encryption to v2 (see needsKeyMigration).
 //
-// Threat boundary: cred.key (userData) and config.json (~/.<dataFolder>) are
-// readable by the same OS user, so this is encryption-at-rest for compliance,
-// not a defense against an attacker who already has that user's filesystem
-// access. It only defeats a config file copied without its cred.key. Real key
+// v1 was fragile: the machine seed mixed hostname + first MAC (unstable across
+// dock/undock, VPN, DHCP renames), and cred.key could go missing (roaming/AV
+// quarantine) and silently degrade to the seed. The static key removes every
+// volatile input.
+//
+// Threat boundary: product.json / cred.key / config.json are readable by the
+// same OS user, so this is encryption-at-rest for compliance, not a defense
+// against an attacker who already holds that user's filesystem access. Real key
 // isolation would need an OS keychain / TPM (out of scope).
 // --------------------------------------------------------------------------
 
@@ -64,73 +85,49 @@ function getMasterKeyPath(): string {
   return join(app.getPath('userData'), MASTER_KEY_FILE)
 }
 
-// Stored as exactly 64 lowercase/uppercase hex chars (32 bytes). The strict
-// pattern rejects a truncated/partial file: Buffer.from(_, 'hex') silently
-// stops at the first non-hex char and could otherwise yield a wrong-but-
-// 32-byte key from a corrupted file.
+// Stored as exactly 64 hex chars (32 bytes). The strict pattern rejects a
+// truncated/partial file: Buffer.from(_, 'hex') silently stops at the first
+// non-hex char and could otherwise yield a wrong-but-32-byte key.
 const MASTER_KEY_HEX = /^[0-9a-f]{64}$/i
 
 /**
- * Load the persisted master key, generating it once on first run. Two
- * non-obvious invariants:
- *   - A malformed existing file is NEVER regenerated (a fresh key would orphan
- *     credentials encrypted under the previous key); cache null so the legacy
- *     fallback takes over until an operator repairs/removes the file.
- *   - A transient read/create failure is NOT cached, so a momentary blip can
- *     recover on the next call instead of degrading the process until restart.
+ * Load the persisted legacy master key if present. NEVER generated anymore —
+ * v2 no longer writes under it. A missing file is normal (returns null); a
+ * malformed file is not regenerated (would orphan v1 ciphertext) and is cached
+ * null. A transient read error is not cached so it can recover next call.
  */
 function loadMasterKey(): Buffer | null {
   if (cachedMasterKey !== undefined) return cachedMasterKey
 
   const keyPath = getMasterKeyPath()
-
-  if (existsSync(keyPath)) {
-    let raw: string
-    try {
-      raw = readFileSync(keyPath, 'utf8').trim()
-    } catch (err) {
-      // Transient — do not cache, allow retry.
-      console.error('[Auth] cred.key read failed (will retry):', (err as Error).message)
-      return null
-    }
-    if (!MASTER_KEY_HEX.test(raw)) {
-      console.error(
-        '[Auth] cred.key is malformed; refusing to regenerate (would orphan ' +
-          'stored credentials). Falling back to legacy key derivation until repaired.',
-      )
-      cachedMasterKey = null
-      return null
-    }
-    cachedMasterKey = Buffer.from(raw, 'hex')
-    return cachedMasterKey
-  }
-
-  // First run: generate once. Write to a temp file then rename so a crash
-  // mid-write can never leave a truncated cred.key (which would be read as
-  // malformed and permanently disable the master key). rename(2) is atomic on
-  // POSIX and Windows. Concurrent generation is prevented by Electron's
-  // single-instance lock.
-  try {
-    const key = randomBytes(MASTER_KEY_LEN)
-    const tmpPath = `${keyPath}.${process.pid}.tmp`
-    writeFileSync(tmpPath, key.toString('hex'), { mode: 0o600 })
-    renameSync(tmpPath, keyPath)
-    cachedMasterKey = key
-    return key
-  } catch (err) {
-    // Transient — do not cache, allow retry on the next call.
-    console.error('[Auth] cred.key create failed (will retry):', (err as Error).message)
+  if (!existsSync(keyPath)) {
+    cachedMasterKey = null
     return null
   }
+
+  let raw: string
+  try {
+    raw = readFileSync(keyPath, 'utf8').trim()
+  } catch (err) {
+    // Transient — do not cache, allow retry.
+    console.error('[Auth] cred.key read failed (will retry):', (err as Error).message)
+    return null
+  }
+  if (!MASTER_KEY_HEX.test(raw)) {
+    console.error('[Auth] cred.key is malformed; ignoring for legacy v1 decryption.')
+    cachedMasterKey = null
+    return null
+  }
+  cachedMasterKey = Buffer.from(raw, 'hex')
+  return cachedMasterKey
 }
 
 let cachedLegacySeed: Buffer | null = null
 
 /**
- * Legacy machine-derived seed. Retained ONLY to decrypt credentials written
- * by builds that predate the persisted master key, and used to encrypt new
- * data only when the master key cannot be established (so behavior is never
- * worse than the old scheme).
+ * Legacy machine-derived seed. Retained ONLY to decrypt v1 credentials written
+ * by builds that derived the KEK from hostname + first MAC. Never used to
+ * encrypt.
  */
 function getLegacyMachineSeed(): Buffer {
   if (cachedLegacySeed) return cachedLegacySeed
@@ -157,14 +154,6 @@ function getLegacyMachineSeed(): Buffer {
   return cachedLegacySeed
 }
 
-function keyMaterialCandidates(): Buffer[] {
-  const candidates: Buffer[] = []
-  const master = loadMasterKey()
-  if (master) candidates.push(master)
-  candidates.push(getLegacyMachineSeed())
-  return candidates
-}
-
 function deriveKeys(salt: Buffer, keyMaterial: Buffer): { encKey: Buffer; macKey: Buffer } {
   // Two distinct labels = two independent keys, no per-purpose splitting risk.
   const enc = Buffer.from(
@@ -185,10 +174,10 @@ function bytesToHex(buf: Buffer): string {
 }
 
 /**
- * SM4-CBC + HMAC-SM3 (encrypt-then-MAC) under an explicit key material.
- * Pure: no caching, no policy gate. The wrappers below choose the key.
+ * SM4-CBC + HMAC-SM3 (encrypt-then-MAC) under an explicit key material and
+ * storage marker. Pure: no caching, no policy gate.
  */
-function encryptCredential(plaintext: string, keyMaterial: Buffer): string {
+function encryptCredential(plaintext: string, keyMaterial: Buffer, marker: string): string {
   const salt = randomBytes(SALT_LEN)
   const iv = randomBytes(IV_LEN)
   const { encKey, macKey } = deriveKeys(salt, keyMaterial)
@@ -207,7 +196,7 @@ function encryptCredential(plaintext: string, keyMaterial: Buffer): string {
   const tag = Buffer.from(tagHex, 'hex')
 
   const payload = Buffer.concat([salt, iv, ciphertext, tag])
-  return MARKER + payload.toString('base64')
+  return marker + payload.toString('base64')
 }
 
 /**
@@ -218,7 +207,7 @@ function encryptCredential(plaintext: string, keyMaterial: Buffer): string {
  */
 function decryptCredential(encoded: string, keyMaterial: Buffer): string | null {
   try {
-    const payload = Buffer.from(encoded.slice(MARKER.length), 'base64')
+    const payload = Buffer.from(encoded.slice(MARKER_LEN), 'base64')
     if (payload.length < SALT_LEN + IV_LEN + HMAC_LEN) return null
 
     const salt = payload.subarray(0, SALT_LEN)
@@ -247,29 +236,62 @@ function decryptCredential(encoded: string, keyMaterial: Buffer): string | null 
   }
 }
 
-let warnedLegacyEncrypt = false
+// --------------------------------------------------------------------------
+// Decode outcome
+//
+// A decode reports both success/failure and which storage format it matched,
+// so callers can preserve ciphertext on failure (non-destructive contract).
+// --------------------------------------------------------------------------
 
-function encryptGm(plaintext: string): string {
-  // Fall back to the legacy seed only if the master key can't be established,
-  // so behavior is never worse than the old scheme.
-  const master = loadMasterKey()
-  if (!master && !warnedLegacyEncrypt) {
-    warnedLegacyEncrypt = true // warn once, not per credential
-    console.error(
-      '[Auth] Master key unavailable; encrypting new credentials under the ' +
-        'legacy machine seed. At-rest protection is degraded until cred.key ' +
-        'can be created.',
-    )
-  }
-  return encryptCredential(plaintext, master ?? getLegacyMachineSeed())
+export type DecodeSource = 'plaintext' | 'v2-static' | 'v1-master' | 'v1-seed'
+export type DecodeFailureReason = 'v2-key-mismatch' | 'v1-undecodable' | 'legacy-safestorage' | 'empty'
+
+export type DecodeOutcome =
+  | { ok: true; value: string; source: DecodeSource }
+  | { ok: false; reason: DecodeFailureReason }
+
+// --------------------------------------------------------------------------
+// Encode / decode
+// --------------------------------------------------------------------------
+
+function encryptV2(plaintext: string): string {
+  return encryptCredential(plaintext, getStaticProductKey(), MARKER_V2)
 }
 
-function decryptGm(encoded: string): string | null {
-  for (const keyMaterial of keyMaterialCandidates()) {
-    const plaintext = decryptCredential(encoded, keyMaterial)
-    if (plaintext !== null) return plaintext
+/**
+ * Decode a stored value, reporting both success/failure and which format it
+ * matched. Never throws and never fabricates an empty string for a real
+ * failure — the discriminated result lets the caller preserve the ciphertext.
+ */
+function decodeDetailed(stored: string): DecodeOutcome {
+  if (!stored) return { ok: true, value: '', source: 'plaintext' }
+
+  if (stored.startsWith(MARKER_V2)) {
+    const pt = decryptCredential(stored, getStaticProductKey())
+    return pt !== null ? { ok: true, value: pt, source: 'v2-static' } : { ok: false, reason: 'v2-key-mismatch' }
   }
-  return null
+
+  if (stored.startsWith(MARKER_V1)) {
+    const master = loadMasterKey()
+    if (master) {
+      const pt = decryptCredential(stored, master)
+      if (pt !== null) return { ok: true, value: pt, source: 'v1-master' }
+    }
+    const seedPt = decryptCredential(stored, getLegacyMachineSeed())
+    if (seedPt !== null) return { ok: true, value: seedPt, source: 'v1-seed' }
+    return { ok: false, reason: 'v1-undecodable' }
+  }
+
+  if (stored.startsWith(ENC_PREFIX)) {
+    // Legacy Electron safeStorage. Decodable values are converted to plaintext
+    // by the startup migration in config.service; a value still carrying this
+    // prefix at field-decode time means that migration could not decrypt it.
+    return { ok: false, reason: 'legacy-safestorage' }
+  }
+
+  // No known marker → legacy plaintext, accepted in both modes so existing
+  // installs keep working. Re-encoded to v2 on the next save (enterprise only).
+  return { ok: true, value: stored, source: 'plaintext' }
 }
 
 // --------------------------------------------------------------------------
@@ -277,43 +299,55 @@ function decryptGm(encoded: string): string | null {
 // --------------------------------------------------------------------------
 
 /**
- * Returns the value to persist into config. When the GM policy is on the
- * credential is wrapped; otherwise it is returned verbatim.
+ * Returns the value to persist into config. When the at-rest policy is on the
+ * credential is wrapped as v2; otherwise it is returned verbatim.
  */
 export function encodeForStorage(plaintext: string): string {
   if (!plaintext) return plaintext
-  return isCredentialAtRestSafe() ? encryptGm(plaintext) : plaintext
+  return isCredentialAtRestSafe() ? encryptV2(plaintext) : plaintext
 }
 
 /**
- * Decode a stored credential. Plain values pass through. Encoded values
- * are unwrapped; on integrity / decrypt failure the function returns an
- * empty string so the caller can fall back to regenerating.
+ * Decode a stored credential, reporting success/failure explicitly. This is
+ * the non-destructive read path: callers use the discriminated result to keep
+ * the original ciphertext on disk when a value cannot be decoded.
+ */
+export function tryDecodeFromStorage(stored: string): DecodeOutcome {
+  return decodeDetailed(stored)
+}
+
+/**
+ * Decode a stored credential to a plain string. Convenience wrapper over
+ * {@link tryDecodeFromStorage} for single-value callers (e.g. the remote-access
+ * PIN) that have no per-field failure handling: returns '' on failure.
  */
 export function decodeFromStorage(stored: string): string {
-  if (!stored) return ''
-  if (!stored.startsWith(MARKER)) {
-    // Legacy plaintext — accepted in both modes so existing installs keep
-    // working. Re-encoding to ciphertext happens the next time the token
-    // is saved (regeneratePassword / setCustomPassword).
-    return stored
-  }
-  return decryptGm(stored) ?? ''
+  const outcome = decodeDetailed(stored)
+  return outcome.ok ? outcome.value : ''
 }
 
 /**
- * True when a stored value should be rewritten under the master key: plaintext
- * (no marker), or GM-encoded but not decryptable with the master key (i.e.
- * legacy-seed ciphertext). Returns false when the master key is unavailable —
- * there is nothing to migrate onto, and returning true would re-trigger the
- * migration on every startup.
+ * True when a stored value should be rewritten to the v2 static-key format:
+ * any decodable non-v2 value (legacy plaintext, or v1 ciphertext we can still
+ * read). Returns false for values already at v2 and for non-v2 values we cannot
+ * decode — rewriting an undecodable value is impossible and returning true
+ * would re-trigger migration on every startup.
  */
 export function needsKeyMigration(stored: string): boolean {
   if (!stored) return false
-  if (!stored.startsWith(MARKER)) return true
+  if (stored.startsWith(MARKER_V2)) return false
+  return decodeDetailed(stored).ok
+}
+
+/**
+ * Test-only: produce a legacy `gmcred:v1:` ciphertext (under the persisted
+ * master key if present, else the machine seed) so tests can exercise the
+ * backward-compatible read + migration path that real on-disk data still uses.
+ * Production code never writes v1 anymore.
+ */
+export function __encryptLegacyV1ForTests(plaintext: string): string {
   const master = loadMasterKey()
-  if (!master) return false
-  return decryptCredential(stored, master) === null
+  return encryptCredential(plaintext, master ?? getLegacyMachineSeed(), MARKER_V1)
 }
 
 /**
@@ -323,5 +357,5 @@ export function needsKeyMigration(stored: string): boolean {
 export function __resetKeyCacheForTests(): void {
   cachedMasterKey = undefined
   cachedLegacySeed = null
-  warnedLegacyEncrypt = false
+  __resetStaticKeyCacheForTests()
 }

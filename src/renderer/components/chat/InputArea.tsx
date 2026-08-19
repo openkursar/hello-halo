@@ -20,15 +20,19 @@
  */
 
 import { useState, useRef, useEffect, useMemo, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
-import { Plus, ImagePlus, Loader2, AlertCircle, Atom, Globe } from 'lucide-react'
+import { Plus, ImagePlus, Loader2, AlertCircle, Atom } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
+import { useChatStore } from '../../stores/chat.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
-import { useAIBrowserStore } from '../../stores/ai-browser.store'
 import { getOnboardingPrompt } from '../onboarding/onboardingData'
+import { ToolsetControls } from './ToolsetControls'
+import { LiveSessionsHeader } from './LiveSessionsHeader'
+import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { ImageAttachmentPreview } from './ImageAttachmentPreview'
+import { KnowledgeBaseButton } from './KnowledgeBaseButton'
 import { processImage, isValidImageType, formatFileSize } from '../../utils/imageProcessor'
 import type { ImageAttachment, Artifact } from '../../types'
-import { getCurrentSource, supportsVision } from '../../types'
+import { getCurrentSource, resolveModelVision } from '../../types'
 import { useTranslation } from '../../i18n'
 import { SlashCommandMenu, filterSlashCommands } from './SlashCommandMenu'
 import type { SlashCommandItem } from '../../types/slash-command'
@@ -87,6 +91,19 @@ interface InputAreaProps {
   slashCommands?: SlashCommandItem[]
   /** Artifacts available for @ mention suggestions */
   mentionArtifacts?: Artifact[]
+  /**
+   * Hide the on-demand toolset broker control ("Tools" button). Digital-human
+   * chat sets this: a digital human's tools are governed by its Capabilities
+   * panel, not the broker, so the control would be inert and misleading here.
+   */
+  hideToolsetControls?: boolean
+  /**
+   * Hide the knowledge base loader button. Digital-human chat sets this: an
+   * app's knowledge bases are bound via its config panel (AppKnowledgeSection),
+   * not per-conversation attach — the button's space-conversation logic would
+   * silently no-op here.
+   */
+  hideKnowledgeControls?: boolean
 }
 
 // Image constraints
@@ -99,18 +116,21 @@ interface ImageError {
   message: string
 }
 
-export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [], mentionArtifacts = [] }: InputAreaProps) {
+export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [], mentionArtifacts = [], hideToolsetControls = false, hideKnowledgeControls = false }: InputAreaProps) {
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
-  // Vision support detection — block image input for non-multimodal models
+  // Vision support detection — images are always accepted; for non-vision
+  // models the backend persists them to files and routes them through the
+  // on-device OCR tool, so this flag only drives the informational hint.
+  // Shares `resolveModelVision` with the backend so the hint can never claim
+  // OCR while the request still ships image blocks.
   const aiSources = useAppStore(state => state.config?.aiSources)
   const visionEnabled = useMemo(() => {
     if (!aiSources) return true
     const source = getCurrentSource(aiSources)
     if (!source) return true
-    const model = source.availableModels.find(m => m.id === source.model)
-    return model ? supportsVision(model) : true
+    return resolveModelVision(source, source.model)
   }, [aiSources])
   const [content, setContent] = useState('')
   const [isFocused, setIsFocused] = useState(false)
@@ -129,10 +149,26 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   const [cursorPos, setCursorPos] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const attachMenuRef = useRef<HTMLDivElement>(null)
 
-  // AI Browser state
-  const { enabled: aiBrowserEnabled, setEnabled: setAIBrowserEnabled } = useAIBrowserStore()
+  // Consume a composer prefill requested for this space (e.g. a skill's slash
+  // command from the store's "Use" action): fill the box once, focus, cursor to
+  // end. Cleared immediately so it never re-fires or leaks into another space.
+  const pendingComposerInput = useChatStore(state => state.pendingComposerInput)
+  const currentSpaceId = useChatStore(state => state.currentSpaceId)
+  useEffect(() => {
+    if (!pendingComposerInput || pendingComposerInput.spaceId !== currentSpaceId) return
+    const text = pendingComposerInput.text
+    useChatStore.setState({ pendingComposerInput: null })
+    setContent(text)
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus()
+      ta.setSelectionRange(ta.value.length, ta.value.length)
+      ta.style.height = 'auto'
+      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`
+    })
+  }, [pendingComposerInput, currentSpaceId])
 
   // Auto-clear error after 3 seconds
   useEffect(() => {
@@ -141,20 +177,6 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       return () => clearTimeout(timer)
     }
   }, [imageError])
-
-  // Close attachment menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (attachMenuRef.current && !attachMenuRef.current.contains(event.target as Node)) {
-        setShowAttachMenu(false)
-      }
-    }
-
-    if (showAttachMenu) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [showAttachMenu])
 
   // Show error to user
   const showError = (message: string) => {
@@ -247,10 +269,6 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
     if (imageFiles.length > 0) {
       e.preventDefault()  // Prevent default only if we're handling images
-      if (!visionEnabled) {
-        showError(t('Current model does not support image input'))
-        return
-      }
       await addImages(imageFiles)
     }
   }
@@ -305,10 +323,6 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     const files = Array.from(e.dataTransfer.files).filter(file => isValidImageType(file))
 
     if (files.length > 0) {
-      if (!visionEnabled) {
-        showError(t('Current model does not support image input'))
-        return
-      }
       await addImages(files)
     }
   }
@@ -327,11 +341,6 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
   // Handle image button click (from attachment menu)
   const handleImageButtonClick = () => {
-    if (!visionEnabled) {
-      showError(t('Current model does not support image input'))
-      setShowAttachMenu(false)
-      return
-    }
     setShowAttachMenu(false)
     fileInputRef.current?.click()
   }
@@ -625,6 +634,10 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
           onChange={handleFileInputChange}
         />
 
+        {/* Live AI sessions — capsule tab adhered to the input's top-left edge.
+            Sibling above the input card; the input box itself is untouched. */}
+        <LiveSessionsHeader />
+
         {/* Input container */}
         <div
           className={`
@@ -681,10 +694,17 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
           )}
           {/* Image preview area */}
           {hasImages && (
-            <ImageAttachmentPreview
-              images={images}
-              onRemove={removeImage}
-            />
+            <>
+              <ImageAttachmentPreview
+                images={images}
+                onRemove={removeImage}
+              />
+              {!visionEnabled && (
+                <div className="px-4 py-1.5 text-xs text-muted-foreground border-b border-border/30">
+                  {t('Current model has no vision — images will be read via local OCR (text only)')}
+                </div>
+              )}
+            </>
           )}
 
           {/* Image processing indicator */}
@@ -770,19 +790,18 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             isProcessingImages={isProcessingImages}
             thinkingEnabled={thinkingEnabled}
             onThinkingToggle={() => setThinkingEnabled(!thinkingEnabled)}
-            aiBrowserEnabled={aiBrowserEnabled}
-            onAIBrowserToggle={() => setAIBrowserEnabled(!aiBrowserEnabled)}
             showAttachMenu={showAttachMenu}
-            onAttachMenuToggle={() => setShowAttachMenu(!showAttachMenu)}
+            onAttachMenuChange={setShowAttachMenu}
             onImageClick={handleImageButtonClick}
             imageCount={images.length}
             maxImages={MAX_IMAGES}
-            attachMenuRef={attachMenuRef}
             canSend={canSend}
             onSend={handleSend}
             onStop={onStop}
             sendKeyMode={sendKeyMode}
             visionEnabled={visionEnabled}
+            hideToolsetControls={hideToolsetControls}
+            hideKnowledgeControls={hideKnowledgeControls}
           />
         </div>
       </div>
@@ -802,19 +821,18 @@ interface InputToolbarProps {
   isProcessingImages: boolean
   thinkingEnabled: boolean
   onThinkingToggle: () => void
-  aiBrowserEnabled: boolean
-  onAIBrowserToggle: () => void
   showAttachMenu: boolean
-  onAttachMenuToggle: () => void
+  onAttachMenuChange: (open: boolean) => void
   onImageClick: () => void
   imageCount: number
   maxImages: number
-  attachMenuRef: React.RefObject<HTMLDivElement | null>
   canSend: boolean
   onSend: () => void
   onStop?: () => void
   sendKeyMode: 'enter' | 'ctrl-enter'
   visionEnabled: boolean
+  hideToolsetControls: boolean
+  hideKnowledgeControls: boolean
 }
 
 function InputToolbar({
@@ -823,32 +841,37 @@ function InputToolbar({
   isProcessingImages,
   thinkingEnabled,
   onThinkingToggle,
-  aiBrowserEnabled,
-  onAIBrowserToggle,
   showAttachMenu,
-  onAttachMenuToggle,
+  onAttachMenuChange,
   onImageClick,
   imageCount,
   maxImages,
-  attachMenuRef,
   canSend,
   onSend,
   onStop,
   sendKeyMode,
-  visionEnabled
+  visionEnabled,
+  hideToolsetControls,
+  hideKnowledgeControls
 }: InputToolbarProps) {
   const { t } = useTranslation()
   return (
-    <div className="flex items-center justify-between px-2 pb-2 pt-1">
-      {/* Left section: attachment button + thinking toggle */}
-      <div className="flex items-center gap-1">
+    <div className="flex items-center justify-between gap-1 px-2 pb-2 pt-1">
+      {/* Left section: attachment + toolsets + thinking. Scrolls horizontally
+          on narrow widths so the fixed Send/Stop group is never pushed off. */}
+      <div className="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-none">
         {/* Attachment menu */}
         {!isGenerating && !isOnboarding && (
-          <div className="relative" ref={attachMenuRef}>
-            <button
-              onClick={onAttachMenuToggle}
-              disabled={isProcessingImages}
-              className={`w-8 h-8 flex items-center justify-center rounded-lg
+          <Popover
+            open={showAttachMenu}
+            onOpenChange={(open) => {
+              if (open && isProcessingImages) return
+              onAttachMenuChange(open)
+            }}
+          >
+            <PopoverTrigger
+              title={t('Add attachment')}
+              className={`w-8 h-8 shrink-0 items-center justify-center rounded-lg cursor-pointer
                 transition-all duration-150
                 ${showAttachMenu
                   ? 'bg-primary/10 text-primary'
@@ -856,73 +879,48 @@ function InputToolbar({
                 }
                 ${isProcessingImages ? 'opacity-50 cursor-not-allowed' : ''}
               `}
-              title={t('Add attachment')}
             >
               <Plus size={18} className={`transition-transform duration-200 ${showAttachMenu ? 'rotate-45' : ''}`} />
-            </button>
+            </PopoverTrigger>
 
-            {/* Attachment menu dropdown */}
-            {showAttachMenu && (
-              <div className="absolute bottom-full left-0 mb-2 py-1.5 bg-popover border border-border
-                rounded-xl shadow-lg min-w-[160px] z-20 animate-fade-in">
-                <button
-                  onClick={onImageClick}
-                  disabled={!visionEnabled || imageCount >= maxImages}
-                  className={`w-full px-3 py-2 flex items-center gap-3 text-sm
-                    transition-colors duration-150
-                    ${!visionEnabled || imageCount >= maxImages
-                      ? 'text-muted-foreground/40 cursor-not-allowed'
-                      : 'text-foreground hover:bg-muted/50'
-                    }
-                  `}
-                  title={!visionEnabled ? t('Current model does not support image input') : undefined}
-                >
-                  <ImagePlus size={16} className="text-muted-foreground" />
-                  <span>{t('Add image')}</span>
-                  {!visionEnabled && (
-                    <span className="ml-auto text-xs text-muted-foreground/60">
-                      {t('Not supported')}
-                    </span>
-                  )}
-                  {visionEnabled && imageCount > 0 && (
-                    <span className="ml-auto text-xs text-muted-foreground">
-                      {imageCount}/{maxImages}
-                    </span>
-                  )}
-                </button>
-                {/* Future extensibility: add more options here */}
-              </div>
-            )}
-          </div>
+            <PopoverContent side="top" align="start" sideOffset={8} className="py-1.5 rounded-xl min-w-[160px]">
+              <button
+                onClick={onImageClick}
+                disabled={imageCount >= maxImages}
+                className={`w-full px-3 py-2 flex items-center gap-3 text-sm
+                  transition-colors duration-150
+                  ${imageCount >= maxImages
+                    ? 'text-muted-foreground/40 cursor-not-allowed'
+                    : 'text-foreground hover:bg-muted/50'
+                  }
+                `}
+                title={!visionEnabled ? t('Current model has no vision — images will be read via local OCR (text only)') : undefined}
+              >
+                <ImagePlus size={16} className="text-muted-foreground" />
+                <span>{t('Add image')}</span>
+                {!visionEnabled && imageCount === 0 && (
+                  <span className="ml-auto text-xs text-muted-foreground/60">
+                    {t('via OCR')}
+                  </span>
+                )}
+                {imageCount > 0 && (
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {imageCount}/{maxImages}
+                  </span>
+                )}
+              </button>
+            </PopoverContent>
+          </Popover>
         )}
 
-        {/* AI Browser toggle */}
-        {!isGenerating && !isOnboarding && (
-          <button
-            onClick={onAIBrowserToggle}
-            className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg
-              transition-colors duration-200 relative
-              ${aiBrowserEnabled
-                ? 'bg-primary/10 text-primary'
-                : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50'
-              }
-            `}
-            title={aiBrowserEnabled ? t('AI Browser enabled (click to disable)') : t('Enable AI Browser')}
-          >
-            <Globe size={15} />
-            <span className="text-xs">{t('Web Control')}</span>
-            {/* Active indicator dot */}
-            {aiBrowserEnabled && (
-              <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-primary rounded-full" />
-            )}
-          </button>
-        )}
+        {/* On-demand toolsets (catalog menu + activation pills) */}
+        {!isGenerating && !isOnboarding && !hideToolsetControls && <ToolsetControls />}
 
         {/* Thinking mode toggle - always show full label, no expansion */}
         {!isGenerating && !isOnboarding && (
           <button
             onClick={onThinkingToggle}
-            className={`h-8 flex items-center gap-1.5 px-2.5 rounded-lg
+            className={`h-8 shrink-0 flex items-center gap-1.5 px-2.5 rounded-lg
               transition-colors duration-200
               ${thinkingEnabled
                 ? 'bg-primary/10 text-primary'
@@ -932,13 +930,16 @@ function InputToolbar({
             title={thinkingEnabled ? t('Disable Deep Thinking') : t('Enable Deep Thinking')}
           >
             <Atom size={15} />
-            <span className="text-xs">{t('Deep Thinking')}</span>
+            <span className="hidden sm:inline text-xs">{t('Deep Thinking')}</span>
           </button>
         )}
+
+        {/* Knowledge base loader */}
+        {!isGenerating && !isOnboarding && !hideKnowledgeControls && <KnowledgeBaseButton />}
       </div>
 
-      {/* Right section: Stop (when generating) + Send */}
-      <div className="flex items-center gap-1">
+      {/* Right section: Stop (when generating) + Send — fixed, never scrolls */}
+      <div className="flex items-center gap-1 shrink-0">
         {isGenerating && onStop && (
           <button
             onClick={onStop}

@@ -34,6 +34,7 @@ interface ItemRow {
   slug: string
   registry_id: string
   name: string
+  display_name: string | null
   description: string
   author: string
   tags: string
@@ -60,6 +61,7 @@ function rowToEntry(row: ItemRow): RegistryEntry & { _registryId: string } {
   return {
     slug: row.slug,
     name: row.name,
+    display_name: row.display_name ?? undefined,
     version: row.version,
     author: row.author,
     description: row.description,
@@ -307,14 +309,22 @@ export class QueryService {
     ).get(...bindings) as { cnt: number }
     const total = countRow.cnt
 
-    // Fetch page
+    // Fetch page. Explicit operator rank pins curated items; the default order
+    // is install count (desc), with items lacking a count collapsing to 0 so
+    // they fall through to the updated_at→name tie-break (works with no counts).
     const rows = this.db.prepare(
-      `SELECT ri.* FROM registry_items ri ${where} ORDER BY ri.rank ASC NULLS LAST, ri.updated_at DESC, ri.rowid ASC LIMIT ? OFFSET ?`
+      `SELECT ri.* FROM registry_items ri ${where}
+       ORDER BY ri.rank ASC NULLS LAST,
+                COALESCE(CAST(json_extract(ri.meta, '$.installs') AS INTEGER), 0) DESC,
+                ri.updated_at DESC,
+                ri.name COLLATE NOCASE ASC,
+                ri.rowid ASC
+       LIMIT ? OFFSET ?`
     ).all(...bindings, pageSize, offset) as ItemRow[]
 
     const items = rows.map(r => {
       const { _registryId, ...entry } = rowToEntry(r)
-      return entry as RegistryEntry
+      return { ...entry, registryId: _registryId }
     })
 
     // Per-source breakdown log

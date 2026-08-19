@@ -3,9 +3,10 @@
  * Exposes REST API and serves the frontend for remote access
  */
 
-import express, { Express, Request, Response } from 'express'
+import express, { Express, Request, Response, Router, NextFunction } from 'express'
 import { createServer, Server, request as httpRequest, IncomingMessage } from 'http'
 import { join } from 'path'
+import { readFileSync } from 'fs'
 import { BrowserWindow } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import { createConnection, createServer as createNetServer } from 'net'
@@ -36,6 +37,74 @@ let serverPort: number = 0
 // Default port
 const DEFAULT_PORT = 3847
 const MAX_PORT_SEARCH_ATTEMPTS = 20
+
+// ---------------------------------------------------------------------------
+// Webhook ingress
+// ---------------------------------------------------------------------------
+
+// Mount point and body limit. The limit must match the contract expected by
+// apps/runtime WebhookSource (MAX_BODY_BYTES = 256KB).
+const WEBHOOK_INGRESS_PATH = '/hooks'
+const WEBHOOK_INGRESS_BODY_LIMIT = '256kb'
+
+// The ingress router is a process-lifetime singleton, NOT tied to a server
+// instance: apps/runtime initializes (and mounts WebhookSource routes) before
+// the HTTP server first starts, and the server may be stopped/restarted with
+// a fresh Express app at any time. Each startHttpServer() re-attaches this
+// same router, so routes registered on it survive server restarts.
+let webhookIngressRouter: Router | null = null
+
+/**
+ * Get the webhook ingress router (mounted at /hooks ahead of auth and
+ * frontend fallbacks whenever the HTTP server runs). apps/runtime
+ * WebhookSource registers its routes here; safe to call before the server
+ * has ever started.
+ */
+export function getWebhookIngressRouter(): Router {
+  if (!webhookIngressRouter) {
+    webhookIngressRouter = express.Router()
+  }
+  return webhookIngressRouter
+}
+
+/**
+ * Mount the webhook ingress on a freshly created Express app, ahead of every
+ * other middleware, so external callers (GitHub, Stripe, ...) are never
+ * intercepted by the global JSON body limit, auth middleware, or frontend
+ * fallbacks. Authentication is per-hook HMAC inside WebhookSource.
+ *
+ * Chain: content-type guard -> dedicated JSON parser (webhook body limit +
+ * raw bytes for HMAC -- re-serialized JSON is not byte-identical) -> ingress
+ * router -> 404 terminal (no route consumed the request, e.g. automation
+ * runtime inactive) -> JSON error handler (body-parser errors such as 413
+ * must never leak an HTML stack trace to external callers).
+ */
+function attachWebhookIngress(app: Express): void {
+  app.use(WEBHOOK_INGRESS_PATH, (req: Request, res: Response, next: NextFunction) => {
+    if (!req.is('application/json')) {
+      res.status(415).json({ error: 'Webhook payloads must be application/json' })
+      return
+    }
+    next()
+  })
+  app.use(
+    WEBHOOK_INGRESS_PATH,
+    express.json({
+      limit: WEBHOOK_INGRESS_BODY_LIMIT,
+      verify: (req, _res, buf) => {
+        ;(req as Request & { rawBody?: Buffer }).rawBody = buf
+      }
+    }),
+    getWebhookIngressRouter()
+  )
+  app.use(WEBHOOK_INGRESS_PATH, (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'Webhook ingress not available' })
+  })
+  app.use(WEBHOOK_INGRESS_PATH, (err: Error & { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
+    console.warn(`[HTTP] Webhook ingress request rejected: ${err.message}`)
+    res.status(err.status ?? 400).json({ error: 'Invalid webhook request' })
+  })
+}
 
 async function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -100,6 +169,8 @@ export async function startHttpServer(
 
   // Create Express app
   expressApp = express()
+
+  attachWebhookIngress(expressApp)
 
   // Middleware
   expressApp.use(express.json())
@@ -224,8 +295,8 @@ export async function startHttpServer(
 
     // SPA fallback - Express 5.x requires named wildcard parameters
     expressApp.get('/{*path}', (req, res) => {
-      // Auth already checked by middleware above
-      res.sendFile(join(staticPath, 'index.html'))
+      // Auth already checked by middleware above. Serve the guard-injected shell.
+      res.type('html').send(getSpaShellHtml(staticPath))
     })
   }
 
@@ -386,6 +457,38 @@ export function getExpressApp(): Express | null {
 }
 
 /**
+ * Path-prefix guard injected into the SPA shell the headless server returns.
+ *
+ * Behind a reverse proxy that mounts the app under a path prefix with no trailing
+ * slash, the browser resolves relative asset/API/WS URLs against the parent
+ * directory and drops the prefix → 404. The proxy collapses both the slashed and
+ * unslashed forms to `/` before the request reaches us, so only the browser can
+ * distinguish them — the fix must run client-side. It lives here, not in the
+ * shared renderer entry, to keep that entry deployment-agnostic.
+ */
+const PATH_PREFIX_GUARD =
+  `<script>(function(){try{` +
+  `if('halo' in window)return;` +
+  `if(window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform())return;` +
+  `if(location.protocol!=='http:'&&location.protocol!=='https:')return;` +
+  `var p=location.pathname;` +
+  `if(p&&p.charAt(p.length-1)!=='/'&&!/\\.[^/]+$/.test(p)){location.replace(p+'/'+location.search+location.hash);}` +
+  `}catch(e){}})();</script>`
+
+/**
+ * SPA shell with the path-prefix guard as the first <head> child, so it runs
+ * before any relative asset tag. Cached: the built index.html is immutable for
+ * the process lifetime.
+ */
+let cachedSpaShellHtml: string | null = null
+function getSpaShellHtml(staticPath: string): string {
+  if (cachedSpaShellHtml) return cachedSpaShellHtml
+  const raw = readFileSync(join(staticPath, 'index.html'), 'utf-8')
+  cachedSpaShellHtml = raw.replace(/<head(\s[^>]*)?>/i, (m) => `${m}${PATH_PREFIX_GUARD}`)
+  return cachedSpaShellHtml
+}
+
+/**
  * Simple login page HTML for remote access
  */
 function getRemoteLoginPage(): string {
@@ -395,6 +498,18 @@ function getRemoteLoginPage(): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Path-prefix guard: with no trailing slash behind a proxy prefix, the
+       relative login fetch drops the prefix → 404. Normalize to a trailing slash. -->
+  <script>
+    (function () {
+      try {
+        var p = location.pathname;
+        if (p && p.charAt(p.length - 1) !== '/' && !/\\.[^/]+$/.test(p)) {
+          location.replace(p + '/' + location.search + location.hash);
+        }
+      } catch (e) {}
+    })();
+  </script>
   <title>Halo Remote Access</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -481,7 +596,7 @@ function getRemoteLoginPage(): string {
       }
 
       try {
-        const res = await fetch('/api/remote/login', {
+        const res = await fetch('api/remote/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token })

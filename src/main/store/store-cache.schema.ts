@@ -110,4 +110,20 @@ export const storeCacheMigrations: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS idx_spec_registry ON registry_spec_cache(registry_id)`)
     },
   },
+  {
+    version: 2,
+    description: 'Add display_name to registry_items',
+    up(db) {
+      // The cache is a column projection of RegistryEntry, so a field missing
+      // here is silently dropped between sync and render — a skill whose
+      // canonical name is its ASCII command would keep showing that command
+      // instead of its authored name.
+      db.exec(`ALTER TABLE registry_items ADD COLUMN display_name TEXT`)
+      // Rows written before the column existed carry no value, and a mirror
+      // only re-syncs once its TTL lapses. Dropping the sync state marks every
+      // source stale so the next pass backfills instead of showing canonical
+      // names for up to an hour.
+      db.exec(`DELETE FROM registry_sync_state`)
+    },
+  },
 ]

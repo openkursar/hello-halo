@@ -24,6 +24,7 @@ import { registerSpaceHandlers } from '../ipc/space'
 import { registerConversationHandlers } from '../ipc/conversation'
 import { registerAgentHandlers } from '../ipc/agent'
 import { registerArtifactHandlers } from '../ipc/artifact'
+import { registerTerminalHandlers } from '../ipc/terminal'
 import { registerSystemHandlers } from '../ipc/system'
 import { registerUpdaterHandlers, initAutoUpdater } from '../services/updater.service'
 import { registerAuthHandlers } from '../ipc/auth'
@@ -66,6 +67,9 @@ export function initializeEssentialServices(): void {
 
   // Artifact: File list is displayed in the right sidebar
   registerArtifactHandlers()
+
+  // Terminal: AI Terminal transport (data/lifecycle events + user I/O)
+  registerTerminalHandlers()
 
   // System: Window controls (maximize/minimize/close) are basic functionality
   registerSystemHandlers()

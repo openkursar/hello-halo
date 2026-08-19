@@ -400,10 +400,6 @@ export class CodexAppServerSession {
     }
   }
 
-  async setModel(model: string | undefined): Promise<void> {
-    if (model) this.options.threadParams.model = model
-  }
-
   async setMaxThinkingTokens(maxThinkingTokens: number | null): Promise<void> {
     this.options.threadParams.config = {
       ...(this.options.threadParams.config || {}),

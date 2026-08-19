@@ -104,6 +104,7 @@ export async function checkNow(): Promise<{
       installed.map(a => ({
         id: a.id,
         upgradeStrategy: a.upgradeStrategy,
+        ignoredVersions: a.ignoredVersions,
         spec: { name: a.spec.name, version: a.spec.version, store: a.spec.store },
       }))
     )

@@ -171,7 +171,6 @@ function StepItem({ step, isLatest }: { step: BrowserStep; isLatest: boolean }) 
 export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = true }: BrowserTaskCardProps) {
   const [isExpanded, setIsExpanded] = useState(true)
   const attachAIBrowserView = useCanvasStore(state => state.attachAIBrowserView)
-  const openUrl = useCanvasStore(state => state.openUrl)
   const activeViewId = useAIBrowserActiveViewId()
   const activeUrl = useAIBrowserStore(state => state.activeUrl)
   const setActiveUrl = useAIBrowserStore(state => state.setActiveUrl)
@@ -310,21 +309,13 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
   // Show recent steps
   const visibleSteps = isExpanded ? steps : steps.slice(-3)
 
-  // Handle view live button click
-  // If AI has an active BrowserView, attach it to Canvas (reuse existing view)
-  // Otherwise fall back to opening a new browser tab with the URL
+  // Reveal the AI's live browser in the Canvas by attaching the EXACT view the
+  // AI is driving (same WebContents) — never a fresh copy. Without a known
+  // active view there is nothing live to show, so the button stays disabled.
   const handleViewLive = () => {
-    // Prefer activeUrl from store (synced from main process)
-    // Fall back to currentUrl extracted from tool calls
-    const urlToOpen = activeUrl || currentUrl
-
-    if (activeViewId && urlToOpen) {
-      // Attach existing AI BrowserView to Canvas - this reuses the view AI is operating
-      attachAIBrowserView(activeViewId, urlToOpen, t('🤖 AI Browser'))
-    } else if (urlToOpen) {
-      // Fallback: open new browser tab if no activeViewId available
-      openUrl(urlToOpen, t('🤖 AI Browser'))
-    }
+    if (!activeViewId) return
+    const urlToOpen = activeUrl || currentUrl || ''
+    attachAIBrowserView(activeViewId, urlToOpen, t('🤖 AI Browser'))
   }
 
   // Don't render if no browser tool calls
@@ -399,15 +390,17 @@ export function BrowserTaskCard({ browserToolCalls, isActive, showViewButton = t
             )}
           </div>
 
-          {/* View button — hidden in contexts without Canvas/BrowserView (e.g. automation apps) */}
+          {/* View button — hidden in contexts without Canvas/BrowserView (e.g. automation apps).
+              Enabled only once the AI's live view id is known, so it always reveals the
+              exact view the AI drives (never a divergent copy). */}
           {showViewButton && (
             <button
               onClick={handleViewLive}
-              disabled={!currentUrl}
+              disabled={!activeViewId}
               className={`
                 flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium
                 transition-all duration-200
-                ${currentUrl
+                ${activeViewId
                   ? 'bg-primary/20 text-primary hover:bg-primary/30 hover:scale-[1.02] active:scale-[0.98]'
                   : 'bg-muted/30 text-muted-foreground cursor-not-allowed'
                 }

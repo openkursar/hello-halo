@@ -7,11 +7,20 @@ import { useEffect, useState } from 'react'
 import { AlertTriangle, ChevronDown, ChevronUp, Cpu, Puzzle, RefreshCw, Terminal } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
-import type { EngineAvailability, EngineId, HaloConfig } from '../../types'
+import type { EngineAvailabilityReport, EngineId, HaloConfig } from '../../types'
 import { CLIConfigSection } from './CLIConfigSection'
 import { Switch } from '../ui/Switch'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { DEFAULT_DISABLED_TOOLS } from '../../../shared/constants/disabled-tools'
+
+// ─── Agent SDK Engine ───────────────────────────────────────────────────────────
+
+/**
+ * Engine order shown in the selector. Labels and descriptions stay at the
+ * render site as `t()` literals — i18next-parser only extracts literal keys,
+ * so moving the copy into this table would drop the existing translations.
+ */
+const ENGINE_IDS: readonly EngineId[] = ['anthropic', 'halo', 'codex', 'dsh']
 
 // ─── Built-in MCP Extensions ────────────────────────────────────────────────────
 
@@ -98,10 +107,6 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   const [sdkEngineInitial] = useState<EngineId>(
     config?.agent?.sdkEngine ?? 'anthropic'
   )
-  // Engines whose runtime this build does not ship cannot be selected — the
-  // choice would only fail after a restart. Unknown = selectable, so a probe
-  // failure never blocks the user.
-  const [engineAvailability, setEngineAvailability] = useState<Record<string, EngineAvailability>>({})
   const [disabledTools, setDisabledToolsState] = useState<string[]>(
     config?.agent?.disabledTools ?? DEFAULT_DISABLED_TOOLS
   )
@@ -117,56 +122,59 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
   })
   const [developerMode, setDeveloperModeState] = useState(config?.agent?.developerMode ?? false)
   const [capsPanelOpen, setCapsPanelOpen] = useState(false)
+  const [engineAvailability, setEngineAvailability] = useState<EngineAvailabilityReport | null>(null)
 
   const sdkEngineChanged = sdkEngine !== sdkEngineInitial
 
+  // Engines absent from this build must not be selectable — picking one used to
+  // leave the app unable to start. Until the probe answers, every option stays
+  // enabled: the call is local and resolves in milliseconds, and a selection
+  // made in that window still degrades safely at startup rather than failing.
   useEffect(() => {
     let cancelled = false
-    void api.getEngineAvailability().then((result) => {
-      if (cancelled || !result?.success || !Array.isArray(result.data)) return
-      const byId: Record<string, EngineAvailability> = {}
-      for (const entry of result.data as EngineAvailability[]) byId[entry.engineId] = entry
-      setEngineAvailability(byId)
-    }).catch(() => {
-      // Probe unavailable (remote client, older backend) — leave every engine
-      // selectable rather than locking the user out of the setting.
-    })
+    api.getEngineAvailability()
+      .then(result => {
+        if (cancelled || !result?.success || !result.data) return
+        setEngineAvailability(result.data as EngineAvailabilityReport)
+      })
+      .catch(error => console.warn('[AdvancedSection] Engine availability unavailable:', error))
     return () => { cancelled = true }
   }, [])
 
-  // ─── Engine options ─────────────────────────────────────────────────────────
+  const isEngineAvailable = (engineId: EngineId) => {
+    if (!engineAvailability) return true
+    return engineAvailability.engines.find(e => e.engineId === engineId)?.available ?? false
+  }
+
+  const engineUnavailableReason = (engineId: EngineId) =>
+    engineAvailability?.engines.find(e => e.engineId === engineId)?.reason
 
   // Built inside the component so every string stays a literal `t(...)` call
   // and reaches the extractor.
-  const engineOptions: {
-    id: EngineId
+  const ENGINE_COPY: Record<EngineId, {
     title: string
     description: string
     /** Hard limits the user should know before switching, shown inline. */
     limitation?: string
-  }[] = [
-    {
-      id: 'anthropic',
+  }> = {
+    anthropic: {
       title: t('Claude Code SDK'),
       description: t('Powered by the official Anthropic Claude Code engine. Works with a wide range of frontier models. (Default)'),
     },
-    {
-      id: 'halo',
+    halo: {
       title: t('Halo SDK'),
       description: t('The official Halo agent engine. Lightweight on resources, faster startup, optimized for open-source models. Experimental.'),
     },
-    {
-      id: 'codex',
+    codex: {
       title: t('Codex SDK'),
       description: t('Powered by the official OpenAI Codex SDK. Better suited for GPT-family models. Experimental.'),
     },
-    {
-      id: 'dsh',
+    dsh: {
       title: t('DeepSeek Harness'),
       description: t('Powered by the open-source DeepSeek Harness runtime, running as a separate process with one provider and model fixed at startup. Experimental.'),
       limitation: t("Halo's built-in tools, MCP servers, skills and approval prompts do not reach this engine — it only runs the tools its own runtime configures. Stopping a reply restarts the engine process and ends the session."),
     },
-  ]
+  }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -302,39 +310,52 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
             {t('Choose the underlying engine that powers the AI agent')}
           </p>
 
+          {engineAvailability?.degradedFrom && (
+            <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 mb-3 text-sm text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>
+                {t('The selected engine is not included in this build, so Halo is running on another engine. Your choice has been kept — reinstall a complete package, or pick an available engine below.')}
+              </span>
+            </div>
+          )}
+
           <div className="space-y-2">
-            {engineOptions.map((option) => {
-              const selected = sdkEngine === option.id
-              const missing = engineAvailability[option.id]?.available === false
+            {ENGINE_IDS.map(engineId => {
+              const copy = ENGINE_COPY[engineId]
               // The active engine stays selectable even if its runtime went
               // missing, so the user is never locked out of their own setting.
-              const disabled = missing && !selected
+              const available = isEngineAvailable(engineId) || sdkEngine === engineId
               return (
                 <label
-                  key={option.id}
+                  key={engineId}
                   className={`flex items-start gap-3 p-3 rounded-lg border border-border transition-colors has-[:checked]:border-primary has-[:checked]:bg-primary/5 ${
-                    disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-muted/50'
+                    available ? 'cursor-pointer hover:bg-muted/50' : 'cursor-not-allowed opacity-60'
                   }`}
                 >
                   <input
                     type="radio"
                     name="sdkEngine"
-                    value={option.id}
-                    checked={selected}
-                    disabled={disabled}
-                    onChange={() => handleSdkEngineChange(option.id)}
+                    value={engineId}
+                    checked={sdkEngine === engineId}
+                    disabled={!available}
+                    onChange={() => handleSdkEngineChange(engineId)}
                     className="mt-0.5 accent-primary"
                   />
                   <div className="min-w-0">
-                    <p className="font-medium text-sm">{option.title}</p>
-                    <p className="text-xs text-muted-foreground">{option.description}</p>
-                    {option.limitation && (
-                      <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{option.limitation}</p>
+                    <p className="font-medium text-sm">
+                      {copy.title}
+                      {!available && (
+                        <span className="ml-2 text-xs font-normal text-muted-foreground">
+                          {t('Not included in this build')}
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-xs text-muted-foreground">{copy.description}</p>
+                    {copy.limitation && (
+                      <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{copy.limitation}</p>
                     )}
-                    {missing && (
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {t('Not available in this build — the engine runtime is not installed.')}
-                      </p>
+                    {!available && engineUnavailableReason(engineId) && (
+                      <p className="mt-1 text-xs text-muted-foreground">{engineUnavailableReason(engineId)}</p>
                     )}
                   </div>
                 </label>

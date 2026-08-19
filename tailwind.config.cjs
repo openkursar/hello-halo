@@ -44,6 +44,10 @@ module.exports = {
         'halo-success': 'hsl(var(--halo-success))',
         'halo-warning': 'hsl(var(--halo-warning))',
         'halo-error': 'hsl(var(--halo-error))',
+
+        // App type accent colors
+        'app-skill': 'hsl(var(--app-skill))',
+        'app-mcp': 'hsl(var(--app-mcp))',
       },
       borderRadius: {
         lg: 'var(--radius)',

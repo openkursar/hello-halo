@@ -14,4 +14,5 @@ export const remoteRpc = {
   getRemoteQRCode: rawRpcMethod('remote:qrcode'),
   setRemotePassword: rawRpcMethod('remote:set-password'),
   regenerateRemotePassword: rawRpcMethod('remote:regenerate-password'),
+  resetTunnelAddress: rawRpcMethod('remote:tunnel:reset-address'),
 }

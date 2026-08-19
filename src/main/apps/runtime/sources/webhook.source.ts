@@ -1,12 +1,13 @@
 /**
  * apps/runtime/sources -- WebhookSource
  *
- * Event source adapter that mounts a `POST /hooks/:path*` route on the
- * existing Express server to receive inbound webhook events.
+ * Event source adapter that registers a `POST /{*hookPath}` route on the
+ * webhook ingress router (http/server `getWebhookIngressRouter()`, mounted
+ * at /hooks) to receive inbound webhook events.
  *
  * Integration approach:
- * - Accepts an Express Application or Router in the constructor.
- * - On start(), mounts `POST /hooks/*` route handler.
+ * - Accepts the ingress Router in the constructor (kept injectable for
+ *   testability; null disables mounting).
  * - Incoming POST requests are converted to AutomationEvent with:
  *   - type: "webhook.received"
  *   - source: "webhook"
@@ -15,26 +16,33 @@
  *   `"wh:{path}:{body-hash}"` for idempotency against retries.
  *
  * Security:
- * - The /hooks/* endpoint is NOT behind the Halo auth middleware because
+ * - The ingress router is mounted ahead of the Halo auth middleware because
  *   external services (GitHub, Stripe, etc.) need to POST without an
  *   auth token.
  * - Per-hook HMAC signature verification is performed when a secret is
  *   configured for the hook path. Secrets are resolved via a callback
- *   function injected at construction time.
+ *   function injected at construction time. Verification requires the raw
+ *   body bytes captured by the ingress JSON parser (`verify` option); only
+ *   JSON payloads are supported.
  * - Supports standard signature headers:
  *   - `x-hub-signature-256`: GitHub-style (sha256=<hex>)
  *   - `x-signature-256`: Generic HMAC-SHA256 (<hex>)
  *   - `x-webhook-signature`: Alternative header (<hex>)
- * - Request body is limited to 256KB to prevent abuse.
+ * - Request body is limited to 256KB (enforced by the ingress JSON parser;
+ *   MAX_BODY_BYTES is a defense-in-depth cross-check for other mounts).
  *
  * Lifecycle:
- * - start(): registers Express route
- * - stop(): marks the source as inactive (Express does not support
- *   runtime route removal, so the handler becomes a no-op)
+ * - The ingress router lives for the whole process (http/server re-attaches
+ *   it to every new Express app), so routes registered here survive HTTP
+ *   server restarts and can be registered before the server ever starts.
+ * - start(): registers the route (once per instance -- Express does not
+ *   support runtime route removal)
+ * - stop(): marks the source as inactive; the mounted handler defers via
+ *   next() so it cannot shadow a replacement instance mounted later
  */
 
 import { createHash, createHmac, timingSafeEqual } from 'crypto'
-import type { Express, Request, Response, NextFunction } from 'express'
+import type { Router, Request, Response, NextFunction } from 'express'
 import type { EventSourceAdapter, AutomationEventInput } from '../event-types'
 
 // ---------------------------------------------------------------------------
@@ -57,8 +65,7 @@ export type WebhookSecretResolver = (hookPath: string) => string | null | undefi
 // Constants
 // ---------------------------------------------------------------------------
 
-const MAX_BODY_BYTES = 256 * 1024 // 256KB
-const HOOKS_BASE_PATH = '/hooks'
+const MAX_BODY_BYTES = 256 * 1024 // 256KB -- keep in sync with http/server WEBHOOK_INGRESS_BODY_LIMIT
 
 /**
  * Ordered list of headers to check for HMAC signatures.
@@ -80,20 +87,22 @@ export class WebhookSource implements EventSourceAdapter {
   readonly type = 'webhook' as const
 
   private emitFn: ((event: AutomationEventInput) => void) | null = null
-  private app: Express | null
+  private router: Router | null
+  private mounted = false
   private active = false
   private secretResolver: WebhookSecretResolver | null
 
   /**
-   * @param app - The Express application to mount the webhook route on.
-   *   If null, the source will not mount any routes (useful for testing
-   *   or when the HTTP server is not available).
+   * @param router - The webhook ingress router (mounted at /hooks by
+   *   http/server) to register the route on. If null, the source will not
+   *   mount any routes (useful for testing or when the HTTP server is not
+   *   available).
    * @param secretResolver - Optional callback to resolve HMAC secrets
    *   for incoming webhook paths. If null, no signature verification
    *   is performed (all webhooks are accepted).
    */
-  constructor(app: Express | null, secretResolver?: WebhookSecretResolver | null) {
-    this.app = app
+  constructor(router: Router | null, secretResolver?: WebhookSecretResolver | null) {
+    this.router = router
     this.secretResolver = secretResolver ?? null
   }
 
@@ -101,19 +110,27 @@ export class WebhookSource implements EventSourceAdapter {
     this.emitFn = emit
     this.active = true
 
-    if (this.app) {
-      this.mountRoute(this.app)
-      console.log(`[WebhookSource] Started -- mounted POST ${HOOKS_BASE_PATH}/*`)
-    } else {
-      console.log('[WebhookSource] Started (no Express app -- dry run mode)')
+    if (!this.router) {
+      console.log('[WebhookSource] Started (no ingress router -- dry run mode)')
+      return
     }
+
+    // Express cannot remove routes at runtime, so mount only once per
+    // instance even across stop()/start() cycles to avoid duplicate handlers.
+    if (!this.mounted) {
+      this.mountRoute(this.router)
+      this.mounted = true
+    }
+    console.log('[WebhookSource] Started -- POST route active on webhook ingress router')
   }
 
   stop(): void {
     this.emitFn = null
     this.active = false
-    // Express does not support runtime route removal.
-    // The mounted handler checks `this.active` and returns 503 when stopped.
+    // Express does not support runtime route removal. The mounted handler
+    // checks `this.active` and passes the request on when stopped, so a
+    // replacement WebhookSource mounted later on the same persistent ingress
+    // router is not shadowed by this stale handler.
     console.log('[WebhookSource] Stopped')
   }
 
@@ -121,21 +138,20 @@ export class WebhookSource implements EventSourceAdapter {
   // Route Handler
   // -------------------------------------------------------------------------
 
-  private mountRoute(app: Express): void {
-    // Mount BEFORE the auth middleware and wildcard routes.
-    // We use a path pattern that captures everything after /hooks/
-    // Express 5 syntax: /hooks/{*hookPath}
-    // Express 4 syntax: /hooks/*
-    // We use both-compatible approach with a single handler.
-    app.post(`${HOOKS_BASE_PATH}/:hookPath(*)`, (req: Request, res: Response, _next: NextFunction) => {
-      this.handleWebhook(req, res)
+  private mountRoute(router: Router): void {
+    // Express 5 (path-to-regexp v8) wildcard syntax. The legacy `:hookPath(*)`
+    // form throws at registration time on Express 5, which silently disabled
+    // this source (the error was only logged by EventRouter).
+    router.post('/{*hookPath}', (req: Request, res: Response, next: NextFunction) => {
+      this.handleWebhook(req, res, next)
     })
   }
 
-  private handleWebhook(req: Request, res: Response): void {
-    // Check if source is active
+  private handleWebhook(req: Request, res: Response, next: NextFunction): void {
+    // Inactive (stopped) sources defer to whatever is mounted after them --
+    // either a newer WebhookSource instance or the ingress 404 terminal.
     if (!this.active || !this.emitFn) {
-      res.status(503).json({ error: 'Webhook source is not active' })
+      next()
       return
     }
 
@@ -146,8 +162,12 @@ export class WebhookSource implements EventSourceAdapter {
       return
     }
 
-    // Extract hook path (everything after /hooks/)
-    const hookPath = req.params.hookPath || req.params[0] || ''
+    // Extract hook path (everything after /hooks/).
+    // Express 5 wildcard params are arrays of path segments.
+    const rawParam = (req.params as Record<string, unknown>).hookPath
+    const hookPath = Array.isArray(rawParam)
+      ? rawParam.join('/')
+      : typeof rawParam === 'string' ? rawParam : ''
 
     // ── HMAC signature verification ──────────────────────────
     if (this.secretResolver) {

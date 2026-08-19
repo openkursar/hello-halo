@@ -15,12 +15,37 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { api } from '../api'
 import { getCurrentLanguage } from '../i18n'
+import { categoryTaxonomyResource, discoverPageResource } from '../lib/store-resources'
 import type { RegistryEntry, StoreAppDetail, UpdateInfo, StoreQuery, StoreQueryResponse, StoreInstallProgress } from '../../shared/store/store-types'
 import type { AppType } from '../../shared/apps/spec-types'
 import type { ImSessionRecord } from '../../shared/types/im-channel'
 
 let storeListRequestSeq = 0
 let storeDetailRequestSeq = 0
+
+/**
+ * Guards for the freshness check. The floor only swallows double-clicks on the
+ * tab row — the check itself is conditional requests, so running it on every
+ * arrival at a tab is the intended cost.
+ */
+const REVALIDATE_MIN_INTERVAL_MS = 2_000
+let lastRevalidateAt = 0
+let revalidateInFlight = false
+
+/**
+ * Last results per browse query, so returning to a tab paints immediately while
+ * the refetch runs instead of blanking. Dropped on refresh, when the server
+ * index itself has changed.
+ *
+ * Only browse combinations are cached. Search terms are excluded: they would
+ * make the key space unbounded, and a search always warrants a fresh result.
+ * `locale` is part of the key because the query returns localized entries.
+ */
+const storeListCache = new Map<string, { items: RegistryEntry[]; page: number; hasMore: boolean }>()
+
+function storeListCacheKey(q: { category?: string; type?: string; locale?: string }): string {
+  return `${q.locale ?? ''}|${q.type ?? ''}|${q.category ?? ''}`
+}
 
 // ============================================
 // Types
@@ -92,7 +117,14 @@ interface AppsPageState {
   storeTypeFilter: AppType | null
   storePage: number
   storeHasMore: boolean
+  /** True when the store's "My Publications" second-level view is open. */
+  storeMineOpen: boolean
   storeSelectedSlug: string | null
+  storeAutoInstall: boolean
+  /** Pending "open the publish dialog pre-selected on this installed app"
+   * intent, carried across navigation from a detail page's Share action and
+   * consumed once by the store header (mirrors storeAutoInstall). */
+  storePublishIntent: { type: AppType; appId: string } | null
   storeSelectedDetail: StoreAppDetail | null
   storeDetailLoading: boolean
   storeDetailError: string | null
@@ -123,10 +155,13 @@ interface AppsPageState {
   // ── Store Actions ──────────────────────────
   setCurrentTab: (tab: AppsPageTab) => void
   loadStoreApps: (query?: StoreQuery) => Promise<void>
+  seedStoreApps: (items: RegistryEntry[], hasMore: boolean) => void
+  revalidateStore: () => Promise<void>
   loadMoreStoreApps: () => Promise<void>
   setStoreSearch: (query: string) => void
   setStoreCategory: (category: string | null) => void
   setStoreTypeFilter: (type: AppType | null) => void
+  setStoreMineOpen: (open: boolean) => void
   /**
    * Switch to the Marketplace tab pre-filtered by the given app type and
    * force a fresh fetch so the listing matches the new filter. Use this
@@ -136,8 +171,15 @@ interface AppsPageState {
    * never forget the reload step.
    */
   openMarketplaceFilteredBy: (type: AppType | null) => Promise<void>
-  selectStoreApp: (slug: string) => Promise<void>
+  selectStoreApp: (slug: string, autoInstall?: boolean) => Promise<void>
   clearStoreSelection: () => void
+  /** Consume the "open install dialog on arrival" intent set by a card's install button. */
+  consumeStoreAutoInstall: () => boolean
+  /** Navigate to the store and request the publish dialog open pre-selected on
+   * the given installed app (used by a detail page's Share action). */
+  openStorePublish: (type: AppType, appId: string) => void
+  /** Consume the publish-dialog intent (returns it once, then clears). */
+  consumeStorePublishIntent: () => { type: AppType; appId: string } | null
   installFromStore: (slug: string, spaceId: string | null, userConfig?: Record<string, unknown>, onProgress?: (progress: StoreInstallProgress) => void) => Promise<string | null>
   refreshStore: () => Promise<void>
   checkUpdates: () => Promise<void>
@@ -168,7 +210,10 @@ export const useAppsPageStore = create<AppsPageState>()(
   storeTypeFilter: null,
   storePage: 1,
   storeHasMore: false,
+  storeMineOpen: false,
   storeSelectedSlug: null,
+  storeAutoInstall: false,
+  storePublishIntent: null,
   storeSelectedDetail: null,
   storeDetailLoading: false,
   storeDetailError: null,
@@ -262,17 +307,64 @@ export const useAppsPageStore = create<AppsPageState>()(
 
   setCurrentTab: (tab) => set({ currentTab: tab }),
 
+  /**
+   * Freshness check for every arrival at a store tab. The index is revalidated
+   * with the validators it was fetched with, so an unchanged store answers 304
+   * and costs nothing but the round trip.
+   *
+   * A changed index reloads the visible list rather than only dropping the
+   * cache: an operator hiding an app must disappear from the grid the user is
+   * looking at, not on their next navigation. The ops-managed page documents
+   * are re-read either way, because they can change while the index does not.
+   */
+  revalidateStore: async () => {
+    const now = Date.now()
+    if (revalidateInFlight || now - lastRevalidateAt < REVALIDATE_MIN_INTERVAL_MS) return
+    revalidateInFlight = true
+    lastRevalidateAt = now
+    try {
+      const res = await api.storeRevalidate()
+      if (!res.success) return
+      discoverPageResource.invalidate()
+      categoryTaxonomyResource.invalidate()
+      if (res.data?.changed) {
+        storeListCache.clear()
+        await get().loadStoreApps()
+      }
+    } catch (err) {
+      console.warn('[AppsPageStore] revalidateStore failed:', err)
+    } finally {
+      revalidateInFlight = false
+    }
+  },
+
+  /**
+   * Adopt the catalog page carried by the discover payload so the grid and the
+   * curated sections describe the same snapshot, and warm the browse cache with
+   * it. Skipped while a search or filter is active (that list is not the
+   * catalog) or while a browse request is in flight, whose newer result wins.
+   */
+  seedStoreApps: (items, hasMore) => {
+    const { storeSearchQuery, storeCategory, storeTypeFilter, storeLoading } = get()
+    if (storeSearchQuery || storeCategory || storeTypeFilter || storeLoading) return
+    set({ storeApps: items, storeHasMore: hasMore, storePage: 1 })
+    storeListCache.set(storeListCacheKey({ locale: getCurrentLanguage() }), { items, page: 1, hasMore })
+  },
+
   loadStoreApps: async (query) => {
     const requestId = ++storeListRequestSeq
-    set({ storeLoading: true, storeError: null, storeApps: [], storePage: 1, storeHasMore: false })
+    const locale = getCurrentLanguage()
+    const baseQuery = query ?? {
+      search: get().storeSearchQuery || undefined,
+      category: get().storeCategory ?? undefined,
+      type: get().storeTypeFilter ?? undefined,
+    }
+    const cacheKey = baseQuery.search ? null : storeListCacheKey({ ...baseQuery, locale })
+    const cached = cacheKey ? storeListCache.get(cacheKey) : undefined
+    set(cached
+      ? { storeLoading: true, storeError: null, storeApps: cached.items, storePage: cached.page, storeHasMore: cached.hasMore }
+      : { storeLoading: true, storeError: null, storeApps: [], storePage: 1, storeHasMore: false })
     try {
-      const locale = getCurrentLanguage()
-      const baseQuery = query ?? {
-        search: get().storeSearchQuery || undefined,
-        category: get().storeCategory ?? undefined,
-        type: get().storeTypeFilter ?? undefined,
-      }
-
       if (baseQuery.type) {
         const requestQuery = { ...baseQuery, locale, page: 1, pageSize: 30 }
         const res = await api.storeQuery(requestQuery)
@@ -283,6 +375,7 @@ export const useAppsPageStore = create<AppsPageState>()(
         if (res.success && res.data) {
           const data = res.data as StoreQueryResponse
           set({ storeApps: data.items, storeHasMore: data.hasMore, storePage: 1 })
+          if (cacheKey) storeListCache.set(cacheKey, { items: data.items, page: 1, hasMore: data.hasMore })
         } else {
           set({ storeError: (res.error as string) || 'Failed to load store apps' })
         }
@@ -314,7 +407,9 @@ export const useAppsPageStore = create<AppsPageState>()(
           if (requestId !== storeListRequestSeq) return
           if (res.success && res.data) {
             typeResults[type] = res.data as StoreQueryResponse
-            applyPartialResults()
+            // Streaming in would shrink an already-painted cached list before
+            // regrowing it, so only do it when there was nothing to show.
+            if (!cached) applyPartialResults()
           } else {
             errors.push(`${type}: ${(res.error as string) || 'query failed'}`)
           }
@@ -328,8 +423,12 @@ export const useAppsPageStore = create<AppsPageState>()(
 
       const merged = typeOrder.flatMap(type => typeResults[type]?.items ?? [])
       if (merged.length === 0 && errors.length > 0) {
+        // Every type failed — keep whatever is on screen rather than blanking it.
         set({ storeError: `Failed to load store apps (${errors.join('; ')})` })
+        return
       }
+      if (cached) set({ storeApps: merged, storePage: 1, storeHasMore: false })
+      if (cacheKey) storeListCache.set(cacheKey, { items: merged, page: 1, hasMore: false })
     } catch (err) {
       if (requestId !== storeListRequestSeq) return
       console.error('[AppsPageStore] loadStoreApps error:', err)
@@ -365,11 +464,11 @@ export const useAppsPageStore = create<AppsPageState>()(
 
       if (res.success && res.data) {
         const data = res.data as StoreQueryResponse
-        set({
-          storeApps: [...get().storeApps, ...data.items],
-          storeHasMore: data.hasMore,
-          storePage: nextPage,
-        })
+        const items = [...get().storeApps, ...data.items]
+        set({ storeApps: items, storeHasMore: data.hasMore, storePage: nextPage })
+        if (!requestQuery.search) {
+          storeListCache.set(storeListCacheKey(requestQuery), { items, page: nextPage, hasMore: data.hasMore })
+        }
       }
     } catch (err) {
       if (requestId !== storeListRequestSeq) return
@@ -386,6 +485,7 @@ export const useAppsPageStore = create<AppsPageState>()(
   setStoreCategory: (category) => set({ storeCategory: category }),
 
   setStoreTypeFilter: (type) => set({ storeTypeFilter: type }),
+  setStoreMineOpen: (open) => set({ storeMineOpen: open }),
 
   openMarketplaceFilteredBy: async (type) => {
     // Set filter + tab atomically before kicking off the fetch so the
@@ -395,9 +495,9 @@ export const useAppsPageStore = create<AppsPageState>()(
     await get().loadStoreApps()
   },
 
-  selectStoreApp: async (slug) => {
+  selectStoreApp: async (slug, autoInstall = false) => {
     const requestId = ++storeDetailRequestSeq
-    set({ storeSelectedSlug: slug, storeDetailLoading: true, storeSelectedDetail: null, storeDetailError: null })
+    set({ storeSelectedSlug: slug, storeAutoInstall: autoInstall, storeDetailLoading: true, storeSelectedDetail: null, storeDetailError: null })
     try {
       const res = await api.storeGetAppDetail(slug)
       if (requestId !== storeDetailRequestSeq) return
@@ -419,11 +519,35 @@ export const useAppsPageStore = create<AppsPageState>()(
 
   clearStoreSelection: () => set({
     storeSelectedSlug: null,
+    storeAutoInstall: false,
     storeSelectedDetail: null,
     storeDetailLoading: false,
     storeDetailError: null,
     storeError: null,
   }),
+
+  consumeStoreAutoInstall: () => {
+    if (!get().storeAutoInstall) return false
+    set({ storeAutoInstall: false })
+    return true
+  },
+
+  openStorePublish: (type, appId) => {
+    // Surface the store tab's header (which owns the publish dialog): leave any
+    // detail/mine sub-view so StoreHeader renders and can consume the intent.
+    set({
+      currentTab: 'store',
+      storeMineOpen: false,
+      storeSelectedSlug: null,
+      storePublishIntent: { type, appId },
+    })
+  },
+
+  consumeStorePublishIntent: () => {
+    const intent = get().storePublishIntent
+    if (intent) set({ storePublishIntent: null })
+    return intent
+  },
 
   installFromStore: async (slug, spaceId, userConfig, onProgress) => {
     try {
@@ -451,6 +575,11 @@ export const useAppsPageStore = create<AppsPageState>()(
         set({ storeError: (res.error as string) || 'Failed to refresh store index' })
         return
       }
+      // Scene categories, collections and the discover layout are ops-managed
+      // server-side; refetch them alongside the index.
+      storeListCache.clear()
+      discoverPageResource.invalidate()
+      categoryTaxonomyResource.invalidate()
       // Reload store apps after refresh
       await get().loadStoreApps()
       await get().checkUpdates()

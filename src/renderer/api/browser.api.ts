@@ -181,6 +181,11 @@ export const browserApi = {
   onAIBrowserActiveViewChanged: (callback: (data: { viewId: string; url: string | null; title: string | null }) => void) =>
     onEvent('ai-browser:active-view-changed', callback as (data: unknown) => void),
 
+  // AI Browser view-gone notification
+  // Sent when the AI's active view is destroyed (canvas tab close, tray stop)
+  onAIBrowserViewGone: (callback: (data: { viewId: string }) => void) =>
+    onEvent('ai-browser:view-gone', callback as (data: unknown) => void),
+
   // ===== Browser Policy (user-extensible allowlist — desktop only) =====
   getBrowserPolicy: async (): Promise<ApiResponse> => {
     if (!isElectron()) {

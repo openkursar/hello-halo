@@ -5,7 +5,7 @@
  * into per-server groups.
  */
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 
 // Mock heavy dependencies that mcp-manager.ts imports transitively
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
@@ -35,7 +35,13 @@ vi.mock('../../../src/main/services/agent/sdk-config', () => ({
   getCleanUserEnv: vi.fn(() => ({}))
 }))
 
-import { groupToolsByMcpServer } from '../../../src/main/services/agent/mcp-manager'
+import {
+  broadcastMcpStatus,
+  getCachedMcpStatus,
+  groupToolsByMcpServer,
+  removeServerStatus,
+  updateServerStatus
+} from '../../../src/main/services/agent/mcp-manager'
 
 describe('groupToolsByMcpServer', () => {
   it('groups MCP tools by server name', () => {
@@ -87,5 +93,90 @@ describe('groupToolsByMcpServer', () => {
     expect(grouped).toEqual({
       'ai-browser': ['browser_navigate_to', 'browser_take_screenshot'],
     })
+  })
+})
+
+// ============================================
+// Two-producer status model
+// ============================================
+
+describe('MCP status derivation', () => {
+  const entry = (name: string) => getCachedMcpStatus().find(s => s.name === name)
+
+  afterEach(() => {
+    for (const s of [...getCachedMcpStatus()]) removeServerStatus(s.name)
+  })
+
+  it('reports the probe verdict while no session has spoken', () => {
+    updateServerStatus('srv', { status: 'connected', tools: ['ping'] })
+
+    expect(entry('srv')).toMatchObject({
+      status: 'connected',
+      probeStatus: 'connected',
+      tools: ['ping']
+    })
+    expect(entry('srv')?.sessionStatus).toBeUndefined()
+  })
+
+  it('lets a session verdict outrank a passing probe instead of being overwritten by it', () => {
+    updateServerStatus('srv', { status: 'connected', tools: ['ping'] })
+    broadcastMcpStatus([{ name: 'srv', status: 'needs-auth' }])
+
+    expect(entry('srv')).toMatchObject({
+      status: 'needs-auth',
+      probeStatus: 'connected',
+      sessionStatus: 'needs-auth'
+    })
+  })
+
+  it('drops the session verdict once a probe reconnects', () => {
+    broadcastMcpStatus([{ name: 'srv', status: 'needs-auth' }])
+    updateServerStatus('srv', { status: 'connected', tools: ['ping'] })
+
+    expect(entry('srv')?.status).toBe('connected')
+    expect(entry('srv')?.sessionStatus).toBeUndefined()
+  })
+
+  it('drops a stale session success when a fresh probe fails', () => {
+    broadcastMcpStatus([{ name: 'srv', status: 'connected' }], ['mcp__srv__ping'])
+    updateServerStatus('srv', { status: 'failed', errorDetail: 'ECONNREFUSED' })
+
+    expect(entry('srv')).toMatchObject({
+      status: 'failed',
+      probeStatus: 'failed',
+      errorDetail: 'ECONNREFUSED'
+    })
+    expect(entry('srv')?.sessionStatus).toBeUndefined()
+  })
+
+  it('keeps the session verdict when the probe also fails', () => {
+    broadcastMcpStatus([{ name: 'srv', status: 'needs-auth' }])
+    updateServerStatus('srv', { status: 'failed', errorDetail: 'ECONNREFUSED' })
+
+    expect(entry('srv')).toMatchObject({
+      status: 'needs-auth',
+      probeStatus: 'failed',
+      sessionStatus: 'needs-auth',
+      errorDetail: 'ECONNREFUSED'
+    })
+  })
+
+  it('preserves a probe verdict across session reports', () => {
+    updateServerStatus('srv', { status: 'failed', errorDetail: 'ECONNREFUSED' })
+    broadcastMcpStatus([{ name: 'srv', status: 'connected' }], ['mcp__srv__ping'])
+
+    expect(entry('srv')).toMatchObject({
+      status: 'connected',
+      probeStatus: 'failed',
+      sessionStatus: 'connected',
+      tools: ['ping']
+    })
+  })
+
+  it('leaves servers absent from a session report untouched', () => {
+    updateServerStatus('other-space', { status: 'connected' })
+    broadcastMcpStatus([{ name: 'srv', status: 'failed' }])
+
+    expect(entry('other-space')?.status).toBe('connected')
   })
 })

@@ -587,8 +587,12 @@ const lastReconcileTime = new Map<string, number>()
  *
  * Designed to recover from missed @parcel/watcher events (OS queue overflow,
  * App Nap, race conditions). Triggered on window focus and manual refresh.
+ *
+ * @param reason - Trigger source (window-focus / watcher-error / worker-restart /
+ *   artifact-api / ...). Logged so the rescan frequency can be attributed to a
+ *   cause when diagnosing high-frequency directory scanning.
  */
-export async function reconcileLoadedDirs(spaceId: string): Promise<void> {
+export async function reconcileLoadedDirs(spaceId: string, reason = 'manual'): Promise<void> {
   const cache = cacheMap.get(spaceId)
   if (!cache || cache.loadedDirs.size === 0) return
 
@@ -596,7 +600,7 @@ export async function reconcileLoadedDirs(spaceId: string): Promise<void> {
   const now = Date.now()
   const lastTime = lastReconcileTime.get(spaceId) || 0
   if (now - lastTime < RECONCILE_COOLDOWN_MS) {
-    console.debug(`[ArtifactCache] Reconcile skipped for ${spaceId} (cooldown)`)
+    console.debug(`[ArtifactCache] Reconcile skipped for ${spaceId} (cooldown, reason=${reason})`)
     return
   }
   lastReconcileTime.set(spaceId, now)
@@ -605,7 +609,7 @@ export async function reconcileLoadedDirs(spaceId: string): Promise<void> {
   let changedDirCount = 0
   const updatedDirs: Array<{ dirPath: string; children: CachedTreeNode[] }> = []
 
-  console.debug(`[ArtifactCache] Reconciling ${dirsToCheck.length} loaded dirs for space: ${spaceId}`)
+  console.log(`[ArtifactCache] Reconcile run: reason=${reason}, ${dirsToCheck.length} loaded dirs, space=${spaceId}`)
 
   // Scan all loaded directories in parallel via worker (off main thread)
   const scanResults = await Promise.allSettled(
@@ -704,13 +708,15 @@ export async function reconcileLoadedDirs(spaceId: string): Promise<void> {
 
 /**
  * Reconcile ALL cached spaces. Called on window focus.
+ *
+ * @param reason - Trigger source, forwarded to reconcileLoadedDirs for attribution.
  */
-export async function reconcileAllSpaces(): Promise<void> {
+export async function reconcileAllSpaces(reason = 'window-focus'): Promise<void> {
   const spaceIds = Array.from(cacheMap.keys())
   if (spaceIds.length === 0) return
 
   await Promise.allSettled(
-    spaceIds.map(spaceId => reconcileLoadedDirs(spaceId))
+    spaceIds.map(spaceId => reconcileLoadedDirs(spaceId, reason))
   )
 }
 

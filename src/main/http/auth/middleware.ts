@@ -143,10 +143,28 @@ export function handleLogin(req: Request, res: Response): void {
 }
 
 /**
- * WebSocket authentication entry point. Mirrors the timing-safe check
- * but does NOT participate in IP/target rate limiting because the WS
- * path requires a successful login first via the HTTP layer.
+ * WebSocket authentication entry point. Participates in the same IP/target
+ * lockout as the HTTP login: nothing forces a WS client through the HTTP
+ * login first, so an unthrottled 'auth' message would let an attacker
+ * brute-force the credential while bypassing the login lockout entirely.
  */
-export function authenticateWebSocket(token: string): boolean {
-  return validateToken(token)
+export function authenticateWebSocket(token: string, ip: string): boolean {
+  if (checkLock(ip).locked) {
+    logAuthEvent('ws_auth_blocked', { ip })
+    return false
+  }
+
+  if (validateToken(token)) {
+    recordSuccess(ip)
+    logAuthEvent('ws_auth_success', { ip })
+    return true
+  }
+
+  const outcome = recordFailure(ip)
+  logAuthEvent('ws_auth_fail', { ip })
+  if (outcome.newlyLocked && outcome.reason) {
+    logAuthEvent('lockout_start', { ip, reason: outcome.reason, retryAfterMs: outcome.retryAfterMs })
+    notifyLockout(outcome.reason, ip)
+  }
+  return false
 }

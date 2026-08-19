@@ -34,7 +34,6 @@ export type {
   Thought,
   SessionState,
   V2SDKSession,
-  SessionConfig,
   V2SessionInfo,
   McpServerStatusInfo,
   TokenUsage,
@@ -99,11 +98,16 @@ export {
   testMcpConnections
 } from './mcp-manager'
 
+export { probeMcpApp } from './mcp-probe'
+export type { McpProbeResult } from './mcp-probe'
+
 // ============================================
 // Re-exports for Internal Use
 // ============================================
 
 export { createCanUseTool, resolveQuestion, rejectQuestion, rejectAllQuestions } from './permission-handler'
+export { listToolsets, openToolsetByUser, closeToolsetByUser } from './toolsets'
+export type { ToolsetStatus, ToolsetsChangedEvent } from './toolsets'
 export { getWorkingDir, getApiCredentials } from './helpers'
 export { parseSDKMessage, buildMessageContent, formatCanvasContext } from './message-utils'
 export { getOrCreateV2Session, activeSessions, v2Sessions, getConsumerHandle } from './session-manager'

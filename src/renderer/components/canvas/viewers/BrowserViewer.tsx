@@ -172,21 +172,12 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
     }
   }, [blockedUrl, blockedHost, tab.browserViewId, tab.id, t])
 
-  // AI Browser state - detect if AI is operating this browser
+  // AI Browser state — identity by viewId is exact: this tab is the AI's live
+  // view iff its BrowserView is the AI's current active view. No URL/hostname or
+  // title-emoji heuristics (which misfire when tabs share a host).
+  const aiActiveViewId = useAIBrowserStore(state => state.activeViewId)
   const isAIOperating = useAIBrowserStore(state => state.isOperating)
-  const aiActiveUrl = useAIBrowserStore(state => state.activeUrl)
-
-  // Determine if this browser is the one AI is currently operating
-  const isThisAIBrowser = (() => {
-    if (!isAIOperating || !aiActiveUrl || !tab.url) return false
-    if (tab.title?.includes('🤖')) return true
-    try {
-      const aiHostname = new URL(aiActiveUrl).hostname
-      return tab.url.includes(aiHostname)
-    } catch {
-      return false
-    }
-  })()
+  const isThisAIBrowser = !!tab.browserViewId && tab.browserViewId === aiActiveViewId
 
   // ============================================
   // Container Bounds Registration
@@ -366,8 +357,8 @@ export function BrowserViewer({ tab }: BrowserViewerProps) {
           <span className="text-xs font-medium text-primary">{t('AI is operating this browser')}</span>
           <div className="flex-1" />
           <div className="flex items-center gap-1">
-            <div className="w-1.5 h-1.5 bg-green-500 rounded-full" />
-            <span className="text-xs text-muted-foreground">{t('Live')}</span>
+            <div className={`w-1.5 h-1.5 rounded-full ${isAIOperating ? 'bg-green-500 animate-pulse' : 'bg-muted-foreground/40'}`} />
+            <span className="text-xs text-muted-foreground">{isAIOperating ? t('Live') : t('Idle')}</span>
           </div>
         </div>
       )}

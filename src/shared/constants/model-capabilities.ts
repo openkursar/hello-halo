@@ -10,11 +10,15 @@
  *     models, `max_tokens` otherwise). OpenAI rejects `max_tokens` on the
  *     o1/o3/o4-mini and gpt-5-thinking families with HTTP 400.
  *
- * Resolution order (vision):
+ * Resolution order (vision), from a model id alone:
  *   1. Explicit ModelOption.supportsVision (provider-declared) — highest priority
  *   2. Vision keyword whitelist (e.g. "-vl", "vision", "omni")
  *   3. Non-vision pattern blacklist (e.g. "deepseek", "glm-4")
  *   4. Default: true (unknown models pass through, no false blocking)
+ *
+ * Callers holding an AI source use {@link resolveModelVision} instead: it adds
+ * the per-model override layer on top and is the one answer every consumer
+ * (renderer hint, backend config, image fallback) must share.
  */
 
 import type { ModelOption } from '../types/ai-sources'
@@ -99,6 +103,45 @@ export function supportsVision(model: ModelOption): boolean {
 export function supportsVisionById(modelId: string | undefined | null): boolean {
   if (!modelId) return true
   return inferVisionSupport(modelId)
+}
+
+/**
+ * Minimal shape {@link resolveModelVision} reads from an AI source. Declared
+ * structurally so the renderer, the source manager and tests can all pass what
+ * they hold without importing the full AISource type.
+ */
+export interface VisionCapabilitySource {
+  modelOverrides?: Record<string, { vision?: boolean } | undefined>
+  availableModels?: ModelOption[]
+}
+
+/**
+ * Effective vision capability for `modelId` within `source` — the single
+ * answer to "can this model accept image blocks".
+ *
+ * Renderer (input hint), source manager (backend config) and the image
+ * fallback must agree: a split decision shows the user "images go through OCR"
+ * while the request still carries image parts, which strict providers reject
+ * outright. Every caller resolves through here.
+ *
+ * Resolution order:
+ *   1. `modelOverrides[modelId].vision` — the user's Model Config setting, or
+ *      a capability the provider's catalog declared. Keyed by the wire model
+ *      id, the same key Model Config writes.
+ *   2. Provider-declared `ModelOption.supportsVision`
+ *   3. Blacklist/keyword inference from the model id
+ */
+export function resolveModelVision(
+  source: VisionCapabilitySource | null | undefined,
+  modelId: string | undefined | null
+): boolean {
+  if (!source || !modelId) return supportsVisionById(modelId)
+
+  const override = source.modelOverrides?.[modelId]?.vision
+  if (typeof override === 'boolean') return override
+
+  const model = source.availableModels?.find(m => m.id === modelId)
+  return model ? supportsVision(model) : supportsVisionById(modelId)
 }
 
 /**

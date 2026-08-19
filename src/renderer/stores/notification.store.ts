@@ -16,12 +16,13 @@
  */
 
 import { create } from 'zustand'
+import type { ToastVariant, ToastBodyFormat } from '../../shared/types/notification'
 
 // ============================================
 // Types
 // ============================================
 
-export type ToastVariant = 'default' | 'success' | 'warning' | 'error'
+export type { ToastVariant, ToastBodyFormat }
 
 export interface ToastAction {
   label: string
@@ -35,6 +36,12 @@ export interface ToastItem {
   title: string
   /** Notification body text */
   body?: string
+  /**
+   * How to render `body`. Defaults to plain text.
+   * 'markdown' routes through RichText — use it for server-authored copy
+   * (release notes, announcements) that needs lists or inline links.
+   */
+  bodyFormat?: ToastBodyFormat
   /** Visual variant — controls icon and accent color */
   variant: ToastVariant
   /** Primary action button (e.g. "Restart now", "View") */

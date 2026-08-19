@@ -1,6 +1,7 @@
 {
   "$schema": "./product.schema.json",
   "name": "Halo",
+  "appId": "com.halo.app",
   "dataFolderName": "halo",
   "version": "1.0.0",
   "updateConfig": {
@@ -40,7 +41,14 @@
       "iconBgColor": "#da7756",
       "recommended": false,
       "builtin": true,
-      "enabled": true
+      "enabled": true,
+      "docs": {
+        "url": "https://hello-halo.cc/docs/getting-started/setup-ai.html",
+        "label": {
+          "en": "Don't know how to get it? View tutorial",
+          "zh-CN": "不知道如何获取？查看教程"
+        }
+      }
     },
     {
       "type": "github-copilot",

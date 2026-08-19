@@ -19,10 +19,10 @@ import { loadProductConfig } from './product-config'
  * Consumers MUST treat this as a one-way gate: when false, the credential
  * persistence layer takes the standard path (plain string stored in
  * config). When true, the GM/T path is taken: HKDF-SHA-256 over a
- * machine-bound seed derives an SM4-CBC encryption key and an HMAC-SM3
- * MAC key (encrypt-then-MAC); see `crypto-envelope.ts`. Any non-boolean
- * truthy value is treated as false to prevent accidental enablement via
- * config typos.
+ * build-deterministic static product key (`credential-key.ts`) derives an
+ * SM4-CBC encryption key and an HMAC-SM3 MAC key (encrypt-then-MAC); see
+ * `crypto-envelope.ts`. Any non-boolean truthy value is treated as false to
+ * prevent accidental enablement via config typos.
  */
 export function isCredentialAtRestSafe(): boolean {
   const security = loadProductConfig().security as { credentialAtRestSafe?: unknown } | undefined

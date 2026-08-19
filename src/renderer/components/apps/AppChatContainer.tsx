@@ -25,7 +25,7 @@ import { AppChatView } from './AppChatView'
 import { ImChatView } from './ImChatView'
 import { ImSessionPanel } from './ImSessionPanel'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
-import { buildImSessionKey } from '../../../shared/apps/im-keys'
+import { buildImSessionKey, buildLocalSessionKey, getAppChatConversationId } from '../../../shared/apps/im-keys'
 
 interface AppChatContainerProps {
   appId: string
@@ -65,6 +65,15 @@ export function AppChatContainer({ appId, spaceId }: AppChatContainerProps) {
     }
   }, [selectedImSession])
 
+  // A native local session ('local' source) is fully interactive and renders in
+  // AppChatView, unlike IM/HTTP sessions (read-only ImChatView). Resolve which
+  // native conversationId AppChatView should drive: the selected local session,
+  // or the app's default when nothing (or an IM session) is selected.
+  const isNativeSelection = !selectedImSession || selectedImSession.source === 'local'
+  const nativeConversationId = selectedImSession?.source === 'local'
+    ? buildLocalSessionKey(appId, selectedImSession.chatId)
+    : getAppChatConversationId(appId)
+
   return (
     <div className="flex h-full">
       {/* Main conversation area */}
@@ -88,15 +97,22 @@ export function AppChatContainer({ appId, spaceId }: AppChatContainerProps) {
 
         {/* Conversation content */}
         <div className="flex-1 overflow-hidden">
-          {selectedImSession ? (
+          {isNativeSelection ? (
+            // key forces a clean remount on native session switch so per-session
+            // message/scroll/ref state never leaks across sessions.
+            <AppChatView
+              key={nativeConversationId}
+              appId={appId}
+              spaceId={spaceId}
+              conversationId={nativeConversationId}
+            />
+          ) : (
             <ImChatView
               appId={appId}
               spaceId={spaceId}
-              session={selectedImSession}
+              session={selectedImSession!}
               clearKey={imChatClearKey}
             />
-          ) : (
-            <AppChatView appId={appId} spaceId={spaceId} />
           )}
         </div>
       </div>

@@ -3,6 +3,7 @@
  *
  * Used by:
  *   - weixin-ilink.provider.ts  (long-poll + send)
+ *   - ilink-media.ts            (CDN download / upload)
  *   - ipc/weixin-ilink.ts       (QR auth flow IPC handlers)
  *   - controllers/weixin-ilink.controller.ts (save-token / disconnect)
  *   - http/routes/index.ts      (QR auth HTTP routes)
@@ -13,6 +14,7 @@
 
 import https from 'https'
 import http from 'http'
+import type { IncomingHttpHeaders } from 'http'
 import { URL } from 'url'
 
 // ============================================
@@ -62,37 +64,56 @@ export function isSessionExpired(ret: number, errcode?: number): boolean {
   return ret === SESSION_EXPIRED_CODE || errcode === SESSION_EXPIRED_CODE
 }
 
-/**
- * Perform an HTTP(S) request and return the parsed JSON response.
- * Supports GET and POST methods. Throws on network or parse errors.
- *
- * @param signal - Optional AbortSignal for cancelling long-running requests
- *                 (e.g., the 35 s long-poll in the provider).
- */
-export function fetchJson<T>(
-  method: 'GET' | 'POST',
-  urlStr: string,
-  headers: Record<string, string>,
-  body?: unknown,
+/** Raw HTTP(S) response — headers are needed by the CDN upload flow. */
+export interface IlinkRawResponse {
+  status: number
+  headers: IncomingHttpHeaders
+  body: Buffer
+}
+
+export interface IlinkRequestOptions {
+  method: 'GET' | 'POST'
+  url: string
+  headers?: Record<string, string>
+  body?: Buffer | string
+  /** Cancels a request in flight (e.g. the 35 s long-poll on stop()). */
   signal?: AbortSignal
-): Promise<T> {
+  /** Abort once the response body grows past this size. */
+  maxBytes?: number
+  /** Abort when the socket makes no progress for this long. */
+  timeoutMs?: number
+  /**
+   * Abort this long after the request starts, whatever the socket is doing.
+   * `timeoutMs` alone cannot bound a slow-drip response that trickles bytes
+   * just often enough to keep looking alive.
+   */
+  deadlineMs?: number
+}
+
+/**
+ * Perform an HTTP(S) request and return the raw response.
+ * Used directly for binary transfers (CDN media download / upload);
+ * {@link fetchJson} builds on it for the JSON API endpoints.
+ */
+export function fetchBinary(options: IlinkRequestOptions): Promise<IlinkRawResponse> {
+  const { method, url, headers = {}, body, signal, maxBytes, timeoutMs, deadlineMs } = options
+
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(new Error('Aborted'))
       return
     }
 
-    const parsedUrl = new URL(urlStr)
+    const parsedUrl = new URL(url)
     const isHttps = parsedUrl.protocol === 'https:'
     const transport = isHttps ? https : http
 
-    const bodyStr = body !== undefined ? JSON.stringify(body) : undefined
     const reqHeaders: Record<string, string> = { ...headers }
-    if (bodyStr) {
-      reqHeaders['Content-Length'] = Buffer.byteLength(bodyStr).toString()
+    if (body !== undefined) {
+      reqHeaders['Content-Length'] = Buffer.byteLength(body).toString()
     }
 
-    const options: https.RequestOptions = {
+    const requestOptions: https.RequestOptions = {
       hostname: parsedUrl.hostname,
       port: parsedUrl.port || (isHttps ? 443 : 80),
       path: parsedUrl.pathname + parsedUrl.search,
@@ -100,21 +121,55 @@ export function fetchJson<T>(
       headers: reqHeaders,
     }
 
-    const req = transport.request(options, (res) => {
+    let deadlineTimer: ReturnType<typeof setTimeout> | null = null
+
+    /** Release both timers so neither outlives the request on a pooled socket. */
+    function clearTimers(): void {
+      if (deadlineTimer) {
+        clearTimeout(deadlineTimer)
+        deadlineTimer = null
+      }
+      // Without a socket there is no timer to clear, and setTimeout would only
+      // queue a 'socket' listener on a request that will never get one.
+      if (timeoutMs !== undefined && req.socket) req.setTimeout(0)
+    }
+
+    const req = transport.request(requestOptions, (res) => {
       const chunks: Buffer[] = []
-      res.on('data', (chunk: Buffer) => chunks.push(chunk))
-      res.on('end', () => {
-        const raw = Buffer.concat(chunks).toString('utf8')
-        try {
-          resolve(JSON.parse(raw) as T)
-        } catch {
-          reject(new Error(`Invalid JSON response: ${raw.slice(0, 200)}`))
+      let received = 0
+      res.on('data', (chunk: Buffer) => {
+        received += chunk.length
+        if (maxBytes !== undefined && received > maxBytes) {
+          req.destroy(new Error(`Response exceeds ${maxBytes} bytes`))
+          return
         }
+        chunks.push(chunk)
+      })
+      res.on('end', () => {
+        clearTimers()
+        resolve({
+          status: res.statusCode ?? 0,
+          headers: res.headers,
+          body: Buffer.concat(chunks),
+        })
       })
       res.on('error', reject)
     })
 
     req.on('error', reject)
+    req.on('close', clearTimers)
+
+    if (timeoutMs !== undefined) {
+      req.setTimeout(timeoutMs, () => {
+        req.destroy(new Error(`Request timed out after ${timeoutMs}ms`))
+      })
+    }
+
+    if (deadlineMs !== undefined) {
+      deadlineTimer = setTimeout(() => {
+        req.destroy(new Error(`Request exceeded the ${deadlineMs}ms deadline`))
+      }, deadlineMs)
+    }
 
     if (signal) {
       const onAbort = () => req.destroy(new Error('Aborted'))
@@ -122,7 +177,37 @@ export function fetchJson<T>(
       req.on('close', () => signal.removeEventListener('abort', onAbort))
     }
 
-    if (bodyStr) req.write(bodyStr)
+    if (body !== undefined) req.write(body)
     req.end()
   })
+}
+
+/**
+ * Perform an HTTP(S) request and return the parsed JSON response.
+ * Supports GET and POST methods. Throws on network or parse errors.
+ *
+ * @param signal - Optional AbortSignal for cancelling long-running requests
+ *                 (e.g., the 35 s long-poll in the provider).
+ */
+export async function fetchJson<T>(
+  method: 'GET' | 'POST',
+  urlStr: string,
+  headers: Record<string, string>,
+  body?: unknown,
+  signal?: AbortSignal
+): Promise<T> {
+  const res = await fetchBinary({
+    method,
+    url: urlStr,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
+  })
+
+  const raw = res.body.toString('utf8')
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    throw new Error(`Invalid JSON response: ${raw.slice(0, 200)}`)
+  }
 }

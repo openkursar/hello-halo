@@ -117,11 +117,11 @@ export function SpaceSelector() {
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-1.5 px-2 py-1.5 text-sm hover:bg-secondary/80 rounded-lg transition-colors max-w-[200px]"
+        className="flex items-center gap-1.5 px-2 py-1.5 text-sm hover:bg-secondary/80 rounded-lg transition-colors max-w-[140px] sm:max-w-[200px]"
         title={displayName}
       >
         <SpaceIcon iconId={displayIcon} size={18} className="flex-shrink-0" />
-        <span className="font-medium truncate hidden sm:inline">{displayName}</span>
+        <span className="font-medium truncate">{displayName}</span>
         <ChevronDown className={`w-3.5 h-3.5 flex-shrink-0 text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 

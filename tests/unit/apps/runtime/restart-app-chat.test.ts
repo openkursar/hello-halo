@@ -6,8 +6,10 @@
  *   - Closes V2 sessions whose conversationId starts with `app-chat:{appId}:`
  *     (IM channel sessions for this app).
  *   - Does NOT touch sessions belonging to other apps.
- *   - Calls stopGeneration() first when a session is actively generating.
- *   - Calls closeV2Session() for every matched session.
+ *   - interruptActive:true aborts an in-flight turn via stopGeneration() first,
+ *     then closes it. Default (false) LEAVES an actively-generating session alone
+ *     (deferred to the next-message fingerprint rebuild) and closes only idle ones.
+ *   - Calls closeV2Session() for every closed session.
  *   - Returns the count of sessions closed.
  *   - Idempotent: returns 0 when no sessions match.
  *   - Continues on per-session errors (one failure does not abort the loop).
@@ -123,8 +125,8 @@ vi.mock('../../../../src/main/services/space.service', () => ({
   getSpace: vi.fn().mockReturnValue(null),
 }))
 
-// Apps siblings. app-chat.ts pulls in runtime/index.ts via getAppMemoryService
-// + getActivityStore; that pulls service.ts → analytics → electron-as-CJS.
+// Apps siblings. app-chat.ts pulls in runtime/index.ts via getAppMemoryService;
+// that pulls service.ts → analytics → electron-as-CJS.
 // We stub the index re-exports so the heavy chain never loads.
 vi.mock('../../../../src/main/apps/manager', () => ({
   getAppManager: vi.fn().mockReturnValue(null),
@@ -134,7 +136,6 @@ vi.mock('../../../../src/main/apps/conversation-mcp', () => ({
 }))
 vi.mock('../../../../src/main/apps/runtime/index', () => ({
   getAppMemoryService: vi.fn().mockReturnValue(null),
-  getActivityStore: vi.fn().mockReturnValue(null),
 }))
 
 // dispatch-inbound pulls in analytics → electron-CJS at module load.
@@ -243,7 +244,7 @@ describe('restartAppChat', () => {
     expect(closeV2Session).not.toHaveBeenCalledWith(lookalikeKey)
   })
 
-  it('aborts in-flight generations before closing the session', async () => {
+  it('interruptActive aborts in-flight generations before closing the session', async () => {
     const nativeKey = getAppChatConversationId('target-app')
     seedSession('active', nativeKey)
     seedSession('v2', nativeKey)
@@ -258,37 +259,66 @@ describe('restartAppChat', () => {
       v2Sessions.delete(id)
     })
 
-    const result = await restartAppChat('target-app')
+    const result = await restartAppChat('target-app', { interruptActive: true })
 
     expect(result.sessionsClosed).toBe(1)
     expect(callOrder).toEqual([`stop:${nativeKey}`, `close:${nativeKey}`])
   })
 
-  it('handles sessions present only in activeSessions (no cached V2 entry)', async () => {
+  it('interruptActive handles sessions present only in activeSessions (no cached V2 entry)', async () => {
     // Edge case: a session is mid-generation but the v2Sessions cache
-    // has been swept (idle cleanup race). Restart must still close it.
+    // has been swept (idle cleanup race). Interrupt must still close it.
     const nativeKey = getAppChatConversationId('target-app')
     seedSession('active', nativeKey)
 
-    const result = await restartAppChat('target-app')
+    const result = await restartAppChat('target-app', { interruptActive: true })
 
     expect(result.sessionsClosed).toBe(1)
     expect(stopGeneration).toHaveBeenCalledWith(nativeKey)
     expect(closeV2Session).toHaveBeenCalledWith(nativeKey)
   })
 
-  it('deduplicates when a session lives in both maps', async () => {
+  it('interruptActive deduplicates when a session lives in both maps', async () => {
     // Sessions that are actively generating also have a v2Sessions entry.
     // The function must not double-close.
     const nativeKey = getAppChatConversationId('target-app')
     seedSession('active', nativeKey)
     seedSession('v2', nativeKey)
 
-    const result = await restartAppChat('target-app')
+    const result = await restartAppChat('target-app', { interruptActive: true })
 
     expect(result.sessionsClosed).toBe(1)
     expect(closeV2Session).toHaveBeenCalledTimes(1)
     expect(stopGeneration).toHaveBeenCalledTimes(1)
+  })
+
+  it('default (no interrupt) leaves an actively-generating session alone', async () => {
+    // A non-revoke edit must not drop an in-flight reply: the active session is
+    // deferred (not stopped, not closed) and rebuilt on its next message.
+    const nativeKey = getAppChatConversationId('target-app')
+    seedSession('active', nativeKey)
+    seedSession('v2', nativeKey)
+
+    const result = await restartAppChat('target-app')
+
+    expect(result.sessionsClosed).toBe(0)
+    expect(stopGeneration).not.toHaveBeenCalled()
+    expect(closeV2Session).not.toHaveBeenCalled()
+  })
+
+  it('default (no interrupt) still closes idle sessions while deferring active ones', async () => {
+    const nativeKey = getAppChatConversationId('target-app')
+    const idleImKey = `${nativeKey}:wecom-bot:direct:user-1`
+    seedSession('active', nativeKey)   // mid-generation → deferred
+    seedSession('v2', nativeKey)
+    seedSession('v2', idleImKey)       // idle → closed now
+
+    const result = await restartAppChat('target-app')
+
+    expect(result.sessionsClosed).toBe(1)
+    expect(stopGeneration).not.toHaveBeenCalled()
+    expect(closeV2Session).toHaveBeenCalledWith(idleImKey)
+    expect(closeV2Session).not.toHaveBeenCalledWith(nativeKey)
   })
 
   it('continues closing other sessions after a per-session failure', async () => {

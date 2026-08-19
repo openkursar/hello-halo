@@ -13,6 +13,7 @@
  * - auth:logout (sourceId) - Logout from a source (by ID)
  * - auth:get-providers - Get list of available auth providers
  * - auth:get-builtin-providers - Get list of built-in providers
+ * - auth:get-quota (sourceId) - Report metered quota for a source (by ID)
  */
 
 import { BrowserWindow, nativeTheme, session } from 'electron'
@@ -284,6 +285,20 @@ export function registerAuthHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error(`[Auth IPC] Logout error for ${sourceId}:`, err)
+        return { success: false, error: err.message }
+      }
+    },
+
+    /**
+     * Report the current metered quota for a source. Returns
+     * { success: true, data: null } when the provider has no quota concept.
+     */
+    authGetQuota: async (sourceId: string) => {
+      try {
+        return await manager.getSourceQuota(sourceId)
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error(`[Auth IPC] Get quota error for ${sourceId}:`, err)
         return { success: false, error: err.message }
       }
     },

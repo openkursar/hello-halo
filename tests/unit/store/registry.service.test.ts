@@ -3,10 +3,20 @@ import { mkdirSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 
-const { getAppManagerMock, getAppRuntimeMock, loadProductConfigMock } = vi.hoisted(() => ({
-  getAppManagerMock: vi.fn(),
-  getAppRuntimeMock: vi.fn(),
-  loadProductConfigMock: vi.fn(),
+const { getAppManagerMock, getAppRuntimeMock, loadProductConfigMock, authorizeInstallMock, completeInstallIntentMock } =
+  vi.hoisted(() => ({
+    getAppManagerMock: vi.fn(),
+    getAppRuntimeMock: vi.fn(),
+    loadProductConfigMock: vi.fn(),
+    authorizeInstallMock: vi.fn(),
+    completeInstallIntentMock: vi.fn(),
+  }))
+
+// Stubbed so ledger calls are observable on sources whose real driver has no
+// ledger. What a driver without one does is install-orders.test.ts's subject.
+vi.mock("../../../src/main/store/backend/install-orders", () => ({
+  authorizeInstall: authorizeInstallMock,
+  completeInstallIntent: completeInstallIntentMock,
 }))
 
 vi.mock("../../../src/main/apps/manager", () => ({
@@ -38,6 +48,7 @@ import {
   getAppDetail,
   listApps,
   installFromStore,
+  applyUpgrade,
   getRegistries,
   onSyncStatusChanged,
 } from "../../../src/main/store/registry.service"
@@ -92,6 +103,9 @@ describe("registry.service", () => {
     getAppRuntimeMock.mockReturnValue(null)
     // Default: no product.json overrides (open-source build behaviour)
     loadProductConfigMock.mockReturnValue({ authProviders: [], registryOverrides: undefined })
+    authorizeInstallMock.mockReset()
+    completeInstallIntentMock.mockReset()
+    authorizeInstallMock.mockResolvedValue(null)
   })
 
   afterEach(() => {
@@ -388,6 +402,7 @@ store:
       install: installSpy,
       uninstall: uninstallSpy,
       deleteApp: deleteAppSpy,
+      listApps: vi.fn(() => []),
     })
 
     const activateSpy = vi.fn().mockResolvedValue(undefined)
@@ -470,6 +485,173 @@ store:
     await expect(installFromStore("legacy-app", "space-1")).rejects.toThrow(
       /app not found in store/i
     )
+  })
+
+  // The ledger hangs off the download, not off any UI entry point. These cases
+  // pin the two places bytes are transferred — a fresh install and an upgrade —
+  // plus the one dependency case that would otherwise bill a download that
+  // never happens.
+  describe("install ledger convergence", () => {
+    const APP = {
+      slug: "ledger-app",
+      name: "Ledger App",
+      author: "tester",
+      description: "Ledger test",
+      type: "automation" as const,
+      format: "bundle" as const,
+      path: "packages/digital-humans/ledger-app",
+      category: "other",
+      tags: [] as string[],
+    }
+    const BASE = "https://openkursar.github.io/digital-human-protocol"
+
+    function specYaml(version: string, requiresSkill?: string): string {
+      return `
+name: "Ledger App"
+version: "${version}"
+author: "tester"
+description: "Ledger test"
+type: automation
+system_prompt: "run"
+${requiresSkill ? `requires:\n  skills:\n    - ${requiresSkill}\n` : ""}store:
+  slug: "ledger-app"
+  category: "other"
+`
+    }
+
+    /** Publish `apps` on the official source and wait for the sync to land. */
+    async function serve(apps: unknown[], specs: Record<string, string>): Promise<void> {
+      fetchMock.mockImplementation(async (input) => {
+        const url = String(input)
+        if (url === `${BASE}/index.json`) {
+          return jsonResponse({
+            version: 1,
+            generated_at: "2026-02-24T00:00:00.000Z",
+            source: BASE,
+            apps,
+          } as RegistryIndex)
+        }
+        for (const [path, body] of Object.entries(specs)) {
+          if (url === `${BASE}/${path}`) return textResponse(body)
+        }
+        return notFoundResponse()
+      })
+      const settled = trackSyncSettled()
+      initRegistryService({ db })
+      await vi.waitFor(() => expect(settled).toContain("official"))
+      await refreshIndex()
+    }
+
+    it("opens an order against the entry's own source on a fresh install", async () => {
+      getAppManagerMock.mockReturnValue({ install: vi.fn().mockResolvedValue("app-1"), listApps: vi.fn(() => []) })
+      await serve([{ ...APP, version: "1.0.0" }], {
+        "packages/digital-humans/ledger-app/spec.yaml": specYaml("1.0.0"),
+      })
+
+      await installFromStore("ledger-app", "space-1")
+
+      expect(authorizeInstallMock).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "official" }),
+        { slug: "ledger-app", version: "1.0.0" },
+      )
+      expect(completeInstallIntentMock).toHaveBeenCalledTimes(1)
+    })
+
+    it("opens an order on upgrade against the installed app's own source", async () => {
+      const installed = {
+        id: "app-1",
+        specId: "Ledger App",
+        status: "active",
+        spec: { name: "Ledger App", version: "1.0.0", store: { slug: "ledger-app", registry_id: "official" } },
+      }
+      getAppManagerMock.mockReturnValue({
+        getApp: vi.fn(() => installed),
+        updateSpec: vi.fn(),
+        listApps: vi.fn(() => []),
+      })
+      await serve([{ ...APP, version: "1.1.0" }], {
+        "packages/digital-humans/ledger-app/spec.yaml": specYaml("1.1.0"),
+      })
+
+      await applyUpgrade("app-1")
+
+      expect(authorizeInstallMock).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "official" }),
+        { slug: "ledger-app", version: "1.1.0" },
+      )
+    })
+
+    it("settles the intent only once the bytes have arrived", async () => {
+      getAppManagerMock.mockReturnValue({ install: vi.fn(), listApps: vi.fn(() => []) })
+      // The index lists the app but its bundle 404s, which is the shape of a
+      // broken release: the order was opened, the download never completed.
+      await serve([{ ...APP, version: "1.0.0" }], {})
+
+      await expect(installFromStore("ledger-app", "space-1")).rejects.toThrow()
+
+      expect(authorizeInstallMock).toHaveBeenCalledTimes(1)
+      expect(completeInstallIntentMock).not.toHaveBeenCalled()
+    })
+
+    /** Parent app declaring `helper-skill`, with that skill offered at 2.0.0. */
+    async function serveWithDependency(installedSkillVersion: string | null): Promise<void> {
+      getAppManagerMock.mockReturnValue({
+        install: vi.fn().mockResolvedValue("app-1"),
+        listApps: vi.fn(() =>
+          installedSkillVersion
+            ? [
+                {
+                  id: "skill-1",
+                  specId: "helper-skill",
+                  status: "active",
+                  spec: { name: "helper-skill", version: installedSkillVersion },
+                },
+              ]
+            : [],
+        ),
+      })
+      await serve(
+        [
+          { ...APP, version: "1.0.0" },
+          {
+            ...APP,
+            slug: "helper-skill",
+            name: "helper-skill",
+            version: "2.0.0",
+            type: "skill",
+            path: "packages/skills/helper-skill",
+          },
+        ],
+        {
+          "packages/digital-humans/ledger-app/spec.yaml": specYaml("1.0.0", "helper-skill"),
+          "packages/skills/helper-skill/spec.yaml":
+            'spec_version: "1"\nname: helper-skill\nversion: 2.0.0\nauthor: tester\n' +
+            "description: dep\ntype: skill\nskill_files: {}\n",
+        },
+      )
+    }
+
+    function orderedTargets(): unknown[] {
+      return authorizeInstallMock.mock.calls.map(([, target]) => target)
+    }
+
+    // A declared dependency is a separate artifact pulled over the network, so
+    // it is a download whether or not a copy is already on disk — AppManager's
+    // skill branch overwrites, which is also how damaged files get repaired.
+    it.each([
+      ["not installed", null],
+      ["installed but stale", "1.0.0"],
+      ["installed at the offered version", "2.0.0"],
+    ])("orders a declared skill when it is %s", async (_case, installedVersion) => {
+      await serveWithDependency(installedVersion)
+
+      await installFromStore("ledger-app", "space-1")
+
+      expect(orderedTargets()).toEqual([
+        { slug: "ledger-app", version: "1.0.0" },
+        { slug: "helper-skill", version: "2.0.0" },
+      ])
+    })
   })
 
   describe("registryOverrides (product.json enterprise config)", () => {

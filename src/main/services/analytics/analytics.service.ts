@@ -24,36 +24,33 @@ import { createGAProvider } from './providers/ga'
 import { createBaiduProvider } from './providers/baidu'
 import { createTelemetryProvider } from './providers/telemetry'
 import { getConfig, saveConfig } from '../../foundation/config.service'
-import { getIdentitySource, getTelemetryConfig } from '../../foundation/product-config'
+import { getAnalyticsConfig, getIdentitySource, getTelemetryConfig } from '../../foundation/product-config'
 import { getCurrentSource } from '../../../shared/types'
 import { deriveErrorCode } from './error-code'
 
 /**
- * Build-time injected analytics credentials
- * These are defined in electron.vite.config.ts and loaded from .env.local
- * In open-source builds without .env.local, these will be empty strings
+ * Provider configuration, read from product.json at runtime.
+ *
+ * Identifiers ship inside the package and are user-readable — they are
+ * per-variant configuration committed in the variant repo, not secrets.
+ * Missing/empty values disable the corresponding provider (open-source
+ * builds omit both blocks entirely).
  */
-declare const __HALO_GA_MEASUREMENT_ID__: string
-declare const __HALO_GA_API_SECRET__: string
-declare const __HALO_BAIDU_SITE_ID__: string
-declare const __HALO_TELEMETRY_ENDPOINT__: string
-declare const __HALO_TELEMETRY_API_KEY__: string
-
-/**
- * Provider configuration (injected at build time)
- * When credentials are empty, the provider will be disabled
- */
-const PROVIDER_CONFIG = {
-  baidu: {
-    siteId: __HALO_BAIDU_SITE_ID__
-  },
-  ga: {
-    measurementId: __HALO_GA_MEASUREMENT_ID__,
-    apiSecret: __HALO_GA_API_SECRET__
-  },
-  telemetry: {
-    endpoint: __HALO_TELEMETRY_ENDPOINT__,
-    apiKey: __HALO_TELEMETRY_API_KEY__
+function loadProviderConfig() {
+  const analytics = getAnalyticsConfig()
+  const telemetry = getTelemetryConfig()
+  return {
+    baidu: {
+      siteId: analytics?.baidu?.siteId ?? ''
+    },
+    ga: {
+      measurementId: analytics?.ga?.measurementId ?? '',
+      apiSecret: analytics?.ga?.apiSecret ?? ''
+    },
+    telemetry: {
+      endpoint: telemetry?.endpoint ?? '',
+      apiKey: telemetry?.apiKey ?? ''
+    }
   }
 }
 
@@ -115,9 +112,12 @@ class AnalyticsService {
    * Should be called after app.whenReady()
    */
   async init(): Promise<void> {
-    // Skip analytics in development mode
-    if (is.dev) {
-      console.log('[Analytics] Skipping in development mode')
+    // Skip analytics in development mode to keep dev noise out of production
+    // telemetry — unless a telemetry endpoint is explicitly configured (via
+    // .env.local), which signals an intentional local telemetry test against a
+    // self-hosted backend rather than the production one.
+    if (is.dev && !PROVIDER_CONFIG.telemetry.endpoint) {
+      console.log('[Analytics] Skipping in development mode (no telemetry endpoint configured)')
       this.markSettled()
       return
     }
@@ -406,6 +406,7 @@ class AnalyticsService {
    */
   private async initProviders(): Promise<void> {
     const userId = this.config!.userId
+    const PROVIDER_CONFIG = loadProviderConfig()
 
     // Create and initialize providers
     // Each provider is isolated - one failing won't affect others
@@ -499,7 +500,7 @@ class AnalyticsService {
    * Get Baidu Analytics site ID (for renderer process SDK initialization)
    */
   getBaiduSiteId(): string {
-    return PROVIDER_CONFIG.baidu.siteId
+    return loadProviderConfig().baidu.siteId
   }
 
   /**

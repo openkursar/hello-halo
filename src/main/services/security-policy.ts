@@ -93,9 +93,9 @@ export interface SecurityPolicy {
    * tunnels that expose the workstation's HTTP server to the public
    * internet without going through the corporate proxy / IdP.
    *
-   * Consumers live under `src/main/services/tunnel.service.ts`,
-   * `src/main/services/remote.service.ts`, `src/main/ipc/remote.ts`, and
-   * the renderer hook `useSecurityPolicy`.
+   * Consumers live under `src/main/services/remote/` (`tunnel.ts`,
+   * `service.ts`), `src/main/ipc/remote.ts`, and the renderer hook
+   * `useSecurityPolicy`.
    */
   tunnelSafe?: boolean
 

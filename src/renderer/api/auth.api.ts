@@ -92,6 +92,20 @@ export const authApi = {
     return httpRequest('POST', '/api/auth/logout', { providerType })
   },
 
+  /**
+   * Report the current metered quota for a source. Desktop-only for now: no HTTP
+   * route is exposed yet, so non-Electron transports report "unsupported"
+   * (data: null) rather than 404-ing. The capability itself runs in the main
+   * process and is reachable over HTTP — add a route here when remote clients
+   * need quota.
+   */
+  authGetQuota: async (sourceId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.authGetQuota(sourceId)
+    }
+    return { success: true, data: null }
+  },
+
   onAuthLoginProgress: (callback: (data: { provider: string; status: string }) => void) =>
     onEvent('auth:login-progress', callback),
 

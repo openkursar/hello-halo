@@ -99,6 +99,41 @@ work directories.
 - `platform/background` -- `onStatusChange` uses a handler array with unsubscribe function
 - This is simpler and more explicit than Node.js EventEmitter for single-event patterns.
 
+### 2.6a MCP Change Event Carries Per-App Details
+
+**Signature**: `onMcpAppsChange((spaceId: string | null, change?: McpAppChange) => void)`
+where `McpAppChange = { appId, specId, action }` and `action` is one of
+`installed | uninstalled | reinstalled | paused | resumed | updated | moved | status`.
+The `McpAppChange` type lives in `services/app-bridge.ts` (type-only import here,
+erased at runtime) because its consumers are on the services tier.
+
+**Rationale**: The original space-only payload was enough for session
+invalidation, but per-server subscribers need to know *which* server changed
+and *how*: the agent's MCP status cache drops the entry on `paused`/`uninstalled`
+(prevents stale "connection error" surviving a reinstall) and triggers a native
+connection probe on `installed`/`reinstalled`/`resumed`/`updated`/`status`
+(see `services/agent/mcp-probe.ts`). Every `emitMcpChange` call site in
+`service.ts` must pass the change details; `change` stays optional only so
+space-level handlers can ignore it.
+
+### 2.6b Applying an App's Own Config Changes to Its Chat
+
+**Decision**: The manager emits no event for this. Changing permissions, user
+config, or a spec field is a plain store write.
+
+**Rationale**: A chat session's defining inputs (system prompt, MCP server set,
+guest permission envelope) are fingerprinted at creation and re-checked on every
+send (`computeSessionInputsFingerprint`, `services/agent/session-manager.ts`).
+A session whose inputs no longer match is torn down and rebuilt before the
+message is dispatched, so a config change lands on the next message with nobody
+notifying anybody. That path is declarative and self-healing; a parallel
+manager→runtime notification would be a second, weaker answer to the same
+question, able only to duplicate what the fingerprint already guarantees.
+
+Interrupting an in-flight turn is a separate and explicitly manual concern —
+`restartAppChat(appId, { interruptActive: true })`, reachable only from the
+"Restart agent" IPC/HTTP path.
+
 ### 2.7 Migration Namespace
 
 **Decision**: Use `'app_manager'` as the migration namespace.
@@ -210,6 +245,36 @@ controlled disable) with zero changes to those callers.
 (N = number of bundled apps, typically ≤10). For unchanged builds this is
 ~10–20ms total, all of which runs in the idle queue and never blocks the UI.
 
+### 2.12 Knowledge Base Seeding: Once Per App, Ever
+
+**Decision**: An automation app's knowledge-base bindings (space-bound KBs +
+the default KB) are seeded exactly once in its lifetime, gated by the
+`knowledge_seeded` column. `moveToSpace` and non-automation app types never
+seed. Three paths can perform that one seed: `install()`'s fresh-install
+branch, `install()`'s reinstall branch, and `ensureKnowledgeSeeded(appId)`.
+
+**Rationale**: Seeding on every `moveToSpace` would silently swap a user's
+curated KB bindings whenever an app moves between spaces; re-seeding on
+`reinstall` would re-add bindings the user deliberately removed. The
+one-shot flag makes "have we ever seeded this app" explicit and queryable,
+instead of inferring it from `appIds.length === 0` (which can't distinguish
+"never seeded" from "user unbound everything"). Because every path is gated
+by the same flag, "which path ran the seed" carries no meaning — only
+whether one already did.
+
+**Why reinstall seeds too**: the startup backfill deliberately skips
+uninstalled records (binding them would leave dangling `appIds` on the KB
+for an app the user removed), so for a pre-feature app that sat uninstalled
+across the upgrade, reinstall is its first moment back in the live
+population. Without this the app would run with no knowledge until some
+later launch caught it. The flag makes it safe: an app that was already
+seeded reinstalls as a no-op.
+
+**Backfill scope**: `knowledge-backfill.ts` (Tier-3 idle task, sibling to
+`seed.ts` and `builtin-loader.ts`) covers every live status, not just
+`active` — a paused or errored app resumes into a normal run, and filtering
+to `active` would strand it.
+
 ---
 
 ## 3. SQLite Schema
@@ -229,6 +294,7 @@ CREATE TABLE installed_apps (
   last_run_at INTEGER,
   last_run_outcome TEXT,                  -- 'useful'|'noop'|'error'|'skipped'|null
   error_message TEXT,
+  knowledge_seeded INTEGER NOT NULL DEFAULT 0, -- 1 once install() has seeded KB bindings (see 2.12)
   UNIQUE(spec_id, space_id)
 );
 CREATE INDEX idx_installed_apps_space ON installed_apps(space_id);
@@ -250,6 +316,7 @@ src/main/apps/manager/
   skill-sync.ts       -- Filesystem sync for skill apps (SDK-discoverable .md files)
   seed.ts             -- One-shot "Halo 助手" placeholder when no apps exist
   builtin-loader.ts   -- Built-in (bundled) digital human loader; runs as Tier-3 idle task
+  knowledge-backfill.ts -- One-shot KB seed for apps predating knowledge_seeded; Tier-3 idle task
 ```
 
 ---
@@ -268,6 +335,7 @@ interface AppManagerService {
   updateLastRun(appId: string, outcome: RunOutcome, errorMessage?: string): void
   getApp(appId: string): InstalledApp | null
   listApps(filter?: AppListFilter): InstalledApp[]
+  ensureKnowledgeSeeded(appId: string): void
   getAppWorkDir(appId: string): string
   clearAppMemory(appId: string): number
   grantPermission(appId: string, permission: string): void

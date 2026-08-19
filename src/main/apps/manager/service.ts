@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 
-import type { AppSpec } from '../spec'
+import type { AppSpec, SkillSpec } from '../spec'
 import { validateAppSpec } from '../spec'
 import type {
   AppManagerService,
@@ -41,7 +41,10 @@ import {
   McpCommandBlockedError,
 } from './errors'
 import { isMcpCommandBlocked } from '../../services/security-policy'
+import { seedAppKnowledgeBases } from '../../services/tlon'
+import type { McpAppChange } from '../../services/app-bridge'
 import { syncSkillToFilesystem, removeSkillFromFilesystem } from './skill-sync'
+import { withSkillMdName } from '../../../shared/skill-frontmatter'
 import { isBuiltinApp } from './types'
 
 // ============================================
@@ -55,7 +58,7 @@ import { isBuiltinApp } from './types'
 // High-level module (services/agent) subscribes without creating circular deps.
 // ============================================
 
-type McpChangeHandler = (spaceId: string | null) => void
+type McpChangeHandler = (spaceId: string | null, change?: McpAppChange) => void
 const mcpChangeHandlers: McpChangeHandler[] = []
 
 /**
@@ -74,10 +77,10 @@ export function onMcpAppsChange(handler: McpChangeHandler): () => void {
   }
 }
 
-function emitMcpChange(spaceId: string | null): void {
+function emitMcpChange(spaceId: string | null, change?: McpAppChange): void {
   for (const handler of mcpChangeHandlers) {
     try {
-      handler(spaceId)
+      handler(spaceId, change)
     } catch (err) {
       console.error('[AppManager] mcpChange handler error:', err)
     }
@@ -233,6 +236,25 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
   }
 
   /**
+   * One-time knowledge-base seed for an already-loaded App record.
+   * No-op for non-automation types and apps already seeded. Failures are
+   * logged only -- seeding must never block install or startup.
+   */
+  function seedKnowledgeIfNeeded(app: InstalledApp): void {
+    if (app.knowledgeSeeded) return
+    if (app.spec.type !== 'automation') return
+    try {
+      seedAppKnowledgeBases(app.id, app.spaceId)
+      store.markKnowledgeSeeded(app.id)
+      // The caller's record outlives this call (install emits it as the
+      // install-event payload), so it must not keep reporting `false`.
+      app.knowledgeSeeded = true
+    } catch (err) {
+      console.error(`[AppManager] Knowledge base seeding failed for ${app.id}:`, err)
+    }
+  }
+
+  /**
    * Recursively delete all contents of a directory without removing the directory itself.
    * Returns the number of files removed.
    */
@@ -272,6 +294,40 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     return effective
   }
 
+  /**
+   * Two skill records are the same skill when they publish under the same
+   * registry slug, or — for unpublished ones — when their authored names match.
+   * An occupant of another type is never the same skill: installing over it
+   * would replace an MCP or automation record with skill content.
+   */
+  function isSameSkill(occupant: InstalledApp, spec: SkillSpec): boolean {
+    if (occupant.spec.type !== 'skill') return false
+    const occupantSpec = occupant.spec
+    const slug = spec.store?.slug
+    if (slug && occupantSpec.store?.slug) return occupantSpec.store.slug === slug
+    return (occupantSpec.display_name ?? occupantSpec.name) === (spec.display_name ?? spec.name)
+  }
+
+  /**
+   * Command-name derivation can map two different authored names onto the same
+   * result. Sharing a specId would mean sharing a directory, so installing one
+   * would overwrite the other's files and uninstalling one would delete them;
+   * a numeric suffix keeps them apart. Only derived names need this — a name
+   * the author typed verbatim collides exactly as it always has.
+   */
+  function withUniqueSkillName(spec: SkillSpec, spaceId: string | null): SkillSpec {
+    if (!spec.display_name) return spec
+    const base = spec.name
+    let candidate = base
+    for (let suffix = 2; ; suffix++) {
+      const occupant = store.getBySpecAndSpace(candidate, spaceId)
+      if (!occupant || isSameSkill(occupant, spec)) {
+        return candidate === base ? spec : { ...spec, name: candidate }
+      }
+      candidate = `${base}-${suffix}`
+    }
+  }
+
   // ── Service Interface Implementation ─────────
 
   const service: AppManagerService = {
@@ -290,28 +346,33 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         }
       }
 
-      // Validate spec before any DB operations
-      validateAppSpec(spec)
+      // Validate spec before any DB operations. The validated result is what
+      // gets persisted: parsing is also where a skill's identifier is
+      // normalized, so discarding it would let an un-normalized name through.
+      const validated = validateAppSpec(spec)
+      const installSpec: AppSpec = validated.type === 'skill'
+        ? withUniqueSkillName(validated, spaceId)
+        : validated
 
       // Security policy: reject MCP installs whose stdio command matches the
       // configured blacklist. The predicate short-circuits to false on
       // open-source builds (no policy → no blacklist → never blocked), so
       // this branch is free except in enterprise variants that opt in.
-      if (spec.type === 'mcp') {
-        const mcpCommand = spec.mcp_server?.command
+      if (installSpec.type === 'mcp') {
+        const mcpCommand = installSpec.mcp_server?.command
         if (mcpCommand && isMcpCommandBlocked(mcpCommand)) {
           throw new McpCommandBlockedError(mcpCommand)
         }
       }
 
       // Check for duplicate installation
-      const specId = spec.name // Use spec name as the canonical spec identifier
+      const specId = installSpec.name // Use spec name as the canonical spec identifier
       const existing = store.getBySpecAndSpace(specId, spaceId)
       if (existing) {
         // If the existing record is uninstalled, reinstall it with the new spec
         if (existing.status === 'uninstalled') {
           // Update spec in case it changed
-          store.updateSpec(existing.id, spec)
+          store.updateSpec(existing.id, installSpec)
           // Update config if provided
           if (userConfig) {
             store.updateConfig(existing.id, userConfig)
@@ -319,12 +380,17 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
           // Reinstall (transitions from uninstalled -> active)
           service.reinstall(existing.id)
           console.log(
-            `[AppManager] Reinstalled previously uninstalled app '${spec.name}' (${existing.id})`
+            `[AppManager] Reinstalled previously uninstalled app '${specId}' (${existing.id})`
           )
           // Re-emit install event: from analytics' perspective a reinstall is
           // a fresh install (the app re-enters the active population).
           const reinstalled = store.getById(existing.id)
           if (reinstalled) {
+            // Catches Apps that predate the knowledge-base feature: the
+            // startup backfill skips uninstalled records, so this is their
+            // first moment back in the live population. Already-seeded Apps
+            // no-op, so a user's manual unbind is never overwritten.
+            seedKnowledgeIfNeeded(reinstalled)
             notifyInstalled(reinstalled)
           }
           return existing.id
@@ -335,8 +401,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         // rather than fail. Automation/MCP apps retain userConfig, memory,
         // schedule overrides and runtime sessions, so duplicates still throw
         // and the caller must explicitly uninstall before reinstalling.
-        if (spec.type === 'skill') {
-          store.updateSpec(existing.id, spec)
+        // The refresh only applies between two skills; an occupant of another
+        // type would be replaced wholesale by skill content.
+        if (installSpec.type === 'skill' && existing.spec.type === 'skill') {
+          store.updateSpec(existing.id, installSpec)
           if (userConfig) {
             store.updateConfig(existing.id, userConfig)
           }
@@ -345,7 +413,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
             syncSkillToFilesystem(refreshed, getSpacePath)
           }
           console.log(
-            `[AppManager] Overwrote existing skill '${spec.name}' (${existing.id})`
+            `[AppManager] Overwrote existing skill '${specId}' (${existing.id})`
           )
           return existing.id
         }
@@ -361,7 +429,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         id: appId,
         specId,
         spaceId,
-        spec,
+        spec: installSpec,
         status: 'active',
         userConfig: userConfig ?? {},
         userOverrides: {},
@@ -371,6 +439,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         },
         installedAt: Date.now(),
         upgradeStrategy: 'auto',
+        knowledgeSeeded: false,
       }
 
       // Persist to SQLite first (atomic: if this fails, no filesystem side effects).
@@ -397,19 +466,23 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         throw dirError
       }
 
+      // Seeding writes into knowledge-base metadata, which the rollback above
+      // cannot undo -- so it runs only once the install can no longer fail.
+      seedKnowledgeIfNeeded(app)
+
       const scope = spaceId ? `space ${spaceId}` : 'global'
       console.log(
-        `[AppManager] Installed app '${spec.name}' (${appId}) in ${scope}`
+        `[AppManager] Installed app '${specId}' (${appId}) in ${scope}`
       )
 
       // Sync skill file to filesystem for Claude Code auto-loading
-      if (spec.type === 'skill') {
+      if (installSpec.type === 'skill') {
         syncSkillToFilesystem(app, getSpacePath)
       }
 
       // Notify session-manager to invalidate affected sessions
-      if (spec.type === 'mcp') {
-        emitMcpChange(spaceId)
+      if (installSpec.type === 'mcp') {
+        emitMcpChange(spaceId, { appId, specId, action: 'installed' })
       }
 
       // Fire install event for analytics / external subscribers.
@@ -441,7 +514,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       // Notify session-manager to invalidate affected sessions
       if (app.spec.type === 'mcp') {
-        emitMcpChange(app.spaceId)
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'uninstalled' })
       }
 
       // Cascade-delete bundled skills when parent is uninstalled.
@@ -498,7 +571,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       // Notify session-manager to invalidate affected sessions
       if (app.spec.type === 'mcp') {
-        emitMcpChange(app.spaceId)
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'reinstalled' })
       }
 
       console.log(`[AppManager] Reinstalled app ${appId}`)
@@ -569,7 +642,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       // MCP paused = no longer available in sessions
       if (app.spec.type === 'mcp') {
-        emitMcpChange(app.spaceId)
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'paused' })
       }
 
       console.log(`[AppManager] App ${appId}: ${oldStatus} -> ${newStatus}`)
@@ -595,7 +668,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       // MCP resumed = available again in sessions
       if (app.spec.type === 'mcp') {
-        emitMcpChange(app.spaceId)
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'resumed' })
       }
 
       console.log(`[AppManager] App ${appId}: ${oldStatus} -> ${newStatus}`)
@@ -638,7 +711,7 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       // rebuild with the correct tool set (e.g. active→error stops the
       // server; error/needs_login→active makes it available again).
       if (app.spec.type === 'mcp') {
-        emitMcpChange(app.spaceId)
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'status' })
       }
 
       console.log(`[AppManager] App ${appId}: ${oldStatus} -> ${status}`)
@@ -647,7 +720,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     // ── Configuration ─────────────────────────
 
     updateConfig(appId: string, config: Record<string, unknown>): void {
-      requireApp(appId) // Throws if not found
+      const app = requireApp(appId) // Throws if not found
+      // Skip the write when nothing actually changed. Compare by value; a key
+      // reorder at worst falls through to a harmless no-op write.
+      if (JSON.stringify(app.userConfig ?? {}) === JSON.stringify(config)) return
       store.updateConfig(appId, config)
     },
 
@@ -686,6 +762,14 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       console.log(`[AppManager] App ${appId}: upgradeStrategy -> ${strategy}`)
     },
 
+    addIgnoredVersion(appId: string, version: string): void {
+      const app = requireApp(appId)
+      const current = app.ignoredVersions ?? []
+      if (current.includes(version)) return
+      store.updateIgnoredVersions(appId, [...current, version])
+      console.log(`[AppManager] App ${appId}: ignore version ${version}`)
+    },
+
     updateSpec(appId: string, specPatch: Record<string, unknown>): void {
       const app = requireApp(appId)
 
@@ -714,19 +798,43 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
         }
       }
 
-      // Persist
-      store.updateSpec(appId, validatedSpec)
+      // Renaming a skill repoints its identity: the directory moves and the
+      // slash command changes with it. The target name must therefore be free,
+      // and the shipped SKILL.md must declare it — the SDK reads the command
+      // from that frontmatter and would otherwise keep answering to the old
+      // one from a directory that no longer exists.
+      const renamedSkill =
+        validatedSpec.type === 'skill' &&
+        app.spec.type === 'skill' &&
+        app.specId !== validatedSpec.name
 
-      // Re-sync skill file so Claude Code auto-loads the updated content.
-      if (validatedSpec.type === 'skill') {
-        const updatedApp = { ...app, spec: validatedSpec } as InstalledApp
+      let nextSpec = validatedSpec
+      if (renamedSkill) {
+        const occupant = store.getBySpecAndSpace(validatedSpec.name, app.spaceId)
+        if (occupant && occupant.id !== appId) {
+          throw new AppAlreadyInstalledError(validatedSpec.name, app.spaceId)
+        }
+        nextSpec = withSkillMdName(validatedSpec, validatedSpec.name)
+      }
+
+      // Persist
+      store.updateSpec(appId, nextSpec)
+
+      // Re-sync skill file so Claude Code auto-loads the updated content, and
+      // drop the directory the rename vacated — the SDK would otherwise keep
+      // loading it as a second, stale skill.
+      if (nextSpec.type === 'skill') {
+        if (renamedSkill) {
+          removeSkillFromFilesystem(app, getSpacePath)
+        }
+        const updatedApp = { ...app, specId: nextSpec.name, spec: nextSpec } as InstalledApp
         syncSkillToFilesystem(updatedApp, getSpacePath)
       }
 
       // MCP server definition may have changed (command/args/env/etc.):
       // invalidate affected sessions so they reconnect with the new config.
       if (validatedSpec.type === 'mcp') {
-        emitMcpChange(app.spaceId)
+        emitMcpChange(app.spaceId, { appId, specId: app.specId, action: 'updated' })
       }
 
       console.log(`[AppManager] Updated spec for app ${appId}`)
@@ -797,13 +905,23 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       // For MCP apps: notify both old and new scopes so session-manager
       // can invalidate the affected sessions on both sides.
       if (app.spec.type === 'mcp') {
-        emitMcpChange(oldSpaceId)
-        emitMcpChange(newSpaceId)
+        emitMcpChange(oldSpaceId, { appId, specId: app.specId, action: 'moved' })
+        emitMcpChange(newSpaceId, { appId, specId: app.specId, action: 'moved' })
       }
 
+      // Knowledge base bindings are deliberately NOT reseeded on move: the
+      // binding set became the user's own after the initial seed, and a
+      // cross-space move is a relocation, not a re-birth of the app.
       const fromScope = oldSpaceId === null ? 'global' : `space ${oldSpaceId}`
       const toScope   = newSpaceId === null ? 'global' : `space ${newSpaceId}`
       console.log(`[AppManager] Moved app ${appId} from ${fromScope} to ${toScope}`)
+    },
+
+    // ── Knowledge Base ────────────────────────
+
+    ensureKnowledgeSeeded(appId: string): void {
+      const app = requireApp(appId)
+      seedKnowledgeIfNeeded(app)
     },
 
     // ── Run Tracking ──────────────────────────
@@ -835,14 +953,17 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
     grantPermission(appId: string, permission: string): void {
       const app = requireApp(appId)
-      const permissions = { ...app.permissions }
 
-      // Add to granted if not already there
+      // Skip the write when the permission is already in the target state.
+      if (app.permissions.granted.includes(permission) &&
+          !app.permissions.denied.includes(permission)) {
+        return
+      }
+
+      const permissions = { ...app.permissions }
       if (!permissions.granted.includes(permission)) {
         permissions.granted = [...permissions.granted, permission]
       }
-
-      // Remove from denied if present
       permissions.denied = permissions.denied.filter(p => p !== permission)
 
       store.updatePermissions(appId, permissions)
@@ -850,12 +971,15 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
     revokePermission(appId: string, permission: string): void {
       const app = requireApp(appId)
+
+      // Skip the write when the permission is already in the target state.
+      if (app.permissions.denied.includes(permission) &&
+          !app.permissions.granted.includes(permission)) {
+        return
+      }
+
       const permissions = { ...app.permissions }
-
-      // Remove from granted
       permissions.granted = permissions.granted.filter(p => p !== permission)
-
-      // Add to denied if not already there
       if (!permissions.denied.includes(permission)) {
         permissions.denied = [...permissions.denied, permission]
       }
