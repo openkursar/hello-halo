@@ -83,7 +83,7 @@ export function SettingsTab({ detail, openMemberId, onOpenMemberChange }: Settin
           )}
           {readOnly
             ? <LeaveSection teamId={detail.team.id} teamName={detail.team.name} />
-            : <DangerSection teamId={detail.team.id} />}
+            : <DangerSection detail={detail} />}
         </AdvancedSection>
       </div>
     </div>
@@ -407,18 +407,23 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
 
       {remove && (
         <ConfirmDialog
-          // The verb names the worst outcome being authorised, not the one that
-          // is certain. Whether it actually happens is the body's job — the two
-          // answer different questions, so they do not contradict.
-          title={remove.aiProvisioned
-            ? t('Delete {{name}}?', { name: remove.name })
-            : t('Remove {{name}} from this team?', { name: remove.name })}
+          // The verb names the worst outcome the press authorises, not the one
+          // that is certain — the worst outcome always has a single value,
+          // "what actually happens" does not.
+          title={!remove.aiProvisioned
+            ? t('Remove {{name}} from this team?', { name: remove.name })
+            : remove.inOwningSpace
+              ? t('Delete {{name}}?', { name: remove.name })
+              : t('Delete {{name}} permanently?', { name: remove.name })}
           message={!remove.aiProvisioned
             ? t('{{name}} stays yours — the digital human, its own instructions, and everything in its space are untouched. What it loses is what it had here: the duty you wrote for this team, and what this team was allowed to ask of it. Add it back later and you write those again.', { name: remove.name })
             : remove.inOwningSpace
               ? t('{{name}} is the lead this team was given when it was created. Removing it deletes the digital human itself. The space it works in is yours and stays, along with everything in it.', { name: remove.name })
-              : t('{{name}} was created by AI for this team. Removing it here may also delete the digital human itself, its space, and every file it produced — that happens whenever this is the only team it works on. If there is anything you want to keep, close this and copy it out first.', { name: remove.name })}
-          confirmLabel={remove.aiProvisioned ? t('Delete permanently') : t('Remove')}
+              : t('Removing it from this team deletes the digital human, its space, and every file it produced. This cannot be undone. If there is anything you want to keep, close this and copy it out first.')}
+          // Lighter for the demoted lead: the space survives, so one rung down.
+          confirmLabel={!remove.aiProvisioned
+            ? t('Remove')
+            : remove.inOwningSpace ? t('Delete') : t('Delete permanently')}
           cancelLabel={t('Cancel')}
           variant={remove.aiProvisioned ? 'danger' : 'default'}
           onConfirm={() => { const r = remove; setRemove(null); void removeMember(detail.team.id, r.appId) }}
@@ -528,10 +533,21 @@ function MemberCard({ memberName, duty, description, isLead, aiProvisioned, onOp
 
 // ── 5. Danger zone ──
 
-function DangerSection({ teamId }: { teamId: string }) {
+function DangerSection({ detail }: { detail: TeamDetail }) {
   const dissolveTeam = useTeamStore(s => s.dissolveTeam)
   const { t } = useTranslation()
   const [confirm, setConfirm] = useState(false)
+
+  // The members dissolve actually deletes. The lead is excluded on purpose: it
+  // is hidden from the Digital Humans list, so naming it here would show a name
+  // the user has never seen, inside an irreversible confirmation.
+  const doomed = useMemo(
+    () => detail.members.filter(m => !m.isLead && m.aiProvisioned),
+    [detail.members]
+  )
+  // One source for both the count and the names, so the two can never disagree.
+  const names = doomed.map(m => m.memberName).join(', ')
+
   return (
     <>
       <div className="rounded-lg border border-destructive/30 p-3">
@@ -548,12 +564,18 @@ function DangerSection({ teamId }: { teamId: string }) {
 
       {confirm && (
         <ConfirmDialog
-          title={t('Dissolve team?')}
-          message={t('This removes the team reference. Member digital humans are not deleted (AI-built members exclusive to this team are cleaned up).')}
-          confirmLabel={t('Dissolve')}
+          title={doomed.length > 0
+            ? t('Dissolve {{name}} and delete {{count}} digital humans?', { name: detail.team.name, count: doomed.length })
+            : t('Dissolve {{name}}?', { name: detail.team.name })}
+          message={doomed.length > 0
+            ? t('{{names}} were created by AI for this team. Dissolving deletes them, and deletes their spaces from your space list — including any files you put there yourself. This cannot be undone. If you need anything out of those spaces, close this and copy it first.', { names })
+            : t('The team and its whole run history are deleted. The digital humans on it are not — they go back to being ordinary digital humans, with everything they have made.')}
+          // Even with no AI members, the team's own lead is a digital human
+          // being deleted, so the verb cannot be a bare "Dissolve".
+          confirmLabel={doomed.length > 0 ? t('Dissolve and delete permanently') : t('Dissolve and delete')}
           cancelLabel={t('Cancel')}
           variant="danger"
-          onConfirm={() => { setConfirm(false); void dissolveTeam(teamId) }}
+          onConfirm={() => { setConfirm(false); void dissolveTeam(detail.team.id) }}
           onCancel={() => setConfirm(false)}
         />
       )}
