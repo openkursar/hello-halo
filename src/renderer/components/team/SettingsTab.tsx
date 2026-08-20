@@ -392,11 +392,12 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
           title={t('Make {{name}} the lead?', { name: promote.name })}
           // Managed mode rebuilds the reporting lines around the new lead; in
           // free mode there are none to lose, so saying so would describe
-          // something that does not exist.
-          message={t('{{name}} will break the goal into tasks and hand them out. The current lead stays on the team as an ordinary member.', { name: promote.name })
-            + (detail.team.collabMode === 'structured'
-              ? ' ' + t('This team is in Managed mode, so the reporting lines are rebuilt around the new lead. Any connections you drew by hand are replaced.')
-              : '')}
+          // something that does not exist. Two whole sentences rather than one
+          // joined to the other: concatenation would fix the English word order
+          // for every language.
+          message={detail.team.collabMode === 'structured'
+            ? t('{{name}} will break the goal into tasks and hand them out. The current lead stays on the team as an ordinary member. This team is in Managed mode, so the reporting lines are rebuilt around the new lead. Any connections you drew by hand are replaced.', { name: promote.name })
+            : t('{{name}} will break the goal into tasks and hand them out. The current lead stays on the team as an ordinary member.', { name: promote.name })}
           confirmLabel={t('Make lead')}
           cancelLabel={t('Cancel')}
           variant="default"
