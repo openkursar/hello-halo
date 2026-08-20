@@ -3,7 +3,7 @@
  * (in Recent Activity / History) open with the system default app on click.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../api'
 
 function baseName(p: string): string {
@@ -31,10 +31,15 @@ export function useTeamArtifacts(
   // basename → absolute path for every produced file in this run.
   const [pathByName, setPathByName] = useState<Map<string, string>>(new Map())
   const [status, setStatus] = useState<ArtifactStatus>('loading')
+  // Which run the paths on hand belong to. A refetch of the same run must not
+  // blank them: the caller refetches whenever a task finishes, and links the
+  // reader was about to click would go dead under the pointer.
+  const loadedKey = useRef<string | null>(null)
+  const key = `${teamId}\u0000${epochId ?? ''}`
 
   useEffect(() => {
     let cancelled = false
-    setStatus('loading')
+    if (loadedKey.current !== key) setStatus('loading')
     void (async () => {
       try {
         const res = epochId
@@ -55,6 +60,7 @@ export function useTeamArtifacts(
           }
         }
         setPathByName(map)
+        loadedKey.current = key
         setStatus('ready')
       } catch (err) {
         if (cancelled) return
@@ -65,7 +71,7 @@ export function useTeamArtifacts(
       }
     })()
     return () => { cancelled = true }
-  }, [teamId, epochId, refreshToken])
+  }, [teamId, epochId, refreshToken, key])
 
   const has = useCallback((ref: string) => pathByName.has(baseName(ref)), [pathByName])
 
