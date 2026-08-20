@@ -418,8 +418,8 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
           message={!remove.aiProvisioned
             ? t('{{name}} stays yours — the digital human, its own instructions, and everything in its space are untouched. What it loses is what it had here: the duty you wrote for this team, and what this team was allowed to ask of it. Add it back later and you write those again.', { name: remove.name })
             : remove.inOwningSpace
-              ? t('{{name}} is the lead this team was given when it was created. Removing it deletes the digital human itself, and that cannot be undone. The space it works in is yours and stays, along with everything in it. (If you have also added it to another team, it stays there and nothing is deleted.)', { name: remove.name })
-              : t('Removing it from this team deletes the digital human, its space, and every file it produced, and that cannot be undone. (If you have also added it to another team, it stays there and nothing is deleted.) If there is anything you want to keep, close this and copy it out first.')}
+              ? t('{{name}} is the lead this team was given when it was created. Removing it deletes the digital human itself, and that cannot be undone. The space it works in is yours and stays, along with everything in it.', { name: remove.name })
+              : t('Removing it from this team deletes the digital human, its space, and every file it produced, and that cannot be undone. If there is anything you want to keep, close this and copy it out first.')}
           // Lighter for the demoted lead: the space survives, so one rung down.
           confirmLabel={!remove.aiProvisioned
             ? t('Remove')
