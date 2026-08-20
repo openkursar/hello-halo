@@ -558,7 +558,12 @@ function DangerSection({ detail }: { detail: TeamDetail }) {
           {t('Dissolve team')}
         </button>
         <p className="mt-1 text-xs text-muted-foreground/60">
-          {t('Removes the team and its run history. Member digital humans are not deleted.')}
+          {/* Says less than the dialog on purpose, and nothing the dialog
+              contradicts. It used to promise no digital human was deleted,
+              which is false whenever the team built any — and this line is
+              read before the button, where the dialog's correction arrives
+              too late. Pending the writer's conditional wording. */}
+          {t('Removes the team and its run history.')}
         </p>
       </div>
 
