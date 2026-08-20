@@ -357,6 +357,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
           message={t('This member becomes the team lead (coordinates and assigns tasks). The current lead becomes a regular member — you can remove it afterward if it is no longer needed.')}
           confirmLabel={t('Make lead')}
           cancelLabel={t('Cancel')}
+          variant="default"
           onConfirm={() => { const p = promote; setPromote(null); void updateTeam(detail.team.id, { leadAppId: p.appId }) }}
           onCancel={() => setPromote(null)}
         />
