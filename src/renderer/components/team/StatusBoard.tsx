@@ -121,6 +121,9 @@ export function StatusBoard({ detail, board, activeFlows, onSelectMember, editin
         onSelectMember={onSelectMember}
         title={isLive ? undefined : t('What happened')}
         summary={board.mode === 'replay' ? board.replay?.summary ?? null : null}
+        emptiness={board.mode === 'replay'
+          ? 'finished'
+          : detail.team.status === 'running' ? 'running' : 'not-started'}
       />
     </div>
   )
@@ -292,6 +295,14 @@ interface RecentActivityProps {
   title?: string
   /** A past run's recorded summary — the lead paragraph above its detailed log. */
   summary?: string | null
+  /**
+   * What an empty board means, which is three different things: nothing has
+   * started, something is running and has not reported yet, or a run ended
+   * having recorded nothing. The reader's next move differs — wait, or go find
+   * out why it produced nothing — so one sentence for all three gives no move
+   * at all.
+   */
+  emptiness: 'not-started' | 'running' | 'finished'
 }
 
 /**
@@ -334,7 +345,7 @@ function ActorName({ appId, name, onSelect }: { appId: string | null; name: stri
   )
 }
 
-function RecentActivity({ tasks, findings, activities, roster, teamId, epochId, kind, onSelectMember, title, summary }: RecentActivityProps) {
+function RecentActivity({ tasks, findings, activities, roster, teamId, epochId, kind, onSelectMember, title, summary, emptiness }: RecentActivityProps) {
   const { t } = useTranslation()
 
   // doneCount in the refetch key re-resolves artifacts as tasks complete.
@@ -395,7 +406,11 @@ function RecentActivity({ tasks, findings, activities, roster, teamId, epochId, 
               // answered without writing anything down, so an empty board here
               // is a normal outcome, not a "you have not started yet".
               ? t('Nothing recorded on the board in this conversation.')
-              : t('No activity yet. Run the team to get started.')}
+              : emptiness === 'running'
+                ? t('Started. Waiting for the first member to report in.')
+                : emptiness === 'finished'
+                  ? t('This run finished without recording anything. Check the goal is something the team can actually act on, or open a member to see where it stopped.')
+                  : t('Nothing here yet. Press Run to start the team on its goal.')}
           </p>
         )
       ) : (
