@@ -66,6 +66,8 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
         {isMine && (
           <button
             onClick={() => { setCurrentTab('my-digital-humans'); openAppConfig(member.appId) }}
+            title={t('Open in Digital Humans')}
+            aria-label={t('Open in Digital Humans')}
             className="flex flex-shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
           >
             <ExternalLink className="h-3.5 w-3.5" />
