@@ -386,15 +386,15 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
 
       {remove && (
         <ConfirmDialog
-          title={remove.aiProvisioned
+          title={remove.aiProvisioned && remove.inOwningSpace
             ? t('Delete {{name}}?', { name: remove.name })
             : t('Remove {{name}} from this team?', { name: remove.name })}
           message={!remove.aiProvisioned
             ? t('{{name}} stays yours — the digital human, its own instructions, and everything in its space are untouched. What it loses is what it had here: the duty you wrote for this team, and what this team was allowed to ask of it. Add it back later and you write those again.', { name: remove.name })
             : remove.inOwningSpace
               ? t('{{name}} is the lead this team was given when it was created. Removing it deletes the digital human itself. The space it works in is yours and stays, along with everything in it.', { name: remove.name })
-              : t('{{name}} was created by AI for this team. Removing it deletes the digital human, its space, and every file it produced. If there is anything you want to keep, close this and copy it out first.', { name: remove.name })}
-          confirmLabel={remove.aiProvisioned ? t('Delete permanently') : t('Remove')}
+              : t('{{name}} was created by AI for this team. Removing it here may also delete the digital human itself, its space, and every file it produced — that happens whenever this is the only team it works on. If there is anything you want to keep, close this and copy it out first.', { name: remove.name })}
+          confirmLabel={remove.aiProvisioned && remove.inOwningSpace ? t('Delete permanently') : t('Remove')}
           cancelLabel={t('Cancel')}
           variant={remove.aiProvisioned ? 'danger' : 'default'}
           onConfirm={() => { const r = remove; setRemove(null); void removeMember(detail.team.id, r.appId) }}
