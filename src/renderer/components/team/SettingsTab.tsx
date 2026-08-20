@@ -82,7 +82,7 @@ export function SettingsTab({ detail, openMemberId, onOpenMemberChange }: Settin
             </div>
           )}
           {readOnly
-            ? <LeaveSection teamId={detail.team.id} />
+            ? <LeaveSection teamId={detail.team.id} teamName={detail.team.name} />
             : <DangerSection teamId={detail.team.id} />}
         </AdvancedSection>
       </div>
@@ -555,7 +555,7 @@ function DangerSection({ teamId }: { teamId: string }) {
 
 // ── 5b. Leave (joined office) ──
 
-function LeaveSection({ teamId }: { teamId: string }) {
+function LeaveSection({ teamId, teamName }: { teamId: string; teamName: string }) {
   const leaveOffice = useTeamStore(s => s.leaveOffice)
   const { t } = useTranslation()
   const [confirm, setConfirm] = useState(false)
@@ -570,16 +570,20 @@ function LeaveSection({ teamId }: { teamId: string }) {
           {t('Leave office')}
         </button>
         <p className="mt-1 text-xs text-muted-foreground/60">
-          {t('Removes this office from your view. Your digital humans stay yours.')}
+          {t('Stop taking part. Your digital humans stay yours.')}
         </p>
       </div>
 
       {confirm && (
         <ConfirmDialog
-          title={t('Leave this office?')}
-          message={t('It will be removed from your view. You can join again later with a new invite.')}
-          confirmLabel={t('Leave office')}
+          title={t('Leave {{name}}?', { name: teamName })}
+          message={t('Your digital humans stop working in this team and go back to being just yours — they, their spaces, and everything in them are untouched. What is deleted is this team\u2019s record on your computer: what it did, and any periodic checks teammates set on your digital humans. To take part again you will need an invite link.')}
+          confirmLabel={t('Leave')}
           cancelLabel={t('Cancel')}
+          // Not danger: leaving takes nothing of the user's away. The record it
+          // does delete is the team's, and losing it is what someone already
+          // expects when they leave — that is worth a sentence, not a colour.
+          variant="default"
           onConfirm={() => { setConfirm(false); void leaveOffice(teamId) }}
           onCancel={() => setConfirm(false)}
         />
