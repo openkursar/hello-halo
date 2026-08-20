@@ -339,7 +339,7 @@ function RecentActivity({ tasks, findings, activities, roster, teamId, epochId, 
 
   // doneCount in the refetch key re-resolves artifacts as tasks complete.
   const doneCount = tasks.filter(tk => tk.status === 'done').length
-  const { has: hasArtifact, open: openArtifact } = useTeamArtifacts(teamId, epochId, `${doneCount}:${tasks.length}`)
+  const { has: hasArtifact, open: openArtifact, status: artifactStatus } = useTeamArtifacts(teamId, epochId, `${doneCount}:${tasks.length}`)
 
   const nameFor = (appId: string | null): string => {
     if (!appId) return t('Unassigned')
@@ -452,7 +452,18 @@ function RecentActivity({ tasks, findings, activities, roster, teamId, epochId, 
                   <span className="text-muted-foreground"> {verb} </span>
                   <span className="text-foreground/80">{task.title}</span>
                   {task.resultRef && (
-                    hasArtifact(task.resultRef) ? (
+                    // Until the lookup lands, the file's absence is unknown —
+                    // drawing that the same as "not there" tells someone who
+                    // came to collect their output that it is gone.
+                    artifactStatus !== 'ready' ? (
+                      <span
+                        className={`ml-1.5 inline-flex items-center gap-0.5 font-mono text-xs text-muted-foreground/60 ${artifactStatus === 'loading' ? 'animate-pulse' : ''}`}
+                        title={task.resultRef}
+                      >
+                        <File className="inline h-3 w-3" />
+                        {task.resultRef.split('/').pop() ?? task.resultRef}
+                      </span>
+                    ) : hasArtifact(task.resultRef) ? (
                       <button
                         type="button"
                         onClick={() => openArtifact(task.resultRef!)}
