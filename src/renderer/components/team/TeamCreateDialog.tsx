@@ -46,6 +46,9 @@ export function TeamCreateDialog({ owningSpaceId, onClose, onCreated, onCreateMe
   const proposeMembers = useTeamStore(s => s.proposeMembers)
   const createTeam = useTeamStore(s => s.createTeam)
   const isProposing = useTeamStore(s => s.isProposing)
+  // The store already holds what actually went wrong. Restating a guess here
+  // would put a second, less informed explanation next to it.
+  const storeError = useTeamStore(s => s.error)
   const isCreating = useTeamStore(s => s.isCreating)
 
   const [name, setName] = useState('')
@@ -308,7 +311,7 @@ export function TeamCreateDialog({ owningSpaceId, onClose, onCreated, onCreateMe
               )}
               {proposeFailed && (
                 <p className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs leading-relaxed text-destructive">
-                  {t('The AI model is unavailable. Check your AI source settings and try again.')}
+                  {storeError ?? t('Failed to propose members')}
                 </p>
               )}
             </div>

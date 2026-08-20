@@ -429,8 +429,12 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       return null
     } catch (err) {
       console.error('[TeamStore] proposeMembers error:', err)
-      set({ error: i18n.t('Failed to propose members') })
-      notifyError(i18n.t('Could not build the team'), i18n.t('The AI model is unavailable. Check your AI source settings and try again.'))
+      // Report what threw. Naming a cause we did not establish — it used to say
+      // the model was unavailable — sends the reader to check a setting that
+      // may be fine while the real reason stays off screen.
+      const msg = String((err as Error)?.message ?? err) || i18n.t('Failed to propose members')
+      set({ error: msg })
+      notifyError(i18n.t('Could not build the team'), msg)
       return null
     } finally {
       set({ isProposing: false })
