@@ -357,7 +357,13 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
       {promote && (
         <ConfirmDialog
           title={t('Make {{name}} the lead?', { name: promote.name })}
-          message={t('This member becomes the team lead (coordinates and assigns tasks). The current lead becomes a regular member — you can remove it afterward if it is no longer needed.')}
+          // Managed mode rebuilds the reporting lines around the new lead; in
+          // free mode there are none to lose, so saying so would describe
+          // something that does not exist.
+          message={t('{{name}} will break the goal into tasks and hand them out. The current lead stays on the team as an ordinary member.', { name: promote.name })
+            + (detail.team.collabMode === 'structured'
+              ? ' ' + t('This team is in Managed mode, so the reporting lines are rebuilt around the new lead. Any connections you drew by hand are replaced.')
+              : '')}
           confirmLabel={t('Make lead')}
           cancelLabel={t('Cancel')}
           variant="default"
