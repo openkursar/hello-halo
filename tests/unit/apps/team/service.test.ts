@@ -370,6 +370,39 @@ describe('TeamService', () => {
       // Still referenced by team B → not deleted.
       expect(ctx.appManager.deleteApp).not.toHaveBeenCalledWith(aiMember.appId)
     })
+
+    it('deletes a space the team built, never the space the team was created in', async () => {
+      const proposal: ProposedMember[] = [{ memberName: 'ai1', role: 'r', responsibility: 'x' }]
+      const team = await ctx.service.createTeam(manualInput({ memberSourcing: 'ai', members: [] }), proposal)
+      const leadAppId = team.leadAppId!
+      const aiMember = ctx.store.listMembersByTeam(team.id).filter((m) => !m.isLead)[0]
+      const aiSpaceId = ctx.appManager.getApp(aiMember.appId)!.spaceId
+
+      await ctx.service.dissolveTeam(team.id)
+
+      // Both apps are the team's own and go with it.
+      expect(ctx.appManager.deleteApp).toHaveBeenCalledWith(leadAppId)
+      expect(ctx.appManager.deleteApp).toHaveBeenCalledWith(aiMember.appId)
+      // The space built for the AI member goes too.
+      expect(ctx.deletedSpaces).toContain(aiSpaceId)
+      // The lead was provisioned into the user's own space. Deleting that would
+      // take its files and every other app living in it.
+      expect(ctx.deletedSpaces).not.toContain(SPACE_A)
+    })
+
+    it('leaves the owning space alone when a demoted lead is removed', async () => {
+      const team = await ctx.service.createTeam(manualInput())
+      const oldLeadAppId = team.leadAppId!
+
+      // Handing the lead over leaves the old one an ordinary member that still
+      // counts as team-provisioned, so its delete button opens up — four clicks
+      // from a fresh team to deleting the space the user works in.
+      await ctx.service.updateTeam(team.id, { leadAppId: 'existing-1' })
+      await ctx.service.removeMember(team.id, oldLeadAppId)
+
+      expect(ctx.appManager.deleteApp).toHaveBeenCalledWith(oldLeadAppId)
+      expect(ctx.deletedSpaces).not.toContain(SPACE_A)
+    })
   })
 
   describe('updateTeam — collabMode switch (§F9)', () => {

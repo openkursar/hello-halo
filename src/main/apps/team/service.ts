@@ -822,7 +822,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
    * the lead a space of its own, and the two stop meaning the same thing —
    * silently, since nothing here would fail.
    */
-  async function cleanupOrphanApp(appId: string, owningSpaceId: string | null): Promise<void> {
+  async function cleanupOrphanApp(appId: string, owningSpaceId: string): Promise<void> {
     if (store.listMembersByAppId(appId).length > 0) return
 
     const app = appManager.getApp(appId)
