@@ -546,7 +546,13 @@ function DangerSection({ detail }: { detail: TeamDetail }) {
     [detail.members]
   )
   // One source for both the count and the names, so the two can never disagree.
+  // The lead stays out of both and is disclosed in its own sentence instead —
+  // putting it in the count would split the two apart again.
   const names = doomed.map(m => m.memberName).join(', ')
+  // Whether the lead dies with the team depends on who made it, not on its
+  // being the lead: one the team provisioned is deleted, one the user promoted
+  // from their own is not (service.ts provisionLead vs promoteExistingLead).
+  const leadDeleted = detail.members.find(m => m.isLead)?.aiProvisioned === true
 
   return (
     <>
@@ -558,12 +564,16 @@ function DangerSection({ detail }: { detail: TeamDetail }) {
           {t('Dissolve team')}
         </button>
         <p className="mt-1 text-xs text-muted-foreground/60">
-          {/* Says less than the dialog on purpose, and nothing the dialog
-              contradicts. It used to promise no digital human was deleted,
-              which is false whenever the team built any — and this line is
-              read before the button, where the dialog's correction arrives
-              too late. Pending the writer's conditional wording. */}
-          {t('Removes the team and its run history.')}
+          {/* Read before the button, so it has to survive being read alone:
+              it used to promise no digital human was deleted, and the dialog's
+              correction arrived only after the user had already been reassured. */}
+          {doomed.length > 0
+            ? (leadDeleted
+              ? t('Deletes the team and its run history, along with {{count}} digital humans AI created for it and the team\u2019s own lead. The digital humans you added stay yours.', { count: doomed.length })
+              : t('Deletes the team and its run history, along with {{count}} digital humans AI created for it. The digital humans you added stay yours.', { count: doomed.length }))
+            : (leadDeleted
+              ? t('Deletes the team and its run history, along with the team\u2019s own lead. The digital humans you added stay yours.')
+              : t('Deletes the team and its run history. The digital humans you added stay yours.'))}
         </p>
       </div>
 
@@ -572,12 +582,21 @@ function DangerSection({ detail }: { detail: TeamDetail }) {
           title={doomed.length > 0
             ? t('Dissolve {{name}} and delete {{count}} digital humans?', { name: detail.team.name, count: doomed.length })
             : t('Dissolve {{name}}?', { name: detail.team.name })}
+          // The lead sentence sits before "cannot be undone", which closes off
+          // everything listed above it — anything added after would fall outside it.
           message={doomed.length > 0
-            ? t('{{names}} were created by AI for this team. Dissolving deletes them, and deletes their spaces from your space list — including any files you put there yourself. This cannot be undone. If you need anything out of those spaces, close this and copy it first.', { names })
-            : t('The team and its whole run history are deleted, along with the team\u2019s own lead, and that cannot be undone. The digital humans you added are not deleted — they go back to being ordinary digital humans, with everything they have made.')}
-          // Even with no AI members, the team's own lead is a digital human
-          // being deleted, so the verb cannot be a bare "Dissolve".
-          confirmLabel={doomed.length > 0 ? t('Dissolve and delete permanently') : t('Dissolve and delete')}
+            ? (leadDeleted
+              ? t('{{names}} were created by AI for this team. Dissolving deletes them, and deletes their spaces from your space list — including any files you put there yourself. The team\u2019s own lead is deleted with it. This cannot be undone. If you need anything out of those spaces, close this and copy it first.', { names })
+              : t('{{names}} were created by AI for this team. Dissolving deletes them, and deletes their spaces from your space list — including any files you put there yourself. This cannot be undone. If you need anything out of those spaces, close this and copy it first.', { names }))
+            : (leadDeleted
+              ? t('The team and its whole run history are deleted, along with the team\u2019s own lead, and that cannot be undone. The digital humans you added are not deleted — they go back to being ordinary digital humans, with everything they have made.')
+              : t('The team and its whole run history are deleted, and that cannot be undone. The digital humans you added are not deleted — they go back to being ordinary digital humans, with everything they have made.'))}
+          // A lead the team provisioned is deleted too, so even with no AI
+          // members the verb cannot be a bare "Dissolve" — unless the lead is
+          // one the user promoted, in which case nothing of theirs goes.
+          confirmLabel={doomed.length > 0
+            ? t('Dissolve and delete permanently')
+            : leadDeleted ? t('Dissolve and delete') : t('Dissolve')}
           cancelLabel={t('Cancel')}
           variant="danger"
           onConfirm={() => { setConfirm(false); void dissolveTeam(detail.team.id) }}
