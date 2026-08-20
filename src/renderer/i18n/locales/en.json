@@ -1499,7 +1499,7 @@
   "Removed {{count}} dead process entries_one": "Removed {{count}} dead process entries",
   "Removed {{count}} dead process entries_other": "Removed {{count}} dead process entries",
   "Removed by ops": "Removed by ops",
-  "Removes the team and its run history. Member digital humans are not deleted.": "Removes the team and its run history. Member digital humans are not deleted.",
+  "Removes the team and its run history.": "Removes the team and its run history.",
   "Removing it from this team deletes the digital human, its space, and every file it produced, and that cannot be undone. (If you have also added it to another team, it stays there and nothing is deleted.) If there is anything you want to keep, close this and copy it out first.": "Removing it from this team deletes the digital human, its space, and every file it produced, and that cannot be undone. (If you have also added it to another team, it stays there and nothing is deleted.) If there is anything you want to keep, close this and copy it out first.",
   "Rename": "Rename",
   "Rename (+cc)": "Rename (+cc)",

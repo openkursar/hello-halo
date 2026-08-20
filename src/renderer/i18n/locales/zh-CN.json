@@ -1350,7 +1350,7 @@
   "Removed by ops": "由运维移除",
   "Removed {{count}} dead process entries_one": "已移除 {{count}} 个失效进程条目",
   "Removed {{count}} dead process entries_other": "已移除 {{count}} 个失效进程条目",
-  "Removes the team and its run history. Member digital humans are not deleted.": "将移除团队及其运行历史。成员数字人不会被删除。",
+  "Removes the team and its run history.": "删除团队及其运行历史。",
   "Removing it from this team deletes the digital human, its space, and every file it produced, and that cannot be undone. (If you have also added it to another team, it stays there and nothing is deleted.) If there is anything you want to keep, close this and copy it out first.": "将它从此团队移除会删除该数字人、其空间及其生成的所有文件，且此操作无法撤销。（如果你还将它添加到了其他团队，它会保留在那里，不会删除任何内容。）如果有任何想保留的内容，请先关闭此对话框，将其复制出来。",
   "Rename": "重命名",
   "Rename (+cc)": "重命名 (+cc)",

@@ -1350,7 +1350,7 @@
   "Removed by ops": "運用により削除されました",
   "Removed {{count}} dead process entries_one": "{{count}} 件の無効なプロセスエントリを削除しました",
   "Removed {{count}} dead process entries_other": "{{count}} 件の無効なプロセスエントリを削除しました",
-  "Removes the team and its run history. Member digital humans are not deleted.": "チームとその実行履歴を削除します。メンバーデジタルヒューマンは削除されません。",
+  "Removes the team and its run history.": "チームとその実行履歴を削除します。",
   "Removing it from this team deletes the digital human, its space, and every file it produced, and that cannot be undone. (If you have also added it to another team, it stays there and nothing is deleted.) If there is anything you want to keep, close this and copy it out first.": "このチームから削除すると、デジタルヒューマンとそのスペース、作成されたすべてのファイルが削除され、元に戻すことはできません。（別のチームにも追加している場合は、そちらには残り、何も削除されません。）残しておきたいものがある場合は、まずこの画面を閉じて、コピーを取ってください。",
   "Rename": "名前を変更します",
   "Rename (+cc)": "名前を変更 (+cc)",

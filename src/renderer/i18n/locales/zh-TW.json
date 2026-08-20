@@ -1350,7 +1350,7 @@
   "Removed by ops": "由管理員移除",
   "Removed {{count}} dead process entries_one": "已移除 {{count}} 個無效程序項目",
   "Removed {{count}} dead process entries_other": "已移除 {{count}} 個無效程序項目",
-  "Removes the team and its run history. Member digital humans are not deleted.": "移除團隊及其執行歷史。成員的數位人類不會被刪除。",
+  "Removes the team and its run history.": "移除團隊及其執行歷史記錄。",
   "Removing it from this team deletes the digital human, its space, and every file it produced, and that cannot be undone. (If you have also added it to another team, it stays there and nothing is deleted.) If there is anything you want to keep, close this and copy it out first.": "將它從此團隊移除，會刪除該數位人、其空間以及它產生的所有檔案，且此操作無法復原。（如果你也將它加入了其他團隊，它會保留在該處，不會刪除任何內容。）若有任何想要保留的內容，請先關閉此視窗，將內容複製出來。",
   "Rename": "重新命名",
   "Rename (+cc)": "重新命名 (+cc)",

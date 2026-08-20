@@ -1350,7 +1350,7 @@
   "Removed by ops": "Von Ops entfernt",
   "Removed {{count}} dead process entries_one": "{{count}} inaktiven Prozesseintrag entfernt",
   "Removed {{count}} dead process entries_other": "{{count}} inaktive Prozesseinträge entfernt",
-  "Removes the team and its run history. Member digital humans are not deleted.": "Entfernt das Team und seinen Ausführungsverlauf. Die digitalen Menschen der Mitglieder werden nicht gelöscht.",
+  "Removes the team and its run history.": "Entfernt das Team und seinen Ausführungsverlauf.",
   "Removing it from this team deletes the digital human, its space, and every file it produced, and that cannot be undone. (If you have also added it to another team, it stays there and nothing is deleted.) If there is anything you want to keep, close this and copy it out first.": "Wenn Sie ihn aus diesem Team entfernen, werden der digitale Mensch, sein Bereich und alle Dateien, die er erstellt hat, gelöscht, und das kann nicht rückgängig gemacht werden. (Falls Sie ihn auch einem anderen Team hinzugefügt haben, bleibt er dort erhalten, und es wird nichts gelöscht.) Falls Sie etwas behalten möchten, schließen Sie diesen Dialog und kopieren Sie es vorher an einen anderen Ort.",
   "Rename": "Umbenennen",
   "Rename (+cc)": "Umbenennen (+cc)",

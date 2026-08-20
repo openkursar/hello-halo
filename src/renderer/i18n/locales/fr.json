@@ -1371,7 +1371,7 @@
   "Removed {{count}} dead process entries_many": "",
   "Removed {{count}} dead process entries_one": "{{count}} entrée de processus mort supprimée",
   "Removed {{count}} dead process entries_other": "{{count}} entrées de processus morts supprimées",
-  "Removes the team and its run history. Member digital humans are not deleted.": "Supprime l'équipe et son historique d'exécution. Les humains numériques membres ne sont pas supprimés.",
+  "Removes the team and its run history.": "Supprime l'équipe et son historique d'exécution.",
   "Removing it from this team deletes the digital human, its space, and every file it produced, and that cannot be undone. (If you have also added it to another team, it stays there and nothing is deleted.) If there is anything you want to keep, close this and copy it out first.": "Le retirer de cette équipe supprime l'humain numérique, son espace et tous les fichiers qu'il a produits, et cette action est irréversible. (Si vous l'avez également ajouté à une autre équipe, il y reste et rien n'est supprimé.) S'il y a des éléments que vous souhaitez conserver, fermez cette fenêtre et copiez-les d'abord.",
   "Rename": "Renommer",
   "Rename (+cc)": "Renommer (+cc)",
