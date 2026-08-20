@@ -238,7 +238,7 @@ function CollaborationSection({ team, readOnly }: { team: TeamDetail['team']; re
           <OptionCard
             icon={<GitBranch className="h-4 w-4" />}
             label={t('Managed mode')}
-            description={t('The AI Lead assigns tasks and reviews results. Members communicate through the defined reporting hierarchy.')}
+            description={t('The Lead assigns tasks and reviews results. Members communicate through the defined reporting hierarchy.')}
             selected={team.collabMode === 'structured'}
             onClick={() => void updateTeam(team.id, { collabMode: 'structured' })}
             disabled={readOnly}
@@ -263,8 +263,8 @@ function CollaborationSection({ team, readOnly }: { team: TeamDetail['team']; re
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <OptionCard
             icon={<Bot className="h-4 w-4" />}
-            label={t('Ask the AI Lead first')}
-            description={t('Members are asked to bring blockers to the AI Lead before involving you.')}
+            label={t('Ask the Lead first')}
+            description={t('Members are asked to bring blockers to the Lead before involving you.')}
             selected={team.escalationRouting === 'lead'}
             onClick={() => void updateTeam(team.id, { escalationRouting: 'lead' })}
             badge={t('Recommended')}
@@ -370,6 +370,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
               duty={member.duty ?? ''}
               description={app?.spec.description ?? ''}
               isLead={member.isLead}
+              aiProvisioned={member.aiProvisioned}
               onOpen={() => onOpenMember(member.appId)}
               onMakeLead={readOnly || member.isLead ? undefined : () => setPromote({ appId: member.appId, name: member.memberName })}
               onRemove={readOnly || member.isLead ? undefined : () => setRemove({
@@ -406,7 +407,10 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
 
       {remove && (
         <ConfirmDialog
-          title={remove.aiProvisioned && remove.inOwningSpace
+          // The verb names the worst outcome being authorised, not the one that
+          // is certain. Whether it actually happens is the body's job — the two
+          // answer different questions, so they do not contradict.
+          title={remove.aiProvisioned
             ? t('Delete {{name}}?', { name: remove.name })
             : t('Remove {{name}} from this team?', { name: remove.name })}
           message={!remove.aiProvisioned
@@ -414,7 +418,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
             : remove.inOwningSpace
               ? t('{{name}} is the lead this team was given when it was created. Removing it deletes the digital human itself. The space it works in is yours and stays, along with everything in it.', { name: remove.name })
               : t('{{name}} was created by AI for this team. Removing it here may also delete the digital human itself, its space, and every file it produced — that happens whenever this is the only team it works on. If there is anything you want to keep, close this and copy it out first.', { name: remove.name })}
-          confirmLabel={remove.aiProvisioned && remove.inOwningSpace ? t('Delete permanently') : t('Remove')}
+          confirmLabel={remove.aiProvisioned ? t('Delete permanently') : t('Remove')}
           cancelLabel={t('Cancel')}
           variant={remove.aiProvisioned ? 'danger' : 'default'}
           onConfirm={() => { const r = remove; setRemove(null); void removeMember(detail.team.id, r.appId) }}
@@ -470,11 +474,13 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   )
 }
 
-function MemberCard({ memberName, duty, description, isLead, onOpen, onMakeLead, onRemove }: {
+function MemberCard({ memberName, duty, description, isLead, aiProvisioned, onOpen, onMakeLead, onRemove }: {
   memberName: string
   duty: string
   description: string
   isLead: boolean
+  /** Decides the delete button's wording: this is the only text read before pressing. */
+  aiProvisioned: boolean
   onOpen: () => void
   onMakeLead?: () => void
   onRemove?: () => void
@@ -487,7 +493,7 @@ function MemberCard({ memberName, duty, description, isLead, onOpen, onMakeLead,
           <div className="flex items-center gap-1.5">
             {isLead && <Star className="h-3.5 w-3.5 flex-shrink-0 fill-current text-amber-500" />}
             <span className="text-sm font-medium text-foreground">{memberName}</span>
-            {isLead && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">{t('AI Lead')}</span>}
+            {isLead && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">{t('Lead')}</span>}
           </div>
           <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
             {duty || description || t('No duty written yet — tap to write one.')}
@@ -499,6 +505,7 @@ function MemberCard({ memberName, duty, description, isLead, onOpen, onMakeLead,
               onClick={onMakeLead}
               className="rounded p-1 text-muted-foreground/50 transition-colors hover:text-amber-500"
               title={t('Make lead')}
+              aria-label={t('Make lead')}
             >
               <Crown className="h-3.5 w-3.5" />
             </button>
@@ -507,7 +514,8 @@ function MemberCard({ memberName, duty, description, isLead, onOpen, onMakeLead,
             <button
               onClick={onRemove}
               className="rounded p-1 text-muted-foreground/50 transition-colors hover:text-destructive"
-              title={t('Remove member')}
+              title={aiProvisioned ? t('Delete member') : t('Remove member')}
+              aria-label={aiProvisioned ? t('Delete member') : t('Remove member')}
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>

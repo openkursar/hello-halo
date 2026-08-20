@@ -341,7 +341,7 @@ export function TeamCreateDialog({ owningSpaceId, onClose, onCreated, onCreateMe
                   <RadioRow
                     checked={collabMode === 'structured'}
                     label={t('Managed mode')}
-                    hint={t('The AI Lead assigns tasks and reviews results.')}
+                    hint={t('The Lead assigns tasks and reviews results.')}
                     onSelect={() => setCollabMode('structured')}
                   />
                   <RadioRow
@@ -385,8 +385,8 @@ export function TeamCreateDialog({ owningSpaceId, onClose, onCreated, onCreateMe
                 <Field label={t('When members need help')}>
                   <RadioRow
                     checked={escalationRouting === 'lead'}
-                    label={t('Ask the AI Lead first')}
-                    hint={t('Members are asked to bring blockers to the AI Lead before involving you. One can still reach you directly when the decision is clearly yours.')}
+                    label={t('Ask the Lead first')}
+                    hint={t('Members are asked to bring blockers to the Lead before involving you. One can still reach you directly when the decision is clearly yours.')}
                     badge={t('Recommended')}
                     onSelect={() => setEscalationRouting('lead')}
                   />
