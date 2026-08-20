@@ -63,6 +63,9 @@ export function TeamCreateDialog({ owningSpaceId, onClose, onCreated, onCreateMe
   // AI-proposal confirmation step
   const [proposal, setProposal] = useState<ProposedMember[] | null>(null)
   const [proposeEmpty, setProposeEmpty] = useState(false)
+  // A backend failure only raised a toast, which is gone by the time the user
+  // looks back at the dialog — leaving a screen that did not react at all.
+  const [proposeFailed, setProposeFailed] = useState(false)
 
   // Lead apps are an internal coordination role and must never be addable as a
   // member; exclude every team's lead from the pickable set.
@@ -140,7 +143,12 @@ export function TeamCreateDialog({ owningSpaceId, onClose, onCreated, onCreateMe
       // null = backend error (toast already shown). Empty = AI returned nothing
       // usable; surface inline so the user can refine the goal or switch to
       // manual rather than confirming an empty roster.
-      if (!proposed) return
+      if (!proposed) {
+        setProposeEmpty(false)
+        setProposeFailed(true)
+        return
+      }
+      setProposeFailed(false)
       if (proposed.length === 0) {
         setProposeEmpty(true)
         return
@@ -295,6 +303,11 @@ export function TeamCreateDialog({ owningSpaceId, onClose, onCreated, onCreateMe
                   {t('The AI could not propose members for this goal. Try describing the goal more concretely, or switch to “I will add members”.')}
                 </p>
               )}
+              {proposeFailed && (
+                <p className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs leading-relaxed text-destructive">
+                  {t('The AI model is unavailable. Check your AI source settings and try again.')}
+                </p>
+              )}
             </div>
           )}
 
@@ -400,7 +413,7 @@ export function TeamCreateDialog({ owningSpaceId, onClose, onCreated, onCreateMe
             className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
           >
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {t('Create and run')}
+            {t('Create')}
           </button>
         </div>
       </div>

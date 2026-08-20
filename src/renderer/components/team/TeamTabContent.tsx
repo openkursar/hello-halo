@@ -85,6 +85,11 @@ export function TeamTabContent() {
               </div>
               <div className="flex flex-1 flex-col overflow-hidden">{rightPane}</div>
             </>
+          ) : teams.length === 0 ? (
+            // With no teams there is no list to show, and the only explanation
+            // of what a team is lives in the empty state — which on mobile has
+            // no right pane to appear in.
+            <TeamEmptyState hasTeams={false} onNewTeam={openCreate} onJoinOffice={openJoin} />
           ) : (
             <TeamList onNewTeam={openCreate} onJoinOffice={openJoin} />
           )}
