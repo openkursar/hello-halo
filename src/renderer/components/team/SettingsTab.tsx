@@ -12,6 +12,7 @@ import { useAppsStore } from '../../stores/apps.store'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import { SchedulePicker } from '../apps/SchedulePicker'
+import { SystemPromptEditor } from '../apps/SystemPromptEditor'
 import type { ScheduleValue } from '../apps/schedule-utils'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Switch } from '../ui/Switch'
@@ -126,15 +127,25 @@ function GoalSection({ team, first, readOnly }: { team: TeamDetail['team']; firs
       </label>
       <label className="mt-3 block space-y-1">
         <span className="text-xs text-muted-foreground">{t('Goal')}</span>
-        <textarea
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onBlur={saveGoal}
-          rows={4}
-          readOnly={readOnly}
-          disabled={readOnly}
-          className="w-full resize-y rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
-        />
+        {/* A joined office keeps the plain disabled field: the editor exists to
+            open a dialog, and there is nothing here to open. */}
+        {readOnly ? (
+          <textarea
+            value={draft}
+            rows={4}
+            readOnly
+            disabled
+            className="w-full resize-y rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground disabled:opacity-60"
+          />
+        ) : (
+          <SystemPromptEditor
+            value={draft}
+            onChange={setDraft}
+            onBlur={saveGoal}
+            onDone={saveGoal}
+            title={t('What {{team}} should get done', { team: team.name })}
+          />
+        )}
         {!readOnly && (
           <p className="text-xs text-muted-foreground/70">
             {t('The lead will decompose this goal into tasks for the team.')}

@@ -29,6 +29,7 @@ import type { InstalledApp } from '../../../shared/apps/app-types'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTeamStore } from '../../stores/team.store'
 import { useTranslation } from '../../i18n'
+import { SystemPromptEditor } from '../apps/SystemPromptEditor'
 
 interface TeamCreateDialogProps {
   owningSpaceId: string
@@ -208,12 +209,14 @@ export function TeamCreateDialog({ owningSpaceId, onClose, onCreated, onCreateMe
             hint={t('Describe in plain words what this team should do')}
             error={goalError ? t('Goal is required') : undefined}
           >
-            <textarea
+            {/* A controlled form field: the value is read on submit, so there is
+                nothing to save on blur or on Done. */}
+            <SystemPromptEditor
               value={goal}
-              onChange={e => setGoal(e.target.value)}
-              rows={3}
+              onChange={setGoal}
+              title={t('What this team should get done')}
               placeholder={t('e.g. Every morning, analyze competitors\u2019 activity and send me a brief.')}
-              className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/50"
+              className="bg-background"
             />
           </Field>
 

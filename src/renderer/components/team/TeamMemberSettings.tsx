@@ -16,6 +16,7 @@ import type { TeamCheckView, TeamDetail, TeamMember, TeamDelegatedPolicy } from 
 import { checksForMember, isRemoteMember } from '../../../shared/apps/team-types'
 import { fullCapabilityPolicy } from '../../../shared/apps/capability-policy'
 import { CapabilityPolicyFields } from '../capability/CapabilityPolicyFields'
+import { SystemPromptEditor } from '../apps/SystemPromptEditor'
 import { useTeamStore } from '../../stores/team.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
@@ -82,15 +83,19 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
               {t('What does it take care of in this team?')}
             </h3>
             {isMine ? (
-              <textarea
+              <SystemPromptEditor
                 value={duty}
-                onChange={e => setDuty(e.target.value)}
+                onChange={setDuty}
                 onBlur={saveDuty}
-                rows={7}
+                onDone={saveDuty}
+                title={t('What {{member}} does in {{team}}', {
+                  member: member.memberName,
+                  team: detail.team.name,
+                })}
+                className="leading-relaxed"
                 placeholder={t(
                   'For example:\nYou do the coding.\nStart once you have the design and the test cases; write the code and test it yourself.\nWhen you are done, tell "Code Review".\nIf it comes back rejected, fix it and tell them again.'
                 )}
-                className="w-full resize-y rounded-lg border border-border bg-secondary px-3 py-2 text-sm leading-relaxed text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               />
             ) : (
               <div className="rounded-lg border border-border bg-secondary/40 px-3 py-2">
