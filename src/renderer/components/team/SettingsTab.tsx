@@ -321,10 +321,17 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   const appMap = useMemo(() => new Map(allApps.map(a => [a.id, a])), [allApps])
   const [showAdd, setShowAdd] = useState(false)
   const [promote, setPromote] = useState<{ appId: string; name: string } | null>(null)
-  // aiProvisioned decides what removal actually does, so it decides what the
-  // confirmation is allowed to promise: a member AI built for this team is
-  // deleted outright, together with its space and everything in it.
-  const [remove, setRemove] = useState<{ appId: string; name: string; aiProvisioned: boolean } | null>(null)
+  // What removal actually does decides what the confirmation may promise, and
+  // it differs three ways: a member you added keeps everything; a member AI
+  // built loses itself and its own space; the lead loses itself but not the
+  // space, which is the team's owning space and therefore the user's own.
+  const [remove, setRemove] = useState<{
+    appId: string
+    name: string
+    aiProvisioned: boolean
+    /** True when the app lives in the team's owning space — the lead's case. */
+    inOwningSpace: boolean
+  } | null>(null)
 
   // Apps not already in this team (candidates for adding).
   const candidates = useMemo(() =>
@@ -348,7 +355,12 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
               isLead={member.isLead}
               onOpen={() => onOpenMember(member.appId)}
               onMakeLead={readOnly || member.isLead ? undefined : () => setPromote({ appId: member.appId, name: member.memberName })}
-              onRemove={readOnly || member.isLead ? undefined : () => setRemove({ appId: member.appId, name: member.memberName, aiProvisioned: member.aiProvisioned })}
+              onRemove={readOnly || member.isLead ? undefined : () => setRemove({
+                appId: member.appId,
+                name: member.memberName,
+                aiProvisioned: member.aiProvisioned,
+                inOwningSpace: app?.spaceId === detail.team.owningSpaceId,
+              })}
             />
           )
         })}
@@ -377,9 +389,11 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
           title={remove.aiProvisioned
             ? t('Delete {{name}}?', { name: remove.name })
             : t('Remove {{name}} from this team?', { name: remove.name })}
-          message={remove.aiProvisioned
-            ? t('{{name}} was created by AI for this team and exists nowhere else. Removing it deletes the digital human, its space, and every file it produced. This cannot be undone. If you only want it to stop working here, copy anything you need out of its space first.', { name: remove.name })
-            : t('{{name}} stays yours — the digital human, its own instructions, and everything in its space are untouched. What it loses is what it had here: the duty you wrote for this team, and what this team was allowed to ask of it. Add it back later and you write those again.', { name: remove.name })}
+          message={!remove.aiProvisioned
+            ? t('{{name}} stays yours — the digital human, its own instructions, and everything in its space are untouched. What it loses is what it had here: the duty you wrote for this team, and what this team was allowed to ask of it. Add it back later and you write those again.', { name: remove.name })
+            : remove.inOwningSpace
+              ? t('{{name}} is the lead this team was given when it was created. Removing it deletes the digital human itself. The space it works in is yours and stays, along with everything in it.', { name: remove.name })
+              : t('{{name}} was created by AI for this team. Removing it deletes the digital human, its space, and every file it produced. If there is anything you want to keep, close this and copy it out first.', { name: remove.name })}
           confirmLabel={remove.aiProvisioned ? t('Delete permanently') : t('Remove')}
           cancelLabel={t('Cancel')}
           variant={remove.aiProvisioned ? 'danger' : 'default'}
