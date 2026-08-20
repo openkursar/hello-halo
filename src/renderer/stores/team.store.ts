@@ -429,10 +429,12 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       return null
     } catch (err) {
       console.error('[TeamStore] proposeMembers error:', err)
-      // Report what threw. Naming a cause we did not establish — it used to say
-      // the model was unavailable — sends the reader to check a setting that
-      // may be fine while the real reason stays off screen.
-      const msg = String((err as Error)?.message ?? err) || i18n.t('Failed to propose members')
+      // What SF-021 removed was naming a cause we had not established — it used
+      // to say the model was unavailable. It did not mean the thrown text has
+      // to reach the screen. The main-process handler turns anything the
+      // service throws into res.error above, so what lands here is what nobody
+      // planned for, and its text is written for whoever debugs it.
+      const msg = i18n.t('Failed to propose members')
       set({ error: msg })
       notifyError(i18n.t('Could not build the team'), msg)
       return null

@@ -919,9 +919,10 @@ async function initPlatformAndApps(): Promise<void> {
       getTriggerSync: () => teamTriggerScheduler,
       spaces: {
         spaceExists: (spaceId) => getSpace(spaceId) != null,
-        // AI-provisioned members get their own independent space under the
-        // owning team. createSpace centralizes data; the name carries
-        // the team + member handle for human-readable grouping.
+        // A member's space is a top-level one, sitting in the user's own space
+        // list with nothing but the name to say whose it is — not a child of
+        // the team's space. owningSpaceId is declared on the interface and
+        // dropped here; no code ever hung a member's space under a team's.
         createMemberSpace: ({ teamName, memberName }) =>
           createSpace({ name: `${teamName} · ${memberName}`, icon: 'users' }).id,
         // Fire-and-forget on dissolve orphan cleanup: deleteSpace is async but
