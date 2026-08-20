@@ -64,12 +64,25 @@ export function SystemPromptEditor({
   const dialogRef = useRef<HTMLTextAreaElement>(null)
   // Value snapshot taken when dialog opens — restored on Cancel
   const originalRef = useRef('')
+  /**
+   * Set while a press on the expand button is in flight, so the blur it causes
+   * does not reach a caller that saves on blur. Expanding is not a commit
+   * point; Done is.
+   *
+   * Cleared by whichever comes first: the blur it was meant to suppress, the
+   * dialog opening, or the next edit. A press that produces no blur — the
+   * textarea never had focus — would otherwise leave it set, and it would go on
+   * to swallow a later, unrelated save.
+   */
+  const expandingRef = useRef(false)
 
   useAutoResize(inlineRef, value)
 
   // ── Open / close ────────────────────────────────────────────────────────
 
   const openDialog = useCallback(() => {
+    // Runs on click, after any blur this press was going to cause.
+    expandingRef.current = false
     originalRef.current = value
     setOpen(true)
   }, [value])
@@ -107,20 +120,14 @@ export function SystemPromptEditor({
   // ── Helpers ──────────────────────────────────────────────────────────────
 
   const handleChange = useCallback(
-    (e: React.ChangeEvent<HTMLTextAreaElement>) => onChange(e.target.value),
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      // Typing means no expand press is in flight — covers a press dragged off
+      // the button, which produces neither blur nor click.
+      expandingRef.current = false
+      onChange(e.target.value)
+    },
     [onChange]
   )
-
-  /**
-   * Opening the dialog blurs the inline textarea, and a caller that saves on
-   * blur would then save mid-edit. The round trip comes back while the user is
-   * still typing in the dialog, and a parent that re-seeds its state from the
-   * saved value wipes whatever was typed after the save left.
-   *
-   * Expanding is not a commit point — Done is. Set on mousedown, which runs
-   * before blur, so this does not depend on the button taking focus.
-   */
-  const expandingRef = useRef(false)
 
   const handleInlineBlur = useCallback(() => {
     if (expandingRef.current) {
