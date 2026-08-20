@@ -1646,7 +1646,7 @@
   "Testing...": "测试中...",
   "Text Extraction (OCR)": "文字提取 (OCR)",
   "That invite link is not valid.": "该邀请链接无效。",
-  "That was the last one — nothing else is waiting on you.": "已经是最后一项了——没有其他等待您处理的事项。",
+  "That was the last one from {{name}}.": "这是 {{name}} 的最后一条。",
   "The AI could not propose members for this goal. Try describing the goal more concretely, or switch to “I will add members”.": "AI无法为此目标提议成员。请尝试更具体地描述目标，或切换到“我将添加成员”。",
   "The AI model is unavailable. Check your AI source settings and try again.": "AI模型不可用。请检查您的AI源设置，然后重试。",
   "The Lead assigns tasks and reviews results.": "由负责人分配任务并审核结果。",

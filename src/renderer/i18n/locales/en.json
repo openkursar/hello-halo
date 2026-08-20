@@ -1801,7 +1801,7 @@
   "Testing...": "Testing...",
   "Text Extraction (OCR)": "Text Extraction (OCR)",
   "That invite link is not valid.": "That invite link is not valid.",
-  "That was the last one — nothing else is waiting on you.": "That was the last one — nothing else is waiting on you.",
+  "That was the last one from {{name}}.": "That was the last one from {{name}}.",
   "The AI could not propose members for this goal. Try describing the goal more concretely, or switch to “I will add members”.": "The AI could not propose members for this goal. Try describing the goal more concretely, or switch to “I will add members”.",
   "The AI model is unavailable. Check your AI source settings and try again.": "The AI model is unavailable. Check your AI source settings and try again.",
   "The app definition is invalid and cannot be published.": "The app definition is invalid and cannot be published.",

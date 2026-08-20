@@ -1669,7 +1669,7 @@
   "Testing...": "Probando...",
   "Text Extraction (OCR)": "Extracción de texto (OCR)",
   "That invite link is not valid.": "Ese enlace de invitación no es válido.",
-  "That was the last one — nothing else is waiting on you.": "Esa fue la última — no hay nada más esperándote.",
+  "That was the last one from {{name}}.": "Ese fue el último de {{name}}.",
   "The AI could not propose members for this goal. Try describing the goal more concretely, or switch to “I will add members”.": "La IA no pudo proponer miembros para este objetivo. Intenta describir el objetivo de manera más concreta, o cambia a “Agregaré miembros”.",
   "The AI model is unavailable. Check your AI source settings and try again.": "El modelo de IA no está disponible. Revisa la configuración de tu fuente de IA e intenta de nuevo.",
   "The Lead assigns tasks and reviews results.": "El Líder asigna las tareas y revisa los resultados.",

@@ -1646,7 +1646,7 @@
   "Testing...": "テスト中...",
   "Text Extraction (OCR)": "テキスト抽出 (OCR)",
   "That invite link is not valid.": "その招待リンクは無効です。",
-  "That was the last one — nothing else is waiting on you.": "これが最後でした — 現在、他に待機中の項目はありません。",
+  "That was the last one from {{name}}.": "これが {{name}} からの最後の項目です。",
   "The AI could not propose members for this goal. Try describing the goal more concretely, or switch to “I will add members”.": "AIがこの目標に対してメンバーを提案できませんでした。目標をもっと具体的に説明するか、「自分でメンバーを追加する」に切り替えてください。",
   "The AI model is unavailable. Check your AI source settings and try again.": "AIモデルが利用できません。AIソースの設定を確認して、もう一度お試しください。",
   "The Lead assigns tasks and reviews results.": "リードがタスクを割り当て、結果をレビューします。",
