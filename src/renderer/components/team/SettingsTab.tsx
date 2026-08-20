@@ -3,13 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   GitBranch, RefreshCw, Bot, UserCircle,
-  ExternalLink, Trash2, Plus, Info, Crown, LogOut, ChevronRight, Settings2, Users, Network,
+  Trash2, Plus, Info, Crown, LogOut, ChevronRight, Settings2, Users, Network,
 } from 'lucide-react'
 import type { TeamDetail, TeamTrigger, TeamScheduleConfig, TeamTriggerInput } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
 import { useOfficeSkin, useTeamViewPrefsStore } from '../../stores/team-view-prefs.store'
 import { useAppsStore } from '../../stores/apps.store'
-import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import { SchedulePicker } from '../apps/SchedulePicker'
@@ -319,8 +318,6 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   const removeMember = useTeamStore(s => s.removeMember)
   const updateTeam = useTeamStore(s => s.updateTeam)
   const allApps = useAppsStore(s => s.apps)
-  const setCurrentTab = useAppsPageStore(s => s.setCurrentTab)
-  const openAppConfig = useAppsPageStore(s => s.openAppConfig)
   const appMap = useMemo(() => new Map(allApps.map(a => [a.id, a])), [allApps])
   const [showAdd, setShowAdd] = useState(false)
   const [promote, setPromote] = useState<{ appId: string; name: string } | null>(null)
@@ -332,11 +329,6 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
       !detail.members.some(m => m.appId === a.id)
     ),
   [allApps, detail.members])
-
-  const openApp = useCallback((appId: string) => {
-    setCurrentTab('my-digital-humans')
-    openAppConfig(appId)
-  }, [setCurrentTab, openAppConfig])
 
   return (
     <Section title={t('Members')}>
@@ -351,7 +343,6 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
               description={app?.spec.description ?? ''}
               isLead={member.isLead}
               onOpen={() => onOpenMember(member.appId)}
-              onOpenApp={() => openApp(member.appId)}
               onMakeLead={readOnly || member.isLead ? undefined : () => setPromote({ appId: member.appId, name: member.memberName })}
               onRemove={readOnly || member.isLead ? undefined : () => void removeMember(detail.team.id, member.appId)}
             />
@@ -418,13 +409,12 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   )
 }
 
-function MemberCard({ memberName, duty, description, isLead, onOpen, onOpenApp, onMakeLead, onRemove }: {
+function MemberCard({ memberName, duty, description, isLead, onOpen, onMakeLead, onRemove }: {
   memberName: string
   duty: string
   description: string
   isLead: boolean
   onOpen: () => void
-  onOpenApp: () => void
   onMakeLead?: () => void
   onRemove?: () => void
 }) {
@@ -452,13 +442,6 @@ function MemberCard({ memberName, duty, description, isLead, onOpen, onOpenApp, 
               <Crown className="h-3.5 w-3.5" />
             </button>
           )}
-          <button
-            onClick={onOpenApp}
-            className="rounded p-1 text-muted-foreground/50 transition-colors hover:text-foreground"
-            title={t('Open in Digital Humans')}
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-          </button>
           {onRemove && (
             <button
               onClick={onRemove}
