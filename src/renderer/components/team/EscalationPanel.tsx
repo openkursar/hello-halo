@@ -124,7 +124,10 @@ export function EscalationPanel({ member }: EscalationPanelProps) {
           {loading
             ? t('Loading the pending decision…')
             : receipt
-              ? t('That was the last one — nothing else is waiting on you.')
+              // Only this member's queue is in scope here — the panel is given
+              // one member and reads one feed. Whether anything is waiting
+              // elsewhere is the attention banner's to say.
+              ? t('That was the last one from {{name}}.', { name: member.memberName })
               : t('This decision is no longer pending.')}
         </p>
       )}
