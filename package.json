@@ -232,6 +232,7 @@
       "node_modules/@parcel/watcher-*/**/*",
       "node_modules/better-sqlite3/build/Release/*.node",
       "node_modules/node-pty/prebuilds/**",
+      "node_modules/@img/**/*",
       "node_modules/tesseract.js/**",
       "node_modules/tesseract.js-core/**"
     ],

@@ -13,12 +13,17 @@
 //    with the prebuild matching the target platform. Prebuilds are downloaded
 //    by prepare-binaries.mjs and stored in node_modules/better-sqlite3/prebuilds/.
 //
-// 3. Ensure executable permissions on all native binaries in the unpacked
+// 3. Keep only the target platform's @img/sharp-* package (plus its libvips
+//    sibling) and fail the build if its prebuilt binary is absent. Same
+//    rationale as @parcel/watcher, with an assertion because a missing sharp
+//    binary only surfaces at runtime, on the first oversized image.
+//
+// 4. Ensure executable permissions on all native binaries in the unpacked
 //    output. Some npm packages (e.g. @anthropic-ai/claude-code v2.1.89)
 //    ship tarballs with missing +x on vendored binaries. This step detects
 //    ELF and Mach-O files by magic bytes and adds +x if missing.
 //
-// 4. macOS ad-hoc signing (prevents "damaged app" prompts on unsigned builds).
+// 5. macOS ad-hoc signing (prevents "damaged app" prompts on unsigned builds).
 // ============================================================================
 
 const { execSync } = require('child_process');
@@ -65,6 +70,17 @@ const CLOUDFLARED_VARIANTS = {
   'darwin-x64':   'cloudflared-darwin-x64',
   'win32-x64':    'cloudflared.exe',
   'linux-x64':    'cloudflared-linux-x64',
+};
+
+// Maps platform-arch to the @img/sharp-* package required at runtime. The
+// Claude engines resize oversized images through sharp, which dlopens the
+// prebuilt .node from this package; the libvips sibling it declares is resolved
+// from the same @img directory and kept alongside it.
+const SHARP_TARGETS = {
+  'darwin-arm64': 'sharp-darwin-arm64',
+  'darwin-x64':   'sharp-darwin-x64',
+  'win32-x64':    'sharp-win32-x64',
+  'linux-x64':    'sharp-linux-x64',
 };
 
 // Maps platform-arch to the @openai/codex native package required at runtime.
@@ -296,6 +312,69 @@ function cleanAndValidateCodexNativePackage(context) {
     console.log(`[afterPack] ${key}: removed ${removed.length} non-target Codex package(s): ${removed.join(', ')}`);
   }
   console.log(`[afterPack] ${key}: keeping @openai/${target.packageName}`);
+}
+
+/**
+ * Keep only the target platform's @img/sharp-* package (and the libvips sibling
+ * it declares) in the unpacked output, and fail the build when its prebuilt
+ * binary is missing.
+ *
+ * The binary must live outside the asar archive: a .node cannot be dlopened
+ * from inside the archive, and sharp's only fallback is to give up, which
+ * surfaces to the user as "Unable to resize image" on any oversized image.
+ */
+function cleanAndValidateSharpNativePackage(context) {
+  const platform = context.electronPlatformName;
+  const archStr = ARCH_NAMES[context.arch] || String(context.arch);
+  const key = `${platform}-${archStr}`;
+  const targetPkg = SHARP_TARGETS[key];
+
+  if (!targetPkg) {
+    console.warn(`[afterPack] No sharp package mapping for ${key}, skipping cleanup`);
+    return;
+  }
+
+  const unpackedDir = getUnpackedDir(context);
+  const imgDir = path.join(unpackedDir, 'node_modules', '@img');
+  const targetDir = path.join(imgDir, targetPkg);
+  const targetLibDir = path.join(targetDir, 'lib');
+
+  const hasBinary = fs.existsSync(targetLibDir)
+    && fs.readdirSync(targetLibDir).some(f => f.endsWith('.node'));
+
+  if (!hasBinary) {
+    console.error(`[afterPack] ${key}: missing sharp native binary: ${targetLibDir}`);
+    console.error(`[afterPack] Run "npm run prepare:all" before cross-platform/cross-arch packaging`);
+    console.error(`[afterPack] Also check that asarUnpack includes "node_modules/@img/**/*"`);
+    throw new Error(`Missing @img/${targetPkg} native binary for ${key}`);
+  }
+
+  // The .node links against libvips through an @rpath/RUNPATH pointing at a
+  // sibling directory under @img, so the sibling must survive the cleanup.
+  const manifest = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf-8'));
+  const siblings = Object.keys(manifest.optionalDependencies || {}).map(dep => dep.split('/').pop());
+
+  const missingSiblings = siblings.filter(name => !fs.existsSync(path.join(imgDir, name, 'lib')));
+  if (missingSiblings.length > 0) {
+    console.error(`[afterPack] ${key}: @img/${targetPkg} needs ${missingSiblings.join(', ')}, not in the unpacked output`);
+    console.error(`[afterPack] Run "npm run prepare:all" to install the libvips sibling`);
+    throw new Error(`Missing libvips package(s) for ${key}: ${missingSiblings.join(', ')}`);
+  }
+
+  const keep = new Set([targetPkg, ...siblings]);
+  const removed = [];
+  for (const entry of fs.readdirSync(imgDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (keep.has(entry.name)) continue;
+
+    fs.rmSync(path.join(imgDir, entry.name), { recursive: true });
+    removed.push(entry.name);
+  }
+
+  if (removed.length > 0) {
+    console.log(`[afterPack] ${key}: removed ${removed.length} non-target sharp package(s): ${removed.join(', ')}`);
+  }
+  console.log(`[afterPack] ${key}: keeping ${[...keep].map(name => `@img/${name}`).join(', ')}`);
 }
 
 /**
@@ -715,6 +794,9 @@ module.exports = async function(context) {
 
   // Ensure the packaged app contains the Codex native binary for this arch.
   cleanAndValidateCodexNativePackage(context);
+
+  // Ensure the packaged app contains the sharp native binary for this arch.
+  cleanAndValidateSharpNativePackage(context);
 
   // Keep only target-platform binaries in @anthropic-ai vendored trees.
   cleanAnthropicVendorBinaries(context);

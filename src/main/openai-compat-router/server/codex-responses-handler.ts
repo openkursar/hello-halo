@@ -19,6 +19,7 @@ import { proxyFetch } from '../../services/proxy-fetch'
 import { getEndpointUrlError, isValidEndpointUrl } from './api-type'
 import { applyProviderAdapter, type AdapterContext } from './provider-adapters'
 import { deferInputTokensEstimate, fillResponseUsageFallback } from '../utils/usage-estimator'
+import { pickSessionAffinityHeaders } from '../utils'
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -618,9 +619,9 @@ export async function handleResponsesRequest(
   codexRequest: CodexResponsesRequest,
   config: BackendConfig,
   res: ExpressResponse,
-  options: { debug?: boolean; timeoutMs?: number } = {}
+  options: { debug?: boolean; timeoutMs?: number; sdkHeaders?: Record<string, string> } = {}
 ): Promise<void> {
-  const { debug = false, timeoutMs = DEFAULT_TIMEOUT_MS } = options
+  const { debug = false, timeoutMs = DEFAULT_TIMEOUT_MS, sdkHeaders } = options
   const { url: backendUrl, key: apiKey, headers: customHeaders, apiType: configApiType, adapterId } = config
 
   if (!isValidEndpointUrl(backendUrl)) {
@@ -734,7 +735,10 @@ export async function handleResponsesRequest(
     ? convertAnthropicToOpenAIResponses(requestToSend, convertOptions).request
     : convertAnthropicToOpenAIChat(requestToSend, convertOptions).request
 
-  const requestHeaders: Record<string, string> = { ...(customHeaders || {}) }
+  const requestHeaders: Record<string, string> = {
+    ...(customHeaders || {}),
+    ...pickSessionAffinityHeaders(sdkHeaders),
+  }
   const adapterContext: AdapterContext = { originalRequest: requestToSend }
   applyProviderAdapter(backendUrl, openaiRequest as Record<string, unknown>, requestHeaders, adapterId, adapterContext)
 

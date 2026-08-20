@@ -46,8 +46,7 @@ import AiBot, {
   type Logger as SdkLogger,
   type WeComMediaType,
 } from '@wecom/aibot-node-sdk'
-import { readdirSync, statSync, unlinkSync } from 'fs'
-import { readFile, writeFile, mkdir } from 'fs/promises'
+import { readFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join, basename, extname } from 'path'
 import type {
@@ -74,6 +73,7 @@ import {
 } from './wecom-stream-session'
 import { ensureUtf8 } from './wecom-content-utf8'
 import { ConnectionArbiter } from './connection-arbiter'
+import { stageMediaFile, pruneMediaTempDir } from './media-temp-files'
 import { notifyAppEvent } from '../../../services/notification.service'
 
 // ============================================
@@ -157,29 +157,12 @@ function generateTraceId(prefix: string): string {
  * is safe to remove.
  */
 export function cleanupWecomTempFiles(): void {
-  const cutoff = Date.now() - 24 * 60 * 60 * 1000
-  let cleaned = 0
-  try {
-    const files = readdirSync(TEMP_DIR)
-    for (const f of files) {
-      const fp = join(TEMP_DIR, f)
-      try {
-        if (statSync(fp).mtimeMs < cutoff) {
-          unlinkSync(fp)
-          cleaned++
-        }
-      } catch {
-        /* file may be in use or already gone */
-      }
-    }
-    if (cleaned > 0) {
-      logEvent('_startup', 'info', 'temp_files_cleaned', {
-        cleaned,
-        dir: TEMP_DIR,
-      })
-    }
-  } catch {
-    /* directory may not exist on first run */
+  const cleaned = pruneMediaTempDir(TEMP_DIR, 24 * 60 * 60 * 1000)
+  if (cleaned > 0) {
+    logEvent('_startup', 'info', 'temp_files_cleaned', {
+      cleaned,
+      dir: TEMP_DIR,
+    })
   }
 }
 
@@ -1432,14 +1415,8 @@ class WecomBotInstance implements ImChannelInstance {
   ): Promise<void> {
     if (!this.wsClient) return
     try {
-      await mkdir(TEMP_DIR, { recursive: true })
       const { buffer, filename } = await this.wsClient.downloadFile(url, aesKey)
-      const safeBase = filename || `image_${Date.now()}.jpg`
-      const localPath = join(
-        TEMP_DIR,
-        `${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${safeBase}`,
-      )
-      await writeFile(localPath, buffer)
+      const staged = await stageMediaFile(TEMP_DIR, filename || `image_${Date.now()}.jpg`, buffer)
 
       const ext = (url.split('?')[0].split('.').pop() ?? '').toLowerCase()
       const mimeMap: Record<string, ImageMediaType> = {
@@ -1450,8 +1427,8 @@ class WecomBotInstance implements ImChannelInstance {
 
       attachments.push({
         type: 'image',
-        filename: safeBase,
-        localPath,
+        filename: staged.filename,
+        localPath: staged.localPath,
         mimeType: 'image/jpeg',
       })
       images.push({
@@ -1459,11 +1436,11 @@ class WecomBotInstance implements ImChannelInstance {
         type: 'image',
         mediaType,
         data: buffer.toString('base64'),
-        name: safeBase,
+        name: staged.filename,
       })
       logEvent(this.instanceId, 'info', 'media_download_done', {
         mediaType: 'image',
-        filename: safeBase,
+        filename: staged.filename,
         bytes: buffer.length,
       })
     } catch (err) {
@@ -1485,18 +1462,12 @@ class WecomBotInstance implements ImChannelInstance {
   ): Promise<void> {
     if (!this.wsClient) return
     try {
-      await mkdir(TEMP_DIR, { recursive: true })
       const { buffer, filename } = await this.wsClient.downloadFile(url, aesKey)
-      const safeBase = filename || fallbackName
-      const localPath = join(
-        TEMP_DIR,
-        `${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${safeBase}`,
-      )
-      await writeFile(localPath, buffer)
-      attachments.push({ type, filename: safeBase, localPath })
+      const staged = await stageMediaFile(TEMP_DIR, filename || fallbackName, buffer)
+      attachments.push({ type, filename: staged.filename, localPath: staged.localPath })
       logEvent(this.instanceId, 'info', 'media_download_done', {
         mediaType: type,
-        filename: safeBase,
+        filename: staged.filename,
         bytes: buffer.length,
       })
     } catch (err) {
