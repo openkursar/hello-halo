@@ -321,6 +321,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   const appMap = useMemo(() => new Map(allApps.map(a => [a.id, a])), [allApps])
   const [showAdd, setShowAdd] = useState(false)
   const [promote, setPromote] = useState<{ appId: string; name: string } | null>(null)
+  const [remove, setRemove] = useState<{ appId: string; name: string } | null>(null)
 
   // Apps not already in this team (candidates for adding).
   const candidates = useMemo(() =>
@@ -344,7 +345,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
               isLead={member.isLead}
               onOpen={() => onOpenMember(member.appId)}
               onMakeLead={readOnly || member.isLead ? undefined : () => setPromote({ appId: member.appId, name: member.memberName })}
-              onRemove={readOnly || member.isLead ? undefined : () => void removeMember(detail.team.id, member.appId)}
+              onRemove={readOnly || member.isLead ? undefined : () => setRemove({ appId: member.appId, name: member.memberName })}
             />
           )
         })}
@@ -358,6 +359,18 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
           cancelLabel={t('Cancel')}
           onConfirm={() => { const p = promote; setPromote(null); void updateTeam(detail.team.id, { leadAppId: p.appId }) }}
           onCancel={() => setPromote(null)}
+        />
+      )}
+
+      {remove && (
+        <ConfirmDialog
+          title={t('Remove {{name}} from the team?', { name: remove.name })}
+          message={t('What it takes care of in this team is deleted, and it stops taking part. The digital human itself is not deleted — you can add it back later, but you would write its duty again.')}
+          confirmLabel={t('Remove')}
+          cancelLabel={t('Cancel')}
+          variant="danger"
+          onConfirm={() => { const r = remove; setRemove(null); void removeMember(detail.team.id, r.appId) }}
+          onCancel={() => setRemove(null)}
         />
       )}
 
