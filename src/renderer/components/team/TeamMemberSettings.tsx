@@ -62,13 +62,16 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
           {member.memberName}
         </span>
-        <button
-          onClick={() => { setCurrentTab('my-digital-humans'); openAppConfig(member.appId) }}
-          className="flex flex-shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">{t('Open in Digital Humans')}</span>
-        </button>
+        {/* Only for a member running here: a teammate's app has no local row to open. */}
+        {isMine && (
+          <button
+            onClick={() => { setCurrentTab('my-digital-humans'); openAppConfig(member.appId) }}
+            className="flex flex-shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">{t('Open in Digital Humans')}</span>
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto">
