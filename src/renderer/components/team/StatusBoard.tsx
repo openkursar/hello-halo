@@ -123,7 +123,10 @@ export function StatusBoard({ detail, board, activeFlows, onSelectMember, editin
         summary={board.mode === 'replay' ? board.replay?.summary ?? null : null}
         emptiness={board.mode === 'replay'
           ? 'finished'
-          : detail.team.status === 'running' ? 'running' : 'not-started'}
+          : detail.team.status === 'running' ? 'running'
+            : detail.team.status === 'waiting_user' ? 'waiting'
+              : detail.team.status === 'error' ? 'error'
+                : 'not-started'}
       />
     </div>
   )
@@ -302,7 +305,7 @@ interface RecentActivityProps {
    * out why it produced nothing — so one sentence for all three gives no move
    * at all.
    */
-  emptiness: 'not-started' | 'running' | 'finished'
+  emptiness: 'not-started' | 'running' | 'waiting' | 'error' | 'finished'
 }
 
 /**
@@ -408,9 +411,25 @@ function RecentActivity({ tasks, findings, activities, roster, teamId, epochId, 
               ? t('Nothing recorded on the board in this conversation.')
               : emptiness === 'running'
                 ? t('Started. Waiting for the first member to report in.')
-                : emptiness === 'finished'
-                  ? t('This run finished without recording anything. Check the goal is something the team can actually act on, or open a member to see where it stopped.')
-                  : t('Nothing here yet. Press Run to start the team on its goal.')}
+                : emptiness === 'waiting'
+                  // A joined office mirrors the host's status, so "blocked on a
+                  // decision" does not say whose. Only the roster does.
+                  ? (roster.some(awaitsOurDecision)
+                    // Points at the member cards on this same board — the one
+                    // waiting carries an alert. The banner above usually shows
+                    // it too, but "usually" is not good enough to send someone to.
+                    ? t('The team has started and is waiting on a decision from you. Open the member that is waiting to answer it.')
+                    : t('The team has started and is waiting on a decision from {{owner}}. There is nothing for you to do here until they answer.', {
+                      owner: roster.find(m => m.status === 'waiting_user')?.owner || t('a teammate'),
+                    }))
+                  : emptiness === 'error'
+                    // Says stopped, not failed: this screen knows the status and
+                    // nothing about why, and cannot offer a retry either — a
+                    // joined office has no Run button to point at.
+                    ? t('The last run stopped before it recorded anything. Open a member to see how far it got.')
+                    : emptiness === 'finished'
+                      ? t('This run finished without recording anything. Check the goal is something the team can actually act on, or open a member to see where it stopped.')
+                      : t('Nothing here yet. Press Run to start the team on its goal.')}
           </p>
         )
       ) : (
