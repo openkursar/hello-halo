@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   GitBranch, RefreshCw, Bot, UserCircle,
-  Trash2, Plus, Info, Crown, LogOut, ChevronRight, Settings2, Users, Network,
+  Trash2, Plus, Info, Crown, Star, LogOut, ChevronRight, Settings2, Users, Network,
 } from 'lucide-react'
 import type { TeamDetail, TeamTrigger, TeamScheduleConfig, TeamTriggerInput } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
@@ -424,7 +424,7 @@ function MemberCard({ memberName, duty, description, isLead, onOpen, onMakeLead,
       <div className="flex items-start justify-between gap-2">
         <button onClick={onOpen} className="min-w-0 flex-1 text-left">
           <div className="flex items-center gap-1.5">
-            {isLead && <span className="text-amber-500">★</span>}
+            {isLead && <Star className="h-3.5 w-3.5 flex-shrink-0 fill-current text-amber-500" />}
             <span className="text-sm font-medium text-foreground">{memberName}</span>
             {isLead && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">{t('AI Lead')}</span>}
           </div>
