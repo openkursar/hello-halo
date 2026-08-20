@@ -321,7 +321,10 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   const appMap = useMemo(() => new Map(allApps.map(a => [a.id, a])), [allApps])
   const [showAdd, setShowAdd] = useState(false)
   const [promote, setPromote] = useState<{ appId: string; name: string } | null>(null)
-  const [remove, setRemove] = useState<{ appId: string; name: string } | null>(null)
+  // aiProvisioned decides what removal actually does, so it decides what the
+  // confirmation is allowed to promise: a member AI built for this team is
+  // deleted outright, together with its space and everything in it.
+  const [remove, setRemove] = useState<{ appId: string; name: string; aiProvisioned: boolean } | null>(null)
 
   // Apps not already in this team (candidates for adding).
   const candidates = useMemo(() =>
@@ -345,7 +348,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
               isLead={member.isLead}
               onOpen={() => onOpenMember(member.appId)}
               onMakeLead={readOnly || member.isLead ? undefined : () => setPromote({ appId: member.appId, name: member.memberName })}
-              onRemove={readOnly || member.isLead ? undefined : () => setRemove({ appId: member.appId, name: member.memberName })}
+              onRemove={readOnly || member.isLead ? undefined : () => setRemove({ appId: member.appId, name: member.memberName, aiProvisioned: member.aiProvisioned })}
             />
           )
         })}
@@ -365,11 +368,15 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
 
       {remove && (
         <ConfirmDialog
-          title={t('Remove {{name}} from the team?', { name: remove.name })}
-          message={t('What it takes care of in this team is deleted, and it stops taking part. The digital human itself is not deleted — you can add it back later, but you would write its duty again.')}
-          confirmLabel={t('Remove')}
+          title={remove.aiProvisioned
+            ? t('Delete {{name}}?', { name: remove.name })
+            : t('Remove {{name}} from this team?', { name: remove.name })}
+          message={remove.aiProvisioned
+            ? t('{{name}} was created by AI for this team and exists nowhere else. Removing it deletes the digital human, its space, and every file it produced. This cannot be undone. If you only want it to stop working here, copy anything you need out of its space first.', { name: remove.name })
+            : t('{{name}} stays yours — the digital human, its own instructions, and everything in its space are untouched. What it loses is what it had here: the duty you wrote for this team, and what this team was allowed to ask of it. Add it back later and you write those again.', { name: remove.name })}
+          confirmLabel={remove.aiProvisioned ? t('Delete permanently') : t('Remove')}
           cancelLabel={t('Cancel')}
-          variant="danger"
+          variant={remove.aiProvisioned ? 'danger' : 'default'}
           onConfirm={() => { const r = remove; setRemove(null); void removeMember(detail.team.id, r.appId) }}
           onCancel={() => setRemove(null)}
         />
