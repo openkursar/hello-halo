@@ -340,7 +340,13 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
     appId: string
     name: string
     aiProvisioned: boolean
-    /** True when the app lives in the team's owning space — the lead's case. */
+    /**
+     * The app lives in the team's owning space, so removal leaves the space
+     * behind — the demoted lead's case. False when the app record cannot be
+     * read at all: a member on a teammate's machine has none, and neither does
+     * any member while the app list is still loading. Both are answered with
+     * the more destructive wording rather than a promise that anything stays.
+     */
     inOwningSpace: boolean
   } | null>(null)
 
@@ -370,7 +376,10 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
                 appId: member.appId,
                 name: member.memberName,
                 aiProvisioned: member.aiProvisioned,
-                inOwningSpace: app?.spaceId === detail.team.owningSpaceId,
+                // Spelled out rather than app?.spaceId === …, so that "we could
+                // not tell" stays a decision made here instead of a value that
+                // falls out of optional chaining somewhere else.
+                inOwningSpace: app !== undefined && app.spaceId === detail.team.owningSpaceId,
               })}
             />
           )
