@@ -111,6 +111,25 @@ export function SystemPromptEditor({
     [onChange]
   )
 
+  /**
+   * Opening the dialog blurs the inline textarea, and a caller that saves on
+   * blur would then save mid-edit. The round trip comes back while the user is
+   * still typing in the dialog, and a parent that re-seeds its state from the
+   * saved value wipes whatever was typed after the save left.
+   *
+   * Expanding is not a commit point — Done is. Set on mousedown, which runs
+   * before blur, so this does not depend on the button taking focus.
+   */
+  const expandingRef = useRef(false)
+
+  const handleInlineBlur = useCallback(() => {
+    if (expandingRef.current) {
+      expandingRef.current = false
+      return
+    }
+    onBlur?.()
+  }, [onBlur])
+
   const monoClass = fontMono ? ' font-mono' : ''
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -123,7 +142,7 @@ export function SystemPromptEditor({
           ref={inlineRef}
           value={value}
           onChange={handleChange}
-          onBlur={onBlur}
+          onBlur={handleInlineBlur}
           placeholder={placeholder}
           spellCheck={false}
           style={{ minHeight: '144px' }}
@@ -141,6 +160,7 @@ export function SystemPromptEditor({
         {/* Expand button — hover-reveal on desktop, always on mobile */}
         <button
           type="button"
+          onMouseDown={() => { expandingRef.current = true }}
           onClick={openDialog}
           title={t('Expand editor')}
           aria-label={t('Expand editor')}
