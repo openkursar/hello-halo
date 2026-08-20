@@ -268,25 +268,30 @@ export function TeamCreateDialog({ owningSpaceId, onClose, onCreated, onCreateMe
                 {memberError && <p className="mt-1 text-xs text-destructive">{t('Add at least one member')}</p>}
               </div>
 
-              <div>
-                <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('Available digital humans')}</p>
-                {pickableApps.length === 0 ? (
-                  <p className="text-sm text-muted-foreground/70">{t('No digital humans available in this space.')}</p>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {pickableApps.map(app => (
-                      <button
-                        key={app.id}
-                        onClick={() => addMember(app.id)}
-                        className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary"
-                      >
-                        <Plus className="h-3.5 w-3.5 text-muted-foreground" />
-                        {app.spec.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+              {/* Nothing left to pick has two causes. Only one of them is
+                  "you have none" — the other is that they are all already in
+                  the Added list right above, which speaks for itself. */}
+              {(pickableApps.length > 0 || availableApps.length === 0) && (
+                <div>
+                  <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('Available digital humans')}</p>
+                  {pickableApps.length === 0 ? (
+                    <p className="text-sm text-muted-foreground/70">{t('You have no digital humans yet. Create one below, or switch to “Let AI build the team from the goal”.')}</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {pickableApps.map(app => (
+                        <button
+                          key={app.id}
+                          onClick={() => addMember(app.id)}
+                          className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary"
+                        >
+                          <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+                          {app.spec.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <button
                 onClick={onCreateMemberInline}
@@ -302,7 +307,7 @@ export function TeamCreateDialog({ owningSpaceId, onClose, onCreated, onCreateMe
           {memberSourcing === 'ai' && (
             <div className="space-y-2">
               <p className="rounded-lg border border-border bg-secondary/30 p-3 text-xs leading-relaxed text-muted-foreground">
-                {t('AI will build the members it needs from your goal (up to {{count}}). After you click Create, it lists the proposed members for your confirmation before anything is created. Each member gets its own subdirectory in the team space and has no schedule by default.', { count: AI_MEMBER_HARD_LIMIT })}
+                {t('AI reads your goal and proposes up to {{count}} new digital humans. You see the list and confirm before any of them is created. Each one gets its own space, named after the team, which appears in your space list alongside your own. None of them runs on a schedule — they only work when this team runs.', { count: AI_MEMBER_HARD_LIMIT })}
               </p>
               {proposeEmpty && (
                 <p className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs leading-relaxed text-destructive">
@@ -461,9 +466,9 @@ function ConfirmProposalDialog({ proposal, creating, onBack, onConfirm }: Confir
             ))}
           </ul>
           <ul className="space-y-1 text-xs text-muted-foreground/80">
-            <li>{t('Each is created in its own subdirectory of the team space.')}</li>
-            <li>{t('No schedule by default — team-driven only.')}</li>
-            <li>{t('These members are cleaned up when the team is dissolved.')}</li>
+            <li>{t('Each gets its own space, named after the team and the member. It appears in your space list.')}</li>
+            <li>{t('They never run on their own — only when this team runs.')}</li>
+            <li>{t('Dissolving the team deletes these digital humans and their spaces — including anything you put in them.')}</li>
           </ul>
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3 sm:px-6">
