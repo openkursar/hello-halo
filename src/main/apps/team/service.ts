@@ -815,6 +815,12 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
    * own — where the app must go but the space must stay: deleting it would
    * take that space's files and every other app living in it, and nothing
    * restores them.
+   *
+   * This reads the space rather than how the app was flagged, because
+   * aiProvisioned is true for both. It holds as long as the lead is the only
+   * member provisioned into the owning space. Put anything else there, or give
+   * the lead a space of its own, and the two stop meaning the same thing —
+   * silently, since nothing here would fail.
    */
   async function cleanupOrphanApp(appId: string, owningSpaceId: string | null): Promise<void> {
     if (store.listMembersByAppId(appId).length > 0) return
