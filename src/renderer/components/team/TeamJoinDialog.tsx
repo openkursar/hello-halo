@@ -131,7 +131,7 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
         <div className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-6">
           <h2 className="flex items-center gap-2 text-base font-medium text-foreground">
             <LogIn className="h-4 w-4 text-muted-foreground" />
-            {t('Join an office')}
+            {t('Join a team')}
           </h2>
           <button onClick={onClose} className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground">
             <X className="h-4 w-4" />
@@ -275,14 +275,14 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
 function joinErrorText(code: string | undefined, t: (k: string) => string): string {
   switch (code) {
     case 'DESKTOP_ONLY':
-      return t('Joining an office is only available in the desktop app.')
+      return t('Joining a team is only available in the desktop app.')
     case 'NO_MEMBERS':
       return t('Select at least one digital human to bring.')
     case 'VERSION_INCOMPATIBLE':
       return t('Your Halo version is not compatible with the host. Update both apps to the latest version and try again.')
     case 'AUTH_REJECTED':
-      return t('This invite is no longer valid — it may have expired, been revoked, or the office was closed. Ask for a new invite link.')
+      return t('This invite is no longer valid — it may have expired, been revoked, or the team was closed. Ask for a new invite link.')
     default:
-      return t('Could not join the office. Check the link and that the person who invited you is online.')
+      return t('Could not join the team. Check the link and that the person who invited you is online.')
   }
 }

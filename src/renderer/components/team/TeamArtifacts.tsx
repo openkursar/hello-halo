@@ -15,6 +15,11 @@ interface ArtifactGroup {
   artifacts: { name: string; path: string; relativePath?: string }[]
 }
 
+export interface ArtifactEntry {
+  name: string
+  path: string
+}
+
 /**
  * `loading` and `failed` both mean "we do not know yet". Callers must not draw
  * them the same way as `ready`, because in `ready` a missing name means the
@@ -30,6 +35,9 @@ export function useTeamArtifacts(
 ) {
   // basename → absolute path for every produced file in this run.
   const [pathByName, setPathByName] = useState<Map<string, string>>(new Map())
+  // Same data as pathByName, kept as an ordered, de-duplicated list for callers
+  // that render "everything this run produced" rather than looking up one ref.
+  const [list, setList] = useState<ArtifactEntry[]>([])
   const [status, setStatus] = useState<ArtifactStatus>('loading')
   // Which run the paths on hand belong to. A refetch of the same run must not
   // blank them: the caller refetches whenever a task finishes, and links the
@@ -53,13 +61,17 @@ export function useTeamArtifacts(
         }
         const groups = (res.data as ArtifactGroup[]) ?? []
         const map = new Map<string, string>()
+        const entries: ArtifactEntry[] = []
         for (const g of groups) {
           for (const a of g.artifacts) {
-            map.set(baseName(a.name), a.path)
+            const name = baseName(a.name)
+            if (!map.has(name)) entries.push({ name, path: a.path })
+            map.set(name, a.path)
             if (a.relativePath) map.set(baseName(a.relativePath), a.path)
           }
         }
         setPathByName(map)
+        setList(entries)
         loadedKey.current = key
         setStatus('ready')
       } catch (err) {
@@ -82,5 +94,5 @@ export function useTeamArtifacts(
     else void api.openArtifact(path)
   }, [pathByName])
 
-  return { has, open, status }
+  return { has, open, status, list }
 }

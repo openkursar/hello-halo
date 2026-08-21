@@ -298,8 +298,11 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     hasPendingEscalation: deps.hasPendingEscalation,
     describeChatKey: deps.describeChatKey,
     renderDigest: (teamId, epochId, viewerAppId) => digest.render({ teamId, epochId, viewerAppId }),
-    onEpochArchived: (teamId, epochId) => {
-      checks?.clearEpoch(teamId, epochId)
+    // A 'stopped' epoch (pause) is reopenable — noteEpochTurn wakes it back up
+    // on the next message — so its periodic checks must survive the seal.
+    // Every other end reason (completed/timeout/error) really is final.
+    onEpochArchived: (teamId, epochId, endReason) => {
+      if (endReason !== 'stopped') checks?.clearEpoch(teamId, epochId)
       digest.clearEpoch(epochId)
       archive.clearEpoch(epochId)
     },

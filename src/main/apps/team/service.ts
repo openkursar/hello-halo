@@ -512,6 +512,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         hasWaitingUser: blockedOnUs || waitingCount > 0,
         waitingCount,
         leadAppId: team.leadAppId,
+        hostNodeId: team.hostNodeId,
         updatedAt: team.updatedAt,
       }
     })

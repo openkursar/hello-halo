@@ -36,7 +36,10 @@ export function TeamList({ onNewTeam, onJoinOffice }: TeamListProps) {
   const selectTeam = useTeamStore(s => s.selectTeam)
   const isLoadingList = useTeamStore(s => s.isLoadingList)
 
-  const statusLabel = (status: TeamStatus, hasWaitingUser: boolean): string => {
+  // Same words the Live board uses for the same states: "Error" (not
+  // "Stopped"), and "Ready" for a joined office at rest (its host, not this
+  // reader, decides when it runs) vs "Idle" for one of your own.
+  const statusLabel = (status: TeamStatus, hasWaitingUser: boolean, isJoined: boolean): string => {
     if (hasWaitingUser) return t('Waiting for decision')
     switch (status) {
       // A joined office blocked on someone else's decision still reads as
@@ -44,7 +47,7 @@ export function TeamList({ onNewTeam, onJoinOffice }: TeamListProps) {
       case 'waiting_user':
       case 'running': return t('Running')
       case 'error': return t('Error')
-      default: return t('Idle')
+      default: return isJoined ? t('Ready') : t('Idle')
     }
   }
 
@@ -70,7 +73,7 @@ export function TeamList({ onNewTeam, onJoinOffice }: TeamListProps) {
                       <span className="truncate text-sm font-medium text-foreground">{team.name}</span>
                     </span>
                     <span className="pl-4 text-xs text-muted-foreground">
-                      {t('{{count}} members', { count: team.memberCount })} · {statusLabel(team.status, team.hasWaitingUser)}
+                      {t('{{count}} members', { count: team.memberCount })} · {statusLabel(team.status, team.hasWaitingUser, team.hostNodeId != null)}
                     </span>
                   </button>
                 </li>
@@ -86,14 +89,14 @@ export function TeamList({ onNewTeam, onJoinOffice }: TeamListProps) {
           className="flex w-full items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-primary transition-colors hover:bg-secondary/50"
         >
           <Plus className="h-4 w-4" />
-          {t('New office')}
+          {t('New team')}
         </button>
         <button
           onClick={onJoinOffice}
           className="flex w-full items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
         >
           <LogIn className="h-4 w-4" />
-          {t('Join an office')}
+          {t('Join a team')}
         </button>
       </div>
     </div>

@@ -780,6 +780,14 @@ export interface TeamListItem {
    * (leads are an internal coordination role, not standalone humans).
    */
   leadAppId: string | null
+  /**
+   * Set when this office is hosted by another node — this reader joined it.
+   * `hostNodeId != null` is the established "did I join this, or do I own
+   * it" check, repeated as-is across renderer (`isJoined`/`readOnly` in
+   * SettingsTab/LiveTab/TeamView) and main (`apps/team/service.ts`,
+   * `location-aware-blackboard.ts`'s OWNED/SHADOW split).
+   */
+  hostNodeId?: string | null
   updatedAt: number
 }
 
@@ -973,6 +981,17 @@ export function isRemoteMember(member: {
  */
 export function awaitsOurDecision(member: Pick<RosterMember, 'status' | 'sameMachine'>): boolean {
   return member.status === 'waiting_user' && member.sameMachine !== false
+}
+
+/**
+ * App ids currently serving as a team lead. Leads are an internal coordination
+ * role, not standalone digital humans, so the apps list hides them from
+ * "pick a member" pickers. Does not distinguish dissolved teams — a team must
+ * clear its `leadAppId` on dissolve/demotion for that lead to become pickable
+ * again.
+ */
+export function leadAppIdSet(teams: readonly Pick<TeamListItem, 'leadAppId'>[]): Set<string> {
+  return new Set(teams.map(tm => tm.leadAppId).filter((id): id is string => !!id))
 }
 
 /**

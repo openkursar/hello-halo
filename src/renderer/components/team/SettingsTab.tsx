@@ -6,6 +6,7 @@ import {
   Trash2, Plus, Info, Crown, Star, LogOut, ChevronRight, Settings2, Users, Network,
 } from 'lucide-react'
 import type { TeamDetail, TeamTrigger, TeamScheduleConfig, TeamTriggerInput } from '../../../shared/apps/team-types'
+import { leadAppIdSet } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
 import { useOfficeSkin, useTeamViewPrefsStore } from '../../stores/team-view-prefs.store'
 import { useAppsStore } from '../../stores/apps.store'
@@ -63,7 +64,7 @@ export function SettingsTab({ detail, openMemberId, onOpenMemberChange }: Settin
       <div className="mx-auto max-w-2xl space-y-6 p-3 sm:p-6">
         {readOnly && (
           <p className="rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-xs text-muted-foreground">
-            {t('This office is managed by its owner. You are watching it — settings are read-only.')}
+            {t('This team is managed by its owner. You are watching it — settings are read-only.')}
           </p>
         )}
         {/* Everyday settings up top (§6.6): name / goal, schedule, members. */}
@@ -292,14 +293,14 @@ function OfficeSkinSection({ teamId }: { teamId: string }) {
   const setOfficeSkin = useTeamViewPrefsStore(s => s.setOfficeSkin)
 
   return (
-    <Section title={t('Office appearance')}>
+    <Section title={t('Appearance')}>
       <p className="mb-2 text-xs text-muted-foreground/70">
-        {t('How this office looks on your screen. Only affects your view.')}
+        {t('How this team looks on your screen. Only affects your view.')}
       </p>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <OptionCard
           icon={<Users className="h-4 w-4" />}
-          label={t('Office cartoon')}
+          label={t('Cartoon')}
           description={t('Members appear as characters at their workstations, showing what each is doing.')}
           selected={skin === 'cartoon'}
           onClick={() => setOfficeSkin(teamId, 'cartoon')}
@@ -328,8 +329,12 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   const addMember = useTeamStore(s => s.addMember)
   const removeMember = useTeamStore(s => s.removeMember)
   const updateTeam = useTeamStore(s => s.updateTeam)
+  const teams = useTeamStore(s => s.teams)
   const allApps = useAppsStore(s => s.apps)
   const appMap = useMemo(() => new Map(allApps.map(a => [a.id, a])), [allApps])
+  // Lead apps are an internal coordination role, never addable as a member
+  // (mirrors the same exclusion in TeamCreateDialog).
+  const leadAppIds = useMemo(() => leadAppIdSet(teams), [teams])
   const [showAdd, setShowAdd] = useState(false)
   const [promote, setPromote] = useState<{ appId: string; name: string } | null>(null)
   // What removal actually does decides what the confirmation may promise, and
@@ -350,13 +355,17 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
     inOwningSpace: boolean
   } | null>(null)
 
-  // Apps not already in this team (candidates for adding).
+  // Apps not already in this team (candidates for adding). Excludes uninstalled
+  // apps and every team's lead — both would otherwise slip through despite
+  // being unusable/forbidden, the same gap TeamCreateDialog already closes.
   const candidates = useMemo(() =>
     allApps.filter(a =>
       a.spec.type === 'automation' &&
+      a.status !== 'uninstalled' &&
+      !leadAppIds.has(a.id) &&
       !detail.members.some(m => m.appId === a.id)
     ),
-  [allApps, detail.members])
+  [allApps, leadAppIds, detail.members])
 
   return (
     <Section title={t('Members')}>
@@ -419,9 +428,10 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
           message={!remove.aiProvisioned
             ? t('{{name}} stays yours — the digital human, its own instructions, and everything in its space are untouched. What it loses is what it had here: the duty you wrote for this team, and what this team was allowed to ask of it. Add it back later and you write those again.', { name: remove.name })
             : remove.inOwningSpace
-              ? t('{{name}} is the lead this team was given when it was created. Removing it deletes the digital human itself, and that cannot be undone. The space it works in is yours and stays, along with everything in it. (If you have also added it to another team, it stays there and nothing is deleted.)', { name: remove.name })
+              ? t('Removing it deletes the digital human itself, and that cannot be undone. The space it works in is shared with the rest of the team and stays, along with everything in it. (If you have also added it to another team, it stays there and nothing is deleted.)', { name: remove.name })
               : t('Removing it from this team deletes the digital human, its space, and every file it produced, and that cannot be undone. (If you have also added it to another team, it stays there and nothing is deleted.) If there is anything you want to keep, close this and copy it out first.')}
-          // Lighter for the demoted lead: the space survives, so one rung down.
+          // Lighter when the app's space is the team's shared owning space: that
+          // space survives removal, so one rung down from "permanently".
           confirmLabel={!remove.aiProvisioned
             ? t('Remove')
             : remove.inOwningSpace ? t('Delete') : t('Delete permanently')}
@@ -536,6 +546,7 @@ function MemberCard({ memberName, duty, description, isLead, aiProvisioned, onOp
 
 function DangerSection({ detail }: { detail: TeamDetail }) {
   const dissolveTeam = useTeamStore(s => s.dissolveTeam)
+  const allApps = useAppsStore(s => s.apps)
   const { t } = useTranslation()
   const [confirm, setConfirm] = useState(false)
 
@@ -554,6 +565,15 @@ function DangerSection({ detail }: { detail: TeamDetail }) {
   // being the lead: one the team provisioned is deleted, one the user promoted
   // from their own is not (service.ts provisionLead vs promoteExistingLead).
   const leadDeleted = detail.members.find(m => m.isLead)?.aiProvisioned === true
+  // A newly AI-provisioned member's space is the team's owning space, so
+  // dissolving never touches its files. Members provisioned before that
+  // change still have their own separate spaces, which dissolving does
+  // delete; check every one rather than assume, so a mixed-age team gets
+  // the cautious wording instead of a false promise.
+  const allSpacesSurvive = doomed.length > 0 && doomed.every(m => {
+    const app = allApps.find(a => a.id === m.appId)
+    return app !== undefined && app.spaceId === detail.team.owningSpaceId
+  })
 
   return (
     <>
@@ -586,9 +606,13 @@ function DangerSection({ detail }: { detail: TeamDetail }) {
           // The lead sentence sits before "cannot be undone", which closes off
           // everything listed above it — anything added after would fall outside it.
           message={doomed.length > 0
-            ? (leadDeleted
-              ? t('{{names}} were created by AI for this team. Dissolving deletes them, and deletes their spaces from your space list — including any files you put there yourself. The team\u2019s own lead is deleted with it. This cannot be undone. If you need anything out of those spaces, close this and copy it first.', { names })
-              : t('{{names}} were created by AI for this team. Dissolving deletes them, and deletes their spaces from your space list — including any files you put there yourself. This cannot be undone. If you need anything out of those spaces, close this and copy it first.', { names }))
+            ? (allSpacesSurvive
+              ? (leadDeleted
+                ? t('{{names}} were created by AI for this team. Dissolving deletes them, and that cannot be undone. The team\u2019s own lead is deleted with it. The space they all worked in is yours and stays, along with everything in it.', { names })
+                : t('{{names}} were created by AI for this team. Dissolving deletes them, and that cannot be undone. The space they worked in is yours and stays, along with everything in it.', { names }))
+              : (leadDeleted
+                ? t('{{names}} were created by AI for this team. Dissolving deletes them, and deletes their spaces from your space list — including any files you put there yourself. The team\u2019s own lead is deleted with it. This cannot be undone. If you need anything out of those spaces, close this and copy it first.', { names })
+                : t('{{names}} were created by AI for this team. Dissolving deletes them, and deletes their spaces from your space list — including any files you put there yourself. This cannot be undone. If you need anything out of those spaces, close this and copy it first.', { names })))
             : (leadDeleted
               ? t('The team and its whole run history are deleted, along with the team\u2019s own lead, and that cannot be undone. The digital humans you added are not deleted — they go back to being ordinary digital humans, with everything they have made.')
               : t('The team and its whole run history are deleted, and that cannot be undone. The digital humans you added are not deleted — they go back to being ordinary digital humans, with everything they have made.'))}
@@ -622,7 +646,7 @@ function LeaveSection({ teamId, teamName }: { teamId: string; teamName: string }
           className="flex items-center gap-1.5 text-sm text-foreground transition-opacity hover:opacity-80"
         >
           <LogOut className="h-4 w-4" />
-          {t('Leave office')}
+          {t('Leave team')}
         </button>
         <p className="mt-1 text-xs text-muted-foreground/60">
           {t('Stop taking part. Your digital humans stay yours.')}

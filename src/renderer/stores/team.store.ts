@@ -245,11 +245,11 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       if (res.success && Array.isArray(res.data)) {
         set({ teams: sortTeams(res.data as TeamListItem[]) })
       } else {
-        set({ error: (res.error as string) || i18n.t('Couldn\u2019t load your offices. Please try again.') })
+        set({ error: (res.error as string) || i18n.t('Couldn\u2019t load your teams. Please try again.') })
       }
     } catch (err) {
       console.error('[TeamStore] loadTeams error:', err)
-      set({ error: i18n.t('Couldn\u2019t load your offices. Please try again.') })
+      set({ error: i18n.t('Couldn\u2019t load your teams. Please try again.') })
     } finally {
       set({ isLoadingList: false })
     }
@@ -291,11 +291,11 @@ export const useTeamStore = create<TeamState>((set, get) => ({
         }
         set({ detail })
       } else if (!res.success) {
-        set({ error: (res.error as string) || i18n.t('Couldn\u2019t open this office. Please try again.') })
+        set({ error: (res.error as string) || i18n.t('Couldn\u2019t open this team. Please try again.') })
       }
     } catch (err) {
       console.error('[TeamStore] loadDetail error:', err)
-      set({ error: i18n.t('Couldn\u2019t open this office. Please try again.') })
+      set({ error: i18n.t('Couldn\u2019t open this team. Please try again.') })
     } finally {
       if (get().currentTeamId === teamId) set({ isLoadingDetail: false })
     }
@@ -662,7 +662,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
           ? i18n.t('"{{member}}" was removed from "{{office}}" by its host.', { member: memberName, office: officeName })
           : officeName
             ? i18n.t('One of your members was removed from "{{office}}" by its host.', { office: officeName })
-            : i18n.t('One of your members was removed from an office by its host.'),
+            : i18n.t('One of your members was removed from a team by its host.'),
         variant: 'warning',
         duration: 6000,
       })
@@ -674,7 +674,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     if (event.boardWriteDiscarded) {
       useNotificationStore.getState().show({
         title: i18n.t('Board update not saved'),
-        body: i18n.t('A recent board update could not reach the office and was undone.'),
+        body: i18n.t('A recent board update could not reach the team and was undone.'),
         variant: 'warning',
         duration: 6000,
       })
@@ -687,10 +687,10 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       if (removedReason === 'dissolved-remote') {
         const existing = get().teams.find(t => t.id === teamId)
         useNotificationStore.getState().show({
-          title: i18n.t('Office closed'),
+          title: i18n.t('Team closed'),
           body: existing
             ? i18n.t('"{{office}}" was closed by its host.', { office: existing.name })
-            : i18n.t('An office you joined was closed by its host.'),
+            : i18n.t('A team you joined was closed by its host.'),
           variant: 'warning',
           duration: 6000,
         })
@@ -825,7 +825,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       useNotificationStore.getState().show({
         title: name
           ? i18n.t('Lost access to {{office}}', { office: name })
-          : i18n.t('Lost access to the office'),
+          : i18n.t('Lost access to the team'),
         body: i18n.t('This machine could not rejoin automatically. Ask for a new invite to reconnect.'),
         variant: 'warning',
         duration: 8000,
@@ -849,7 +849,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       useNotificationStore.getState().show({
         title: name
           ? i18n.t('{{office}} is back', { office: name })
-          : i18n.t('The office is back'),
+          : i18n.t('The team is back'),
         body: i18n.t('Reconnected automatically — work picks up where it left off.'),
         variant: 'success',
         duration: 4000,

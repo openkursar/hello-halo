@@ -9,7 +9,6 @@
 import { useEffect, useState } from 'react'
 import { ChevronLeft } from 'lucide-react'
 import { useTeamStore } from '../../stores/team.store'
-import { useSpaceStore } from '../../stores/space.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useIsMobile } from '../../hooks/useIsMobile'
@@ -23,10 +22,6 @@ import { TeamJoinDialog } from './TeamJoinDialog'
 export function TeamTabContent() {
   const { t } = useTranslation()
   const isMobile = useIsMobile()
-
-  const currentSpace = useSpaceStore(s => s.currentSpace)
-  const haloSpace = useSpaceStore(s => s.haloSpace)
-  const owningSpaceId = currentSpace?.id ?? haloSpace?.id ?? null
 
   const teams = useTeamStore(s => s.teams)
   const currentTeamId = useTeamStore(s => s.currentTeamId)
@@ -96,11 +91,9 @@ export function TeamTabContent() {
         </div>
       )}
 
-      {showCreate && owningSpaceId && (
+      {showCreate && (
         <TeamCreateDialog
-          owningSpaceId={owningSpaceId}
           onClose={() => setShowCreate(false)}
-          onCreateMemberInline={() => { setShowCreate(false); setShowInstallDialog(true) }}
         />
       )}
 

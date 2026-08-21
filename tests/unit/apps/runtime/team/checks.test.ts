@@ -264,6 +264,32 @@ describe('team periodic checks', () => {
     expect(h.wakes).toHaveLength(0)
   })
 
+  it('keeps a check on a paused (stopped) run instead of dropping it like a real ending', async () => {
+    // "Pause" seals the epoch with endReason 'stopped', which is reopenable
+    // — unlike 'completed'/'timeout'/'error', it must not read as the work
+    // being over.
+    const h = makeHarness(store)
+    const check = h.checks.schedule(baseInput())
+    store.endEpoch(EPOCH, Date.now(), 'stopped', null)
+
+    expect(await h.fireDue(check.id)).toBe('skipped')
+    expect(store.getCheckById(check.id)).not.toBeNull()
+    expect(h.jobs.has(`team-check:${check.id}`)).toBe(true)
+    expect(h.wakes).toHaveLength(0)
+  })
+
+  it('re-arms a paused run\u2019s checks after a restart, unlike a finished one\u2019s', () => {
+    const first = makeHarness(store)
+    const check = first.checks.schedule(baseInput())
+    store.endEpoch(EPOCH, Date.now(), 'stopped', null)
+
+    const restarted = makeHarness(store)
+    restarted.checks.rehydrate()
+
+    expect(restarted.jobs.has(`team-check:${check.id}`)).toBe(true)
+    expect(store.getCheckById(check.id)).not.toBeNull()
+  })
+
   it('arms a replicated check locally without re-publishing it', () => {
     const h = makeHarness(store)
     const replicated: TeamCheck = {

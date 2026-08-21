@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { PanelRight, Zap, MessageSquarePlus, Radar, Bot, ChevronDown, Check } from 'lucide-react'
+import { PanelRight, Zap, MessageSquarePlus, Bot, ChevronDown, Check, HelpCircle } from 'lucide-react'
 import { useTeamStore, useMemberPresence } from '../../stores/team.store'
 import { useDefaultChatTarget, useTeamViewPrefsStore } from '../../stores/team-view-prefs.store'
 import { useAppsStore } from '../../stores/apps.store'
@@ -89,6 +89,7 @@ export function ConversationTab({ detail, onOpenLive }: ConversationTabProps) {
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {selected ? conversationLabel(selected, t) : t('Conversation')}
           </span>
+          {targetMember && <ConversationHelp memberName={targetMember.memberName} />}
           {!boundTarget && targetMember && (
             <TargetPicker
               own={own}
@@ -97,16 +98,6 @@ export function ConversationTab({ detail, onOpenLive }: ConversationTabProps) {
               onPick={appId => setDefaultMember(team.id, appId)}
             />
           )}
-          {/* Jump to the Live view — the team's canonical "watch them work" tab.
-              Focused on this conversation when one is open, else the live run. */}
-          <button
-            onClick={() => onOpenLive(selected?.epochId ?? '')}
-            className="flex flex-shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-            title={t('Watch the team work live')}
-          >
-            <Radar className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">{t('Live')}</span>
-          </button>
           <button
             onClick={() => setPanelOpen(v => !v)}
             className={`flex-shrink-0 rounded-md p-1.5 transition-colors ${panelOpen ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary'}`}
@@ -185,6 +176,33 @@ function TargetPicker({ own, currentAppId, currentName, onPick }: {
   )
 }
 
+/**
+ * Explains what this screen actually is: a private thread with one digital
+ * human, not a broadcast to the whole team. Kept as its own control rather
+ * than folded into the Live button, which does a different job (jump to
+ * watching a run) and would lose that meaning if repurposed.
+ */
+function ConversationHelp({ memberName }: { memberName: string }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        className="flex flex-shrink-0 items-center rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+        title={t('How this conversation works')}
+      >
+        <HelpCircle className="h-3.5 w-3.5" />
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 space-y-2 p-3 text-xs text-muted-foreground">
+        <p>{t('You are talking to {{name}}. It can bring in whichever other members are needed.', { name: memberName })}</p>
+        <p>{t('Each conversation is its own run of the team — members coordinate with each other only inside it.')}</p>
+        <p>{t('Conversations do not share messages with each other.')}</p>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function ConversationChat({ detail, conversation, targetAppId, targetMember, onOpenLive }: {
   detail: TeamDetail
   /** null = a draft native session (lazily created on first send). */
@@ -210,8 +228,8 @@ function ConversationChat({ detail, conversation, targetAppId, targetMember, onO
     return (
       <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">
         {detail.members.some(m => !isRemoteMember(m))
-          ? t('The digital humans in this office are no longer installed, so there is nobody here to answer. Add one in Settings.')
-          : t('Bring one of your digital humans into this office to start talking.')}
+          ? t('The digital humans in this team are no longer installed, so there is nobody here to answer. Add one in Settings.')
+          : t('Bring one of your digital humans into this team to start talking.')}
       </div>
     )
   }

@@ -17,6 +17,7 @@ import { checksForMember, isRemoteMember } from '../../../shared/apps/team-types
 import { fullCapabilityPolicy } from '../../../shared/apps/capability-policy'
 import { CapabilityPolicyFields } from '../capability/CapabilityPolicyFields'
 import { SystemPromptEditor } from '../apps/SystemPromptEditor'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { useTeamStore } from '../../stores/team.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
@@ -81,7 +82,7 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
         <div className="mx-auto max-w-2xl space-y-5 p-3 sm:p-6">
           <div className="space-y-2">
             <h3 className="text-sm font-medium text-foreground">
-              {t('What does it take care of in this team?')}
+              {t('Duty in this team')}
             </h3>
             {isMine ? (
               <SystemPromptEditor
@@ -130,6 +131,7 @@ function MemberChecks({ teamId, checks }: { teamId: string; checks: TeamCheckVie
   const cancelCheck = useTeamStore(s => s.cancelCheck)
   const conversations = useTeamStore(s => s.conversations)
   const epochs = useTeamStore(s => s.epochs)
+  const [stopping, setStopping] = useState<TeamCheckView | null>(null)
 
   if (checks.length === 0) {
     return (
@@ -169,13 +171,24 @@ function MemberChecks({ teamId, checks }: { teamId: string; checks: TeamCheckVie
             )}
           </div>
           <button
-            onClick={() => void cancelCheck(teamId, check.id)}
+            onClick={() => setStopping(check)}
             className="flex-shrink-0 rounded px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
           >
             {t('Stop')}
           </button>
         </div>
       ))}
+      {stopping && (
+        <ConfirmDialog
+          title={t('Stop this periodic check?')}
+          message={t('The instruction it was checking for is not saved anywhere else — stopping it cannot be undone.')}
+          confirmLabel={t('Stop')}
+          cancelLabel={t('Cancel')}
+          variant="danger"
+          onConfirm={() => { const c = stopping; setStopping(null); void cancelCheck(teamId, c.id) }}
+          onCancel={() => setStopping(null)}
+        />
+      )}
     </div>
   )
 }
