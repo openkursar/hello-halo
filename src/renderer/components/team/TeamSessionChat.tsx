@@ -243,7 +243,7 @@ export function TeamSessionChat({
           switch (remoteResult?.reason) {
             case 'TIMEOUT': return t('No reply from {{owner}} in time — they may be busy. Try again shortly.', { owner })
             case 'UNDELIVERED': return t('Couldn\u2019t reach {{owner}} — your message was not delivered. Try again when they\u2019re back online.', { owner })
-            case 'MEMBER_NOT_FOUND': return t('{{owner}} is no longer in this office.', { owner })
+            case 'MEMBER_NOT_FOUND': return t('{{owner}} is no longer in this team.', { owner })
             default: return t('Couldn\u2019t send your message just now. Please try again.')
           }
         }

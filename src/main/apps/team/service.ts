@@ -512,6 +512,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         hasWaitingUser: blockedOnUs || waitingCount > 0,
         waitingCount,
         leadAppId: team.leadAppId,
+        hostNodeId: team.hostNodeId,
         updatedAt: team.updatedAt,
       }
     })
@@ -739,7 +740,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     store.removeMember(teamId, appId)
 
     if (target.aiProvisioned) {
-      await cleanupOrphanApp(appId)
+      await cleanupOrphanApp(appId, team.owningSpaceId)
     }
 
     // If the removed member was the lead, reassign so the next run does not
@@ -806,8 +807,23 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   // ── Dissolve (orphan cleanup) ──
 
-  /** Best-effort: failures logged, never thrown. Skips apps still referenced. */
-  async function cleanupOrphanApp(appId: string): Promise<void> {
+  /**
+   * Best-effort: failures logged, never thrown. Skips apps still referenced.
+   *
+   * Deletes the space only when the team provisioned it. A member built by AI
+   * gets a space of its own, so removing it takes back only what the team
+   * created. The lead is provisioned into the team's owning space — the user's
+   * own — where the app must go but the space must stay: deleting it would
+   * take that space's files and every other app living in it, and nothing
+   * restores them.
+   *
+   * This reads the space rather than how the app was flagged, because
+   * aiProvisioned is true for both. It holds as long as the lead is the only
+   * member provisioned into the owning space. Put anything else there, or give
+   * the lead a space of its own, and the two stop meaning the same thing —
+   * silently, since nothing here would fail.
+   */
+  async function cleanupOrphanApp(appId: string, owningSpaceId: string): Promise<void> {
     if (store.listMembersByAppId(appId).length > 0) return
 
     const app = appManager.getApp(appId)
@@ -818,6 +834,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       console.log(`${LOG_TAG} cleanupOrphanApp: deleted app=${appId}`)
     } catch (err) {
       console.warn(`${LOG_TAG} cleanupOrphanApp failed for app=${appId}:`, err)
+    }
+    if (spaceId && spaceId === owningSpaceId) {
+      console.log(`${LOG_TAG} cleanupOrphanApp: kept the team's owning space=${spaceId} (app=${appId})`)
+      return
     }
     if (spaceId && spaces.deleteMemberSpace) {
       try {
@@ -867,7 +887,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
     for (const m of members) {
       if (m.aiProvisioned) {
-        await cleanupOrphanApp(m.appId)
+        await cleanupOrphanApp(m.appId, team.owningSpaceId)
       }
     }
 

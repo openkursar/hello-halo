@@ -110,7 +110,7 @@ export function TeamView({ detail }: TeamViewProps) {
               {isJoined && (
                 <span className="flex flex-shrink-0 items-center gap-1 rounded-full border border-border bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">
                   <Eye className="h-3 w-3" />
-                  {t('Joined office')}
+                  {t('Joined team')}
                 </span>
               )}
             </div>

@@ -101,31 +101,37 @@ export function EventSidebar({ detail, conversations, epochs, selectedEpochId, o
         )}
 
         {/* ── Earlier ── */}
-        <div className="px-2 pb-3 pt-2">
-          <SectionLabel>{t('Earlier')}</SectionLabel>
-          {rows.length === 0 ? (
-            <p className="px-2 py-6 text-center text-xs text-muted-foreground/60">
-              {t('Nothing yet. Talk to the team, or press Run.')}
-            </p>
-          ) : (
-            rows.map(row => {
-              if (row.kind === 'group') {
-                return <NoActionGroup key={row.key} group={row} selectedEpochId={selectedEpochId} onSelect={onSelect} />
-              }
-              if (row.kind === 'conversation') {
-                return (
-                  <ConversationRow
-                    key={row.epoch.id}
-                    epoch={row.epoch}
-                    selected={selectedEpochId === row.epoch.id}
-                    onClick={() => onSelect(row.epoch.id)}
-                  />
-                )
-              }
-              return <RunRow key={row.epoch.id} epoch={row.epoch} selected={selectedEpochId === row.epoch.id} onClick={() => onSelect(row.epoch.id)} />
-            })
-          )}
-        </div>
+        {/* During the first run there is nothing earlier yet, and the Run
+            button has already turned into Pause, so the empty line would point
+            at a button that is not on screen. Drop the whole section: the busy
+            list above is already saying what is happening. */}
+        {(rows.length > 0 || !hasBusy) && (
+          <div className="px-2 pb-3 pt-2">
+            <SectionLabel>{t('Earlier')}</SectionLabel>
+            {rows.length === 0 ? (
+              <p className="px-2 py-6 text-center text-xs text-muted-foreground/60">
+                {t('Nothing yet. Talk to the team, or press Run.')}
+              </p>
+            ) : (
+              rows.map(row => {
+                if (row.kind === 'group') {
+                  return <NoActionGroup key={row.key} group={row} selectedEpochId={selectedEpochId} onSelect={onSelect} />
+                }
+                if (row.kind === 'conversation') {
+                  return (
+                    <ConversationRow
+                      key={row.epoch.id}
+                      epoch={row.epoch}
+                      selected={selectedEpochId === row.epoch.id}
+                      onClick={() => onSelect(row.epoch.id)}
+                    />
+                  )
+                }
+                return <RunRow key={row.epoch.id} epoch={row.epoch} selected={selectedEpochId === row.epoch.id} onClick={() => onSelect(row.epoch.id)} />
+              })
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

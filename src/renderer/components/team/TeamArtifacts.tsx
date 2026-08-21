@@ -3,7 +3,7 @@
  * (in Recent Activity / History) open with the system default app on click.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../api'
 
 function baseName(p: string): string {
@@ -15,6 +15,19 @@ interface ArtifactGroup {
   artifacts: { name: string; path: string; relativePath?: string }[]
 }
 
+export interface ArtifactEntry {
+  name: string
+  path: string
+}
+
+/**
+ * `loading` and `failed` both mean "we do not know yet". Callers must not draw
+ * them the same way as `ready`, because in `ready` a missing name means the
+ * file is genuinely not there — and a reader who opens a finished run to
+ * collect its output reads "not there" as "my files are gone".
+ */
+export type ArtifactStatus = 'loading' | 'ready' | 'failed'
+
 export function useTeamArtifacts(
   teamId: string,
   epochId: string | null | undefined,
@@ -22,26 +35,55 @@ export function useTeamArtifacts(
 ) {
   // basename → absolute path for every produced file in this run.
   const [pathByName, setPathByName] = useState<Map<string, string>>(new Map())
+  // Same data as pathByName, kept as an ordered, de-duplicated list for callers
+  // that render "everything this run produced" rather than looking up one ref.
+  const [list, setList] = useState<ArtifactEntry[]>([])
+  const [status, setStatus] = useState<ArtifactStatus>('loading')
+  // Which run the paths on hand belong to. A refetch of the same run must not
+  // blank them: the caller refetches whenever a task finishes, and links the
+  // reader was about to click would go dead under the pointer.
+  const loadedKey = useRef<string | null>(null)
+  const key = `${teamId}\u0000${epochId ?? ''}`
 
   useEffect(() => {
     let cancelled = false
+    if (loadedKey.current !== key) setStatus('loading')
     void (async () => {
-      const res = epochId
-        ? await api.teamEpochArtifacts(teamId, epochId)
-        : await api.teamListArtifacts(teamId)
-      if (cancelled) return
-      const groups = (res?.success ? (res.data as ArtifactGroup[]) : []) ?? []
-      const map = new Map<string, string>()
-      for (const g of groups) {
-        for (const a of g.artifacts) {
-          map.set(baseName(a.name), a.path)
-          if (a.relativePath) map.set(baseName(a.relativePath), a.path)
+      try {
+        const res = epochId
+          ? await api.teamEpochArtifacts(teamId, epochId)
+          : await api.teamListArtifacts(teamId)
+        if (cancelled) return
+        if (!res?.success) {
+          console.warn('[TeamArtifacts] lookup rejected', { teamId, epochId, error: res?.error })
+          setStatus('failed')
+          return
         }
+        const groups = (res.data as ArtifactGroup[]) ?? []
+        const map = new Map<string, string>()
+        const entries: ArtifactEntry[] = []
+        for (const g of groups) {
+          for (const a of g.artifacts) {
+            const name = baseName(a.name)
+            if (!map.has(name)) entries.push({ name, path: a.path })
+            map.set(name, a.path)
+            if (a.relativePath) map.set(baseName(a.relativePath), a.path)
+          }
+        }
+        setPathByName(map)
+        setList(entries)
+        loadedKey.current = key
+        setStatus('ready')
+      } catch (err) {
+        if (cancelled) return
+        // Swallowing this used to leave an empty map, which reads on screen as
+        // "this run produced nothing".
+        console.warn('[TeamArtifacts] lookup failed', { teamId, epochId, err })
+        setStatus('failed')
       }
-      setPathByName(map)
     })()
     return () => { cancelled = true }
-  }, [teamId, epochId, refreshToken])
+  }, [teamId, epochId, refreshToken, key])
 
   const has = useCallback((ref: string) => pathByName.has(baseName(ref)), [pathByName])
 
@@ -52,5 +94,5 @@ export function useTeamArtifacts(
     else void api.openArtifact(path)
   }, [pathByName])
 
-  return { has, open }
+  return { has, open, status, list }
 }

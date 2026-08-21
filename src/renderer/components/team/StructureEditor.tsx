@@ -4,11 +4,12 @@
  * the default lead → member links.
  */
 
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { Check, RotateCcw, Network } from 'lucide-react'
 import type { TeamDetail, TeamEdge } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
 import { useTranslation } from '../../i18n'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { TeamFlowCanvas } from './flow/TeamFlowCanvas'
 
 interface StructureEditorProps {
@@ -41,9 +42,14 @@ export function StructureEditor({ detail, onDone }: StructureEditorProps) {
   // Reset to the recommended structure: lead → each member (sync), the same
   // default createTeam generates. A real, working reset (the old one was a no-op
   // when already structured).
+  // Without a lead there is no recommendation to rebuild: the old code cleared
+  // every connection and restored nothing, under a button promising a reset.
+  const hasLead = detail.team.leadAppId != null
+  const [confirmReset, setConfirmReset] = useState(false)
+
   const resetToRecommended = useCallback(() => {
     const leadAppId = detail.team.leadAppId
-    if (!leadAppId) { setEdges(teamId, []); return }
+    if (!leadAppId) return
     const defaults: TeamEdge[] = detail.members
       .filter(m => m.appId !== leadAppId)
       .map(m => ({ teamId, fromAppId: leadAppId, toAppId: m.appId, sync: true }))
@@ -51,6 +57,21 @@ export function StructureEditor({ detail, onDone }: StructureEditorProps) {
   }, [detail.team.leadAppId, detail.members, teamId, setEdges])
 
   return (
+    <>
+    {confirmReset && (
+      <ConfirmDialog
+        title={t('Reset to the recommended structure?')}
+        // The count stands in for naming what is lost: there is no compact way
+        // to list connections, but "how many" is what tells the user whether
+        // this is the empty board they just opened or an afternoon of work.
+        message={t('This rebuilds the reporting lines around the lead. Any connections you drew by hand are replaced — there are {{count}} right now.', { count: edges.length })}
+        confirmLabel={t('Reset')}
+        cancelLabel={t('Cancel')}
+        variant="danger"
+        onConfirm={() => { setConfirmReset(false); resetToRecommended() }}
+        onCancel={() => setConfirmReset(false)}
+      />
+    )}
     <div className="flex h-full min-h-[520px] flex-col">
       {/* Toolbar */}
       <div className="flex flex-shrink-0 items-center gap-2 border-b border-border px-3 py-2.5 sm:px-4">
@@ -64,9 +85,13 @@ export function StructureEditor({ detail, onDone }: StructureEditorProps) {
         <div className="ml-auto flex items-center gap-2">
           {isStructured && (
             <button
-              onClick={resetToRecommended}
-              className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-              title={t('Reset to recommendation')}
+              onClick={() => setConfirmReset(true)}
+              disabled={!hasLead}
+              className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+              title={hasLead
+                ? t('Reset to recommendation')
+                : t('Give this team a lead first — the recommended structure is built around one.')}
+              aria-label={t('Reset to recommendation')}
             >
               <RotateCcw className="h-3 w-3" />
               <span className="hidden sm:inline">{t('Reset to recommendation')}</span>
@@ -111,5 +136,6 @@ export function StructureEditor({ detail, onDone }: StructureEditorProps) {
         </div>
       )}
     </div>
+    </>
   )
 }

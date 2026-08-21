@@ -17,6 +17,7 @@ import { useAppsStore } from '../stores/apps.store'
 import { useAppsPageStore, tabForAppType } from '../stores/apps-page.store'
 import { useTeamStore } from '../stores/team.store'
 import type { AppType } from '../../shared/apps/spec-types'
+import { leadAppIdSet } from '../../shared/apps/team-types'
 import { Header } from '../components/layout/Header'
 import { AppList } from '../components/apps/AppList'
 import { AutomationHeader } from '../components/apps/AutomationHeader'
@@ -80,20 +81,21 @@ export function AppsPage() {
   // Team lead apps are an internal coordination role, not standalone digital
   // humans — hide them from the digital-humans list (they are managed inside
   // the team view). Derived from the loaded team list (kept fresh via events).
-  const teamLeadAppIds = useTeamStore(s => s.teams)
-  const leadAppIdSet = useMemo(
-    () => new Set(teamLeadAppIds.map(t => t.leadAppId).filter((id): id is string => !!id)),
-    [teamLeadAppIds]
-  )
+  const teams = useTeamStore(s => s.teams)
+  const leadAppIds = useMemo(() => leadAppIdSet(teams), [teams])
+
+  // How many teams have a decision waiting on the user — surfaced on the Teams
+  // tab itself so it's visible without having to switch away and back.
+  const waitingTeamsCount = useTeamStore(s => s.teams.filter(tm => tm.hasWaitingUser).length)
 
   /** Filter apps visible in the current tab (excludes store tab) */
   const appsForCurrentTab = useMemo(() => {
     if (!appTypeForCurrentTab) return []
     return apps.filter(a =>
       a.spec.type === appTypeForCurrentTab &&
-      !(appTypeForCurrentTab === 'automation' && leadAppIdSet.has(a.id))
+      !(appTypeForCurrentTab === 'automation' && leadAppIds.has(a.id))
     )
-  }, [apps, appTypeForCurrentTab, leadAppIdSet])
+  }, [apps, appTypeForCurrentTab, leadAppIds])
 
   /**
    * Open the marketplace pre-filtered by the target type. Delegates to the
@@ -290,6 +292,7 @@ export function AppsPage() {
         <TabButton
           active={currentTab === 'team'}
           label={t('Teams')}
+          badge={waitingTeamsCount}
           onClick={() => setCurrentTab('team')}
         />
         <TabButton
@@ -491,19 +494,26 @@ interface TabButtonProps {
   active: boolean
   label: string
   onClick: () => void
+  /** Count shown as a small pill next to the label; hidden when 0 or omitted. */
+  badge?: number
 }
 
-function TabButton({ active, label, onClick }: TabButtonProps) {
+function TabButton({ active, label, onClick, badge }: TabButtonProps) {
   return (
     <button
       onClick={onClick}
-      className={`px-3 py-1.5 text-sm rounded-md transition-colors whitespace-nowrap ${
+      className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors whitespace-nowrap ${
         active
           ? 'bg-secondary text-foreground font-medium'
           : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50'
       }`}
     >
       {label}
+      {!!badge && (
+        <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-medium text-white">
+          {badge}
+        </span>
+      )}
     </button>
   )
 }

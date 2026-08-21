@@ -29,18 +29,20 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [revoking, setRevoking] = useState(false)
+  const [revokeError, setRevokeError] = useState<string | null>(null)
 
   const generate = useCallback(async () => {
     setLoading(true)
     setError(null)
     setCopied(false)
+    setRevokeError(null)
     try {
       const res = await api.teamGenerateInvite(teamId)
       if (res.success && res.data) {
         const data = res.data as { url: string; jti: string }
         setInvite({ url: data.url, jti: data.jti })
       } else if (res.error === 'REMOTE_ACCESS_OFF') {
-        setError(t('Turn on Remote Access in Settings so others can join this office.'))
+        setError(t('Turn on Remote Access in Settings so others can join this team.'))
       } else {
         setError(t('Could not create an invite. Please try again.'))
       }
@@ -67,11 +69,16 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
   const revoke = async () => {
     if (!invite) return
     setRevoking(true)
+    setRevokeError(null)
     try {
-      await api.teamRevokeInvite(teamId, invite.jti)
-      setInvite(null)
+      const res = await api.teamRevokeInvite(teamId, invite.jti)
+      if (res.success) {
+        setInvite(null)
+      } else {
+        setRevokeError(t('Could not revoke this link. Please try again.'))
+      }
     } catch {
-      // Non-fatal: the link still expires on its own.
+      setRevokeError(t('Could not revoke this link. Please try again.'))
     } finally {
       setRevoking(false)
     }
@@ -86,7 +93,7 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
         <div className="flex items-center justify-between border-b border-border px-4 py-3 sm:px-6">
           <h2 className="flex items-center gap-2 text-base font-medium text-foreground">
             <Link2 className="h-4 w-4 text-muted-foreground" />
-            {t('Invite to this office')}
+            {t('Invite to this team')}
           </h2>
           <button onClick={onClose} className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground">
             <X className="h-4 w-4" />
@@ -132,10 +139,11 @@ export function TeamInviteDialog({ teamId, onClose }: TeamInviteDialogProps) {
               </div>
 
               <p className="text-xs text-muted-foreground">
-                {t('Anyone with this link can bring a digital human into this office.')}
+                {t('Anyone with this link can bring a digital human into this team.')}
               </p>
 
-              <div className="flex justify-end border-t border-border pt-3">
+              <div className="flex flex-col items-end gap-1.5 border-t border-border pt-3">
+                {revokeError && <p className="text-xs text-destructive">{revokeError}</p>}
                 <button
                   onClick={revoke}
                   disabled={revoking}

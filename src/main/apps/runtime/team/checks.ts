@@ -3,7 +3,9 @@
  *
  * One member leaves a standing instruction for another; the target wakes on that
  * rhythm until someone stops it. The check belongs to the thing it was set
- * inside (a run or a conversation) and disappears with it.
+ * inside (a run or a conversation) and disappears when that ends for real — a
+ * pause is not an ending, so a paused run's checks stay put and pick back up
+ * once the team resumes (see epochIsDead).
  *
  * Two rules shape everything here:
  *   - The alarm lives on the machine that OWNS the target. Whoever set it can
@@ -25,6 +27,7 @@ import type {
   TeamCheck,
   TeamCheckSchedule,
   TeamCheckView,
+  TeamEpoch,
 } from '../../../../shared/apps/team-types'
 import type { TeamStore } from '../../team'
 import type { BusyDisposition, WakeDisposition } from './message-bus'
@@ -38,6 +41,16 @@ export const TEAM_CHECK_JOB_KIND = 'team_check'
 
 function jobId(checkId: string): string {
   return `team-check:${checkId}`
+}
+
+/**
+ * A 'stopped' epoch is a pause, not an ending — noteEpochTurn wakes it back up
+ * on the team's next message. Every other end reason (completed/timeout/error)
+ * is final. Checks must survive the former and not the latter, so every place
+ * that used to read "endedAt !== null" as "this check is dead" reads this instead.
+ */
+function epochIsDead(epoch: TeamEpoch | null): boolean {
+  return !epoch || (epoch.endedAt !== null && epoch.endReason !== 'stopped')
 }
 
 /** Thrown for a refusal the calling agent is meant to read and act on. */
@@ -354,10 +367,14 @@ export function createTeamChecks(deps: TeamChecksDeps): TeamChecks {
       return 'skipped'
     }
     const epoch = store.getEpochById(check.epochId)
-    if (!epoch || epoch.endedAt !== null) {
+    if (epochIsDead(epoch)) {
       removeLocally(check)
       return 'skipped'
     }
+    // Paused: epochIsDead above already let this through, so just do not wake
+    // the team while it is resting — the next due round checks again once it
+    // resumes, and the check itself stays armed and on the board meanwhile.
+    if (epoch && epoch.endedAt !== null) return 'skipped'
     // A one-shot has no second chance, so the two rules that keep a recurring
     // check cheap are wrong for it: skipping a busy round would throw the whole
     // thing away, and keeping the row afterwards would leave the board showing
@@ -440,8 +457,8 @@ export function createTeamChecks(deps: TeamChecksDeps): TeamChecks {
     let armed = 0
     for (const check of store.listAllChecks()) {
       const epoch = store.getEpochById(check.epochId)
-      if (!epoch || epoch.endedAt !== null) {
-        // Its run/conversation ended while this node was down.
+      if (epochIsDead(epoch)) {
+        // Its run/conversation ended (for real, not just paused) while this node was down.
         store.deleteCheck(check.id)
         disarmJob(check.id)
         continue

@@ -569,7 +569,7 @@ export function RemoteAccessSection({ config, setConfig }: RemoteAccessSectionPr
         <div className="pt-4 border-t border-border space-y-2">
           <p className="font-medium">{t('Federation Gateway')}</p>
           <p className="text-sm text-muted-foreground">
-            {t('Relay office collaboration through a gateway server so members outside your local network can join. Leave empty for LAN-only offices.')}
+            {t('Relay team collaboration through a gateway server so members outside your local network can join. Leave empty for LAN-only teams.')}
           </p>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <input

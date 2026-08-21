@@ -299,9 +299,16 @@ type ImportState =
 
 interface AppInstallDialogProps {
   onClose: () => void
+  /**
+   * Fired with the new app's id right after it's created/imported. Does not
+   * imply the dialog is closing — the bundle install path stays open on a
+   * 'partial' result to show which skills failed. Use `onClose` to react to
+   * dismissal.
+   */
+  onInstalled?: (appId: string) => void
 }
 
-export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
+export function AppInstallDialog({ onClose, onInstalled }: AppInstallDialogProps) {
   const { t } = useTranslation()
   const { installApp, importApp, loadApps, updateAppOverrides } = useAppsStore()
 
@@ -470,15 +477,16 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
   const handleYamlInstall = useCallback(async (yamlStr: string) => {
     setLoading(true)
     try {
-      await importApp(selectedSpaceId, yamlStr)
+      const appId = await importApp(selectedSpaceId, yamlStr)
       await loadApps()
+      if (appId) onInstalled?.(appId)
       onClose()
     } catch (err) {
       setError(formatInstallError(err, t, 'digital_human'))
     } finally {
       setLoading(false)
     }
-  }, [selectedSpaceId, importApp, loadApps, onClose, t])
+  }, [selectedSpaceId, importApp, loadApps, onClose, onInstalled, t])
 
   // ── Install: bundle (zip/folder) ──
   const handleBundleInstall = useCallback(async (result: ZipParseResult) => {
@@ -536,8 +544,9 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
     })
 
     try {
-      await importApp(selectedSpaceId, result.yamlContent)
+      const appId = await importApp(selectedSpaceId, result.yamlContent)
       await loadApps()
+      if (appId) onInstalled?.(appId)
       const failedSkills = skillResults.filter(s => !s.success)
       if (failedSkills.length > 0) {
         setImportState({ phase: 'partial', result, skillResults })
@@ -552,7 +561,7 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
         skillResults,
       })
     }
-  }, [selectedSpaceId, installApp, importApp, loadApps, t])
+  }, [selectedSpaceId, installApp, importApp, loadApps, onInstalled, t])
 
   // ── Install handler (visual / yaml modes) ──
   async function handleCreateInstall() {
@@ -589,6 +598,7 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
           await updateAppOverrides(appId, { modelSourceId, modelId })
         }
         await loadApps()
+        onInstalled?.(appId)
         onClose()
       } else {
         setError(t('Installation failed. Check the spec and try again.'))

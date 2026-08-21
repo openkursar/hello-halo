@@ -20,6 +20,7 @@ import { createPortal } from 'react-dom'
 import { Maximize2, X } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useAutoResize } from '../../hooks/useAutoResize'
+import { cn } from '../../lib/utils'
 
 interface SystemPromptEditorProps {
   value: string
@@ -33,6 +34,17 @@ interface SystemPromptEditorProps {
   className?: string
   /** Called after the dialog closes via Done (not Cancel). Use to trigger a form save. */
   onDone?: () => void
+  /**
+   * Dialog heading. Name the task, not the field — the label at the entry
+   * already carries the field name. Defaults to "System Prompt".
+   */
+  title?: string
+  /**
+   * Fires when the inline textarea loses focus. Forms that save on blur need
+   * this: the expand dialog closes without producing one, so onDone alone
+   * would leave everything typed inline unsaved.
+   */
+  onBlur?: () => void
 }
 
 export function SystemPromptEditor({
@@ -43,6 +55,8 @@ export function SystemPromptEditor({
   required = false,
   className = '',
   onDone,
+  title,
+  onBlur,
 }: SystemPromptEditorProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -50,12 +64,25 @@ export function SystemPromptEditor({
   const dialogRef = useRef<HTMLTextAreaElement>(null)
   // Value snapshot taken when dialog opens — restored on Cancel
   const originalRef = useRef('')
+  /**
+   * Set while a press on the expand button is in flight, so the blur it causes
+   * does not reach a caller that saves on blur. Expanding is not a commit
+   * point; Done is.
+   *
+   * Cleared by whichever comes first: the blur it was meant to suppress, the
+   * dialog opening, or the next edit. A press that produces no blur — the
+   * textarea never had focus — would otherwise leave it set, and it would go on
+   * to swallow a later, unrelated save.
+   */
+  const expandingRef = useRef(false)
 
   useAutoResize(inlineRef, value)
 
   // ── Open / close ────────────────────────────────────────────────────────
 
   const openDialog = useCallback(() => {
+    // Runs on click, after any blur this press was going to cause.
+    expandingRef.current = false
     originalRef.current = value
     setOpen(true)
   }, [value])
@@ -93,9 +120,22 @@ export function SystemPromptEditor({
   // ── Helpers ──────────────────────────────────────────────────────────────
 
   const handleChange = useCallback(
-    (e: React.ChangeEvent<HTMLTextAreaElement>) => onChange(e.target.value),
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      // Typing means no expand press is in flight — covers a press dragged off
+      // the button, which produces neither blur nor click.
+      expandingRef.current = false
+      onChange(e.target.value)
+    },
     [onChange]
   )
+
+  const handleInlineBlur = useCallback(() => {
+    if (expandingRef.current) {
+      expandingRef.current = false
+      return
+    }
+    onBlur?.()
+  }, [onBlur])
 
   const monoClass = fontMono ? ' font-mono' : ''
 
@@ -109,10 +149,11 @@ export function SystemPromptEditor({
           ref={inlineRef}
           value={value}
           onChange={handleChange}
+          onBlur={handleInlineBlur}
           placeholder={placeholder}
           spellCheck={false}
           style={{ minHeight: '144px' }}
-          className={[
+          className={cn(
             'w-full px-3 py-2 text-sm',
             'bg-secondary border border-border rounded-lg',
             'focus:outline-none focus:ring-1 focus:ring-primary',
@@ -120,12 +161,13 @@ export function SystemPromptEditor({
             'resize-none overflow-y-auto max-h-[400px]',
             monoClass,
             className,
-          ].filter(Boolean).join(' ')}
+          )}
         />
 
         {/* Expand button — hover-reveal on desktop, always on mobile */}
         <button
           type="button"
+          onMouseDown={() => { expandingRef.current = true }}
           onClick={openDialog}
           title={t('Expand editor')}
           aria-label={t('Expand editor')}
@@ -153,7 +195,7 @@ export function SystemPromptEditor({
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-border flex-shrink-0">
               <h2 id="system-prompt-editor-title" className="text-lg font-semibold text-foreground">
-                {t('System Prompt')}
+                {title ?? t('System Prompt')}
                 {required && <span className="text-red-400 ml-1">*</span>}
               </h2>
               <button

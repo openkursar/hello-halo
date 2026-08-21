@@ -1,6 +1,6 @@
 /**
  * DefaultMemberCard — the plain status-card skin (unchanged from the original
- * MemberNode look): status dot, ★ lead, working pulse, owner/presence, and a
+ * MemberNode look): status dot, lead star, working pulse, owner/presence, and a
  * one-line role / current-task summary.
  */
 

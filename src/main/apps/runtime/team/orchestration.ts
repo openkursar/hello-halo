@@ -246,7 +246,7 @@ export interface OrchestrationDeps {
    * they were set inside, so they end with it. Late-bound by the runtime factory
    * (checks are constructed after orchestration). Never thrown into the seal path.
    */
-  onEpochArchived?: (teamId: string, epochId: string) => void
+  onEpochArchived?: (teamId: string, epochId: string, endReason: EpochEndReason) => void
 }
 
 // Long tasks (coding, multi-step research) routinely exceed 30 minutes; the
@@ -1012,7 +1012,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     bus.resetEpoch(epochId)
 
     try {
-      deps.onEpochArchived?.(teamId, epochId)
+      deps.onEpochArchived?.(teamId, epochId, endReason)
     } catch (err) {
       console.error(`${LOG_TAG} onEpochArchived observer failed:`, err)
     }

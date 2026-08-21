@@ -16,6 +16,8 @@ import type { TeamCheckView, TeamDetail, TeamMember, TeamDelegatedPolicy } from 
 import { checksForMember, isRemoteMember } from '../../../shared/apps/team-types'
 import { fullCapabilityPolicy } from '../../../shared/apps/capability-policy'
 import { CapabilityPolicyFields } from '../capability/CapabilityPolicyFields'
+import { SystemPromptEditor } from '../apps/SystemPromptEditor'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { useTeamStore } from '../../stores/team.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
@@ -62,31 +64,40 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
           {member.memberName}
         </span>
-        <button
-          onClick={() => { setCurrentTab('my-digital-humans'); openAppConfig(member.appId) }}
-          className="flex flex-shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">{t('Open in Digital Humans')}</span>
-        </button>
+        {/* Only for a member running here: a teammate's app has no local row to open. */}
+        {isMine && (
+          <button
+            onClick={() => { setCurrentTab('my-digital-humans'); openAppConfig(member.appId) }}
+            title={t('Open in Digital Humans')}
+            aria-label={t('Open in Digital Humans')}
+            className="flex flex-shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">{t('Open in Digital Humans')}</span>
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-2xl space-y-5 p-3 sm:p-6">
           <div className="space-y-2">
             <h3 className="text-sm font-medium text-foreground">
-              {t('What does it take care of in this team?')}
+              {t('Duty in this team')}
             </h3>
             {isMine ? (
-              <textarea
+              <SystemPromptEditor
                 value={duty}
-                onChange={e => setDuty(e.target.value)}
+                onChange={setDuty}
                 onBlur={saveDuty}
-                rows={7}
+                onDone={saveDuty}
+                title={t('What {{member}} does in {{team}}', {
+                  member: member.memberName,
+                  team: detail.team.name,
+                })}
+                className="leading-relaxed"
                 placeholder={t(
                   'For example:\nYou do the coding.\nStart once you have the design and the test cases; write the code and test it yourself.\nWhen you are done, tell "Code Review".\nIf it comes back rejected, fix it and tell them again.'
                 )}
-                className="w-full resize-y rounded-lg border border-border bg-secondary px-3 py-2 text-sm leading-relaxed text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               />
             ) : (
               <div className="rounded-lg border border-border bg-secondary/40 px-3 py-2">
@@ -120,6 +131,7 @@ function MemberChecks({ teamId, checks }: { teamId: string; checks: TeamCheckVie
   const cancelCheck = useTeamStore(s => s.cancelCheck)
   const conversations = useTeamStore(s => s.conversations)
   const epochs = useTeamStore(s => s.epochs)
+  const [stopping, setStopping] = useState<TeamCheckView | null>(null)
 
   if (checks.length === 0) {
     return (
@@ -159,13 +171,24 @@ function MemberChecks({ teamId, checks }: { teamId: string; checks: TeamCheckVie
             )}
           </div>
           <button
-            onClick={() => void cancelCheck(teamId, check.id)}
+            onClick={() => setStopping(check)}
             className="flex-shrink-0 rounded px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
           >
             {t('Stop')}
           </button>
         </div>
       ))}
+      {stopping && (
+        <ConfirmDialog
+          title={t('Stop this periodic check?')}
+          message={t('The instruction it was checking for is not saved anywhere else — stopping it cannot be undone.')}
+          confirmLabel={t('Stop')}
+          cancelLabel={t('Cancel')}
+          variant="danger"
+          onConfirm={() => { const c = stopping; setStopping(null); void cancelCheck(teamId, c.id) }}
+          onCancel={() => setStopping(null)}
+        />
+      )}
     </div>
   )
 }

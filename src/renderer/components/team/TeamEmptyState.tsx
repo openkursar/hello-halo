@@ -45,12 +45,12 @@ export function TeamEmptyState({ hasTeams, onNewTeam, onJoinOffice }: TeamEmptyS
       <OrgChartGlyph />
       {hasTeams ? (
         <p className="max-w-sm text-sm text-muted-foreground">
-          {t('Select a team to view its status and artifacts, or create a new office.')}
+          {t('Select a team to view its status and artifacts, or create a new team.')}
         </p>
       ) : (
         <>
           <div className="space-y-1.5">
-            <p className="text-base font-medium text-foreground">{t('Create your first office')}</p>
+            <p className="text-base font-medium text-foreground">{t('Create your first team')}</p>
             <p className="max-w-md text-sm text-muted-foreground">
               {t('Group a set of digital humans into a team and describe a goal in plain words — a lead will break it down and coordinate them to get it done.')}
             </p>
@@ -61,14 +61,14 @@ export function TeamEmptyState({ hasTeams, onNewTeam, onJoinOffice }: TeamEmptyS
               className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
             >
               <Plus className="h-4 w-4" />
-              {t('New office')}
+              {t('New team')}
             </button>
             <button
               onClick={onJoinOffice}
               className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm text-foreground transition-colors hover:bg-secondary"
             >
               <LogIn className="h-4 w-4" />
-              {t('Join an office')}
+              {t('Join a team')}
             </button>
           </div>
         </>

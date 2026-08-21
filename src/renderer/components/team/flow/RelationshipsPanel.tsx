@@ -7,7 +7,7 @@
  */
 
 import { useContext, useMemo, useState } from 'react'
-import { Plus, Trash2, ArrowDown, ChevronRight, Network } from 'lucide-react'
+import { Plus, Trash2, ArrowDown, ChevronRight, Network, Star } from 'lucide-react'
 import { FlowEditContext } from './flow-context'
 import { useTranslation } from '../../../i18n'
 
@@ -55,12 +55,12 @@ export function RelationshipsPanel() {
                     <li key={`${e.fromAppId}-${e.toAppId}-${i}`} className="rounded-lg border border-border bg-background p-2">
                       <div className="flex items-center gap-1.5 text-sm">
                         <span className="flex min-w-0 items-center gap-1">
-                          {from?.isLead && <span className="text-amber-500">★</span>}
+                          {from?.isLead && <Star className="h-3.5 w-3.5 flex-shrink-0 fill-current text-amber-500" />}
                           <span className="truncate text-foreground">{from?.memberName ?? e.fromAppId}</span>
                         </span>
                         <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                         <span className="flex min-w-0 items-center gap-1">
-                          {to?.isLead && <span className="text-amber-500">★</span>}
+                          {to?.isLead && <Star className="h-3.5 w-3.5 flex-shrink-0 fill-current text-amber-500" />}
                           <span className="truncate text-foreground">{to?.memberName ?? e.toAppId}</span>
                         </span>
                         <button
@@ -122,6 +122,8 @@ function AddRelationForm({ onClose }: { onClose: () => void }) {
   const duplicate = !!from && !!to && edges.some(e => e.fromAppId === from && e.toAppId === to)
   const canAdd = !!from && !!to && !sameNode && !duplicate
 
+  // The lead marker is the ★ character here, not the Star icon used everywhere
+  // else: <option> takes text only, so an element child would not render.
   return (
     <div className="space-y-2">
       <div>

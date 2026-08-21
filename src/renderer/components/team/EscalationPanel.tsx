@@ -74,6 +74,12 @@ export function EscalationPanel({ member }: EscalationPanelProps) {
     const answered = entries?.find(e => e.id === shownId)
     const response = answered?.userResponse
     if (!answered || !response) return
+    // A timeout or an orphaned escalation is recorded as a response too, and
+    // showing it back would tell the reader they answered something they never
+    // saw. Matching the marker text is brittle: the backend rewording it breaks
+    // this silently, and it breaks towards showing the false receipt again.
+    // (src/main/apps/runtime/service.ts, store.ts)
+    if ((response.text ?? '').startsWith('[Auto-closed]')) return
     setReceipt({
       question: answered.content.question ?? answered.content.summary,
       answer: response.choice ?? response.text ?? '',
@@ -124,7 +130,10 @@ export function EscalationPanel({ member }: EscalationPanelProps) {
           {loading
             ? t('Loading the pending decision…')
             : receipt
-              ? t('That was the last one — nothing else is waiting on you.')
+              // Only this member's queue is in scope here — the panel is given
+              // one member and reads one feed. Whether anything is waiting
+              // elsewhere is the attention banner's to say.
+              ? t('That was the last one from {{name}}.', { name: member.memberName })
               : t('This decision is no longer pending.')}
         </p>
       )}

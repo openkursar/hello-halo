@@ -191,7 +191,7 @@ export function LiveTab({ detail, onSelectMember, editingStructure, onExitEditin
           pulse: false,
         }
       }
-      case 'error': return { word: t('Stopped'), toneClass: 'text-red-500', pulse: false }
+      case 'error': return { word: t('Error'), toneClass: 'text-red-500', pulse: false }
       default:
         return focusedConversation
           ? null

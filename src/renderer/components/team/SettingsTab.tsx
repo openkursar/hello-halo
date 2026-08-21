@@ -3,16 +3,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   GitBranch, RefreshCw, Bot, UserCircle,
-  ExternalLink, Trash2, Plus, Info, Crown, LogOut, ChevronRight, Settings2, Users, Network,
+  Trash2, Plus, Info, Crown, Star, LogOut, ChevronRight, Settings2, Users, Network,
 } from 'lucide-react'
 import type { TeamDetail, TeamTrigger, TeamScheduleConfig, TeamTriggerInput } from '../../../shared/apps/team-types'
+import { leadAppIdSet } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
 import { useOfficeSkin, useTeamViewPrefsStore } from '../../stores/team-view-prefs.store'
 import { useAppsStore } from '../../stores/apps.store'
-import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import { SchedulePicker } from '../apps/SchedulePicker'
+import { SystemPromptEditor } from '../apps/SystemPromptEditor'
 import type { ScheduleValue } from '../apps/schedule-utils'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Switch } from '../ui/Switch'
@@ -63,7 +64,7 @@ export function SettingsTab({ detail, openMemberId, onOpenMemberChange }: Settin
       <div className="mx-auto max-w-2xl space-y-6 p-3 sm:p-6">
         {readOnly && (
           <p className="rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-xs text-muted-foreground">
-            {t('This office is managed by its owner. You are watching it — settings are read-only.')}
+            {t('This team is managed by its owner. You are watching it — settings are read-only.')}
           </p>
         )}
         {/* Everyday settings up top (§6.6): name / goal, schedule, members. */}
@@ -82,8 +83,8 @@ export function SettingsTab({ detail, openMemberId, onOpenMemberChange }: Settin
             </div>
           )}
           {readOnly
-            ? <LeaveSection teamId={detail.team.id} />
-            : <DangerSection teamId={detail.team.id} />}
+            ? <LeaveSection teamId={detail.team.id} teamName={detail.team.name} />
+            : <DangerSection detail={detail} />}
         </AdvancedSection>
       </div>
     </div>
@@ -127,15 +128,25 @@ function GoalSection({ team, first, readOnly }: { team: TeamDetail['team']; firs
       </label>
       <label className="mt-3 block space-y-1">
         <span className="text-xs text-muted-foreground">{t('Goal')}</span>
-        <textarea
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onBlur={saveGoal}
-          rows={4}
-          readOnly={readOnly}
-          disabled={readOnly}
-          className="w-full resize-y rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
-        />
+        {/* A joined office keeps the plain disabled field: the editor exists to
+            open a dialog, and there is nothing here to open. */}
+        {readOnly ? (
+          <textarea
+            value={draft}
+            rows={4}
+            readOnly
+            disabled
+            className="w-full resize-y rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground disabled:opacity-60"
+          />
+        ) : (
+          <SystemPromptEditor
+            value={draft}
+            onChange={setDraft}
+            onBlur={saveGoal}
+            onDone={saveGoal}
+            title={t('What {{team}} should get done', { team: team.name })}
+          />
+        )}
         {!readOnly && (
           <p className="text-xs text-muted-foreground/70">
             {t('The lead will decompose this goal into tasks for the team.')}
@@ -228,7 +239,7 @@ function CollaborationSection({ team, readOnly }: { team: TeamDetail['team']; re
           <OptionCard
             icon={<GitBranch className="h-4 w-4" />}
             label={t('Managed mode')}
-            description={t('The AI Lead assigns tasks and reviews results. Members communicate through the defined reporting hierarchy.')}
+            description={t('The Lead assigns tasks and reviews results. Members communicate through the defined reporting hierarchy.')}
             selected={team.collabMode === 'structured'}
             onClick={() => void updateTeam(team.id, { collabMode: 'structured' })}
             disabled={readOnly}
@@ -253,8 +264,8 @@ function CollaborationSection({ team, readOnly }: { team: TeamDetail['team']; re
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <OptionCard
             icon={<Bot className="h-4 w-4" />}
-            label={t('Ask the AI Lead first')}
-            description={t('Members are asked to bring blockers to the AI Lead before involving you.')}
+            label={t('Ask the Lead first')}
+            description={t('Members are asked to bring blockers to the Lead before involving you.')}
             selected={team.escalationRouting === 'lead'}
             onClick={() => void updateTeam(team.id, { escalationRouting: 'lead' })}
             badge={t('Recommended')}
@@ -282,14 +293,14 @@ function OfficeSkinSection({ teamId }: { teamId: string }) {
   const setOfficeSkin = useTeamViewPrefsStore(s => s.setOfficeSkin)
 
   return (
-    <Section title={t('Office appearance')}>
+    <Section title={t('Appearance')}>
       <p className="mb-2 text-xs text-muted-foreground/70">
-        {t('How this office looks on your screen. Only affects your view.')}
+        {t('How this team looks on your screen. Only affects your view.')}
       </p>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <OptionCard
           icon={<Users className="h-4 w-4" />}
-          label={t('Office cartoon')}
+          label={t('Cartoon')}
           description={t('Members appear as characters at their workstations, showing what each is doing.')}
           selected={skin === 'cartoon'}
           onClick={() => setOfficeSkin(teamId, 'cartoon')}
@@ -318,25 +329,43 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   const addMember = useTeamStore(s => s.addMember)
   const removeMember = useTeamStore(s => s.removeMember)
   const updateTeam = useTeamStore(s => s.updateTeam)
+  const teams = useTeamStore(s => s.teams)
   const allApps = useAppsStore(s => s.apps)
-  const setCurrentTab = useAppsPageStore(s => s.setCurrentTab)
-  const openAppConfig = useAppsPageStore(s => s.openAppConfig)
   const appMap = useMemo(() => new Map(allApps.map(a => [a.id, a])), [allApps])
+  // Lead apps are an internal coordination role, never addable as a member
+  // (mirrors the same exclusion in TeamCreateDialog).
+  const leadAppIds = useMemo(() => leadAppIdSet(teams), [teams])
   const [showAdd, setShowAdd] = useState(false)
   const [promote, setPromote] = useState<{ appId: string; name: string } | null>(null)
+  // What removal actually does decides what the confirmation may promise, and
+  // it differs three ways: a member you added keeps everything; a member AI
+  // built loses itself and its own space; the lead loses itself but not the
+  // space, which is the team's owning space and therefore the user's own.
+  const [remove, setRemove] = useState<{
+    appId: string
+    name: string
+    aiProvisioned: boolean
+    /**
+     * The app lives in the team's owning space, so removal leaves the space
+     * behind — the demoted lead's case. False when the app record cannot be
+     * read at all: a member on a teammate's machine has none, and neither does
+     * any member while the app list is still loading. Both are answered with
+     * the more destructive wording rather than a promise that anything stays.
+     */
+    inOwningSpace: boolean
+  } | null>(null)
 
-  // Apps not already in this team (candidates for adding).
+  // Apps not already in this team (candidates for adding). Excludes uninstalled
+  // apps and every team's lead — both would otherwise slip through despite
+  // being unusable/forbidden, the same gap TeamCreateDialog already closes.
   const candidates = useMemo(() =>
     allApps.filter(a =>
       a.spec.type === 'automation' &&
+      a.status !== 'uninstalled' &&
+      !leadAppIds.has(a.id) &&
       !detail.members.some(m => m.appId === a.id)
     ),
-  [allApps, detail.members])
-
-  const openApp = useCallback((appId: string) => {
-    setCurrentTab('my-digital-humans')
-    openAppConfig(appId)
-  }, [setCurrentTab, openAppConfig])
+  [allApps, leadAppIds, detail.members])
 
   return (
     <Section title={t('Members')}>
@@ -350,10 +379,18 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
               duty={member.duty ?? ''}
               description={app?.spec.description ?? ''}
               isLead={member.isLead}
+              aiProvisioned={member.aiProvisioned}
               onOpen={() => onOpenMember(member.appId)}
-              onOpenApp={() => openApp(member.appId)}
               onMakeLead={readOnly || member.isLead ? undefined : () => setPromote({ appId: member.appId, name: member.memberName })}
-              onRemove={readOnly || member.isLead ? undefined : () => void removeMember(detail.team.id, member.appId)}
+              onRemove={readOnly || member.isLead ? undefined : () => setRemove({
+                appId: member.appId,
+                name: member.memberName,
+                aiProvisioned: member.aiProvisioned,
+                // Spelled out rather than app?.spaceId === …, so that "we could
+                // not tell" stays a decision made here instead of a value that
+                // falls out of optional chaining somewhere else.
+                inOwningSpace: app !== undefined && app.spaceId === detail.team.owningSpaceId,
+              })}
             />
           )
         })}
@@ -362,11 +399,46 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
       {promote && (
         <ConfirmDialog
           title={t('Make {{name}} the lead?', { name: promote.name })}
-          message={t('This member becomes the team lead (coordinates and assigns tasks). The current lead becomes a regular member — you can remove it afterward if it is no longer needed.')}
+          // Managed mode rebuilds the reporting lines around the new lead; in
+          // free mode there are none to lose, so saying so would describe
+          // something that does not exist. Two whole sentences rather than one
+          // joined to the other: concatenation would fix the English word order
+          // for every language.
+          message={detail.team.collabMode === 'structured'
+            ? t('{{name}} will break the goal into tasks and hand them out. The current lead stays on the team as an ordinary member. This team is in Managed mode, so the reporting lines are rebuilt around the new lead. Any connections you drew by hand are replaced.', { name: promote.name })
+            : t('{{name}} will break the goal into tasks and hand them out. The current lead stays on the team as an ordinary member.', { name: promote.name })}
           confirmLabel={t('Make lead')}
           cancelLabel={t('Cancel')}
+          variant="default"
           onConfirm={() => { const p = promote; setPromote(null); void updateTeam(detail.team.id, { leadAppId: p.appId }) }}
           onCancel={() => setPromote(null)}
+        />
+      )}
+
+      {remove && (
+        <ConfirmDialog
+          // The verb names the worst outcome the press authorises, not the one
+          // that is certain — the worst outcome always has a single value,
+          // "what actually happens" does not.
+          title={!remove.aiProvisioned
+            ? t('Remove {{name}} from this team?', { name: remove.name })
+            : remove.inOwningSpace
+              ? t('Delete {{name}}?', { name: remove.name })
+              : t('Delete {{name}} permanently?', { name: remove.name })}
+          message={!remove.aiProvisioned
+            ? t('{{name}} stays yours — the digital human, its own instructions, and everything in its space are untouched. What it loses is what it had here: the duty you wrote for this team, and what this team was allowed to ask of it. Add it back later and you write those again.', { name: remove.name })
+            : remove.inOwningSpace
+              ? t('Removing it deletes the digital human itself, and that cannot be undone. The space it works in is shared with the rest of the team and stays, along with everything in it. (If you have also added it to another team, it stays there and nothing is deleted.)', { name: remove.name })
+              : t('Removing it from this team deletes the digital human, its space, and every file it produced, and that cannot be undone. (If you have also added it to another team, it stays there and nothing is deleted.) If there is anything you want to keep, close this and copy it out first.')}
+          // Lighter when the app's space is the team's shared owning space: that
+          // space survives removal, so one rung down from "permanently".
+          confirmLabel={!remove.aiProvisioned
+            ? t('Remove')
+            : remove.inOwningSpace ? t('Delete') : t('Delete permanently')}
+          cancelLabel={t('Cancel')}
+          variant={remove.aiProvisioned ? 'danger' : 'default'}
+          onConfirm={() => { const r = remove; setRemove(null); void removeMember(detail.team.id, r.appId) }}
+          onCancel={() => setRemove(null)}
         />
       )}
 
@@ -418,13 +490,14 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   )
 }
 
-function MemberCard({ memberName, duty, description, isLead, onOpen, onOpenApp, onMakeLead, onRemove }: {
+function MemberCard({ memberName, duty, description, isLead, aiProvisioned, onOpen, onMakeLead, onRemove }: {
   memberName: string
   duty: string
   description: string
   isLead: boolean
+  /** Decides the delete button's wording: this is the only text read before pressing. */
+  aiProvisioned: boolean
   onOpen: () => void
-  onOpenApp: () => void
   onMakeLead?: () => void
   onRemove?: () => void
 }) {
@@ -434,9 +507,9 @@ function MemberCard({ memberName, duty, description, isLead, onOpen, onOpenApp, 
       <div className="flex items-start justify-between gap-2">
         <button onClick={onOpen} className="min-w-0 flex-1 text-left">
           <div className="flex items-center gap-1.5">
-            {isLead && <span className="text-amber-500">★</span>}
+            {isLead && <Star className="h-3.5 w-3.5 flex-shrink-0 fill-current text-amber-500" />}
             <span className="text-sm font-medium text-foreground">{memberName}</span>
-            {isLead && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">{t('AI Lead')}</span>}
+            {isLead && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">{t('Lead')}</span>}
           </div>
           <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
             {duty || description || t('No duty written yet — tap to write one.')}
@@ -448,22 +521,17 @@ function MemberCard({ memberName, duty, description, isLead, onOpen, onOpenApp, 
               onClick={onMakeLead}
               className="rounded p-1 text-muted-foreground/50 transition-colors hover:text-amber-500"
               title={t('Make lead')}
+              aria-label={t('Make lead')}
             >
               <Crown className="h-3.5 w-3.5" />
             </button>
           )}
-          <button
-            onClick={onOpenApp}
-            className="rounded p-1 text-muted-foreground/50 transition-colors hover:text-foreground"
-            title={t('Open in Digital Humans')}
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-          </button>
           {onRemove && (
             <button
               onClick={onRemove}
               className="rounded p-1 text-muted-foreground/50 transition-colors hover:text-destructive"
-              title={t('Remove member')}
+              title={aiProvisioned ? t('Delete member') : t('Remove member')}
+              aria-label={aiProvisioned ? t('Delete member') : t('Remove member')}
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>
@@ -476,10 +544,37 @@ function MemberCard({ memberName, duty, description, isLead, onOpen, onOpenApp, 
 
 // ── 5. Danger zone ──
 
-function DangerSection({ teamId }: { teamId: string }) {
+function DangerSection({ detail }: { detail: TeamDetail }) {
   const dissolveTeam = useTeamStore(s => s.dissolveTeam)
+  const allApps = useAppsStore(s => s.apps)
   const { t } = useTranslation()
   const [confirm, setConfirm] = useState(false)
+
+  // The members dissolve actually deletes. The lead is excluded on purpose: it
+  // is hidden from the Digital Humans list, so naming it here would show a name
+  // the user has never seen, inside an irreversible confirmation.
+  const doomed = useMemo(
+    () => detail.members.filter(m => !m.isLead && m.aiProvisioned),
+    [detail.members]
+  )
+  // One source for both the count and the names, so the two can never disagree.
+  // The lead stays out of both and is disclosed in its own sentence instead —
+  // putting it in the count would split the two apart again.
+  const names = doomed.map(m => m.memberName).join(', ')
+  // Whether the lead dies with the team depends on who made it, not on its
+  // being the lead: one the team provisioned is deleted, one the user promoted
+  // from their own is not (service.ts provisionLead vs promoteExistingLead).
+  const leadDeleted = detail.members.find(m => m.isLead)?.aiProvisioned === true
+  // A newly AI-provisioned member's space is the team's owning space, so
+  // dissolving never touches its files. Members provisioned before that
+  // change still have their own separate spaces, which dissolving does
+  // delete; check every one rather than assume, so a mixed-age team gets
+  // the cautious wording instead of a false promise.
+  const allSpacesSurvive = doomed.length > 0 && doomed.every(m => {
+    const app = allApps.find(a => a.id === m.appId)
+    return app !== undefined && app.spaceId === detail.team.owningSpaceId
+  })
+
   return (
     <>
       <div className="rounded-lg border border-destructive/30 p-3">
@@ -490,18 +585,46 @@ function DangerSection({ teamId }: { teamId: string }) {
           {t('Dissolve team')}
         </button>
         <p className="mt-1 text-xs text-muted-foreground/60">
-          {t('Removes the team and its run history. Member digital humans are not deleted.')}
+          {/* Read before the button, so it has to survive being read alone:
+              it used to promise no digital human was deleted, and the dialog's
+              correction arrived only after the user had already been reassured. */}
+          {doomed.length > 0
+            ? (leadDeleted
+              ? t('Deletes the team and its run history, along with {{count}} digital humans AI created for it and the team\u2019s own lead. The digital humans you added stay yours.', { count: doomed.length })
+              : t('Deletes the team and its run history, along with {{count}} digital humans AI created for it. The digital humans you added stay yours.', { count: doomed.length }))
+            : (leadDeleted
+              ? t('Deletes the team and its run history, along with the team\u2019s own lead. The digital humans you added stay yours.')
+              : t('Deletes the team and its run history. The digital humans you added stay yours.'))}
         </p>
       </div>
 
       {confirm && (
         <ConfirmDialog
-          title={t('Dissolve team?')}
-          message={t('This removes the team reference. Member digital humans are not deleted (AI-built members exclusive to this team are cleaned up).')}
-          confirmLabel={t('Dissolve')}
+          title={doomed.length > 0
+            ? t('Dissolve {{name}} and delete {{count}} digital humans?', { name: detail.team.name, count: doomed.length })
+            : t('Dissolve {{name}}?', { name: detail.team.name })}
+          // The lead sentence sits before "cannot be undone", which closes off
+          // everything listed above it — anything added after would fall outside it.
+          message={doomed.length > 0
+            ? (allSpacesSurvive
+              ? (leadDeleted
+                ? t('{{names}} were created by AI for this team. Dissolving deletes them, and that cannot be undone. The team\u2019s own lead is deleted with it. The space they all worked in is yours and stays, along with everything in it.', { names })
+                : t('{{names}} were created by AI for this team. Dissolving deletes them, and that cannot be undone. The space they worked in is yours and stays, along with everything in it.', { names }))
+              : (leadDeleted
+                ? t('{{names}} were created by AI for this team. Dissolving deletes them, and deletes their spaces from your space list — including any files you put there yourself. The team\u2019s own lead is deleted with it. This cannot be undone. If you need anything out of those spaces, close this and copy it first.', { names })
+                : t('{{names}} were created by AI for this team. Dissolving deletes them, and deletes their spaces from your space list — including any files you put there yourself. This cannot be undone. If you need anything out of those spaces, close this and copy it first.', { names })))
+            : (leadDeleted
+              ? t('The team and its whole run history are deleted, along with the team\u2019s own lead, and that cannot be undone. The digital humans you added are not deleted — they go back to being ordinary digital humans, with everything they have made.')
+              : t('The team and its whole run history are deleted, and that cannot be undone. The digital humans you added are not deleted — they go back to being ordinary digital humans, with everything they have made.'))}
+          // A lead the team provisioned is deleted too, so even with no AI
+          // members the verb cannot be a bare "Dissolve" — unless the lead is
+          // one the user promoted, in which case nothing of theirs goes.
+          confirmLabel={doomed.length > 0
+            ? t('Dissolve and delete permanently')
+            : leadDeleted ? t('Dissolve and delete') : t('Dissolve')}
           cancelLabel={t('Cancel')}
           variant="danger"
-          onConfirm={() => { setConfirm(false); void dissolveTeam(teamId) }}
+          onConfirm={() => { setConfirm(false); void dissolveTeam(detail.team.id) }}
           onCancel={() => setConfirm(false)}
         />
       )}
@@ -511,7 +634,7 @@ function DangerSection({ teamId }: { teamId: string }) {
 
 // ── 5b. Leave (joined office) ──
 
-function LeaveSection({ teamId }: { teamId: string }) {
+function LeaveSection({ teamId, teamName }: { teamId: string; teamName: string }) {
   const leaveOffice = useTeamStore(s => s.leaveOffice)
   const { t } = useTranslation()
   const [confirm, setConfirm] = useState(false)
@@ -523,19 +646,23 @@ function LeaveSection({ teamId }: { teamId: string }) {
           className="flex items-center gap-1.5 text-sm text-foreground transition-opacity hover:opacity-80"
         >
           <LogOut className="h-4 w-4" />
-          {t('Leave office')}
+          {t('Leave team')}
         </button>
         <p className="mt-1 text-xs text-muted-foreground/60">
-          {t('Removes this office from your view. Your digital humans stay yours.')}
+          {t('Stop taking part. Your digital humans stay yours.')}
         </p>
       </div>
 
       {confirm && (
         <ConfirmDialog
-          title={t('Leave this office?')}
-          message={t('It will be removed from your view. You can join again later with a new invite.')}
-          confirmLabel={t('Leave office')}
+          title={t('Leave {{name}}?', { name: teamName })}
+          message={t('Your digital humans stop working in this team and go back to being just yours — they, their spaces, and everything in them are untouched. What is deleted is this team\u2019s record on your computer: what it did, and any periodic checks teammates set on your digital humans. To take part again you will need an invite link.')}
+          confirmLabel={t('Leave')}
           cancelLabel={t('Cancel')}
+          // Not danger: leaving takes nothing of the user's away. The record it
+          // does delete is the team's, and losing it is what someone already
+          // expects when they leave — that is worth a sentence, not a colour.
+          variant="default"
           onConfirm={() => { setConfirm(false); void leaveOffice(teamId) }}
           onCancel={() => setConfirm(false)}
         />

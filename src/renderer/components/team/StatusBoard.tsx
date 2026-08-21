@@ -10,7 +10,7 @@
  * first) and the connector rail is hidden.
  */
 
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File, Send, Clock, BellOff, Flag, Hourglass } from 'lucide-react'
 import type { TeamDetail, RosterMember, BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamEdge, TeamStatus, EpochOutcome, TeamRunTriggerType } from '../../../shared/apps/team-types'
 import { awaitsOurDecision } from '../../../shared/apps/team-types'
@@ -61,10 +61,11 @@ interface StatusBoardProps {
   onExitEditing?: () => void
 }
 
+/** Shared shape so ProducedFiles and RecentActivity can split one lookup instead of each triggering their own. */
+type TeamArtifactsApi = ReturnType<typeof useTeamArtifacts>
+
 export function StatusBoard({ detail, board, activeFlows, onSelectMember, editingStructure = false, onExitEditing }: StatusBoardProps) {
   const { t } = useTranslation()
-
-  const isLive = board.mode === 'live'
 
   // Editing the collaboration structure takes over the whole board area with the
   // dedicated full-canvas editor (auto-layout + draggable nodes + floating list).
@@ -75,10 +76,23 @@ export function StatusBoard({ detail, board, activeFlows, onSelectMember, editin
   if (board.roster.length === 0) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-        {t('This team has no members yet. Add members from the manage menu.')}
+        {t('This team has no members yet. Add members from Settings → Members.')}
       </div>
     )
   }
+
+  return <StatusBoardMain detail={detail} board={board} activeFlows={activeFlows} onSelectMember={onSelectMember} />
+}
+
+function StatusBoardMain({ detail, board, activeFlows, onSelectMember }: Omit<StatusBoardProps, 'editingStructure' | 'onExitEditing'>) {
+  const { t } = useTranslation()
+
+  const isLive = board.mode === 'live'
+
+  // ProducedFiles and RecentActivity both resolve this run's output files;
+  // one lookup here instead of each triggering its own IPC round trip.
+  const doneCount = board.tasks.filter(tk => tk.status === 'done').length
+  const artifacts = useTeamArtifacts(detail.team.id, board.epochId, `${doneCount}:${board.tasks.length}`)
 
   return (
     <div className="flex flex-col gap-5 p-3 sm:gap-6 sm:p-6">
@@ -110,17 +124,26 @@ export function StatusBoard({ detail, board, activeFlows, onSelectMember, editin
         />
       )}
 
+      {/* Fixed home for this run's output — otherwise it only exists as a chip
+          on the tail of Recent Activity, which drops old rows past 15. */}
+      <ProducedFiles artifacts={artifacts} />
+
       <RecentActivity
         tasks={board.tasks}
         findings={board.findings}
         activities={board.activities}
         roster={board.roster}
-        teamId={detail.team.id}
-        epochId={board.epochId}
+        artifacts={artifacts}
         kind={board.kind ?? 'run'}
         onSelectMember={onSelectMember}
         title={isLive ? undefined : t('What happened')}
         summary={board.mode === 'replay' ? board.replay?.summary ?? null : null}
+        emptiness={board.mode === 'replay'
+          ? 'finished'
+          : detail.team.status === 'running' ? 'running'
+            : detail.team.status === 'waiting_user' ? 'waiting'
+              : detail.team.status === 'error' ? 'error'
+                : 'not-started'}
       />
     </div>
   )
@@ -135,6 +158,11 @@ interface LiveLine {
   name: string
   thought: Thought | null
   text: string
+}
+
+interface RestingLine extends LiveLine {
+  /** When this member was last seen generating (for the relative-time label). */
+  ts: number
 }
 
 interface LiveActivityFeedProps {
@@ -176,7 +204,7 @@ function LiveActivityFeed({ roster, teamId, epochId, onSelectMember }: LiveActiv
   // those updates, but its siblings (the topology) do not.
   const sessions = useChatStore(s => s.sessions)
 
-  const lines = useMemo<LiveLine[]>(() => {
+  const live = useMemo<LiveLine[]>(() => {
     if (!epochId) return []
     const out: LiveLine[] = []
     for (const m of roster) {
@@ -191,37 +219,72 @@ function LiveActivityFeed({ roster, teamId, epochId, onSelectMember }: LiveActiv
     return out
   }, [roster, teamId, epochId, sessions, t])
 
-  if (lines.length === 0) return null
+  // Between turns nobody is generating, but the run is still live — remember
+  // each member's last line so the block does not read as "nobody is working"
+  // in that gap. Cleared when the focused run changes.
+  const lastSeenRef = useRef<Map<string, RestingLine>>(new Map())
+  useEffect(() => { lastSeenRef.current.clear() }, [epochId])
+  useEffect(() => {
+    const ts = Date.now()
+    for (const l of live) lastSeenRef.current.set(l.appId, { ...l, ts })
+  }, [live])
+
+  const liveIds = new Set(live.map(l => l.appId))
+  const resting = roster
+    .filter(m => !liveIds.has(m.appId) && lastSeenRef.current.has(m.appId))
+    .map(m => lastSeenRef.current.get(m.appId)!)
+
+  // Resting rows show a relative-time label ("2m ago") that would otherwise
+  // freeze until some unrelated re-render happened to pass through.
+  const [, forceRelativeTimeRefresh] = useState(0)
+  useEffect(() => {
+    if (resting.length === 0) return
+    const id = setInterval(() => forceRelativeTimeRefresh(n => n + 1), 30000)
+    return () => clearInterval(id)
+  }, [resting.length])
+
+  if (live.length === 0 && resting.length === 0) return null
 
   const findMember = (appId: string) => roster.find(m => m.appId === appId)
+
+  const row = (l: LiveLine, isLive: boolean, ts?: number) => {
+    const m = findMember(l.appId)
+    const Icon = getThoughtIcon(l.thought?.type ?? 'text', l.thought?.toolName)
+    return (
+      <li key={l.appId}>
+        <button
+          onClick={() => m && onSelectMember(m)}
+          className={`group flex w-full items-center gap-2 rounded-lg border border-border px-2.5 py-2 text-left text-sm transition-colors hover:bg-secondary/50 ${isLive ? 'bg-background' : 'bg-background/60 opacity-60 hover:opacity-100'}`}
+        >
+          <Icon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+          <span className="flex-shrink-0 font-medium text-foreground">{l.name}</span>
+          <span className="truncate text-muted-foreground">{l.text}</span>
+          {isLive ? (
+            <span className="ml-auto flex-shrink-0 text-[11px] text-primary opacity-0 transition-opacity group-hover:opacity-100">{t('Open')}</span>
+          ) : (
+            <span className="ml-auto flex-shrink-0 text-[11px] text-muted-foreground/60">{relativeTime(ts!, t)}</span>
+          )}
+        </button>
+      </li>
+    )
+  }
 
   return (
     <div>
       <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        <span className="relative flex h-2 w-2">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/60" />
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-        </span>
-        {t('Working now')}
+        {live.length > 0 ? (
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/60" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+          </span>
+        ) : (
+          <span className="h-2 w-2 flex-shrink-0 rounded-full bg-muted-foreground/40" />
+        )}
+        {live.length > 0 ? t('Working now') : t('Recently working')}
       </h3>
       <ul className="flex flex-col gap-1">
-        {lines.map(l => {
-          const m = findMember(l.appId)
-          const Icon = getThoughtIcon(l.thought?.type ?? 'text', l.thought?.toolName)
-          return (
-            <li key={l.appId}>
-              <button
-                onClick={() => m && onSelectMember(m)}
-                className="group flex w-full items-center gap-2 rounded-lg border border-border bg-background px-2.5 py-2 text-left text-sm transition-colors hover:bg-secondary/50"
-              >
-                <Icon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                <span className="flex-shrink-0 font-medium text-foreground">{l.name}</span>
-                <span className="truncate text-muted-foreground">{l.text}</span>
-                <span className="ml-auto flex-shrink-0 text-[11px] text-primary opacity-0 transition-opacity group-hover:opacity-100">{t('Open')}</span>
-              </button>
-            </li>
-          )
-        })}
+        {live.map(l => row(l, true))}
+        {resting.map(l => row(l, false, l.ts))}
       </ul>
     </div>
   )
@@ -276,6 +339,46 @@ function PendingDecisions({ roster, onSelectMember }: { roster: RosterMember[]; 
 }
 
 // ──────────────────────────────────────────────
+// Produced files — a fixed, non-scrolling home for this run's output
+// ──────────────────────────────────────────────
+
+function ProducedFiles({ artifacts }: { artifacts: TeamArtifactsApi }) {
+  const { t } = useTranslation()
+  const { list, open, status } = artifacts
+
+  return (
+    <div>
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {t('Produced files')}
+      </h3>
+      {status === 'loading' ? (
+        <p className="text-sm text-muted-foreground/70">{t('Checking…')}</p>
+      ) : status === 'failed' ? (
+        <p className="text-sm text-muted-foreground/70">{t('Could not check for produced files.')}</p>
+      ) : list.length === 0 ? (
+        <p className="text-sm text-muted-foreground/70">{t('Nothing produced yet.')}</p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {list.map(a => (
+            <li key={a.name}>
+              <button
+                type="button"
+                onClick={() => open(a.name)}
+                title={t('Open with the default app')}
+                className="flex w-full items-center gap-2 rounded-lg border border-border bg-background px-2.5 py-2 text-left text-sm transition-colors hover:bg-secondary/50"
+              >
+                <File className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                <span className="truncate font-mono text-xs text-foreground">{a.name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// ──────────────────────────────────────────────
 // Recent activity feed
 // ──────────────────────────────────────────────
 
@@ -284,14 +387,21 @@ interface RecentActivityProps {
   findings: BlackboardFinding[]
   activities: TeamActivity[]
   roster: RosterMember[]
-  teamId: string
-  epochId: string | null
+  artifacts: TeamArtifactsApi
   kind: 'run' | 'conversation'
   onSelectMember: (member: RosterMember) => void
   /** Section heading override (a replay says "What happened", live says "Recent activity"). */
   title?: string
   /** A past run's recorded summary — the lead paragraph above its detailed log. */
   summary?: string | null
+  /**
+   * What an empty board means, which is three different things: nothing has
+   * started, something is running and has not reported yet, or a run ended
+   * having recorded nothing. The reader's next move differs — wait, or go find
+   * out why it produced nothing — so one sentence for all three gives no move
+   * at all.
+   */
+  emptiness: 'not-started' | 'running' | 'waiting' | 'error' | 'finished'
 }
 
 /**
@@ -334,12 +444,10 @@ function ActorName({ appId, name, onSelect }: { appId: string | null; name: stri
   )
 }
 
-function RecentActivity({ tasks, findings, activities, roster, teamId, epochId, kind, onSelectMember, title, summary }: RecentActivityProps) {
+function RecentActivity({ tasks, findings, activities, roster, artifacts, kind, onSelectMember, title, summary, emptiness }: RecentActivityProps) {
   const { t } = useTranslation()
 
-  // doneCount in the refetch key re-resolves artifacts as tasks complete.
-  const doneCount = tasks.filter(tk => tk.status === 'done').length
-  const { has: hasArtifact, open: openArtifact } = useTeamArtifacts(teamId, epochId, `${doneCount}:${tasks.length}`)
+  const { has: hasArtifact, open: openArtifact, status: artifactStatus } = artifacts
 
   const nameFor = (appId: string | null): string => {
     if (!appId) return t('Unassigned')
@@ -395,7 +503,27 @@ function RecentActivity({ tasks, findings, activities, roster, teamId, epochId, 
               // answered without writing anything down, so an empty board here
               // is a normal outcome, not a "you have not started yet".
               ? t('Nothing recorded on the board in this conversation.')
-              : t('No activity yet. Run the team to get started.')}
+              : emptiness === 'running'
+                ? t('Started. Waiting for the first member to report in.')
+                : emptiness === 'waiting'
+                  // A joined office mirrors the host's status, so "blocked on a
+                  // decision" does not say whose. Only the roster does.
+                  ? (roster.some(awaitsOurDecision)
+                    // Points at the member cards on this same board — the one
+                    // waiting carries an alert. The banner above usually shows
+                    // it too, but "usually" is not good enough to send someone to.
+                    ? t('The team has started and is waiting on a decision from you. Open the member that is waiting to answer it.')
+                    : t('The team has started and is waiting on a decision from {{owner}}. There is nothing for you to do here until they answer.', {
+                      owner: roster.find(m => m.status === 'waiting_user')?.owner || t('a teammate'),
+                    }))
+                  : emptiness === 'error'
+                    // Says stopped, not failed: this screen knows the status and
+                    // nothing about why, and cannot offer a retry either — a
+                    // joined office has no Run button to point at.
+                    ? t('The last run stopped before it recorded anything. Open a member to see how far it got.')
+                    : emptiness === 'finished'
+                      ? t('This run finished without recording anything. Check the goal is something the team can actually act on, or open a member to see where it stopped.')
+                      : t('Nothing here yet. Press Run to start the team on its goal.')}
           </p>
         )
       ) : (
@@ -452,7 +580,18 @@ function RecentActivity({ tasks, findings, activities, roster, teamId, epochId, 
                   <span className="text-muted-foreground"> {verb} </span>
                   <span className="text-foreground/80">{task.title}</span>
                   {task.resultRef && (
-                    hasArtifact(task.resultRef) ? (
+                    // Until the lookup lands, the file's absence is unknown —
+                    // drawing that the same as "not there" tells someone who
+                    // came to collect their output that it is gone.
+                    artifactStatus !== 'ready' ? (
+                      <span
+                        className={`ml-1.5 inline-flex items-center gap-0.5 font-mono text-xs text-muted-foreground/60 ${artifactStatus === 'loading' ? 'animate-pulse' : ''}`}
+                        title={task.resultRef}
+                      >
+                        <File className="inline h-3 w-3" />
+                        {task.resultRef.split('/').pop() ?? task.resultRef}
+                      </span>
+                    ) : hasArtifact(task.resultRef) ? (
                       <button
                         type="button"
                         onClick={() => openArtifact(task.resultRef!)}
