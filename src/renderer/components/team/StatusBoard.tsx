@@ -10,8 +10,8 @@
  * first) and the connector rail is hidden.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File, Send, Clock, BellOff, Flag, Hourglass } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { CheckCircle2, Undo2, AlertTriangle, CircleDot, Circle, MessageSquareText, Star, File, Send, Clock, BellOff, Flag, Hourglass, ChevronRight } from 'lucide-react'
 import type { TeamDetail, RosterMember, BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamEdge, TeamStatus, EpochOutcome, TeamRunTriggerType } from '../../../shared/apps/team-types'
 import { awaitsOurDecision } from '../../../shared/apps/team-types'
 import type { Thought } from '../../types'
@@ -61,7 +61,7 @@ interface StatusBoardProps {
   onExitEditing?: () => void
 }
 
-/** Shared shape so ProducedFiles and RecentActivity can split one lookup instead of each triggering their own. */
+/** Shared shape so SharedFiles and RecentActivity can split one lookup instead of each triggering their own. */
 type TeamArtifactsApi = ReturnType<typeof useTeamArtifacts>
 
 export function StatusBoard({ detail, board, activeFlows, onSelectMember, editingStructure = false, onExitEditing }: StatusBoardProps) {
@@ -89,7 +89,7 @@ function StatusBoardMain({ detail, board, activeFlows, onSelectMember }: Omit<St
 
   const isLive = board.mode === 'live'
 
-  // ProducedFiles and RecentActivity both resolve this run's output files;
+  // SharedFiles and RecentActivity both resolve this run's published files;
   // one lookup here instead of each triggering its own IPC round trip.
   const doneCount = board.tasks.filter(tk => tk.status === 'done').length
   const artifacts = useTeamArtifacts(detail.team.id, board.epochId, `${doneCount}:${board.tasks.length}`)
@@ -124,9 +124,10 @@ function StatusBoardMain({ detail, board, activeFlows, onSelectMember }: Omit<St
         />
       )}
 
-      {/* Fixed home for this run's output — otherwise it only exists as a chip
-          on the tail of Recent Activity, which drops old rows past 15. */}
-      <ProducedFiles artifacts={artifacts} />
+      {/* Fixed home for what members published this run — otherwise it only
+          exists as a chip on the tail of Recent Activity, which drops old
+          rows past 15. */}
+      <SharedFiles artifacts={artifacts} />
 
       <RecentActivity
         tasks={board.tasks}
@@ -158,11 +159,6 @@ interface LiveLine {
   name: string
   thought: Thought | null
   text: string
-}
-
-interface RestingLine extends LiveLine {
-  /** When this member was last seen generating (for the relative-time label). */
-  ts: number
 }
 
 interface LiveActivityFeedProps {
@@ -204,7 +200,7 @@ function LiveActivityFeed({ roster, teamId, epochId, onSelectMember }: LiveActiv
   // those updates, but its siblings (the topology) do not.
   const sessions = useChatStore(s => s.sessions)
 
-  const live = useMemo<LiveLine[]>(() => {
+  const lines = useMemo<LiveLine[]>(() => {
     if (!epochId) return []
     const out: LiveLine[] = []
     for (const m of roster) {
@@ -219,72 +215,37 @@ function LiveActivityFeed({ roster, teamId, epochId, onSelectMember }: LiveActiv
     return out
   }, [roster, teamId, epochId, sessions, t])
 
-  // Between turns nobody is generating, but the run is still live — remember
-  // each member's last line so the block does not read as "nobody is working"
-  // in that gap. Cleared when the focused run changes.
-  const lastSeenRef = useRef<Map<string, RestingLine>>(new Map())
-  useEffect(() => { lastSeenRef.current.clear() }, [epochId])
-  useEffect(() => {
-    const ts = Date.now()
-    for (const l of live) lastSeenRef.current.set(l.appId, { ...l, ts })
-  }, [live])
-
-  const liveIds = new Set(live.map(l => l.appId))
-  const resting = roster
-    .filter(m => !liveIds.has(m.appId) && lastSeenRef.current.has(m.appId))
-    .map(m => lastSeenRef.current.get(m.appId)!)
-
-  // Resting rows show a relative-time label ("2m ago") that would otherwise
-  // freeze until some unrelated re-render happened to pass through.
-  const [, forceRelativeTimeRefresh] = useState(0)
-  useEffect(() => {
-    if (resting.length === 0) return
-    const id = setInterval(() => forceRelativeTimeRefresh(n => n + 1), 30000)
-    return () => clearInterval(id)
-  }, [resting.length])
-
-  if (live.length === 0 && resting.length === 0) return null
+  if (lines.length === 0) return null
 
   const findMember = (appId: string) => roster.find(m => m.appId === appId)
-
-  const row = (l: LiveLine, isLive: boolean, ts?: number) => {
-    const m = findMember(l.appId)
-    const Icon = getThoughtIcon(l.thought?.type ?? 'text', l.thought?.toolName)
-    return (
-      <li key={l.appId}>
-        <button
-          onClick={() => m && onSelectMember(m)}
-          className={`group flex w-full items-center gap-2 rounded-lg border border-border px-2.5 py-2 text-left text-sm transition-colors hover:bg-secondary/50 ${isLive ? 'bg-background' : 'bg-background/60 opacity-60 hover:opacity-100'}`}
-        >
-          <Icon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-          <span className="flex-shrink-0 font-medium text-foreground">{l.name}</span>
-          <span className="truncate text-muted-foreground">{l.text}</span>
-          {isLive ? (
-            <span className="ml-auto flex-shrink-0 text-[11px] text-primary opacity-0 transition-opacity group-hover:opacity-100">{t('Open')}</span>
-          ) : (
-            <span className="ml-auto flex-shrink-0 text-[11px] text-muted-foreground/60">{relativeTime(ts!, t)}</span>
-          )}
-        </button>
-      </li>
-    )
-  }
 
   return (
     <div>
       <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {live.length > 0 ? (
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/60" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-          </span>
-        ) : (
-          <span className="h-2 w-2 flex-shrink-0 rounded-full bg-muted-foreground/40" />
-        )}
-        {live.length > 0 ? t('Working now') : t('Recently working')}
+        <span className="relative flex h-2 w-2">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/60" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+        </span>
+        {t('Working now')}
       </h3>
       <ul className="flex flex-col gap-1">
-        {live.map(l => row(l, true))}
-        {resting.map(l => row(l, false, l.ts))}
+        {lines.map(l => {
+          const m = findMember(l.appId)
+          const Icon = getThoughtIcon(l.thought?.type ?? 'text', l.thought?.toolName)
+          return (
+            <li key={l.appId}>
+              <button
+                onClick={() => m && onSelectMember(m)}
+                className="group flex w-full items-center gap-2 rounded-lg border border-border px-2.5 py-2 text-left text-sm transition-colors hover:bg-secondary/50"
+              >
+                <Icon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                <span className="flex-shrink-0 font-medium text-foreground">{l.name}</span>
+                <span className="truncate text-muted-foreground">{l.text}</span>
+                <span className="ml-auto flex-shrink-0 text-[11px] text-primary opacity-0 transition-opacity group-hover:opacity-100">{t('Open')}</span>
+              </button>
+            </li>
+          )
+        })}
       </ul>
     </div>
   )
@@ -339,36 +300,49 @@ function PendingDecisions({ roster, onSelectMember }: { roster: RosterMember[]; 
 }
 
 // ──────────────────────────────────────────────
-// Produced files — a fixed, non-scrolling home for this run's output
+// Shared files — what members published this run, folded behind its header
 // ──────────────────────────────────────────────
 
-function ProducedFiles({ artifacts }: { artifacts: TeamArtifactsApi }) {
+function SharedFiles({ artifacts }: { artifacts: TeamArtifactsApi }) {
   const { t } = useTranslation()
-  const { list, open, status } = artifacts
+  const { list, openPath, status } = artifacts
+  const [expanded, setExpanded] = useState(false)
+
+  // Nothing shared (or not yet known) earns no space on the board — the
+  // section exists only when there are files to collect.
+  if (status !== 'ready' || list.length === 0) return null
+
+  // A name is ambiguous when two members published different files under it —
+  // say whose each row is, since the name alone no longer tells.
+  const nameCounts = new Map<string, number>()
+  for (const a of list) nameCounts.set(a.name, (nameCounts.get(a.name) ?? 0) + 1)
 
   return (
     <div>
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {t('Produced files')}
-      </h3>
-      {status === 'loading' ? (
-        <p className="text-sm text-muted-foreground/70">{t('Checking…')}</p>
-      ) : status === 'failed' ? (
-        <p className="text-sm text-muted-foreground/70">{t('Could not check for produced files.')}</p>
-      ) : list.length === 0 ? (
-        <p className="text-sm text-muted-foreground/70">{t('Nothing produced yet.')}</p>
-      ) : (
-        <ul className="flex flex-col gap-1">
+      <button
+        type="button"
+        onClick={() => setExpanded(v => !v)}
+        className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        {t('Shared files')}
+        <span className="font-normal text-muted-foreground/60">{list.length}</span>
+      </button>
+      {expanded && (
+        <ul className="mt-2 flex flex-col gap-1">
           {list.map(a => (
-            <li key={a.name}>
+            <li key={a.path}>
               <button
                 type="button"
-                onClick={() => open(a.name)}
+                onClick={() => openPath(a.path)}
                 title={t('Open with the default app')}
                 className="flex w-full items-center gap-2 rounded-lg border border-border bg-background px-2.5 py-2 text-left text-sm transition-colors hover:bg-secondary/50"
               >
                 <File className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                 <span className="truncate font-mono text-xs text-foreground">{a.name}</span>
+                {nameCounts.get(a.name)! > 1 && a.memberName && (
+                  <span className="flex-shrink-0 text-[11px] text-muted-foreground/60">{a.memberName}</span>
+                )}
               </button>
             </li>
           ))}

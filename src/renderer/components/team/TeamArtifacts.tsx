@@ -12,12 +12,15 @@ function baseName(p: string): string {
 }
 
 interface ArtifactGroup {
+  memberName?: string
   artifacts: { name: string; path: string; relativePath?: string }[]
 }
 
 export interface ArtifactEntry {
   name: string
   path: string
+  /** Whose file this is — only rendered when another entry shares the same name. */
+  memberName?: string
 }
 
 /**
@@ -60,14 +63,22 @@ export function useTeamArtifacts(
           return
         }
         const groups = (res.data as ArtifactGroup[]) ?? []
+        // Lookup keys: the stored ref exactly, plus its basename as a fallback.
+        // First publisher wins — two members can publish different files under
+        // one basename, and overwriting here was how a click opened the other
+        // member's file.
         const map = new Map<string, string>()
         const entries: ArtifactEntry[] = []
+        const seenPaths = new Set<string>()
         for (const g of groups) {
           for (const a of g.artifacts) {
             const name = baseName(a.name)
-            if (!map.has(name)) entries.push({ name, path: a.path })
-            map.set(name, a.path)
-            if (a.relativePath) map.set(baseName(a.relativePath), a.path)
+            if (!seenPaths.has(a.path)) {
+              seenPaths.add(a.path)
+              entries.push({ name, path: a.path, memberName: g.memberName })
+            }
+            if (!map.has(name)) map.set(name, a.path)
+            if (a.relativePath && !map.has(a.relativePath)) map.set(a.relativePath, a.path)
           }
         }
         setPathByName(map)
@@ -85,14 +96,20 @@ export function useTeamArtifacts(
     return () => { cancelled = true }
   }, [teamId, epochId, refreshToken, key])
 
-  const has = useCallback((ref: string) => pathByName.has(baseName(ref)), [pathByName])
+  const has = useCallback(
+    (ref: string) => pathByName.has(ref) || pathByName.has(baseName(ref)),
+    [pathByName]
+  )
 
-  const open = useCallback((ref: string) => {
-    const path = pathByName.get(baseName(ref))
-    if (!path) return
+  const openPath = useCallback((path: string) => {
     if (api.isRemoteMode()) void api.downloadArtifact(path)
     else void api.openArtifact(path)
-  }, [pathByName])
+  }, [])
 
-  return { has, open, status, list }
+  const open = useCallback((ref: string) => {
+    const path = pathByName.get(ref) ?? pathByName.get(baseName(ref))
+    if (path) openPath(path)
+  }, [pathByName, openPath])
+
+  return { has, open, openPath, status, list }
 }

@@ -209,7 +209,7 @@ export function TeamJoinDialog({ onClose, onCreateDigitalHuman, initialLink }: T
               </ul>
               <p className="mt-2.5 flex items-start gap-2 text-xs text-muted-foreground">
                 <Lock className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-emerald-600 dark:text-emerald-400" />
-                {t('Your files, keys, and computer stay private and on your side.')}
+                {t('Your digital human keeps working in its own space on your side, and your files, keys, and computer stay private — only the items above are shared.')}
               </p>
               <label className="mt-3 flex cursor-pointer items-center gap-2.5 border-t border-border pt-3 text-sm text-foreground">
                 <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border ${

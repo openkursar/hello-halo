@@ -1,21 +1,25 @@
 /**
  * TeamCreateDialog — Create-team form.
  *
- * Captures name, goal and member sourcing (manual default / AI) up front;
- * coordination (free default / managed), lead (auto / pick) and escalation
- * routing (lead default / user) live under a collapsed "Advanced options"
- * section so most users never have to touch them. Wording is kept identical to
- * the team Settings tab so the same concepts read the same everywhere.
+ * Asks only for what creation actually decides: name, goal, members. The
+ * owning space defaults to the current one and shows as a one-line summary
+ * with a "Change" affordance (the lead and any AI-built members are created
+ * there); coordination and escalation live under a collapsed "Advanced
+ * options" section. The lead is always auto-assigned here — promoting a
+ * specific member happens in team Settings, where the lead is visible. For
+ * the same reason the escalation wording avoids naming the lead here, while
+ * Settings names it: the reader there has already met it.
  *
- * For AI sourcing, "Create" first calls proposeMembers and shows a confirmation
- * step (cost governance) before teamCreate runs with the confirmed proposal.
+ * Members come from two actions in the same row: pick existing digital
+ * humans, or let AI propose a roster from the goal. The AI path confirms the
+ * proposal (cost governance) before teamCreate runs with it.
  *
- * Validation: name + goal required; manual sourcing requires ≥1 member.
+ * Validation: name + goal required; creating directly requires ≥1 member.
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Loader2, X, Plus, ChevronDown, ChevronRight } from 'lucide-react'
+import { Loader2, X, Plus, Sparkles, ChevronDown, ChevronRight } from 'lucide-react'
 import type {
   CreateTeamInput,
   MemberSourcing,
@@ -24,14 +28,16 @@ import type {
   TeamMemberInput,
   ProposedMember,
 } from '../../../shared/apps/team-types'
-import { AI_MEMBER_HARD_LIMIT, leadAppIdSet } from '../../../shared/apps/team-types'
+import { leadAppIdSet } from '../../../shared/apps/team-types'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTeamStore } from '../../stores/team.store'
+import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
 import { SystemPromptEditor } from '../apps/SystemPromptEditor'
 import { AppInstallDialog } from '../apps/AppInstallDialog'
 import { SpacePicker } from '../apps/SpacePicker'
+import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 
 interface TeamCreateDialogProps {
   onClose: () => void
@@ -50,25 +56,31 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
   const storeError = useTeamStore(s => s.error)
   const isCreating = useTeamStore(s => s.isCreating)
 
+  const spaces = useSpaceStore(s => s.spaces)
+  const haloSpace = useSpaceStore(s => s.haloSpace)
+  const currentSpace = useSpaceStore(s => s.currentSpace)
+
   const [name, setName] = useState('')
   const [goal, setGoal] = useState('')
-  // Required, like installing a digital human: the team's lead, and every
-  // member AI builds for it, live here — not in a fresh space per member.
-  const [selectedSpaceId, setSelectedSpaceId] = useState('')
-  const [memberSourcing, setMemberSourcing] = useState<MemberSourcing>('manual')
+  // The lead and every AI-built member are created in this space, so it must
+  // be chosen deliberately — but the space the user is already working in is
+  // the right answer for most teams, so it starts pre-filled and changeable
+  // rather than asked as a required question.
+  const defaultSpaceId = currentSpace?.id ?? haloSpace?.id ?? spaces[0]?.id ?? ''
+  const [selectedSpaceId, setSelectedSpaceId] = useState(defaultSpaceId)
+  const [spaceEditing, setSpaceEditing] = useState(false)
   const [collabMode, setCollabMode] = useState<CollabMode>('free')
   const [escalationRouting, setEscalationRouting] = useState<EscalationRouting>('lead')
-  const [leadMode, setLeadMode] = useState<'auto' | 'pick'>('auto')
-  const [leadAppId, setLeadAppId] = useState<string | null>(null)
   const [selectedAppIds, setSelectedAppIds] = useState<string[]>([])
   const [submitted, setSubmitted] = useState(false)
-  // Advanced options (coordination / lead / escalation) stay collapsed by
-  // default — sensible defaults cover most teams, keeping creation low-friction.
+  // Advanced options (coordination / escalation) stay collapsed by default —
+  // sensible defaults cover most teams, keeping creation low-friction.
   const [showAdvanced, setShowAdvanced] = useState(false)
   // Stacked on top of this dialog rather than replacing it, so the in-progress
   // team form (name, goal, already-picked members) survives the inline
   // digital-human creation flow regardless of whether it's finished or cancelled.
   const [showInlineCreate, setShowInlineCreate] = useState(false)
+  const [showMemberPicker, setShowMemberPicker] = useState(false)
 
   // AI-proposal confirmation step
   const [proposal, setProposal] = useState<ProposedMember[] | null>(null)
@@ -77,14 +89,45 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
   // looks back at the dialog — leaving a screen that did not react at all.
   const [proposeFailed, setProposeFailed] = useState(false)
 
+  // Spaces can load after this dialog mounts; backfill the default only while
+  // the user has not picked one themselves.
+  useEffect(() => {
+    if (!selectedSpaceId && defaultSpaceId) setSelectedSpaceId(defaultSpaceId)
+  }, [selectedSpaceId, defaultSpaceId])
+
+  // Expanding a section near the bottom (space picker, advanced options)
+  // grows the scrolled body, leaving the new content below the fold — scroll
+  // just enough to reveal it once the expand animation has settled.
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const spaceSectionRef = useRef<HTMLDivElement>(null)
+  const advancedSectionRef = useRef<HTMLDivElement>(null)
+  const reveal = (el: HTMLElement | null) => {
+    window.setTimeout(() => {
+      const body = bodyRef.current
+      if (!body || !el) return
+      const overflow = el.getBoundingClientRect().bottom - body.getBoundingClientRect().bottom
+      if (overflow > 0) body.scrollBy({ top: overflow + 8, behavior: 'smooth' })
+    }, 220)
+  }
+
+  const allSpaces = useMemo(
+    () => (haloSpace ? [haloSpace, ...spaces] : spaces),
+    [haloSpace, spaces]
+  )
+  const selectedSpaceName = useMemo(() => {
+    const found =
+      allSpaces.find(s => s.id === selectedSpaceId) ??
+      (currentSpace?.id === selectedSpaceId ? currentSpace : undefined)
+    return found?.name ?? ''
+  }, [allSpaces, currentSpace, selectedSpaceId])
+
   // Lead apps are an internal coordination role and must never be addable as a
   // member; exclude every team's lead from the pickable set.
   const leadAppIds = useMemo(() => leadAppIdSet(teams), [teams])
 
   // Automation apps available to add. Show ALL of the user's digital humans
-  // (any space) so they can be composed into a team — the owning space only
-  // determines where the team record lives, not which humans can join.
-  // Excludes uninstalled apps and team leads.
+  // (any space) so they can be composed into a team — joining never moves a
+  // digital human out of its own space.
   const availableApps = useMemo<InstalledApp[]>(
     () => apps.filter(a =>
       a.spec.type === 'automation' &&
@@ -106,67 +149,66 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
   const nameError = submitted && !name.trim()
   const goalError = submitted && !goal.trim()
   const spaceError = submitted && !selectedSpaceId
-  const memberError = submitted && memberSourcing === 'manual' && selectedAppIds.length === 0
+  const memberError = submitted && selectedAppIds.length === 0
 
-  const canSubmit =
-    name.trim().length > 0 &&
-    goal.trim().length > 0 &&
-    selectedSpaceId !== '' &&
-    (memberSourcing === 'ai' || selectedAppIds.length > 0)
-
-  const addMember = (appId: string) => setSelectedAppIds(ids => [...ids, appId])
-  const removeMember = (appId: string) => {
-    setSelectedAppIds(ids => ids.filter(id => id !== appId))
-    if (leadAppId === appId) setLeadAppId(null)
+  const addMember = (appId: string) => {
+    setSelectedAppIds(ids => [...ids, appId])
+    setShowMemberPicker(false)
   }
+  const removeMember = (appId: string) => setSelectedAppIds(ids => ids.filter(id => id !== appId))
 
-  const buildInput = (): CreateTeamInput => {
+  const buildInput = (sourcing: MemberSourcing): CreateTeamInput => {
     const members: TeamMemberInput[] | undefined =
-      memberSourcing === 'manual' ? selectedAppIds.map(appId => ({ appId })) : undefined
+      sourcing === 'manual' ? selectedAppIds.map(appId => ({ appId })) : undefined
     return {
       name: name.trim(),
       goal: goal.trim(),
       owningSpaceId: selectedSpaceId,
-      memberSourcing,
+      memberSourcing: sourcing,
       collabMode,
       escalationRouting,
       members,
-      leadAppId: leadMode === 'pick' ? leadAppId : null,
+      leadAppId: null,
     }
   }
 
-  const finalize = async (confirmedProposal?: ProposedMember[]) => {
-    const team = await createTeam(buildInput(), confirmedProposal)
+  const finalize = async (sourcing: MemberSourcing, confirmedProposal?: ProposedMember[]) => {
+    const team = await createTeam(buildInput(sourcing), confirmedProposal)
     if (team) {
       onCreated?.(team.id)
       onClose()
     }
   }
 
-  const handleSubmit = async () => {
-    setSubmitted(true)
-    if (!canSubmit) return
+  // The common required fields; the AI path derives its roster from the goal,
+  // so it cannot start without one either way.
+  const baseValid = name.trim().length > 0 && goal.trim().length > 0 && selectedSpaceId !== ''
 
-    if (memberSourcing === 'ai') {
-      const proposed = await proposeMembers(goal.trim(), selectedSpaceId)
-      // null = backend error (toast already shown). Empty = AI returned nothing
-      // usable; surface inline so the user can refine the goal or switch to
-      // manual rather than confirming an empty roster.
-      if (!proposed) {
-        setProposeEmpty(false)
-        setProposeFailed(true)
-        return
-      }
-      setProposeFailed(false)
-      if (proposed.length === 0) {
-        setProposeEmpty(true)
-        return
-      }
+  const handleCreate = async () => {
+    setSubmitted(true)
+    if (!baseValid || selectedAppIds.length === 0) return
+    await finalize('manual')
+  }
+
+  const handleAiBuild = async () => {
+    setSubmitted(true)
+    if (!baseValid) return
+    const proposed = await proposeMembers(goal.trim(), selectedSpaceId)
+    // null = backend error (toast already shown). Empty = AI returned nothing
+    // usable; surface inline so the user can refine the goal or add members
+    // themselves rather than confirming an empty roster.
+    if (!proposed) {
       setProposeEmpty(false)
-      setProposal(proposed)
+      setProposeFailed(true)
       return
     }
-    await finalize()
+    setProposeFailed(false)
+    if (proposed.length === 0) {
+      setProposeEmpty(true)
+      return
+    }
+    setProposeEmpty(false)
+    setProposal(proposed)
   }
 
   // ── AI proposal confirmation step ──
@@ -174,9 +216,10 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
     return (
       <ConfirmProposalDialog
         proposal={proposal}
+        spaceName={selectedSpaceName}
         creating={isCreating}
         onBack={() => setProposal(null)}
-        onConfirm={() => finalize(proposal)}
+        onConfirm={() => finalize('ai', proposal)}
       />
     )
   }
@@ -187,7 +230,9 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-4" onMouseDown={onClose}>
         <div
-          className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-xl"
+          // Fixed frame height: inline expansions (member picker, space picker)
+          // must scroll the body, not grow the dialog — a resizing modal jumps.
+          className="flex h-[min(44rem,90vh)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-xl"
           onMouseDown={e => e.stopPropagation()}
         >
           {/* Header */}
@@ -199,7 +244,7 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
           </div>
 
           {/* Body */}
-          <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6">
+          <div ref={bodyRef} className="flex-1 space-y-5 overflow-y-auto px-4 py-4 sm:px-6">
             {/* Name */}
             <Field label={t('Name')} required error={nameError ? t('Name is required') : undefined}>
               <input
@@ -210,19 +255,6 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
                 className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/50"
               />
             </Field>
-
-            {/* Space — where the lead and every AI-built member will live */}
-            <div className="space-y-1.5">
-              <SpacePicker
-                selectedSpaceId={selectedSpaceId}
-                onSelect={setSelectedSpaceId}
-                label={t('Space')}
-              />
-              <p className="text-xs text-muted-foreground">
-                {t('The team\u2019s lead, and any members AI builds for it, live here alongside whatever else you keep in this space.')}
-              </p>
-              {spaceError && <p className="text-xs text-destructive">{t('Choose a space')}</p>}
-            </div>
 
             {/* Goal */}
             <Field
@@ -235,102 +267,102 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
                   nothing to save on blur or on Done. */}
               <SystemPromptEditor
                 value={goal}
-                onChange={setGoal}
+                onChange={v => { setGoal(v); setProposeEmpty(false); setProposeFailed(false) }}
                 title={t('What this team should get done')}
                 placeholder={t('e.g. Every morning, analyze competitors\u2019 activity and send me a brief.')}
                 className="bg-background"
               />
             </Field>
 
-            {/* Member sourcing */}
-            <Field label={t('Member source')}>
-              <RadioRow
-                checked={memberSourcing === 'manual'}
-                label={t('I will add members (default)')}
-                onSelect={() => setMemberSourcing('manual')}
-              />
-              <RadioRow
-                checked={memberSourcing === 'ai'}
-                label={t('Let AI build the team from the goal')}
-                onSelect={() => setMemberSourcing('ai')}
-              />
-            </Field>
-
-            {/* Manual member area */}
-            {memberSourcing === 'manual' && (
-              <div className="space-y-3">
-                <div>
-                  <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('Added')}</p>
-                  {addedApps.length === 0 ? (
-                    <p className="text-sm text-muted-foreground/70">{t('No members added yet.')}</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {addedApps.map(app => (
-                        <div key={app.id} className="flex items-center gap-2 rounded-lg border border-border px-2.5 py-1.5">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm text-foreground">{app.spec.name}</p>
-                            {app.spaceId && (
-                              <p className="truncate font-mono text-[11px] text-muted-foreground">{app.spaceId}</p>
-                            )}
-                          </div>
-                          <button
-                            onClick={() => removeMember(app.id)}
-                            className="rounded p-0.5 text-muted-foreground hover:text-destructive"
-                            title={t('Remove')}
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
+            {/* Members */}
+            <Field label={t('Members')} error={memberError ? t('Add at least one member, or let AI build the team') : undefined}>
+              <div className="space-y-2.5">
+                {addedApps.length === 0 ? (
+                  <p className="text-sm text-muted-foreground/70">{t('No members added yet.')}</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {addedApps.map(app => (
+                      <div key={app.id} className="flex items-center gap-2 rounded-lg border border-border px-2.5 py-1.5">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm text-foreground">{app.spec.name}</p>
+                          {app.spaceId && (
+                            <p className="truncate font-mono text-[11px] text-muted-foreground">{app.spaceId}</p>
+                          )}
                         </div>
-                      ))}
-                    </div>
-                  )}
-                  {memberError && <p className="mt-1 text-xs text-destructive">{t('Add at least one member')}</p>}
-                </div>
-
-                {/* Nothing left to pick has two causes. Only one of them is
-                    "you have none" — the other is that they are all already in
-                    the Added list right above, which speaks for itself. */}
-                {(pickableApps.length > 0 || availableApps.length === 0) && (
-                  <div>
-                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('Available digital humans')}</p>
-                    {pickableApps.length === 0 ? (
-                      <p className="text-sm text-muted-foreground/70">{t('You have no digital humans yet. Create one below, or switch to “Let AI build the team from the goal”.')}</p>
-                    ) : (
-                      <div className="flex flex-wrap gap-2">
-                        {pickableApps.map(app => (
-                          <button
-                            key={app.id}
-                            onClick={() => addMember(app.id)}
-                            className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary"
-                          >
-                            <Plus className="h-3.5 w-3.5 text-muted-foreground" />
-                            {app.spec.name}
-                          </button>
-                        ))}
+                        <button
+                          onClick={() => removeMember(app.id)}
+                          className="rounded p-0.5 text-muted-foreground hover:text-destructive"
+                          title={t('Remove')}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
                       </div>
-                    )}
+                    ))}
                   </div>
                 )}
 
-                <button
-                  onClick={() => setShowInlineCreate(true)}
-                  className="flex items-center gap-1.5 text-sm text-primary transition-colors hover:underline"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  {t('Create a member inline')}
-                </button>
-              </div>
-            )}
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Portal-rendered popover: floats above the dialog without
+                      being clipped by its scroll container or affecting its
+                      height. */}
+                  <Popover open={showMemberPicker} onOpenChange={setShowMemberPicker}>
+                    <PopoverTrigger className="rounded-lg border border-border px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary">
+                      <span className="flex items-center gap-1.5">
+                        <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+                        {t('Add a digital human')}
+                      </span>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="max-h-48 w-64 overflow-y-auto py-1">
+                      {pickableApps.length === 0 ? (
+                        <p className="px-3 py-2 text-sm text-muted-foreground/70">
+                          {availableApps.length === 0
+                            ? t('You have no digital humans yet.')
+                            : t('All your digital humans are already added.')}
+                        </p>
+                      ) : (
+                        pickableApps.map(app => (
+                          <button
+                            key={app.id}
+                            onClick={() => addMember(app.id)}
+                            className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-secondary"
+                          >
+                            <Plus className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                            <span className="truncate">{app.spec.name}</span>
+                          </button>
+                        ))
+                      )}
+                      <div className="mt-1 border-t border-border pt-1">
+                        <button
+                          onClick={() => { setShowMemberPicker(false); setShowInlineCreate(true) }}
+                          className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-sm text-primary transition-colors hover:bg-secondary"
+                        >
+                          <Plus className="h-3.5 w-3.5 flex-shrink-0" />
+                          {t('New digital human…')}
+                        </button>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
 
-            {/* AI sourcing info */}
-            {memberSourcing === 'ai' && (
-              <div className="space-y-2">
-                <p className="rounded-lg border border-border bg-secondary/30 p-3 text-xs leading-relaxed text-muted-foreground">
-                  {t('AI reads your goal and proposes up to {{count}} new digital humans. You see the list and confirm before any of them is created. They live in the space you chose above, alongside its lead. None of them runs on a schedule — they only work when this team runs.', { count: AI_MEMBER_HARD_LIMIT })}
+                  <button
+                    onClick={handleAiBuild}
+                    disabled={busy || !goal.trim()}
+                    title={!goal.trim() ? t('Fill in the goal first — AI builds the team from it.') : undefined}
+                    className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary disabled:opacity-50"
+                  >
+                    {isProposing
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                      : <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />}
+                    {t('Let AI build the team from the goal')}
+                  </button>
+                </div>
+
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {t('Members keep working in their own spaces — the team just brings them into one room to collaborate, and anything they need to share goes on the board.')}
                 </p>
+
                 {proposeEmpty && (
                   <p className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs leading-relaxed text-destructive">
-                    {t('The AI could not propose members for this goal. Try describing the goal more concretely, or switch to “I will add members”.')}
+                    {t('The AI could not propose members for this goal. Try describing the goal more concretely, or add members yourself instead.')}
                   </p>
                 )}
                 {proposeFailed && (
@@ -339,15 +371,66 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
                   </p>
                 )}
               </div>
-            )}
+            </Field>
 
-            {/* Advanced options — collapsed by default to keep creation simple.
-                Wording is kept identical to the team Settings tab so the same
-                concepts read the same everywhere. */}
-            <div className="border-t border-border pt-4">
+            {/* Space — where the lead and every AI-built member are created.
+                One quiet line by default; the picker expands below it on
+                "Change", and the same button collapses it again ("Done"). */}
+            <div ref={spaceSectionRef} className="space-y-1.5">
+              {selectedSpaceId && (
+                <button
+                  onClick={() => {
+                    setSpaceEditing(v => {
+                      if (!v) reveal(spaceSectionRef.current)
+                      return !v
+                    })
+                  }}
+                  className="flex w-full items-center justify-between gap-2 text-left"
+                >
+                  <span className="truncate text-xs text-muted-foreground">
+                    {t('New digital humans are saved in the {{name}} space', { name: selectedSpaceName })}
+                  </span>
+                  <span className="flex-shrink-0 text-xs text-primary">
+                    {spaceEditing ? t('Done') : t('Change')}
+                  </span>
+                </button>
+              )}
+              <div
+                className={`grid transition-[grid-template-rows] duration-200 ease-out ${
+                  spaceEditing || !selectedSpaceId ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+                }`}
+              >
+                <div className="min-h-0 overflow-hidden">
+                  <div className="space-y-1.5">
+                    <SpacePicker
+                      selectedSpaceId={selectedSpaceId}
+                      onSelect={setSelectedSpaceId}
+                      label={t('Space')}
+                    />
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      {t('The lead and any members AI builds are created in this space. Digital humans you already have keep working in their own spaces after they join.')}
+                    </p>
+                    {spaceError && <p className="text-xs text-destructive">{t('Choose a space')}</p>}
+                  </div>
+                </div>
+              </div>
+              {!spaceEditing && selectedSpaceId && (
+                <p className="text-xs leading-relaxed text-muted-foreground/70">
+                  {t('Members AI creates and the lead work in this space. Digital humans you add yourself are not affected.')}
+                </p>
+              )}
+            </div>
+
+            {/* Advanced options — collapsed by default to keep creation simple. */}
+            <div ref={advancedSectionRef} className="border-t border-border pt-4">
               <button
                 type="button"
-                onClick={() => setShowAdvanced(v => !v)}
+                onClick={() => {
+                  setShowAdvanced(v => {
+                    if (!v) reveal(advancedSectionRef.current)
+                    return !v
+                  })
+                }}
                 className="flex w-full items-center gap-1.5 text-sm font-medium text-foreground"
               >
                 {showAdvanced
@@ -379,41 +462,14 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
                     />
                   </Field>
 
-                  {/* Team lead */}
-                  <Field label={t('Team lead')}>
-                    <RadioRow
-                      checked={leadMode === 'auto'}
-                      label={t('Assign automatically (recommended)')}
-                      onSelect={() => { setLeadMode('auto'); setLeadAppId(null) }}
-                    />
-                    <div className="flex flex-wrap items-center gap-2">
-                      <RadioRow
-                        checked={leadMode === 'pick'}
-                        label={t('Pick a member')}
-                        onSelect={() => setLeadMode('pick')}
-                      />
-                      {leadMode === 'pick' && (
-                        <select
-                          value={leadAppId ?? ''}
-                          onChange={e => setLeadAppId(e.target.value || null)}
-                          disabled={memberSourcing === 'ai' || addedApps.length === 0}
-                          className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
-                        >
-                          <option value="">{t('Select a member')}</option>
-                          {addedApps.map(app => (
-                            <option key={app.id} value={app.id}>{app.spec.name}</option>
-                          ))}
-                        </select>
-                      )}
-                    </div>
-                  </Field>
-
-                  {/* When a member needs help (escalation routing) */}
+                  {/* When a member needs help (escalation routing). The lead is
+                      not named here — at creation time the user has not met it
+                      yet; Settings uses its name once it exists. */}
                   <Field label={t('When members need help')}>
                     <RadioRow
                       checked={escalationRouting === 'lead'}
-                      label={t('Ask the Lead first')}
-                      hint={t('Members are asked to bring blockers to the Lead before involving you. One can still reach you directly when the decision is clearly yours.')}
+                      label={t('Work it out within the team first')}
+                      hint={t('Members are asked to clear blockers together before involving you. One can still reach you directly when the decision is clearly yours.')}
                       badge={t('Recommended')}
                       onSelect={() => setEscalationRouting('lead')}
                     />
@@ -438,11 +494,11 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
               {t('Cancel')}
             </button>
             <button
-              onClick={handleSubmit}
+              onClick={handleCreate}
               disabled={busy}
               className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
             >
-              {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {isCreating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               {t('Create')}
             </button>
           </div>
@@ -471,16 +527,17 @@ export function TeamCreateDialog({ onClose, onCreated }: TeamCreateDialogProps) 
 
 interface ConfirmProposalDialogProps {
   proposal: ProposedMember[]
+  spaceName: string
   creating: boolean
   onBack: () => void
   onConfirm: () => void
 }
 
-function ConfirmProposalDialog({ proposal, creating, onBack, onConfirm }: ConfirmProposalDialogProps) {
+function ConfirmProposalDialog({ proposal, spaceName, creating, onBack, onConfirm }: ConfirmProposalDialogProps) {
   const { t } = useTranslation()
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-4">
-      <div className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border bg-background shadow-xl">
+      <div className="flex h-[min(36rem,90vh)] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border bg-background shadow-xl">
         <div className="border-b border-border px-4 py-3 sm:px-6">
           <h2 className="text-base font-medium text-foreground">{t('Confirm the members AI will build')}</h2>
         </div>
@@ -497,7 +554,7 @@ function ConfirmProposalDialog({ proposal, creating, onBack, onConfirm }: Confir
             ))}
           </ul>
           <ul className="space-y-1 text-xs text-muted-foreground/80">
-            <li>{t('They live in the space you chose, alongside the team\u2019s lead.')}</li>
+            <li>{t('The lead and these members will be created in: {{name}}', { name: spaceName })}</li>
             <li>{t('They never run on their own — only when this team runs.')}</li>
             <li>{t('Dissolving the team deletes these digital humans, but the space they worked in stays, along with everything in it.')}</li>
           </ul>
