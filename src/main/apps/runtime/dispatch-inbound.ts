@@ -63,10 +63,10 @@ const EMPTY_RESPONSE_NOTICE = 'The model returned an empty response. Please send
 
 /**
  * Immediate ack for non-streaming IM channels — the final reply arrives as a
- * separate message later. Hardcoded because the backend does not have renderer
- * i18n loaded.
+ * separate message later. Hardcoded Chinese like buildSupplementAck because
+ * the backend does not have renderer i18n loaded.
  */
-const PROCESSING_ACK = 'Received, processing...'
+const PROCESSING_ACK = '✅ 已收到，正在处理…'
 
 /**
  * Commands that abort the current generation.
