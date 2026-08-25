@@ -229,6 +229,12 @@ describe('dispatchInboundMessage — streaming selection', () => {
     const arg = sendAppChatMessageMock.mock.calls[0][0] as { onProgress?: unknown }
     expect(arg.onProgress).toBeUndefined()
   })
+
+  it('sends the processing ack via reply.send when streaming is absent', async () => {
+    const reply = makeReply(false)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+    expect(reply.send).toHaveBeenCalledWith('✅ 已收到，正在处理…')
+  })
 })
 
 // ============================================

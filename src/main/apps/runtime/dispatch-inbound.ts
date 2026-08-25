@@ -820,7 +820,7 @@ export async function dispatchInboundMessage(
   // a one-shot notice instead, so acks also work when streaming is stripped
   // (instance streaming off, or group quoteReply disabled in the provider).
   if (reply.streaming) {
-    reply.streaming.update({ type: 'status', text: 'Received, processing...' }).catch(() => {})
+    reply.streaming.update({ type: 'status', text: PROCESSING_ACK }).catch(() => {})
   } else {
     reply.send(PROCESSING_ACK).catch(() => {})
   }
