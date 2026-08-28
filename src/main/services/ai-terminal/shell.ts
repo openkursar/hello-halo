@@ -36,7 +36,7 @@ export type { ResolvedShellSpec, ShellFamily }
  * default is used.
  */
 export function resolveShell(preferred?: string): ResolvedShellSpec {
-  const env = { HALO_TERMINAL: '1' }
+  const env = userShellEnv()
 
   // An explicit choice must get args matching THAT executable — never staple
   // one shell family's args onto another (different arg grammar).
@@ -51,6 +51,24 @@ export function resolveShell(preferred?: string): ResolvedShellSpec {
   // Interactive shell so the user's normal prompt/aliases load.
   const file = process.env.SHELL || '/bin/bash'
   return { file, args: ['-i'], env, family: shellFamily(file) }
+}
+
+/**
+ * The complete environment the pty is spawned with. Built here so the worker
+ * never falls back to its own `process.env`: `child_process.fork` hands every
+ * worker an `ELECTRON_RUN_AS_NODE=1` that Electron injects to make the fork run
+ * as Node. Inherited by a user shell, that variable degrades every Electron the
+ * user then launches into a plain Node process — `npm run dev` in this repo
+ * dies on a missing `BrowserWindow` export. Main's env is also the only one
+ * carrying fix-path's PATH repair for GUI launches.
+ */
+function userShellEnv(): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value
+  }
+  env.HALO_TERMINAL = '1'
+  return env
 }
 
 /**

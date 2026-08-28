@@ -194,6 +194,7 @@ function resolveCapabilitiesFromSource(
   return {
     maxOutputTokens: resolved.maxOutputTokens,
     contextWindow: resolved.contextWindow,
+    reasoningEffort: resolved.reasoningEffort,
   }
 }
 
@@ -436,6 +437,7 @@ export function credentialsToBackendConfig(
     filterContent: credentials.filterContent,
     adapterId: credentials.adapterId,
     visionOverride: credentials.visionOverride,
+    reasoningEffort: credentials.capabilities?.reasoningEffort,
     ...overrides
   }
 }

@@ -14,10 +14,19 @@
  *   events for one CC turn and completes when CC produces a `result`.
  *   The loop then re-enters `stream()` to wait for the next turn.
  *
+ *   Because the loop never leaves the stream, output produced between user
+ *   messages (background-task notifications, team-agent turns) is consumed as it
+ *   appears. A surface that instead reads the stream once per user message
+ *   leaves such a turn queued in the pipe, and the next message picks it up as
+ *   if it were its own answer — every later reply then lags one turn behind.
+ *
  * Turn types:
- *   1. User-initiated: sendMessage() calls v2Session.send() → CC processes → consumer picks up
+ *   1. User-initiated: caller calls v2Session.send() → CC processes → consumer picks up
  *   2. Autonomous: CC gets internal input (team agent message) → consumer picks up
  *   The consumer doesn't distinguish — it processes whatever comes out.
+ *
+ * Surface-specific behavior (persistence, delivery) lives behind {@link TurnSink};
+ * this module knows nothing about conversations, JSONL, or IM channels.
  *
  * Lifecycle:
  *   - Started when V2 session is created (startConsumer)
@@ -26,19 +35,9 @@
  */
 
 import type { V2SDKSession, SessionState, Thought } from './types'
-import type { StreamResult } from './stream-processor'
 import { processStream } from './stream-processor'
+import type { TurnSink } from './turn-sink'
 import { emitAgentEvent } from './events'
-import {
-  addMessage,
-  updateLastMessage
-} from '../conversation.service'
-import { saveSessionId } from '../conversation.service'
-import { notifyTaskComplete } from '../notification.service'
-import { getConversation } from '../conversation.service'
-import { type FileChangesSummary, extractFileChangesSummaryFromThoughts } from '../../../shared/file-changes'
-import { resolveSourcesForReadPaths } from '../tlon'
-import type { KBSource } from '../../../shared/types/tlon'
 import { createSessionState, consumePendingRebuild, markTurnInitReceived } from './session-manager'
 import { hasActiveTeamTasks, isTeamLifecycleThought } from './subagent-handler'
 
@@ -69,6 +68,18 @@ export interface ConsumerHandle {
   updateDisplayModel(displayModel: string, contextWindow?: number): void
 }
 
+/** Everything a consumer needs beyond the session itself. */
+export interface ConsumerContext {
+  spaceId: string
+  conversationId: string
+  /** Display model name for thought parsing */
+  displayModel: string
+  /** Source-resolved context window for token-usage display */
+  contextWindow?: number
+  /** Surface-specific persistence + delivery for each consumed turn */
+  sink: TurnSink
+}
+
 /**
  * Internal consumer state — tracks everything the consumer needs across turns.
  */
@@ -78,6 +89,7 @@ interface ConsumerState {
   displayModel: string
   /** Source-resolved context window for token-usage display (see ProcessStreamParams) */
   contextWindow?: number
+  sink: TurnSink
   /** AbortController for the consumer loop itself (not per-turn) */
   consumerAbort: AbortController
   /** True when consumer is inside for-await (processing a turn) */
@@ -104,24 +116,20 @@ interface ConsumerState {
  * It processes all turns (user-initiated and autonomous) until stopped.
  *
  * @param v2Session - The V2 SDK session to consume
- * @param spaceId - Space ID for persistence and event routing
- * @param conversationId - Conversation ID for persistence and event routing
- * @param displayModel - Display model name for thought parsing
- * @param contextWindow - Source-resolved context window for token-usage display
+ * @param context - Routing identity, display model, and the turn sink
  * @returns ConsumerHandle for lifecycle control
  */
 export function startConsumer(
   v2Session: V2SDKSession,
-  spaceId: string,
-  conversationId: string,
-  displayModel: string,
-  contextWindow?: number
+  context: ConsumerContext
 ): ConsumerHandle {
+  const { conversationId } = context
   const state: ConsumerState = {
-    spaceId,
+    spaceId: context.spaceId,
     conversationId,
-    displayModel,
-    contextWindow,
+    displayModel: context.displayModel,
+    contextWindow: context.contextWindow,
+    sink: context.sink,
     consumerAbort: new AbortController(),
     processingTurn: false,
     currentSessionState: null,
@@ -137,6 +145,13 @@ export function startConsumer(
   }).finally(() => {
     state.running = false
     state.currentSessionState = null
+    // Sinks that hand out per-turn promises settle their outstanding ones here;
+    // nothing else will arrive on this session.
+    try {
+      state.sink.onConsumerStopped?.()
+    } catch (err) {
+      console.error(`[Consumer][${conversationId}] sink.onConsumerStopped failed:`, err)
+    }
     console.log(`[Consumer][${conversationId}] Consumer loop exited`)
   })
 
@@ -181,7 +196,7 @@ export function startConsumer(
  * Runs for the lifetime of the V2 session, processing one turn per iteration.
  */
 async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promise<void> {
-  const { spaceId, conversationId } = state
+  const { spaceId, conversationId, sink } = state
 
   console.log(`[Consumer][${conversationId}] Consumer started`)
 
@@ -213,8 +228,8 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
 
     try {
       // processStream consumes one turn. The onTurnInit callback fires when CC
-      // emits system:init — we create the assistant placeholder there, uniformly
-      // for both user-initiated and autonomous turns.
+      // emits system:init — the turn boundary both the consumer and the sink
+      // key off, uniformly for user-initiated and autonomous turns.
 
       const result = await processStream({
         v2Session,
@@ -226,7 +241,7 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
         abortController: turnAbort,
         t0: turnStartTime,
         callbacks: {
-          onRawMessage: undefined,
+          onRawMessage: sink.onRawMessage ? (m) => sink.onRawMessage!(m) : undefined,
           onTurnInit: () => {
             receivedAnyEvent = true
 
@@ -238,12 +253,7 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
             // ownership from turnsAwaitingInit over to currentSessionState.
             markTurnInitReceived(conversationId)
 
-            // Create assistant placeholder message for this turn
-            addMessage(spaceId, conversationId, {
-              role: 'assistant',
-              content: '',
-              toolCalls: [],
-            })
+            sink.onTurnStart?.()
 
             // Notify frontend to transition to generating state
             emitAgentEvent('agent:turn-start', spaceId, conversationId, {
@@ -258,7 +268,7 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
         // Reset empty iteration counter on successful turn
         consecutiveEmptyIterations = 0
 
-        persistTurnResult(spaceId, conversationId, result)
+        sink.onTurnComplete(result)
 
         // Accumulate team lifecycle thoughts across turns: a team spawned in an
         // earlier turn must keep blocking session rebuilds and idle cleanup while
@@ -278,10 +288,6 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
         })
         agentCompleteEmitted = true
 
-        // System notification for task completion (if window not focused)
-        const conversation = getConversation(spaceId, conversationId)
-        notifyTaskComplete(conversation?.title || 'Conversation')
-
         console.log(
           `[Consumer][${conversationId}] Turn complete:` +
           ` content=${result.finalContent.length} chars, thoughts=${result.thoughts.length},` +
@@ -290,7 +296,7 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
 
         // Drain timeout: the abort-drain failed to receive a result within the
         // safety timeout. The REPL pipe is dirty — continuing would read stale data.
-        // Break the consumer loop; next sendMessage detects the dead consumer and
+        // Break the consumer loop; next send detects the dead consumer and
         // creates a fresh session via getOrCreateV2Session.
         if (result.drainTimedOut) {
           console.warn(`[Consumer][${conversationId}] Drain timed out — REPL pipe is dirty, breaking for session rebuild`)
@@ -298,9 +304,9 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
         }
 
         // API config or toolset change during this turn → break the loop so the
-        // session is rebuilt with the new set on the next sendMessage.
+        // session is rebuilt with the new set on the next send.
         // Deferred while team agents are still running: breaking now would leave
-        // the CC subprocess unread and the next sendMessage would kill it (and
+        // the CC subprocess unread and the next send would kill it (and
         // every in-flight team task) as a zombie. The flag stays set and is
         // consumed after the team's final turn.
         if (!hasActiveTeamTasks(state.teamLifecycleThoughts) && consumePendingRebuild(conversationId)) {
@@ -341,24 +347,7 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
         error: error.message || 'Unknown error. Check logs in Settings > System > Logs.',
       })
 
-      // Persist error to conversation.
-      // If onTurnInit fired (receivedAnyEvent=true), the assistant placeholder exists
-      // and we can safely update it. Otherwise, system:init never arrived — no
-      // placeholder was created — so we must addMessage to avoid updateLastMessage
-      // accidentally corrupting a previous turn's assistant message.
-      if (receivedAnyEvent) {
-        updateLastMessage(spaceId, conversationId, {
-          content: '',
-          error: error.message,
-        })
-      } else {
-        addMessage(spaceId, conversationId, {
-          role: 'assistant',
-          content: '',
-          error: error.message,
-          toolCalls: [],
-        })
-      }
+      sink.onTurnError?.(error, receivedAnyEvent)
 
       // Reset empty iteration counter — errors are not empty iterations
       consecutiveEmptyIterations = 0
@@ -378,7 +367,7 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
     } finally {
       // Safety net (M1 fix): guarantee agent:complete is emitted if a turn started
       // but neither the happy path nor catch path emitted it (e.g., unhandled
-      // exception between persistTurnResult and emitAgentEvent).
+      // exception between the sink call and emitAgentEvent).
       if (receivedAnyEvent && !agentCompleteEmitted) {
         console.warn(`[Consumer][${conversationId}] Safety net: emitting agent:complete (missed in normal path)`)
         emitAgentEvent('agent:complete', spaceId, conversationId, {
@@ -399,63 +388,6 @@ async function consumeLoop(v2Session: V2SDKSession, state: ConsumerState): Promi
 // ============================================
 // Turn Handling Helpers
 // ============================================
-
-/**
- * Persist a completed turn's result to the conversation.
- */
-function persistTurnResult(
-  spaceId: string,
-  conversationId: string,
-  result: StreamResult,
-): void {
-  const { finalContent, hasMeaningfulContent, thoughts, tokenUsage, capturedSessionId, hasErrorThought, errorThought } = result
-
-  // Save session ID for future resumption
-  if (capturedSessionId) {
-    saveSessionId(spaceId, conversationId, capturedSessionId)
-  }
-
-  // Never persist the empty-response repair placeholder as message content —
-  // it would render as a blank bubble and mask the empty-response error block.
-  // Still persist when only thoughts exist (thinking-only turns) so the
-  // reasoning survives a reload.
-  const contentToStore = hasMeaningfulContent ? finalContent : ''
-
-  if (contentToStore || hasErrorThought || thoughts.length > 0) {
-    // Extract file changes summary
-    let metadata: { fileChanges?: FileChangesSummary } | undefined
-    let sources: KBSource[] | undefined
-    if (thoughts.length > 0) {
-      try {
-        const fileChangesSummary = extractFileChangesSummaryFromThoughts(thoughts)
-        if (fileChangesSummary) {
-          metadata = { fileChanges: fileChangesSummary }
-        }
-      } catch (error) {
-        console.error(`[Consumer][${conversationId}] Failed to extract file changes:`, error)
-      }
-      // Knowledge-base documents the agent Read this turn → clickable citations.
-      try {
-        const readPaths = thoughts
-          .filter(t => t.type === 'tool_use' && t.toolName === 'Read' && typeof t.toolInput?.file_path === 'string')
-          .map(t => t.toolInput!.file_path as string)
-        const resolved = readPaths.length > 0 ? resolveSourcesForReadPaths(readPaths) : []
-        if (resolved.length > 0) sources = resolved
-      } catch (error) {
-        console.error(`[Consumer][${conversationId}] Failed to resolve KB sources:`, error)
-      }
-    }
-
-    updateLastMessage(spaceId, conversationId, {
-      content: contentToStore,
-      thoughts: thoughts.length > 0 ? [...thoughts] : undefined,
-      tokenUsage: tokenUsage || undefined,
-      metadata,
-      sources,
-      error: errorThought?.content,
-    })
-  }
-}
 
 /**
  * Check if an error indicates the CC process is dead (not recoverable).

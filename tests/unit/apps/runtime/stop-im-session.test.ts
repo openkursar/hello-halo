@@ -29,20 +29,30 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   })),
 }))
 
-const { activeSessions, v2Sessions, closeV2Session, stopGeneration } = vi.hoisted(() => {
-  const _activeSessions = new Map<string, unknown>()
+// A conversation is "generating" when its persistent consumer is mid-turn —
+// app chat no longer keeps its own activeSessions entry.
+const { consumers, v2Sessions, closeV2Session, stopGeneration } = vi.hoisted(() => {
+  const _consumers = new Map<string, unknown>()
   const _v2Sessions = new Map<string, unknown>()
   return {
-    activeSessions: _activeSessions,
+    consumers: _consumers,
     v2Sessions: _v2Sessions,
     closeV2Session: vi.fn((id: string) => {
       _v2Sessions.delete(id)
     }),
     stopGeneration: vi.fn(async (id: string) => {
-      _activeSessions.delete(id)
+      _consumers.delete(id)
     }),
   }
 })
+
+/** Mark a conversation as mid-turn (running consumer with an active turn). */
+function markGenerating(conversationId: string): void {
+  consumers.set(conversationId, {
+    isRunning: true,
+    getActiveSessionState: () => ({ thoughts: [], spaceId: 'space-1' }),
+  })
+}
 
 const { clearSupplementBuffer } = vi.hoisted(() => ({
   clearSupplementBuffer: vi.fn(),
@@ -58,17 +68,21 @@ const { getImStreamHandle, clearImStreamHandle } = vi.hoisted(() => {
 })
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
-  activeSessions,
   v2Sessions,
   closeV2Session,
   getOrCreateV2Session: vi.fn(),
-  createSessionState: vi.fn(),
-  registerActiveSession: vi.fn(),
-  unregisterActiveSession: vi.fn(),
+  getConsumerHandle: (id: string) => consumers.get(id) ?? null,
+  getRunningConsumerIds: () => Array.from(consumers.keys()),
+  markTurnDispatched: vi.fn(),
+  updateConsumerDisplayModel: vi.fn(),
 }))
 
 vi.mock('../../../../src/main/services/agent/control', () => ({
   stopGeneration,
+  getSessionState: (id: string) =>
+    consumers.has(id)
+      ? { isActive: true, thoughts: [], spaceId: 'space-1' }
+      : { isActive: false, thoughts: [] },
 }))
 
 vi.mock('../../../../src/main/services/agent/helpers', () => ({
@@ -159,7 +173,7 @@ import { buildImSessionKey, getAppChatConversationId } from '../../../../src/sha
 
 describe('stopImSession', () => {
   beforeEach(() => {
-    activeSessions.clear()
+    consumers.clear()
     v2Sessions.clear()
     closeV2Session.mockClear()
     stopGeneration.mockClear()
@@ -170,7 +184,7 @@ describe('stopImSession', () => {
 
   it('aborts the active generation and returns stopped: true', async () => {
     const conversationId = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
-    activeSessions.set(conversationId, {})
+    markGenerating(conversationId)
 
     const result = await stopImSession('app-1', 'wecom-bot', 'group', 'room-1')
 
@@ -181,7 +195,7 @@ describe('stopImSession', () => {
 
   it('drops buffered supplements for the conversation', async () => {
     const conversationId = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
-    activeSessions.set(conversationId, {})
+    markGenerating(conversationId)
 
     await stopImSession('app-1', 'wecom-bot', 'group', 'room-1')
 
@@ -191,7 +205,7 @@ describe('stopImSession', () => {
 
   it('does NOT close the V2 session (history preserved)', async () => {
     const conversationId = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
-    activeSessions.set(conversationId, {})
+    markGenerating(conversationId)
     v2Sessions.set(conversationId, {})
 
     await stopImSession('app-1', 'wecom-bot', 'group', 'room-1')
@@ -213,19 +227,19 @@ describe('stopImSession', () => {
   it('only stops the targeted session, not siblings', async () => {
     const targetKey = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
     const siblingKey = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-2')
-    activeSessions.set(targetKey, {})
-    activeSessions.set(siblingKey, {})
+    markGenerating(targetKey)
+    markGenerating(siblingKey)
 
     await stopImSession('app-1', 'wecom-bot', 'group', 'room-1')
 
     expect(stopGeneration).toHaveBeenCalledTimes(1)
     expect(stopGeneration).toHaveBeenCalledWith(targetKey)
-    expect(activeSessions.has(siblingKey)).toBe(true)
+    expect(consumers.has(siblingKey)).toBe(true)
   })
 
   it('disposes the IM stream handle when one is registered (streaming mode)', async () => {
     const conversationId = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
-    activeSessions.set(conversationId, {})
+    markGenerating(conversationId)
 
     const dispose = vi.fn()
     const handle = { dispose, update: vi.fn(), finish: vi.fn() }
@@ -241,7 +255,7 @@ describe('stopImSession', () => {
 
   it('proceeds normally when no stream handle is registered (non-streaming mode)', async () => {
     const conversationId = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
-    activeSessions.set(conversationId, {})
+    markGenerating(conversationId)
 
     // No stream handle — registry returns undefined for this conversation
     getImStreamHandle.mockReturnValue(undefined)
@@ -280,7 +294,7 @@ describe('stopImSession', () => {
  */
 describe('stop entry points share the same cleanup', () => {
   beforeEach(() => {
-    activeSessions.clear()
+    consumers.clear()
     v2Sessions.clear()
     stopGeneration.mockClear()
     clearSupplementBuffer.mockClear()
@@ -291,7 +305,7 @@ describe('stop entry points share the same cleanup', () => {
 
   it('stopAppChatConversation drops the buffer and disposes the stream', async () => {
     const conversationId = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
-    activeSessions.set(conversationId, {})
+    markGenerating(conversationId)
     const dispose = vi.fn()
     getImStreamHandle.mockReturnValue({ dispose })
 
@@ -306,8 +320,8 @@ describe('stop entry points share the same cleanup', () => {
   it('stopAppChat cleans up every session of the app, native and IM alike', async () => {
     const nativeKey = getAppChatConversationId('app-1')
     const imKey = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
-    activeSessions.set(nativeKey, {})
-    activeSessions.set(imKey, {})
+    markGenerating(nativeKey)
+    markGenerating(imKey)
 
     await stopAppChat('app-1')
 
@@ -321,13 +335,13 @@ describe('stop entry points share the same cleanup', () => {
   it('stopAppChat leaves other apps untouched', async () => {
     const ownKey = buildImSessionKey('app-1', 'wecom-bot', 'group', 'room-1')
     const otherKey = buildImSessionKey('app-2', 'wecom-bot', 'group', 'room-1')
-    activeSessions.set(ownKey, {})
-    activeSessions.set(otherKey, {})
+    markGenerating(ownKey)
+    markGenerating(otherKey)
 
     await stopAppChat('app-1')
 
     expect(stopGeneration).toHaveBeenCalledTimes(1)
     expect(stopGeneration).toHaveBeenCalledWith(ownKey)
-    expect(activeSessions.has(otherKey)).toBe(true)
+    expect(consumers.has(otherKey)).toBe(true)
   })
 })

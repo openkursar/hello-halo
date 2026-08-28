@@ -6,9 +6,9 @@ import type { AnthropicRequest, OpenAIChatRequest } from '../../types'
 import { convertAnthropicMessagesToOpenAIChat } from '../messages'
 import {
   convertAnthropicToolsToOpenAIChat,
-  convertAnthropicToolChoiceToOpenAIChat,
-  convertAnthropicThinkingToChatReasoningEffort
+  convertAnthropicToolChoiceToOpenAIChat
 } from '../tools'
+import { resolveReasoningEffortValue, isThinkingEffort } from '../reasoning-effort'
 import { supportsVisionById, isReasoningModelById } from '../../../../shared/constants/model-capabilities'
 import { buildStreamOptionsIncludeUsage } from './stream-options'
 import { resolveOutputTokenLimit } from './max-tokens'
@@ -80,7 +80,11 @@ export function convertAnthropicToOpenAIChat(
   }
 
   // Convert thinking -> reasoning_effort (top-level string per Chat Completions spec)
-  const reasoningEffort = convertAnthropicThinkingToChatReasoningEffort(anthropicRequest.thinking)
+  const reasoningEffort = resolveReasoningEffortValue(
+    anthropicRequest.thinking,
+    options?.reasoningEffort,
+    anthropicRequest.model
+  )
   if (reasoningEffort) {
     openaiRequest.reasoning_effort = reasoningEffort
   }
@@ -91,7 +95,7 @@ export function convertAnthropicToOpenAIChat(
   // ALL assistant messages once any thinking content exists in the conversation.
   const hasThinkingInConversation = openaiRequest.messages
     .some((m) => m.role === 'assistant' && 'reasoning_content' in m)
-  if (reasoningEffort || hasThinkingInConversation) {
+  if (isThinkingEffort(reasoningEffort) || hasThinkingInConversation) {
     for (const msg of openaiRequest.messages) {
       if (msg.role === 'assistant' && !('reasoning_content' in msg)) {
         ;(msg as unknown as Record<string, unknown>).reasoning_content = ''

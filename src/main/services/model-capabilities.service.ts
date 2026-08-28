@@ -23,7 +23,8 @@ import presetData from '../../shared/data/model-capabilities.json'
 import type {
   ModelCapability,
   ModelCapabilityOverride,
-  ModelCapabilitiesPreset
+  ModelCapabilitiesPreset,
+  ResolvedModelCapability
 } from '../../shared/types/model-capabilities'
 
 /** Context window granted by the explicit `[1m]` model-id suffix */
@@ -96,7 +97,7 @@ class ModelCapabilitiesService {
   resolve(
     modelId: string,
     overrides?: Record<string, ModelCapabilityOverride>
-  ): ModelCapability {
+  ): ResolvedModelCapability {
     const base: ModelCapability = this.findPreset(modelId) ?? {
       displayName: modelId,
       provider: 'unknown',

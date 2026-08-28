@@ -104,6 +104,8 @@ src/
 │   ├── openai-compat-router/          # Anthropic <-> OpenAI bridge
 │   └── services/                      # Domain services — grouped by role:
 │       ├── agent/                     # Agent engine — largest subsystem. See agent/DESIGN.md
+│       │   │                          #   One persistent consumer per session; per-surface
+│       │   │                          #   destinations behind TurnSink (agent/DESIGN.md §3.1)
 │       │   └── toolsets/              #   Toolset Broker — on-demand in-process MCP loading. See toolsets/DESIGN.md
 │       ├── ai-browser/                # AI Browser + tools/
 │       ├── ai-terminal/              # AI Terminal (pty + xterm headless + MCP tools). See ai-terminal/DESIGN.md
@@ -140,7 +142,10 @@ src/
 │   │                                  #   capability-policy (what a non-owner caller may
 │   │                                  #   make a digital human do — shared by IM guests
 │   │                                  #   and teammates; enforced in apps/runtime/capability-policy)
-│   └── constants/                     # providers, ignore-patterns
+│   └── constants/                     # providers, ignore-patterns, display-scale,
+│                                      #   model-capabilities (wire-id → capability
+│                                      #   inference), model-runtime-limits,
+│                                      #   reasoning-effort
 │
 ├── preload/
 │   └── index.ts                       # Exposes HaloAPI to renderer (source of truth for IPC)

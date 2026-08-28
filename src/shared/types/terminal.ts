@@ -14,14 +14,14 @@ export type TerminalRunState = 'running' | 'exited'
 export type ShellFamily = 'posix' | 'other'
 
 /**
- * A fully-resolved shell to spawn. Shell POLICY (which executable, which args)
- * lives in the main process (it may consult Electron paths / installed Git
- * Bash); the pty-host worker only executes a resolved spec.
+ * A fully-resolved shell to spawn. Shell POLICY (which executable, which args,
+ * which environment) lives in the main process (it may consult Electron paths /
+ * installed Git Bash); the pty-host worker only executes a resolved spec.
  */
 export interface ResolvedShellSpec {
   file: string
   args: string[]
-  /** Extra env layered onto the pty environment */
+  /** Complete pty environment — the worker spawns with exactly this */
   env: Record<string, string>
   /** posix = bash/zsh/sh family (accepts `set -o`); other = powershell/cmd/… */
   family: ShellFamily

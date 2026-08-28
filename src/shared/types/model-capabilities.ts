@@ -10,6 +10,8 @@
  *   - Priority: user override > JSON preset > built-in defaults
  */
 
+import type { ReasoningEffortSetting } from '../constants/reasoning-effort'
+
 /** Full capability description for a single model */
 export interface ModelCapability {
   /** Human-readable model name */
@@ -27,10 +29,29 @@ export interface ModelCapability {
 }
 
 /**
+ * Model settings that exist only as a user choice.
+ *
+ * Deliberately outside {@link ModelCapability}: a value here is always
+ * something the user typed, which is what lets the engine paths forward an
+ * unrecognized level to the upstream instead of clamping it. A preset able to
+ * declare one would send that unclamped value to users who never opted in.
+ */
+export interface UserModelSettings {
+  /**
+   * How hard this model should think while the chat "Deep Thinking" toggle is
+   * on. Absent = Halo's default level.
+   */
+  reasoningEffort?: ReasoningEffortSetting
+}
+
+/**
  * User-supplied partial override for a single model.
  * Only fields the user changes need to be present.
  */
-export type ModelCapabilityOverride = Partial<ModelCapability>
+export type ModelCapabilityOverride = Partial<ModelCapability> & UserModelSettings
+
+/** Preset capability merged with the user's own settings. */
+export type ResolvedModelCapability = ModelCapability & UserModelSettings
 
 /** Top-level structure of model-capabilities.json */
 export interface ModelCapabilitiesPreset {

@@ -181,7 +181,12 @@ export type OpenAIResponsesToolChoice =
 // ============================================================================
 
 export interface OpenAIResponsesReasoningConfig {
-  effort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh'
+  /**
+   * Free string: accepted levels differ per provider and per model
+   * (`none`/`minimal`/`xhigh`/`max` all exist somewhere), and values Halo does
+   * not recognize are forwarded untouched.
+   */
+  effort?: string
   summary?: 'none' | 'concise' | 'detailed'
   include?: ('encrypted_content')[]
 }

@@ -26,14 +26,18 @@ import { buildTeamChatKey } from '../../../shared/apps/im-keys'
 import { getAppManager } from '../manager'
 import { getTeamStore } from '../team'
 import { getActiveTeamRuntime } from './team'
-import { sendAppChatMessage, buildImSessionKey, clearImSession } from './app-chat'
+import {
+  sendAppChatMessage,
+  buildImSessionKey,
+  clearImSession,
+  isAppChatConversationGenerating,
+} from './app-chat'
 import type { ImSessionContext } from './im-channels/im-prompt'
 import { getImSessionRegistry } from './im-session-registry'
 import { getActiveImChannelManager } from './im-channels'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import { stopGeneration } from '../../services/agent/control'
-import { activeSessions } from '../../services/agent/session-manager'
 import { setImPermissionContext, clearImPermissionContext } from './im-permission-registry'
 import { setImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
@@ -66,6 +70,13 @@ const MAX_REPLY_LENGTH = 4000
  * terminated, so we finish it with this notice instead of an empty bubble.
  */
 const EMPTY_RESPONSE_NOTICE = 'The model returned an empty response. Please send your message again.'
+
+/**
+ * Immediate ack for non-streaming IM channels — the final reply arrives as a
+ * separate message later. Hardcoded Chinese like buildSupplementAck because
+ * the backend does not have renderer i18n loaded.
+ */
+const PROCESSING_ACK = '✅ 已收到，正在处理…'
 
 /**
  * Commands that abort the current generation.
@@ -419,7 +430,7 @@ export function flushSupplementBuffer(conversationId: string): void {
     return
   }
 
-  if (activeSessions.has(conversationId)) {
+  if (isAppChatConversationGenerating(conversationId)) {
     console.log(
       `${LOG_TAG} flushSupplementBuffer deferred: conv=${conversationId} is ` +
       `busy (race with newly-arrived message), ${entries.length} supplement(s) ` +
@@ -696,7 +707,7 @@ export async function dispatchInboundMessage(
   // ── Stop command: abort generation, silently drop buffered supplements ──
   if (isStopCommand(msg.body)) {
     const dropped = clearSupplementBuffer(conversationId)
-    const isActive = activeSessions.has(conversationId)
+    const isActive = isAppChatConversationGenerating(conversationId)
     if (isActive) {
       console.log(
         `${LOG_TAG} Stop command received: channel=${msg.channel}, chatId=${msg.chatId}, ` +
@@ -745,7 +756,9 @@ export async function dispatchInboundMessage(
   }
 
   // ── Supplement buffering (busy → buffer, flush after generation ends) ──
-  if (!options.skipBusyCheck && activeSessions.has(conversationId)) {
+  // "Busy" covers an autonomous turn too: starting a round while one is running
+  // would let that turn claim this message's round and answer the wrong thing.
+  if (!options.skipBusyCheck && isAppChatConversationGenerating(conversationId)) {
     const entry: SupplementEntry = { msg, reply, appId, instanceId }
     const buffer = supplementBuffers.get(conversationId) ?? []
     buffer.push(entry)
@@ -926,8 +939,13 @@ export async function dispatchInboundMessage(
 
   // Send an immediate acknowledgment so the user sees the <think> block appear
   // right away instead of staring at silence while session + MCP servers init.
+  // On non-streaming channels the status cannot ride an existing stream — send
+  // a one-shot notice instead, so acks also work when streaming is stripped
+  // (instance streaming off, or group quoteReply disabled in the provider).
   if (reply.streaming) {
-    reply.streaming.update({ type: 'status', text: 'Received, processing...' }).catch(() => {})
+    reply.streaming.update({ type: 'status', text: PROCESSING_ACK }).catch(() => {})
+  } else {
+    reply.send(PROCESSING_ACK).catch(() => {})
   }
 
   try {
@@ -943,6 +961,10 @@ export async function dispatchInboundMessage(
       // Team-backed chat: hand the lead its team context (tools + Entry + the
       // long-lived conversation epoch). Absent for single-human chats.
       ...(teamBacking ? { teamContext: teamBacking.teamContext } : {}),
+
+      // IM has no Deep Thinking toggle, so replies take the same extended
+      // thinking this digital human's scheduled runs get.
+      thinkingEnabled: true,
 
       // Relay origin for pushes this run makes. Captured from the raw inbound
       // body (assembled text carries runtime tags and, after a relay was
