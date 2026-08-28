@@ -66,6 +66,13 @@ const MAX_REPLY_LENGTH = 4000
 const EMPTY_RESPONSE_NOTICE = 'The model returned an empty response. Please send your message again.'
 
 /**
+ * Immediate ack for non-streaming IM channels — the final reply arrives as a
+ * separate message later. Hardcoded Chinese like buildSupplementAck because
+ * the backend does not have renderer i18n loaded.
+ */
+const PROCESSING_ACK = '✅ 已收到，正在处理…'
+
+/**
  * Commands that abort the current generation.
  * Slash-prefixed to avoid false triggers from normal conversation.
  */
@@ -815,8 +822,13 @@ export async function dispatchInboundMessage(
 
   // Send an immediate acknowledgment so the user sees the <think> block appear
   // right away instead of staring at silence while session + MCP servers init.
+  // On non-streaming channels the status cannot ride an existing stream — send
+  // a one-shot notice instead, so acks also work when streaming is stripped
+  // (instance streaming off, or group quoteReply disabled in the provider).
   if (reply.streaming) {
-    reply.streaming.update({ type: 'status', text: 'Received, processing...' }).catch(() => {})
+    reply.streaming.update({ type: 'status', text: PROCESSING_ACK }).catch(() => {})
+  } else {
+    reply.send(PROCESSING_ACK).catch(() => {})
   }
 
   try {

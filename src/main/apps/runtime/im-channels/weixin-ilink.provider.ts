@@ -15,24 +15,49 @@
  * - AbortController used for clean long-poll cancellation on stop()
  * - Exponential backoff reconnect: 2s base, 30s cap, 100 attempts max
  * - context_token cache key: `${accountId}:${userId}` (accountId = ilink_bot_id)
+ * - Media rides the WeChat C2C CDN in both directions — see ilink-media.ts;
+ *   inbound handles are downloaded and staged as local files, outbound files
+ *   are uploaded and referenced from a sendmessage image/file item
+ * - An item whose media cannot be resolved degrades to a text placeholder
+ *   rather than costing the user the rest of the message
+ * - Inbound handling runs off the poll loop: serialised per chat so one
+ *   conversation stays in order, and capped process-wide so a backlog of media
+ *   cannot fan out into memory
  */
 
 import { randomUUID } from 'crypto'
+import { readFile, stat } from 'fs/promises'
+import { tmpdir } from 'os'
+import { extname, join } from 'path'
 import type {
   ImChannelProvider,
   ImChannelInstance,
   ImChannelConfigFieldDef,
   ImChannelType,
+  ImFileCapability,
 } from '../../../../shared/types/im-channel'
-import type { InboundMessage, ReplyHandle } from '../../../../shared/types/inbound-message'
+import type {
+  InboundMessage,
+  InboundAttachment,
+  ReplyHandle,
+} from '../../../../shared/types/inbound-message'
+import type { ImageAttachment, ImageMediaType } from '../../../services/agent/types'
+import { Semaphore } from '../concurrency'
 import {
   ILINK_BASE_URL,
   CHANNEL_VERSION,
-  SESSION_EXPIRED_CODE,
   buildAuthHeaders,
   isSessionExpired,
   fetchJson,
 } from './ilink-api'
+import {
+  downloadIlinkMedia,
+  uploadIlinkMedia,
+  MAX_MEDIA_BYTES,
+  type IlinkCdnMedia,
+  type IlinkMediaItem,
+} from './ilink-media'
+import { stageMediaFile, pruneMediaTempDir } from './media-temp-files'
 
 // ============================================
 // Constants
@@ -42,6 +67,59 @@ const RECONNECT_BASE_DELAY_MS = 2_000
 const RECONNECT_MAX_DELAY_MS = 30_000
 const MAX_RECONNECT_ATTEMPTS = 100
 const DEDUP_MAX_SIZE = 200
+
+/** Local temp directory for downloaded iLink media. */
+const TEMP_DIR = join(tmpdir(), 'halo-weixin-ilink')
+/** Downloaded media only has to outlive a single agent execution. */
+const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000
+/**
+ * Cap on an image inlined as multimodal input. Base64 expands the payload by
+ * a third, so this keeps a single image inside the request-wide image budget.
+ * Larger images are still attached as files, just not inlined.
+ */
+const MAX_INLINE_IMAGE_BYTES = 2.5 * 1024 * 1024
+/**
+ * Cap on how many images from one message are inlined. Without it a single
+ * message carrying N images sends N × MAX_INLINE_IMAGE_BYTES of base64 into the
+ * model request. The rest still arrive as file attachments.
+ */
+const MAX_INLINE_IMAGES = 4
+/** File extensions sent as an image item; WeChat rejects anything else inline. */
+const IMAGE_EXTENSIONS = new Set([
+  '.jpg', '.jpeg', '.png', '.gif', '.webp',
+])
+const INLINE_IMAGE_MIMES = new Set<string>([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+])
+const MEDIA_LABEL: Record<InboundMediaKind, string> = {
+  image: 'Image',
+  file: 'File',
+  video: 'Video',
+}
+
+/**
+ * Downloads run detached from the poll loop, so nothing else bounds how many a
+ * backlog can start at once — and each one buffers up to MAX_MEDIA_BYTES in the
+ * main process. Shared by every instance, because the memory ceiling is a
+ * property of the process, not of one account.
+ */
+const MAX_CONCURRENT_MEDIA_DOWNLOADS = 3
+const mediaDownloadSlots = new Semaphore(MAX_CONCURRENT_MEDIA_DOWNLOADS)
+
+// ============================================
+// Public temp-file cleanup
+// ============================================
+
+/**
+ * Remove stale iLink media temp files. Called once at startup by the
+ * im-channels layer.
+ */
+export function cleanupWeixinIlinkTempFiles(): void {
+  const cleaned = pruneMediaTempDir(TEMP_DIR, TEMP_FILE_TTL_MS)
+  if (cleaned > 0) {
+    console.log(`[WeixinIlink] Cleaned ${cleaned} stale temp file(s) from ${TEMP_DIR}`)
+  }
+}
 
 // ============================================
 // Provider-local types
@@ -53,13 +131,26 @@ interface WeixinIlinkConfig {
   accountId?: string   // ilink_bot_id — used as part of context_token cache key
 }
 
+/** Inbound media kinds that are downloaded and surfaced as attachments. */
+type InboundMediaKind = 'image' | 'file' | 'video'
+
+/** One entry of an inbound `item_list`; the server omits handles it has none for. */
 interface WeixinMessageItem {
-  type: 1 | 2 | 3 | 4 | 5   // 1=text, 2=image, 3=voice, 4=file, 5=video
+  type: number   // 1=text, 2=image, 3=voice, 4=file, 5=video
   text_item?: { text: string }
-  voice_item?: { text: string }
-  image_item?: Record<string, unknown>
-  file_item?: { filename?: string }
-  video_item?: Record<string, unknown>
+  voice_item?: { text?: string }
+  image_item?: IlinkMediaItem
+  /** Both name spellings are read — the server has been seen using either. */
+  file_item?: IlinkMediaItem & { file_name?: string; filename?: string }
+  video_item?: IlinkMediaItem
+}
+
+/** Outbound item_list entry — 1=text, 2=image, 4=file. */
+interface WeixinOutboundItem {
+  type: 1 | 2 | 4
+  text_item?: { text: string }
+  image_item?: { media: IlinkCdnMedia; mid_size: number }
+  file_item?: { media: IlinkCdnMedia; file_name: string; file_size: number }
 }
 
 interface WeixinMessage {
@@ -123,6 +214,13 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
   private reconnectAttempts = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private pollAbortController: AbortController | null = null
+  /**
+   * Aborted when the instance goes down for good — stop(), or a fatal error.
+   * Media downloads outlive the poll iteration that dispatched them, so they
+   * cannot ride the per-poll controller, which reconnect() aborts while those
+   * downloads are still legitimately running.
+   */
+  private shutdownController = new AbortController()
   private inboundHandler: ((msg: InboundMessage, reply: ReplyHandle) => void) | null = null
 
   // context_token cache: key is `${accountId}:${userId}`, value is most recent context_token.
@@ -134,6 +232,14 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
 
   // Long-poll cursor — empty string means start from the beginning
   private updatesBuf = ''
+
+  // Tail of each chat's in-flight handling chain, keyed by chatId
+  private chatQueues = new Map<string, Promise<void>>()
+
+  readonly fileCapability: ImFileCapability = {
+    sendFile: (chatId, file) =>
+      this.sendFileToChat(chatId, file.resolvedPath, file.displayName),
+  }
 
   constructor(instanceId: string, config: WeixinIlinkConfig) {
     this.instanceId = instanceId
@@ -148,6 +254,9 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
 
   start(): void {
     this.active = true
+    if (this.shutdownController.signal.aborted) {
+      this.shutdownController = new AbortController()
+    }
     if (!this.config.botToken) {
       console.log(`[WeixinIlink:${this.instanceId}] No bot_token configured — waiting for QR login`)
       return
@@ -160,9 +269,11 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
     this.active = false
     this.connected = false
     this.abortCurrentPoll()
+    this.shutdownController.abort()
     this.inboundHandler = null
     this.contextTokens.clear()
     this.seenMessageIds = []
+    this.chatQueues.clear()
     this.updatesBuf = ''
     this.reconnectAttempts = 0
     console.log(`[WeixinIlink:${this.instanceId}] Stopped`)
@@ -243,8 +354,7 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
           console.error(
             `[WeixinIlink:${this.instanceId}] Session expired (code -14) — re-auth via QR required`
           )
-          this.connected = false
-          this.active = false
+          this.haltOnFatal()
           break
         }
 
@@ -268,11 +378,12 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
           this.updatesBuf = response.get_updates_buf
         }
 
+        // Dispatched without awaiting: handling downloads media, and the poll
+        // must be back on getupdates long before a slow CDN finishes.
         if (response.msgs && response.msgs.length > 0) {
           for (const msg of response.msgs) {
-            if (msg.message_type === 1) {
-              this.handleInboundMessage(msg)
-            }
+            if (msg.message_type !== 1) continue
+            this.dispatchInChatOrder(msg)
           }
         }
 
@@ -297,7 +408,7 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
       console.error(
         `[WeixinIlink:${this.instanceId}] Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached, stopping`
       )
-      this.active = false
+      this.haltOnFatal()
       return
     }
     const delay = Math.min(
@@ -314,6 +425,19 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
     this.reconnectTimer = null
   }
 
+  /**
+   * Give up on the channel from the inside — session expiry, exhausted
+   * reconnects. Downloads still in flight are aborted rather than left to run
+   * to their deadline and stage files nothing will ever read; start() issues a
+   * fresh controller once the channel is revived.
+   */
+  private haltOnFatal(): void {
+    this.active = false
+    this.connected = false
+    this.abortCurrentPoll()
+    this.shutdownController.abort()
+  }
+
   private abortCurrentPoll(): void {
     if (this.pollAbortController) {
       this.pollAbortController.abort()
@@ -327,7 +451,34 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
 
   // ── Inbound message handling ─────────────────────────────────
 
-  private handleInboundMessage(msg: WeixinMessage): void {
+  /**
+   * Hand a message to its chat's queue. Detached handling would otherwise let a
+   * text-only message overtake an earlier one whose media is still downloading,
+   * so each conversation is serialised while separate chats still run in
+   * parallel. The tail is dropped once it drains, so the map only ever holds
+   * chats with work in flight.
+   */
+  private dispatchInChatOrder(msg: WeixinMessage): void {
+    const chatId = msg.from_user_id
+    if (!chatId) return
+
+    const tail = this.chatQueues.get(chatId) ?? Promise.resolve()
+    const next: Promise<void> = tail
+      .then(() => this.handleInboundMessage(msg))
+      .catch((err) => {
+        console.error(
+          `[WeixinIlink:${this.instanceId}] Inbound handling failed for message ` +
+          `${msg.message_id ?? 'n/a'}:`,
+          err
+        )
+      })
+      .finally(() => {
+        if (this.chatQueues.get(chatId) === next) this.chatQueues.delete(chatId)
+      })
+    this.chatQueues.set(chatId, next)
+  }
+
+  private async handleInboundMessage(msg: WeixinMessage): Promise<void> {
     if (!this.active || !this.inboundHandler) return
 
     const userId = msg.from_user_id
@@ -348,8 +499,13 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
       this.contextTokens.set(this.contextTokenKey(userId), msg.context_token)
     }
 
-    const text = this.extractText(msg)
-    console.log(`[WeixinIlink:${this.instanceId}] Inbound from=${userId} len=${text.length}`)
+    const { text, attachments, images } = await this.collectContent(msg)
+    if (!this.active || !this.inboundHandler) return
+
+    console.log(
+      `[WeixinIlink:${this.instanceId}] Inbound from=${userId} len=${text.length} ` +
+      `attachments=${attachments.length} images=${images.length}`
+    )
 
     const inbound: InboundMessage = {
       body: text,
@@ -360,6 +516,8 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
       chatId: userId,
       messageId: msgId,
       timestamp: Date.now(),
+      ...(attachments.length > 0 ? { attachments } : {}),
+      ...(images.length > 0 ? { images } : {}),
     }
 
     // Capture context_token at dispatch time — must be echoed in reply
@@ -381,42 +539,137 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
     this.inboundHandler(inbound, reply)
   }
 
-  private extractText(msg: WeixinMessage): string {
-    const items = msg.item_list ?? []
+  /**
+   * Turn the item list into message text plus downloaded media. Media failures
+   * degrade to a text placeholder so one bad item cannot cost the user the
+   * whole message.
+   */
+  private async collectContent(msg: WeixinMessage): Promise<{
+    text: string
+    attachments: InboundAttachment[]
+    images: ImageAttachment[]
+  }> {
     const parts: string[] = []
+    const attachments: InboundAttachment[] = []
+    const images: ImageAttachment[] = []
 
-    for (const item of items) {
+    for (const item of msg.item_list ?? []) {
       switch (item.type) {
         case 1:
           if (item.text_item?.text) parts.push(item.text_item.text)
           break
         case 2:
-          parts.push('[Image]')
+          parts.push(await this.collectMedia(item, 'image', attachments, images))
           break
         case 3:
-          // Use speech-to-text transcript when provided
-          if (item.voice_item?.text) parts.push(item.voice_item.text)
-          else parts.push('[Voice]')
+          // Speech-to-text transcript when the server supplies one; the audio
+          // itself is not surfaced. A voice message without a transcript is
+          // ordinary traffic, not something to report.
+          parts.push(item.voice_item?.text || '[Voice]')
           break
         case 4:
-          parts.push(`[File: ${item.file_item?.filename ?? 'unknown'}]`)
+          parts.push(await this.collectMedia(item, 'file', attachments, images))
           break
         case 5:
-          parts.push('[Video]')
+          parts.push(await this.collectMedia(item, 'video', attachments, images))
           break
         default:
+          console.warn(
+            `[WeixinIlink:${this.instanceId}] Unhandled inbound item type ${item.type}`
+          )
           parts.push(`[Unknown message type: ${item.type}]`)
       }
     }
 
-    return parts.join('\n').trim()
+    return { text: parts.join('\n').trim(), attachments, images }
+  }
+
+  /** Download one media item into the temp store and return its text label. */
+  private async collectMedia(
+    item: WeixinMessageItem,
+    kind: InboundMediaKind,
+    attachments: InboundAttachment[],
+    images: ImageAttachment[],
+  ): Promise<string> {
+    const label = MEDIA_LABEL[kind]
+    const handle = kind === 'image'
+      ? item.image_item
+      : kind === 'video' ? item.video_item : item.file_item
+    const wireName = kind === 'file'
+      ? item.file_item?.file_name || item.file_item?.filename
+      : undefined
+
+    if (!handle) {
+      console.warn(`[WeixinIlink:${this.instanceId}] Inbound ${kind} item carries no media handle`)
+      return `[${label}]`
+    }
+
+    await mediaDownloadSlots.acquire()
+    try {
+      const { data, mime } = await downloadIlinkMedia(handle, kind, this.shutdownController.signal)
+      const staged = await stageMediaFile(
+        TEMP_DIR,
+        wireName || this.defaultMediaName(kind, mime),
+        data,
+      )
+
+      attachments.push({
+        type: kind,
+        filename: staged.filename,
+        localPath: staged.localPath,
+        mimeType: mime,
+      })
+
+      if (
+        kind === 'image' &&
+        INLINE_IMAGE_MIMES.has(mime) &&
+        data.length <= MAX_INLINE_IMAGE_BYTES &&
+        images.length < MAX_INLINE_IMAGES
+      ) {
+        images.push({
+          id: `ilink_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          type: 'image',
+          mediaType: mime as ImageMediaType,
+          data: data.toString('base64'),
+          name: staged.filename,
+        })
+      }
+
+      console.log(
+        `[WeixinIlink:${this.instanceId}] Media ready kind=${kind} ` +
+        `name=${staged.filename} bytes=${data.length} mime=${mime}`
+      )
+      return `[${label}: ${staged.filename}]`
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.warn(`[WeixinIlink:${this.instanceId}] Inbound ${kind} download failed: ${message}`)
+      return wireName
+        ? `[${label}: ${wireName} — download failed]`
+        : `[${label} — download failed]`
+    } finally {
+      mediaDownloadSlots.release()
+    }
+  }
+
+  private defaultMediaName(kind: InboundMediaKind, mime: string): string {
+    // An image the download could not type arrives as a generic MIME, and
+    // `.octet-stream` is not an extension anyone wants to see.
+    if (kind === 'image') {
+      return `image_${Date.now()}.${mime.startsWith('image/') ? mime.slice('image/'.length) : 'bin'}`
+    }
+    if (kind === 'video') return `video_${Date.now()}.mp4`
+    return `file_${Date.now()}`
   }
 
   // ── Send message ──────────────────────────────────────────────
 
-  private async sendMessage(
+  private sendMessage(toUserId: string, text: string, contextToken: string): Promise<void> {
+    return this.sendItems(toUserId, [{ type: 1, text_item: { text } }], contextToken)
+  }
+
+  private async sendItems(
     toUserId: string,
-    text: string,
+    itemList: WeixinOutboundItem[],
     contextToken: string
   ): Promise<void> {
     if (!this.config.botToken) {
@@ -440,7 +693,7 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
         message_type: 2,             // BOT
         message_state: 2,            // FINISH
         context_token: contextToken,
-        item_list: [{ type: 1, text_item: { text } }],
+        item_list: itemList,
       },
       base_info: { channel_version: CHANNEL_VERSION },
     }
@@ -455,8 +708,7 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
 
     const sendRetCode = response.ret ?? response.errcode ?? 0
     if (isSessionExpired(sendRetCode, response.errcode)) {
-      this.active = false
-      this.connected = false
+      this.haltOnFatal()
       throw new Error(
         `[WeixinIlink:${this.instanceId}] Session expired (code -14) — re-auth required`
       )
@@ -469,6 +721,75 @@ class WeixinIlinkBotInstance implements ImChannelInstance {
     }
 
     console.log(`[WeixinIlink:${this.instanceId}] Message sent to ${toUserId}`)
+  }
+
+  // ── Send file (CDN upload + media item) ───────────────────────
+
+  private async sendFileToChat(
+    chatId: string,
+    filePath: string,
+    displayName: string,
+  ): Promise<boolean> {
+    if (!this.config.botToken) {
+      console.warn(`[WeixinIlink:${this.instanceId}] Cannot send file: no bot_token`)
+      return false
+    }
+    const contextToken = this.contextTokens.get(this.contextTokenKey(chatId))
+    if (!contextToken) {
+      console.warn(
+        `[WeixinIlink:${this.instanceId}] Cannot send file to ${chatId}: ` +
+        'no context_token — blocked until next inbound message from user'
+      )
+      return false
+    }
+
+    try {
+      // Size is checked before reading — uploadIlinkMedia's own cap would only
+      // fire once the whole file is already resident in the main process.
+      const { size } = await stat(filePath)
+      if (size > MAX_MEDIA_BYTES) {
+        console.warn(
+          `[WeixinIlink:${this.instanceId}] Cannot send ${displayName} to ${chatId}: ` +
+          `${size} bytes exceeds the ${MAX_MEDIA_BYTES} byte limit`
+        )
+        return false
+      }
+
+      const data = await readFile(filePath)
+      // The extension is read off the name the recipient will see, so the item
+      // type and the file_name never disagree about what is being sent.
+      const asImage = IMAGE_EXTENSIONS.has(extname(displayName).toLowerCase())
+
+      const { media, ciphertextSize } = await uploadIlinkMedia({
+        baseUrl: this.config.baseUrl,
+        botToken: this.config.botToken,
+        toUserId: chatId,
+        kind: asImage ? 'image' : 'file',
+        data,
+      })
+
+      // mid_size describes the encrypted CDN object; file_size is rendered to
+      // the user as the size of their file, so it carries the raw byte count.
+      const item: WeixinOutboundItem = asImage
+        ? { type: 2, image_item: { media, mid_size: ciphertextSize } }
+        : {
+            type: 4,
+            file_item: { media, file_name: displayName, file_size: data.length },
+          }
+
+      await this.sendItems(chatId, [item], contextToken)
+      console.log(
+        `[WeixinIlink:${this.instanceId}] File sent to ${chatId}: ` +
+        `name=${displayName} bytes=${data.length} as=${asImage ? 'image' : 'file'}`
+      )
+      return true
+    } catch (err) {
+      console.error(
+        `[WeixinIlink:${this.instanceId}] sendFile failed for ${chatId} (${displayName}):`,
+        err
+      )
+      return false
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────────────

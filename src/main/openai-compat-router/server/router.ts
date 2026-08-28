@@ -119,7 +119,17 @@ export function createApp(options: RouterOptions = {}): Express {
 
     console.log(`[Router] in_detail endpoint=/v1/responses method=${req.method} url=${req.url} from=${req.ip || ''}:${req.socket?.remotePort ?? ''} backend_host=${(() => { try { return new URL(decodedConfig.url).host } catch { return decodedConfig.url } })()} model_override=${decodedConfig.model || ''} api_type=${decodedConfig.apiType || ''} ts=${Date.now()}`)
 
-    await handleResponsesRequest(req.body || {}, decodedConfig, res, { debug, timeoutMs })
+    // Collect SDK headers so the handler can restore session-affinity headers
+    // onto the upstream request.
+    const HOP_BY_HOP = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'authorization'])
+    const sdkHeaders: Record<string, string> = {}
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (!HOP_BY_HOP.has(key) && value) {
+        sdkHeaders[key] = Array.isArray(value) ? value[0] : value
+      }
+    }
+
+    await handleResponsesRequest(req.body || {}, decodedConfig, res, { debug, timeoutMs, sdkHeaders })
   })
 
   // Token counting endpoint

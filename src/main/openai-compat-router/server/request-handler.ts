@@ -25,7 +25,7 @@ import {
   streamAnthropicPassthrough,
   pipeAnthropicPassthrough
 } from '../stream'
-import { isNativeAnthropicHost, normalizeSystemPrompt, safeJsonParse } from '../utils'
+import { isNativeAnthropicHost, normalizeSystemPrompt, safeJsonParse, pickSessionAffinityHeaders } from '../utils'
 import { proxyFetch } from '../../services/proxy-fetch'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { runInterceptors } from '../interceptors'
@@ -515,7 +515,7 @@ async function handleOpenAIConversion(
   res: ExpressResponse,
   options: RequestHandlerOptions
 ): Promise<void> {
-  const { debug = false, timeoutMs = DEFAULT_TIMEOUT_MS } = options
+  const { debug = false, timeoutMs = DEFAULT_TIMEOUT_MS, sdkHeaders } = options
   const { url: backendUrl, key: apiKey, model, headers: customHeaders, apiType: configApiType, adapterId } = config
   console.log(`[RequestHandler] adapterId: ${adapterId || 'none'}`)
 
@@ -566,8 +566,10 @@ async function handleOpenAIConversion(
     console.log(`[RequestHandler] wire=${apiType} tools=${toolCount}`)
     console.log(`[RequestHandler] POST ${backendUrl} (stream=${wantStream ?? false})`)
 
-    // Build headers: start with custom headers from config
-    const requestHeaders: Record<string, string> = { ...(customHeaders || {}) }
+    const requestHeaders: Record<string, string> = {
+      ...(customHeaders || {}),
+      ...pickSessionAffinityHeaders(sdkHeaders),
+    }
 
     // Apply provider-specific transformations (e.g., Groq temperature fix, OpenRouter headers)
     const adapterContext: AdapterContext = { originalRequest: requestToSend }
