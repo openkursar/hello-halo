@@ -27,13 +27,14 @@ const { setImStreamHandle, getImStreamHandle, clearImStreamHandle } = vi.hoisted
   clearImStreamHandle: vi.fn(),
 }))
 
-const { sendAppChatMessage, clearImSession, buildImSessionKey } = vi.hoisted(() => ({
+const { sendAppChatMessage, clearImSession, buildImSessionKey, isAppChatConversationGenerating } = vi.hoisted(() => ({
   sendAppChatMessage: vi.fn(async () => {}),
   clearImSession: vi.fn(async () => {}),
   buildImSessionKey: vi.fn(
     (appId: string, channel: string, chatType: string, chatId: string) =>
       `app-chat:${appId}:${channel}:${chatType}:${chatId}`,
   ),
+  isAppChatConversationGenerating: vi.fn(() => false),
 }))
 
 const { getImSessionRegistry } = vi.hoisted(() => ({
@@ -51,10 +52,7 @@ const { stopGeneration } = vi.hoisted(() => ({
   stopGeneration: vi.fn(async () => {}),
 }))
 
-const { activeSessions } = vi.hoisted(() => {
-  const m = new Map<string, unknown>()
-  return { activeSessions: m }
-})
+
 
 const { maybeClaimOwner } = vi.hoisted(() => ({
   maybeClaimOwner: vi.fn(async () => false),
@@ -64,6 +62,7 @@ vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
   sendAppChatMessage,
   clearImSession,
   buildImSessionKey,
+  isAppChatConversationGenerating,
 }))
 
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
@@ -95,10 +94,6 @@ vi.mock('../../../../src/main/services/agent/control', () => ({
   stopGeneration,
 }))
 
-vi.mock('../../../../src/main/services/agent/session-manager', () => ({
-  activeSessions,
-}))
-
 vi.mock('../../../../src/main/foundation/window.service', () => ({
   sendToRenderer: vi.fn(),
 }))
@@ -117,6 +112,12 @@ vi.mock('../../../../src/main/services/analytics/types', () => ({
 
 vi.mock('../../../../src/main/foundation/product-config', () => ({
   getImChannelsPermissionDefaults: vi.fn(() => ({})),
+}))
+vi.mock('../../../../src/main/apps/team', () => ({
+  getTeamStore: vi.fn(() => ({})),
+}))
+vi.mock('../../../../src/main/apps/runtime/team', () => ({
+  getActiveTeamRuntime: vi.fn(() => undefined),
 }))
 
 vi.mock('../../../../src/main/apps/manager', () => ({
@@ -177,15 +178,14 @@ describe('dispatchInboundMessage — stream-handle race regression', () => {
     getImStreamHandle.mockClear()
     clearImStreamHandle.mockClear()
     sendAppChatMessage.mockClear()
-    activeSessions.clear()
+    isAppChatConversationGenerating.mockReturnValue(false)
     ;(getActiveImChannelManager as any).mockClear()
   })
 
   it('does NOT call setImStreamHandle when the message is buffered as a supplement', async () => {
     // Simulate an active round — the supplement-buffer busy-check will buffer
     // this message and return before reaching the setImStreamHandle call.
-    const conversationId = 'app-chat:app-1:wecom-bot:group:room-1'
-    activeSessions.set(conversationId, {})
+    isAppChatConversationGenerating.mockReturnValue(true)
 
     const handle = makeStreamingHandle()
     await dispatchInboundMessage(

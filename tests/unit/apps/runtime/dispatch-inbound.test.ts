@@ -35,6 +35,9 @@ const clearImSessionMock = vi.fn(async () => undefined)
 vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
   sendAppChatMessage: (...a: unknown[]) => sendAppChatMessageMock(...a),
   clearImSession: (...a: unknown[]) => clearImSessionMock(...a),
+  // Busy check: no conversation is generating in these tests, so every
+  // message takes the start-of-round path rather than being buffered.
+  isAppChatConversationGenerating: () => false,
   // Mirror the real deterministic joiner so we can assert derivation order.
   buildImSessionKey: (appId: string, channel: string, chatType: string, chatId: string) =>
     `app-chat:${appId}:${channel}:${chatType}:${chatId}`,
@@ -74,9 +77,7 @@ vi.mock('../../../../src/main/http/websocket', () => ({
 vi.mock('../../../../src/main/services/agent/control', () => ({
   stopGeneration: vi.fn(async () => undefined),
 }))
-vi.mock('../../../../src/main/services/agent/session-manager', () => ({
-  activeSessions: new Map(),
-}))
+
 vi.mock('../../../../src/main/apps/runtime/im-permission-registry', () => ({
   setImPermissionContext: vi.fn(),
   clearImPermissionContext: vi.fn(),
@@ -96,6 +97,12 @@ vi.mock('../../../../src/main/services/space.service', () => ({
 }))
 vi.mock('../../../../src/main/foundation/product-config', () => ({
   getImChannelsPermissionDefaults: vi.fn(() => undefined),
+}))
+vi.mock('../../../../src/main/apps/team', () => ({
+  getTeamStore: vi.fn(() => ({})),
+}))
+vi.mock('../../../../src/main/apps/runtime/team', () => ({
+  getActiveTeamRuntime: vi.fn(() => undefined),
 }))
 
 import { dispatchInboundMessage } from '../../../../src/main/apps/runtime/dispatch-inbound'
@@ -228,6 +235,12 @@ describe('dispatchInboundMessage — streaming selection', () => {
     await dispatchInboundMessage(makeMsg(), makeReply(false), 'app-1', 'inst-1')
     const arg = sendAppChatMessageMock.mock.calls[0][0] as { onProgress?: unknown }
     expect(arg.onProgress).toBeUndefined()
+  })
+
+  it('sends the processing ack via reply.send when streaming is absent', async () => {
+    const reply = makeReply(false)
+    await dispatchInboundMessage(makeMsg(), reply, 'app-1', 'inst-1')
+    expect(reply.send).toHaveBeenCalledWith('✅ 已收到，正在处理…')
   })
 })
 
