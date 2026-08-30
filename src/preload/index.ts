@@ -70,6 +70,8 @@ export interface HaloAPI {
   authCheckToken: (sourceId: string) => Promise<IpcResponse>
   authLogout: (sourceId: string) => Promise<IpcResponse>
   authGetQuota: (sourceId: string) => Promise<IpcResponse>
+  authDelegatedStatus: () => Promise<IpcResponse>
+  authDelegatedActivate: () => Promise<IpcResponse>
   onAuthLoginProgress: (callback: (data: { provider: string; status: string }) => void) => () => void
 
   // Config

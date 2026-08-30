@@ -28,6 +28,25 @@
     },
 
     {
+      "type": "claude-cli",
+      "displayName": {
+        "en": "Claude Code CLI",
+        "zh-CN": "Claude Code CLI"
+      },
+      "recommended": false,
+      "description": {
+        "en": "Sign in through the bundled Claude Code CLI; Halo stores no token",
+        "zh-CN": "通过内置的 Claude Code CLI 登录，Halo 不保存任何 token"
+      },
+      "icon": "terminal",
+      "iconBgColor": "#D97757",
+      "builtin": true,
+      "enabled": true,
+      "setupHidden": true,
+      "platforms": ["darwin"]
+    },
+
+    {
       "type": "custom",
       "displayName": {
         "en": "Custom API",

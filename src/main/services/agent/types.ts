@@ -61,6 +61,11 @@ export interface ApiCredentials {
   /** Provider adapter ID for request/response transformations */
   adapterId?: string
   /**
+   * The CLI subprocess authenticates itself and `apiKey` is empty. Routes
+   * credential resolution away from every key-bearing path.
+   */
+  delegatedAuth?: boolean
+  /**
    * The source's effective vision capability for this model (per-model override
    * → provider declaration → id heuristic), resolved by AISourceManager and
    * forwarded to the OpenAI-compat converter. Keeping this authoritative is what

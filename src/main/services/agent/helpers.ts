@@ -18,6 +18,7 @@ import { resolveModelId, type BackendRequestConfig, type AISource } from '../../
 import { modelCapabilitiesService } from '../model-capabilities.service'
 import { isMcpCommandBlocked } from '../security-policy'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
+import { assertDelegatedAuthReady } from './cli-auth'
 
 // ============================================
 // Headless Electron Path Management
@@ -242,11 +243,20 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
     throw new Error('No AI source configured. Please configure an API key or login.')
   }
 
+  if (backendConfig.delegatedAuth) {
+    assertDelegatedAuthReady()
+  }
+
   // Determine provider type based on current source
   let provider: 'anthropic' | 'openai' | 'oauth'
   let oauthProvider: string | undefined
 
-  if (currentSource?.authType === 'oauth') {
+  if (currentSource?.authType === 'delegated') {
+    // The CLI speaks the Anthropic wire protocol on its own credential; the
+    // router still sits in between, which the 'oauth' path already models.
+    provider = 'oauth'
+    console.log('[Agent] Using CLI-delegated credential via AISourceManager')
+  } else if (currentSource?.authType === 'oauth') {
     provider = 'oauth'
     // Preserve the provider identity: only Claude OAuth tokens are
     // first-party-locked, and consumers like compaction's provider fork (#121)
@@ -287,6 +297,7 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
     filterContent: backendConfig.filterContent,
     adapterId: backendConfig.adapterId,
     visionOverride: backendConfig.visionOverride,
+    delegatedAuth: backendConfig.delegatedAuth,
     capabilities,
     supportsVision: modelOption?.supportsVision,
   }
@@ -328,10 +339,18 @@ export async function getApiCredentialsForSource(
     return getApiCredentials(config)
   }
 
+  if (backendConfig.delegatedAuth) {
+    assertDelegatedAuthReady()
+  }
+
   // Determine provider type
   let provider: 'anthropic' | 'openai' | 'oauth'
   let oauthProvider: string | undefined
-  if (source.authType === 'oauth') {
+  if (source.authType === 'delegated') {
+    // The CLI speaks the Anthropic wire protocol on its own credential; the
+    // router still sits in between, which the 'oauth' path already models.
+    provider = 'oauth'
+  } else if (source.authType === 'oauth') {
     provider = 'oauth'
     oauthProvider = source.provider
   } else if (source.provider === 'anthropic') {
@@ -365,6 +384,7 @@ export async function getApiCredentialsForSource(
     filterContent: backendConfig.filterContent,
     adapterId: backendConfig.adapterId,
     visionOverride: backendConfig.visionOverride,
+    delegatedAuth: backendConfig.delegatedAuth,
     capabilities,
     supportsVision: modelOption?.supportsVision,
   }
@@ -447,6 +467,7 @@ export function credentialsToBackendConfig(
     adapterId: credentials.adapterId,
     visionOverride: credentials.visionOverride,
     reasoningEffort: credentials.capabilities?.reasoningEffort,
+    delegatedAuth: credentials.delegatedAuth,
     ...overrides
   }
 }

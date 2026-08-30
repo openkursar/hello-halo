@@ -34,7 +34,7 @@ Halo is a local-first Electron AI product with:
 - **Conversation management**: Lazy-loaded with thoughts separation, starred conversations, Pulse panel for task status
 - **Content Canvas**: Multi-tab preview (Code/Markdown/HTML/Image/JSON/CSV/Browser) with CodeMirror 6
 - **AI Browser**: 14 tools (consolidated from 28), Accessibility Tree, anti-detection stealth
-- **AI Sources**: Multi-provider architecture (OAuth + Custom API Key), v2 format
+- **AI Sources**: Multi-provider architecture (OAuth + Custom API Key + CLI-delegated), v2 format
 - **Remote Access**: HTTP Server + WebSocket, PIN auth, tunnel support
 - **OpenAI Compatible Mode**: Anthropic <-> OpenAI protocol bridge
 - **Apps Layer**: spec, manager, runtime, conversation-mcp implemented; runtime supports schedule/event/IM triggers

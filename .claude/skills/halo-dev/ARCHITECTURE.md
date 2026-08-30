@@ -198,6 +198,7 @@ Key types:
 |------|-------------|
 | `HaloConfig` | App config: `api`, `aiSources`, `permissions`, `appearance`, `system`, `remoteAccess`, `mcpServers`, `notifications`, `notificationChannels`, `agent`, `layout`, `chat` |
 | `AISourcesConfig` | Multi-provider v2 format: `version`, `currentId`, `sources[]` |
+| `AuthType` | `api-key` \| `oauth` \| `delegated` — see the delegated note below |
 | `ConversationMeta` | Lightweight list item (no messages) |
 | `Conversation` | Full conversation with `messages`, `sessionId`, `version` |
 | `Message` | Contains `content`, `toolCalls`, `thoughts` (null=separated), `images`, `tokenUsage`, `thoughtsSummary`, `metadata.fileChanges`, `error` |
@@ -213,6 +214,16 @@ Key types:
 | `TokenUsage` | Token usage stats: input/output/cache/cost |
 | `CompactInfo` | Context compression notification |
 | `FileChangesSummary` | Lightweight file changes in message metadata |
+
+**`delegated` auth type** (`claude-cli` source): Halo holds no credential — the
+bundled Claude Code CLI authenticates itself from its own store, keyed by
+`CLAUDE_CONFIG_DIR`. Consequences for any code touching sources:
+
+- Never gate a delegated source on `apiKey` / `accessToken`; they are absent by design.
+- Its SDK env must carry no `ANTHROPIC_API_KEY`; the backend config rides on
+  `ANTHROPIC_CUSTOM_HEADERS` (`x-halo-backend`) so the router can still route it.
+- Only the `anthropic` engine can run it, and only on platforms listed in the
+  provider's `platforms` entry in product.json.
 
 **Three-state `thoughts` field** in Message:
 - `undefined` = no thoughts

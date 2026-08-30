@@ -47,8 +47,13 @@ export function resolveLocalizedText(value: LocalizedText, locale: string): stri
 
 /**
  * Authentication method type
+ *
+ * `delegated` sources hold no credential at all: the bundled Claude Code CLI
+ * authenticates itself from its own credential store, so Halo never sees a
+ * token. Distinct from `oauth` because every token-management path
+ * (accessToken presence checks, refresh, logout) must skip these sources.
  */
-export type AuthType = 'api-key' | 'oauth'
+export type AuthType = 'api-key' | 'oauth' | 'delegated'
 
 /**
  * Built-in provider IDs
@@ -366,6 +371,12 @@ export interface BackendRequestConfig {
    * the level from the request's thinking budget.
    */
   reasoningEffort?: ReasoningEffortSetting
+  /**
+   * The CLI subprocess authenticates itself; `key` carries no credential.
+   * Routes the SDK env away from `ANTHROPIC_API_KEY` and tells the router to
+   * forward the subprocess's own Authorization header untouched.
+   */
+  delegatedAuth?: boolean
 }
 
 // ============================================================================
@@ -682,6 +693,12 @@ export interface AuthProviderConfig {
   recommended: boolean
   /** Whether this provider is enabled */
   enabled: boolean
+  /**
+   * Platforms this entry is offered on (`process.platform` values). Absent
+   * means every platform. Used to ship a login path whose mechanism is only
+   * verified on some systems, instead of exposing it everywhere untested.
+   */
+  platforms?: NodeJS.Platform[]
   /**
    * Hide this entry from the first-run login selector while keeping it available
    * in the in-app AI source settings. For providers that are valid but should not
