@@ -906,6 +906,48 @@ describe('SchedulerTimer', () => {
       await vi.advanceTimersByTimeAsync(0)
     })
 
+    // #340: with every slot taken and past-due jobs stranded, the pre-fix
+    // armTimer computed a 0ms delay and the recursive setTimeout spun.
+    // Fake clocks compress such a spin into a finite number of fires, so
+    // count-based assertions cannot see it -- this test pins the WAKE RHYTHM
+    // through getEnabledJobs (the SQL read every wake path performs).
+    it('does not spin at full capacity: wakes are bounded to the retry period', async () => {
+      const capped = new SchedulerTimer(store, nowFn, { maxConcurrentRuns: 2 })
+      timers.push(capped)
+
+      const handler = vi.fn().mockImplementation(() => new Promise<RunOutcome>(() => {}))
+      capped.setHandler(handler)
+
+      // 3 due jobs, cap 2: job-2 stays stranded past-due.
+      for (let i = 0; i < 3; i++) {
+        store.insertJob(makeJob({ id: `spin-${i}`, nextRunAtMs: currentTime }))
+      }
+
+      const spy = vi.spyOn(store, 'getEnabledJobs')
+      capped.start()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(handler).toHaveBeenCalledTimes(2)
+      const baseline = spy.mock.calls.length
+
+      // Steady state: no wake for just under the 500ms retry period.
+      await vi.advanceTimersByTimeAsync(499)
+      expect(spy.mock.calls.length).toBe(baseline)
+
+      // The retry wake fires at 500ms (tick read + post-tick re-arm read).
+      await vi.advanceTimersByTimeAsync(1)
+      expect(spy.mock.calls.length).toBe(baseline + 2)
+      expect(handler).toHaveBeenCalledTimes(2)
+
+      // Upper bound: across seconds of sustained full capacity the read rate
+      // stays O(1) per retry period -- the pre-fix spin did thousands per
+      // second. Loose enough to survive future tuning of the constant.
+      const before = spy.mock.calls.length
+      await vi.advanceTimersByTimeAsync(60_000)
+      const reads = spy.mock.calls.length - before
+      expect(reads).toBeLessThanOrEqual(400)
+    })
+
     it('honors the concurrency cap injected through initScheduler deps', async () => {
       // The bootstrap call site must pass maxConcurrentRuns through
       // SchedulerDeps into the timer; an engine-default-only gate would be

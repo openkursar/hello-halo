@@ -35,6 +35,16 @@ import type {
 const MAX_TIMER_DELAY_MS = 60_000
 
 /**
+ * Retry delay when a job is past due but all concurrency slots are taken.
+ * This is a fallback, not the main pickup path: slots are refilled by the
+ * dispatch closure (executeJob's .finally -> startNext) the instant one
+ * frees, so the timer only needs to cover jobs that become due while at
+ * full capacity. Without it, armTimer would compute a 0ms delay for such
+ * stranded jobs and spin the timer (issue #340).
+ */
+const FULL_CAPACITY_RETRY_MS = 500
+
+/**
  * Interval for the independent stuck-job cleanup pass. Kept separate from the
  * tick loop so a hung handler can never starve crash recovery: the tick
  * dispatches jobs and the cleanup pass clears stale markers on its own clock.
@@ -212,7 +222,13 @@ export class SchedulerTimer {
     }
 
     const now = this.nowFn()
-    const delay = Math.max(0, nextWakeMs - now)
+    let delay = Math.max(0, nextWakeMs - now)
+    if (nextWakeMs <= now && this.activeRuns >= this.maxConcurrentRuns) {
+      // Past-due jobs exist but every slot is taken; they will be picked up
+      // by the dispatch closure when a slot frees. Retry periodically as a
+      // bounded-latency fallback instead of spinning on a 0ms delay (#340).
+      delay = FULL_CAPACITY_RETRY_MS
+    }
     // Clamp to MAX_TIMER_DELAY_MS for recovery from clock jumps
     const clampedDelay = Math.min(delay, MAX_TIMER_DELAY_MS)
 
