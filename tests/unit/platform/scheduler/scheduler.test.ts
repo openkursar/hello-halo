@@ -16,6 +16,7 @@ import type { DatabaseManager } from '../../../../src/main/platform/store/types'
 import { parseEveryString, computeNextRunEvery, computeNextRun, computeNextRunCron } from '../../../../src/main/platform/scheduler/schedule'
 import { SchedulerStore } from '../../../../src/main/platform/scheduler/store'
 import { SchedulerTimer } from '../../../../src/main/platform/scheduler/timer'
+import { initScheduler, resetSchedulerForTest } from '../../../../src/main/platform/scheduler/index'
 import type { SchedulerJob, Schedule, RunOutcome } from '../../../../src/main/platform/scheduler/types'
 
 // ============================================================================
@@ -903,6 +904,42 @@ describe('SchedulerTimer', () => {
 
       releases['job-3'][0]()
       await vi.advanceTimersByTimeAsync(0)
+    })
+
+    it('honors the concurrency cap injected through initScheduler deps', async () => {
+      // The bootstrap call site must pass maxConcurrentRuns through
+      // SchedulerDeps into the timer; an engine-default-only gate would be
+      // vacuous. This pins the wiring by observing dispatch behavior with a
+      // non-default cap (1) that only the injection path can produce.
+      const service = await initScheduler({ db: manager, maxConcurrentRuns: 1 })
+      const injectedTimer = timers.find(t => t !== timer)
+      // initScheduler constructs its own timer; track it for afterEach cleanup.
+      if (injectedTimer && !timers.includes(injectedTimer)) timers.push(injectedTimer)
+
+      const releases: Array<() => void> = []
+      service.onJobDue(() =>
+        new Promise<RunOutcome>(resolve => {
+          releases.push(() => resolve('useful'))
+        })
+      )
+
+      for (let i = 0; i < 2; i++) {
+        store.insertJob(makeJob({ id: `dep-job-${i}`, nextRunAtMs: currentTime }))
+      }
+
+      service.start()
+      await vi.advanceTimersByTimeAsync(0)
+
+      // Cap 1: the second job stays queued until the first settles.
+      expect(releases).toHaveLength(1)
+      releases[0]()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(releases).toHaveLength(2)
+      releases[1]()
+
+      service.stop()
+      // Reset the module singleton so other tests get a fresh instance.
+      await resetSchedulerForTest()
     })
   })
 })

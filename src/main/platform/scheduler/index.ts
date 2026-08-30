@@ -69,6 +69,13 @@ let serviceInstance: SchedulerService | null = null
 
 export interface SchedulerDeps {
   db: DatabaseManager
+  /**
+   * Cap on concurrently executing jobs (dispatch-layer limit). The runtime
+   * execution layer enforces its own Semaphore on top of this. Required from
+   * real bootstrap call sites so the cap is an explicit product decision,
+   * not an engine default silently in effect.
+   */
+  maxConcurrentRuns?: number
 }
 
 /**
@@ -77,7 +84,8 @@ export interface SchedulerDeps {
  * Creates the persistence layer, timer engine, and returns the
  * SchedulerService interface. Must be called after `initStore()`.
  *
- * @param deps - Dependencies. Currently only `db` (DatabaseManager).
+ * @param deps - Dependencies: `db` (DatabaseManager) and the explicit
+ *   dispatch concurrency cap `maxConcurrentRuns`.
  * @returns The SchedulerService instance.
  */
 export async function initScheduler(deps: SchedulerDeps): Promise<SchedulerService> {
@@ -88,7 +96,9 @@ export async function initScheduler(deps: SchedulerDeps): Promise<SchedulerServi
   const start = performance.now()
 
   const store = new SchedulerStore(deps.db)
-  const timer = new SchedulerTimer(store)
+  const timer = new SchedulerTimer(store, undefined, {
+    maxConcurrentRuns: deps.maxConcurrentRuns
+  })
 
   const service: SchedulerService = {
     // -- Job CRUD --
@@ -310,5 +320,16 @@ export async function shutdownScheduler(): Promise<void> {
     serviceInstance.stop()
     serviceInstance = null
     console.log('[Scheduler] Shutdown complete')
+  }
+}
+
+/**
+ * Test-only singleton reset. Call after an initScheduler-based test so the
+ * module-level serviceInstance does not leak into other tests.
+ */
+export async function resetSchedulerForTest(): Promise<void> {
+  if (serviceInstance) {
+    serviceInstance.stop()
+    serviceInstance = null
   }
 }
