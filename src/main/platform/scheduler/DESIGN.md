@@ -182,7 +182,7 @@ src/main/platform/scheduler/
 ## 4. Public API (contract with apps/runtime)
 
 ```typescript
-export function initScheduler(deps: { db: DatabaseManager }): Promise<SchedulerService>
+export function initScheduler(deps: { db: DatabaseManager; maxConcurrentRuns?: number }): Promise<SchedulerService>
 export function shutdownScheduler(): Promise<void>
 
 interface SchedulerService {
