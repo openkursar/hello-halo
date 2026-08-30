@@ -469,7 +469,7 @@ describe('WecomStreamSession.maybePushProgress', () => {
     }
   })
 
-  it('pushes the accumulated answer text once available', async () => {
+  it('pushes the new answer increment once available (no full-snapshot duplication)', async () => {
     vi.useFakeTimers()
     try {
       const t0 = new Date('2026-01-01T00:00:00Z').getTime()
@@ -493,10 +493,71 @@ describe('WecomStreamSession.maybePushProgress', () => {
 
       const answerPush = pushes.find(p => (p.args[1] as string).includes('partial answer'))
       expect(answerPush).toBeDefined()
-      // Answer pushes carry only the answer text — no status marker, no
+      // Answer pushes carry only the answer increment — no status marker, no
       // thinking content.
       expect((answerPush!.args[1] as string)).not.toContain('任务进行中')
       expect((answerPush!.args[1] as string)).not.toContain('reading')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('consecutive progress pushes never overlap — each carries only the new increment', async () => {
+    // Regression (#225): intermediate pushes used to re-send the full
+    // cumulative answer, so the chat history showed every window's content
+    // again. Each push must be exactly the delta since the previous one.
+    vi.useFakeTimers()
+    try {
+      const t0 = new Date('2026-01-01T00:00:00Z').getTime()
+      vi.setSystemTime(t0)
+
+      const transport = makeTransport()
+      const { logger } = makeLogger()
+      const session = makeSession(transport, logger)
+
+      session.markStreamBroken('test')
+
+      await session.update({ type: 'text_delta', text: 'Alpha. ' })
+      vi.setSystemTime(t0 + 2 * 60_000 + 1000)
+      await session.update({ type: 'text_delta', text: 'Beta. ' })
+      vi.setSystemTime(t0 + 4 * 60_000 + 1000)
+      await session.update({ type: 'text_delta', text: 'Gamma.' })
+
+      const pushes = transport.calls.filter(p => p.method === 'queuePush')
+      // Window 1: 'Alpha. ' / Window 2: 'Beta. ' / Window 3: 'Gamma.'
+      expect(pushes).toHaveLength(3)
+      expect(pushes[0].args[1]).toBe('Alpha. ')
+      expect(pushes[1].args[1]).toBe('Beta. ')
+      expect(pushes[2].args[1]).toBe('Gamma.')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a lost intermediate push does not affect final completeness', async () => {
+    // Even if every intermediate push is dropped (queuePush false), finish()
+    // re-delivers the authoritative full text.
+    vi.useFakeTimers()
+    try {
+      const t0 = new Date('2026-01-01T00:00:00Z').getTime()
+      vi.setSystemTime(t0)
+
+      const transport = makeTransport({ nextPush: false })
+      const { logger } = makeLogger()
+      const session = makeSession(transport, logger)
+
+      session.markStreamBroken('test')
+
+      await session.update({ type: 'text_delta', text: 'part one. ' })
+      vi.setSystemTime(t0 + 2 * 60_000 + 1000)
+      await session.update({ type: 'text_delta', text: 'part two.' })
+
+      transport.nextPush = true
+      await session.finish('part one. part two.')
+
+      const pushes = transport.calls.filter(p => p.method === 'queuePush')
+      const finalPush = pushes[pushes.length - 1]
+      expect(finalPush.args[1]).toBe('part one. part two.')
     } finally {
       vi.useRealTimers()
     }
@@ -540,6 +601,62 @@ describe('WecomStreamSession.maybePushProgress', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('delivers a >20480B final answer as ordered labeled segments, not push_failed', async () => {
+    // (#225) The server caps one push at 20480B. finish() re-delivers the
+    // SDK-authoritative full text — that text overwrites the streamed
+    // accumulation, so the final push path never uses incremental offsets;
+    // oversized answers must be byte-segmented with `(i/n)` labels so the
+    // complete content arrives instead of an oversized rejection.
+    const transport = makeTransport()
+    const { logger } = makeLogger()
+    const session = makeSession(transport, logger)
+
+    session.markStreamBroken('test')
+
+    // 45 KB of ASCII: 3 segments at ~20KB budget each.
+    const finalText = Array.from({ length: 45000 }, (_, i) =>
+      String.fromCharCode(97 + (i % 26)),
+    ).join('')
+    await session.finish(finalText)
+
+    const pushes = transport.calls.filter(p => p.method === 'queuePush')
+    expect(pushes).toHaveLength(3)
+
+    const bodies: string[] = []
+    for (let i = 0; i < pushes.length; i++) {
+      const text = pushes[i].args[1] as string
+      expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(20000)
+      expect(text.startsWith(`(${i + 1}/3)\n\n`)).toBe(true)
+      bodies.push(text.slice(`(${i + 1}/3)\n\n`.length))
+    }
+
+    // No overlap, no loss: concatenated segment bodies equal the original text.
+    expect(bodies.join('')).toBe(finalText)
+  })
+
+  it('splits segments on UTF-8 character boundaries when the final answer is oversized', async () => {
+    // Multi-byte content must never be cut mid-sequence — a segment boundary
+    // walking into a UTF-8 continuation byte would corrupt that character.
+    const transport = makeTransport()
+    const { logger } = makeLogger()
+    const session = makeSession(transport, logger)
+
+    session.markStreamBroken('test')
+
+    // 'é' is 2 bytes; with 10001 chars the boundary lands inside a sequence.
+    const finalText = 'é'.repeat(10001)
+    await session.finish(finalText)
+
+    const pushes = transport.calls.filter(p => p.method === 'queuePush')
+    expect(pushes.length).toBe(2)
+
+    const bodies = pushes.map(
+      (p, i) => (p.args[1] as string).slice(`(${i + 1}/2)\n\n`.length),
+    )
+    // Reassembly is byte-faithful: no character corrupted by the split.
+    expect(bodies.join('')).toBe(finalText)
   })
 
   it('increments progressPushesSent counter on each push', async () => {

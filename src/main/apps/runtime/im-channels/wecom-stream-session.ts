@@ -49,6 +49,9 @@ const STREAM_TRANSITION_NOTICE =
 const STREAM_MAX_CONTENT_BYTES = 20000
 /** Soft byte budget for push messages; overflow keeps the tail, not the head. */
 const PUSH_MAX_CONTENT_BYTES = 20000
+/** Bytes set aside for the `(i/n)` label so a labeled segment never exceeds
+ * the push budget (label worst case ~10B; 16 covers any realistic count). */
+const PUSH_SEGMENT_LABEL_RESERVE = 16
 /** Chinese user-facing marker replacing the truncated head of a push. */
 const PUSH_TRUNCATION_HEAD =
   '_(回答过长已截断，仅保留末尾部分)_\n\n'
@@ -251,6 +254,13 @@ export class WecomStreamSession implements StreamingHandle {
 
   // Push-mode progress throttle
   private lastProgressPushAt = 0
+  /**
+   * Character offset into the sanitized answer already covered by an
+   * intermediate push. maybePushProgress sends only `answer.slice(offset)` so
+   * consecutive pushes never overlap (each used to re-send the full
+   * cumulative snapshot, duplicating content in the chat history).
+   */
+  private lastPushedAnswerLength = 0
 
   // Lifecycle counters — surfaced in the terminal summary log
   private streamPacketsSent = 0
@@ -377,25 +387,13 @@ export class WecomStreamSession implements StreamingHandle {
       } else {
         // Server-side rejected or transport-level failure — fall back to push.
         this.markStreamBroken(`finish frame failed (result=${result})`)
-        const ok = await this.init.transport.queuePush(
-          this.init.chatId,
-          this.answerText,
-          this.init.chatType,
-          `stream:${this.init.streamId}`,
-          this.init.trace,
-        )
+        const ok = await this.pushFinalAnswer()
         this.finalPushSent = ok
         deliveredVia = ok ? 'push' : 'push_failed'
       }
     } else {
       // Stream channel already gone — push the final answer (survives WS bounce).
-      const ok = await this.init.transport.queuePush(
-        this.init.chatId,
-        this.answerText,
-        this.init.chatType,
-        `stream:${this.init.streamId}`,
-        this.init.trace,
-      )
+      const ok = await this.pushFinalAnswer()
       this.finalPushSent = ok
       deliveredVia = ok ? 'push' : 'push_failed'
     }
@@ -634,19 +632,25 @@ export class WecomStreamSession implements StreamingHandle {
     }
   }
 
-  /** Push throttled snapshot while in push mode. The answer text is the
-   * payload users actually wait for; when none has streamed yet only the
-   * bare in-progress status goes out. */
+  /**
+   * Push throttled increment while in push mode. Only the answer text past
+   * `lastPushedAnswerLength` goes out, so each push is pure new content — a
+   * lost mid push never affects final completeness (finish() re-delivers the
+   * authoritative full text). While no answer text has streamed yet, only the
+   * bare in-progress status goes out.
+   */
   private async maybePushProgress(): Promise<void> {
     const now = Date.now()
     if (now - this.lastProgressPushAt < STREAM_PROGRESS_PUSH_INTERVAL_MS) return
 
     const answer = this.sanitizeAnswerForOutput()
-    if (answer.trim().length === 0 && this.progressLines.length === 0) return
+    const delta = answer.slice(this.lastPushedAnswerLength)
+    if (delta.trim().length === 0 && this.progressLines.length === 0) return
 
     this.lastProgressPushAt = now
-    const pushText = answer.trim().length > 0
-      ? this.truncatePushText(answer)
+    this.lastPushedAnswerLength = answer.length
+    const pushText = delta.trim().length > 0
+      ? this.truncatePushText(delta)
       : PUSH_STATUS_ONLY_TEXT
     this.progressPushesSent++
 
@@ -682,6 +686,53 @@ export class WecomStreamSession implements StreamingHandle {
       start++
     }
     return PUSH_TRUNCATION_HEAD + bytes.subarray(start).toString('utf8')
+  }
+
+  /**
+   * Push the final answer under the server's 20480B per-message cap. Short
+   * answers go out as one message; longer ones are split into ordered
+   * segments labeled `(1/n) … (n/n)`, each within the budget and cut only on
+   * UTF-8 character boundaries, so the complete answer is delivered instead
+   * of being rejected as oversized (#225).
+   */
+  private async pushFinalAnswer(): Promise<boolean> {
+    const text = this.sanitizeAnswerForOutput()
+    if (Buffer.byteLength(text, 'utf8') <= PUSH_MAX_CONTENT_BYTES) {
+      return this.init.transport.queuePush(
+        this.init.chatId,
+        text,
+        this.init.chatType,
+        `stream:${this.init.streamId}`,
+        this.init.trace,
+      )
+    }
+
+    const bytes = Buffer.from(text, 'utf8')
+    const segBudget = PUSH_MAX_CONTENT_BYTES - PUSH_SEGMENT_LABEL_RESERVE
+    const segments: string[] = []
+    let cursor = 0
+    while (cursor < bytes.length) {
+      let end = Math.min(cursor + segBudget, bytes.length)
+      while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) {
+        end++
+      }
+      segments.push(bytes.subarray(cursor, end).toString('utf8'))
+      cursor = end
+    }
+
+    let allOk = true
+    for (let i = 0; i < segments.length; i++) {
+      const label = `(${i + 1}/${segments.length})`
+      const ok = await this.init.transport.queuePush(
+        this.init.chatId,
+        `${label}\n\n${segments[i]}`,
+        this.init.chatType,
+        `stream:${this.init.streamId}`,
+        this.init.trace,
+      )
+      if (!ok) allOk = false
+    }
+    return allOk
   }
 
   private logTerminalSummary(
@@ -724,4 +775,5 @@ export const STREAM_TIMING_CONSTANTS = {
   STREAM_SAFETY_MARGIN_MS,
   STREAM_PROGRESS_PUSH_INTERVAL_MS,
   STREAM_MAX_CONTENT_BYTES,
+  PUSH_MAX_CONTENT_BYTES,
 } as const
