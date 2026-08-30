@@ -438,6 +438,15 @@ describe('executeRun — onRunStarted lifecycle hook', () => {
 })
 
 describe('executeRun — compaction provider routing (#121)', () => {
+  // Only Claude locks its OAuth tokens to first-party clients (api.anthropic.com
+  // 403s bare @anthropic-ai/sdk calls), so ONLY Claude OAuth takes the agent-SDK
+  // subprocess fork. Copilot/智谱 OAuth are safe on the raw SDK path because
+  // generateCompactionViaRawSdk → resolveCredentialsForSdk routes provider!=='anthropic'
+  // through the local OpenAI-compat router with an encoded BackendConfig — the
+  // exact same session-assembly path their normal chat turns use (session
+  // config / mcp-manager / codex options). Their endpoints (GitHub Copilot,
+  // open.bigmodel.cn) have no first-party lock.
+
   beforeEach(() => {
     vi.mocked(getApiCredentials).mockReset()
     vi.mocked(getApiCredentials).mockResolvedValue({
@@ -450,9 +459,10 @@ describe('executeRun — compaction provider routing (#121)', () => {
     anthropicCreateMock.mockReset()
   })
 
-  it('routes OAuth providers through a one-shot agent SDK query', async () => {
+  it('routes Claude OAuth through a one-shot agent SDK query', async () => {
     vi.mocked(getApiCredentials).mockResolvedValue({
       provider: 'oauth',
+      oauthProvider: 'claude',
       apiKey: '',
       baseUrl: '',
       model: 'claude-oauth-model',
@@ -517,7 +527,10 @@ describe('executeRun — compaction provider routing (#121)', () => {
   })
 
   it('falls back to the system summary when the agent SDK query yields nothing', async () => {
-    vi.mocked(getApiCredentials).mockResolvedValue({ provider: 'oauth' } as any)
+    vi.mocked(getApiCredentials).mockResolvedValue({
+      provider: 'oauth',
+      oauthProvider: 'claude',
+    } as any)
     vi.mocked(agentSdkQuery).mockImplementationOnce((() =>
       (async function* () {
         // Stream ends with no assistant text and no result.
@@ -535,4 +548,40 @@ describe('executeRun — compaction provider routing (#121)', () => {
     expect(agentSdkQuery).toHaveBeenCalledTimes(1)
     expect(memory.write.mock.calls[0][1].content).toContain('Compacted by system')
   })
+
+  it.each([
+    ['github-copilot', 'copilot-oauth-model'],
+    ['zhipu-coding-oauth', 'zhipu-oauth-model'],
+  ] as const)(
+    'keeps %s OAuth on the raw @anthropic-ai/sdk path (router, not subprocess)',
+    async (oauthProvider, model) => {
+      // Raw SDK here is NOT a bare upstream call: resolveCredentialsForSdk sees
+      // provider!=='anthropic' and routes through the local OpenAI-compat
+      // router (encoded BackendConfig) — the same path as normal chat turns.
+      anthropicCreateMock.mockResolvedValue({
+        content: [{ type: 'text', text: LLM_COMPACTED_SUMMARY }],
+      })
+
+      vi.mocked(getApiCredentials).mockResolvedValue({
+        provider: 'oauth',
+        oauthProvider,
+        apiKey: 'oauth-token',
+        baseUrl: 'https://api.test.com',
+        model,
+      } as any)
+
+      nextSession = new FakeSession({ script: [assistantReport()] })
+      const memory = makeCompactionMemory()
+      await executeRun({
+        app: makeApp(),
+        trigger: baseTrigger,
+        store: makeStore(),
+        memory,
+      })
+
+      expect(agentSdkQuery).not.toHaveBeenCalled()
+      expect(anthropicCreateMock).toHaveBeenCalledTimes(1)
+      expect(memory.write.mock.calls[0][1].content).toContain('## State | compacted via one-shot query')
+    },
+  )
 })

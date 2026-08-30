@@ -1044,13 +1044,19 @@ const COMPACTION_MAX_RETRIES = 2
 const COMPACTION_AGENT_SDK_TIMEOUT_MS = 120_000
 
 /**
- * Providers whose tokens Anthropic locks to first-party clients: bare
- * @anthropic-ai/sdk calls get 403 even with a valid token, so compaction must
- * go through the agent SDK's cli.js subprocess, which carries Anthropic's
- * request signing (#121).
+ * Only Claude locks its OAuth tokens to first-party clients (api.anthropic.com
+ * rejects bare @anthropic-ai/sdk calls with 403 even with a valid token), so
+ * only Claude OAuth compaction must go through the agent SDK's cli.js
+ * subprocess, which carries Anthropic's request signing. Copilot/智谱 OAuth
+ * ride the same local OpenAI-compat router as their normal chat turns
+ * (resolveCredentialsForSdk → encoded BackendConfig), which is not
+ * first-party-locked (#121).
  */
-function providerRequiresFirstPartyClient(provider: string): boolean {
-  return provider === 'oauth'
+function providerRequiresFirstPartyClient(
+  provider: string,
+  oauthProvider?: string,
+): boolean {
+  return provider === 'oauth' && oauthProvider === 'claude'
 }
 
 /**
@@ -1188,7 +1194,7 @@ async function generateCompactionSummary(
       ? await getApiCredentialsForSource(config, app.userOverrides.modelSourceId, app.userOverrides.modelId)
       : await getApiCredentials(config)
 
-    if (providerRequiresFirstPartyClient(credentials.provider)) {
+    if (providerRequiresFirstPartyClient(credentials.provider, credentials.oauthProvider)) {
       return await generateCompactionViaAgentSdk(content, appName, app, credentials, runTag)
     }
     return await generateCompactionViaRawSdk(content, appName, credentials, runTag)
