@@ -47,6 +47,8 @@ const STREAM_TRANSITION_NOTICE =
   '\n\n---\n_任务仍在进行中，后续进度会以新消息推送（企微协议限制单条流式消息最长 10 分钟）_'
 /** Soft byte budget for stream content (WeCom server hard cap = 20480). */
 const STREAM_MAX_CONTENT_BYTES = 20000
+/** Pushed when the turn is still running but no answer text has streamed yet. */
+const PUSH_STATUS_ONLY_TEXT = '_(任务进行中)_'
 
 // ============================================
 // Logger contract (mirrors WecomBotInstance's logEvent)
@@ -627,15 +629,18 @@ export class WecomStreamSession implements StreamingHandle {
     }
   }
 
-  /** Push throttled progress snapshot while in push mode. */
+  /** Push throttled snapshot while in push mode. The answer text is the
+   * payload users actually wait for; progress lines are never pushed —
+   * when no answer has streamed yet, only the bare in-progress status. */
   private async maybePushProgress(): Promise<void> {
     const now = Date.now()
     if (now - this.lastProgressPushAt < STREAM_PROGRESS_PUSH_INTERVAL_MS) return
-    if (this.progressLines.length === 0) return
+
+    const answer = this.sanitizeAnswerForOutput()
+    if (answer.trim().length === 0 && this.progressLines.length === 0) return
 
     this.lastProgressPushAt = now
-    const tail = this.progressLines.slice(-3).join('\n')
-    const pushText = `_(任务进行中)_\n\n${tail}`
+    const pushText = answer.trim().length > 0 ? answer : PUSH_STATUS_ONLY_TEXT
     this.progressPushesSent++
 
     this.logger('info', 'stream_progress_push', {

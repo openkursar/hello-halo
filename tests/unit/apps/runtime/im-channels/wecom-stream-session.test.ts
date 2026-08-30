@@ -430,7 +430,7 @@ describe('WecomStreamSession.maybePushProgress', () => {
     }
   })
 
-  it('formats push text with last 3 progress lines', async () => {
+  it('pushes only the bare status when no answer text has streamed yet', async () => {
     vi.useFakeTimers()
     try {
       const t0 = new Date('2026-01-01T00:00:00Z').getTime()
@@ -442,9 +442,7 @@ describe('WecomStreamSession.maybePushProgress', () => {
 
       session.markStreamBroken('test')
 
-      // Each update is throttled to one push per 2-minute interval, so all
-      // four progress lines accumulate first and only the final push (after
-      // advancing past the throttle) reflects the last-3-lines snapshot.
+      // Progress-only events: no text_delta, so answerText is still empty.
       await session.update({ type: 'tool_call', tool: 'Read', summary: 'first' })
       await session.update({ type: 'tool_call', tool: 'Edit', summary: 'second' })
       await session.update({ type: 'tool_call', tool: 'Write', summary: 'third' })
@@ -460,14 +458,45 @@ describe('WecomStreamSession.maybePushProgress', () => {
 
       const pushText = progressPushes[progressPushes.length - 1].args[1] as string
 
-      // Header prefix present.
-      expect(pushText).toContain('_(任务进行中)_')
-
-      // Only the last 3 of the 4 accumulated lines appear (slice(-3)).
+      // Bare status only — never the thinking/progress lines themselves.
+      expect(pushText).toBe('_(任务进行中)_')
       expect(pushText).not.toContain('first')
-      expect(pushText).toContain('second')
-      expect(pushText).toContain('third')
-      expect(pushText).toContain('fourth')
+      expect(pushText).not.toContain('second')
+      expect(pushText).not.toContain('third')
+      expect(pushText).not.toContain('fourth')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('pushes the accumulated answer text once available', async () => {
+    vi.useFakeTimers()
+    try {
+      const t0 = new Date('2026-01-01T00:00:00Z').getTime()
+      vi.setSystemTime(t0)
+
+      const transport = makeTransport()
+      const { logger } = makeLogger()
+      const session = makeSession(transport, logger)
+
+      session.markStreamBroken('test')
+
+      // Some tool activity first (progress-only, lands in the first window).
+      await session.update({ type: 'tool_call', tool: 'Read', summary: 'reading' })
+
+      // Answer text starts streaming after the first throttle window.
+      vi.setSystemTime(t0 + 2 * 60_000 + 1000)
+      await session.update({ type: 'text_delta', text: 'partial answer' })
+
+      const pushes = transport.calls.filter(p => p.method === 'queuePush')
+      expect(pushes.length).toBeGreaterThanOrEqual(2)
+
+      const answerPush = pushes.find(p => (p.args[1] as string).includes('partial answer'))
+      expect(answerPush).toBeDefined()
+      // Answer pushes carry only the answer text — no status marker, no
+      // thinking content.
+      expect((answerPush!.args[1] as string)).not.toContain('任务进行中')
+      expect((answerPush!.args[1] as string)).not.toContain('reading')
     } finally {
       vi.useRealTimers()
     }
@@ -553,7 +582,7 @@ describe('WecomStreamSession.maybePushProgress', () => {
     expect(sourceTag).toBe('stream:stream-test-1')
   })
 
-  it('handles tool_result events in progress lines', async () => {
+  it('handles tool_result events without leaking them into pushes', async () => {
     vi.useFakeTimers()
     try {
       const t0 = new Date('2026-01-01T00:00:00Z').getTime()
@@ -565,8 +594,6 @@ describe('WecomStreamSession.maybePushProgress', () => {
 
       session.markStreamBroken('test')
 
-      // The tool_call and its tool_result land in the same throttle window, so
-      // both accumulate before the post-throttle push renders them together.
       await session.update({ type: 'tool_call', tool: 'Read', summary: 'reading' })
       await session.update({ type: 'tool_result', tool: 'Read', summary: 'done', success: true })
 
@@ -580,8 +607,10 @@ describe('WecomStreamSession.maybePushProgress', () => {
       expect(progressPushes.length).toBeGreaterThanOrEqual(1)
 
       const pushText = progressPushes[progressPushes.length - 1].args[1] as string
-      expect(pushText).toContain('📖') // Read icon (tool_call)
-      expect(pushText).toContain('✅') // Success icon (tool_result)
+      // Tool activity never reaches the user-facing push payload.
+      expect(pushText).toBe('_(任务进行中)_')
+      expect(pushText).not.toContain('📖')
+      expect(pushText).not.toContain('✅')
     } finally {
       vi.useRealTimers()
     }
