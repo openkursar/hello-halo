@@ -19,6 +19,15 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// The raw compaction path dynamic-imports @anthropic-ai/sdk; mock it so the
+// API-key-path test can observe which client was (not) constructed.
+const anthropicCreateMock = vi.fn()
+vi.mock('@anthropic-ai/sdk', () => ({
+  default: class MockAnthropic {
+    messages = { create: anthropicCreateMock }
+  },
+}))
+
 // ── Agent SDK + electron-touching dependencies (mirrors runtime.test.ts) ──
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   unstable_v2_createSession: vi.fn(),
@@ -48,6 +57,7 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
     sdkModel: 'test-model',
     displayModel: 'Test Model',
   }),
+  getCleanUserEnv: vi.fn().mockReturnValue({}),
   buildBaseSdkOptions: vi.fn().mockReturnValue({
     model: 'test-model',
     cwd: '/tmp/test',
@@ -98,6 +108,7 @@ vi.mock('../../../../src/main/services/agent/session-manager', () => ({
 let nextSession: FakeSession
 vi.mock('../../../../src/main/services/agent/resolved-sdk', () => ({
   createSession: vi.fn(async () => nextSession),
+  query: vi.fn(),
 }))
 
 vi.mock('../../../../src/main/platform/memory/snapshot', () => ({
@@ -166,6 +177,8 @@ vi.mock('../../../../src/main/apps/runtime/prompt', () => ({
 
 import { executeRun } from '../../../../src/main/apps/runtime/execute'
 import { RunExecutionError } from '../../../../src/main/apps/runtime/errors'
+import { query as agentSdkQuery } from '../../../../src/main/services/agent/resolved-sdk'
+import { getApiCredentials } from '../../../../src/main/services/agent/helpers'
 
 // ============================================
 // Fakes
@@ -252,6 +265,27 @@ function systemInit(sessionId = 'cc-session-xyz'): SdkMessage {
 const baseTrigger = {
   type: 'schedule' as const,
   description: 'scheduled tick',
+}
+
+/** Compaction output shape that passes isValidCompaction. */
+const LLM_COMPACTED_SUMMARY =
+  '# now\n\n## State | compacted via one-shot query\n\n# History\n\n## 2026-08-30-1100 | compacted\n'
+
+/** Memory fake with needsCompaction=true so a successful run reaches the compaction fork. */
+function makeCompactionMemory() {
+  return {
+    getPromptInstructions: vi.fn().mockReturnValue(''),
+    saveSessionSummary: vi.fn().mockResolvedValue(undefined),
+    needsCompaction: vi.fn().mockResolvedValue(true),
+    read: vi.fn().mockResolvedValue(
+      '# now\n\n## State | large memory\n\n# History\n\n## 2026-08-29-0900 | older entry\n',
+    ),
+    compact: vi.fn().mockResolvedValue({
+      archived: 'memory/run/2026-08-30-1000-run.jsonl',
+      needsSummary: true,
+    }),
+    write: vi.fn().mockResolvedValue(undefined),
+  } as any
 }
 
 // ============================================
@@ -392,5 +426,105 @@ describe('executeRun — onRunStarted lifecycle hook', () => {
       }),
     ).resolves.toBeDefined()
     expect(onRunStarted).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('executeRun — compaction provider routing (#121)', () => {
+  beforeEach(() => {
+    vi.mocked(getApiCredentials).mockReset()
+    vi.mocked(getApiCredentials).mockResolvedValue({
+      baseUrl: 'https://api.test.com',
+      apiKey: 'test-key',
+      model: 'test-model',
+      provider: 'anthropic',
+    } as any)
+    vi.mocked(agentSdkQuery).mockReset()
+    anthropicCreateMock.mockReset()
+  })
+
+  it('routes OAuth providers through a one-shot agent SDK query', async () => {
+    vi.mocked(getApiCredentials).mockResolvedValue({
+      provider: 'oauth',
+      apiKey: '',
+      baseUrl: '',
+      model: 'claude-oauth-model',
+    } as any)
+    vi.mocked(agentSdkQuery).mockImplementationOnce((() =>
+      (async function* () {
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: LLM_COMPACTED_SUMMARY }] },
+        }
+        yield { type: 'result', result: LLM_COMPACTED_SUMMARY }
+      })()) as any)
+
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    const memory = makeCompactionMemory()
+    await executeRun({
+      app: makeApp(),
+      trigger: baseTrigger,
+      store: makeStore(),
+      memory,
+    })
+
+    // Fork taken: one-shot query, never the raw @anthropic-ai/sdk client.
+    expect(agentSdkQuery).toHaveBeenCalledTimes(1)
+    expect(anthropicCreateMock).not.toHaveBeenCalled()
+
+    const arg = vi.mocked(agentSdkQuery).mock.calls[0][0] as any
+    expect(arg.options.maxTurns).toBe(1)
+    expect(arg.options.model).toBe('test-model')
+    expect(arg.options.apiKey).toBe('test-key')
+    expect(arg.options.anthropicBaseUrl).toBe('https://api.test.com')
+    expect(arg.prompt).toContain('compacting the memory file')
+
+    // LLM summary written as the new memory.md, not the system fallback.
+    expect(memory.write).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        mode: 'replace',
+        content: expect.not.stringContaining('Compacted by system'),
+      }),
+    )
+    expect(memory.write.mock.calls[0][1].content).toContain('## State | compacted via one-shot query')
+  })
+
+  it('keeps API-key providers on the raw @anthropic-ai/sdk path', async () => {
+    anthropicCreateMock.mockResolvedValue({
+      content: [{ type: 'text', text: LLM_COMPACTED_SUMMARY }],
+    })
+
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    const memory = makeCompactionMemory()
+    await executeRun({
+      app: makeApp(),
+      trigger: baseTrigger,
+      store: makeStore(),
+      memory,
+    })
+
+    expect(agentSdkQuery).not.toHaveBeenCalled()
+    expect(anthropicCreateMock).toHaveBeenCalledTimes(1)
+    expect(memory.write.mock.calls[0][1].content).toContain('## State | compacted via one-shot query')
+  })
+
+  it('falls back to the system summary when the agent SDK query yields nothing', async () => {
+    vi.mocked(getApiCredentials).mockResolvedValue({ provider: 'oauth' } as any)
+    vi.mocked(agentSdkQuery).mockImplementationOnce((() =>
+      (async function* () {
+        // Stream ends with no assistant text and no result.
+      })()) as any)
+
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    const memory = makeCompactionMemory()
+    await executeRun({
+      app: makeApp(),
+      trigger: baseTrigger,
+      store: makeStore(),
+      memory,
+    })
+
+    expect(agentSdkQuery).toHaveBeenCalledTimes(1)
+    expect(memory.write.mock.calls[0][1].content).toContain('Compacted by system')
   })
 })
