@@ -329,7 +329,7 @@ describe('executeRun — completion branches', () => {
 
   it('maps a result.is_error message to outcome error', async () => {
     nextSession = new FakeSession({
-      script: [assistantReport(), { type: 'result', is_error: true }],
+      script: [assistantReport(), { type: 'result', is_error: true, result: 'model rate-limited' }],
     })
     const store = makeStore()
     const result = await executeRun({
@@ -339,9 +339,12 @@ describe('executeRun — completion branches', () => {
       memory: makeMemory(),
     })
     expect(result.outcome).toBe('error')
+    // The SDK result text flows into both the DB completion and the returned
+    // result, so downstream surfaces (updateLastRun, RunFinishedEvent) get it.
+    expect(result.errorMessage).toBe('model rate-limited')
     expect(store.completeRun).toHaveBeenCalledWith(
       result.runId,
-      expect.objectContaining({ status: 'error' }),
+      expect.objectContaining({ status: 'error', errorMessage: 'model rate-limited' }),
     )
   })
 
@@ -359,6 +362,11 @@ describe('executeRun — completion branches', () => {
     })
 
     expect(result.outcome).toBe('error')
+    // The no-report reason names the retry cap instead of degrading to a bare
+    // "failed" status — lastError surfaces this text to the app state UI.
+    expect(result.errorMessage).toBe(
+      'AI ended without reporting results after 10 auto-continue attempt(s)'
+    )
     // 1 initial stream + MAX_AUTO_CONTINUES (10) retries = 11 stream cycles.
     expect(nextSession.streamCalls).toBe(11)
     // A run_error activity entry is surfaced for the no-report case.
