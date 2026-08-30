@@ -98,6 +98,26 @@ function isClearCommand(body: string): boolean {
 }
 
 /**
+ * Leading @mention(s) in group bodies. WeCom (and similar IM platforms) deliver
+ * a group message to the bot only when the bot is mentioned, so any leading
+ * mention necessarily targets this bot — no identity matching needed. Mentions
+ * elsewhere in the body are kept: they can point at other members and carry
+ * semantic meaning for the model.
+ */
+const LEADING_GROUP_MENTION = /^(?:@\S+\s+)+/
+
+/**
+ * Strip leading @mention prefix from group bodies. Direct chats pass through
+ * unchanged (mention prefixes never occur there). Applied once here, before
+ * every downstream consumer (session preview, commands, identity injection,
+ * relay quote), so command matching survives "@bot /stop".
+ */
+function normalizeInboundBody(body: string, chatType: 'direct' | 'group'): string {
+  if (chatType !== 'group') return body
+  return body.replace(LEADING_GROUP_MENTION, '')
+}
+
+/**
  * Bilingual rejection message sent when a DM is blocked by replyScope policy.
  * Hardcoded because the backend does not have renderer i18n loaded.
  */
@@ -580,6 +600,11 @@ export async function dispatchInboundMessage(
 
   // Build isolated session key
   const conversationId = buildImSessionKey(app.id, msg.channel, msg.chatType, msg.chatId)
+
+  // Normalize the body once at the single funnel every channel passes through.
+  // Pre-built paths (supplement flush) short-circuit identity injection below
+  // but still rely on the body for commands and previews.
+  msg.body = normalizeInboundBody(msg.body, msg.chatType)
 
   // Register session in ImSessionRegistry (idempotent — updates lastActiveAt on repeat)
   const registry = getImSessionRegistry()
