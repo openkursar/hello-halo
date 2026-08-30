@@ -502,6 +502,46 @@ describe('WecomStreamSession.maybePushProgress', () => {
     }
   })
 
+  it('caps the pushed answer at the tail when it exceeds the push byte budget', async () => {
+    // A long-running task accumulates more answer text than a single WeCom
+    // push can carry (server cap 20480B). The push must keep the TAIL — the
+    // part the user has not seen in earlier pushes — plus a head marker, not
+    // silently exceed the cap and get rejected.
+    vi.useFakeTimers()
+    try {
+      const t0 = new Date('2026-01-01T00:00:00Z').getTime()
+      vi.setSystemTime(t0)
+
+      const transport = makeTransport()
+      const { logger } = makeLogger()
+      const session = makeSession(transport, logger)
+
+      session.markStreamBroken('test')
+
+      // First update opens the first throttle window.
+      await session.update({ type: 'text_delta', text: 'seed' })
+
+      // Next window: a single answer far past what one push may carry.
+      vi.setSystemTime(t0 + 2 * 60_000 + 1000)
+      const chunk = 'x'.repeat(30 * 1024)
+      await session.update({ type: 'text_delta', text: chunk })
+
+      const pushes = transport.calls.filter(p => p.method === 'queuePush')
+      expect(pushes.length).toBeGreaterThanOrEqual(2)
+      const pushText = pushes[pushes.length - 1].args[1] as string
+
+      expect(Buffer.byteLength(pushText, 'utf8')).toBeLessThanOrEqual(20000)
+      // Truncated from the head: a marker replaces it and the retained body
+      // is a suffix of the answer, so nothing at the tail is lost.
+      expect(pushText).toContain('已截断')
+      const body = pushText.slice(pushText.indexOf('\n\n') + 2)
+      expect(chunk.endsWith(body)).toBe(true)
+      expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(1024)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('increments progressPushesSent counter on each push', async () => {
     vi.useFakeTimers()
     try {

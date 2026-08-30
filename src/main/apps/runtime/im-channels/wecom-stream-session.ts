@@ -47,6 +47,11 @@ const STREAM_TRANSITION_NOTICE =
   '\n\n---\n_任务仍在进行中，后续进度会以新消息推送（企微协议限制单条流式消息最长 10 分钟）_'
 /** Soft byte budget for stream content (WeCom server hard cap = 20480). */
 const STREAM_MAX_CONTENT_BYTES = 20000
+/** Soft byte budget for push messages; overflow keeps the tail, not the head. */
+const PUSH_MAX_CONTENT_BYTES = 20000
+/** Chinese user-facing marker replacing the truncated head of a push. */
+const PUSH_TRUNCATION_HEAD =
+  '_(回答过长已截断，仅保留末尾部分)_\n\n'
 /** Pushed when the turn is still running but no answer text has streamed yet. */
 const PUSH_STATUS_ONLY_TEXT = '_(任务进行中)_'
 
@@ -630,8 +635,8 @@ export class WecomStreamSession implements StreamingHandle {
   }
 
   /** Push throttled snapshot while in push mode. The answer text is the
-   * payload users actually wait for; progress lines are never pushed —
-   * when no answer has streamed yet, only the bare in-progress status. */
+   * payload users actually wait for; when none has streamed yet only the
+   * bare in-progress status goes out. */
   private async maybePushProgress(): Promise<void> {
     const now = Date.now()
     if (now - this.lastProgressPushAt < STREAM_PROGRESS_PUSH_INTERVAL_MS) return
@@ -640,7 +645,9 @@ export class WecomStreamSession implements StreamingHandle {
     if (answer.trim().length === 0 && this.progressLines.length === 0) return
 
     this.lastProgressPushAt = now
-    const pushText = answer.trim().length > 0 ? answer : PUSH_STATUS_ONLY_TEXT
+    const pushText = answer.trim().length > 0
+      ? this.truncatePushText(answer)
+      : PUSH_STATUS_ONLY_TEXT
     this.progressPushesSent++
 
     this.logger('info', 'stream_progress_push', {
@@ -658,6 +665,23 @@ export class WecomStreamSession implements StreamingHandle {
       `stream:${this.init.streamId}`,
       this.init.trace,
     )
+  }
+
+  /**
+   * Cap a push at the byte budget, keeping the TAIL — in push mode the user
+   * has already seen the head in earlier pushes, and the tail is where new
+   * content lands. UTF-8 never splits a surrogate pair across byte
+   * boundaries, so walking to a char boundary keeps the slice valid.
+   */
+  private truncatePushText(text: string): string {
+    if (Buffer.byteLength(text, 'utf8') <= PUSH_MAX_CONTENT_BYTES) return text
+    const headBudget = PUSH_MAX_CONTENT_BYTES - Buffer.byteLength(PUSH_TRUNCATION_HEAD, 'utf8')
+    const bytes = Buffer.from(text, 'utf8')
+    let start = bytes.length - headBudget
+    while (start > 0 && (bytes[start] & 0xc0) === 0x80) {
+      start++
+    }
+    return PUSH_TRUNCATION_HEAD + bytes.subarray(start).toString('utf8')
   }
 
   private logTerminalSummary(
