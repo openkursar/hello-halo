@@ -57,7 +57,18 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
     sdkModel: 'test-model',
     displayModel: 'Test Model',
   }),
-  getCleanUserEnv: vi.fn().mockReturnValue({}),
+  // Faithful stand-in for the real env builder's auth-channel rule; the real
+  // invariants are pinned in tests/unit/services/agent/delegated-auth.test.ts.
+  buildSdkEnv: vi.fn((params: {
+    anthropicApiKey: string
+    anthropicBaseUrl: string
+    delegatedRoutingHeader?: string
+  }) => ({
+    ANTHROPIC_BASE_URL: params.anthropicBaseUrl,
+    ...(params.delegatedRoutingHeader
+      ? { ANTHROPIC_CUSTOM_HEADERS: params.delegatedRoutingHeader }
+      : { ANTHROPIC_API_KEY: params.anthropicApiKey }),
+  })),
   buildBaseSdkOptions: vi.fn().mockReturnValue({
     model: 'test-model',
     cwd: '/tmp/test',
@@ -175,10 +186,14 @@ vi.mock('../../../../src/main/apps/runtime/prompt', () => ({
   buildEscalationResumeMessage: vi.fn().mockReturnValue('ESCALATION RESUME'),
 }))
 
-import { executeRun } from '../../../../src/main/apps/runtime/execute'
+import {
+  executeRun,
+  providerRequiresFirstPartyClient
+} from '../../../../src/main/apps/runtime/execute'
 import { RunExecutionError } from '../../../../src/main/apps/runtime/errors'
 import { query as agentSdkQuery } from '../../../../src/main/services/agent/resolved-sdk'
 import { getApiCredentials } from '../../../../src/main/services/agent/helpers'
+import { resolveCredentialsForSdk } from '../../../../src/main/services/agent/sdk-config'
 
 // ============================================
 // Fakes
@@ -445,7 +460,9 @@ describe('executeRun — compaction provider routing (#121)', () => {
   // through the local OpenAI-compat router with an encoded BackendConfig — the
   // exact same session-assembly path their normal chat turns use (session
   // config / mcp-manager / codex options). Their endpoints (GitHub Copilot,
-  // open.bigmodel.cn) have no first-party lock.
+  // open.bigmodel.cn) have no first-party lock. Delegated sources join the
+  // Claude OAuth fork: they hold no key, so the CLI subprocess is their only
+  // credential carrier.
 
   beforeEach(() => {
     vi.mocked(getApiCredentials).mockReset()
@@ -455,6 +472,13 @@ describe('executeRun — compaction provider routing (#121)', () => {
       model: 'test-model',
       provider: 'anthropic',
     } as any)
+    vi.mocked(resolveCredentialsForSdk).mockReset()
+    vi.mocked(resolveCredentialsForSdk).mockResolvedValue({
+      anthropicBaseUrl: 'https://api.test.com',
+      anthropicApiKey: 'test-key',
+      sdkModel: 'test-model',
+      displayModel: 'Test Model',
+    })
     vi.mocked(agentSdkQuery).mockReset()
     anthropicCreateMock.mockReset()
   })
@@ -492,7 +516,9 @@ describe('executeRun — compaction provider routing (#121)', () => {
     const arg = vi.mocked(agentSdkQuery).mock.calls[0][0] as any
     expect(arg.options.maxTurns).toBe(1)
     expect(arg.options.model).toBe('test-model')
-    expect(arg.options.apiKey).toBe('test-key')
+    // Credentials ride in env (same as session assembly), not options.apiKey.
+    expect(arg.options.apiKey).toBeUndefined()
+    expect(arg.options.env.ANTHROPIC_API_KEY).toBe('test-key')
     expect(arg.options.anthropicBaseUrl).toBe('https://api.test.com')
     expect(arg.prompt).toContain('compacting the memory file')
 
@@ -504,6 +530,52 @@ describe('executeRun — compaction provider routing (#121)', () => {
         content: expect.not.stringContaining('Compacted by system'),
       }),
     )
+    expect(memory.write.mock.calls[0][1].content).toContain('## State | compacted via one-shot query')
+  })
+
+  it('routes delegated sources through the agent SDK query with the routing header', async () => {
+    vi.mocked(getApiCredentials).mockResolvedValue({
+      provider: 'oauth',
+      delegatedAuth: true,
+      apiKey: '',
+      baseUrl: '',
+      model: 'claude-cli-model',
+    } as any)
+    vi.mocked(resolveCredentialsForSdk).mockResolvedValue({
+      anthropicBaseUrl: 'http://127.0.0.1:60098',
+      anthropicApiKey: '',
+      sdkModel: 'test-model',
+      displayModel: 'Test Model',
+      delegatedRoutingHeader: 'x-halo-backend: encoded-config',
+    } as any)
+    vi.mocked(agentSdkQuery).mockImplementationOnce((() =>
+      (async function* () {
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: LLM_COMPACTED_SUMMARY }] },
+        }
+        yield { type: 'result', result: LLM_COMPACTED_SUMMARY }
+      })()) as any)
+
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    const memory = makeCompactionMemory()
+    await executeRun({
+      app: makeApp(),
+      trigger: baseTrigger,
+      store: makeStore(),
+      memory,
+    })
+
+    // Fork taken for delegated: never the keyless raw SDK client.
+    expect(agentSdkQuery).toHaveBeenCalledTimes(1)
+    expect(anthropicCreateMock).not.toHaveBeenCalled()
+
+    const arg = vi.mocked(agentSdkQuery).mock.calls[0][0] as any
+    // buildSdkEnv auth-channel rule (stubbed here; real invariants pinned in
+    // delegated-auth.test.ts): backend identity on the custom header, no API
+    // key near the subprocess.
+    expect(arg.options.env.ANTHROPIC_CUSTOM_HEADERS).toBe('x-halo-backend: encoded-config')
+    expect(arg.options.env.ANTHROPIC_API_KEY).toBeUndefined()
     expect(memory.write.mock.calls[0][1].content).toContain('## State | compacted via one-shot query')
   })
 
@@ -584,4 +656,18 @@ describe('executeRun — compaction provider routing (#121)', () => {
       expect(memory.write.mock.calls[0][1].content).toContain('## State | compacted via one-shot query')
     },
   )
+})
+
+describe('providerRequiresFirstPartyClient', () => {
+  it('sends delegated sources to the first-party bucket regardless of provider id', () => {
+    expect(providerRequiresFirstPartyClient('oauth', undefined, true)).toBe(true)
+    expect(providerRequiresFirstPartyClient('oauth', 'claude-cli', true)).toBe(true)
+  })
+
+  it('keeps the Claude OAuth lock and the raw-SDK default for the rest', () => {
+    expect(providerRequiresFirstPartyClient('oauth', 'claude')).toBe(true)
+    expect(providerRequiresFirstPartyClient('oauth', 'github-copilot')).toBe(false)
+    expect(providerRequiresFirstPartyClient('anthropic')).toBe(false)
+    expect(providerRequiresFirstPartyClient('openai')).toBe(false)
+  })
 })

@@ -40,7 +40,7 @@ import { truncateUtf16Safe } from './text-truncate'
 import { getImSessionRegistry } from './im-session-registry'
 import { autoSyncRunResult } from './im-auto-sync'
 import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getWorkingDir, getMcpServersForRequires } from '../../services/agent/helpers'
-import { resolveCredentialsForSdk, buildBaseSdkOptions, getCleanUserEnv } from '../../services/agent/sdk-config'
+import { resolveCredentialsForSdk, buildBaseSdkOptions, buildSdkEnv } from '../../services/agent/sdk-config'
 import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { getOrCreateV2Session } from '../../services/agent/session-manager'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
@@ -1051,12 +1051,18 @@ const COMPACTION_AGENT_SDK_TIMEOUT_MS = 120_000
  * ride the same local OpenAI-compat router as their normal chat turns
  * (resolveCredentialsForSdk → encoded BackendConfig), which is not
  * first-party-locked (#121).
+ *
+ * Delegated sources join the first-party bucket too: they hold no key at all,
+ * and the CLI subprocess is their only credential carrier — a raw SDK call
+ * would reach the router with an empty key and no routing header, fail, and
+ * silently fall back to the heuristic compaction summary.
  */
-function providerRequiresFirstPartyClient(
+export function providerRequiresFirstPartyClient(
   provider: string,
   oauthProvider?: string,
+  delegatedAuth?: boolean
 ): boolean {
-  return provider === 'oauth' && oauthProvider === 'claude'
+  return delegatedAuth || (provider === 'oauth' && oauthProvider === 'claude')
 }
 
 /**
@@ -1194,7 +1200,7 @@ async function generateCompactionSummary(
       ? await getApiCredentialsForSource(config, app.userOverrides.modelSourceId, app.userOverrides.modelId)
       : await getApiCredentials(config)
 
-    if (providerRequiresFirstPartyClient(credentials.provider, credentials.oauthProvider)) {
+    if (providerRequiresFirstPartyClient(credentials.provider, credentials.oauthProvider, credentials.delegatedAuth)) {
       return await generateCompactionViaAgentSdk(content, appName, app, credentials, runTag)
     }
     return await generateCompactionViaRawSdk(content, appName, credentials, runTag)
@@ -1233,24 +1239,22 @@ async function generateCompactionViaAgentSdk(
     const queryIterator = agentSdkQuery({
       prompt: buildCompactionPrompt(truncatedContent, appName),
       options: {
-        apiKey: resolved.anthropicApiKey,
         model: resolved.sdkModel,
         anthropicBaseUrl: resolved.anthropicBaseUrl,
         cwd: getWorkingDir(app.spaceId!),
         executable: getHeadlessElectronPath(),
         executableArgs: ['--no-warnings'],
-        env: {
-          ...getCleanUserEnv(),
-          ELECTRON_RUN_AS_NODE: '1',
-          ELECTRON_NO_ATTACH_CONSOLE: '1',
-          ANTHROPIC_API_KEY: resolved.anthropicApiKey,
-          ANTHROPIC_BASE_URL: resolved.anthropicBaseUrl,
-          NO_PROXY: 'localhost,127.0.0.1',
-          no_proxy: 'localhost,127.0.0.1',
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-          DISABLE_TELEMETRY: '1',
-          DISABLE_COST_WARNINGS: '1',
-        },
+        // Same env builder as regular sessions (buildBaseSdkOptions does the
+        // same): it routes delegated sources via ANTHROPIC_CUSTOM_HEADERS —
+        // never ANTHROPIC_API_KEY, which would override the CLI's own
+        // credential — and pins CLAUDE_CONFIG_DIR, where the delegated CLI
+        // looks up that credential.
+        env: buildSdkEnv({
+          anthropicApiKey: resolved.anthropicApiKey,
+          anthropicBaseUrl: resolved.anthropicBaseUrl,
+          delegatedRoutingHeader: resolved.delegatedRoutingHeader,
+          capabilities: resolved.capabilities,
+        }),
         permissionMode: 'bypassPermissions',
         abortController,
         maxTurns: 1,
