@@ -163,6 +163,13 @@ interface Conversation extends ConversationMeta {
    */
   modelSourceId?: string
   modelId?: string
+  /**
+   * Set when the user renamed the conversation. Suppresses the first-message
+   * auto-title in addMessage, so a rename survives even if it happens before
+   * the first user message. Absent on legacy data = auto-title still applies
+   * (same behavior as before the field existed).
+   */
+  titleCustomized?: boolean
 }
 
 // Thoughts file structure
@@ -811,9 +818,14 @@ export function updateConversation(
 
   const { conversation, filePath, conversationsDir } = result
 
+  // A title arriving through an update is a user rename — mark it so the
+  // first-message auto-title in addMessage never clobbers it afterwards.
+  const titleCustomized = 'title' in updates ? true : conversation.titleCustomized
+
   const updated: Conversation = {
     ...conversation,
     ...updates,
+    ...(titleCustomized ? { titleCustomized } : {}),
     updatedAt: new Date().toISOString()
   }
 
@@ -845,8 +857,13 @@ export function addMessage(spaceId: string, conversationId: string, message: Omi
   conversation.updatedAt = new Date().toISOString()
   conversation.messageCount = conversation.messages.length
 
-  // Auto-update title from first user message
-  if (conversation.messages.length === 1 && message.role === 'user') {
+  // Auto-update title from first user message, unless the user already named
+  // this conversation — their name wins even if it predates the first message.
+  if (
+    conversation.messages.length === 1 &&
+    message.role === 'user' &&
+    !conversation.titleCustomized
+  ) {
     conversation.title = message.content.slice(0, 50) + (message.content.length > 50 ? '...' : '')
   }
 

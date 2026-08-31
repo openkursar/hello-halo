@@ -121,8 +121,12 @@ async function initPlatformAndApps(): Promise<void> {
   platformDb = db
 
   // ── Phase 1: Platform services (parallel) ───────────────────────────────
+  // Dispatch-layer concurrency cap for the scheduler. The runtime execution
+  // layer applies its own Semaphore on top; this one bounds how many due jobs
+  // the timer may launch simultaneously.
+  const SCHEDULER_MAX_CONCURRENT_RUNS = 5
   const [scheduler, memory] = await Promise.all([
-    initScheduler({ db }),
+    initScheduler({ db, maxConcurrentRuns: SCHEDULER_MAX_CONCURRENT_RUNS }),
     initMemory(),
   ])
 

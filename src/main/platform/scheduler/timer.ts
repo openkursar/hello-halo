@@ -35,10 +35,34 @@ import type {
 const MAX_TIMER_DELAY_MS = 60_000
 
 /**
+ * Retry delay when a job is past due but all concurrency slots are taken.
+ * This is a fallback, not the main pickup path: slots are refilled by the
+ * dispatch closure (executeJob's .finally -> startNext) the instant one
+ * frees, so the timer only needs to cover jobs that become due while at
+ * full capacity. Without it, armTimer would compute a 0ms delay for such
+ * stranded jobs and spin the timer (issue #340).
+ */
+const FULL_CAPACITY_RETRY_MS = 500
+
+/**
+ * Interval for the independent stuck-job cleanup pass. Kept separate from the
+ * tick loop so a hung handler can never starve crash recovery: the tick
+ * dispatches jobs and the cleanup pass clears stale markers on its own clock.
+ */
+const STUCK_CLEANUP_INTERVAL_MS = 60_000
+
+/**
  * If a job's `runningAtMs` is older than this threshold, it is considered
  * stuck (process crashed during execution) and the marker is cleared.
  */
 const STUCK_JOB_THRESHOLD_MS = 2 * 60 * 60 * 1000 // 2 hours
+
+/**
+ * Default cap on concurrently executing jobs per tick dispatch. Bounds the
+ * blast radius of a due-job storm on the shared handler (which fronts
+ * provider rate limits); queued due jobs start as slots free up.
+ */
+const DEFAULT_MAX_CONCURRENT_RUNS = 5
 
 /**
  * Maximum consecutive errors before a job is auto-disabled.
@@ -87,16 +111,26 @@ export class SchedulerTimer {
   private store: SchedulerStore
   private handler: JobDueHandler | null = null
   private timerId: ReturnType<typeof setTimeout> | null = null
+  private cleanupIntervalId: ReturnType<typeof setInterval> | null = null
   private running = false  // Guard against concurrent tick execution
   private nowFn: () => number
+  private maxConcurrentRuns: number
+  private activeRuns = 0
 
   /**
    * @param store - The persistence layer for jobs and run logs.
    * @param nowFn - Function returning current epoch ms. Injectable for testing.
+   * @param options.maxConcurrentRuns - Cap on concurrently executing jobs.
+   *   Defaults to DEFAULT_MAX_CONCURRENT_RUNS. Injectable for testing.
    */
-  constructor(store: SchedulerStore, nowFn: () => number = () => Date.now()) {
+  constructor(
+    store: SchedulerStore,
+    nowFn: () => number = () => Date.now(),
+    options?: { maxConcurrentRuns?: number }
+  ) {
     this.store = store
     this.nowFn = nowFn
+    this.maxConcurrentRuns = Math.max(1, options?.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS)
   }
 
   /**
@@ -133,6 +167,13 @@ export class SchedulerTimer {
     // Step 4: Arm the timer
     this.armTimer()
 
+    // Step 5: Independent stuck-job cleanup pass. Not part of the tick loop:
+    // a hung handler must not delay crash recovery for unrelated jobs.
+    this.cleanupIntervalId = setInterval(() => {
+      this.cleanupStuckJobs(this.nowFn())
+    }, STUCK_CLEANUP_INTERVAL_MS)
+    this.cleanupIntervalId.unref?.()
+
     const enabledJobs = this.store.getEnabledJobs()
     console.log(
       `[Scheduler] Started with ${enabledJobs.length} enabled job(s). ` +
@@ -148,6 +189,10 @@ export class SchedulerTimer {
     if (this.timerId !== null) {
       clearTimeout(this.timerId)
       this.timerId = null
+    }
+    if (this.cleanupIntervalId !== null) {
+      clearInterval(this.cleanupIntervalId)
+      this.cleanupIntervalId = null
     }
     console.log('[Scheduler] Timer stopped')
   }
@@ -177,7 +222,13 @@ export class SchedulerTimer {
     }
 
     const now = this.nowFn()
-    const delay = Math.max(0, nextWakeMs - now)
+    let delay = Math.max(0, nextWakeMs - now)
+    if (nextWakeMs <= now && this.activeRuns >= this.maxConcurrentRuns) {
+      // Past-due jobs exist but every slot is taken; they will be picked up
+      // by the dispatch closure when a slot frees. Retry periodically as a
+      // bounded-latency fallback instead of spinning on a 0ms delay (#340).
+      delay = FULL_CAPACITY_RETRY_MS
+    }
     // Clamp to MAX_TIMER_DELAY_MS for recovery from clock jumps
     const clampedDelay = Math.min(delay, MAX_TIMER_DELAY_MS)
 
@@ -224,8 +275,8 @@ export class SchedulerTimer {
 
   private async onTick(): Promise<void> {
     if (this.running) {
-      // A previous tick is still executing. Re-arm and return.
-      // This prevents concurrent tick execution.
+      // A previous tick is still dispatching (its due-job scan is synchronous;
+      // handler executions are fire-tracked, not awaited). Re-arm shortly.
       this.timerId = setTimeout(() => {
         this.onTick().catch(err => {
           console.error('[Scheduler] Timer tick failed:', err)
@@ -238,9 +289,6 @@ export class SchedulerTimer {
     try {
       const now = this.nowFn()
 
-      // Clean up stuck jobs
-      this.cleanupStuckJobs(now)
-
       // Find due jobs
       const dueJobs = this.findDueJobs(now)
       console.debug(`[Scheduler] Tick: ${dueJobs.length} due, ${this.store.listJobs().filter(j => j.enabled).length} enabled total`)
@@ -251,15 +299,43 @@ export class SchedulerTimer {
         return
       }
 
-      // Execute due jobs sequentially
-      // (The consumer is responsible for global concurrency control)
-      for (const job of dueJobs) {
-        await this.executeJob(job, now)
-      }
+      // Dispatch due jobs with bounded concurrency: up to maxConcurrentRuns
+      // handlers execute at once, the rest stay queued (they remain due and
+      // are picked up as slots free up or by the next tick). executeJob sets
+      // the running marker synchronously before awaiting, which is the
+      // per-job re-entry lock findDueJobs filters on.
+      void this.dispatchDueJobs(dueJobs)
     } finally {
       this.running = false
       this.armTimer()
     }
+  }
+
+  /**
+   * Start as many due jobs as the concurrency cap allows. Freed slots are
+   * refilled immediately; jobs beyond the cap stay queued until a slot frees
+   * or a later tick re-dispatches them.
+   */
+  private dispatchDueJobs(queue: SchedulerJob[]): void {
+    const startNext = (): void => {
+      while (this.activeRuns < this.maxConcurrentRuns) {
+        const job = queue.shift()
+        if (!job) return
+        this.activeRuns++
+        void this.executeJob(job, this.nowFn())
+          .catch(err => {
+            console.error(`[Scheduler] Job "${job.name}" (${job.id}) dispatch failed:`, err)
+          })
+          .finally(() => {
+            this.activeRuns--
+            // A finished job computed a new nextRunAtMs; re-arm so the timer
+            // wakes for it even when no other future job was pending.
+            this.armTimer()
+            startNext()
+          })
+      }
+    }
+    startNext()
   }
 
   // -----------------------------------------------------------------------
@@ -438,9 +514,10 @@ export class SchedulerTimer {
       `[Scheduler] Found ${dueJobs.length} missed job(s) to catch up`
     )
 
-    // Execute missed jobs asynchronously but don't block startup.
-    // We run them as part of the first timer tick instead.
-    // The timer will fire immediately (delay = 0) if there are due jobs.
+    // Missed jobs are not executed here. They remain due (nextRunAtMs in the
+    // past, idle, no running marker), so the first tick -- armed with delay 0
+    // -- dispatches them, bounded by the same concurrency cap as any other
+    // due batch. One dispatch per job; no backlog storm.
   }
 
   /**
@@ -503,6 +580,8 @@ export class SchedulerTimer {
 
   /**
    * Clean up jobs that have been "running" for too long (process crash recovery).
+   * Runs on its own interval, independent of the tick loop, so a hung handler
+   * cannot starve recovery for unrelated jobs.
    */
   private cleanupStuckJobs(nowMs: number): void {
     const jobs = this.store.getEnabledJobs()
@@ -531,6 +610,9 @@ export class SchedulerTimer {
         }
 
         this.store.updateJob(job)
+        // The recovered job has a new nextRunAtMs; make sure the timer wakes
+        // for it (the tick may not fire again on its own).
+        this.armTimer()
       }
     }
   }

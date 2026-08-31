@@ -14,6 +14,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Wifi, QrCode, ArrowRight, Loader2, AlertCircle, X, Server, ArrowLeft } from 'lucide-react'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
+import { isAccessCodeSubmittable, normalizeAccessCodeInput } from '../../../shared/auth/password-policy'
 
 /** Info returned to the caller after a successful connection */
 export interface ServerAddedInfo {
@@ -453,10 +454,9 @@ export function ServerConnect({ onServerAdded, onBack }: ServerConnectProps) {
                 type="text"
                 value={accessCode}
                 onChange={(e) => {
-                  // Server accepts alphanumeric tokens 4-32 chars (auto PIN or custom password).
-                  // Strip everything else and cap at 32 to match server-side validation.
-                  const val = e.target.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 32)
-                  setAccessCode(val)
+                  // Shared policy: auto PINs contain printable ASCII specials, so
+                  // only whitespace is stripped — never characters.
+                  setAccessCode(normalizeAccessCodeInput(e.target.value))
                   setError(null)
                 }}
                 onKeyDown={(e) => handleKeyDown(e, handleAuth)}
@@ -476,7 +476,7 @@ export function ServerConnect({ onServerAdded, onBack }: ServerConnectProps) {
             {/* Login button */}
             <button
               onClick={handleAuth}
-              disabled={accessCode.length < 4 || isConnecting}
+              disabled={!isAccessCodeSubmittable(accessCode) || isConnecting}
               className="w-full py-3 rounded-lg bg-primary text-primary-foreground font-medium flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
             >
               {isConnecting ? (

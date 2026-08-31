@@ -97,6 +97,23 @@ describe('resolveReasoningEffortValue', () => {
     expect(resolveReasoningEffortValue(enabled(32_000), 'off', 'glm-5.1')).toBe('none')
   })
 
+  it('maps thinking-off to the lowest level for always-thinking models', () => {
+    // glm-5.3 family rejects disable values outright — 400 with
+    // "该模型始终思考，不支持关闭思考" — so "off" must land on low instead.
+    expect(resolveReasoningEffortValue(disabled, undefined, 'glm-5.3-flash')).toBe('low')
+    expect(resolveReasoningEffortValue(enabled(32_000), 'off', 'glm-5.3')).toBe('low')
+    expect(resolveReasoningEffortValue(undefined, undefined, 'glm-5.3-flash')).toBe('low')
+  })
+
+  it('clamps inferred levels to the always-thinking ladder', () => {
+    // Declared levels forward verbatim by design; only Halo-inferred ones
+    // clamp, so medium/xhigh land on levels glm-5.3 actually accepts.
+    expect(resolveReasoningEffortValue(enabled(5_120), undefined, 'glm-5.3')).toBe('low')
+    expect(resolveReasoningEffortValue(enabled(10_240), undefined, 'glm-5.3-flash')).toBe('high')
+    expect(resolveReasoningEffortValue(enabled(32_000), undefined, 'glm-5.3')).toBe('max')
+    expect(resolveReasoningEffortValue(adaptive, undefined, 'glm-5.3-flash')).toBe('high')
+  })
+
   it('keeps adaptive-mode requests thinking instead of collapsing them', () => {
     expect(resolveReasoningEffortValue(adaptive, undefined, 'some-proxy-model')).toBe('high')
     expect(resolveReasoningEffortValue(adaptive, 'max', 'deepseek-v4-pro')).toBe('max')

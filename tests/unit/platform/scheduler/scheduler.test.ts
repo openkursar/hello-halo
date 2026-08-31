@@ -16,6 +16,7 @@ import type { DatabaseManager } from '../../../../src/main/platform/store/types'
 import { parseEveryString, computeNextRunEvery, computeNextRun, computeNextRunCron } from '../../../../src/main/platform/scheduler/schedule'
 import { SchedulerStore } from '../../../../src/main/platform/scheduler/store'
 import { SchedulerTimer } from '../../../../src/main/platform/scheduler/timer'
+import { initScheduler, resetSchedulerForTest } from '../../../../src/main/platform/scheduler/index'
 import type { SchedulerJob, Schedule, RunOutcome } from '../../../../src/main/platform/scheduler/types'
 
 // ============================================================================
@@ -633,6 +634,7 @@ describe('SchedulerTimer', () => {
   let manager: DatabaseManager
   let store: SchedulerStore
   let timer: SchedulerTimer
+  const timers: SchedulerTimer[] = []
 
   let currentTime: number
   const nowFn = () => currentTime
@@ -642,11 +644,13 @@ describe('SchedulerTimer', () => {
     manager = createDatabaseManager(':memory:')
     store = new SchedulerStore(manager)
     timer = new SchedulerTimer(store, nowFn)
+    timers.push(timer)
     vi.useFakeTimers({ now: currentTime })
   })
 
   afterEach(() => {
-    timer.stop()
+    for (const t of timers) t.stop()
+    timers.length = 0
     manager.closeAll()
     vi.useRealTimers()
   })
@@ -750,5 +754,234 @@ describe('SchedulerTimer', () => {
     const updated = store.getJob(job.id)
     expect(updated!.runningAtMs).toBeUndefined()
     expect(updated!.status).toBe('idle')
+  })
+
+  // Issue #340: a hung handler must not starve other jobs or the tick loop.
+  describe('hung-handler isolation (issue #340)', () => {
+    it('runs another job while one handler hangs', async () => {
+      const release: Array<() => void> = []
+      const hang = vi.fn().mockImplementation(() => new Promise<RunOutcome>(resolve => {
+        release.push(() => resolve('useful'))
+      }))
+      const done = vi.fn().mockResolvedValue('useful' as RunOutcome)
+      timer.setHandler(async (job) => (job.id === 'hang-job' ? hang() : done(job)))
+
+      store.insertJob(makeJob({ id: 'hang-job', nextRunAtMs: currentTime }))
+      store.insertJob(makeJob({ id: 'ok-job', nextRunAtMs: currentTime }))
+
+      timer.start()
+      await vi.advanceTimersByTimeAsync(0)
+
+      // hang-job is stuck in the handler, but ok-job must still have completed.
+      expect(hang).toHaveBeenCalledOnce()
+      expect(done).toHaveBeenCalledOnce()
+      const okJob = store.getJob('ok-job')
+      expect(okJob!.runningAtMs).toBeUndefined()
+      expect(okJob!.lastRunAtMs).toBe(currentTime)
+
+      release[0]()
+      await vi.advanceTimersByTimeAsync(0)
+      const hangJob = store.getJob('hang-job')
+      expect(hangJob!.runningAtMs).toBeUndefined()
+    })
+
+    it('keeps ticking while a handler hangs: the next scheduled run fires on time', async () => {
+      const release: Array<() => void> = []
+      const hang = vi.fn().mockImplementation(() => new Promise<RunOutcome>(resolve => {
+        release.push(() => resolve('useful'))
+      }))
+      const done = vi.fn().mockResolvedValue('useful' as RunOutcome)
+      timer.setHandler(async (job) => (job.id === 'hang-job' ? hang() : done(job)))
+
+      store.insertJob(makeJob({ id: 'hang-job', nextRunAtMs: currentTime }))
+      store.insertJob(makeJob({
+        id: 'later-job',
+        schedule: { kind: 'every', every: '30m' },
+        anchorMs: currentTime,
+        nextRunAtMs: currentTime + 60_000,
+      }))
+
+      timer.start()
+      await vi.advanceTimersByTimeAsync(0)
+
+      currentTime += 60_000
+      await vi.advanceTimersByTimeAsync(60_000)
+
+      // later-job fired on its own schedule despite the hang.
+      expect(done).toHaveBeenCalledTimes(1)
+      expect(done).toHaveBeenCalledWith(expect.objectContaining({ id: 'later-job' }))
+
+      release[0]()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    it('clears a stuck running marker while a handler is hung (self-heal not starved)', async () => {
+      // A job whose handler hangs develops its OWN stale marker: it crossed
+      // the 2h threshold mid-hang. The old loop could never clear it — the
+      // hung tick held the running guard, so re-armed ticks returned early
+      // and in-tick cleanup never ran again.
+      const release: Array<() => void> = []
+      const hang = vi.fn().mockImplementation(() => new Promise<RunOutcome>(resolve => {
+        release.push(() => resolve('useful'))
+      }))
+      const done = vi.fn().mockResolvedValue('useful' as RunOutcome)
+      timer.setHandler(async (job) => (job.id === 'hang-job' ? hang() : done(job)))
+
+      store.insertJob(makeJob({ id: 'hang-job', nextRunAtMs: currentTime }))
+      store.insertJob(makeJob({
+        id: 'later-job',
+        schedule: { kind: 'every', every: '30m' },
+        anchorMs: currentTime,
+        nextRunAtMs: currentTime + 60_000,
+      }))
+
+      timer.start()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(hang).toHaveBeenCalledOnce()
+      expect(store.getJob('hang-job')!.runningAtMs).toBe(currentTime)
+
+      // The marker crosses the threshold while the handler is still hung.
+      currentTime += 2 * 60 * 60 * 1000 + 5_000
+      await vi.advanceTimersByTimeAsync(60_000)
+      await vi.advanceTimersByTimeAsync(60_000)
+
+      const cleared = store.getJob('hang-job')
+      expect(cleared!.runningAtMs).toBeUndefined()
+      expect(cleared!.status).toBe('idle')
+      // Recovery follows grid semantics (no catch-up storm): the job fires
+      // again at its next scheduled point, and the re-arm makes the timer
+      // actually wake for it.
+      expect(cleared!.nextRunAtMs).toBeGreaterThan(currentTime)
+      currentTime += 30 * 60_000
+      await vi.advanceTimersByTimeAsync(30 * 60_000)
+      expect(hang).toHaveBeenCalledTimes(2)
+
+      release[0]()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+  })
+
+  // Issue #340: the tick dispatches due jobs with bounded concurrency instead
+  // of a serial for-await, so one slow job cannot block the rest.
+  describe('bounded dispatch (issue #340)', () => {
+    it('runs due jobs concurrently up to the cap and queues the rest', async () => {
+      const capped = new SchedulerTimer(store, nowFn, { maxConcurrentRuns: 2 })
+      timers.push(capped)
+
+      const releases: Record<string, Array<() => void>> = {}
+      const handler = vi.fn().mockImplementation((job: SchedulerJob) => {
+        releases[job.id] = releases[job.id] || []
+        return new Promise<RunOutcome>(resolve => {
+          releases[job.id].push(() => resolve('useful'))
+        })
+      })
+      capped.setHandler(handler)
+
+      for (let i = 0; i < 3; i++) {
+        store.insertJob(makeJob({ id: `job-${i}`, nextRunAtMs: currentTime }))
+      }
+
+      capped.start()
+      await vi.advanceTimersByTimeAsync(0)
+
+      // Two slots occupied, the third job waits.
+      expect(handler).toHaveBeenCalledTimes(2)
+      expect(store.getJob('job-2')!.runningAtMs).toBeUndefined()
+
+      // Release one slot; the queued job starts.
+      releases['job-0'][0]()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(handler).toHaveBeenCalledTimes(3)
+
+      // A due job discovered by a LATER tick respects slots freed earlier.
+      store.insertJob(makeJob({ id: 'job-3', nextRunAtMs: currentTime }))
+      releases['job-1'][0]()
+      releases['job-2'][0]()
+      await vi.advanceTimersByTimeAsync(0)
+      currentTime += 60_000
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(handler).toHaveBeenCalledTimes(4)
+
+      releases['job-3'][0]()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // #340: with every slot taken and past-due jobs stranded, the pre-fix
+    // armTimer computed a 0ms delay and the recursive setTimeout spun.
+    // Fake clocks compress such a spin into a finite number of fires, so
+    // count-based assertions cannot see it -- this test pins the WAKE RHYTHM
+    // through getEnabledJobs (the SQL read every wake path performs).
+    it('does not spin at full capacity: wakes are bounded to the retry period', async () => {
+      const capped = new SchedulerTimer(store, nowFn, { maxConcurrentRuns: 2 })
+      timers.push(capped)
+
+      const handler = vi.fn().mockImplementation(() => new Promise<RunOutcome>(() => {}))
+      capped.setHandler(handler)
+
+      // 3 due jobs, cap 2: job-2 stays stranded past-due.
+      for (let i = 0; i < 3; i++) {
+        store.insertJob(makeJob({ id: `spin-${i}`, nextRunAtMs: currentTime }))
+      }
+
+      const spy = vi.spyOn(store, 'getEnabledJobs')
+      capped.start()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(handler).toHaveBeenCalledTimes(2)
+      const baseline = spy.mock.calls.length
+
+      // Steady state: no wake for just under the 500ms retry period.
+      await vi.advanceTimersByTimeAsync(499)
+      expect(spy.mock.calls.length).toBe(baseline)
+
+      // The retry wake fires at 500ms (tick read + post-tick re-arm read).
+      await vi.advanceTimersByTimeAsync(1)
+      expect(spy.mock.calls.length).toBe(baseline + 2)
+      expect(handler).toHaveBeenCalledTimes(2)
+
+      // Upper bound: across seconds of sustained full capacity the read rate
+      // stays O(1) per retry period -- the pre-fix spin did thousands per
+      // second. Loose enough to survive future tuning of the constant.
+      const before = spy.mock.calls.length
+      await vi.advanceTimersByTimeAsync(60_000)
+      const reads = spy.mock.calls.length - before
+      expect(reads).toBeLessThanOrEqual(400)
+    })
+
+    it('honors the concurrency cap injected through initScheduler deps', async () => {
+      // The bootstrap call site must pass maxConcurrentRuns through
+      // SchedulerDeps into the timer; an engine-default-only gate would be
+      // vacuous. This pins the wiring by observing dispatch behavior with a
+      // non-default cap (1) that only the injection path can produce.
+      const service = await initScheduler({ db: manager, maxConcurrentRuns: 1 })
+      const injectedTimer = timers.find(t => t !== timer)
+      // initScheduler constructs its own timer; track it for afterEach cleanup.
+      if (injectedTimer && !timers.includes(injectedTimer)) timers.push(injectedTimer)
+
+      const releases: Array<() => void> = []
+      service.onJobDue(() =>
+        new Promise<RunOutcome>(resolve => {
+          releases.push(() => resolve('useful'))
+        })
+      )
+
+      for (let i = 0; i < 2; i++) {
+        store.insertJob(makeJob({ id: `dep-job-${i}`, nextRunAtMs: currentTime }))
+      }
+
+      service.start()
+      await vi.advanceTimersByTimeAsync(0)
+
+      // Cap 1: the second job stays queued until the first settles.
+      expect(releases).toHaveLength(1)
+      releases[0]()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(releases).toHaveLength(2)
+      releases[1]()
+
+      service.stop()
+      // Reset the module singleton so other tests get a fresh instance.
+      await resetSchedulerForTest()
+    })
   })
 })

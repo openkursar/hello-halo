@@ -78,16 +78,21 @@ Each job has an implicit concurrency limit of 1 -- a job that is already
 with a non-null `runningAtMs` value.
 
 **Stuck job detection**: If `runningAtMs` is older than 2 hours (configurable),
-the marker is cleared on the next tick, treating it as a crash/timeout. The job
-is then eligible to run again.
+the marker is cleared, treating it as a crash/timeout. The job is then eligible
+to run again. The cleanup pass runs on its own 60s interval (`start()` /
+`stop()` lifecycle), NOT inside the tick loop -- a hung handler must never
+starve crash recovery for unrelated jobs (issue #340).
+
+**Bounded dispatch**: The tick dispatches due jobs with bounded concurrency
+(default 5, constructor-injectable via `maxConcurrentRuns`). Jobs beyond the
+cap stay queued and start as slots free up; the tick itself never awaits
+handler completion, so one slow/hung job cannot delay the next scheduled run
+of any other job.
 
 **Global concurrency**: The architecture doc mentions `maxConcurrentDaemonRuns`.
-This is the responsibility of `apps/runtime` (the consumer), not the scheduler.
-The scheduler fires `onJobDue` for every due job; the consumer can throttle
-via a semaphore before calling the handler.
-
-Decision rationale: The scheduler is a generic engine. Global concurrency across
-heterogeneous jobs is a policy decision that belongs in the consuming layer.
+The scheduler's dispatch cap bounds concurrency of the `onJobDue` handler it
+calls; a consumer needing a tighter policy can still throttle with its own
+semaphore before doing the real work.
 
 ### 2.5 Restart Recovery
 
@@ -177,7 +182,7 @@ src/main/platform/scheduler/
 ## 4. Public API (contract with apps/runtime)
 
 ```typescript
-export function initScheduler(deps: { db: DatabaseManager }): Promise<SchedulerService>
+export function initScheduler(deps: { db: DatabaseManager; maxConcurrentRuns?: number }): Promise<SchedulerService>
 export function shutdownScheduler(): Promise<void>
 
 interface SchedulerService {
