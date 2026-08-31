@@ -139,6 +139,35 @@ const requestyAdapter: ProviderAdapter = {
 }
 
 // ============================================================================
+// OrcaRouter Adapter
+// ============================================================================
+
+/**
+ * OrcaRouter supports app attribution headers
+ *
+ * OrcaRouter is an OpenAI-compatible gateway and, like OpenRouter, accepts
+ * optional app attribution headers so requests show up under the app name
+ * in gateway analytics instead of "Unknown".
+ *
+ * @see https://docs.orcarouter.ai
+ */
+const orcaRouterAdapter: ProviderAdapter = {
+  id: 'orcarouter',
+  name: 'OrcaRouter',
+
+  match(url: string): boolean {
+    return url.includes('orcarouter.ai')
+  },
+
+  getExtraHeaders(): Record<string, string> {
+    return {
+      'HTTP-Referer': 'https://hello-halo.cc/',
+      'X-Title': 'Halo'
+    }
+  }
+}
+
+// ============================================================================
 // DeepSeek Adapter
 // ============================================================================
 
@@ -260,6 +289,7 @@ const tencentAdapter: ProviderAdapter = {
 const adapters: readonly ProviderAdapter[] = [
   groqAdapter,
   openRouterAdapter,
+  orcaRouterAdapter,
   requestyAdapter,
   deepSeekAdapter,
   moonshotAdapter,
@@ -323,4 +353,4 @@ export function applyProviderAdapter(
 // Exports
 // ============================================================================
 
-export { groqAdapter, openRouterAdapter, deepSeekAdapter, moonshotAdapter, zhipuAdapter, tencentAdapter }
+export { groqAdapter, openRouterAdapter, orcaRouterAdapter, deepSeekAdapter, moonshotAdapter, zhipuAdapter, tencentAdapter }
