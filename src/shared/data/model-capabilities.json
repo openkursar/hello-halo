@@ -1,6 +1,25 @@
 {
   "version": 2,
-  "updatedAt": "2026-06-10",
+  "updatedAt": "2026-08-31",
+  "vision": {
+    "allowlist": [
+      "vision", "-vl", "pixtral", "paligemma", "cogvlm",
+      "glm-4v", "glm-ocr", "multimodal", "omni"
+    ],
+    "blocklist": [
+      "deepseek",
+      "glm-4", "glm-5", "chatglm",
+      "llama-2", "llama-3.1", "llama-3.3", "codellama",
+      "mixtral", "mistral-large", "mistral-medium", "mistral-nemo", "codestral",
+      "qwen-coder", "qwen2.5-coder", "qwen3-coder", "qwen-math", "qwq",
+      "phi-2", "phi-3-mini", "phi-3-small", "phi-3-medium", "phi-4-mini",
+      "gemma-2", "codegemma",
+      "nemotron",
+      "minimax", "abab",
+      "command-r", "dbrx", "olmo", "starcoder",
+      "solar", "mercury", "lfm", "palmyra", "internlm", "baichuan"
+    ]
+  },
   "patterns": {
     "claude-": {
       "displayName": "Claude",
@@ -31,7 +50,7 @@
       "provider": "anthropic",
       "contextWindow": 200000,
       "maxOutputTokens": 8192,
-      "vision": false,
+      "vision": true,
       "thinking": false
     },
     "claude-3-5-": {
@@ -127,7 +146,7 @@
       "provider": "zhipu",
       "contextWindow": 131072,
       "maxOutputTokens": 131072,
-      "vision": false,
+      "vision": true,
       "thinking": true
     },
     "glm-4": {
@@ -143,7 +162,7 @@
       "provider": "qwen",
       "contextWindow": 200000,
       "maxOutputTokens": 16384,
-      "vision": false,
+      "vision": true,
       "thinking": true
     },
     "qwen-": {
@@ -151,7 +170,7 @@
       "provider": "qwen",
       "contextWindow": 131072,
       "maxOutputTokens": 8192,
-      "vision": false,
+      "vision": true,
       "thinking": false
     },
     "deepseek-v4-": {
@@ -175,7 +194,7 @@
       "provider": "moonshot",
       "contextWindow": 131072,
       "maxOutputTokens": 32768,
-      "vision": false,
+      "vision": true,
       "thinking": true
     },
     "minimax-": {
@@ -191,7 +210,7 @@
       "provider": "xai",
       "contextWindow": 131072,
       "maxOutputTokens": 16384,
-      "vision": false,
+      "vision": true,
       "thinking": false
     },
     "mistral-": {
@@ -199,7 +218,7 @@
       "provider": "mistral",
       "contextWindow": 200000,
       "maxOutputTokens": 8192,
-      "vision": false,
+      "vision": true,
       "thinking": false
     },
     "llama-": {
@@ -207,7 +226,7 @@
       "provider": "meta",
       "contextWindow": 128000,
       "maxOutputTokens": 16384,
-      "vision": false,
+      "vision": true,
       "thinking": false
     }
   },
@@ -249,7 +268,7 @@
       "provider": "qwen",
       "contextWindow": 200000,
       "maxOutputTokens": 32768,
-      "vision": false,
+      "vision": true,
       "thinking": true
     },
     "qwen3-coder": {
@@ -265,7 +284,7 @@
       "provider": "qwen",
       "contextWindow": 200000,
       "maxOutputTokens": 16384,
-      "vision": false,
+      "vision": true,
       "thinking": true
     },
     "qwen3-72b": {
@@ -273,7 +292,7 @@
       "provider": "qwen",
       "contextWindow": 131072,
       "maxOutputTokens": 16384,
-      "vision": false,
+      "vision": true,
       "thinking": true
     },
     "qwen3-32b": {
@@ -281,7 +300,7 @@
       "provider": "qwen",
       "contextWindow": 131072,
       "maxOutputTokens": 16384,
-      "vision": false,
+      "vision": true,
       "thinking": true
     },
     "qwen3-14b": {
@@ -289,7 +308,7 @@
       "provider": "qwen",
       "contextWindow": 131072,
       "maxOutputTokens": 16384,
-      "vision": false,
+      "vision": true,
       "thinking": true
     },
     "qwen3-8b": {
@@ -297,7 +316,7 @@
       "provider": "qwen",
       "contextWindow": 131072,
       "maxOutputTokens": 16384,
-      "vision": false,
+      "vision": true,
       "thinking": true
     },
     "qwen-plus": {
@@ -305,7 +324,7 @@
       "provider": "qwen",
       "contextWindow": 131072,
       "maxOutputTokens": 16384,
-      "vision": false,
+      "vision": true,
       "thinking": false
     },
     "qwen-turbo": {
@@ -313,7 +332,7 @@
       "provider": "qwen",
       "contextWindow": 131072,
       "maxOutputTokens": 8192,
-      "vision": false,
+      "vision": true,
       "thinking": false
     },
     "qwen-max": {
@@ -321,7 +340,7 @@
       "provider": "qwen",
       "contextWindow": 32768,
       "maxOutputTokens": 8192,
-      "vision": false,
+      "vision": true,
       "thinking": false
     },
     "qwen-vl-plus": {
@@ -364,6 +383,14 @@
       "vision": false,
       "thinking": true
     },
+    "glm-5.3-flash": {
+      "displayName": "GLM-5.3 Flash",
+      "provider": "zhipu",
+      "contextWindow": 200000,
+      "maxOutputTokens": 131072,
+      "vision": true,
+      "thinking": true
+    },
     "glm-4.7": {
       "displayName": "GLM-4.7",
       "provider": "zhipu",
@@ -393,7 +420,7 @@
       "provider": "zhipu",
       "contextWindow": 131072,
       "maxOutputTokens": 131072,
-      "vision": false,
+      "vision": true,
       "thinking": true
     },
     "glm-z1": {
@@ -401,7 +428,7 @@
       "provider": "zhipu",
       "contextWindow": 131072,
       "maxOutputTokens": 131072,
-      "vision": false,
+      "vision": true,
       "thinking": true
     },
     "MiniMax-M2.7": {
@@ -441,7 +468,7 @@
       "provider": "moonshot",
       "contextWindow": 131072,
       "maxOutputTokens": 32768,
-      "vision": false,
+      "vision": true,
       "thinking": true
     },
     "claude-sonnet-5": {
@@ -681,7 +708,7 @@
       "provider": "xai",
       "contextWindow": 131072,
       "maxOutputTokens": 16384,
-      "vision": false,
+      "vision": true,
       "thinking": false
     },
     "grok-3-mini": {
@@ -689,7 +716,7 @@
       "provider": "xai",
       "contextWindow": 131072,
       "maxOutputTokens": 16384,
-      "vision": false,
+      "vision": true,
       "thinking": true
     },
     "mistral-large-latest": {
