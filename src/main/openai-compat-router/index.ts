@@ -83,6 +83,7 @@ export {
   // Config encoding
   encodeBackendConfig,
   decodeBackendConfig,
+  DELEGATED_ROUTING_HEADER,
   // URL helpers
   extractBaseUrl,
   normalizeApiUrl,

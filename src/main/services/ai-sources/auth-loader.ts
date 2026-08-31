@@ -175,7 +175,12 @@ export function loadAuthProviders(): LoadedProvider[] {
  */
 export function getEnabledAuthProviderConfigs(): AuthProviderConfig[] {
   const config = loadProductConfig()
-  return config.authProviders.filter(p => p.enabled)
+  return config.authProviders.filter(p => p.enabled && isPlatformSupported(p))
+}
+
+/** A provider without a `platforms` list runs everywhere. */
+function isPlatformSupported(provider: AuthProviderConfig): boolean {
+  return !provider.platforms || provider.platforms.includes(process.platform)
 }
 
 /**
