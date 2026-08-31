@@ -125,8 +125,8 @@ function StatusBoardMain({ detail, board, activeFlows, onSelectMember }: Omit<St
       )}
 
       {/* Fixed home for what members published this run — otherwise it only
-          exists as a chip on the tail of Recent Activity, which drops old
-          rows past 15. */}
+          exists as a chip on the tail of Recent Activity, which collapses
+          behind its "Load more". */}
       <SharedFiles artifacts={artifacts} />
 
       <RecentActivity
@@ -418,8 +418,12 @@ function ActorName({ appId, name, onSelect }: { appId: string | null; name: stri
   )
 }
 
+/** Rows shown before the feed is expanded, and how many each expansion adds. */
+const FEED_PAGE_SIZE = 20
+
 function RecentActivity({ tasks, findings, activities, roster, artifacts, kind, onSelectMember, title, summary, emptiness }: RecentActivityProps) {
   const { t } = useTranslation()
+  const [visibleCount, setVisibleCount] = useState(FEED_PAGE_SIZE)
 
   const { has: hasArtifact, open: openArtifact, status: artifactStatus } = artifacts
 
@@ -440,7 +444,6 @@ function RecentActivity({ tasks, findings, activities, roster, artifacts, kind, 
         .filter(a => a.kind !== 'reply')
         .map<ActivityRow>(act => ({ kind: 'act', ts: act.createdAt, act }))
         .sort((a, b) => b.ts - a.ts)
-        .slice(0, 15)
     }
     // A run recorded before the office kept this record: reconstruct what can be
     // reconstructed from the state that survived.
@@ -456,8 +459,10 @@ function RecentActivity({ tasks, findings, activities, roster, artifacts, kind, 
     for (const finding of findings) {
       rows.push({ kind: 'finding', ts: finding.createdAt, finding })
     }
-    return rows.sort((a, b) => b.ts - a.ts).slice(0, 15)
+    return rows.sort((a, b) => b.ts - a.ts)
   }, [activities, tasks, findings])
+
+  const visible = recent.slice(0, visibleCount)
 
   return (
     <div>
@@ -469,7 +474,7 @@ function RecentActivity({ tasks, findings, activities, roster, artifacts, kind, 
           {summary}
         </p>
       )}
-      {recent.length === 0 ? (
+      {visible.length === 0 ? (
         summary ? null : (
           <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground/70">
             {kind === 'conversation'
@@ -502,7 +507,7 @@ function RecentActivity({ tasks, findings, activities, roster, artifacts, kind, 
         )
       ) : (
         <ul className="flex flex-col gap-1">
-          {recent.map(row => {
+          {visible.map(row => {
             if (row.kind === 'act') {
               return (
                 <ActRow
@@ -588,6 +593,15 @@ function RecentActivity({ tasks, findings, activities, roster, artifacts, kind, 
             )
           })}
         </ul>
+      )}
+      {visibleCount < recent.length && (
+        <button
+          type="button"
+          onClick={() => setVisibleCount(c => c + FEED_PAGE_SIZE)}
+          className="mt-1 w-full rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
+        >
+          {t('Load more')}
+        </button>
       )}
     </div>
   )

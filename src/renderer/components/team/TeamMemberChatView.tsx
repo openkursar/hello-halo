@@ -139,7 +139,9 @@ export function TeamMemberChatView({
           panel; anywhere else the question never left that machine and the bar
           below carries it as state instead. */}
       {awaitsOurDecision(member) && (
-        <div className="shrink-0 border-t border-amber-500/30 bg-amber-500/5 p-3">
+        // Capped flex column: the panel inside splits into scrolling content
+        // and always-visible actions instead of growing past the viewport.
+        <div className="flex max-h-[40vh] min-w-0 shrink-0 flex-col border-t border-amber-500/30 bg-amber-500/5 p-3">
           <EscalationPanel member={member} />
         </div>
       )}

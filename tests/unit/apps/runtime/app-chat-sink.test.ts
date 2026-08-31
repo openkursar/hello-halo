@@ -76,6 +76,18 @@ function feedText(sink: ReturnType<typeof makeSink>, text: string) {
   sink.onRawMessage({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
 }
 
+/**
+ * Feed a thinking-only assistant envelope. Gateways behind OpenAI-compat
+ * engines can stream reasoning without ever emitting a text block; the answer
+ * then only exists in the terminal result. Pins the #299 shape.
+ */
+function feedThinkingOnly(sink: ReturnType<typeof makeSink>) {
+  sink.onRawMessage({
+    type: 'assistant',
+    message: { content: [{ type: 'thinking', thinking: 'reasoning about the request' }] },
+  })
+}
+
 // ============================================
 // Tests
 // ============================================
@@ -109,6 +121,29 @@ describe('app-chat sink turn ownership', () => {
     sink.onTurnComplete(makeResult())
 
     expect(pushToChat).toHaveBeenCalledWith('room-1', 'background task finished', 'group')
+  })
+
+  it('settles a thinking-only round from result.finalContent when no text block was streamed', async () => {
+    const sink = makeSink()
+    const onReply = vi.fn()
+
+    const round = sink.beginRound({ onReply })
+    sink.onTurnStart()
+    feedThinkingOnly(sink)
+    sink.onTurnComplete(makeResult({ finalContent: 'the real answer' }))
+
+    await expect(round.done).resolves.toBeUndefined()
+    expect(onReply).toHaveBeenCalledWith('the real answer')
+  })
+
+  it('pushes result.finalContent for a thinking-only autonomous turn', () => {
+    const sink = makeSink()
+
+    sink.onTurnStart()
+    feedThinkingOnly(sink)
+    sink.onTurnComplete(makeResult({ finalContent: 'background answer' }))
+
+    expect(pushToChat).toHaveBeenCalledWith('room-1', 'background answer', 'group')
   })
 
   it('does not let an autonomous turn answer the next message', async () => {

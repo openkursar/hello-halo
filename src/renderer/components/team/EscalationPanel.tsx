@@ -87,7 +87,7 @@ export function EscalationPanel({ member }: EscalationPanelProps) {
   }, [currentId, entries])
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex min-h-0 flex-col gap-3">
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
         <p className="min-w-0 flex-1 text-sm text-foreground">
@@ -115,7 +115,7 @@ export function EscalationPanel({ member }: EscalationPanelProps) {
       )}
 
       {current ? (
-        <div className="flex flex-col gap-1.5">
+        <div className="flex min-h-0 flex-1 flex-col gap-1.5">
           <p className="text-[11px] text-muted-foreground">
             {t('Asked {{when}}', { when: formatTimeAgo(current.ts, t) })}
           </p>

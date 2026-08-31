@@ -8,6 +8,9 @@ import type { MemoryService, MemoryCallerScope } from '../../../platform/memory'
 import { buildMemorySnapshot, type MemorySnapshot } from '../../../platform/memory/snapshot'
 import type { TriggerContext, AppRunResult } from '../types'
 import { truncateUtf16Safe } from '../text-truncate'
+import { query as agentSdkQuery } from '../../../services/agent/resolved-sdk'
+import { getHeadlessElectronPath, getWorkingDir } from '../../../services/agent/helpers'
+import { getCleanUserEnv } from '../../../services/agent/sdk-config'
 
 // ── Prepare (turn start) ──
 
@@ -53,6 +56,9 @@ export interface CompactionCredentials {
   anthropicApiKey?: string
   anthropicBaseUrl?: string
   sdkModel: string
+  /** Raw provider fields — decide which compaction path to take (#121 fork). */
+  provider?: string
+  oauthProvider?: string
 }
 
 /** Injected so this module stays decoupled from InstalledApp / config. */
@@ -188,6 +194,7 @@ export async function checkAndCompactMemory(
     const summary = await generateCompactionSummary(
       currentContent,
       appName,
+      scope,
       runTag,
       credsProvider
     )
@@ -243,92 +250,217 @@ function buildCompactionPrompt(content: string, appName: string): string {
   )
 }
 
+/** Abort timeout for the one-shot agent-SDK compaction query */
+const COMPACTION_AGENT_SDK_TIMEOUT_MS = 120_000
+
+/**
+ * Only Claude locks its OAuth tokens to first-party clients (api.anthropic.com
+ * rejects bare @anthropic-ai/sdk calls with 403 even with a valid token), so
+ * only Claude OAuth compaction must go through the agent SDK's cli.js
+ * subprocess, which carries Anthropic's request signing. Other OAuth providers
+ * ride the same local OpenAI-compat router as their normal chat turns, which
+ * is not first-party-locked (#121).
+ */
+function providerRequiresFirstPartyClient(provider?: string, oauthProvider?: string): boolean {
+  return provider === 'oauth' && oauthProvider === 'claude'
+}
+
+/**
+ * Provider fork (#121): first-party-locked providers (Claude OAuth) reject
+ * bare @anthropic-ai/sdk calls with 403, so they go through the agent SDK's
+ * cli.js subprocess instead. All other providers keep the raw SDK path.
+ */
 async function generateCompactionSummary(
   content: string,
   appName: string,
+  scope: MemoryCallerScope,
   runTag: string,
   credsProvider: CompactionCredentialsProvider
 ): Promise<string> {
   try {
-    const { default: Anthropic } = await import('@anthropic-ai/sdk')
     const resolved = await credsProvider()
-
-    const truncatedContent = content.length > MAX_COMPACTION_INPUT_LENGTH
-      ? truncateUtf16Safe(content, MAX_COMPACTION_INPUT_LENGTH) + '\n\n... (truncated)'
-      : content
-
-    const client = new Anthropic({
-      apiKey: resolved.anthropicApiKey,
-      baseURL: resolved.anthropicBaseUrl,
-    })
-
-    const prompt = buildCompactionPrompt(truncatedContent, appName)
-
-    const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
-      { role: 'user', content: prompt },
-    ]
-
-    let lastOutput = ''
-
-    for (let attempt = 0; attempt <= COMPACTION_MAX_RETRIES; attempt++) {
-      const response = await client.messages.create({
-        model: resolved.sdkModel,
-        max_tokens: COMPACTION_MAX_TOKENS,
-        messages,
-      })
-
-      const output = response.content
-        .filter((block: any) => block.type === 'text')
-        .map((block: any) => block.text)
-        .join('')
-
-      if (output.trim().length === 0) {
-        console.warn(`[Runtime][${runTag}] Compaction attempt ${attempt + 1}: LLM returned empty output`)
-        break
-      }
-
-      lastOutput = output
-
-      if (isValidCompaction(output)) {
-        if (attempt > 0) {
-          console.log(`[Runtime][${runTag}] Compaction succeeded on retry ${attempt}`)
-        }
-        return output
-      }
-
-      console.warn(
-        `[Runtime][${runTag}] Compaction attempt ${attempt + 1}: ` +
-        `output missing required headings (has # now: ${/^# now\s*$/m.test(output)}, ` +
-        `has # History: ${/^# History\s*$/m.test(output)})`
-      )
-
-      if (attempt < COMPACTION_MAX_RETRIES) {
-        messages.push({ role: 'assistant', content: output })
-        messages.push({
-          role: 'user',
-          content:
-            'Your output is missing the required H1 headings. ' +
-            'The compacted memory MUST contain both `# now` and `# History` as H1 headings ' +
-            '(lines starting with exactly `# now` and `# History`). ' +
-            'Please output the corrected compacted memory.',
-        })
-      }
+    if (providerRequiresFirstPartyClient(resolved.provider, resolved.oauthProvider)) {
+      return await generateCompactionViaAgentSdk(content, appName, scope, resolved, runTag)
     }
-
-    if (lastOutput.trim().length > 0) {
-      console.warn(
-        `[Runtime][${runTag}] Compaction retries exhausted, ` +
-        `keeping last LLM output (${lastOutput.length} chars)`
-      )
-      return lastOutput
-    }
-
-    console.warn(`[Runtime][${runTag}] LLM returned no usable output, using fallback`)
-    return buildFallbackCompactionSummary(content)
+    return await generateCompactionViaRawSdk(content, appName, resolved, runTag)
   } catch (err) {
     console.error(`[Runtime][${runTag}] LLM compaction failed, using fallback:`, err)
     return buildFallbackCompactionSummary(content)
   }
+}
+
+/**
+ * Compaction via a one-shot agent SDK query. The resolved router credentials
+ * are the same ones the run's main session uses, so the cli.js subprocess
+ * path carries whatever signing the provider requires.
+ *
+ * No retry loop here: the prompt already mandates the H1 structure, and on
+ * invalid or failed output the caller-facing semantics (fallback below)
+ * keep the archived memory recoverable.
+ */
+async function generateCompactionViaAgentSdk(
+  content: string,
+  appName: string,
+  scope: MemoryCallerScope,
+  resolved: CompactionCredentials,
+  runTag: string
+): Promise<string> {
+  const truncatedContent = content.length > MAX_COMPACTION_INPUT_LENGTH
+    ? truncateUtf16Safe(content, MAX_COMPACTION_INPUT_LENGTH) + '\n\n... (truncated)'
+    : content
+
+  const abortController = new AbortController()
+  const timeoutId = setTimeout(() => abortController.abort(), COMPACTION_AGENT_SDK_TIMEOUT_MS)
+
+  try {
+    const queryIterator = agentSdkQuery({
+      prompt: buildCompactionPrompt(truncatedContent, appName),
+      options: {
+        apiKey: resolved.anthropicApiKey,
+        model: resolved.sdkModel,
+        anthropicBaseUrl: resolved.anthropicBaseUrl,
+        cwd: getWorkingDir(scope.spaceId),
+        executable: getHeadlessElectronPath(),
+        executableArgs: ['--no-warnings'],
+        env: {
+          ...getCleanUserEnv(),
+          ELECTRON_RUN_AS_NODE: '1',
+          ELECTRON_NO_ATTACH_CONSOLE: '1',
+          ANTHROPIC_API_KEY: resolved.anthropicApiKey,
+          ANTHROPIC_BASE_URL: resolved.anthropicBaseUrl,
+          NO_PROXY: 'localhost,127.0.0.1',
+          no_proxy: 'localhost,127.0.0.1',
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+          DISABLE_TELEMETRY: '1',
+          DISABLE_COST_WARNINGS: '1',
+        },
+        permissionMode: 'bypassPermissions',
+        abortController,
+        maxTurns: 1,
+      } as any,
+    })
+
+    let lastOutput = ''
+    for await (const msg of queryIterator) {
+      if (msg.type === 'assistant') {
+        const blocks = (msg as any).message?.content
+        if (Array.isArray(blocks)) {
+          lastOutput += blocks
+            .filter((block: any) => block.type === 'text')
+            .map((block: any) => block.text)
+            .join('')
+        }
+      } else if (msg.type === 'result') {
+        const resultText = (msg as any).result ?? (msg as any).message?.result ?? ''
+        if (typeof resultText === 'string' && resultText.length > lastOutput.length) {
+          lastOutput = resultText
+        }
+        break
+      }
+    }
+
+    if (lastOutput.trim().length === 0) {
+      console.warn(`[Runtime][${runTag}] Agent-SDK compaction returned no usable output, using fallback`)
+      return buildFallbackCompactionSummary(content)
+    }
+    if (!isValidCompaction(lastOutput)) {
+      console.warn(
+        `[Runtime][${runTag}] Agent-SDK compaction output missing required headings, using fallback`
+      )
+      return buildFallbackCompactionSummary(content)
+    }
+    return lastOutput
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+/**
+ * Compaction via the raw @anthropic-ai/sdk client with format validation and
+ * multi-turn retry. Works with all non-locked provider types (Anthropic API
+ * key, OpenAI-compat). After all retries, keeps the last LLM output; only
+ * falls back to code-based extraction when nothing usable was produced.
+ */
+async function generateCompactionViaRawSdk(
+  content: string,
+  appName: string,
+  resolved: CompactionCredentials,
+  runTag: string
+): Promise<string> {
+  const { default: Anthropic } = await import('@anthropic-ai/sdk')
+
+  const truncatedContent = content.length > MAX_COMPACTION_INPUT_LENGTH
+    ? truncateUtf16Safe(content, MAX_COMPACTION_INPUT_LENGTH) + '\n\n... (truncated)'
+    : content
+
+  const client = new Anthropic({
+    apiKey: resolved.anthropicApiKey,
+    baseURL: resolved.anthropicBaseUrl,
+  })
+
+  const prompt = buildCompactionPrompt(truncatedContent, appName)
+
+  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
+    { role: 'user', content: prompt },
+  ]
+
+  let lastOutput = ''
+
+  for (let attempt = 0; attempt <= COMPACTION_MAX_RETRIES; attempt++) {
+    const response = await client.messages.create({
+      model: resolved.sdkModel,
+      max_tokens: COMPACTION_MAX_TOKENS,
+      messages,
+    })
+
+    const output = response.content
+      .filter((block: any) => block.type === 'text')
+      .map((block: any) => block.text)
+      .join('')
+
+    if (output.trim().length === 0) {
+      console.warn(`[Runtime][${runTag}] Compaction attempt ${attempt + 1}: LLM returned empty output`)
+      break
+    }
+
+    lastOutput = output
+
+    if (isValidCompaction(output)) {
+      if (attempt > 0) {
+        console.log(`[Runtime][${runTag}] Compaction succeeded on retry ${attempt}`)
+      }
+      return output
+    }
+
+    console.warn(
+      `[Runtime][${runTag}] Compaction attempt ${attempt + 1}: ` +
+      `output missing required headings (has # now: ${/^# now\s*$/m.test(output)}, ` +
+      `has # History: ${/^# History\s*$/m.test(output)})`
+    )
+
+    if (attempt < COMPACTION_MAX_RETRIES) {
+      messages.push({ role: 'assistant', content: output })
+      messages.push({
+        role: 'user',
+        content:
+          'Your output is missing the required H1 headings. ' +
+          'The compacted memory MUST contain both `# now` and `# History` as H1 headings ' +
+          '(lines starting with exactly `# now` and `# History`). ' +
+          'Please output the corrected compacted memory.',
+      })
+    }
+  }
+
+  if (lastOutput.trim().length > 0) {
+    console.warn(
+      `[Runtime][${runTag}] Compaction retries exhausted, ` +
+      `keeping last LLM output (${lastOutput.length} chars)`
+    )
+    return lastOutput
+  }
+
+  console.warn(`[Runtime][${runTag}] LLM returned no usable output, using fallback`)
+  return buildFallbackCompactionSummary(content)
 }
 
 /** Extracts `# now` (first 50 lines) and `# History` (last 10 entries) when LLM is unavailable. */

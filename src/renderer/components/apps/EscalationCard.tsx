@@ -85,40 +85,44 @@ export function EscalationCard({ entry, appId }: EscalationCardProps) {
   }
 
   return (
-    <div className="border border-orange-400/40 rounded-lg p-3 bg-orange-400/5 space-y-3">
-      {/* Question */}
-      <div className="flex items-start gap-2">
-        <MessageSquare className="w-3.5 h-3.5 text-orange-400 mt-0.5 flex-shrink-0" />
-        <p className="text-sm text-foreground">{question}</p>
-      </div>
-
-      {/* Detailed context data */}
-      {entry.content.dataPath ? (
-        <div className="rounded-md border border-border overflow-hidden">
-          <button
-            onClick={() => api.showArtifactInFolder(entry.content.dataPath!)}
-            title={entry.content.dataPath}
-            className="w-full flex items-center gap-1.5 px-2.5 py-1.5
-              bg-secondary/60 hover:bg-secondary text-muted-foreground
-              text-[11px] font-mono transition-colors group border-b border-border"
-          >
-            <FileText className="w-3 h-3 flex-shrink-0" />
-            <span className="truncate">{entry.content.dataPath.split('/').pop()}</span>
-            <FolderOpen className="w-3 h-3 flex-shrink-0 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
-          </button>
-          {data && (
-            <div className="p-3">
-              <MarkdownRenderer content={data} className="text-sm" />
-            </div>
-          )}
+    <div className="flex min-h-0 flex-1 flex-col gap-3 border border-orange-400/40 rounded-lg p-3 bg-orange-400/5">
+      {/* Question + data scroll when long, so the actions below stay in view.
+          break-words keeps unbroken tokens (constant names, URLs) inside the card. */}
+      <div className="min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto break-words">
+        {/* Question */}
+        <div className="flex items-start gap-2">
+          <MessageSquare className="w-3.5 h-3.5 text-orange-400 mt-0.5 flex-shrink-0" />
+          <p className="min-w-0 text-sm text-foreground">{question}</p>
         </div>
-      ) : data ? (
-        <MarkdownRenderer content={data} className="text-sm" />
-      ) : null}
+
+        {/* Detailed context data */}
+        {entry.content.dataPath ? (
+          <div className="rounded-md border border-border overflow-hidden">
+            <button
+              onClick={() => api.showArtifactInFolder(entry.content.dataPath!)}
+              title={entry.content.dataPath}
+              className="w-full flex items-center gap-1.5 px-2.5 py-1.5
+                bg-secondary/60 hover:bg-secondary text-muted-foreground
+                text-[11px] font-mono transition-colors group border-b border-border"
+            >
+              <FileText className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate">{entry.content.dataPath.split('/').pop()}</span>
+              <FolderOpen className="w-3 h-3 flex-shrink-0 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
+            </button>
+            {data && (
+              <div className="p-3">
+                <MarkdownRenderer content={data} className="text-sm" />
+              </div>
+            )}
+          </div>
+        ) : data ? (
+          <MarkdownRenderer content={data} className="text-sm" />
+        ) : null}
+      </div>
 
       {/* Preset choices */}
       {choices.length > 0 && !showTextInput && (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex shrink-0 flex-wrap gap-2">
           {choices.map(choice => (
             <button
               key={choice}
@@ -141,7 +145,7 @@ export function EscalationCard({ entry, appId }: EscalationCardProps) {
 
       {/* Free text input (no preset choices or after expanding) */}
       {(choices.length === 0 || showTextInput) && (
-        <div className="space-y-2">
+        <div className="shrink-0 space-y-2">
           <textarea
             value={customText}
             onChange={e => setCustomText(e.target.value)}

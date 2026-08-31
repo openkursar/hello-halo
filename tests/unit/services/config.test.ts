@@ -438,3 +438,71 @@ describe('non-destructive credential guard (issue #172 regression)', () => {
     expect(onDisk.api.apiKey).toBe(undecodable)
   })
 })
+
+describe('read-failure write guard (issue #216 regression)', () => {
+  beforeEach(() => {
+    setCredentialAtRestSafe(false)
+  })
+
+  // A config.json that cannot be parsed (crash mid-write on a non-atomic FS,
+  // disk corruption, manual edit gone wrong) is an error state, not an empty
+  // one. The old getConfig() catch returned DEFAULT_CONFIG, and saveConfig()
+  // merged onto that poisoned base — one unrelated save wiped imChannels,
+  // notificationChannels, spaces and every other key the defaults lack.
+  const pristineConfig = {
+    isFirstLaunch: false,
+    api: { provider: 'openai', apiKey: '', apiUrl: '' },
+    imChannels: { instances: [{ id: 'wecom-1', type: 'wecom-bot' }] },
+  }
+
+  function writeCorruptedConfig(): void {
+    fs.writeFileSync(getConfigPath(), `${JSON.stringify(pristineConfig).slice(0, -3)}{{corrupt`)
+  }
+
+  it('returns defaults from a corrupt file but never persists over it', () => {
+    writeCorruptedConfig()
+
+    // The process still gets a usable in-memory config (defaults)...
+    expect(getConfig().isFirstLaunch).toBe(true)
+    // ...but any save against that poisoned base must be blocked: the
+    // corrupt file keeps every user-owned key until a human repairs it.
+    saveConfig({ system: { autoLaunch: true } })
+
+    // The file is byte-identical to the corrupt original — no DEFAULT_CONFIG
+    // write-back, no partial "merge", nothing.
+    const raw = fs.readFileSync(getConfigPath(), 'utf-8')
+    expect(() => JSON.parse(raw)).toThrow()
+    // The user-owned key the defaults lack is still on disk, untouched.
+    expect(raw).toContain('wecom-1')
+  })
+
+  it('keeps blocking saves until the file parses again', () => {
+    writeCorruptedConfig()
+    getConfig() // latch the failure
+    saveConfig({ isFirstLaunch: false }) // blocked
+
+    // A second save while still corrupt is also blocked.
+    saveConfig({ isFirstLaunch: false })
+    const raw = fs.readFileSync(getConfigPath(), 'utf-8')
+    expect(() => JSON.parse(raw)).toThrow()
+
+    // Once the file is repaired, the guard clears and saves go through again.
+    fs.writeFileSync(getConfigPath(), JSON.stringify(pristineConfig))
+    saveConfig({ system: { autoLaunch: true } })
+
+    const onDisk = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'))
+    expect(onDisk.imChannels.instances[0].id).toBe('wecom-1')
+    expect(onDisk.system.autoLaunch).toBe(true)
+  })
+
+  it('still returns defaults and saves normally when no file exists', () => {
+    // First launch: file absent is the one legitimate DEFAULT_CONFIG path and
+    // must keep saving normally — the guard only covers existing-broken files.
+    expect(fs.existsSync(getConfigPath())).toBe(false)
+    expect(getConfig().isFirstLaunch).toBe(true)
+
+    saveConfig({ api: { apiKey: 'new-key' } })
+    const onDisk = JSON.parse(fs.readFileSync(getConfigPath(), 'utf-8'))
+    expect(onDisk.api.apiKey).toBe('new-key')
+  })
+})

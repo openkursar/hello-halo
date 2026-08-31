@@ -104,6 +104,8 @@ interface StreamResult {
   totalTokens: number
   /** Whether the AI reported an error via report_to_user */
   aiReportedError: boolean
+  /** Error text from the SDK result message when aiReportedError was set */
+  aiReportedErrorDetail?: string
   /** Whether the AI called report_to_user during this stream cycle */
   reportToolCalled: boolean
   /** V2 session ID captured from the system init message (for escalation recovery) */
@@ -564,6 +566,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         finalText: streamResult.finalText + nextResult.finalText,
         totalTokens: streamResult.totalTokens + nextResult.totalTokens,
         aiReportedError: nextResult.aiReportedError,
+        aiReportedErrorDetail: nextResult.aiReportedErrorDetail,
         reportToolCalled: nextResult.reportToolCalled,
         sessionId: streamResult.sessionId || nextResult.sessionId,
       }
@@ -583,6 +586,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     let finalStatus: RunStatus
     let outcome: AppRunResult['outcome']
+    let finalErrorMessage: string | undefined
 
     // Escalation is detected via the onEscalation callback closure,
     // which sets escalationEntryId when report_to_user(type="escalation") is called.
@@ -592,6 +596,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     } else if (streamResult.aiReportedError) {
       finalStatus = 'error'
       outcome = 'error'
+      finalErrorMessage = streamResult.aiReportedErrorDetail || 'AI reported an error without details'
     } else if (!streamResult.reportToolCalled && !isInteractiveFollowup) {
       // AI never called report_to_user despite auto-continue prompts —
       // treat as error so it shows in Activity Thread and counts toward
@@ -599,6 +604,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       // a conversational reply has nothing to report, so it completes normally.
       finalStatus = 'error'
       outcome = 'error'
+      finalErrorMessage = `AI ended without reporting results after ${autoContinueCount} auto-continue attempt(s)`
       console.warn(
         `[Runtime][${runTag}] AI never called report_to_user after ` +
         `${autoContinueCount} auto-continue attempt(s) — marking as error`
@@ -613,6 +619,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       finishedAt,
       durationMs,
       tokensUsed: streamResult.totalTokens || undefined,
+      errorMessage: finalErrorMessage,
     })
 
     // Persist the CC session id for every outcome. The subprocess is closed in
@@ -696,6 +703,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       durationMs,
       tokensUsed: streamResult.totalTokens || undefined,
       finalText: streamResult.finalText || undefined,
+      errorMessage: finalErrorMessage,
     }
   } catch (err) {
     const finishedAt = Date.now()
@@ -870,6 +878,9 @@ async function processStream(
         }
         if (m.is_error || m.error_during_execution) {
           result.aiReportedError = true
+          if (typeof m.result === 'string' && m.result.length > 0) {
+            result.aiReportedErrorDetail = m.result
+          }
           console.warn(`[Runtime][${runTag}] AI reported error in result message`)
         }
       }
@@ -914,6 +925,8 @@ function buildCompactionCreds(app: InstalledApp): CompactionCredentialsProvider 
       anthropicApiKey: resolved.anthropicApiKey,
       anthropicBaseUrl: resolved.anthropicBaseUrl,
       sdkModel: resolved.sdkModel,
+      provider: credentials.provider,
+      oauthProvider: credentials.oauthProvider,
     }
   }
 }

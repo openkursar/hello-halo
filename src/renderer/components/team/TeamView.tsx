@@ -116,10 +116,11 @@ export function TeamView({ detail }: TeamViewProps) {
             </div>
             <button
               onClick={() => setTab('settings')}
-              className="mt-0.5 line-clamp-2 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
+              className="mt-0.5 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
               title={t('Edit in Settings')}
             >
-              {team.goal}
+              {/* line-clamp is unreliable on <button> itself, so it sits on the span */}
+              <span className="line-clamp-2">{team.goal}</span>
             </button>
           </div>
 

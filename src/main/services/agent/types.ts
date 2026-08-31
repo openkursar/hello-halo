@@ -42,6 +42,14 @@ export interface ApiCredentials {
   model: string
   displayModel?: string
   provider: 'anthropic' | 'openai' | 'oauth'
+  /**
+   * Provider identity behind an OAuth source (source.provider, e.g. 'claude',
+   * 'github-copilot', 'zhipu-coding-oauth'). Only Claude locks its OAuth
+   * tokens to first-party clients — consumers needing that distinction (e.g.
+   * compaction's provider fork, #121) read this instead of guessing from
+   * `provider === 'oauth'`. undefined for non-OAuth credentials.
+   */
+  oauthProvider?: string
   /** Custom headers for OAuth providers */
   customHeaders?: Record<string, string>
   /** API type for the backend provider */

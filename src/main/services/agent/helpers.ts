@@ -244,9 +244,14 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
 
   // Determine provider type based on current source
   let provider: 'anthropic' | 'openai' | 'oauth'
+  let oauthProvider: string | undefined
 
   if (currentSource?.authType === 'oauth') {
     provider = 'oauth'
+    // Preserve the provider identity: only Claude OAuth tokens are
+    // first-party-locked, and consumers like compaction's provider fork (#121)
+    // need to distinguish it from Copilot/智谱 OAuth.
+    oauthProvider = currentSource.provider
     console.log(`[Agent] Using OAuth provider ${currentSource.provider} via AISourceManager`)
   } else if (currentSource?.provider === 'anthropic') {
     provider = 'anthropic'
@@ -275,6 +280,7 @@ export async function getApiCredentials(config: ReturnType<typeof getConfig>): P
     model: modelId,
     displayModel,
     provider,
+    oauthProvider,
     customHeaders: backendConfig.headers,
     apiType: backendConfig.apiType,
     forceStream: backendConfig.forceStream,
@@ -324,8 +330,10 @@ export async function getApiCredentialsForSource(
 
   // Determine provider type
   let provider: 'anthropic' | 'openai' | 'oauth'
+  let oauthProvider: string | undefined
   if (source.authType === 'oauth') {
     provider = 'oauth'
+    oauthProvider = source.provider
   } else if (source.provider === 'anthropic') {
     provider = 'anthropic'
   } else {
@@ -350,6 +358,7 @@ export async function getApiCredentialsForSource(
     model: effectiveModelId,
     displayModel,
     provider,
+    oauthProvider,
     customHeaders: backendConfig.headers,
     apiType: backendConfig.apiType,
     forceStream: backendConfig.forceStream,

@@ -218,6 +218,14 @@ const REASONING_EFFORT_PROFILES: ReadonlyArray<{
   pattern: string
   profile: ReasoningEffortProfile
 }> = [
+  // GLM-5.3 and GLM-5.3-FLASH always think: they reject every request that
+  // tries to stop them and only accept low/high/max, so a "thinking off"
+  // request must still send an effort, mapped to their lowest level.
+  // First match wins, so this must stay above the plain glm-5 entry.
+  {
+    pattern: 'glm-5.3',
+    profile: { levels: ['low', 'high', 'max'], disableValue: 'low' }
+  },
   // GLM-5 reasons by default, so omitting the field leaves it thinking; it
   // takes an explicit value to stop.
   { pattern: 'glm-5', profile: { levels: ['low', 'medium', 'high'], disableValue: 'none' } },

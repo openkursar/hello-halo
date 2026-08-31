@@ -757,7 +757,6 @@ async function runAppChatTurn(
     // what was actually said, not our preamble.
     const memoryPreamble = resumeSessionId ? '' : await buildSessionMemoryPreamble(memoryScope, appId)
 
-
     // With the non-vision fallback active, image blocks are replaced by the
     // injected attachment-paths block.
     const messageContent = buildMessageContent(
@@ -873,8 +872,9 @@ async function runAppChatTurn(
       anthropicApiKey: resolvedCreds.anthropicApiKey,
       anthropicBaseUrl: resolvedCreds.anthropicBaseUrl,
       sdkModel: resolvedCreds.sdkModel,
+      provider: credentials.provider,
+      oauthProvider: credentials.oauthProvider,
     }))
-
 
     // Flush buffered IM supplements (deferred so busy lock is released first)
     if (conversationId !== defaultConvId) {

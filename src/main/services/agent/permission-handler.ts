@@ -20,8 +20,11 @@ import { emitAgentEvent } from './events'
 // ============================================
 
 type PermissionResult = {
-  behavior: 'allow' | 'deny'
+  behavior: 'allow'
   updatedInput: Record<string, unknown>
+} | {
+  behavior: 'deny'
+  message: string
 }
 
 type CanUseToolFn = (
@@ -167,7 +170,10 @@ export function createCanUseTool(deps?: CanUseToolDeps): CanUseToolFn {
     // Non-interactive sessions cannot respond to interactive tools — deny immediately
     if (deps.nonInteractive) {
       console.log(`[PermissionHandler] AskUserQuestion denied: non-interactive session (conversationId=${deps.conversationId})`)
-      return { behavior: 'deny' as const, updatedInput: input }
+      return {
+        behavior: 'deny' as const,
+        message: 'Question skipped: this session runs unattended and cannot wait for an answer.'
+      }
     }
 
     const { spaceId, conversationId } = deps
@@ -215,7 +221,7 @@ export function createCanUseTool(deps?: CanUseToolDeps): CanUseToolFn {
       console.log(`[PermissionHandler] AskUserQuestion cancelled: id=${id}`, (error as Error).message)
       return {
         behavior: 'deny' as const,
-        updatedInput: input
+        message: 'Question cancelled: the user stopped generation before answering.'
       }
     }
   }
