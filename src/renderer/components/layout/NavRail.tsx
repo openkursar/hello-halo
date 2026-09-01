@@ -10,13 +10,15 @@
  * line up with it, and doubles as the macOS traffic-light clearance.
  */
 
-import type { ComponentType } from 'react'
+import type { ComponentType, CSSProperties } from 'react'
 import { MessageSquare, Bot, BookOpen, Store, Settings } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
 import { cn } from '../../lib/utils'
+import { isElectron } from '../../api/transport'
+import { usePlatform } from './Header'
 
 type Destination = 'chat' | 'digital-humans' | 'knowledge' | 'store'
 
@@ -56,12 +58,18 @@ function NavItem({ icon: Icon, label, active, onClick }: NavItemProps) {
   )
 }
 
+// Traffic-light DIP clearance the rail must cover at 100% zoom. Provisional —
+// the plan's own 52-56px cluster estimate plus the x:8 offset (main/index.ts)
+// can land as far as ~64px; not verified on a real device yet, see commit log.
+const MAC_CHROME_CLEARANCE_PX = 64
+
 export function NavRail() {
   const { t } = useTranslation()
   const view = useAppStore(s => s.view)
   const setView = useAppStore(s => s.setView)
   const currentSpace = useSpaceStore(s => s.currentSpace)
   const active = useActiveDestination()
+  const platform = usePlatform()
 
   const goChat = () => setView(currentSpace ? 'space' : 'home')
   const goDigitalHumans = () => {
@@ -75,8 +83,23 @@ export function NavRail() {
   const goKnowledge = () => setView('tlon')
   const goSettings = () => setView('settings')
 
+  // trafficLightPosition is native window-chrome DIP, invariant under
+  // webContents.setZoomFactor() (--display-scale). The rail's CSS width is
+  // NOT invariant — it shrinks in real DIP terms as the user zooms out. This
+  // floor keeps the rail's real-DIP width >= the clearance the lights need
+  // regardless of zoom. At the default 100% zoom this evaluates to
+  // MAC_CHROME_CLEARANCE_PX itself (64px, wider than the 56px w-14 base) —
+  // every mac user sees a 64px rail until display-scale reaches ~1.14
+  // (64/56), above which w-14 wins back and the rail settles at 56px.
+  const chromeInset: CSSProperties = isElectron() && platform.isMac
+    ? { minWidth: `calc(${MAC_CHROME_CLEARANCE_PX}px / var(--display-scale, 1))` }
+    : {}
+
   return (
-    <div className="hidden sm:flex flex-col items-center w-14 h-full flex-shrink-0 bg-card border-r border-border">
+    <div
+      style={chromeInset}
+      className="hidden sm:flex flex-col items-center w-14 h-full flex-shrink-0 bg-card border-r border-border"
+    >
       {/* Aligns with the per-page Header row; also clears macOS traffic lights. */}
       <div className="w-full h-10 flex-shrink-0 drag-region" />
 

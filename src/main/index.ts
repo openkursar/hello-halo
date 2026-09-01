@@ -401,8 +401,10 @@ function createWindow(): void {
     // macOS: hiddenInset for traffic lights in content area
     // Windows/Linux: hidden + titleBarOverlay for native buttons overlay
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
-    // Fine-tuned to fit inside the 56px nav rail (traffic light cluster is
-    // ~52-56px wide) while staying vertically centered on the 40px header row
+    // Reduces overlap with the 56px nav rail (traffic light cluster is
+    // ~52-56px wide); exact fit pending real-device verification. Vertically
+    // centered on the 40px header row. NavRail compensates for zoom via
+    // --display-scale — see MAC_CHROME_CLEARANCE_PX in NavRail.tsx.
     trafficLightPosition: isMac ? { x: 8, y: 11 } : undefined,
     // Windows/Linux: native window controls overlay in content area
     titleBarOverlay: !isMac ? {
