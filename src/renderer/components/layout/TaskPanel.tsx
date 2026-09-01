@@ -1,11 +1,10 @@
 /**
  * TaskPanel - rail-triggered task panel
  *
- * Replaces PulseSidebarSection's notification duty (that component and its
- * embed in ConversationList are gone). Same underlying data — PulseList,
- * same usePulseCount() the rail badge reads — just triggered from the rail
- * instead of buried inside the conversation sidebar, and visible from every
- * RAIL_VIEWS page instead of only when a space's sidebar happens to be open.
+ * Surfaces active tasks and unseen completions (PulseList, same
+ * usePulseCount() the rail badge reads) from a rail click, visible from
+ * every RAIL_VIEWS page instead of only when a space's sidebar happens to
+ * be open.
  *
  * Two presentations, matching how every other rail-adjacent surface in this
  * shell already splits: docked column on desktop (participates in layout,

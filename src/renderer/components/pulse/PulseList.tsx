@@ -2,7 +2,7 @@
  * PulseList - Shared presentational component for rendering pulse task items
  *
  * Pure list rendering of active tasks, unseen completions, and pinned conversations.
- * Used by PulseSidebarSection in the conversation list sidebar.
+ * Used by TaskPanel and SpacePage.
  *
  * Responsibilities:
  * - Renders grouped items (active first, then pinned idle)
