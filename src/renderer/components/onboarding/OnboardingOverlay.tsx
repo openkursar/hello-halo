@@ -79,7 +79,7 @@ export function OnboardingOverlay() {
   const Icon = config.icon
 
   // For view-artifact step, don't pass onTargetClick
-  // The ArtifactRail handles completion after opening the file
+  // The Files tab (ArtifactFilesTab) handles completion after opening the file
   const handleTargetClick = currentStep === 'view-artifact' ? undefined : nextStep
 
   return (

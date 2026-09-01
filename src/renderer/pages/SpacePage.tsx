@@ -30,12 +30,13 @@ import { SpaceSelector } from '../components/layout/SpaceSelector'
 import { ModelSelector } from '../components/layout/ModelSelector'
 import { QuotaPill } from '../components/layout/QuotaPill'
 import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
+import { HeaderMoreMenu } from '../components/layout/HeaderMoreMenu'
 import { ContentCanvas, TerminalCloseGuard } from '../components/canvas'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
 import { api } from '../api'
 import { useLayoutPreferences } from '../hooks/useLayoutPreferences'
 import { useWindowMaximize } from '../components/canvas/viewers/useWindowMaximize'
-import { X, MessageSquare } from 'lucide-react'
+import { X, MessageSquare, PanelRight } from 'lucide-react'
 import { SearchIcon } from '../components/search/SearchIcon'
 import { useSearchShortcuts } from '../hooks/useSearchShortcuts'
 import { useTranslation } from '../i18n'
@@ -373,6 +374,21 @@ export function SpacePage() {
             <div className="hidden sm:block">
               <ModelSelector />
             </div>
+
+            {/* Space resources rail toggle - desktop only; mobile reaches the
+                rail via its own floating trigger button */}
+            <div className="hidden sm:block">
+              <button
+                onClick={() => setRailExpanded(!effectiveRailExpanded)}
+                className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
+                title={effectiveRailExpanded ? t('Close space resources') : t('Open space resources')}
+                aria-pressed={effectiveRailExpanded}
+              >
+                <PanelRight className="w-5 h-5 text-muted-foreground" />
+              </button>
+            </div>
+
+            <HeaderMoreMenu />
 
             {/* Mobile: overflow menu collapses model/search/settings */}
             <MobileOverflowMenu onSearch={() => openSearch('space')} />
