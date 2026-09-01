@@ -388,7 +388,9 @@ export function SpacePage() {
               </button>
             </div>
 
-            <HeaderMoreMenu />
+            {/* Collapse the rail so the newly-opened browser tab gets its
+                width back — matches the old rail-footer button's effect. */}
+            <HeaderMoreMenu onBrowserOpened={() => setRailExpanded(false)} />
 
             {/* Mobile: overflow menu collapses model/search/settings */}
             <MobileOverflowMenu onSearch={() => openSearch('space')} />

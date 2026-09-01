@@ -2,7 +2,7 @@
  * HeaderMoreMenu - desktop entry point for opening the built-in browser or a
  * space terminal as a Canvas tab.
  *
- * P5: these used to be footer buttons on ArtifactRail. Same destination
+ * These used to be footer buttons on ArtifactRail. Same destination
  * (ContentCanvas, via useSpaceQuickActions), just moved out of the rail —
  * they're quick actions, not space resources, and this way they stay
  * reachable even when the rail is collapsed.
@@ -13,9 +13,15 @@ import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { useSpaceQuickActions } from '../../hooks/useSpaceQuickActions'
 import { useTranslation } from '../../i18n'
 
-export function HeaderMoreMenu() {
+interface HeaderMoreMenuProps {
+  /** Forwarded to useSpaceQuickActions — e.g. collapse the resource rail to
+   * hand the newly-opened browser tab its width back. */
+  onBrowserOpened?: () => void
+}
+
+export function HeaderMoreMenu({ onBrowserOpened }: HeaderMoreMenuProps) {
   const { t } = useTranslation()
-  const { canOpenBrowser, openBrowser, terminalAvailable, terminalCreating, openTerminal } = useSpaceQuickActions()
+  const { canOpenBrowser, openBrowser, terminalAvailable, terminalCreating, openTerminal } = useSpaceQuickActions({ onBrowserOpened })
 
   if (!canOpenBrowser && !terminalAvailable) return null
 
