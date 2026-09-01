@@ -847,6 +847,35 @@ export function registerAppHandlers(): void {
       }
     },
 
+    // ── app:list-available-skills-for-space ─────────────────────────────────
+    // Same disk-scan as above, keyed directly by spaceId — for surfaces (the
+    // space resource rail) that have a space, not a digital human, in hand.
+    appListAvailableSkillsForSpace: async (spaceId: string) => {
+      try {
+        return { success: true, data: listAvailableSkills(spaceId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:list-available-skills-for-space error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:list-effective-mcp-apps ──────────────────────────────────────────
+    // Space-scoped ∪ global MCP apps (space overrides global), for read-only
+    // display in the space resource rail — not the "declared dependencies of
+    // one digital human" list AppMcpDepsSection shows.
+    appListEffectiveMcpApps: async (spaceId: string) => {
+      try {
+        const r = requireManager()
+        if (!r.success) return r
+        return { success: true, data: r.manager.listEffectiveMcpApps(spaceId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:list-effective-mcp-apps error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
     // ── app:get-data-path ──────────────────────────────────────────────────
     appGetDataPath: async (appId: string) => {
       try {

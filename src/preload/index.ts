@@ -525,6 +525,8 @@ export interface HaloAPI {
   appOpenSkillFolder: (appId: string) => Promise<IpcResponse>
   appDeriveSkillCommandName: (name: string) => Promise<IpcResponse<string>>
   appListAvailableSkills: (appId: string) => Promise<IpcResponse<import('../shared/apps/app-types').AvailableSkill[]>>
+  appListAvailableSkillsForSpace: (spaceId: string) => Promise<IpcResponse<import('../shared/apps/app-types').AvailableSkill[]>>
+  appListEffectiveMcpApps: (spaceId: string) => Promise<IpcResponse<import('../shared/apps/app-types').InstalledApp[]>>
   appGetDataPath: (appId: string) => Promise<IpcResponse<{ path: string }>>
   appOpenDataFolder: (appId: string) => Promise<IpcResponse>
   appClearMemory: (appId: string) => Promise<IpcResponse<{ filesRemoved: number }>>

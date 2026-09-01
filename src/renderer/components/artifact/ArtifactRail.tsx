@@ -5,9 +5,8 @@
  * Mobile (<640px): Floating button + Overlay panel
  *
  * Owns only the shell: expand/collapse, drag-resize, and the top tab strip.
- * Tab content is a sibling component per tab — today just "Files"
- * (`ArtifactFilesTab`); Skill/MCP tabs join later as their own components,
- * added to the strip without touching this shell.
+ * Tab content is a sibling component per tab — Files/Skill/MCP, each a
+ * standalone component the shell just mounts by active-tab id.
  *
  * Browser/terminal used to be footer buttons here; they now open from
  * Header's more menu (still the same ContentCanvas tab underneath — see
@@ -17,10 +16,14 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { ArtifactFilesTab } from './ArtifactFilesTab'
+import { SkillsTab } from './SkillsTab'
+import { McpTab } from './McpTab'
 import { useCanvasStore } from '../../stores/canvas.store'
 import { ChevronRight, X } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useIsMobile } from '../../hooks/useIsMobile'
+
+type RailTab = 'files' | 'skill' | 'mcp'
 
 // Width constraints (in pixels) - Desktop only
 const MIN_WIDTH = 200
@@ -38,17 +41,28 @@ interface ArtifactRailProps {
   onWidthChange?: (width: number) => void  // Callback when user finishes resizing
 }
 
-/** Tab strip — one tab today; sized to grow without shell changes. */
-function TabStrip() {
+/** Tab strip — Files/Skill/MCP, each a sibling content component below. */
+function TabStrip({ active, onChange }: { active: RailTab; onChange: (tab: RailTab) => void }) {
   const { t } = useTranslation()
+  const tabs: { id: RailTab; label: string }[] = [
+    { id: 'files', label: t('Files') },
+    { id: 'skill', label: t('Skill') },
+    { id: 'mcp', label: t('MCP') },
+  ]
   return (
     <div className="flex items-center gap-1">
-      <button
-        className="h-7 px-2.5 rounded-md text-sm font-medium bg-secondary text-foreground"
-        aria-current="true"
-      >
-        {t('Files')}
-      </button>
+      {tabs.map(tab => (
+        <button
+          key={tab.id}
+          onClick={() => onChange(tab.id)}
+          className={`h-7 px-2.5 rounded-md text-sm font-medium transition-colors ${
+            active === tab.id ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'
+          }`}
+          aria-current={active === tab.id}
+        >
+          {tab.label}
+        </button>
+      ))}
     </div>
   )
 }
@@ -60,6 +74,8 @@ export function ArtifactRail({
   onWidthChange
 }: ArtifactRailProps) {
   const { t } = useTranslation()
+
+  const [activeTab, setActiveTab] = useState<RailTab>('files')
 
   const isControlled = externalExpanded !== undefined
   const [internalExpanded, setInternalExpanded] = useState(true)
@@ -143,6 +159,23 @@ export function ArtifactRail({
     }
   }, [isMobile, mobileOverlayOpen])
 
+  // All three tabs stay mounted (CSS-hidden when inactive) so switching tabs
+  // doesn't re-fetch Skill/MCP lists or lose the Files tab's tree state —
+  // same reasoning as the expand/collapse CSS-hide below.
+  const tabContent = (
+    <>
+      <div className={`flex-1 flex flex-col overflow-hidden${activeTab === 'files' ? '' : ' hidden'}`}>
+        <ArtifactFilesTab />
+      </div>
+      <div className={`flex-1 flex flex-col overflow-hidden${activeTab === 'skill' ? '' : ' hidden'}`}>
+        <SkillsTab />
+      </div>
+      <div className={`flex-1 flex flex-col overflow-hidden${activeTab === 'mcp' ? '' : ' hidden'}`}>
+        <McpTab />
+      </div>
+    </>
+  )
+
   // ==================== Mobile Overlay Mode ====================
   if (isMobile) {
     return (
@@ -188,7 +221,7 @@ export function ArtifactRail({
             >
               {/* Header */}
               <div className="p-3 border-b border-border flex items-center justify-between">
-                <TabStrip />
+                <TabStrip active={activeTab} onChange={setActiveTab} />
                 <button
                   onClick={() => setMobileOverlayOpen(false)}
                   className="p-1 hover:bg-secondary rounded transition-colors"
@@ -198,7 +231,7 @@ export function ArtifactRail({
                 </button>
               </div>
 
-              <ArtifactFilesTab />
+              {tabContent}
             </div>
           </div>
         )}
@@ -232,7 +265,7 @@ export function ArtifactRail({
 
       {/* Header - height matches CanvasTabs (py-1.5 + h-7 content = ~40px) */}
       <div className="flex-shrink-0 px-3 h-10 border-b border-border flex items-center justify-between">
-        {isExpanded && <TabStrip />}
+        {isExpanded && <TabStrip active={activeTab} onChange={setActiveTab} />}
         <button
           onClick={handleToggleExpanded}
           className="p-1 hover:bg-secondary rounded transition-colors"
@@ -241,9 +274,9 @@ export function ArtifactRail({
         </button>
       </div>
 
-      {/* Content — CSS-hidden when collapsed to preserve ArtifactTree folder expansion state */}
+      {/* Content — CSS-hidden when collapsed to preserve tab-internal state (tree expansion, fetched lists) */}
       <div className={`flex-1 flex flex-col overflow-hidden${isExpanded ? '' : ' hidden'}`}>
-        <ArtifactFilesTab />
+        {tabContent}
       </div>
     </div>
   )

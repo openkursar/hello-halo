@@ -12,7 +12,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
-import type { AvailableSkill } from '../../shared/apps/app-types'
+import type { AvailableSkill, InstalledApp } from '../../shared/apps/app-types'
 
 export const appsApi = {
   // ===== Apps =====
@@ -237,6 +237,20 @@ export const appsApi = {
       return window.halo.appListAvailableSkills(appId)
     }
     return httpRequest('GET', `/api/apps/${appId}/available-skills`)
+  },
+
+  appListAvailableSkillsForSpace: async (spaceId: string): Promise<ApiResponse<AvailableSkill[]>> => {
+    if (isElectron()) {
+      return window.halo.appListAvailableSkillsForSpace(spaceId)
+    }
+    return httpRequest('GET', `/api/spaces/${spaceId}/available-skills`)
+  },
+
+  appListEffectiveMcpApps: async (spaceId: string): Promise<ApiResponse<InstalledApp[]>> => {
+    if (isElectron()) {
+      return window.halo.appListEffectiveMcpApps(spaceId)
+    }
+    return httpRequest('GET', `/api/spaces/${spaceId}/effective-mcp-apps`)
   },
 
   appOpenDataFolder: async (appId: string): Promise<ApiResponse> => {

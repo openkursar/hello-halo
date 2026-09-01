@@ -173,6 +173,38 @@ export function registerAppsRoutes(app: Express): void {
     }
   })
 
+  // GET /api/spaces/:spaceId/available-skills — same disk scan, keyed by space
+  // directly (space resource rail has a space, not a digital human, in hand).
+  app.get('/api/spaces/:spaceId/available-skills', async (req: Request, res: Response) => {
+    try {
+      const { spaceId } = req.params
+      if (!spaceId) {
+        res.status(400).json({ success: false, error: 'Missing spaceId' })
+        return
+      }
+      res.json({ success: true, data: listAvailableSkills(spaceId) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/spaces/:spaceId/effective-mcp-apps — space-scoped ∪ global MCP
+  // apps, for read-only display (not one digital human's declared deps).
+  app.get('/api/spaces/:spaceId/effective-mcp-apps', async (req: Request, res: Response) => {
+    try {
+      const { spaceId } = req.params
+      if (!spaceId) {
+        res.status(400).json({ success: false, error: 'Missing spaceId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      res.json({ success: true, data: manager.listEffectiveMcpApps(spaceId) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // GET /api/skills/command-name — preview the identifier a skill would install
   // under. Kept off the /api/apps/:appId branch so it is not shadowed by it.
   app.get('/api/skills/command-name', async (req: Request, res: Response) => {

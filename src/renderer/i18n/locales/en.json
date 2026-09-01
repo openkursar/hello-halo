@@ -1021,6 +1021,7 @@
   "No matching results found": "No matching results found",
   "No MCP servers connected yet": "No MCP servers connected yet",
   "No MCP servers found in ~/.claude.json": "No MCP servers found in ~/.claude.json",
+  "No MCP servers installed in this space yet.": "No MCP servers installed in this space yet.",
   "No messages in this session": "No messages in this session",
   "No messages yet": "No messages yet",
   "No model selected": "No model selected",
