@@ -401,8 +401,9 @@ function createWindow(): void {
     // macOS: hiddenInset for traffic lights in content area
     // Windows/Linux: hidden + titleBarOverlay for native buttons overlay
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
-    // Fine-tuned for visual alignment with 40px header
-    trafficLightPosition: isMac ? { x: 15, y: 11 } : undefined,
+    // Fine-tuned to fit inside the 56px nav rail (traffic light cluster is
+    // ~52-56px wide) while staying vertically centered on the 40px header row
+    trafficLightPosition: isMac ? { x: 8, y: 11 } : undefined,
     // Windows/Linux: native window controls overlay in content area
     titleBarOverlay: !isMac ? {
       color: '#0a0a0a',

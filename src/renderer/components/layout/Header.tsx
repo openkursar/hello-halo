@@ -2,7 +2,7 @@
  * Header Component - Cross-platform title bar
  *
  * Handles platform-specific padding for window controls:
- * - macOS Electron: traffic lights on the left (pl-20)
+ * - macOS Electron: traffic lights sit over the NavRail, not the Header — no inset here
  * - Windows/Linux Electron: titleBarOverlay buttons on the right (pr-36)
  * - Capacitor: safe area padding on top (status bar)
  * - Browser/Mobile: no extra padding needed (pl-4)
@@ -50,15 +50,15 @@ export function Header({ left, right, className = '' }: HeaderProps) {
   const activeServer = useServerStore(s => s.getActive())
 
   // Platform-specific padding classes
-  // macOS: traffic lights overlay on the left
+  // macOS: traffic lights now live over the NavRail, Header needs no left inset
   // Windows/Linux: titleBarOverlay buttons overlay on the right
   // Capacitor: safe area left/right padding, no drag region
   // Browser/Mobile: no overlay, use normal padding
   //
-  // The overlay-side inset clears native window chrome (traffic lights /
-  // titleBarOverlay buttons) that does NOT scale with the persistent display
-  // zoom. Dividing by --display-scale keeps the reserved space constant in real
-  // pixels so content never slides under the buttons when zoomed out.
+  // The overlay-side inset clears native window chrome (titleBarOverlay
+  // buttons) that does NOT scale with the persistent display zoom. Dividing
+  // by --display-scale keeps the reserved space constant in real pixels so
+  // content never slides under the buttons when zoomed out.
   const platformPadding = isInElectron
     ? platform.isMac
       ? 'pr-4'
@@ -67,10 +67,8 @@ export function Header({ left, right, className = '' }: HeaderProps) {
       ? 'pl-4 pr-4'    // Capacitor: standard padding, safe area handled by globals.css
       : 'pl-4 pr-4'    // Browser/Mobile: normal padding
 
-  const chromeInset: CSSProperties = isInElectron
-    ? platform.isMac
-      ? { paddingLeft: 'calc(5rem / var(--display-scale, 1))' }   // 80px for traffic lights
-      : { paddingRight: 'calc(9rem / var(--display-scale, 1))' }  // 144px for titleBarOverlay buttons
+  const chromeInset: CSSProperties = isInElectron && !platform.isMac
+    ? { paddingRight: 'calc(9rem / var(--display-scale, 1))' }  // 144px for titleBarOverlay buttons
     : {}
 
   // Capacitor: disable drag region (no window chrome)

@@ -30,6 +30,7 @@ import { OnboardingOverlay } from './components/onboarding'
 import { UpdateNotification } from './components/updater/UpdateNotification'
 import { NotificationToast } from './components/notification/NotificationToast'
 import { CredentialAlertBanner } from './components/settings/CredentialAlertBanner'
+import { NavRail } from './components/layout/NavRail'
 import { useNotificationStore } from './stores/notification.store'
 import { api } from './api'
 import { syncStatusBarStyle } from './api/safe-area'
@@ -37,7 +38,7 @@ import { isCapacitor, isElectron, onEvent } from './api/transport'
 import { useTelemetry } from './hooks/useTelemetry'
 import type { WsConnectionState } from './api/transport'
 import { useTranslation } from './i18n'
-import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, Question, McpServerStatus } from './types'
+import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, Question, McpServerStatus, AppView } from './types'
 import type { SessionInitInfo } from './types/slash-command'
 import type { IngestProgressEvent } from '../shared/types/tlon'
 import type { ToastPayload } from '../shared/types/notification'
@@ -50,6 +51,10 @@ const SpacePage = lazy(() => import('./pages/SpacePage').then(m => ({ default: m
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
 const AppsPage = lazy(() => import('./pages/AppsPage').then(m => ({ default: m.AppsPage })))
 const TlonPage = lazy(() => import('./pages/TlonPage').then(m => ({ default: m.TlonPage })))
+
+// Views that render inside the persistent shell (rail visible). Pre-app
+// screens (splash/setup/server connect/...) render full-bleed without it.
+const RAIL_VIEWS: AppView[] = ['home', 'space', 'settings', 'apps', 'tlon']
 
 // Page loading fallback - minimal spinner that matches app style
 function PageLoader() {
@@ -1007,7 +1012,12 @@ export default function App() {
           <span className="text-foreground">{t('Reconnecting...')}</span>
         </div>
       )}
-      {renderView()}
+      <div className="h-full w-full flex overflow-hidden">
+        {RAIL_VIEWS.includes(view) && <NavRail />}
+        <div className="flex-1 min-w-0 h-full overflow-hidden">
+          {renderView()}
+        </div>
+      </div>
       {/* Search panel - full screen edit mode */}
       <SearchPanel isOpen={isSearchOpen} onClose={closeSearch} />
       {/* Search highlight bar - floating navigation mode */}
