@@ -947,6 +947,7 @@
   "No registries configured": "未配置注册表",
   "No scheduled trigger. This app can be triggered manually or via IM bot.": "无计划触发。此应用可通过手动或即时通讯机器人触发。",
   "No skill loaded. Drop a file or folder first.": "未加载技能。请先拖放文件或文件夹。",
+  "No skills available in this space yet.": "此空间中尚无可用技能。",
   "No skills available yet.": "",
   "No skills found in ~/.claude/skills/": "在 ~/.claude/skills/ 中未找到技能",
   "No space selected": "未选择空间",

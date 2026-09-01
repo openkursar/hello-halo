@@ -1036,6 +1036,7 @@
   "No registries configured": "No registries configured",
   "No scheduled trigger. This app can be triggered manually or via IM bot.": "No scheduled trigger. This app can be triggered manually or via IM bot.",
   "No skill loaded. Drop a file or folder first.": "No skill loaded. Drop a file or folder first.",
+  "No skills available in this space yet.": "No skills available in this space yet.",
   "No skills available yet.": "No skills available yet.",
   "No skills found in ~/.claude/skills/": "No skills found in ~/.claude/skills/",
   "No Skills installed yet": "No Skills installed yet",

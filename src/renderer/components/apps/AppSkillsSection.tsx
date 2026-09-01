@@ -213,7 +213,7 @@ export function AppSkillsSection({ appId, spaceId }: AppSkillsSectionProps) {
       ) : (
         <div className="rounded-lg border border-dashed border-border p-4 text-center space-y-2">
           <p className="text-xs text-muted-foreground">
-            {t('No skills available yet.')}
+            {t('No skills available in this space yet.')}
           </p>
           <button
             onClick={openStore}

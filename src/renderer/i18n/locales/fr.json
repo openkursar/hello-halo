@@ -963,6 +963,7 @@
   "No registries configured": "Aucun registre configuré",
   "No scheduled trigger. This app can be triggered manually or via IM bot.": "Aucun déclencheur planifié. Cette application peut être déclenchée manuellement ou via un bot de messagerie instantanée.",
   "No skill loaded. Drop a file or folder first.": "Aucune compétence chargée. Déposez d'abord un fichier ou un dossier.",
+  "No skills available in this space yet.": "Aucune compétence disponible pour le moment dans cet espace.",
   "No skills available yet.": "",
   "No skills found in ~/.claude/skills/": "Aucune compétence trouvée dans ~/.claude/skills/",
   "No space selected": "Aucun espace sélectionné",

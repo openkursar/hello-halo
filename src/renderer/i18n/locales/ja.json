@@ -947,6 +947,7 @@
   "No registries configured": "設定されたレジストリがありません",
   "No scheduled trigger. This app can be triggered manually or via IM bot.": "スケジュールトリガーはありません。このアプリは手動またはIMボットから起動できます。",
   "No skill loaded. Drop a file or folder first.": "スキルが読み込まれていません。まずファイルまたはフォルダをドロップしてください。",
+  "No skills available in this space yet.": "このスペースにはまだ利用可能なスキルがありません。",
   "No skills available yet.": "",
   "No skills found in ~/.claude/skills/": "~/.claude/skills/内にスキルが見つかりませんでした",
   "No space selected": "スペースが選択されていません",
