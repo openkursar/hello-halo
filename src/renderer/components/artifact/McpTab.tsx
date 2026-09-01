@@ -65,7 +65,7 @@ export function McpTab() {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center px-4 py-8">
         <Wrench className="w-8 h-8 text-muted-foreground/40 mb-2" />
-        <p className="text-xs text-muted-foreground">{t('No MCP servers installed in this space yet.')}</p>
+        <p className="text-xs text-muted-foreground">{t('No MCP servers available yet.')}</p>
       </div>
     )
   }
