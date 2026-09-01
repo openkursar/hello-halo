@@ -18,7 +18,7 @@ import { api } from '../api'
 /**
  * Track renderer session lifecycle and page navigation.
  *
- * @param view - Current top-level view name (e.g. 'home', 'space', 'settings')
+ * @param view - Current top-level view name (e.g. 'space', 'settings')
  */
 export function useTelemetry(view: string): void {
   const sessionStartRef = useRef<number>(Date.now())

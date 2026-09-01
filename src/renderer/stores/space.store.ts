@@ -21,6 +21,18 @@ interface SpaceState {
   loadSpaces: () => Promise<void>
   loadHaloSpace: () => Promise<void>
   setCurrentSpace: (space: Space | null) => void
+  /**
+   * Pick the space a caller with no space context should land on: the real
+   * space with the most recent activity, or halo-temp if none exist yet.
+   * Loads spaces/haloSpace first if needed. Used at startup and whenever
+   * `currentSpace` is cleared out from under a caller (e.g. deleting the
+   * active space) — kept here because the selection rule depends on space
+   * domain knowledge (halo-temp is excluded from the activity comparison
+   * since it re-stamps `updatedAt` to "now" every session; `listSpaces()`
+   * sorts by user-defined `sortOrder` once any space has one, so the first
+   * array entry is not reliably "most recently used").
+   */
+  selectDefaultSpace: () => Promise<Space | null>
   createSpace: (input: CreateSpaceInput) => Promise<Space | null>
   updateSpace: (spaceId: string, updates: { name?: string; icon?: string }) => Promise<Space | null>
   deleteSpace: (spaceId: string) => Promise<boolean>
@@ -84,6 +96,19 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
   // Set current space
   setCurrentSpace: (space) => {
     set({ currentSpace: space })
+  },
+
+  selectDefaultSpace: async () => {
+    await get().loadSpaces()
+    const { spaces, haloSpace } = get()
+
+    if (spaces.length === 0) return haloSpace
+
+    return spaces.reduce((latest, s) => {
+      const sTime = new Date(s.lastActiveAt || s.updatedAt).getTime()
+      const latestTime = new Date(latest.lastActiveAt || latest.updatedAt).getTime()
+      return sTime > latestTime ? s : latest
+    })
   },
 
   // Create new space
@@ -157,10 +182,15 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
           spaces: state.spaces.filter((s) => s.id !== spaceId)
         }))
 
-        // Clear current space if it was deleted
+        // If the deleted space was active, fall back to another space
+        // immediately rather than leaving `currentSpace` null — with no
+        // HomePage to escape to, that would strand the user on a
+        // permanent "no space selected" screen instead of just this tab.
         const currentSpace = get().currentSpace
         if (currentSpace?.id === spaceId) {
           set({ currentSpace: null })
+          const fallback = await get().selectDefaultSpace()
+          if (fallback) set({ currentSpace: fallback })
         }
 
         // Clean up chat store state for the deleted space

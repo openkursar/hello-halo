@@ -16,14 +16,14 @@
 import { useState } from 'react'
 import { Menu, X, MessageSquare, Bot, BookOpen, Store, Settings } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
-import { useSpaceStore } from '../../stores/space.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
+import { useGoToConversation } from '../../hooks/useGoToConversation'
 
 export function NarrowNavSheet() {
   const { t } = useTranslation()
   const navigate = useAppStore(s => s.navigate)
-  const currentSpace = useSpaceStore(s => s.currentSpace)
+  const goToConversation = useGoToConversation()
   const [isOpen, setIsOpen] = useState(false)
   const [isAnimatingOut, setIsAnimatingOut] = useState(false)
 
@@ -36,7 +36,7 @@ export function NarrowNavSheet() {
     }, 200)
   }
 
-  const goChat = () => close(() => navigate(currentSpace ? 'space' : 'home'))
+  const goChat = () => close(goToConversation)
   const goDigitalHumans = () => close(() => {
     useAppsPageStore.getState().setCurrentTab('my-digital-humans')
     navigate('apps')

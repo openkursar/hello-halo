@@ -47,7 +47,6 @@ import { hasAnyAISource } from './types'
 
 // Lazy load heavy page components for better initial load performance
 // These pages contain complex components (chat, markdown, code highlighting, etc.)
-const HomePage = lazy(() => import('./pages/HomePage').then(m => ({ default: m.HomePage })))
 const SpacePage = lazy(() => import('./pages/SpacePage').then(m => ({ default: m.SpacePage })))
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
 const AppsPage = lazy(() => import('./pages/AppsPage').then(m => ({ default: m.AppsPage })))
@@ -55,7 +54,7 @@ const TlonPage = lazy(() => import('./pages/TlonPage').then(m => ({ default: m.T
 
 // Views that render inside the persistent shell (rail visible). Pre-app
 // screens (splash/setup/server connect/...) render full-bleed without it.
-const RAIL_VIEWS: AppView[] = ['home', 'space', 'settings', 'apps', 'tlon']
+const RAIL_VIEWS: AppView[] = ['space', 'settings', 'apps', 'tlon']
 
 // Page loading fallback - minimal spinner that matches app style
 function PageLoader() {
@@ -102,7 +101,7 @@ function applyTheme(theme: 'light' | 'dark' | 'system') {
 
 export default function App() {
   const { t } = useTranslation()
-  const { view, config, initialize, setMcpStatus, navigate, setConfig, completeDeferredGitBashCheck } = useAppStore()
+  const { view, config, initialize, setMcpStatus, navigate, enterApp, setConfig, completeDeferredGitBashCheck } = useAppStore()
   const {
     handleAgentMessage,
     handleAgentToolCall,
@@ -469,7 +468,7 @@ export default function App() {
       const listenerPromise = CapApp.addListener('backButton', () => {
         const currentView = useAppStore.getState().view
         if (currentView === 'settings' || currentView === 'apps' || currentView === 'tlon') {
-          useAppStore.getState().navigateBack('home')
+          useAppStore.getState().navigateBack('space')
         } else if (currentView === 'serverConnect') {
           // Back from add-server → server list (if we have servers)
           const { servers } = useServerStore.getState()
@@ -477,7 +476,7 @@ export default function App() {
             useAppStore.getState().navigate('serverList')
           }
         }
-        // On home/space/serverList: don't exit — Android will minimize the app
+        // On space/serverList: don't exit — Android will minimize the app
       })
 
       removeListener = () => { listenerPromise.then(l => l.remove()) }
@@ -929,7 +928,7 @@ export default function App() {
       if (loadedConfig.isFirstLaunch || (!hasAnyAISource(loadedConfig.aiSources) && !loadedConfig.modelConfigSkipped)) {
         navigate('setup')
       } else {
-        navigate('home')
+        await enterApp()
       }
     } else {
       navigate('setup')
@@ -944,7 +943,7 @@ export default function App() {
     && view !== 'splash'
 
   // Render based on current view
-  // Heavy pages (HomePage, SpacePage, SettingsPage) are lazy-loaded for better initial performance
+  // Heavy pages (SpacePage, SettingsPage, AppsPage, TlonPage) are lazy-loaded for better initial performance
   const renderView = () => {
     switch (view) {
       case 'splash':
@@ -966,12 +965,6 @@ export default function App() {
             onServerSelected={handleServerSelected}
             onAddServer={handleAddServer}
           />
-        )
-      case 'home':
-        return (
-          <Suspense fallback={<PageLoader />}>
-            <HomePage />
-          </Suspense>
         )
       case 'space':
         return (

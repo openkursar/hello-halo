@@ -39,7 +39,7 @@ interface ClaudeLoginState {
 
 export function SetupPage() {
   const { t } = useTranslation()
-  const { navigate, setConfig, config } = useAppStore()
+  const { enterApp, setConfig, config } = useAppStore()
   // Step is derived per render so the wizard remains correct even if:
   //   (a) `config` arrives after SetupPage first mounts (async IPC race), or
   //   (b) React Fast Refresh preserves stale useState across HMR.
@@ -114,13 +114,13 @@ export function SetupPage() {
         throw new Error(completeResult.error || t('Login failed'))
       }
 
-      // Success! Reload config and go to home
+      // Success! Reload config and enter the app
       const configResult = await api.getConfig()
       if (configResult.success && configResult.data) {
         setConfig(configResult.data as any)
       }
 
-      navigate('home')
+      await enterApp()
     } catch (err) {
       console.error(`[SetupPage] ${providerType} login error:`, err)
       setError(err instanceof Error ? err.message : t('Login failed'))
@@ -151,13 +151,13 @@ export function SetupPage() {
         return
       }
 
-      // Success! Reload config and go to home
+      // Success! Reload config and enter the app
       const configResult = await api.getConfig()
       if (configResult.success && configResult.data) {
         setConfig(configResult.data as any)
       }
       setClaudeLogin(null)
-      navigate('home')
+      await enterApp()
     } catch (err) {
       setClaudeLogin(prev => prev ? {
         ...prev,
@@ -183,13 +183,13 @@ export function SetupPage() {
         return
       }
 
-      // Success! Reload config and go to home
+      // Success! Reload config and enter the app
       const configResult = await api.getConfig()
       if (configResult.success && configResult.data) {
         setConfig(configResult.data as any)
       }
       setClaudeLogin(null)
-      navigate('home')
+      await enterApp()
     } catch (err) {
       setClaudeLogin(prev => prev ? {
         ...prev,
@@ -231,7 +231,7 @@ export function SetupPage() {
       }
       await api.setConfig(newConfig)
       setConfig(newConfig)
-      navigate('home')
+      await enterApp()
     } catch (err) {
       console.error('[SetupPage] skip error:', err)
       setError(err instanceof Error ? err.message : t('Skip failed'))

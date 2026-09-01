@@ -14,12 +14,12 @@
 import type { ComponentType, CSSProperties } from 'react'
 import { MessageSquare, Bot, BookOpen, Store, Settings } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
-import { useSpaceStore } from '../../stores/space.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
 import { cn } from '../../lib/utils'
 import { isElectron } from '../../api/transport'
 import { useIsNarrowShell } from '../../hooks/useIsMobile'
+import { useGoToConversation } from '../../hooks/useGoToConversation'
 import { usePlatform } from './Header'
 
 type Destination = 'chat' | 'digital-humans' | 'knowledge' | 'store'
@@ -69,12 +69,11 @@ export function NavRail() {
   const { t } = useTranslation()
   const view = useAppStore(s => s.view)
   const navigate = useAppStore(s => s.navigate)
-  const currentSpace = useSpaceStore(s => s.currentSpace)
   const active = useActiveDestination()
   const platform = usePlatform()
   const isNarrow = useIsNarrowShell()
 
-  const goChat = () => navigate(currentSpace ? 'space' : 'home')
+  const goChat = useGoToConversation()
   const goDigitalHumans = () => {
     useAppsPageStore.getState().setCurrentTab('my-digital-humans')
     navigate('apps')

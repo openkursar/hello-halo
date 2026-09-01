@@ -782,7 +782,7 @@ export type AgentEvent =
 // App State Types
 // ============================================
 
-export type AppView = 'splash' | 'gitBashSetup' | 'setup' | 'home' | 'space' | 'settings' | 'apps' | 'tlon' | 'serverConnect' | 'serverList';
+export type AppView = 'splash' | 'gitBashSetup' | 'setup' | 'space' | 'settings' | 'apps' | 'tlon' | 'serverConnect' | 'serverList';
 
 export interface AppState {
   view: AppView;

@@ -7,6 +7,7 @@ import { api } from '../api'
 import { isCapacitor } from '../api/transport'
 import type { HaloConfig, AppView, McpServerStatus } from '../types'
 import { hasAnyAISource } from '../types'
+import { useSpaceStore } from './space.store'
 
 // Git Bash installation progress
 interface GitBashInstallProgress {
@@ -20,7 +21,7 @@ interface AppState {
   // View state — `view` is the current persistent destination; `returnTo` is
   // the destination a "back" affordance should resolve to, not a history
   // stack. Callers that need back behavior read `returnTo` and pick their
-  // own fallback (e.g. `navigate(returnTo || 'home')`).
+  // own fallback (e.g. `navigate(returnTo || 'space')`).
   view: AppView
   returnTo: AppView | null
   isLoading: boolean
@@ -47,6 +48,16 @@ interface AppState {
   // and, unlike navigate(), consumes returnTo so a later back doesn't loop
   // back to where "back" itself was pressed from.
   navigateBack: (fallback: AppView) => void
+  // Land in the main app experience: resolves which space to open via
+  // space.store's own selection rule (space.store.ts:selectDefaultSpace —
+  // kept there since it depends on space-domain knowledge this store has
+  // no business knowing) and only then switches to the space view, so
+  // there is never a frame where the view is 'space' but no space is set.
+  // Cross-store call, an intentional new dependency edge (app.store ->
+  // space.store, peers not layers): every "setup/onboarding just finished"
+  // call site needs the same sequencing, so it lives here once rather than
+  // being re-inlined at each of them.
+  enterApp: () => Promise<void>
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
   setConfig: (config: HaloConfig) => void
@@ -90,6 +101,16 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   navigateBack: (fallback) => {
     set({ view: get().returnTo || fallback, returnTo: null })
+  },
+
+  enterApp: async () => {
+    const spaceStore = useSpaceStore.getState()
+    const target = await spaceStore.selectDefaultSpace()
+    if (target) {
+      spaceStore.setCurrentSpace(target)
+      spaceStore.refreshCurrentSpace()  // fire-and-forget: fills in preferences once loaded
+    }
+    set({ view: 'space' })
   },
 
   setLoading: (isLoading) => set({ isLoading }),
@@ -272,9 +293,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           console.log('[Store] First launch or no AI source, showing setup')
           set({ view: 'setup' })
         } else {
-          // Go to home
-          console.log('[Store] Config loaded, showing home')
-          set({ view: 'home' })
+          console.log('[Store] Config loaded, entering app')
+          await get().enterApp()
 
           // Silently refresh remote model lists in background (fire-and-forget).
           // Ensures users see the latest available models without manual refresh,

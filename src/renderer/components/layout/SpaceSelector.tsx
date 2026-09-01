@@ -2,15 +2,19 @@
  * SpaceSelector - Header dropdown for switching between spaces
  *
  * Shows current space icon + name, click to open dropdown with all spaces.
- * Bottom link navigates to HomePage for space management.
+ * Also the space *management* surface (create / rename / delete / reorder)
+ * now that there's no HomePage to send that to — reorder was already here
+ * (SortableSpaceList below); create/edit/delete were migrated in from it.
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { ChevronDown, Settings2, Unplug } from 'lucide-react'
+import { ChevronDown, Plus, Pencil, Trash2, Unplug } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { SpaceIcon } from '../icons/ToolIcons'
 import { SortableSpaceList } from '../space/SortableSpaceList'
+import { CreateSpaceDialog } from '../space/CreateSpaceDialog'
+import { EditSpaceDialog } from '../space/EditSpaceDialog'
 import { useTranslation } from '../../i18n'
 import type { Space } from '../../types'
 
@@ -20,8 +24,10 @@ const LOAD_THROTTLE_MS = 5_000
 export function SpaceSelector() {
   const { t } = useTranslation()
   const { navigate } = useAppStore()
-  const { haloSpace, spaces, currentSpace, setCurrentSpace, refreshCurrentSpace, loadSpaces, isLoading, reorderSpaces } = useSpaceStore()
+  const { haloSpace, spaces, currentSpace, setCurrentSpace, refreshCurrentSpace, loadSpaces, isLoading, reorderSpaces, deleteSpace } = useSpaceStore()
   const [isOpen, setIsOpen] = useState(false)
+  const [showCreateDialog, setShowCreateDialog] = useState(false)
+  const [editingSpace, setEditingSpace] = useState<Space | null>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const lastLoadRef = useRef(0)
 
@@ -92,9 +98,31 @@ export function SpaceSelector() {
     setIsOpen(false)
   }
 
-  const handleManageSpaces = () => {
+  const handleCreateSpace = () => {
     setIsOpen(false)
-    navigate('home')
+    setShowCreateDialog(true)
+  }
+
+  const handleEditSpace = (e: React.MouseEvent, space: Space) => {
+    e.stopPropagation()
+    setEditingSpace(space)
+  }
+
+  // Same project-vs-centralized-space detection HomePage used, moved as-is.
+  const handleDeleteSpace = async (e: React.MouseEvent, space: Space) => {
+    e.stopPropagation()
+
+    const lastSegment = space.path.split(/[/\\]/).pop() ?? ''
+    const isCentralizedSpace = space.path.includes('/spaces/') && lastSegment.length === 36
+    const isProjectSpace = !!space.workingDir || !isCentralizedSpace
+
+    const message = isProjectSpace
+      ? t('Are you sure you want to delete this space?\n\nOnly Halo data (conversation history) will be deleted, your project files will be kept.')
+      : t('Are you sure you want to delete this space?\n\nAll conversations and files in the space will be deleted.')
+
+    if (confirm(message)) {
+      await deleteSpace(space.id)
+    }
   }
 
   // Build space list: Halo Space first, then dedicated spaces
@@ -151,44 +179,71 @@ export function SpaceSelector() {
                   space={space}
                   isActive={space.id === currentSpace?.id}
                   onSelect={handleSelectSpace}
+                  onEdit={handleEditSpace}
+                  onDelete={handleDeleteSpace}
                 />
               )}
             />
           )}
 
-          {/* Manage Spaces link */}
+          {/* New Space — replaces the old "Manage Spaces" link now that this
+              dropdown is the space management surface itself. */}
           <div className="border-t border-border/50 mt-1 pt-1">
             <button
-              onClick={handleManageSpaces}
+              onClick={handleCreateSpace}
               className="w-full px-3 py-2 text-left text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors flex items-center gap-2"
             >
-              <Settings2 className="w-3.5 h-3.5" />
-              {t('Manage Spaces')}
+              <Plus className="w-3.5 h-3.5" />
+              {t('New Space')}
             </button>
           </div>
         </div>
+      )}
+
+      {showCreateDialog && (
+        <CreateSpaceDialog
+          onClose={() => setShowCreateDialog(false)}
+          onCreated={() => setShowCreateDialog(false)}
+        />
+      )}
+
+      {editingSpace && (
+        <EditSpaceDialog
+          space={editingSpace}
+          onClose={() => setEditingSpace(null)}
+          onSaved={() => setEditingSpace(null)}
+        />
       )}
     </div>
   )
 }
 
-/** A single space row inside the SpaceSelector dropdown. */
+/** A single space row inside the SpaceSelector dropdown. Halo Space (temp)
+ * has no edit/delete — pass onEdit/onDelete only for real spaces. */
 function SpaceDropdownRow({
   space,
   isActive,
   onSelect,
+  onEdit,
+  onDelete,
 }: {
   space: Space
   isActive: boolean
   onSelect: (space: Space) => void
+  onEdit?: (e: React.MouseEvent, space: Space) => void
+  onDelete?: (e: React.MouseEvent, space: Space) => void
 }) {
   const { t } = useTranslation()
   const name = space.isTemp ? t('Halo Space') : space.name
+  const editable = !space.isTemp && !space.isMissing && (onEdit || onDelete)
 
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onSelect(space)}
-      className={`w-full px-3 py-2.5 text-left text-sm transition-colors flex items-center gap-2.5 ${
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect(space) }}
+      className={`group w-full px-3 py-2.5 text-left text-sm transition-colors flex items-center gap-2.5 cursor-pointer ${
         space.isMissing
           ? 'text-muted-foreground cursor-not-allowed opacity-70'
           : `hover:bg-secondary/80 ${isActive ? 'text-primary bg-primary/5' : 'text-foreground'}`
@@ -199,9 +254,35 @@ function SpaceDropdownRow({
       {space.isMissing && (
         <Unplug className="w-3.5 h-3.5 flex-shrink-0" aria-label={t('Unavailable')} />
       )}
-      {isActive && !space.isMissing && (
-        <span className="ml-auto w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
+      {(editable || (isActive && !space.isMissing)) && (
+        <div className="ml-auto flex items-center gap-1 flex-shrink-0">
+          {editable && (
+            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+              {onEdit && (
+                <button
+                  onClick={(e) => onEdit(e, space)}
+                  className="p-1 hover:bg-secondary rounded transition-colors"
+                  title={t('Edit Space')}
+                >
+                  <Pencil className="w-3.5 h-3.5 text-muted-foreground" />
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  onClick={(e) => onDelete(e, space)}
+                  className="p-1 hover:bg-destructive/20 rounded transition-colors"
+                  title={t('Delete space')}
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                </button>
+              )}
+            </div>
+          )}
+          {isActive && !space.isMissing && (
+            <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
+          )}
+        </div>
       )}
-    </button>
+    </div>
   )
 }
