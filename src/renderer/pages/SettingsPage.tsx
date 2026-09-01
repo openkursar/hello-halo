@@ -29,7 +29,7 @@ import {
 
 export function SettingsPage() {
   const { t } = useTranslation()
-  const { config, setConfig, navigate, returnTo } = useAppStore()
+  const { config, setConfig, navigateBack } = useAppStore()
   const isMobile = useIsMobile()
   const isRemoteMode = api.isRemoteMode()
 
@@ -42,9 +42,10 @@ export function SettingsPage() {
     scrollToSection(sectionId)
   }, [])
 
-  // Handle back - return to previous view
+  // Handle back - return to previous view, consuming it so a later back
+  // press doesn't loop to wherever this one was pressed from
   const handleBack = () => {
-    navigate(returnTo || 'home')
+    navigateBack('home')
   }
 
   return (

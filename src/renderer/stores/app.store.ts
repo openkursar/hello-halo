@@ -39,7 +39,14 @@ interface AppState {
   gitBashCheckPending: boolean  // True when git-bash check was deferred due to IPC not ready
 
   // Actions
-  navigate: (view: AppView) => void  // the single write entry point for navigation state
+  // The single write entry point for UI-driven navigation (rail, header,
+  // deep links). Bootstrap/init flows setting the landing view are a
+  // separate concern and are not required to route through these.
+  navigate: (view: AppView) => void
+  // For "back" affordances: resolves to returnTo (or the caller's fallback)
+  // and, unlike navigate(), consumes returnTo so a later back doesn't loop
+  // back to where "back" itself was pressed from.
+  navigateBack: (fallback: AppView) => void
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
   setConfig: (config: HaloConfig) => void
@@ -79,6 +86,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     } else {
       set({ view })
     }
+  },
+
+  navigateBack: (fallback) => {
+    set({ view: get().returnTo || fallback, returnTo: null })
   },
 
   setLoading: (isLoading) => set({ isLoading }),
