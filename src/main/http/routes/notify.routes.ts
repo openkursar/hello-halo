@@ -5,6 +5,7 @@
 import type { Express, Request, Response } from 'express'
 import {
   clearAllTokenCaches,
+  getNotifyChannelsConfig,
   getServiceConfig,
   testChannel,
 } from './_shared'
@@ -38,6 +39,15 @@ export function registerNotifyRoutes(app: Express): void {
     try {
       clearAllTokenCaches()
       res.json({ success: true })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/notify-channels/product-config — product-level channel customizations
+  app.get('/api/notify-channels/product-config', async (req: Request, res: Response) => {
+    try {
+      res.json({ success: true, data: getNotifyChannelsConfig() ?? null })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

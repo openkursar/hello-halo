@@ -38,6 +38,7 @@ import type {
   HealthExportResponse,
   HealthCheckResponse
 } from '../shared/types'
+import type { NotifyChannelsProductConfig } from '../shared/types/notification-channels'
 import type { StoreInstallProgress, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, StoreSignInStatus } from '../shared/store/store-types'
 import type { AppType } from '../shared/apps/spec-types'
 
@@ -462,6 +463,7 @@ export interface HaloAPI {
   // Notification Channels
   testNotificationChannel: (channelType: string) => Promise<IpcResponse>
   clearNotificationChannelCache: () => Promise<IpcResponse>
+  notifyChannelsProductConfig: () => Promise<IpcResponse<NotifyChannelsProductConfig | null>>
 
   // WeCom Bot (企业微信智能机器人) — legacy compat
   getWecomBotStatus: () => Promise<IpcResponse>

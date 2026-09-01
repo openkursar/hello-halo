@@ -17,6 +17,7 @@ import { existsSync } from 'fs'
 import { app } from 'electron'
 import { type AuthProviderConfig } from '../../shared/types'
 import type { CategoryTaxonomy, RegistrySource } from '../../shared/store/store-types'
+import type { NotifyChannelsProductConfig } from '../../shared/types/notification-channels'
 
 // AuthProviderConfig is defined in src/shared/types/ai-sources.ts so the main
 // loader and the renderer setup UI share one source of truth. Re-exported here
@@ -116,12 +117,16 @@ export interface RegistryOverride {
 /**
  * Enterprise service defaults — pre-populated configuration for internal services.
  *
- * Each key maps to a service's config type with optional fields.
- * At runtime, these defaults are merged under user config (user values take precedence).
- * Open-source builds omit this entirely; enterprise builds set values in product.json.
+ * Each key maps to a service's config type with optional fields. They are
+ * seeded into the user's config on first run (`config.service.ts`), so from
+ * then on the user owns — and can see and edit — every value. Open-source
+ * builds omit this entirely; enterprise builds set values in product.json.
+ *
+ * Credentials never belong here: product.json ships inside the package and is
+ * readable by any user.
  */
 export interface ServiceDefaults {
-  /** Default email channel configuration (partial — user config wins) */
+  /** Initial email channel configuration (seeded once; user edits win afterwards) */
   email?: Partial<import('../../shared/types/notification-channels').EmailChannelConfig>
 }
 
@@ -247,6 +252,14 @@ export interface ProductConfig {
    * Open-source builds omit this (no restrictions by default).
    */
   imChannels?: ImChannelsProductConfig
+
+  /**
+   * Notification channel customizations (optional, enterprise/custom builds only).
+   *
+   * Presentation-only (help links). Endpoint defaults live in
+   * `serviceDefaults`; open-source builds omit both.
+   */
+  notifyChannels?: NotifyChannelsProductConfig
 
   /**
    * Store configuration (optional).
@@ -435,6 +448,15 @@ export function getServiceDefaults(): ServiceDefaults | undefined {
  */
 export function getAnnouncementsUrl(): string | undefined {
   return loadProductConfig().announcementsUrl?.trim() || undefined
+}
+
+/**
+ * Get notification-channel customizations from product.json.
+ * Returns undefined when not configured (open-source builds) — the settings
+ * UI then renders no help links.
+ */
+export function getNotifyChannelsConfig(): NotifyChannelsProductConfig | undefined {
+  return loadProductConfig().notifyChannels
 }
 
 /**

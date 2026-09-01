@@ -7,7 +7,7 @@ import { dirname, join } from 'path'
 import { homedir } from 'os'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
-import { getDataFolderName } from './product-config'
+import { getDataFolderName, getServiceDefaults } from './product-config'
 
 // Import analytics config type
 import type { AnalyticsConfig } from '../services/analytics/types'
@@ -340,6 +340,50 @@ function migrateWecomBotToImChannelInstances(): void {
     })
   } catch (error) {
     console.error('[Config Migration] Failed to persist wecomBot migration:', error)
+  }
+}
+
+// ============================================================================
+// EMAIL CHANNEL SEED
+// ============================================================================
+// Enterprise builds declare their corporate SMTP endpoint in product.json
+// `serviceDefaults.email`. It is written into the user's config once so the
+// settings form opens with real, editable values, and so every consumer
+// (settings test, notification send, email MCP) resolves one identical config.
+//
+// Seeding only ever creates the block. An existing block is left untouched —
+// including values the user deliberately cleared.
+// ============================================================================
+
+function seedEmailChannelDefaults(): void {
+  const defaults = getServiceDefaults()?.email
+  if (!defaults) return
+
+  const configPath = getConfigPath()
+  if (!existsSync(configPath)) return
+
+  let parsed: Record<string, any>
+  try {
+    parsed = JSON.parse(readFileSync(configPath, 'utf-8'))
+  } catch {
+    return
+  }
+
+  if (parsed.notificationChannels?.email) return
+
+  parsed.notificationChannels = {
+    ...parsed.notificationChannels,
+    email: { enabled: false, ...defaults },
+  }
+
+  try {
+    writeFileSync(configPath, JSON.stringify(parsed, null, 2))
+    console.log('[Config Seed] Seeded email channel from product.json:', {
+      host: defaults.smtp?.host ?? '(none)',
+      port: defaults.smtp?.port ?? '(none)',
+    })
+  } catch (error) {
+    console.error('[Config Seed] Failed to persist email channel defaults:', error)
   }
 }
 
@@ -1155,6 +1199,9 @@ export async function initializeApp(): Promise<void> {
 
   // Migrate single wecomBot config to multi-instance imChannels.instances[]
   migrateWecomBotToImChannelInstances()
+
+  // Seed the email channel from product.json on first run (enterprise builds)
+  seedEmailChannelDefaults()
 }
 
 /**

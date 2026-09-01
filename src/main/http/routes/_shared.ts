@@ -17,6 +17,7 @@ import * as configController from '../../controllers/config.controller'
 import * as tlonController from '../../controllers/tlon.controller'
 import { getEnabledAuthProviderConfigs, getAISourceManager } from '../../services/ai-sources'
 import { testChannel, clearAllTokenCaches } from '../../services/notify-channels'
+import { getNotifyChannelsConfig } from '../../foundation/product-config'
 import type { NotificationChannelType } from '../../../shared/types/notification-channels'
 import {
   listArtifacts,
@@ -258,6 +259,7 @@ export {
   getEnabledAuthProviderConfigs,
   getImChannelManager,
   getImSessionRegistry,
+  getNotifyChannelsConfig,
   getPublicSecurityPolicy,
   getServiceConfig,
   getSpace,
