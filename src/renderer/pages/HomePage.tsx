@@ -29,7 +29,7 @@ import type { AppType } from '../../shared/apps/spec-types'
 
 export function HomePage() {
   const { t } = useTranslation()
-  const { setView } = useAppStore()
+  const { navigate } = useAppStore()
   const { haloSpace, spaces, loadSpaces, setCurrentSpace, refreshCurrentSpace, updateSpace, deleteSpace, reorderSpaces } = useSpaceStore()
   const { apps, loadApps } = useAppsStore()
   const { setInitialAppId, setCurrentTab, setShowInstallDialog, openMarketplaceFilteredBy } = useAppsPageStore()
@@ -56,7 +56,7 @@ export function HomePage() {
     if (space.isMissing) return
     setCurrentSpace(space)
     refreshCurrentSpace()  // Load full space data (preferences) from backend
-    setView('space')
+    navigate('space')
   }
 
   // Handle delete space
@@ -141,7 +141,7 @@ export function HomePage() {
         }
         right={
           <button
-            onClick={() => setView('settings')}
+            onClick={() => navigate('settings')}
             className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
           >
             <Settings className="w-5 h-5" />
@@ -180,34 +180,34 @@ export function HomePage() {
             apps={apps}
             onOpenAutomationList={() => {
               setCurrentTab('my-digital-humans')
-              setView('apps')
+              navigate('apps')
             }}
             onOpenSkillsList={() => {
               setCurrentTab('my-skills')
-              setView('apps')
+              navigate('apps')
             }}
             onOpenMcpList={() => {
               setCurrentTab('my-mcp')
-              setView('apps')
+              navigate('apps')
             }}
             onSelectApp={(appId) => {
               setInitialAppId(appId)
-              setView('apps')
+              navigate('apps')
             }}
             onCreateAutomation={() => {
               setCurrentTab('my-digital-humans')
               setShowInstallDialog(true)
-              setView('apps')
+              navigate('apps')
             }}
             onBrowseSkillsMarket={() => {
               // Set view first so AppsPage mounts and StoreView's
               // mount-effect doesn't skip the load. The store action then
               // atomically sets filter + tab and forces a fresh fetch.
-              setView('apps')
+              navigate('apps')
               void openMarketplaceFilteredBy('skill')
             }}
             onBrowseMcpMarket={() => {
-              setView('apps')
+              navigate('apps')
               void openMarketplaceFilteredBy('mcp')
             }}
           />
@@ -215,7 +215,7 @@ export function HomePage() {
 
         {/* Knowledge entry — opens the Tlon knowledge-base manager */}
         <button
-          onClick={() => setView('tlon')}
+          onClick={() => navigate('tlon')}
           className="w-full mb-8 flex items-center gap-3 p-4 rounded-xl border border-border bg-card hover:bg-secondary transition-colors text-left group"
         >
           <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">

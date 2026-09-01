@@ -57,7 +57,7 @@ export function SpacePage() {
   const { t } = useTranslation()
 
   // Precise selectors — only subscribe to what SpacePage needs for layout orchestration
-  const setView = useAppStore(state => state.setView)
+  const navigate = useAppStore(state => state.navigate)
   const mockBashMode = useAppStore(state => state.mockBashMode)
   const gitBashInstallProgress = useAppStore(state => state.gitBashInstallProgress)
   const startGitBashInstall = useAppStore(state => state.startGitBashInstall)
@@ -341,7 +341,7 @@ export function SpacePage() {
           <>
             {/* Back button */}
             <button
-              onClick={() => setView('home')}
+              onClick={() => navigate('home')}
               className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -391,7 +391,7 @@ export function SpacePage() {
             <MobileOverflowMenu onSearch={() => openSearch('space')} />
 
             <button
-              onClick={() => setView('settings')}
+              onClick={() => navigate('settings')}
               className="hidden sm:block p-1.5 hover:bg-secondary rounded-lg transition-colors"
               title={t('Settings')}
             >

@@ -28,12 +28,12 @@ export function AppKnowledgeSection({ appId }: AppKnowledgeSectionProps) {
   const loadKBs = useTlonStore(s => s.loadKBs)
   const bindApp = useTlonStore(s => s.bindApp)
   const unbindApp = useTlonStore(s => s.unbindApp)
-  const setView = useAppStore(s => s.setView)
+  const navigate = useAppStore(s => s.navigate)
 
   useEffect(() => { void loadKBs() }, [loadKBs])
 
   const bound = kbs.filter(kb => kb.appIds.includes(appId))
-  const openKnowledgePage = () => setView('tlon')
+  const openKnowledgePage = () => navigate('tlon')
 
   const toggleKb = (kbId: string) => {
     const isBound = kbs.find(kb => kb.id === kbId)?.appIds.includes(appId)

@@ -41,7 +41,7 @@ import { ChevronLeft, ChevronRight, Settings } from 'lucide-react'
 
 export function AppsPage() {
   const { t } = useTranslation()
-  const { setView, previousView } = useAppStore()
+  const { navigate, returnTo } = useAppStore()
   const currentSpace = useSpaceStore(state => state.currentSpace)
   const haloSpace = useSpaceStore(state => state.haloSpace)
   const spaces = useSpaceStore(state => state.spaces)
@@ -248,7 +248,7 @@ export function AppsPage() {
       <Header
         left={
           <button
-            onClick={() => setView(currentSpace ? 'space' : (previousView || 'home'))}
+            onClick={() => navigate(currentSpace ? 'space' : (returnTo || 'home'))}
             className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             <ChevronLeft className="w-4 h-4" />
@@ -257,7 +257,7 @@ export function AppsPage() {
         }
         right={
           <button
-            onClick={() => setView('settings')}
+            onClick={() => navigate('settings')}
             className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
             title={t('Settings')}
           >

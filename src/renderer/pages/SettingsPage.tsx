@@ -29,7 +29,7 @@ import {
 
 export function SettingsPage() {
   const { t } = useTranslation()
-  const { config, setConfig, goBack } = useAppStore()
+  const { config, setConfig, navigate, returnTo } = useAppStore()
   const isMobile = useIsMobile()
   const isRemoteMode = api.isRemoteMode()
 
@@ -44,7 +44,7 @@ export function SettingsPage() {
 
   // Handle back - return to previous view
   const handleBack = () => {
-    goBack()
+    navigate(returnTo || 'home')
   }
 
   return (

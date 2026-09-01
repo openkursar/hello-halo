@@ -101,7 +101,7 @@ function applyTheme(theme: 'light' | 'dark' | 'system') {
 
 export default function App() {
   const { t } = useTranslation()
-  const { view, config, initialize, setMcpStatus, setView, setConfig, completeDeferredGitBashCheck } = useAppStore()
+  const { view, config, initialize, setMcpStatus, navigate, setConfig, completeDeferredGitBashCheck } = useAppStore()
   const {
     handleAgentMessage,
     handleAgentToolCall,
@@ -166,10 +166,10 @@ export default function App() {
         const { servers } = useServerStore.getState()
         if (servers.length > 0) {
           console.log('[App] Capacitor: servers exist but no active, showing server list')
-          setView('serverList')
+          navigate('serverList')
         } else {
           console.log('[App] Capacitor: no servers, showing ServerConnect')
-          setView('serverConnect')
+          navigate('serverConnect')
         }
       }
       return
@@ -233,7 +233,7 @@ export default function App() {
       unsubscribe()
       clearTimeout(fallbackTimeout)
     }
-  }, [initialize, initializeOnboarding, completeDeferredGitBashCheck, setView])
+  }, [initialize, initializeOnboarding, completeDeferredGitBashCheck, navigate])
 
   // Theme switching
   useEffect(() => {
@@ -290,12 +290,12 @@ export default function App() {
       api.disconnectWebSocket()
       useServerStore.getState().clearActive()
       const { servers } = useServerStore.getState()
-      setView(servers.length > 0 ? 'serverList' : 'serverConnect')
+      navigate(servers.length > 0 ? 'serverList' : 'serverConnect')
     }
 
     window.addEventListener('halo:auth-expired', handleAuthExpired)
     return () => window.removeEventListener('halo:auth-expired', handleAuthExpired)
-  }, [setView])
+  }, [navigate])
 
   // Capacitor: notification bridge — push local notifications when app is backgrounded
   useEffect(() => {
@@ -468,12 +468,13 @@ export default function App() {
       const listenerPromise = CapApp.addListener('backButton', () => {
         const currentView = useAppStore.getState().view
         if (currentView === 'settings' || currentView === 'apps') {
-          useAppStore.getState().goBack()
+          const { returnTo, navigate } = useAppStore.getState()
+          navigate(returnTo || 'home')
         } else if (currentView === 'serverConnect') {
           // Back from add-server → server list (if we have servers)
           const { servers } = useServerStore.getState()
           if (servers.length > 0) {
-            useAppStore.getState().setView('serverList')
+            useAppStore.getState().navigate('serverList')
           }
         }
         // On home/space/serverList: don't exit — Android will minimize the app
@@ -515,14 +516,14 @@ export default function App() {
 
   // Handle "Add Device" from ServerList (Capacitor)
   const handleAddServer = useCallback(() => {
-    setView('serverConnect')
-  }, [setView])
+    navigate('serverConnect')
+  }, [navigate])
 
   // Handle back from ServerConnect to ServerList (Capacitor)
   const handleServerConnectBack = useCallback(() => {
     api.clearServerUrl() // Clear pending URL
-    setView('serverList')
-  }, [setView])
+    navigate('serverList')
+  }, [navigate])
 
   // Initialize AI Browser IPC listeners for active view sync
   useEffect(() => {
@@ -691,7 +692,7 @@ export default function App() {
       if (appId) {
         console.log(`[App] Notification deep navigation: appId=${appId}`)
         setInitialAppId(appId)
-        setView('apps')
+        navigate('apps')
       }
     })
 
@@ -701,7 +702,7 @@ export default function App() {
       unsubEscalation()
       unsubNavigate()
     }
-  }, [setInitialAppId, setView])
+  }, [setInitialAppId, navigate])
 
   // Register Tlon (knowledge base) real-time event listeners.
   // Uses the imported onEvent() transport directly (not api.onEvent) so the
@@ -741,7 +742,7 @@ export default function App() {
             label: t('View'),
             onClick: () => {
               setInitialAppId(appId)
-              setView('apps')
+              navigate('apps')
             },
           }
           : undefined
@@ -757,7 +758,7 @@ export default function App() {
       })
     })
     return () => { unsub() }
-  }, [showToast, setInitialAppId, setView, t])
+  }, [showToast, setInitialAppId, navigate, t])
 
   // Handle search keyboard shortcuts with debouncing for navigation
   // Use ref to maintain debounce timer across renders
@@ -926,12 +927,12 @@ export default function App() {
       // Show setup if first launch or no AI source configured
       // (modelConfigSkipped honors an explicit deferral from the first-run wizard)
       if (loadedConfig.isFirstLaunch || (!hasAnyAISource(loadedConfig.aiSources) && !loadedConfig.modelConfigSkipped)) {
-        setView('setup')
+        navigate('setup')
       } else {
-        setView('home')
+        navigate('home')
       }
     } else {
-      setView('setup')
+      navigate('setup')
     }
   }
 

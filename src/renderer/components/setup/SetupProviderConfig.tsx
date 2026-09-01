@@ -27,14 +27,14 @@ interface SetupProviderConfigProps {
 
 export function SetupProviderConfig({ entry, onBack }: SetupProviderConfigProps) {
   const { t } = useTranslation()
-  const { config, setConfig, setView } = useAppStore()
+  const { config, setConfig, navigate } = useAppStore()
 
   const title = resolveLocalizedText(entry.displayName, getCurrentLanguage())
   const isPreset = Boolean(entry.preset)
 
   // Persist the first source created during onboarding (shared with the login
   // screen's preset and custom paths).
-  const handleSave = (source: AISource) => saveFirstRunSource(source, { config, setConfig, setView })
+  const handleSave = (source: AISource) => saveFirstRunSource(source, { config, setConfig, navigate })
 
   const emptySources: AISourcesConfig = config?.aiSources ?? {
     version: 2,

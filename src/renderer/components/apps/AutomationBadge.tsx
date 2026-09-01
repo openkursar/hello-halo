@@ -17,7 +17,7 @@ import { useTranslation } from '../../i18n'
 
 export function AutomationBadge() {
   const { t } = useTranslation()
-  const { setView } = useAppStore()
+  const { navigate } = useAppStore()
   const { apps } = useAppsStore()
   const { setInitialAppId } = useAppsPageStore()
 
@@ -30,7 +30,7 @@ export function AutomationBadge() {
   if (waitingApp) {
     const handleClick = () => {
       setInitialAppId(waitingApp.id)
-      setView('apps')
+      navigate('apps')
     }
     return (
       <button
@@ -50,7 +50,7 @@ export function AutomationBadge() {
   if (runningApps.length === 0) return null
 
   const handleClick = () => {
-    setView('apps')
+    navigate('apps')
   }
 
   return (

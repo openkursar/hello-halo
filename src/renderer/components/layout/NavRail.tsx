@@ -66,22 +66,22 @@ const MAC_CHROME_CLEARANCE_PX = 64
 export function NavRail() {
   const { t } = useTranslation()
   const view = useAppStore(s => s.view)
-  const setView = useAppStore(s => s.setView)
+  const navigate = useAppStore(s => s.navigate)
   const currentSpace = useSpaceStore(s => s.currentSpace)
   const active = useActiveDestination()
   const platform = usePlatform()
 
-  const goChat = () => setView(currentSpace ? 'space' : 'home')
+  const goChat = () => navigate(currentSpace ? 'space' : 'home')
   const goDigitalHumans = () => {
     useAppsPageStore.getState().setCurrentTab('my-digital-humans')
-    setView('apps')
+    navigate('apps')
   }
   const goStore = () => {
     useAppsPageStore.getState().setCurrentTab('store')
-    setView('apps')
+    navigate('apps')
   }
-  const goKnowledge = () => setView('tlon')
-  const goSettings = () => setView('settings')
+  const goKnowledge = () => navigate('tlon')
+  const goSettings = () => navigate('settings')
 
   // trafficLightPosition is native window-chrome DIP, invariant under
   // webContents.setZoomFactor() (--display-scale). The rail's CSS width is

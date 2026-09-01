@@ -19,7 +19,7 @@ const LOAD_THROTTLE_MS = 5_000
 
 export function SpaceSelector() {
   const { t } = useTranslation()
-  const { setView } = useAppStore()
+  const { navigate } = useAppStore()
   const { haloSpace, spaces, currentSpace, setCurrentSpace, refreshCurrentSpace, loadSpaces, isLoading, reorderSpaces } = useSpaceStore()
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -88,13 +88,13 @@ export function SpaceSelector() {
     }
     setCurrentSpace(space)
     refreshCurrentSpace()  // Load full space data (preferences) from backend
-    setView('space')
+    navigate('space')
     setIsOpen(false)
   }
 
   const handleManageSpaces = () => {
     setIsOpen(false)
-    setView('home')
+    navigate('home')
   }
 
   // Build space list: Halo Space first, then dedicated spaces

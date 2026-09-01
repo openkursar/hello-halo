@@ -36,7 +36,7 @@ export function KnowledgeBaseButton() {
   const setDefaultKB = useTlonStore(s => s.setDefaultKB)
   const bindSpace = useTlonStore(s => s.bindSpace)
   const unbindSpace = useTlonStore(s => s.unbindSpace)
-  const setView = useAppStore(s => s.setView)
+  const navigate = useAppStore(s => s.navigate)
 
   const getCurrentConversationId = useChatStore(s => s.getCurrentConversationId)
   const getCachedConversation = useChatStore(s => s.getCachedConversation)
@@ -92,7 +92,7 @@ export function KnowledgeBaseButton() {
 
   const openKnowledgePage = () => {
     setOpen(false)
-    setView('tlon')
+    navigate('tlon')
   }
 
   return (

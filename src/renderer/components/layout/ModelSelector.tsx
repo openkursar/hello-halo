@@ -53,7 +53,7 @@ function useCurrentConversation(): Conversation | null {
  */
 function ModelList({ onDone }: { onDone: () => void }) {
   const { t } = useTranslation()
-  const { config, setConfig, setView } = useAppStore()
+  const { config, setConfig, navigate } = useAppStore()
   const [isRefreshing, setIsRefreshing] = useState(false)
 
   const aiSources = useAiSources()
@@ -131,7 +131,7 @@ function ModelList({ onDone }: { onDone: () => void }) {
   // Handle add source
   const handleAddSource = () => {
     onDone()
-    setView('settings')
+    navigate('settings')
   }
 
   // Refresh model lists for all sources from remote APIs

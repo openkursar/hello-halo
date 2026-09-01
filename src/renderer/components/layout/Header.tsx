@@ -46,7 +46,7 @@ export function Header({ left, right, className = '' }: HeaderProps) {
   const isInCapacitor = isCapacitor()
 
   // Capacitor: device switcher
-  const setView = useAppStore(s => s.setView)
+  const navigate = useAppStore(s => s.navigate)
   const activeServer = useServerStore(s => s.getActive())
 
   // Platform-specific padding classes
@@ -102,7 +102,7 @@ export function Header({ left, right, className = '' }: HeaderProps) {
           {/* Capacitor: device switcher button — always visible when connected */}
           {isInCapacitor && (
             <button
-              onClick={() => setView('serverList')}
+              onClick={() => navigate('serverList')}
               className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-secondary transition-colors max-w-[120px]"
               title={activeServer?.name}
             >

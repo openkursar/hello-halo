@@ -57,7 +57,7 @@ export function navigateToConversation(spaceId: string, conversationId: string) 
 
   // Switch space — SpacePage's initSpace will pick up the flag and call selectConversation
   spaceStore.setCurrentSpace(targetSpace)
-  useAppStore.getState().setView('space')
+  useAppStore.getState().navigate('space')
 }
 
 interface PulseListProps {

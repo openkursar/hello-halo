@@ -181,7 +181,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
                     const target = spaceStore.spaces.find(s => s.id === app.spaceId) ?? spaceStore.haloSpace
                     if (target) {
                       spaceStore.setCurrentSpace(target)
-                      useAppStore.getState().setView('space')
+                      useAppStore.getState().navigate('space')
                     }
                   }}
                   className="inline-flex items-center gap-1 ml-1.5 px-1.5 py-0.5 rounded-sm bg-secondary/50 text-muted-foreground hover:bg-secondary hover:text-primary transition-colors text-[11px] leading-tight"

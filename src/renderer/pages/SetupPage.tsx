@@ -39,7 +39,7 @@ interface ClaudeLoginState {
 
 export function SetupPage() {
   const { t } = useTranslation()
-  const { setView, setConfig, config } = useAppStore()
+  const { navigate, setConfig, config } = useAppStore()
   // Step is derived per render so the wizard remains correct even if:
   //   (a) `config` arrives after SetupPage first mounts (async IPC race), or
   //   (b) React Fast Refresh preserves stale useState across HMR.
@@ -120,7 +120,7 @@ export function SetupPage() {
         setConfig(configResult.data as any)
       }
 
-      setView('home')
+      navigate('home')
     } catch (err) {
       console.error(`[SetupPage] ${providerType} login error:`, err)
       setError(err instanceof Error ? err.message : t('Login failed'))
@@ -157,7 +157,7 @@ export function SetupPage() {
         setConfig(configResult.data as any)
       }
       setClaudeLogin(null)
-      setView('home')
+      navigate('home')
     } catch (err) {
       setClaudeLogin(prev => prev ? {
         ...prev,
@@ -189,7 +189,7 @@ export function SetupPage() {
         setConfig(configResult.data as any)
       }
       setClaudeLogin(null)
-      setView('home')
+      navigate('home')
     } catch (err) {
       setClaudeLogin(prev => prev ? {
         ...prev,
@@ -231,7 +231,7 @@ export function SetupPage() {
       }
       await api.setConfig(newConfig)
       setConfig(newConfig)
-      setView('home')
+      navigate('home')
     } catch (err) {
       console.error('[SetupPage] skip error:', err)
       setError(err instanceof Error ? err.message : t('Skip failed'))

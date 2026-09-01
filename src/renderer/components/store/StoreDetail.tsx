@@ -78,7 +78,7 @@ export function StoreDetail() {
   const setCurrentTab = useAppsPageStore(state => state.setCurrentTab)
   const consumeStoreAutoInstall = useAppsPageStore(state => state.consumeStoreAutoInstall)
   const checkUpdates = useAppsPageStore(state => state.checkUpdates)
-  const setView = useAppStore(state => state.setView)
+  const navigate = useAppStore(state => state.navigate)
   const spaces = useSpaceStore(state => state.spaces)
   const currentSpace = useSpaceStore(state => state.currentSpace)
   const setCurrentSpace = useSpaceStore(state => state.setCurrentSpace)
@@ -200,7 +200,7 @@ export function StoreDetail() {
         const command = `/${installedApp.spec.name.toLowerCase().replace(/\s+/g, '-')} `
         useChatStore.setState({ pendingComposerInput: { spaceId: target.id, text: command } })
       }
-      setView('space')
+      navigate('space')
       return
     }
     clearStoreSelection()
@@ -213,7 +213,7 @@ export function StoreDetail() {
     currentSpace,
     setCurrentSpace,
     refreshCurrentSpace,
-    setView,
+    navigate,
     clearStoreSelection,
     setCurrentTab,
     selectApp,

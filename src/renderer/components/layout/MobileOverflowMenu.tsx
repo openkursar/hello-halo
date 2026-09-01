@@ -21,7 +21,7 @@ interface MobileOverflowMenuProps {
 
 export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
   const { t } = useTranslation()
-  const { config, setView } = useAppStore()
+  const { config, navigate } = useAppStore()
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [isAnimatingOut, setIsAnimatingOut] = useState(false)
   const [isModelSheetOpen, setIsModelSheetOpen] = useState(false)
@@ -115,7 +115,7 @@ export function MobileOverflowMenu({ onSearch }: MobileOverflowMenuProps) {
               </button>
 
               <button
-                onClick={() => closeMenu(() => setView('settings'))}
+                onClick={() => closeMenu(() => navigate('settings'))}
                 className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
               >
                 <Settings className="w-4 h-4 text-muted-foreground flex-shrink-0" />

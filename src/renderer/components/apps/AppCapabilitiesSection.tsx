@@ -41,9 +41,9 @@ interface AppCapabilitiesSectionProps {
 
 /** Jump to Settings > Message Channels and scroll it into view. */
 function useGoToChannels() {
-  const { setView } = useAppStore()
+  const { navigate } = useAppStore()
   return () => {
-    setView('settings')
+    navigate('settings')
     setTimeout(() => {
       const el = document.getElementById('message-channels')
       el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
