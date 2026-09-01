@@ -15,7 +15,6 @@ import { useSpaceStore } from '../../stores/space.store'
 import { useAppStore } from '../../stores/app.store'
 import { api } from '../../api'
 import { TaskStatusDot } from '../pulse/TaskStatusDot'
-import { PulseSidebarSection } from '../pulse/PulseSidebarSection'
 import { AutomationBadge } from '../apps/AutomationBadge'
 import { EngineBadge } from './EngineBadge'
 import type { ConversationMeta } from '../../types'
@@ -35,13 +34,10 @@ const clampTopSectionHeight = (value: number, containerHeight: number) => {
 
 interface ConversationListProps {
   onClose?: () => void
-  /** Whether the sidebar is currently visible (used to skip heavy Pulse section when hidden) */
-  visible?: boolean
 }
 
 export const ConversationList = memo(function ConversationList({
   onClose,
-  visible = true,
 }: ConversationListProps) {
   const { t } = useTranslation()
 
@@ -379,15 +375,10 @@ export const ConversationList = memo(function ConversationList({
         )}
       </div>
 
-      {/* Top section: automation badge + pinned conversations (resizable) */}
+      {/* Top section: automation badge (resizable) */}
       <div className="relative flex-shrink-0 flex flex-col overflow-hidden" style={{ maxHeight: topSectionHeight }}>
         {/* Automation apps status badge — quick jump to AppsPage */}
         <AutomationBadge />
-
-        {/* Pinned section - fills remaining space and scrolls within the dragged height */}
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          {visible && <PulseSidebarSection />}
-        </div>
 
         {/* Vertical drag handle */}
         <div

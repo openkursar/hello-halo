@@ -3,10 +3,10 @@
  *
  * NavRail hides in a genuinely narrow layout (see useIsNarrowShell), so this
  * is its replacement entry point for Conversation / Digital Humans /
- * Knowledge Base / Store / Settings — reachable from every RAIL_VIEWS page,
- * not just the one the user happens to be on. Without this, deleting
- * HomePage (their only other entry point today) would make three of those
- * destinations permanently unreachable on a narrow layout.
+ * Knowledge Base / Store / Tasks / Settings — reachable from every
+ * RAIL_VIEWS page, not just the one the user happens to be on. Without
+ * this, deleting HomePage (their only other entry point for some of these)
+ * would make those destinations permanently unreachable on a narrow layout.
  *
  * Same bottom-sheet interaction as MobileOverflowMenu, kept as a separate
  * component since the two serve different purposes (page-local actions vs.
@@ -14,9 +14,11 @@
  */
 
 import { useState } from 'react'
-import { Menu, X, MessageSquare, Bot, BookOpen, Store, Settings } from 'lucide-react'
+import { Menu, X, MessageSquare, Bot, BookOpen, Store, ListChecks, Settings } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
+import { useTaskPanelStore } from '../../stores/taskPanel.store'
+import { usePulseCount } from '../../stores/chat.store'
 import { useTranslation } from '../../i18n'
 import { useGoToConversation } from '../../hooks/useGoToConversation'
 
@@ -24,6 +26,8 @@ export function NarrowNavSheet() {
   const { t } = useTranslation()
   const navigate = useAppStore(s => s.navigate)
   const goToConversation = useGoToConversation()
+  const taskCount = usePulseCount()
+  const openTaskPanel = useTaskPanelStore(s => s.toggle)
   const [isOpen, setIsOpen] = useState(false)
   const [isAnimatingOut, setIsAnimatingOut] = useState(false)
 
@@ -47,6 +51,7 @@ export function NarrowNavSheet() {
     navigate('apps')
   })
   const goSettings = () => close(() => navigate('settings'))
+  const goTasks = () => close(openTaskPanel)
 
   return (
     <>
@@ -122,6 +127,17 @@ export function NarrowNavSheet() {
               >
                 <Store className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-sm text-foreground">{t('Store')}</span>
+              </button>
+
+              <button
+                onClick={goTasks}
+                className="w-full px-4 py-3 flex items-center gap-3 hover:bg-secondary/80 transition-colors"
+              >
+                <ListChecks className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                <span className="text-sm text-foreground">{t('Tasks')}</span>
+                {taskCount > 0 && (
+                  <span className="ml-auto text-xs text-muted-foreground tabular-nums">{taskCount}</span>
+                )}
               </button>
 
               <button

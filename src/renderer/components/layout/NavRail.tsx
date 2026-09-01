@@ -2,19 +2,21 @@
  * NavRail - persistent global navigation column
  *
  * Left-most 56px column with the four primary destinations (conversation /
- * digital humans / knowledge base / store) and settings pinned to the
- * bottom. Hidden only in a genuinely narrow layout (see useIsNarrowShell) —
- * HeaderShell's NarrowNavSheet is the escape hatch to these same
- * destinations there.
+ * digital humans / knowledge base / store), plus tasks and settings pinned
+ * to the bottom. Hidden only in a genuinely narrow layout (see
+ * useIsNarrowShell) — HeaderShell's NarrowNavSheet is the escape hatch to
+ * these same destinations there.
  *
  * The top spacer reserves the row height of the per-page Header so rail icons
  * line up with it, and doubles as the macOS traffic-light clearance.
  */
 
 import type { ComponentType, CSSProperties } from 'react'
-import { MessageSquare, Bot, BookOpen, Store, Settings } from 'lucide-react'
+import { MessageSquare, Bot, BookOpen, Store, ListChecks, Settings } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
+import { useTaskPanelStore } from '../../stores/taskPanel.store'
+import { usePulseCount } from '../../stores/chat.store'
 import { useTranslation } from '../../i18n'
 import { cn } from '../../lib/utils'
 import { isElectron } from '../../api/transport'
@@ -39,9 +41,11 @@ interface NavItemProps {
   label: string
   active?: boolean
   onClick?: () => void
+  /** Small count pill, top-right of the icon (e.g. task count). */
+  badge?: number
 }
 
-function NavItem({ icon: Icon, label, active, onClick }: NavItemProps) {
+function NavItem({ icon: Icon, label, active, onClick, badge }: NavItemProps) {
   return (
     <button
       onClick={onClick}
@@ -49,13 +53,18 @@ function NavItem({ icon: Icon, label, active, onClick }: NavItemProps) {
       aria-label={label}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'w-full h-11 flex items-center justify-center border-l-[3px] transition-colors',
+        'relative w-full h-11 flex items-center justify-center border-l-[3px] transition-colors',
         active
           ? 'border-primary bg-primary/10 text-primary'
           : 'border-transparent text-muted-foreground hover:bg-secondary hover:text-foreground'
       )}
     >
       <Icon className="w-5 h-5" />
+      {!!badge && (
+        <span className="absolute top-1 right-3 min-w-[14px] h-[14px] px-0.5 rounded-full bg-primary text-primary-foreground text-[9px] leading-[14px] text-center tabular-nums">
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
     </button>
   )
 }
@@ -72,6 +81,9 @@ export function NavRail() {
   const active = useActiveDestination()
   const platform = usePlatform()
   const isNarrow = useIsNarrowShell()
+  const taskCount = usePulseCount()
+  const toggleTaskPanel = useTaskPanelStore(s => s.toggle)
+  const isTaskPanelOpen = useTaskPanelStore(s => s.isOpen)
 
   const goChat = useGoToConversation()
   const goDigitalHumans = () => {
@@ -115,6 +127,7 @@ export function NavRail() {
       </nav>
 
       <div className="w-full flex flex-col items-center gap-1 pb-3 no-drag">
+        <NavItem icon={ListChecks} label={t('Tasks')} active={isTaskPanelOpen} badge={taskCount} onClick={toggleTaskPanel} />
         <NavItem icon={Settings} label={t('Settings')} active={view === 'settings'} onClick={goSettings} />
       </div>
     </div>

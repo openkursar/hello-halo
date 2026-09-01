@@ -32,6 +32,8 @@ import { NotificationToast } from './components/notification/NotificationToast'
 import { CredentialAlertBanner } from './components/settings/CredentialAlertBanner'
 import { NavRail } from './components/layout/NavRail'
 import { HeaderShell } from './components/layout/Header'
+import { TaskPanel } from './components/layout/TaskPanel'
+import { useTaskPanelStore } from './stores/taskPanel.store'
 import { useNotificationStore } from './stores/notification.store'
 import { api } from './api'
 import { syncStatusBarStyle } from './api/safe-area'
@@ -102,6 +104,7 @@ function applyTheme(theme: 'light' | 'dark' | 'system') {
 export default function App() {
   const { t } = useTranslation()
   const { view, config, initialize, setMcpStatus, navigate, enterApp, setConfig, completeDeferredGitBashCheck } = useAppStore()
+  const isTaskPanelOpen = useTaskPanelStore(s => s.isOpen)
   const {
     handleAgentMessage,
     handleAgentToolCall,
@@ -1010,6 +1013,10 @@ export default function App() {
         {RAIL_VIEWS.includes(view) ? (
           <>
             <NavRail />
+            {/* Docked on wide layouts (flex sibling, pushes content over);
+                TaskPanel renders itself as a bottom sheet instead on narrow
+                ones, where mounting position doesn't matter. */}
+            {isTaskPanelOpen && <TaskPanel />}
             <div className="flex-1 min-w-0 h-full overflow-hidden flex flex-col">
               <HeaderShell>
                 <div className="flex-1 min-h-0 overflow-hidden">

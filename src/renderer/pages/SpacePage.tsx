@@ -406,7 +406,6 @@ export function SpacePage() {
           <div style={{ display: showConversationList && !isCanvasMaximized ? 'flex' : 'none' }}>
             <ConversationList
               onClose={handleToggleConversationList}
-              visible={showConversationList && !isCanvasMaximized}
             />
           </div>
         )}
