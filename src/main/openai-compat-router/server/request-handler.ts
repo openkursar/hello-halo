@@ -25,7 +25,7 @@ import {
   streamAnthropicPassthrough,
   pipeAnthropicPassthrough
 } from '../stream'
-import { isNativeAnthropicHost, normalizeSystemPrompt, safeJsonParse } from '../utils'
+import { isNativeAnthropicHost, normalizeSystemPrompt, safeJsonParse, pickSessionAffinityHeaders } from '../utils'
 import { proxyFetch } from '../../services/proxy-fetch'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { runInterceptors } from '../interceptors'
@@ -263,8 +263,11 @@ async function fetchAnthropicUpstream(
       // Override with merged beta (covers both SDK and provider betas)
       ...(mergedBeta && { 'anthropic-beta': mergedBeta }),
       // Skip x-api-key when the provider already injected an Authorization header
-      // (e.g. GitHub Copilot uses Bearer token instead of x-api-key)
-      ...(!hasAuthHeader && { 'x-api-key': apiKey }),
+      // (e.g. GitHub Copilot uses Bearer token instead of x-api-key), and when
+      // there is no key at all — a delegated caller's own Authorization header
+      // is already in sdkHeaders, and an empty x-api-key alongside it is a
+      // malformed request upstream may reject.
+      ...(!hasAuthHeader && apiKey && { 'x-api-key': apiKey }),
     }
 
     // Deduplicate content-type: sdkHeaders (lowercase from Express) and customHeaders
@@ -515,7 +518,7 @@ async function handleOpenAIConversion(
   res: ExpressResponse,
   options: RequestHandlerOptions
 ): Promise<void> {
-  const { debug = false, timeoutMs = DEFAULT_TIMEOUT_MS } = options
+  const { debug = false, timeoutMs = DEFAULT_TIMEOUT_MS, sdkHeaders } = options
   const { url: backendUrl, key: apiKey, model, headers: customHeaders, apiType: configApiType, adapterId } = config
   console.log(`[RequestHandler] adapterId: ${adapterId || 'none'}`)
 
@@ -554,7 +557,10 @@ async function handleOpenAIConversion(
 
     // Convert request
     const requestToSend = { ...anthropicRequest, stream: wantStream }
-    const convertOptions = { visionOverride: config.visionOverride }
+    const convertOptions = {
+      visionOverride: config.visionOverride,
+      reasoningEffort: config.reasoningEffort
+    }
     const openaiRequest = apiType === 'responses'
       ? convertAnthropicToOpenAIResponses(requestToSend, convertOptions).request
       : convertAnthropicToOpenAIChat(requestToSend, convertOptions).request
@@ -563,8 +569,10 @@ async function handleOpenAIConversion(
     console.log(`[RequestHandler] wire=${apiType} tools=${toolCount}`)
     console.log(`[RequestHandler] POST ${backendUrl} (stream=${wantStream ?? false})`)
 
-    // Build headers: start with custom headers from config
-    const requestHeaders: Record<string, string> = { ...(customHeaders || {}) }
+    const requestHeaders: Record<string, string> = {
+      ...(customHeaders || {}),
+      ...pickSessionAffinityHeaders(sdkHeaders),
+    }
 
     // Apply provider-specific transformations (e.g., Groq temperature fix, OpenRouter headers)
     const adapterContext: AdapterContext = { originalRequest: requestToSend }

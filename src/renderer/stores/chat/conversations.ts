@@ -370,6 +370,9 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
       const response = await api.deleteConversation(spaceId, conversationId)
 
       if (response.success) {
+        const wasCurrent =
+          get().spaceStates.get(spaceId)?.currentConversationId === conversationId
+
         set((state) => {
           // Clean up session state
           const newSessions = new Map(state.sessions)
@@ -408,6 +411,16 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
             pulseReadAt: newPulseReadAt
           }
         })
+
+        // Deleting the last conversation would leave the space with no current
+        // conversation — every consumer (sendMessage, toolsets, KB) degrades to
+        // null and user input is silently dropped. The space page's own init
+        // treats "no conversations" the same way, so auto-create a fresh empty
+        // conversation through the normal creation path here too.
+        const remaining = get().spaceStates.get(spaceId)?.conversations ?? []
+        if (wasCurrent && remaining.length === 0) {
+          await get().createConversation(spaceId)
+        }
 
         return true
       }

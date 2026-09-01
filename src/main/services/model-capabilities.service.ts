@@ -11,6 +11,11 @@
  *   2. Longest-prefix match from the `patterns` section
  *   3. Built-in defaults
  *
+ * Vision is the one exception to "preset blob wins": it is resolved by the
+ * shared id-heuristic chain (`supportsVisionById`) so this service, the
+ * OpenAI-compat router and the renderer input hint always produce the same
+ * answer for the same model id.
+ *
  * Additionally, a `[1m]` suffix on the model id (CC's explicit 1M context
  * opt-in) raises the resolved contextWindow to 1M unless the user override
  * explicitly sets contextWindow — see `resolve()`.
@@ -20,66 +25,39 @@
  */
 
 import presetData from '../../shared/data/model-capabilities.json'
+import {
+  findModelPresetCapability,
+  supportsVisionById
+} from '../../shared/constants/model-capabilities'
 import type {
   ModelCapability,
   ModelCapabilityOverride,
-  ModelCapabilitiesPreset
+  ModelCapabilitiesPreset,
+  ResolvedModelCapability
 } from '../../shared/types/model-capabilities'
 
 /** Context window granted by the explicit `[1m]` model-id suffix */
 const EXPLICIT_1M_CONTEXT_WINDOW = 1_000_000
 
-/** Fallback values used when a model has no preset or pattern entry */
-const DEFAULT_CAPABILITY: Omit<ModelCapability, 'displayName' | 'provider'> = {
+/**
+ * Fallback values used when a model has no preset or pattern entry.
+ * No `vision` here: that field is resolved by the shared id heuristic.
+ */
+const DEFAULT_CAPABILITY: Omit<ModelCapability, 'displayName' | 'provider' | 'vision'> = {
   contextWindow: 128_000,
   maxOutputTokens: 16_384,
-  vision: false,
   thinking: false
-}
-
-/**
- * Normalise a model ID so proxy-prefixed and case-variant IDs can match.
- *
- * Examples:
- *   "Pro/zai-org/GLM-4.7"  → "glm-4.7"
- *   "Claude-Opus-4-6"      → "claude-opus-4-6"
- *   "deepseek-chat"        → "deepseek-chat"
- */
-function normalizeModelId(raw: string): string {
-  // Strip everything before the last slash (proxy routing prefixes)
-  const lastSlash = raw.lastIndexOf('/')
-  const base = lastSlash >= 0 ? raw.slice(lastSlash + 1) : raw
-  return base.toLowerCase()
 }
 
 class ModelCapabilitiesService {
   private readonly preset: ModelCapabilitiesPreset
-  /** Normalised-key → original-key lookup for the models map */
-  private readonly normalisedModels: Map<string, string>
-  /** Pattern prefixes sorted by length descending (longest match first) */
-  private readonly sortedPatterns: Array<{ prefix: string; cap: ModelCapability }>
 
   constructor() {
     this.preset = presetData as ModelCapabilitiesPreset
 
-    // Build normalised model lookup
-    this.normalisedModels = new Map()
-    for (const key of Object.keys(this.preset.models)) {
-      this.normalisedModels.set(key.toLowerCase(), key)
-    }
-
-    // Build sorted pattern list (longest prefix first for greedy matching)
-    this.sortedPatterns = []
-    if (this.preset.patterns) {
-      for (const [prefix, cap] of Object.entries(this.preset.patterns)) {
-        this.sortedPatterns.push({ prefix: prefix.toLowerCase(), cap })
-      }
-      this.sortedPatterns.sort((a, b) => b.prefix.length - a.prefix.length)
-    }
-
     console.log(
       `[ModelCapabilities] Loaded ${Object.keys(this.preset.models).length} model presets, ` +
-      `${this.sortedPatterns.length} patterns (v${this.preset.version})`
+      `${Object.keys(this.preset.patterns ?? {}).length} patterns (v${this.preset.version})`
     )
   }
 
@@ -96,11 +74,14 @@ class ModelCapabilitiesService {
   resolve(
     modelId: string,
     overrides?: Record<string, ModelCapabilityOverride>
-  ): ModelCapability {
-    const base: ModelCapability = this.findPreset(modelId) ?? {
-      displayName: modelId,
-      provider: 'unknown',
-      ...DEFAULT_CAPABILITY
+  ): ResolvedModelCapability {
+    const base: ModelCapability = {
+      ...(findModelPresetCapability(modelId) ?? {
+        displayName: modelId,
+        provider: 'unknown',
+        ...DEFAULT_CAPABILITY
+      }),
+      vision: supportsVisionById(modelId)
     }
 
     const userOverride = overrides?.[modelId]
@@ -133,7 +114,7 @@ class ModelCapabilitiesService {
    * for checking whether a preset exists (non-null = matched).
    */
   getPreset(modelId: string): ModelCapability | null {
-    return this.findPreset(modelId)
+    return findModelPresetCapability(modelId)
   }
 
   /** Return all exact-match preset model capability entries. */
@@ -147,30 +128,6 @@ class ModelCapabilitiesService {
       version: this.preset.version,
       updatedAt: this.preset.updatedAt
     }
-  }
-
-  // ── Internal helpers ────────────────────────────────────────────────
-
-  /**
-   * Try to find a preset via normalised exact match, then pattern fallback.
-   */
-  private findPreset(modelId: string): ModelCapability | null {
-    const normalised = normalizeModelId(modelId)
-
-    // 1. Exact match (case-insensitive, prefix-stripped)
-    const originalKey = this.normalisedModels.get(normalised)
-    if (originalKey) {
-      return this.preset.models[originalKey]
-    }
-
-    // 2. Longest-prefix pattern match
-    for (const { prefix, cap } of this.sortedPatterns) {
-      if (normalised.startsWith(prefix)) {
-        return cap
-      }
-    }
-
-    return null
   }
 }
 

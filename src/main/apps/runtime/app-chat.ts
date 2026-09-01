@@ -3,7 +3,7 @@
  *
  * Interactive chat entry point for automation Apps.
  * Allows users to chat with an App's AI agent in real-time,
- * reusing the main Agent's full streaming capabilities via stream-processor.
+ * reusing the main Agent's session + consumption machinery.
  *
  * This is separate from execute.ts (scheduled runs):
  * - execute.ts:  Automated runs triggered by schedule/events, batch processing
@@ -15,10 +15,16 @@
  * V2 process is rebuilt (idle timeout, crash, config change).
  *
  * Design:
- * - Uses stream-processor.ts for all streaming logic (shared with main agent)
- * - Uses session-manager.ts for V2 session lifecycle (same reuse/invalidation)
- * - Sends renderer events via the virtual conversationId "app-chat:{appId}"
- * - Frontend subscribes to agent:* events filtered by this conversationId
+ * - This module owns the *entry* half: prompt assembly, tool/permission
+ *   envelope, credentials, and dispatching the message.
+ * - Consumption is the shared persistent consumer (services/agent/session-
+ *   consumer.ts), so CC output produced between messages — a finished
+ *   background task, a team agent's turn — is read as it appears instead of
+ *   waiting in the pipe for the next message to pick up as its own answer.
+ * - Turn results land in the app-chat sink (app-chat-sink.ts): JSONL
+ *   persistence plus delivery to whoever sent the message.
+ * - Renderer events flow via the virtual conversationId "app-chat:{appId}";
+ *   the frontend subscribes to agent:* filtered by it.
  */
 
 import { writeFile } from 'fs/promises'
@@ -37,25 +43,32 @@ import {
 } from '../../services/agent/helpers'
 import { emitAgentEvent } from '../../services/agent/events'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
+import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { createCanUseTool } from '../../services/agent/permission-handler'
 import { getImPermissionContext } from './im-permission-registry'
 import type { GuestPolicy } from '../../../shared/types/im-channel'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import type { BrowserContext } from '../../services/ai-browser/context'
-import { processStream } from '../../services/agent/stream-processor'
 import { buildMessageContent } from '../../services/agent/message-utils'
 import { prepareNonVisionImageFallback } from '../../services/agent/image-attachments'
 import {
   getOrCreateV2Session,
   closeV2Session,
-  createSessionState,
-  registerActiveSession,
-  unregisterActiveSession,
-  activeSessions,
+  getConsumerHandle,
+  getRunningConsumerIds,
+  markTurnDispatched,
+  updateConsumerDisplayModel,
   v2Sessions
 } from '../../services/agent/session-manager'
-import { stopGeneration } from '../../services/agent/control'
+import { stopGeneration, getSessionState } from '../../services/agent/control'
+import {
+  getAppChatSink,
+  hasActiveAppChatRound,
+  getConversationsWithActiveRound,
+  disposeAppChatSink,
+  type AppChatRoundHandle,
+} from './app-chat-sink'
 import { assembleAppChatPrompt } from './prompt/assembler'
 import { buildIdentityFragments } from './prompt/identity'
 import { buildDisabledCapabilitiesGuidance, buildUnconfiguredCapabilitiesGuidance } from './prompt/capabilities'
@@ -75,7 +88,7 @@ import { createWebSearchMcpServer } from '../../services/web-search'
 import { createOcrMcpServer } from '../../services/ocr'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { getSpace, getSpaceDir } from '../../services/space.service'
-import { openSessionWriter, readSessionMessages, saveChatSessionId, loadChatSessionId, deleteChatSessionId, copySessionJsonl } from './session-store'
+import { readSessionMessages, loadChatSessionId, deleteChatSessionId, copySessionJsonl } from './session-store'
 import { getAppMemoryService } from './index'
 import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
 // Key builders live in shared/ so the renderer can import them without
@@ -87,8 +100,6 @@ import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
 import type { ProgressEvent } from '../../../shared/types/inbound-message'
 import type { ImageAttachment } from '../../services/agent/types'
-import { ProgressEventParser } from './progress-formatter'
-import { ReplyTextAccumulator } from './reply-accumulator'
 import { flushSupplementBuffer, clearSupplementBuffer } from './dispatch-inbound'
 import { getImStreamHandle, clearImStreamHandle } from './im-stream-registry'
 export { getAppChatConversationId, buildImSessionKey }
@@ -559,9 +570,6 @@ export async function sendAppChatMessage(
   )
 
   // ── 5. Build SDK options ─────────────────────────────
-  const abortController = new AbortController()
-  const sessionState = createSessionState(spaceId, conversationId, abortController)
-
   const sdkOptions = buildBaseSdkOptions({
     credentials: resolvedCreds,
     workDir,
@@ -573,6 +581,8 @@ export async function sendAppChatMessage(
     },
     mcpServers,
   })
+
+  const thinkingBudget = applyReasoningEffort(sdkOptions, thinkingEnabled, resolvedCreds.capabilities)
 
   // Override for app chat context
   sdkOptions.systemPrompt = systemPrompt
@@ -633,6 +643,12 @@ export async function sendAppChatMessage(
       ? getImSessionRegistry()?.getPendingResume(appId, forkParsedKey.channel, forkParsedKey.chatId)
       : undefined
 
+  // The sink outlives individual V2 sessions: it owns the transcript writer and
+  // the queue of messages awaiting an answer, so a session rebuild underneath it
+  // never orphans a caller.
+  const sink = getAppChatSink({ appId, conversationId, runId: chatRunId, spacePath })
+
+  let round: AppChatRoundHandle | undefined
   try {
     const t0 = Date.now()
 
@@ -646,37 +662,35 @@ export async function sendAppChatMessage(
     // Fork-on-first-message: a local session created via "continue in client"
     // carries a pending source SDK session id. With no session of its own yet,
     // resume that source AND branch to a fresh session id (forkSession) so the
-    // two windows evolve independently. The captured new id is persisted in
-    // onComplete and the pending marker is cleared, so later messages take the
+    // two windows evolve independently. The captured new id is persisted by the
+    // sink, which also clears the pending marker, so later messages take the
     // normal resume path. Only reachable when the engine advertises sessionFork
     // (the fork UI is gated on it), so no engine guard is needed here.
     let resumeSessionId = savedSessionId
-    let forkFromChannel: string | undefined
-    let forkFromChatId: string | undefined
     if (!resumeSessionId && forkResumeSessionId) {
       resumeSessionId = forkResumeSessionId
       sdkOptions.forkSession = true
-      forkFromChannel = forkParsedKey?.channel
-      forkFromChatId = forkParsedKey?.chatId
       console.log(`[AppChat][${appId}] Forking new local session from source SDK session ${forkResumeSessionId}`)
     }
 
-    // No displayModel: app-chat drives its own processStream(), so it must not
-    // start a persistent session consumer (that would fight over the stream).
     const v2Session = await getOrCreateV2Session(
       spaceId,
       conversationId,
       sdkOptions,
       resumeSessionId,
-      workDir
+      workDir,
+      { displayModel: resolvedCreds.displayModel, sink }
     )
 
-    registerActiveSession(conversationId, sessionState)
+    // A reused session keeps the consumer it was created with; refresh the model
+    // label so thought parsing stays correct after a model switch that did not
+    // force a rebuild.
+    updateConsumerDisplayModel(conversationId, resolvedCreds.displayModel)
 
     // Set thinking tokens dynamically
     if (typeof v2Session.setMaxThinkingTokens === 'function') {
       try {
-        await v2Session.setMaxThinkingTokens(thinkingEnabled ? 10240 : null)
+        await v2Session.setMaxThinkingTokens(thinkingBudget)
       } catch (e) {
         console.error(`[AppChat][${appId}] Failed to set thinking tokens:`, e)
       }
@@ -684,19 +698,12 @@ export async function sendAppChatMessage(
 
     console.log(`[AppChat][${appId}] V2 session ready: ${Date.now() - t0}ms`)
 
-    // ── 7. Open session writer for JSONL persistence ──
-    const sessionWriter = spacePath
-      ? openSessionWriter(spacePath, appId, chatRunId)
-      : undefined
+    // ── 7. Persist the user message for reload recovery ──
+    // Original images are persisted regardless of the vision fallback — they
+    // feed the chat bubble display, not the model.
+    sink.writeUserMessage(message, images)
 
-    // Write user message to JSONL for reload recovery. Original images are
-    // persisted regardless of the vision fallback — they feed the chat bubble
-    // display, not the model.
-    if (sessionWriter) {
-      sessionWriter.writeTrigger(message, images)
-    }
-
-    // ── 8. Process stream ──────────────────────────────
+    // ── 8. Dispatch and wait for this message's turn ────
     // With the non-vision fallback active, image blocks are replaced by the
     // injected attachment-paths block.
     const messageContent = buildMessageContent(
@@ -704,136 +711,38 @@ export async function sendAppChatMessage(
       imageFallback ? undefined : images
     )
 
-    // Accumulate the final reply text from raw SDK assistant messages. Keeps the
-    // last contiguous run of text blocks so multi-segment answers survive intact
-    // (a tool_use resets the run — preceding text is intermediate narration).
-    // This is the authoritative source for IM replies; reading directly from SDK
-    // output sidesteps processStream's lastTextContent dual-path pollution.
-    const replyAccumulator = new ReplyTextAccumulator()
+    // Claim the next turn for this message. Enqueued immediately before send so
+    // the window in which an autonomous turn could start first — and therefore
+    // claim this round — is as narrow as the SDK allows.
+    round = sink.beginRound({ onProgress, onReply, onMessageAccepted })
 
-    // One stateful parser per message: accumulates tool input JSON and thinking
-    // text across delta events, emits complete ProgressEvents on block_stop.
-    const progressParser = onProgress ? new ProgressEventParser() : null
-
-    // The first SDK message is the earliest proof the engine accepted our
-    // message — before it, nothing entered the engine's history.
-    let messageAccepted = false
-    const acceptMessage = () => {
-      if (messageAccepted || !onMessageAccepted) return
-      messageAccepted = true
-      try {
-        onMessageAccepted()
-      } catch (acceptErr) {
-        console.error(`[AppChat][${appId}] onMessageAccepted callback error:`, acceptErr)
+    // Mark the dispatch BEFORE send: from here until system:init the consumer
+    // looks idle, and an unguarded rebuild in that window would destroy this
+    // message.
+    markTurnDispatched(conversationId)
+    try {
+      if (typeof messageContent === 'string') {
+        v2Session.send(messageContent)
+      } else {
+        v2Session.send({ type: 'user', message: { role: 'user', content: messageContent } } as any)
       }
+    } catch (sendErr) {
+      // Nothing reached CC, so no turn will arrive to settle this round.
+      round.cancel()
+      throw sendErr
     }
 
-    await processStream({
-      v2Session,
-      sessionState,
-      spaceId,
-      conversationId,
-      messageContent,
-      displayModel: resolvedCreds.displayModel,
-      abortController,
-      t0,
-      callbacks: {
-        onComplete: (streamResult) => {
-          // Save session ID for future resumption (same pattern as send-message.ts).
-          // When V2 session is rebuilt after idle timeout or process crash,
-          // this allows the SDK to restore conversation history from disk.
-          if (streamResult.capturedSessionId && spacePath) {
-            saveChatSessionId(spacePath, appId, chatRunId, streamResult.capturedSessionId)
-
-            // Fork established: the captured id is the NEW forked session
-            // (distinct from the source). Clear the pending marker so later
-            // messages resume this session normally instead of re-forking.
-            if (forkFromChannel && forkFromChatId) {
-              getImSessionRegistry()?.clearPendingResume(appId, forkFromChannel, forkFromChatId)
-            }
-          }
-
-          // App chat doesn't use conversation.service for storage.
-          // Messages are persisted to JSONL via onRawMessage for reload.
-          const assistantText = replyAccumulator.getReply()
-          const replyContent = assistantText || streamResult.finalContent
-          console.log(
-            `[AppChat][${appId}] Stream complete: ` +
-            `content=${replyContent.length} chars` +
-            `${assistantText ? ' (from SDK message)' : ' (from streamResult)'}, ` +
-            `thoughts=${streamResult.thoughts.length}, ` +
-            `tokens=${streamResult.tokenUsage ? 'yes' : 'no'}`
-          )
-
-          // Invoke onReply callback for external bridges (WeCom Bot auto-reply).
-          // Always fire when content exists — including the whitespace-only
-          // empty-response placeholder — because the bridge's onReply is what
-          // terminates a streaming IM session. Whether the placeholder is shown
-          // or replaced with a notice is the bridge's decision, not ours.
-          if (onReply && replyContent) {
-            try {
-              onReply(replyContent)
-            } catch (replyErr) {
-              console.error(`[AppChat][${appId}] onReply callback error:`, replyErr)
-            }
-          }
-        },
-        onRawMessage: (sdkMessage) => {
-          acceptMessage()
-
-          // Persist SDK messages to JSONL for "View process" / reload recovery.
-          //
-          // We skip `stream_event` for both engines: token-level deltas are
-          // too granular for JSONL (hundreds per response) and the engine
-          // adapters are required to ALSO emit aggregate top-level
-          // `assistant`/`user` envelopes (see services/agent/codex/event-
-          // normalizer.ts → aggregateBlock). The aggregates are what
-          // session-store.convertEventsToMessages reconstructs the chat
-          // history from. Engine-specific persistence gates here are a
-          // protocol-conformance smell; if a future engine needs them, fix
-          // the engine adapter, not this consumer.
-          if (sessionWriter && sdkMessage.type !== 'stream_event') {
-            sessionWriter.writeEvent(sdkMessage)
-          }
-
-          // Accumulate assistant text for the IM reply. SDK assistant messages
-          // carry complete text blocks in order, so the accumulator can track
-          // the last contiguous run across a multi-step (text/tool_use) flow.
-          replyAccumulator.feed(sdkMessage)
-
-          // Emit progress events to IM channel if callback provided
-          if (onProgress && progressParser) {
-            const progressEvent = progressParser.feed(sdkMessage)
-            if (progressEvent) {
-              try {
-                onProgress(progressEvent)
-              } catch (progressErr) {
-                console.error(`[AppChat][${appId}] onProgress callback error:`, progressErr)
-              }
-            }
-          }
-        }
-      }
-    })
+    await round.done
 
     console.log(`[AppChat][${appId}] Chat message processed successfully`)
   } catch (error: unknown) {
     const err = error as Error
-
-    // Abort is expected (user stopped generation)
-    if (err.name === 'AbortError' || abortController.signal.aborted) {
-      console.log(`[AppChat][${appId}] Aborted by user`)
-      return
-    }
 
     console.error(`[AppChat][${appId}] Error:`, error)
     emitAgentEvent('agent:error', spaceId, conversationId, {
       type: 'error',
       error: err.message || 'Unknown error during app chat'
     })
-
-    // Close session on error to force fresh session next time
-    closeV2Session(conversationId)
 
     // Destroy scoped browser context on error for IM sessions only.
     // The native app-chat context (defaultConvId) is reused across messages — preserve it
@@ -848,10 +757,10 @@ export async function sendAppChatMessage(
         console.log(`[AppChat][${appId}] IM scoped browser context destroyed (error)`)
       }
     }
-  } finally {
-    // Clean up active session (but keep V2 session for reuse)
-    unregisterActiveSession(conversationId)
 
+    // Let the caller close out its transport (IM stream, HTTP client).
+    throw err
+  } finally {
     // For IM sessions (not the native app-chat key), destroy scoped browser context
     // on successful completion. The native app-chat key reuses its context across messages,
     // but IM sessions can accumulate unboundedly — clean up to prevent memory leaks.
@@ -869,8 +778,6 @@ export async function sendAppChatMessage(
         console.log(`[AppChat][${appId}] IM scoped browser context destroyed (completion)`)
       }
     }
-
-    console.log(`[AppChat][${appId}] Active session cleaned up`)
 
     // Flush buffered IM supplements (deferred so busy lock is released first)
     if (conversationId !== defaultConvId) {
@@ -904,7 +811,7 @@ export async function sendAppChatMessage(
  * @returns whether a generation was actually running
  */
 async function stopConversation(conversationId: string): Promise<boolean> {
-  const wasActive = activeSessions.has(conversationId)
+  const wasActive = isAppChatConversationGenerating(conversationId)
 
   clearSupplementBuffer(conversationId)
 
@@ -930,17 +837,29 @@ async function stopConversation(conversationId: string): Promise<boolean> {
  * @param appId - App ID to stop chat for
  */
 export async function stopAppChat(appId: string): Promise<void> {
-  const prefix = getAppChatConversationId(appId)
-  // Collect all conversation IDs belonging to this app:
-  // - "app-chat:{appId}" (native chat)
-  // - "app-chat:{appId}:{channel}:{chatType}:{chatId}" (IM sessions)
-  const toStop = Array.from(activeSessions.keys()).filter(
-    k => k === prefix || k.startsWith(prefix + ':')
-  )
+  const toStop = collectAppConversationIds(appId).filter(isAppChatConversationGenerating)
   for (const convId of toStop) {
     await stopConversation(convId)
   }
   console.log(`[AppChat][${appId}] Generation stopped (${toStop.length} session(s))`)
+}
+
+/**
+ * Every conversation of this app that currently exists in memory: one that has
+ * a message awaiting an answer, and one whose consumer is alive. Covers the
+ * native default, native local, IM, and HTTP sessions; cross-app keys never
+ * match the prefix.
+ */
+function collectAppConversationIds(appId: string): string[] {
+  const prefix = getAppChatConversationId(appId)
+  const ids = new Set<string>()
+  for (const id of getConversationsWithActiveRound()) {
+    if (id === prefix || id.startsWith(prefix + ':')) ids.add(id)
+  }
+  for (const id of getRunningConsumerIds()) {
+    if (id === prefix || id.startsWith(prefix + ':')) ids.add(id)
+  }
+  return Array.from(ids)
 }
 
 /**
@@ -963,19 +882,22 @@ export async function stopAppChatConversation(conversationId: string): Promise<v
  * @param appId - App ID to check
  */
 export function isAppChatGenerating(appId: string): boolean {
-  const prefix = getAppChatConversationId(appId)
-  for (const key of activeSessions.keys()) {
-    if (key === prefix || key.startsWith(prefix + ':')) return true
-  }
-  return false
+  return collectAppConversationIds(appId).some(isAppChatConversationGenerating)
 }
 
 /**
  * Whether a single conversation is generating, for the HTTP status endpoint's
  * per-conversation polling. (isAppChatGenerating reports across all sessions.)
+ *
+ * Two windows count as generating, and both matter: a message dispatched but
+ * not yet acknowledged by CC (round queued, no turn running), and a turn the
+ * consumer is currently processing — including an autonomous one, which occupies
+ * the session just as much as a solicited turn.
  */
 export function isAppChatConversationGenerating(conversationId: string): boolean {
-  return activeSessions.has(conversationId)
+  if (hasActiveAppChatRound(conversationId)) return true
+  const consumer = getConsumerHandle(conversationId)
+  return !!(consumer?.isRunning && consumer.getActiveSessionState())
 }
 
 /**
@@ -1047,14 +969,13 @@ export function getAppChatSessionState(appId: string, conversationId?: string): 
   spaceId?: string
 } {
   const convId = conversationId ?? getAppChatConversationId(appId)
-  const session = activeSessions.get(convId)
-  if (!session) {
-    return { isActive: false, thoughts: [] }
-  }
+  const state = getSessionState(convId)
   return {
-    isActive: true,
-    thoughts: [...session.thoughts],
-    spaceId: session.spaceId
+    // A queued round has no turn state yet, but the client is already waiting
+    // on it and must not be told the session went idle.
+    isActive: state.isActive || hasActiveAppChatRound(convId),
+    thoughts: state.thoughts,
+    spaceId: state.spaceId,
   }
 }
 
@@ -1086,6 +1007,7 @@ export function cleanupAppChatBrowserContext(appId: string): void {
  * 2. Close the V2 session (forces fresh session on next message)
  * 3. Destroy scoped browser context (if any)
  * 4. Empty the JSONL persistence file
+ * 5. Drop the sink so the next message starts with a fresh transcript writer
  *
  * Idempotent: safe to call even if the session doesn't exist.
  */
@@ -1095,7 +1017,7 @@ async function clearSessionByConversationId(
   spaceId: string
 ): Promise<void> {
   // 1. Abort active generation (if any) before closing
-  if (activeSessions.has(conversationId)) {
+  if (isAppChatConversationGenerating(conversationId)) {
     console.log(`[AppChat][${appId}] Session is generating, aborting first...`)
     await stopGeneration(conversationId)
   }
@@ -1128,6 +1050,10 @@ async function clearSessionByConversationId(
     // Remove saved sessionId so next session starts truly fresh
     deleteChatSessionId(space.path, appId, runId)
   }
+
+  // 5. Drop the sink. Its rounds were already settled when closeV2Session
+  //    stopped the consumer; the next message builds a fresh one.
+  disposeAppChatSink(conversationId)
 }
 
 /**
@@ -1204,23 +1130,19 @@ export async function restartAppChat(
   const { interruptActive = false } = options
   const prefix = getAppChatConversationId(appId)
 
-  // Collect all session keys belonging to this app from both maps:
-  //   - activeSessions: currently generating (needs abort)
-  //   - v2Sessions:     cached CC subprocesses (idle but stuck with old prompt)
-  // A session may live in only one of the two; use a Set to dedupe.
-  const sessionIds = new Set<string>()
-  for (const k of activeSessions.keys()) {
-    if (k === prefix || k.startsWith(prefix + ':')) sessionIds.add(k)
-  }
+  // Every cached CC subprocess of this app — including idle ones, which are the
+  // whole point (they still hold the stale prompt). Generating sessions are a
+  // subset: a turn cannot run without its session.
+  const sessionIds: string[] = []
   for (const k of v2Sessions.keys()) {
-    if (k === prefix || k.startsWith(prefix + ':')) sessionIds.add(k)
+    if (k === prefix || k.startsWith(prefix + ':')) sessionIds.push(k)
   }
 
   let closed = 0
   let deferred = 0
   for (const convId of sessionIds) {
     try {
-      const isActive = activeSessions.has(convId)
+      const isActive = isAppChatConversationGenerating(convId)
 
       // Mid-generation + non-interrupting edit: leave the live turn to finish.
       // The fingerprint rebuilds this session on its next message.

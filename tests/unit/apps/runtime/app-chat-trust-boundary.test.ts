@@ -33,14 +33,14 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   })),
 }))
 
-const { activeSessions, v2Sessions, closeV2Session, stopGeneration } = vi.hoisted(() => {
-  const _activeSessions = new Map<string, unknown>()
+const { consumers, v2Sessions, closeV2Session, stopGeneration } = vi.hoisted(() => {
+  const _consumers = new Map<string, unknown>()
   const _v2Sessions = new Map<string, unknown>()
   return {
-    activeSessions: _activeSessions,
+    consumers: _consumers,
     v2Sessions: _v2Sessions,
     closeV2Session: vi.fn((id: string) => { _v2Sessions.delete(id) }),
-    stopGeneration: vi.fn(async (id: string) => { _activeSessions.delete(id) }),
+    stopGeneration: vi.fn(async (id: string) => { _consumers.delete(id) }),
   }
 })
 
@@ -65,16 +65,22 @@ const { registry, createLocalSession } = vi.hoisted(() => {
 })
 
 vi.mock('../../../../src/main/services/agent/session-manager', () => ({
-  activeSessions,
   v2Sessions,
   closeV2Session,
   getOrCreateV2Session: vi.fn(),
-  createSessionState: vi.fn(),
-  registerActiveSession: vi.fn(),
-  unregisterActiveSession: vi.fn(),
+  getConsumerHandle: (id: string) => consumers.get(id) ?? null,
+  getRunningConsumerIds: () => Array.from(consumers.keys()),
+  markTurnDispatched: vi.fn(),
+  updateConsumerDisplayModel: vi.fn(),
 }))
 
-vi.mock('../../../../src/main/services/agent/control', () => ({ stopGeneration }))
+vi.mock('../../../../src/main/services/agent/control', () => ({
+  stopGeneration,
+  getSessionState: (id: string) =>
+    consumers.has(id)
+      ? { isActive: true, thoughts: [], spaceId: 'space-1' }
+      : { isActive: false, thoughts: [] },
+}))
 
 vi.mock('../../../../src/main/apps/runtime/im-session-registry', () => ({
   getImSessionRegistry: vi.fn(() => registry),
@@ -154,7 +160,7 @@ const OTHER = 'other-app'
 
 describe('clearAppChat trust boundary', () => {
   beforeEach(() => {
-    activeSessions.clear()
+    consumers.clear()
     v2Sessions.clear()
     closeV2Session.mockClear()
     stopGeneration.mockClear()

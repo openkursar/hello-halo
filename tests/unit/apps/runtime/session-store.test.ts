@@ -522,6 +522,30 @@ describe('convertEventsToMessages', () => {
       expect(messages[1].timestamp).toBe('2026-01-01T00:00:01.000Z')
     })
 
+    it('recovers the bubble from result.result when the assistant envelope carries only thinking', () => {
+      // #299 shape: the assistant envelope has no text block (only thinking),
+      // so the lastText aggregate stays empty and the whole reply body lands
+      // in the terminal result. The rebuild must still produce the bubble
+      // from pendingResultText while keeping the thinking in the thought process.
+      const events: StoredEvent[] = [
+        userTrigger('Summarize the repo', '2026-01-01T00:00:00.000Z'),
+        assistantThinking('I should look at the file list first.', '2026-01-01T00:00:01.000Z'),
+        resultWithText('The repo has three modules.', false, '2026-01-01T00:00:02.000Z'),
+      ]
+
+      const messages = convertEventsToMessages(events)
+
+      expect(messages).toHaveLength(2)
+      expect(messages[0]).toMatchObject({ role: 'user', content: 'Summarize the repo' })
+      expect(messages[1].role).toBe('assistant')
+      expect(messages[1].content).toBe('The repo has three modules.')
+      expect(messages[1].thoughts).toHaveLength(1)
+      expect(messages[1].thoughts![0]).toMatchObject({
+        type: 'thinking',
+        content: 'I should look at the file list first.',
+      })
+    })
+
     it('keeps tool thoughts while recovering final text from result.result', () => {
       // thinking is suppressed too in live mode, but the tool aggregate is
       // persisted; the final bubble text comes from the result envelope.

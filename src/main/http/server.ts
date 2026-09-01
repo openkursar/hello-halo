@@ -20,6 +20,7 @@ import {
   handleLogin,
   CredentialRestoreError,
 } from './auth'
+import { ACCESS_CODE_MIN_SUBMIT_LENGTH, PASSWORD_MAX_LENGTH } from '../../shared/auth/password-policy'
 import { initWebSocket, shutdownWebSocket, getClientCount } from './websocket'
 import { registerApiRoutes } from './routes'
 import { getMainWindow as getMainWindowFromService } from '../foundation/window.service'
@@ -580,7 +581,7 @@ function getRemoteLoginPage(): string {
 
     <p>Enter access code to connect to your desktop</p>
     <div class="input-group">
-      <input type="password" id="token" maxlength="64" placeholder="Access Code" autocomplete="off">
+      <input type="password" id="token" maxlength="${PASSWORD_MAX_LENGTH}" placeholder="Access Code" autocomplete="off">
     </div>
     <button onclick="login()" style="margin-top: 1rem; width: 100%; max-width: 300px;">Connect</button>
     <p id="error" class="error"></p>
@@ -590,7 +591,7 @@ function getRemoteLoginPage(): string {
       const token = document.getElementById('token').value;
       const error = document.getElementById('error');
 
-      if (!token || token.length < 6) {
+      if (!token || token.length < ${ACCESS_CODE_MIN_SUBMIT_LENGTH}) {
         error.textContent = 'Please enter access code';
         return;
       }

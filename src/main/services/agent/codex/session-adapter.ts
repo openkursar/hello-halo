@@ -41,6 +41,7 @@ import {
 } from './transport/server-request-handler'
 import { CodexEventNormalizer } from './event-normalizer'
 import { resolveCodexOptions, type CodexResolvedOptions } from './options'
+import { resolveCodexReasoningEffort } from '../reasoning-effort'
 import {
   ClientMethods,
   ServerNotifications,
@@ -403,7 +404,9 @@ export class CodexAppServerSession {
   async setMaxThinkingTokens(maxThinkingTokens: number | null): Promise<void> {
     this.options.threadParams.config = {
       ...(this.options.threadParams.config || {}),
-      model_reasoning_effort: maxThinkingTokens ? 'high' : 'medium',
+      model_reasoning_effort: maxThinkingTokens === null
+        ? resolveCodexReasoningEffort('off')
+        : this.options.reasoningEffort,
     }
   }
 

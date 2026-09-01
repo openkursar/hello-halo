@@ -17,7 +17,7 @@ import {
   credentialsToBackendConfig
 } from './helpers'
 import { emitAgentBroadcast } from './events'
-import { getCleanUserEnv } from './sdk-config'
+import { getCleanUserEnv, resolveCredentialsForSdk } from './sdk-config'
 import { resolveModelId } from '../../../shared/types/ai-sources'
 
 // ============================================
@@ -242,9 +242,18 @@ export async function testMcpConnections(): Promise<{ success: boolean; servers:
     let anthropicBaseUrl = credentials.baseUrl
     let anthropicApiKey = credentials.apiKey
     let sdkModel = resolveModelId(credentials.model)
+    let delegatedRoutingHeader: string | undefined
 
-    // For non-Anthropic providers (openai or oauth), use the OpenAI compat router
-    if (credentials.provider !== 'anthropic') {
+    // Delegated sources carry no key, so the shared resolver owns their env
+    // shape — duplicating it here would let the two drift.
+    if (credentials.delegatedAuth) {
+      const resolved = await resolveCredentialsForSdk(credentials)
+      anthropicBaseUrl = resolved.anthropicBaseUrl
+      sdkModel = resolved.sdkModel
+      delegatedRoutingHeader = resolved.delegatedRoutingHeader
+      console.log(`[Agent] MCP test: delegated credential via ${anthropicBaseUrl}`)
+    } else if (credentials.provider !== 'anthropic') {
+      // For non-Anthropic providers (openai or oauth), use the OpenAI compat router
       const router = await ensureOpenAICompatRouter({ debug: false })
       anthropicBaseUrl = router.baseUrl
 
@@ -264,7 +273,9 @@ export async function testMcpConnections(): Promise<{ success: boolean; servers:
     const queryIterator = claudeQuery({
       prompt: 'hi', // Simple prompt to trigger MCP connection
       options: {
-        apiKey: anthropicApiKey,
+        // A delegated run must reach the CLI with no key at all: any value here
+        // makes it authenticate as an API-key user and ignore its own credential.
+        ...(delegatedRoutingHeader ? {} : { apiKey: anthropicApiKey }),
         model: sdkModel,
         anthropicBaseUrl,
         cwd,
@@ -274,7 +285,9 @@ export async function testMcpConnections(): Promise<{ success: boolean; servers:
           ...getCleanUserEnv(),
           ELECTRON_RUN_AS_NODE: '1',
           ELECTRON_NO_ATTACH_CONSOLE: '1',
-          ANTHROPIC_API_KEY: anthropicApiKey,
+          ...(delegatedRoutingHeader
+            ? { ANTHROPIC_CUSTOM_HEADERS: delegatedRoutingHeader }
+            : { ANTHROPIC_API_KEY: anthropicApiKey }),
           ANTHROPIC_BASE_URL: anthropicBaseUrl,
           NO_PROXY: 'localhost,127.0.0.1',
           no_proxy: 'localhost,127.0.0.1',

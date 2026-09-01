@@ -43,7 +43,7 @@ Division of labor (hard boundary):
 
 | Concern | Where | Why |
 |---|---|---|
-| Shell resolution (`shell.ts`), space scoping, flow-control policy, event fan-out | main | May touch Electron/config; policy must stay out of the worker |
+| Shell resolution incl. pty environment (`shell.ts`), space scoping, flow-control policy, event fan-out | main | May touch Electron/config; policy must stay out of the worker |
 | pty spawn/write/resize/kill, headless xterm buffer, read modes, write-and-wait, wait-for polling, replay buffer, session cap + exited-session pruning | worker | Must sit next to the pty; heavy and stall-prone |
 | Session metadata (TerminalInfo) | worker-authoritative, mirrored in main proxies | list()/scoping stay synchronous; event snapshots refresh the mirror |
 
@@ -93,6 +93,18 @@ terminal); and Git Bash `--login` MSYS init forks dozens of processes (10s+
 open under endpoint scanning). Git Bash stays reachable via an explicit
 `preferred` path (`terminal_create`'s `shell` arg). This is unrelated to the
 Claude-Code Git Bash dependency (`services/git-bash`), which is untouched.
+
+### Environment: main assembles it whole, the worker never adds its own
+
+`ResolvedShellSpec.env` is the **complete** pty environment, built by
+`resolveShell()` from main's `process.env`. The worker spawns with exactly that
+and must never merge in its own `process.env`: `child_process.fork` gives every
+worker an `ELECTRON_RUN_AS_NODE=1` (Electron injects it so the fork runs as
+Node), and a user shell that inherits it turns every Electron the user launches
+into a plain Node process — `npm run dev` in this repo then fails with a missing
+`BrowserWindow` export. Main's env is also the only one with fix-path's PATH
+repair. Same rule for any future spawn of a user-visible process: the
+environment is policy, and policy lives in main.
 
 ## 5) MCP tools (AI-facing)
 

@@ -11,9 +11,14 @@ import { createHash } from 'crypto'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs'
 import { app } from 'electron'
 import { resolveClaudeConfigDir, getConfig } from '../../foundation/config.service'
-import { ensureOpenAICompatRouter, encodeBackendConfig, decodeBackendConfig } from '../../openai-compat-router'
+import {
+  ensureOpenAICompatRouter,
+  encodeBackendConfig,
+  decodeBackendConfig,
+  DELEGATED_ROUTING_HEADER
+} from '../../openai-compat-router'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
-import { inferOpenAIWireApi, credentialsToBackendConfig } from './helpers'
+import { inferOpenAIWireApi, credentialsToBackendConfig, getHeadlessElectronPath } from './helpers'
 import { resolveModelId } from '../../../shared/types/ai-sources'
 import { buildSystemPrompt, DEFAULT_ALLOWED_TOOLS } from './system-prompt'
 import { createCanUseTool } from './permission-handler'
@@ -64,6 +69,13 @@ export interface ResolvedSdkCredentials {
    * user actually configured in Settings > Provider > Model Config.
    */
   capabilities?: ResolvedModelCapabilities
+  /**
+   * Backend routing identity for delegated sources, as a `Name: value` header
+   * line. Present only when the CLI subprocess authenticates itself: the auth
+   * channel then carries its own OAuth token, so the router cannot recover the
+   * backend from `x-api-key` and reads this header instead.
+   */
+  delegatedRoutingHeader?: string
 }
 
 /**
@@ -72,6 +84,8 @@ export interface ResolvedSdkCredentials {
 export interface SdkEnvParams {
   anthropicApiKey: string
   anthropicBaseUrl: string
+  /** See ResolvedSdkCredentials.delegatedRoutingHeader. */
+  delegatedRoutingHeader?: string
   /** Claude CLI config directory mode */
   configDirMode?: 'halo' | 'cc' | 'custom'
   /** Custom config dir path (when configDirMode === 'custom') */
@@ -262,6 +276,11 @@ export async function resolveCredentialsForSdk(
   credentials: ApiCredentials
 ): Promise<ResolvedSdkCredentials> {
   console.debug(`[SDK Config] resolveCredentialsForSdk: provider=${credentials.provider}, model=${credentials.model}, baseUrl=${credentials.baseUrl}`)
+
+  if (credentials.delegatedAuth) {
+    return resolveDelegatedAuth(credentials)
+  }
+
   // Experimental: route Anthropic through local router for interceptor coverage
   if (PROXY_ANTHROPIC && credentials.provider === 'anthropic') {
     return resolveAnthropicPassthrough(credentials)
@@ -322,7 +341,10 @@ export async function resolveCredentialsForSdk(
  */
 export function computeCredentialsFingerprint(sdkOptions: Record<string, any>): string {
   const env = (sdkOptions.env || {}) as Record<string, unknown>
-  const rawKey = String(env.ANTHROPIC_API_KEY ?? '')
+  // Delegated sources carry the encoded backend on a custom header instead of
+  // the key; without it their identity fields would all hash to the same value.
+  const rawKey = String(env.ANTHROPIC_API_KEY ?? env.ANTHROPIC_CUSTOM_HEADERS ?? '')
+    .replace(new RegExp(`^${DELEGATED_ROUTING_HEADER}:\\s*`), '')
 
   const backend = decodeBackendConfig(rawKey)
   const keyIdentity = backend
@@ -389,6 +411,43 @@ export function computeSessionInputsFingerprint(sdkOptions: Record<string, any>)
     : ''
   const material = [mcpKeys, prompt, permissionMode, disallowed, skipPermissions].join('\u0000')
   return createHash('sha256').update(material).digest('hex').slice(0, 16)
+}
+
+/**
+ * Resolve a source whose credential lives inside the CLI subprocess.
+ *
+ * No key is produced: the subprocess authenticates itself and sends its own
+ * `Authorization` header. Requests still go through the router — that is what
+ * keeps the image budget, the warmup/preflight short-circuits, system-prompt
+ * normalization and `[1m]` stripping working — so the backend identity travels
+ * in a dedicated header instead of the occupied auth channel.
+ */
+async function resolveDelegatedAuth(
+  credentials: ApiCredentials
+): Promise<ResolvedSdkCredentials> {
+  const router = await ensureOpenAICompatRouter({ debug: false })
+
+  const routingConfig = encodeBackendConfig(
+    credentialsToBackendConfig(credentials, { apiType: 'anthropic_passthrough' })
+  )
+
+  let sdkModel = resolveModelId(credentials.model)
+  const decoratedSdkModel = applyCC1mContextUnlock(sdkModel, credentials.capabilities)
+  if (decoratedSdkModel !== sdkModel) {
+    console.log(`[SDK Config] CC 1M context unlock (delegated): sdkModel "${sdkModel}" → "${decoratedSdkModel}" (contextWindow=${credentials.capabilities?.contextWindow})`)
+    sdkModel = decoratedSdkModel
+  }
+
+  console.log(`[SDK Config] Delegated auth: routing via ${router.baseUrl}, CLI supplies its own credential`)
+
+  return {
+    anthropicBaseUrl: router.baseUrl,
+    anthropicApiKey: '',
+    sdkModel,
+    displayModel: credentials.displayModel || credentials.model,
+    capabilities: credentials.capabilities,
+    delegatedRoutingHeader: `${DELEGATED_ROUTING_HEADER}: ${routingConfig}`,
+  }
 }
 
 /**
@@ -525,8 +584,13 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
     ELECTRON_RUN_AS_NODE: 1,
     ELECTRON_NO_ATTACH_CONSOLE: 1,
 
-    // API credentials
-    ANTHROPIC_API_KEY: params.anthropicApiKey,
+    // API credentials. A delegated source deliberately sets no key: the CLI
+    // resolves its own credential, and setting ANTHROPIC_API_KEY would make it
+    // authenticate as an API-key user instead, bypassing that credential
+    // entirely. Its backend identity rides on a custom header.
+    ...(params.delegatedRoutingHeader
+      ? { ANTHROPIC_CUSTOM_HEADERS: params.delegatedRoutingHeader }
+      : { ANTHROPIC_API_KEY: params.anthropicApiKey }),
     ANTHROPIC_BASE_URL: params.anthropicBaseUrl,
 
     // Claude config dir: resolved from configDirMode (halo default / cc default / custom)
@@ -660,7 +724,7 @@ const CLI_RELATIVE = 'node_modules/@anthropic-ai/claude-code/cli.js'
  * `existsSync` picks whichever candidate path actually exists, covering both dev and E2E
  * without any hardcoded relative-path assumptions.
  */
-function resolveClaudeCodeCliPath(): string {
+export function resolveClaudeCodeCliPath(): string {
   if (app.isPackaged) {
     // Packaged: node_modules is bundled inside the asar alongside the app
     return path.join(app.getAppPath(), CLI_RELATIVE)
@@ -681,6 +745,34 @@ function resolveClaudeCodeCliPath(): string {
     )
   }
   return resolved
+}
+
+/**
+ * Shell command that runs the bundled CLI's own login flow against Halo's
+ * credential slot, for the user to execute in a terminal session.
+ *
+ * Spawned through the headless Electron binary rather than `node`: a packaged
+ * install has no guarantee that a system Node exists. `CLAUDE_CONFIG_DIR` is
+ * passed inline because the terminal service inherits the user's shell
+ * environment and exposes no per-session env — and it decides which credential
+ * slot receives the login, so omitting it would sign the user into their
+ * personal `claude` install instead of Halo's.
+ *
+ * POSIX quoting is sufficient while delegated auth is macOS-only; PowerShell
+ * needs its own form when Windows is enabled.
+ */
+export function buildCliLoginCommand(): string {
+  return [
+    'ELECTRON_RUN_AS_NODE=1',
+    `CLAUDE_CONFIG_DIR=${shellQuote(resolveClaudeConfigDir())}`,
+    shellQuote(getHeadlessElectronPath()),
+    shellQuote(resolveClaudeCodeCliPath()),
+    '/login'
+  ].join(' ')
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
 // On spawn ENOENT the SDK always blames cliPath ("executable not found"), even
@@ -728,6 +820,7 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
   const env = buildSdkEnv({
     anthropicApiKey: credentials.anthropicApiKey,
     anthropicBaseUrl: credentials.anthropicBaseUrl,
+    delegatedRoutingHeader: credentials.delegatedRoutingHeader,
     configDirMode: params.configDirMode,
     customConfigDir: params.customConfigDir,
     enableTeams: params.enableTeams,

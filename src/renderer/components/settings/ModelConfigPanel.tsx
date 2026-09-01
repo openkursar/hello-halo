@@ -17,11 +17,30 @@ import { useState, useEffect, useRef } from 'react'
 import { ChevronDown, ChevronRight, RotateCcw, Info, AlertTriangle, Loader2 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
-import type { ModelCapability, ModelCapabilityOverride } from '../../../shared/types/model-capabilities'
+import type {
+  ModelCapability,
+  ModelCapabilityOverride,
+  ResolvedModelCapability
+} from '../../../shared/types/model-capabilities'
 import {
   MAX_OUTPUT_TOKENS_HARD_MIN,
   RECOMMENDED_MIN_MAX_OUTPUT_TOKENS,
 } from '../../../shared/constants/model-runtime-limits'
+import {
+  DEFAULT_REASONING_EFFORT,
+  REASONING_EFFORT_LEVELS,
+  isReasoningEffortLevel,
+  type ReasoningEffortLevel,
+} from '../../../shared/constants/reasoning-effort'
+
+/** Fields the JSON tab accepts; anything else is reported back. */
+const EDITABLE_CAPABILITY_KEYS: ReadonlyArray<keyof ModelCapabilityOverride> = [
+  'contextWindow',
+  'maxOutputTokens',
+  'vision',
+  'thinking',
+  'reasoningEffort'
+]
 
 // ── Default values used when no preset exists ──────────────────────────────
 const DEFAULT_CAPABILITY: ModelCapability = {
@@ -61,14 +80,30 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
   // ── JSON editor state ──────────────────────────────────────────────────
   const [jsonText, setJsonText] = useState('')
   const [jsonError, setJsonError] = useState<string | null>(null)
+  const [jsonWarning, setJsonWarning] = useState<string | null>(null)
   const jsonLoadedForModel = useRef<string>('')
 
   // ── Compute effective values ───────────────────────────────────────────
   // Priority: override > preset > defaults
   const userOverride = overrides[modelId] ?? {}
   const base: ModelCapability = preset ?? DEFAULT_CAPABILITY
-  const effective: ModelCapability = { ...base, ...userOverride }
+  const effective: ResolvedModelCapability = { ...base, ...userOverride }
   const hasOverride = Object.keys(userOverride).length > 0
+
+  // ── Reasoning effort presentation ──────────────────────────────────────
+  const effortSelectValue = effective.reasoningEffort ?? ''
+  /** A provider-specific level typed in the JSON tab, kept selectable here. */
+  const isCustomEffort = !!effective.reasoningEffort
+    && !isReasoningEffortLevel(effective.reasoningEffort)
+  const effortLabels: Record<ReasoningEffortLevel, string> = {
+    off: t('Off'),
+    minimal: t('Minimal'),
+    low: t('Low'),
+    medium: t('Medium'),
+    high: t('High'),
+    xhigh: t('Extra High'),
+    max: t('Max')
+  }
 
   // ── Load preset when modelId changes ──────────────────────────────────
   useEffect(() => {
@@ -78,6 +113,7 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
     setLoadingPreset(true)
     setPreset(null)
     setJsonError(null)
+    setJsonWarning(null)
 
     api.modelCapabilitiesGetPreset(modelId)
       .then(res => {
@@ -114,16 +150,21 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
       contextWindow: effective.contextWindow,
       maxOutputTokens: effective.maxOutputTokens,
       vision: effective.vision,
-      thinking: effective.thinking
+      thinking: effective.thinking,
+      // Spelled out even when unset, so the field is discoverable here.
+      reasoningEffort: effective.reasoningEffort ?? DEFAULT_REASONING_EFFORT
     }
     setJsonText(JSON.stringify(entry, null, 2))
     setJsonError(null)
+    setJsonWarning(null)
     jsonLoadedForModel.current = modelId
   }, [activeTab, modelId, effective])
 
   // ── Handle tab switching ───────────────────────────────────────────────
   const handleTabChange = (tab: ActiveTab) => {
     setActiveTab(tab)
+    setJsonError(null)
+    setJsonWarning(null)
   }
 
   // ── Visual field helpers ───────────────────────────────────────────────
@@ -147,20 +188,51 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
     updateField(field, checked)
   }
 
+  const handleReasoningEffortField = (value: string) => {
+    if (value) {
+      updateField('reasoningEffort', value)
+      return
+    }
+    // Empty = "use Halo's default": drop the key rather than store a level.
+    const { reasoningEffort: _cleared, ...rest } = userOverride
+    const next = { ...overrides }
+    if (Object.keys(rest).length > 0) next[modelId] = rest
+    else delete next[modelId]
+    onChange(next)
+    jsonLoadedForModel.current = ''
+  }
+
   // ── JSON editor helpers ────────────────────────────────────────────────
   const handleJsonBlur = () => {
+    let parsed: Record<string, unknown>
     try {
-      const parsed = JSON.parse(jsonText) as Record<string, unknown>
-      const next: ModelCapabilityOverride = {}
-      if (typeof parsed.contextWindow === 'number') next.contextWindow = parsed.contextWindow
-      if (typeof parsed.maxOutputTokens === 'number') next.maxOutputTokens = parsed.maxOutputTokens
-      if (typeof parsed.vision === 'boolean') next.vision = parsed.vision
-      if (typeof parsed.thinking === 'boolean') next.thinking = parsed.thinking
-      setJsonError(null)
-      onChange({ ...overrides, [modelId]: next })
+      parsed = JSON.parse(jsonText) as Record<string, unknown>
     } catch {
       setJsonError(t('Invalid JSON — changes not saved'))
+      return
     }
+
+    const next: ModelCapabilityOverride = {}
+    if (typeof parsed.contextWindow === 'number') next.contextWindow = parsed.contextWindow
+    if (typeof parsed.maxOutputTokens === 'number') next.maxOutputTokens = parsed.maxOutputTokens
+    if (typeof parsed.vision === 'boolean') next.vision = parsed.vision
+    if (typeof parsed.thinking === 'boolean') next.thinking = parsed.thinking
+    if (typeof parsed.reasoningEffort === 'string' && parsed.reasoningEffort) {
+      next.reasoningEffort = parsed.reasoningEffort
+    }
+
+    // The recognized fields above are saved either way; an unknown key is
+    // reported so a mistyped one does not look accepted.
+    const ignored = Object.keys(parsed).filter(
+      (key) => !(EDITABLE_CAPABILITY_KEYS as readonly string[]).includes(key)
+    )
+    setJsonError(null)
+    setJsonWarning(
+      ignored.length > 0
+        ? t('Unsupported field(s) ignored: {{fields}}', { fields: ignored.join(', ') })
+        : null
+    )
+    onChange({ ...overrides, [modelId]: next })
   }
 
   // ── Reset override ─────────────────────────────────────────────────────
@@ -169,6 +241,7 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
     delete next[modelId]
     onChange(next)
     setJsonError(null)
+    setJsonWarning(null)
     jsonLoadedForModel.current = ''
   }
 
@@ -323,6 +396,38 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
                   <span className="text-sm text-foreground">{t('Thinking')}</span>
                 </label>
               </div>
+
+              {/* Reasoning effort */}
+              <div>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">
+                  {t('Reasoning Effort')}
+                </label>
+                <select
+                  value={effortSelectValue}
+                  onChange={e => handleReasoningEffortField(e.target.value)}
+                  className="w-full sm:w-56 px-2.5 py-1.5 text-sm bg-input border border-border
+                             rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  <option value="">{t('Default')}</option>
+                  {REASONING_EFFORT_LEVELS.map(level => (
+                    <option key={level} value={level}>{effortLabels[level]}</option>
+                  ))}
+                  {isCustomEffort && (
+                    <option value={effective.reasoningEffort}>{effective.reasoningEffort}</option>
+                  )}
+                </select>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {t('How hard this model thinks while Deep Thinking is on.')}
+                </p>
+                {isCustomEffort && (
+                  <div className="flex items-start gap-1.5 mt-1 text-xs text-amber-600 dark:text-amber-500">
+                    <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
+                    <span>
+                      {t('Sent to the provider as-is — Halo cannot check whether this model accepts it.')}
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -342,8 +447,14 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
               {jsonError && (
                 <p className="text-xs text-red-500">{jsonError}</p>
               )}
+              {jsonWarning && (
+                <div className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-500">
+                  <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
+                  <span>{jsonWarning}</span>
+                </div>
+              )}
               <p className="text-xs text-muted-foreground">
-                {t('Edit JSON then click outside to apply. Only numeric and boolean fields are used.')}
+                {t('Edit JSON then click outside to apply. Unrecognized fields are ignored.')}
               </p>
             </div>
           )}

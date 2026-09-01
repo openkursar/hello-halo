@@ -11,6 +11,7 @@
 | Session lifecycle (create / reuse / destroy / batch-invalidate on config change) | `session-manager.ts` | Largest file. V2 Session model. Registers callback on `config.service.ts` to auto-clean when API config changes. |
 | SDK stream → Thought[] translation | `stream-processor.ts` | Second largest. Incremental push, partial tool calls, interruption recovery. |
 | SDK invocation & configuration | `sdk-config.ts`, `resolved-sdk.ts`, `codex/` | Provider selection, model resolution, SDK option assembly. Alternate SDK engines are loaded only through `resolved-sdk.ts`; Codex-specific translation is isolated under `codex/`. |
+| Thinking depth → engine options | `reasoning-effort.ts` | Combines the per-request Deep Thinking toggle with the per-model effort level into `effort` / `maxThinkingTokens` / Codex `model_reasoning_effort`. Every SDK call site goes through `applyReasoningEffort`. See §9. |
 | Engine availability probe | `engine-availability.ts` | Detects which engine runtimes shipped in this build (manifest + entry file + platform binary for Codex) so `resolved-sdk.ts` can fall back instead of crashing at startup. Result is cached per process; exposed via `agent:get-engine-availability`. |
 | System prompt composition | `system-prompt.ts` | Space context, conversation context, tool availability injection. `buildKnowledgeSection` is exported separately for creation-time append. |
 | Knowledge context resolution | `knowledge-context.ts` | Conversation `knowledgeBaseIds` → injectable `KBReference[]` (agent→tlon dependency collector). Cheap id-only variant feeds the session knowledge fingerprint. |
@@ -23,7 +24,8 @@
 | Session control | `control.ts` | Interrupt / pause / switch-model mid-session. |
 | Outbound message composition | `send-message.ts`, `message-utils.ts` | User message assembly, attachment handling, token counting. |
 | Non-vision image fallback | `image-attachments.ts` | For models without vision: persists pasted images into the space's `attachments/` dir (content-addressed, mirrors the conversation-dir layout) and replaces the outbound image blocks with a `<halo_attachments>` path block for the `ocr_image` tool. Vision models bypass it entirely. Broker-free by design — ensuring ocr_image is present is the caller's concern: `send-message.ts` auto-opens the OCR toolset (opener `system`, before session creation so the rebuild seeds the same turn); app chat (`apps/runtime/app-chat.ts`) seeds the OCR MCP server unconditionally. |
-| Session consumption loop | `session-consumer.ts` | Iterator over SDK events; dispatches into stream-processor. |
+| Session consumption loop | `session-consumer.ts` | Persistent per-session loop over SDK turns; dispatches into stream-processor. Surface-agnostic — see §3.1. |
+| Turn destination | `turn-sink.ts`, `conversation-sink.ts` | `TurnSink` is where a consumed turn goes (persistence + delivery). `conversation-sink.ts` is the space-chat implementation; `apps/runtime/app-chat-sink.ts` is the digital-human one. |
 | Top-level orchestration | `agents.ts`, `index.ts` | Public surface; wires everything together. |
 | Constants & shared types | `constants.ts`, `types.ts`, `events.ts`, `helpers.ts` | — |
 
@@ -65,6 +67,44 @@ Key invariants:
 - Tool calls go through three states: `pending` → `running` → `completed`/`failed`. Each state transition is a separate thought event.
 - `requiresApproval: true` tool calls **block** the stream until permission-handler resolves.
 
+### 3.1) One consumption model, pluggable destinations
+
+CC is a REPL: it produces turns from any input, not just user messages — a
+background task finishing or a team agent reporting yields a turn with nobody
+waiting for it. The consumer therefore **never leaves the stream**: it re-enters
+`stream()` immediately after each turn, so such output is read as it appears.
+
+A surface that instead read the stream once per user message would leave that
+turn queued in the pipe, and the next message would consume it as its own answer
+— every later reply then lagging one turn behind, permanently. Digital-human
+chat had exactly this shape before it was moved onto the consumer.
+
+What differs per surface is not consumption but **destination**, which is the
+`TurnSink` contract (`turn-sink.ts`):
+
+```
+session-consumer (one loop per V2 session, surface-agnostic)
+  ├── onTurnStart      — CC acknowledged a turn (system:init)
+  ├── onRawMessage     — every SDK message of the turn
+  ├── onTurnComplete   — the turn's StreamResult
+  ├── onTurnError      — the turn threw
+  └── onConsumerStopped — no further turn will arrive
+
+  implementations:
+    conversation-sink.ts            — conversation.service + chat UI (space chat)
+    apps/runtime/app-chat-sink.ts   — run JSONL + reply delivery (digital humans)
+```
+
+A sink is supplied through `getOrCreateV2Session`'s `consumer` argument; its
+presence is what starts a consumer at all. Automation runs
+(`apps/runtime/execute.ts`) pass none and drive their own `processStream` — a
+headless batch execution has no turn gaps to lose, and two readers would fight
+over one stream.
+
+**Adding a chat entry point = writing a sink.** The consumer must never learn
+about a surface; a branch on conversation kind inside this loop is the smell
+that the sink boundary is being bypassed.
+
 ## 4) Subagent Model
 
 `subagent-handler.ts` manages nested agent invocations. A parent agent can spawn one or more subagents; each subagent runs in its own SDK session with:
@@ -97,6 +137,7 @@ Injection rules:
 | If you need to... | Start here |
 |---|---|
 | Change how the SDK is invoked or configured | `sdk-config.ts` / `resolved-sdk.ts` |
+| Change how hard a model thinks | `reasoning-effort.ts` (never set `effort` / `maxThinkingTokens` at a call site) |
 | Change engine bundling detection / startup fallback | `engine-availability.ts` / `resolved-sdk.ts` |
 | Change how SDK events become thoughts | `stream-processor.ts` |
 | Change session lifecycle or invalidation rules | `session-manager.ts` |
@@ -117,3 +158,52 @@ Injection rules:
 4. **Do not weaken the config-change invalidation contract.** Partial in-place session updates are forbidden; batch destroy + recreate is the only supported path.
 5. **Mirrors of CC-internal formats stay in one module and fail closed.** `mcp-auth-state.ts` reproduces CC's entry-key derivation and keychain naming; a CC upgrade that changes either must make the lookup miss, never make it match the wrong record. Revalidate when bumping `@anthropic-ai/claude-agent-sdk`.
 6. **Guard every `mainWindow` access** in async callbacks with `!mainWindow.isDestroyed()`.
+7. **Every engine clamps the effort ladder to its own enum.** See §9.
+
+## 9) Reasoning Effort
+
+Two inputs decide how hard a model thinks, and they are orthogonal:
+
+- **Whether** — the chat's Deep Thinking toggle, per request. IM and automation
+  runs have no toggle and always think.
+- **How hard** — `reasoningEffort` on the model's user override
+  (Settings > Provider > Model Config), per model.
+
+`reasoning-effort.ts` is the only place they combine. Call sites pass both to
+`applyReasoningEffort(sdkOptions, thinkingEnabled, capabilities)` and never set
+a thinking option themselves; it writes the names the downstream consumers
+read:
+
+| Option | Read by | Ladder |
+|---|---|---|
+| `effort` | Claude Agent SDK (`--effort`) | `low` `medium` `high` `max` |
+| `maxThinkingTokens` | Claude Agent SDK (`--max-thinking-tokens`) | token budget |
+| `reasoningEffort` | `codex/options.ts` → `model_reasoning_effort` | `minimal` `low` `medium` `high` `xhigh` |
+
+Depth is frozen when the engine spawns: `--effort` is a launch argument and
+Codex reads `model_reasoning_effort` at thread start, while the SDK's only
+runtime setter is `setMaxThinkingTokens`. `ensureSessionWarm` therefore applies
+the level through `applySessionReasoningEffort` — a session warmed without one
+can never acquire it, and warm-up runs on every conversation switch, so leaving
+it out disables the feature for most of main chat.
+
+What this does *not* express is switching thinking off: with no `thinking`
+option set, a model whose default is adaptive keeps reasoning, and
+`setMaxThinkingTokens(null)` clears the limit rather than stopping it. The
+Deep Thinking toggle therefore only lowers the budget today. Making it a true
+off switch means sending `thinking: { type: 'disabled' }`, which is a
+deliberate behavior change and not part of this contract yet.
+
+The two engine ladders overlap but neither contains the other, so a level is
+clamped per engine rather than forwarded. These values configure a local
+process, where an out-of-enum value fails as an opaque startup error rather
+than a reportable API error — nothing unrecognized is passed through. The
+OpenAI-compat router is the exception and deliberately forwards a
+user-declared level verbatim, because there the upstream returns an error the
+user can act on.
+
+`reasoningEffort` exists only on `ModelCapabilityOverride`, never on a preset:
+a value there is always something the user typed, which is what makes
+forwarding an unrecognized one safe. A change to it is part of the aiSources
+signature (`config.service.ts`), so it invalidates sessions like any other
+credential change — the toggle does not, since it is not config.

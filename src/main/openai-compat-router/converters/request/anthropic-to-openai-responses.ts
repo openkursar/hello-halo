@@ -6,9 +6,9 @@ import type { AnthropicRequest, OpenAIResponsesRequest } from '../../types'
 import { convertAnthropicMessagesToResponsesInput } from '../messages'
 import {
   convertAnthropicToolsToResponses,
-  convertAnthropicToolChoiceToResponses,
-  convertAnthropicThinkingToResponsesReasoning
+  convertAnthropicToolChoiceToResponses
 } from '../tools'
+import { resolveReasoningEffortValue } from '../reasoning-effort'
 import { supportsVisionById } from '../../../../shared/constants/model-capabilities'
 import { buildStreamOptionsIncludeUsage } from './stream-options'
 import { resolveOutputTokenLimit } from './max-tokens'
@@ -94,9 +94,13 @@ export function convertAnthropicToOpenAIResponses(
   }
 
   // Convert thinking -> reasoning (only when enabled; omit entirely when disabled)
-  const reasoning = convertAnthropicThinkingToResponsesReasoning(anthropicRequest.thinking)
-  if (reasoning) {
-    request.reasoning = reasoning
+  const effort = resolveReasoningEffortValue(
+    anthropicRequest.thinking,
+    options?.reasoningEffort,
+    anthropicRequest.model
+  )
+  if (effort) {
+    request.reasoning = { effort }
   }
 
   if (stripImages && hasImages) {

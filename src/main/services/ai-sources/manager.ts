@@ -37,19 +37,22 @@ import {
   type OAuthCompleteResult,
   type ModelOption,
   type ProviderId,
-  type AuthQuotaSnapshot
+  type AuthQuotaSnapshot,
+  DEFAULT_MODEL
 } from '../../../shared/types'
 import {
   getBuiltinProvider,
   isAnthropicProvider,
   isBuiltinProvider,
-  resolveModelVision
+  resolveModelVision,
+  CLAUDE_SUBSCRIPTION_MODELS
 } from '../../../shared/constants'
 import { getConfig, saveConfig } from '../../foundation/config.service'
 import { getCustomProvider } from './providers/custom.provider'
 import { getGitHubCopilotProvider } from './providers/github-copilot.provider'
 import { getClaudeProvider } from './providers/claude.provider'
 import { getZhipuCodingOAuthProvider } from './providers/zhipu-coding-oauth.provider'
+import { getCliDelegatedProvider } from './providers/cli-delegated.provider'
 import { loadAuthProvidersAsync } from './auth-loader'
 import { loadProductConfig } from '../../foundation/product-config'
 import { decryptString } from '../../foundation/secure-storage.service'
@@ -91,6 +94,12 @@ class AISourceManager {
     this.registerProvider(getGitHubCopilotProvider())
     this.registerProvider(getClaudeProvider())
     this.registerProvider(getZhipuCodingOAuthProvider())
+    // Delegated auth depends on the CLI's credential store, whose layout is
+    // only verified on macOS. Registering it elsewhere would surface a source
+    // that cannot be logged into. See product.json `platforms`.
+    if (process.platform === 'darwin') {
+      this.registerProvider(getCliDelegatedProvider())
+    }
 
     // Sync saved sources' model lists with current BUILTIN_PROVIDERS
     this.syncBuiltinModels()
@@ -224,16 +233,17 @@ class AISourceManager {
       return null
     }
 
-    // OAuth: delegate to provider (handles token exchange, custom headers, etc.)
-    if (source.authType === 'oauth') {
+    // Provider-built: OAuth handles token exchange and custom headers;
+    // delegated builds a keyless config the CLI subprocess authenticates itself.
+    if (source.authType === 'oauth' || source.authType === 'delegated') {
       const provider = this.providers.get(source.provider)
       if (!provider) {
-        console.warn(`[AISourceManager] No provider found for OAuth source: ${source.provider}`)
+        console.warn(`[AISourceManager] No provider found for ${source.authType} source: ${source.provider}`)
         return null
       }
       const legacyConfig = this.buildLegacyOAuthConfig(source)
       const result = provider.getBackendConfig(legacyConfig)
-      console.log(`[AISourceManager] OAuth provider returned adapterId: ${result?.adapterId || 'none'}`)
+      console.log(`[AISourceManager] ${source.authType} provider returned adapterId: ${result?.adapterId || 'none'}`)
       this.stampVisionCapability(source, result)
       return result
     }
@@ -347,6 +357,8 @@ class AISourceManager {
     const aiSources = this.getAiSourcesConfig()
     return aiSources.sources.some(s => {
       if (s.authType === 'api-key') return !!s.apiKey
+      // Delegated sources hold no credential — their existence is the config.
+      if (s.authType === 'delegated') return true
       return !!s.accessToken
     })
   }
@@ -360,6 +372,7 @@ class AISourceManager {
     if (!source) return false
 
     if (source.authType === 'api-key') return !!source.apiKey
+    if (source.authType === 'delegated') return true
     return !!source.accessToken
   }
 
@@ -386,11 +399,11 @@ class AISourceManager {
       return null
     }
 
-    // OAuth: delegate to provider
-    if (source.authType === 'oauth') {
+    // Provider-built: see getBackendConfig() for the OAuth/delegated split.
+    if (source.authType === 'oauth' || source.authType === 'delegated') {
       const provider = this.providers.get(source.provider)
       if (!provider) {
-        console.warn(`[AISourceManager] No provider found for OAuth source: ${source.provider}`)
+        console.warn(`[AISourceManager] No provider found for ${source.authType} source: ${source.provider}`)
         return null
       }
       // Substitute the override model into the legacy config BEFORE calling
@@ -468,6 +481,51 @@ class AISourceManager {
     console.log(`[AISourceManager] Added source: ${source.name} (${source.id})`)
 
     return newConfig
+  }
+
+  /**
+   * Create or refresh the delegated source and make it current.
+   *
+   * The delegated counterpart of completeOAuthLogin: there is no token to
+   * store, so this only records that the CLI slot is signed in and which
+   * account it holds. One source per install, because the slot is singular.
+   */
+  upsertDelegatedSource(account: string): AISource {
+    const provider = getCliDelegatedProvider()
+    const models = Object.entries(CLAUDE_SUBSCRIPTION_MODELS).map(([id, name]) => ({ id, name }))
+    const aiSources = this.getAiSourcesConfig()
+    const existing = aiSources.sources.find(s => s.authType === 'delegated' && s.provider === provider.type)
+    const now = new Date().toISOString()
+
+    if (existing) {
+      const source: AISource = {
+        ...existing,
+        user: { name: account, uid: '' },
+        availableModels: models,
+        updatedAt: now
+      }
+      this.updateSource(existing.id, source)
+      this.setCurrentSource(existing.id)
+      return source
+    }
+
+    const source: AISource = {
+      id: uuidv4(),
+      name: provider.displayName,
+      provider: provider.type,
+      authType: 'delegated',
+      apiUrl: '',
+      user: { name: account, uid: '' },
+      model: DEFAULT_MODEL,
+      availableModels: models,
+      createdAt: now,
+      updatedAt: now
+    }
+
+    this.addSource(source)
+    this.setCurrentSource(source.id)
+    console.log(`[AISourceManager] Delegated source created: ${source.id}`)
+    return source
   }
 
   /**

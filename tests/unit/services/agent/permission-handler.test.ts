@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { z } from 'zod'
 
 const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }))
 
@@ -51,7 +52,9 @@ describe('createCanUseTool — branch table', () => {
   it('denies AskUserQuestion in a non-interactive session without emitting', async () => {
     const fn = createCanUseTool({ spaceId: 's', conversationId: 'c', nonInteractive: true })
     const res = await fn('AskUserQuestion', { questions: [question()] }, noAbort)
-    expect(res).toEqual({ behavior: 'deny', updatedInput: { questions: [question()] } })
+    expect(res.behavior).toBe('deny')
+    expect(typeof (res as { message?: string }).message).toBe('string')
+    expect((res as { message: string }).message.length).toBeGreaterThan(0)
     expect(emitAgentEvent).not.toHaveBeenCalled()
   })
 
@@ -85,7 +88,8 @@ describe('createCanUseTool — branch table', () => {
     const id = getActivePendingQuestion('c')!.id
     expect(rejectQuestion(id, 'cancelled')).toBe(true)
     const res = await pending
-    expect(res).toEqual({ behavior: 'deny', updatedInput: input })
+    expect(res.behavior).toBe('deny')
+    expect(typeof (res as { message?: string }).message).toBe('string')
     expect(getActivePendingQuestion('c')).toBeNull()
   })
 
@@ -135,5 +139,41 @@ describe('pending-question registry', () => {
 
   it('getActivePendingQuestion returns null when the conversation has no in-flight ask', () => {
     expect(getActivePendingQuestion('never-asked')).toBeNull()
+  })
+})
+
+describe('deny results satisfy the SDK PermissionResult contract (#271)', () => {
+  // Mirrors the SDK's discriminated union (sdk.d.ts PermissionResult): the
+  // deny variant carries a required message; the CLI zod-parses the control
+  // response, so a deny without message throws ZodError at runtime.
+  const permissionResultSchema = z.discriminatedUnion('behavior', [
+    z.object({ behavior: z.literal('allow'), updatedInput: z.record(z.string(), z.unknown()).optional() }),
+    z.object({ behavior: z.literal('deny'), message: z.string() }),
+  ])
+
+  it('non-interactive deny validates against the SDK schema', async () => {
+    const fn = createCanUseTool({ spaceId: 's', conversationId: 'c', nonInteractive: true })
+    const res = await fn('AskUserQuestion', { questions: [question()] }, noAbort)
+    const parsed = permissionResultSchema.safeParse(res)
+    expect(parsed.success).toBe(true)
+  })
+
+  it('cancel-path deny validates against the SDK schema', async () => {
+    const fn = createCanUseTool({ spaceId: 's', conversationId: 'c' })
+    const pending = fn('AskUserQuestion', { questions: [question()] }, noAbort)
+    rejectQuestion(getActivePendingQuestion('c')!.id, 'cancelled')
+    const res = await pending
+    const parsed = permissionResultSchema.safeParse(res)
+    expect(parsed.success).toBe(true)
+  })
+
+  it('abort-path deny validates against the SDK schema', async () => {
+    const controller = new AbortController()
+    const fn = createCanUseTool({ spaceId: 's', conversationId: 'c' })
+    const pending = fn('AskUserQuestion', { questions: [question()] }, { signal: controller.signal })
+    controller.abort()
+    const res = await pending
+    const parsed = permissionResultSchema.safeParse(res)
+    expect(parsed.success).toBe(true)
   })
 })

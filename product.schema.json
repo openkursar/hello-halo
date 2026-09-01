@@ -92,6 +92,14 @@
             "type": "boolean",
             "description": "When true, the provider is hidden from the first-run login selector but remains available in the in-app AI source settings. Use for valid providers that should not lead onboarding. Orthogonal to `enabled` (which removes the provider everywhere)."
           },
+          "platforms": {
+            "type": "array",
+            "description": "Platforms this entry is offered on, as process.platform values (e.g. [\"darwin\"]). Absent means every platform. Use for login mechanisms verified on only some systems.",
+            "items": {
+              "type": "string",
+              "enum": ["darwin", "win32", "linux"]
+            }
+          },
           "docs": {
             "type": "object",
             "description": "Optional documentation link shown on the login selector card (e.g. how to apply for an account).",

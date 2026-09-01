@@ -15,7 +15,7 @@
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
-import { createSession } from '../../services/agent/resolved-sdk'
+import { createSession, query as agentSdkQuery } from '../../services/agent/resolved-sdk'
 import type { InstalledApp } from '../manager'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import type { MemoryService, MemoryCallerScope } from '../../platform/memory'
@@ -40,7 +40,8 @@ import { truncateUtf16Safe } from './text-truncate'
 import { getImSessionRegistry } from './im-session-registry'
 import { autoSyncRunResult } from './im-auto-sync'
 import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getWorkingDir, getMcpServersForRequires } from '../../services/agent/helpers'
-import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
+import { resolveCredentialsForSdk, buildBaseSdkOptions, buildSdkEnv } from '../../services/agent/sdk-config'
+import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { getOrCreateV2Session } from '../../services/agent/session-manager'
 import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../services/ai-browser'
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
@@ -103,6 +104,8 @@ interface StreamResult {
   totalTokens: number
   /** Whether the AI reported an error via report_to_user */
   aiReportedError: boolean
+  /** Error text from the SDK result message when aiReportedError was set */
+  aiReportedErrorDetail?: string
   /** Whether the AI called report_to_user during this stream cycle */
   reportToolCalled: boolean
   /** V2 session ID captured from the system init message (for escalation recovery) */
@@ -465,7 +468,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // back by polling (see DESIGN.md §2.10), which is enough to watch a run's steps.
     sdkOptions.includePartialMessages = false
     // Enable extended thinking for automation runs (same as interactive chat)
-    sdkOptions.maxThinkingTokens = 10240
+    applyReasoningEffort(sdkOptions, true, resolvedCreds.capabilities)
 
     const mcpServerNames = sdkOptions.mcpServers ? Object.keys(sdkOptions.mcpServers) : []
     console.log(
@@ -473,7 +476,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       `promptLen=${systemPrompt.length}, maxTurns=${sdkOptions.maxTurns}, ` +
       `mcpServers=[${mcpServerNames.join(', ')}], aiBrowser=${usesAIBrowser}, email=${usesEmail}`
     )
-    console.debug(`[Runtime][${runTag}] SDK options: model=${sdkOptions.model}, allowedTools=${(sdkOptions.allowedTools || []).length}, disallowedTools=${(sdkOptions.disallowedTools || []).length}, maxThinkingTokens=${sdkOptions.maxThinkingTokens}`)
+    console.debug(`[Runtime][${runTag}] SDK options: model=${sdkOptions.model}, allowedTools=${(sdkOptions.allowedTools || []).length}, disallowedTools=${(sdkOptions.disallowedTools || []).length}, effort=${sdkOptions.reasoningEffort}, maxThinkingTokens=${sdkOptions.maxThinkingTokens}`)
 
     // Session creation strategy:
     //   escalation_followup / continue_followup → restore existing session via
@@ -571,6 +574,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         finalText: streamResult.finalText + nextResult.finalText,
         totalTokens: streamResult.totalTokens + nextResult.totalTokens,
         aiReportedError: nextResult.aiReportedError,
+        aiReportedErrorDetail: nextResult.aiReportedErrorDetail,
         reportToolCalled: nextResult.reportToolCalled,
         sessionId: streamResult.sessionId || nextResult.sessionId,
       }
@@ -590,6 +594,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     let finalStatus: RunStatus
     let outcome: AppRunResult['outcome']
+    let finalErrorMessage: string | undefined
 
     // Escalation is detected via the onEscalation callback closure,
     // which sets escalationEntryId when report_to_user(type="escalation") is called.
@@ -599,6 +604,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     } else if (streamResult.aiReportedError) {
       finalStatus = 'error'
       outcome = 'error'
+      finalErrorMessage = streamResult.aiReportedErrorDetail || 'AI reported an error without details'
     } else if (!streamResult.reportToolCalled && !isInteractiveFollowup) {
       // AI never called report_to_user despite auto-continue prompts —
       // treat as error so it shows in Activity Thread and counts toward
@@ -606,6 +612,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       // a conversational reply has nothing to report, so it completes normally.
       finalStatus = 'error'
       outcome = 'error'
+      finalErrorMessage = `AI ended without reporting results after ${autoContinueCount} auto-continue attempt(s)`
       console.warn(
         `[Runtime][${runTag}] AI never called report_to_user after ` +
         `${autoContinueCount} auto-continue attempt(s) — marking as error`
@@ -620,6 +627,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       finishedAt,
       durationMs,
       tokensUsed: streamResult.totalTokens || undefined,
+      errorMessage: finalErrorMessage,
     })
 
     // Persist the CC session id for every outcome. The subprocess is closed in
@@ -706,6 +714,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       durationMs,
       tokensUsed: streamResult.totalTokens || undefined,
       finalText: streamResult.finalText || undefined,
+      errorMessage: finalErrorMessage,
     }
   } catch (err) {
     const finishedAt = Date.now()
@@ -880,6 +889,9 @@ async function processStream(
         }
         if (m.is_error || m.error_during_execution) {
           result.aiReportedError = true
+          if (typeof m.result === 'string' && m.result.length > 0) {
+            result.aiReportedErrorDetail = m.result
+          }
           console.warn(`[Runtime][${runTag}] AI reported error in result message`)
         }
       }
@@ -1028,6 +1040,31 @@ const COMPACTION_MAX_TOKENS = 16384
 /** Max retry attempts when LLM output fails format validation */
 const COMPACTION_MAX_RETRIES = 2
 
+/** Abort timeout for the one-shot agent-SDK compaction query */
+const COMPACTION_AGENT_SDK_TIMEOUT_MS = 120_000
+
+/**
+ * Only Claude locks its OAuth tokens to first-party clients (api.anthropic.com
+ * rejects bare @anthropic-ai/sdk calls with 403 even with a valid token), so
+ * only Claude OAuth compaction must go through the agent SDK's cli.js
+ * subprocess, which carries Anthropic's request signing. Copilot/智谱 OAuth
+ * ride the same local OpenAI-compat router as their normal chat turns
+ * (resolveCredentialsForSdk → encoded BackendConfig), which is not
+ * first-party-locked (#121).
+ *
+ * Delegated sources join the first-party bucket too: they hold no key at all,
+ * and the CLI subprocess is their only credential carrier — a raw SDK call
+ * would reach the router with an empty key and no routing header, fail, and
+ * silently fall back to the heuristic compaction summary.
+ */
+export function providerRequiresFirstPartyClient(
+  provider: string,
+  oauthProvider?: string,
+  delegatedAuth?: boolean
+): boolean {
+  return delegatedAuth || (provider === 'oauth' && oauthProvider === 'claude')
+}
+
 /**
  * Check if app memory needs compaction and perform it if necessary.
  *
@@ -1147,9 +1184,9 @@ function buildCompactionPrompt(content: string, appName: string): string {
  * 4. After all retries exhausted, keep the last LLM output as-is
  * 5. Only fall back to code-based extraction on API-level failures
  *
- * Uses the @anthropic-ai/sdk client directly (not a full SDK session) for
- * minimal overhead. The call goes through the resolved credentials so it
- * works with all provider types (Anthropic, OpenAI-compat, OAuth).
+ * Provider fork (#121): first-party-locked providers (Claude OAuth) reject
+ * bare @anthropic-ai/sdk calls with 403, so they go through the agent SDK's
+ * cli.js subprocess instead. All other providers keep the raw SDK path.
  */
 async function generateCompactionSummary(
   content: string,
@@ -1158,96 +1195,200 @@ async function generateCompactionSummary(
   runTag: string
 ): Promise<string> {
   try {
-    const { default: Anthropic } = await import('@anthropic-ai/sdk')
     const config = getConfig()
     const credentials = app.userOverrides?.modelSourceId
       ? await getApiCredentialsForSource(config, app.userOverrides.modelSourceId, app.userOverrides.modelId)
       : await getApiCredentials(config)
-    const resolved = await resolveCredentialsForSdk(credentials)
 
-    // Truncate input if too large
-    const truncatedContent = content.length > MAX_COMPACTION_INPUT_LENGTH
-      ? truncateUtf16Safe(content, MAX_COMPACTION_INPUT_LENGTH) + '\n\n... (truncated)'
-      : content
-
-    const client = new Anthropic({
-      apiKey: resolved.anthropicApiKey,
-      baseURL: resolved.anthropicBaseUrl,
-    })
-
-    const prompt = buildCompactionPrompt(truncatedContent, appName)
-
-    // Build conversation for multi-turn retry
-    const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
-      { role: 'user', content: prompt },
-    ]
-
-    let lastOutput = ''
-
-    // Attempt 1 + up to COMPACTION_MAX_RETRIES retries
-    for (let attempt = 0; attempt <= COMPACTION_MAX_RETRIES; attempt++) {
-      const response = await client.messages.create({
-        model: resolved.sdkModel,
-        max_tokens: COMPACTION_MAX_TOKENS,
-        messages,
-      })
-
-      const output = response.content
-        .filter((block: any) => block.type === 'text')
-        .map((block: any) => block.text)
-        .join('')
-
-      if (output.trim().length === 0) {
-        console.warn(`[Runtime][${runTag}] Compaction attempt ${attempt + 1}: LLM returned empty output`)
-        // On empty output, don't retry — go to fallback
-        break
-      }
-
-      lastOutput = output
-
-      if (isValidCompaction(output)) {
-        if (attempt > 0) {
-          console.log(`[Runtime][${runTag}] Compaction succeeded on retry ${attempt}`)
-        }
-        return output
-      }
-
-      // Validation failed — log and prepare retry
-      console.warn(
-        `[Runtime][${runTag}] Compaction attempt ${attempt + 1}: ` +
-        `output missing required headings (has # now: ${/^# now\s*$/m.test(output)}, ` +
-        `has # History: ${/^# History\s*$/m.test(output)})`
-      )
-
-      if (attempt < COMPACTION_MAX_RETRIES) {
-        // Add the failed output as assistant message, then feedback as user message
-        messages.push({ role: 'assistant', content: output })
-        messages.push({
-          role: 'user',
-          content:
-            'Your output is missing the required H1 headings. ' +
-            'The compacted memory MUST contain both `# now` and `# History` as H1 headings ' +
-            '(lines starting with exactly `# now` and `# History`). ' +
-            'Please output the corrected compacted memory.',
-        })
-      }
+    if (providerRequiresFirstPartyClient(credentials.provider, credentials.oauthProvider, credentials.delegatedAuth)) {
+      return await generateCompactionViaAgentSdk(content, appName, app, credentials, runTag)
     }
-
-    // All attempts exhausted: use last LLM output if we have one, otherwise fallback
-    if (lastOutput.trim().length > 0) {
-      console.warn(
-        `[Runtime][${runTag}] Compaction retries exhausted, ` +
-        `keeping last LLM output (${lastOutput.length} chars)`
-      )
-      return lastOutput
-    }
-
-    console.warn(`[Runtime][${runTag}] LLM returned no usable output, using fallback`)
-    return buildFallbackCompactionSummary(content)
+    return await generateCompactionViaRawSdk(content, appName, credentials, runTag)
   } catch (err) {
     console.error(`[Runtime][${runTag}] LLM compaction failed, using fallback:`, err)
     return buildFallbackCompactionSummary(content)
   }
+}
+
+/**
+ * Compaction via a one-shot agent SDK query. The resolved router credentials
+ * are the same ones the run's main session uses, so the cli.js subprocess
+ * path carries whatever signing the provider requires.
+ *
+ * No retry loop here: the prompt already mandates the H1 structure, and on
+ * invalid or failed output the caller-facing semantics (fallback below)
+ * keep the archived memory recoverable.
+ */
+async function generateCompactionViaAgentSdk(
+  content: string,
+  appName: string,
+  app: InstalledApp,
+  credentials: Awaited<ReturnType<typeof getApiCredentials>>,
+  runTag: string
+): Promise<string> {
+  const resolved = await resolveCredentialsForSdk(credentials)
+
+  const truncatedContent = content.length > MAX_COMPACTION_INPUT_LENGTH
+    ? truncateUtf16Safe(content, MAX_COMPACTION_INPUT_LENGTH) + '\n\n... (truncated)'
+    : content
+
+  const abortController = new AbortController()
+  const timeoutId = setTimeout(() => abortController.abort(), COMPACTION_AGENT_SDK_TIMEOUT_MS)
+
+  try {
+    const queryIterator = agentSdkQuery({
+      prompt: buildCompactionPrompt(truncatedContent, appName),
+      options: {
+        model: resolved.sdkModel,
+        anthropicBaseUrl: resolved.anthropicBaseUrl,
+        cwd: getWorkingDir(app.spaceId!),
+        executable: getHeadlessElectronPath(),
+        executableArgs: ['--no-warnings'],
+        // Same env builder as regular sessions (buildBaseSdkOptions does the
+        // same): it routes delegated sources via ANTHROPIC_CUSTOM_HEADERS —
+        // never ANTHROPIC_API_KEY, which would override the CLI's own
+        // credential — and pins CLAUDE_CONFIG_DIR, where the delegated CLI
+        // looks up that credential.
+        env: buildSdkEnv({
+          anthropicApiKey: resolved.anthropicApiKey,
+          anthropicBaseUrl: resolved.anthropicBaseUrl,
+          delegatedRoutingHeader: resolved.delegatedRoutingHeader,
+          capabilities: resolved.capabilities,
+        }),
+        permissionMode: 'bypassPermissions',
+        abortController,
+        maxTurns: 1,
+      } as any,
+    })
+
+    let lastOutput = ''
+    for await (const msg of queryIterator) {
+      if (msg.type === 'assistant') {
+        const blocks = (msg as any).message?.content
+        if (Array.isArray(blocks)) {
+          lastOutput += blocks
+            .filter((block: any) => block.type === 'text')
+            .map((block: any) => block.text)
+            .join('')
+        }
+      } else if (msg.type === 'result') {
+        const resultText = (msg as any).result ?? (msg as any).message?.result ?? ''
+        if (typeof resultText === 'string' && resultText.length > lastOutput.length) {
+          lastOutput = resultText
+        }
+        break
+      }
+    }
+
+    if (lastOutput.trim().length === 0) {
+      console.warn(`[Runtime][${runTag}] Agent-SDK compaction returned no usable output, using fallback`)
+      return buildFallbackCompactionSummary(content)
+    }
+    if (!isValidCompaction(lastOutput)) {
+      console.warn(
+        `[Runtime][${runTag}] Agent-SDK compaction output missing required headings, using fallback`
+      )
+      return buildFallbackCompactionSummary(content)
+    }
+    return lastOutput
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+/**
+ * Compaction via the raw @anthropic-ai/sdk client (not a full SDK session)
+ * for minimal overhead. The call goes through the resolved credentials so it
+ * works with all non-locked provider types (Anthropic API key, OpenAI-compat).
+ */
+async function generateCompactionViaRawSdk(
+  content: string,
+  appName: string,
+  credentials: Awaited<ReturnType<typeof getApiCredentials>>,
+  runTag: string
+): Promise<string> {
+  const { default: Anthropic } = await import('@anthropic-ai/sdk')
+  const resolved = await resolveCredentialsForSdk(credentials)
+
+  // Truncate input if too large
+  const truncatedContent = content.length > MAX_COMPACTION_INPUT_LENGTH
+    ? truncateUtf16Safe(content, MAX_COMPACTION_INPUT_LENGTH) + '\n\n... (truncated)'
+    : content
+
+  const client = new Anthropic({
+    apiKey: resolved.anthropicApiKey,
+    baseURL: resolved.anthropicBaseUrl,
+  })
+
+  const prompt = buildCompactionPrompt(truncatedContent, appName)
+
+  // Build conversation for multi-turn retry
+  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
+    { role: 'user', content: prompt },
+  ]
+
+  let lastOutput = ''
+
+  // Attempt 1 + up to COMPACTION_MAX_RETRIES retries
+  for (let attempt = 0; attempt <= COMPACTION_MAX_RETRIES; attempt++) {
+    const response = await client.messages.create({
+      model: resolved.sdkModel,
+      max_tokens: COMPACTION_MAX_TOKENS,
+      messages,
+    })
+
+    const output = response.content
+      .filter((block: any) => block.type === 'text')
+      .map((block: any) => block.text)
+      .join('')
+
+    if (output.trim().length === 0) {
+      console.warn(`[Runtime][${runTag}] Compaction attempt ${attempt + 1}: LLM returned empty output`)
+      // On empty output, don't retry — go to fallback
+      break
+    }
+
+    lastOutput = output
+
+    if (isValidCompaction(output)) {
+      if (attempt > 0) {
+        console.log(`[Runtime][${runTag}] Compaction succeeded on retry ${attempt}`)
+      }
+      return output
+    }
+
+    // Validation failed — log and prepare retry
+    console.warn(
+      `[Runtime][${runTag}] Compaction attempt ${attempt + 1}: ` +
+      `output missing required headings (has # now: ${/^# now\s*$/m.test(output)}, ` +
+      `has # History: ${/^# History\s*$/m.test(output)})`
+    )
+
+    if (attempt < COMPACTION_MAX_RETRIES) {
+      // Add the failed output as assistant message, then feedback as user message
+      messages.push({ role: 'assistant', content: output })
+      messages.push({
+        role: 'user',
+        content:
+          'Your output is missing the required H1 headings. ' +
+          'The compacted memory MUST contain both `# now` and `# History` as H1 headings ' +
+          '(lines starting with exactly `# now` and `# History`). ' +
+          'Please output the corrected compacted memory.',
+      })
+    }
+  }
+
+  // All attempts exhausted: use last LLM output if we have one, otherwise fallback
+  if (lastOutput.trim().length > 0) {
+    console.warn(
+      `[Runtime][${runTag}] Compaction retries exhausted, ` +
+      `keeping last LLM output (${lastOutput.length} chars)`
+    )
+    return lastOutput
+  }
+
+  console.warn(`[Runtime][${runTag}] LLM returned no usable output, using fallback`)
+  return buildFallbackCompactionSummary(content)
 }
 
 /**

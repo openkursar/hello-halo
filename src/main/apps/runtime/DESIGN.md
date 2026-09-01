@@ -294,6 +294,61 @@ const systemPrompt = assembleAppChatPrompt({ identity, entry, constraints })
 final string. Acceptable: it caps the assembler's blast radius and prevents
 the file from re-acquiring channel knowledge over time.
 
+### 2.12a App Chat Runs on the Shared Consumer (Turn Sink)
+
+**Problem**: app chat used to read the SDK stream once per user message
+(`processStream` per `sendAppChatMessage`). Between messages nobody was in
+`stream()`, so a turn CC produced on its own — a `run_in_background` task
+finishing, a team agent reporting — stayed queued in the pipe. The next message
+consumed that queued turn as its own answer, and from then on every reply lagged
+one turn behind. Space chat was immune because its persistent consumer
+(`services/agent/session-consumer.ts`) never leaves the stream.
+
+**Decision**: app chat uses that same consumer. The surface-specific half is a
+`TurnSink` (`services/agent/turn-sink.ts`) implemented by `app-chat-sink.ts`;
+`sendAppChatMessage` no longer consumes anything, it only assembles the session
+inputs and dispatches.
+
+```
+sendAppChatMessage
+  ├── prompt / MCP / permission envelope   (unchanged)
+  ├── getOrCreateV2Session(..., { displayModel, sink })   → consumer starts here
+  ├── sink.writeUserMessage(text)          → run JSONL
+  ├── sink.beginRound({ onProgress, onReply, onMessageAccepted })
+  ├── markTurnDispatched + v2Session.send()
+  └── await round.done
+```
+
+**Turn ownership**: the SDK stream carries no correlation between a `send()` and
+the turn it causes, so ownership is decided by order. `beginRound` enqueues
+immediately before `send()`; a turn claims the queue head at its `system:init`.
+Consequences that matter:
+
+- A turn that starts with an empty queue is **autonomous**. It is persisted like
+  any other turn and, for IM sessions, pushed to the originating chat (the user
+  asked for that work — its completion belongs in the conversation). Native and
+  HTTP sessions need no push: the `agent:*` events already reached the client and
+  `AppChatView` reloads the transcript on completion.
+- A round enqueued while a turn is already running cannot be claimed by it, so
+  the residual race is only the instant between enqueue and `system:init`. The
+  IM busy check closes even that: `isAppChatConversationGenerating` counts an
+  autonomous turn as busy, so an inbound message arriving then is buffered as a
+  supplement instead of starting a round.
+- A round that can never be answered is settled, not left hanging:
+  `onConsumerStopped` rejects outstanding rounds when the session dies, and an
+  empty interrupted/errored turn rejects rather than leaving an IM stream open.
+
+**Generating state moved off `activeSessions`**. App chat no longer registers
+there; `isAppChatConversationGenerating` is the single predicate (queued round OR
+consumer mid-turn) and every caller — stop, clear, restart, supplement buffering
+— goes through it. Session invalidation for app chat now takes the consumer path
+(`pendingConsumerRebuilds`) instead of the legacy `pendingInvalidations` path,
+which is also what makes stop/team-agent handling in `control.ts` apply to
+digital humans for free.
+
+Automation runs (`execute.ts`) are untouched: a headless run has no turn gaps to
+lose, and its own `processStream` must remain the only reader of that stream.
+
 ### 2.13 Native Multi-Sessions (Local Channel + Session Fork)
 
 **Decision**: A digital human's native client chat supports multiple named
@@ -492,6 +547,7 @@ src/main/apps/runtime/
 
   -- Interactive chat with an App (separate from automation runs):
   app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
+  app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a)
   config-defaults.ts         -- Merge App config_schema defaults into userConfig
   dispatch-inbound.ts        -- Route IM inbound messages into app-chat
   im-permission-registry.ts  -- Per-conversation owner/guest context for SDK gating

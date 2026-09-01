@@ -8,6 +8,7 @@ import {
   deepSeekAdapter,
   groqAdapter,
   openRouterAdapter,
+  orcaRouterAdapter,
   moonshotAdapter,
   zhipuAdapter
 } from '../../../src/main/openai-compat-router/server/provider-adapters'
@@ -148,6 +149,18 @@ describe('findAdapter', () => {
   it('finds openrouter adapter by URL', () => {
     const adapter = findAdapter('https://openrouter.ai/api/v1')
     expect(adapter?.id).toBe('openrouter')
+  })
+
+  it('finds orcarouter adapter by URL', () => {
+    const adapter = findAdapter('https://api.orcarouter.ai/v1')
+    expect(adapter?.id).toBe('orcarouter')
+  })
+
+  it('attaches app attribution headers for the app', () => {
+    expect(orcaRouterAdapter.getExtraHeaders?.()).toEqual({
+      'HTTP-Referer': 'https://hello-halo.cc/',
+      'X-Title': 'Halo'
+    })
   })
 
   it('returns undefined for unknown URL without adapterId', () => {

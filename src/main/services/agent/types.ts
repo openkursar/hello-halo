@@ -5,6 +5,8 @@
  * This file has no dependencies and is imported by all other agent modules.
  */
 
+import type { ReasoningEffortSetting } from '../../../shared/constants/reasoning-effort'
+
 // ============================================
 // API Credentials
 // ============================================
@@ -23,6 +25,11 @@ export interface ResolvedModelCapabilities {
   maxOutputTokens: number
   /** Effective context window for the model (preset merged with user override) */
   contextWindow: number
+  /**
+   * How hard the model should think while Deep Thinking is on, as set by the
+   * user in Model Config. `undefined` = use Halo's default level.
+   */
+  reasoningEffort?: ReasoningEffortSetting
 }
 
 /**
@@ -35,6 +42,14 @@ export interface ApiCredentials {
   model: string
   displayModel?: string
   provider: 'anthropic' | 'openai' | 'oauth'
+  /**
+   * Provider identity behind an OAuth source (source.provider, e.g. 'claude',
+   * 'github-copilot', 'zhipu-coding-oauth'). Only Claude locks its OAuth
+   * tokens to first-party clients — consumers needing that distinction (e.g.
+   * compaction's provider fork, #121) read this instead of guessing from
+   * `provider === 'oauth'`. undefined for non-OAuth credentials.
+   */
+  oauthProvider?: string
   /** Custom headers for OAuth providers */
   customHeaders?: Record<string, string>
   /** API type for the backend provider */
@@ -45,6 +60,11 @@ export interface ApiCredentials {
   filterContent?: boolean
   /** Provider adapter ID for request/response transformations */
   adapterId?: string
+  /**
+   * The CLI subprocess authenticates itself and `apiKey` is empty. Routes
+   * credential resolution away from every key-bearing path.
+   */
+  delegatedAuth?: boolean
   /**
    * The source's effective vision capability for this model (per-model override
    * → provider declaration → id heuristic), resolved by AISourceManager and
@@ -123,7 +143,7 @@ export interface AgentRequest {
   message: string
   resumeSessionId?: string
   images?: ImageAttachment[]  // Optional images for multi-modal messages
-  thinkingEnabled?: boolean   // Enable extended thinking mode (maxThinkingTokens: 10240)
+  thinkingEnabled?: boolean   // Enable extended thinking; depth comes from the model's reasoning effort
   model?: string              // Model to use (for future model switching)
   canvasContext?: CanvasContext  // Current canvas state for AI awareness
   knowledgeBaseId?: string         // When set, run as a "chat with this knowledge base" turn:

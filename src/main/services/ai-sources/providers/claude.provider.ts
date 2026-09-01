@@ -38,6 +38,7 @@ import type {
   AISourceUserInfo
 } from '../../../../shared/types'
 import { DEFAULT_MODEL, resolveModelId } from '../../../../shared/types'
+import { CLAUDE_SUBSCRIPTION_MODELS } from '../../../../shared/constants/claude-models'
 
 // ============================================================================
 // Constants
@@ -80,23 +81,7 @@ const TOKEN_REFRESH_THRESHOLD_MS = 5 * 60 * 1000
 // Model Catalog
 // ============================================================================
 
-/**
- * Claude OAuth model catalog (same models as regular Anthropic API).
- * [1m] suffix indicates 1M context window variant (stripped before API call).
- */
-const CLAUDE_MODELS: Record<string, string> = {
-  'claude-sonnet-5': 'Claude Sonnet 5',
-  'claude-sonnet-5[1m]': 'Claude Sonnet 5 (1M context)',
-  'claude-fable-5': 'Claude Fable 5',
-  'claude-fable-5[1m]': 'Claude Fable 5 (1M context)',
-  'claude-opus-5': 'Claude Opus 5',
-  'claude-opus-5[1m]': 'Claude Opus 5 (1M context)',
-  'claude-opus-4-8': 'Claude Opus 4.8',
-  'claude-opus-4-8[1m]': 'Claude Opus 4.8 (1M context)',
-  'claude-opus-4-6': 'Claude Opus 4.6',
-  'claude-opus-4-6[1m]': 'Claude Opus 4.6 (1M context)',
-  'claude-haiku-4-5-20251001': 'Claude Haiku 4.5'
-}
+const CLAUDE_MODELS = CLAUDE_SUBSCRIPTION_MODELS
 
 // ============================================================================
 // Beta Header Builder

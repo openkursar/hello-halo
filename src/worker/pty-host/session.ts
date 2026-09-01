@@ -232,7 +232,9 @@ export class TerminalSession extends EventEmitter {
       cols: this.info.cols,
       rows: this.info.rows,
       cwd: this.spec.cwd,
-      env: { ...process.env, ...shell.env } as Record<string, string>
+      // Spec env is complete and authoritative; this worker's own process.env
+      // carries fork-injected Electron variables that must not reach the shell.
+      env: shell.env
     })
 
     this.dataListener = this.proc.onData((chunk) => this.onData(chunk))

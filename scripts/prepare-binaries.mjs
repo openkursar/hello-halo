@@ -81,6 +81,20 @@ const CODEX_PACKAGES = {
   'linux': { pkg: '@openai/codex-linux-x64', targetTriple: 'x86_64-unknown-linux-musl', binary: 'codex' }
 }
 
+// @img/sharp-* prebuilt binaries, used by the Claude engines to downscale
+// oversized images before sending them to a model. Declared as optional
+// dependencies of @anthropic-ai/claude-code, so npm installs the host's package
+// only and a cross-platform build would ship none — the app then fails on any
+// image wider than the model limit with "Unable to resize image".
+// Each package pulls its libvips sibling from its own optionalDependencies
+// (win32 has none: the DLLs are inside the package).
+const SHARP_PACKAGES = {
+  'mac-arm64': '@img/sharp-darwin-arm64',
+  'mac-x64': '@img/sharp-darwin-x64',
+  'win': '@img/sharp-win32-x64',
+  'linux': '@img/sharp-linux-x64'
+}
+
 // better-sqlite3 prebuild configuration
 // Prebuilds are platform-specific .node binaries downloaded from GitHub releases.
 // They are stored in node_modules/better-sqlite3/prebuilds/{os}-{arch}/ and
@@ -537,6 +551,107 @@ function installCodex(platform) {
 }
 
 /**
+ * Sharp release to install for every target platform, read from whichever
+ * @img/sharp-* package npm resolved for this host. Pinning all platforms to the
+ * host's version keeps one sharp release across the whole build matrix.
+ */
+function getSharpVersion() {
+  const imgDir = path.join(PROJECT_ROOT, 'node_modules', '@img')
+  const hostPkg = fs.existsSync(imgDir)
+    ? fs.readdirSync(imgDir).find(name => name.startsWith('sharp-') && !name.startsWith('sharp-libvips-'))
+    : undefined
+
+  if (!hostPkg) {
+    throw new Error('No @img/sharp-* package in node_modules, run "npm install" first')
+  }
+  return JSON.parse(fs.readFileSync(path.join(imgDir, hostPkg, 'package.json'), 'utf8')).version
+}
+
+/**
+ * Download an npm package tarball straight into node_modules, bypassing the
+ * host os/cpu checks that make npm refuse a foreign-platform package.
+ */
+function installFromRegistry(pkg, version) {
+  const shortName = pkg.split('/').pop()
+  const registry = execSync('npm config get registry', { encoding: 'utf8' }).trim().replace(/\/+$/, '')
+  const tarballUrl = `${registry}/${pkg}/-/${shortName}-${version}.tgz`
+  const destDir = path.join(PROJECT_ROOT, 'node_modules', ...pkg.split('/'))
+  const tmpTgz = path.join(PROJECT_ROOT, `node_modules/.${shortName}.tgz`)
+
+  try {
+    if (fs.existsSync(destDir)) {
+      fs.rmSync(destDir, { recursive: true })
+    }
+    fs.mkdirSync(destDir, { recursive: true })
+
+    curlDownload(tarballUrl, tmpTgz)
+    execSync(`tar -xzf "${tmpTgz}" -C "${destDir}" --strip-components=1`, { stdio: 'pipe' })
+    fs.unlinkSync(tmpTgz)
+  } catch (err) {
+    if (fs.existsSync(tmpTgz)) fs.unlinkSync(tmpTgz)
+    throw err
+  }
+
+  return destDir
+}
+
+function checkSharp(platform) {
+  const pkg = SHARP_PACKAGES[platform]
+  const pkgDir = path.join(PROJECT_ROOT, 'node_modules', ...pkg.split('/'))
+  const manifestPath = path.join(pkgDir, 'package.json')
+
+  if (!fs.existsSync(manifestPath)) {
+    return { exists: false }
+  }
+
+  const libDir = path.join(pkgDir, 'lib')
+  if (!fs.existsSync(libDir) || !fs.readdirSync(libDir).some(f => f.endsWith('.node'))) {
+    return { exists: true, valid: false }
+  }
+
+  // The libvips sibling carries the shared library the .node links against,
+  // so the package alone is not enough on platforms that declare one.
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+  const siblings = Object.keys(manifest.optionalDependencies || {})
+  const valid = siblings.every(dep =>
+    fs.existsSync(path.join(PROJECT_ROOT, 'node_modules', ...dep.split('/'), 'package.json'))
+  )
+  return { exists: true, valid }
+}
+
+/**
+ * Install the @img/sharp-* package for a target platform, plus the libvips
+ * sibling it declares.
+ */
+function installSharp(platform) {
+  const pkg = SHARP_PACKAGES[platform]
+  const version = getSharpVersion()
+
+  log.info(`Installing ${pkg}@${version} from registry...`)
+
+  try {
+    const destDir = installFromRegistry(pkg, version)
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(destDir, 'package.json'), 'utf8'))
+    for (const [dep, range] of Object.entries(manifest.optionalDependencies || {})) {
+      const depVersion = range.replace(/^[^0-9]*/, '')
+      log.info(`Installing ${dep}@${depVersion} for ${pkg}...`)
+      installFromRegistry(dep, depVersion)
+    }
+
+    const status = checkSharp(platform)
+    if (!status.exists || !status.valid) {
+      throw new Error(`No valid sharp binary found in downloaded ${pkg}`)
+    }
+
+    log.success(`Installed ${pkg}@${version}`)
+  } catch (err) {
+    log.error(`Failed to install ${pkg}: ${err.message}`)
+    throw err
+  }
+}
+
+/**
  * Prepare all binaries for a platform
  */
 function preparePlatform(platform) {
@@ -572,6 +687,14 @@ function preparePlatform(platform) {
     installCodex(platform)
   } else {
     log.success(`@openai/codex native package already exists for ${platform}`)
+  }
+
+  // Check and install the @img/sharp-* prebuilt image resizer
+  const sharpStatus = checkSharp(platform)
+  if (!sharpStatus.exists || !sharpStatus.valid) {
+    installSharp(platform)
+  } else {
+    log.success(`@img/sharp native package already exists for ${platform}`)
   }
 
   // Portable Git: bundled into the Windows build for offline Git Bash setup

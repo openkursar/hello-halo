@@ -29,3 +29,33 @@ describe('Atlas Cloud built-in provider', () => {
     ])
   })
 })
+
+describe('OrcaRouter built-in provider', () => {
+  it('registers an OpenAI-compatible gateway provider with dynamic model discovery', () => {
+    const provider = getBuiltinProvider('orcarouter')
+
+    expect(provider).toMatchObject({
+      id: 'orcarouter',
+      authType: 'api-key',
+      apiUrl: 'https://api.orcarouter.ai/v1',
+      modelsUrl: 'https://api.orcarouter.ai/v1/models',
+      region: 'global'
+    })
+    expect(provider?.recommended).toBeUndefined()
+    expect(getAllProviderIds()).toContain('orcarouter')
+  })
+
+  it('defaults to a concrete flagship model, with the virtual auto router last', () => {
+    expect(getDefaultModel('orcarouter')).toBe('openai/gpt-5.5')
+    expect(getBuiltinProvider('orcarouter')?.models.map(model => model.id)).toEqual([
+      'openai/gpt-5.5',
+      'google/gemini-3.5-flash',
+      'anthropic/claude-opus-4.8',
+      'grok/grok-4.3',
+      'deepseek/deepseek-v4-pro',
+      'minimax/minimax-m2.7',
+      'qwen/qwen3.7-max',
+      'orcarouter/auto'
+    ])
+  })
+})
