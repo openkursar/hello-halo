@@ -50,7 +50,7 @@ function TabStrip({ active, onChange }: { active: RailTab; onChange: (tab: RailT
     { id: 'mcp', label: t('MCP') },
   ]
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1 overflow-x-auto">
       {tabs.map(tab => (
         <button
           key={tab.id}
@@ -76,6 +76,17 @@ export function ArtifactRail({
   const { t } = useTranslation()
 
   const [activeTab, setActiveTab] = useState<RailTab>('files')
+  // Skill/MCP each do a real fetch (disk scan / IPC call) on mount, so they
+  // must not mount until the user actually opens that tab — CSS-hidden
+  // alone isn't enough, since hidden tabs still stay in the React tree and
+  // run their effects. Once opened, a tab keeps its mount (added to this
+  // set, never removed) so switching away and back doesn't refetch.
+  const [mountedTabs, setMountedTabs] = useState<Set<RailTab>>(() => new Set<RailTab>(['files']))
+
+  const handleTabChange = useCallback((tab: RailTab) => {
+    setActiveTab(tab)
+    setMountedTabs(prev => (prev.has(tab) ? prev : new Set(prev).add(tab)))
+  }, [])
 
   const isControlled = externalExpanded !== undefined
   const [internalExpanded, setInternalExpanded] = useState(true)
@@ -159,20 +170,26 @@ export function ArtifactRail({
     }
   }, [isMobile, mobileOverlayOpen])
 
-  // All three tabs stay mounted (CSS-hidden when inactive) so switching tabs
-  // doesn't re-fetch Skill/MCP lists or lose the Files tab's tree state —
-  // same reasoning as the expand/collapse CSS-hide below.
+  // Once a tab has been opened it stays mounted (CSS-hidden when inactive)
+  // so switching back doesn't re-fetch or lose state — but a tab that was
+  // never opened isn't in the DOM at all (see mountedTabs above), so Skill's
+  // disk scan and MCP's IPC call only run for a space page whose user
+  // actually opened that tab.
   const tabContent = (
     <>
       <div className={`flex-1 flex flex-col overflow-hidden${activeTab === 'files' ? '' : ' hidden'}`}>
         <ArtifactFilesTab />
       </div>
-      <div className={`flex-1 flex flex-col overflow-hidden${activeTab === 'skill' ? '' : ' hidden'}`}>
-        <SkillsTab />
-      </div>
-      <div className={`flex-1 flex flex-col overflow-hidden${activeTab === 'mcp' ? '' : ' hidden'}`}>
-        <McpTab />
-      </div>
+      {mountedTabs.has('skill') && (
+        <div className={`flex-1 flex flex-col overflow-hidden${activeTab === 'skill' ? '' : ' hidden'}`}>
+          <SkillsTab />
+        </div>
+      )}
+      {mountedTabs.has('mcp') && (
+        <div className={`flex-1 flex flex-col overflow-hidden${activeTab === 'mcp' ? '' : ' hidden'}`}>
+          <McpTab />
+        </div>
+      )}
     </>
   )
 
@@ -221,7 +238,7 @@ export function ArtifactRail({
             >
               {/* Header */}
               <div className="p-3 border-b border-border flex items-center justify-between">
-                <TabStrip active={activeTab} onChange={setActiveTab} />
+                <TabStrip active={activeTab} onChange={handleTabChange} />
                 <button
                   onClick={() => setMobileOverlayOpen(false)}
                   className="p-1 hover:bg-secondary rounded transition-colors"
@@ -265,7 +282,7 @@ export function ArtifactRail({
 
       {/* Header - height matches CanvasTabs (py-1.5 + h-7 content = ~40px) */}
       <div className="flex-shrink-0 px-3 h-10 border-b border-border flex items-center justify-between">
-        {isExpanded && <TabStrip active={activeTab} onChange={setActiveTab} />}
+        {isExpanded && <TabStrip active={activeTab} onChange={handleTabChange} />}
         <button
           onClick={handleToggleExpanded}
           className="p-1 hover:bg-secondary rounded transition-colors"

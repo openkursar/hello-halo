@@ -31,8 +31,14 @@ export function SkillsTab() {
   useEffect(() => {
     // AppsPage owns the initial loadApps() call; SkillsTab can render before
     // that page ever mounts, so make sure the installed-apps list this needs
-    // for click-through is actually populated.
-    useAppsStore.getState().loadApps()
+    // for click-through is actually populated. apps.store has no
+    // loaded/in-flight dedup of its own, so guard here — skip the refetch
+    // once something (this tab, another mount, or AppsPage itself) has
+    // already populated or is populating the list.
+    const store = useAppsStore.getState()
+    if (store.apps.length === 0 && !store.isLoading) {
+      store.loadApps()
+    }
   }, [])
 
   useEffect(() => {
