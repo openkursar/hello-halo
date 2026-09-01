@@ -242,7 +242,12 @@ function SpaceDropdownRow({
       role="button"
       tabIndex={0}
       onClick={() => onSelect(space)}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelect(space) }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onSelect(space)
+        }
+      }}
       className={`group w-full px-3 py-2.5 text-left text-sm transition-colors flex items-center gap-2.5 cursor-pointer ${
         space.isMissing
           ? 'text-muted-foreground cursor-not-allowed opacity-70'
@@ -257,7 +262,7 @@ function SpaceDropdownRow({
       {(editable || (isActive && !space.isMissing)) && (
         <div className="ml-auto flex items-center gap-1 flex-shrink-0">
           {editable && (
-            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="flex items-center gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
               {onEdit && (
                 <button
                   onClick={(e) => onEdit(e, space)}
