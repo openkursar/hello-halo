@@ -23,7 +23,6 @@ import { useCanvasIsOpen } from '../stores/canvas.store'
 export function TlonPage() {
   const { t } = useTranslation()
   const navigate = useAppStore(s => s.navigate)
-  const navigateBack = useAppStore(s => s.navigateBack)
   const isMobile = useIsMobile()
 
   const kbs = useTlonStore(s => s.kbs)
@@ -93,15 +92,6 @@ export function TlonPage() {
   return (
     <div className="h-full flex flex-col bg-background relative">
       <Header
-        left={
-          <button
-            onClick={() => navigateBack('home')}
-            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            {t('Knowledge')}
-          </button>
-        }
         right={
           <button
             onClick={() => navigate('settings')}

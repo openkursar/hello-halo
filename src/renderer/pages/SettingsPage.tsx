@@ -4,7 +4,6 @@
  */
 
 import { useState, useCallback } from 'react'
-import { ArrowLeft } from 'lucide-react'
 import { useAppStore } from '../stores/app.store'
 import { api } from '../api'
 import type { HaloConfig } from '../types'
@@ -29,7 +28,7 @@ import {
 
 export function SettingsPage() {
   const { t } = useTranslation()
-  const { config, setConfig, navigateBack } = useAppStore()
+  const { config, setConfig } = useAppStore()
   const isMobile = useIsMobile()
   const isRemoteMode = api.isRemoteMode()
 
@@ -42,28 +41,10 @@ export function SettingsPage() {
     scrollToSection(sectionId)
   }, [])
 
-  // Handle back - return to previous view, consuming it so a later back
-  // press doesn't loop to wherever this one was pressed from
-  const handleBack = () => {
-    navigateBack('home')
-  }
-
   return (
     <div className="h-full w-full flex flex-col">
       {/* Header */}
-      <Header
-        left={
-          <>
-            <button
-              onClick={handleBack}
-              className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-            <span className="font-medium text-sm">{t('Settings')}</span>
-          </>
-        }
-      />
+      <Header />
 
       {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden">

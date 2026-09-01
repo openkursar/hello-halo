@@ -9,22 +9,20 @@
  *
  * Height: 40px (compact, modern style)
  * Traffic light vertical center formula: y = height/2 - 7 = 13
+ *
+ * Single persistent instance, mounted once by `HeaderShell` in the app shell.
+ * Pages don't render a `<header>` element themselves — they call `<Header
+ * left right hidden />`, which portals its content into the shell's slots.
+ * This keeps each page's own left/right JSX (and the hooks/state it reads)
+ * exactly where it always was, while only one `<header>` DOM node ever exists.
  */
 
-import { ReactNode, CSSProperties } from 'react'
+import { ReactNode, CSSProperties, createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Monitor } from 'lucide-react'
 import { isElectron, isCapacitor } from '../../api/transport'
 import { useAppStore } from '../../stores/app.store'
 import { useServerStore } from '../../stores/server.store'
-
-interface HeaderProps {
-  /** Left side content (after platform padding) */
-  left?: ReactNode
-  /** Right side content (before platform padding) */
-  right?: ReactNode
-  /** Additional className for header */
-  className?: string
-}
 
 // Get platform info with fallback for SSR/browser
 const getPlatform = () => {
@@ -40,14 +38,78 @@ const getPlatform = () => {
   }
 }
 
-export function Header({ left, right, className = '' }: HeaderProps) {
+// Export platform detection hook for use in other components
+export function usePlatform() {
+  return getPlatform()
+}
+
+// ============================================
+// Slot registry — connects the shell's single <header> to whichever page is
+// currently mounted, without either side needing a reference to the other.
+// ============================================
+
+interface HeaderSlotsContextValue {
+  leftEl: HTMLDivElement | null
+  rightEl: HTMLDivElement | null
+  setHidden: (hidden: boolean) => void
+}
+
+const HeaderSlotsContext = createContext<HeaderSlotsContextValue | null>(null)
+
+interface HeaderProps {
+  /** Left side content (after platform padding) */
+  left?: ReactNode
+  /** Right side content (before platform padding) */
+  right?: ReactNode
+  /**
+   * Replace the header with a bare drag strip for this page (e.g. a
+   * maximized canvas that needs the traffic-light clearance but no chrome).
+   * Cleared automatically when the calling page unmounts.
+   */
+  hidden?: boolean
+}
+
+/** Page-facing: portals left/right content into the shell's single header. */
+export function Header({ left, right, hidden }: HeaderProps) {
+  const ctx = useContext(HeaderSlotsContext)
+
+  useEffect(() => {
+    ctx?.setHidden(!!hidden)
+    return () => ctx?.setHidden(false)
+  }, [hidden, ctx])
+
+  if (!ctx?.leftEl || !ctx?.rightEl) return null
+
+  return (
+    <>
+      {createPortal(left ?? null, ctx.leftEl)}
+      {createPortal(right ?? null, ctx.rightEl)}
+    </>
+  )
+}
+
+// ============================================
+// Shell chrome — the actual <header> DOM, rendered once by App.tsx
+// ============================================
+
+interface HeaderShellProps {
+  children: ReactNode
+}
+
+/** Renders the single persistent header (or its hidden/drag-only variant) and provides the slot registry to whichever page is mounted as `children`. */
+export function HeaderShell({ children }: HeaderShellProps) {
   const platform = getPlatform()
   const isInElectron = isElectron()
   const isInCapacitor = isCapacitor()
 
-  // Capacitor: device switcher
   const navigate = useAppStore(s => s.navigate)
   const activeServer = useServerStore(s => s.getActive())
+
+  const [leftEl, setLeftEl] = useState<HTMLDivElement | null>(null)
+  const [rightEl, setRightEl] = useState<HTMLDivElement | null>(null)
+  const [hidden, setHidden] = useState(false)
+
+  const ctxValue = useMemo(() => ({ leftEl, rightEl, setHidden }), [leftEl, rightEl])
 
   // Platform-specific padding classes
   // macOS: traffic lights now live over the NavRail, Header needs no left inset
@@ -74,52 +136,56 @@ export function Header({ left, right, className = '' }: HeaderProps) {
   // Capacitor: disable drag region (no window chrome)
   const dragClass = isInCapacitor ? '' : 'drag-region'
 
-  // Header height: 40px, trafficLightPosition.y should be 40/2 - 7 = 13
   return (
-    <header
-      style={chromeInset}
-      className={`
-        flex items-center justify-between h-10
-        border-b border-border ${dragClass}
-        ${platformPadding}
-        ${className}
-      `.trim().replace(/\s+/g, ' ')}
-    >
-      {/* Left side: Interactive elements need no-drag to allow clicks */}
-      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-        <div className="no-drag flex items-center gap-2 sm:gap-3">
-          {left}
-        </div>
-      </div>
+    <HeaderSlotsContext.Provider value={ctxValue}>
+      {hidden ? (
+        // Bare drag strip: same footprint a maximized canvas needs (draggable,
+        // clears the mac traffic lights) with no chrome content on top of it.
+        <div
+          className="h-11 flex-shrink-0 bg-background"
+          style={{ WebkitAppRegion: 'drag' } as CSSProperties}
+        />
+      ) : (
+        // Header height: 40px, trafficLightPosition.y should be 40/2 - 7 = 13
+        <header
+          style={chromeInset}
+          className={`
+            flex items-center justify-between h-10 flex-shrink-0
+            border-b border-border ${dragClass}
+            ${platformPadding}
+          `.trim().replace(/\s+/g, ' ')}
+        >
+          {/* Left slot — pure portal target, no sibling JSX children */}
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className="no-drag flex items-center gap-2 sm:gap-3 min-w-0" ref={setLeftEl} />
+          </div>
 
-      {/* Center: Draggable area - grows to fill space */}
-      <div className="flex-1 min-w-[100px]" />
+          {/* Center: Draggable area - grows to fill space */}
+          <div className="flex-1 min-w-[100px]" />
 
-      {/* Right side: Interactive elements need no-drag to allow clicks */}
-      <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
-        <div className="no-drag flex items-center gap-1 sm:gap-2">
-          {right}
-          {/* Capacitor: device switcher button — always visible when connected */}
-          {isInCapacitor && (
-            <button
-              onClick={() => navigate('serverList')}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-secondary transition-colors max-w-[120px]"
-              title={activeServer?.name}
-            >
-              <Monitor className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-              <span className="text-xs text-muted-foreground truncate hidden sm:block">
-                {activeServer?.name ?? ''}
-              </span>
-            </button>
-          )}
-        </div>
-      </div>
-    </header>
+          {/* Right slot — kept as its own portal-only div; the Capacitor
+              switcher is a separate sibling so it never shares DOM-child
+              ownership with the portaled content. */}
+          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+            <div className="no-drag flex items-center gap-1 sm:gap-2" ref={setRightEl} />
+            {isInCapacitor && (
+              <div className="no-drag">
+                <button
+                  onClick={() => navigate('serverList')}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-secondary transition-colors max-w-[120px]"
+                  title={activeServer?.name}
+                >
+                  <Monitor className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                  <span className="text-xs text-muted-foreground truncate hidden sm:block">
+                    {activeServer?.name ?? ''}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+        </header>
+      )}
+      {children}
+    </HeaderSlotsContext.Provider>
   )
 }
-
-// Export platform detection hook for use in other components
-export function usePlatform() {
-  return getPlatform()
-}
-

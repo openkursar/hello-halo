@@ -329,27 +329,14 @@ export function SpacePage() {
         Show/hide is controlled by api.showChatCapsuleOverlay() / api.hideChatCapsuleOverlay()
       */}
 
-      {/* Header - replaced with drag region spacer when maximized (for macOS traffic lights) */}
-      {isCanvasMaximized ? (
-        <div
-          className="h-11 flex-shrink-0 bg-background"
-          style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
-        />
-      ) : (
+      {/* Header — hidden (bare drag strip) when the canvas is maximized, since
+          there's no chrome to show and the strip still needs to be draggable
+          and clear the macOS traffic lights. */}
       <Header
+        hidden={isCanvasMaximized}
         left={
           <>
-            {/* Back button */}
-            <button
-              onClick={() => navigate('home')}
-              className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
-
-            {/* Space Selector - dropdown for switching spaces (includes icon + name + back) */}
+            {/* Space Selector - dropdown for switching spaces (includes icon + name + "Manage Spaces") */}
             <SpaceSelector />
 
             {/* Mobile: Chat History Panel as bottom sheet */}
@@ -403,7 +390,6 @@ export function SpacePage() {
           </>
         }
       />
-      )}
 
       {/* Git Bash Warning Banner - Windows only, when in mock mode */}
       {mockBashMode && !isCanvasMaximized && (

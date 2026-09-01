@@ -31,6 +31,7 @@ import { UpdateNotification } from './components/updater/UpdateNotification'
 import { NotificationToast } from './components/notification/NotificationToast'
 import { CredentialAlertBanner } from './components/settings/CredentialAlertBanner'
 import { NavRail } from './components/layout/NavRail'
+import { HeaderShell } from './components/layout/Header'
 import { useNotificationStore } from './stores/notification.store'
 import { api } from './api'
 import { syncStatusBarStyle } from './api/safe-area'
@@ -1013,10 +1014,22 @@ export default function App() {
         </div>
       )}
       <div className="h-full w-full flex overflow-hidden">
-        {RAIL_VIEWS.includes(view) && <NavRail />}
-        <div className="flex-1 min-w-0 h-full overflow-hidden">
-          {renderView()}
-        </div>
+        {RAIL_VIEWS.includes(view) ? (
+          <>
+            <NavRail />
+            <div className="flex-1 min-w-0 h-full overflow-hidden flex flex-col">
+              <HeaderShell>
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  {renderView()}
+                </div>
+              </HeaderShell>
+            </div>
+          </>
+        ) : (
+          <div className="flex-1 min-w-0 h-full overflow-hidden">
+            {renderView()}
+          </div>
+        )}
       </div>
       {/* Search panel - full screen edit mode */}
       <SearchPanel isOpen={isSearchOpen} onClose={closeSearch} />

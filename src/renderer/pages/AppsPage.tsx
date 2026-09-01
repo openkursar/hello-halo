@@ -41,8 +41,7 @@ import { ChevronLeft, ChevronRight, Settings } from 'lucide-react'
 
 export function AppsPage() {
   const { t } = useTranslation()
-  const { navigate, navigateBack } = useAppStore()
-  const currentSpace = useSpaceStore(state => state.currentSpace)
+  const { navigate } = useAppStore()
   const haloSpace = useSpaceStore(state => state.haloSpace)
   const spaces = useSpaceStore(state => state.spaces)
   const { apps, loadApps, updateAppOverrides } = useAppsStore()
@@ -246,15 +245,6 @@ export function AppsPage() {
     <div className="h-full flex flex-col bg-background">
       {/* Header */}
       <Header
-        left={
-          <button
-            onClick={() => currentSpace ? navigate('space') : navigateBack('home')}
-            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            {currentSpace?.name ?? t('Back')}
-          </button>
-        }
         right={
           <button
             onClick={() => navigate('settings')}
