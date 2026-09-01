@@ -150,8 +150,12 @@ export function HeaderShell({ children }: HeaderShellProps) {
       {hidden ? (
         // Bare drag strip: same footprint a maximized canvas needs (draggable,
         // clears the mac traffic lights) with no chrome content on top of it.
+        // h-10, matching the real header below and NavRail's top spacer —
+        // origin/main had this at h-11 (44px) with no such alignment target
+        // (NavRail didn't exist yet), an existing inconsistency, not one
+        // introduced by this change.
         <div
-          className="h-11 flex-shrink-0 bg-background"
+          className="h-10 flex-shrink-0 bg-background"
           style={{ WebkitAppRegion: 'drag' } as CSSProperties}
         />
       ) : (
