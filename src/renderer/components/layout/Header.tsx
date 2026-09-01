@@ -17,12 +17,14 @@
  * exactly where it always was, while only one `<header>` DOM node ever exists.
  */
 
-import { ReactNode, CSSProperties, createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { ReactNode, CSSProperties, createContext, useContext, useLayoutEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Monitor } from 'lucide-react'
 import { isElectron, isCapacitor } from '../../api/transport'
 import { useAppStore } from '../../stores/app.store'
 import { useServerStore } from '../../stores/server.store'
+import { useIsNarrowShell } from '../../hooks/useIsMobile'
+import { NarrowNavSheet } from './NarrowNavSheet'
 
 // Get platform info with fallback for SSR/browser
 const getPlatform = () => {
@@ -73,7 +75,13 @@ interface HeaderProps {
 export function Header({ left, right, hidden }: HeaderProps) {
   const ctx = useContext(HeaderSlotsContext)
 
-  useEffect(() => {
+  // Layout effect, not a passive one: this gates which DOM (real header vs
+  // drag strip) the shell renders. A passive effect runs after paint, so the
+  // outgoing page's cleanup and the incoming page's set land in different
+  // frames — the wrong variant is visible for a beat during every view
+  // switch. Layout effects for the unmount and the mount both resolve
+  // before the browser paints, so only the correct state ever gets drawn.
+  useLayoutEffect(() => {
     ctx?.setHidden(!!hidden)
     return () => ctx?.setHidden(false)
   }, [hidden, ctx])
@@ -101,6 +109,7 @@ export function HeaderShell({ children }: HeaderShellProps) {
   const platform = getPlatform()
   const isInElectron = isElectron()
   const isInCapacitor = isCapacitor()
+  const isNarrow = useIsNarrowShell()
 
   const navigate = useAppStore(s => s.navigate)
   const activeServer = useServerStore(s => s.getActive())
@@ -155,8 +164,13 @@ export function HeaderShell({ children }: HeaderShellProps) {
             ${platformPadding}
           `.trim().replace(/\s+/g, ' ')}
         >
-          {/* Left slot — pure portal target, no sibling JSX children */}
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Unified destination menu: only way to reach Conversation/Digital
+                Humans/Knowledge Base/Store/Settings when NavRail is hidden —
+                every RAIL_VIEWS page reaches it the same way, so none of them
+                need their own copy. */}
+            {isNarrow && <NarrowNavSheet />}
+            {/* Left slot — pure portal target, no sibling JSX children */}
             <div className="no-drag flex items-center gap-2 sm:gap-3 min-w-0" ref={setLeftEl} />
           </div>
 

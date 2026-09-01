@@ -44,7 +44,7 @@ export function SettingsPage() {
   return (
     <div className="h-full w-full flex flex-col">
       {/* Header */}
-      <Header />
+      <Header left={<span className="font-medium text-sm">{t('Settings')}</span>} />
 
       {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden">

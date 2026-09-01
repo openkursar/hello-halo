@@ -468,7 +468,7 @@ export default function App() {
 
       const listenerPromise = CapApp.addListener('backButton', () => {
         const currentView = useAppStore.getState().view
-        if (currentView === 'settings' || currentView === 'apps') {
+        if (currentView === 'settings' || currentView === 'apps' || currentView === 'tlon') {
           useAppStore.getState().navigateBack('home')
         } else if (currentView === 'serverConnect') {
           // Back from add-server → server list (if we have servers)

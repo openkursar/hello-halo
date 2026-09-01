@@ -3,8 +3,9 @@
  *
  * Left-most 56px column with the four primary destinations (conversation /
  * digital humans / knowledge base / store) and settings pinned to the
- * bottom. Desktop only — narrow widths keep using the existing
- * MobileOverflowMenu, the same breakpoint every other layout component uses.
+ * bottom. Hidden only in a genuinely narrow layout (see useIsNarrowShell) —
+ * HeaderShell's NarrowNavSheet is the escape hatch to these same
+ * destinations there.
  *
  * The top spacer reserves the row height of the per-page Header so rail icons
  * line up with it, and doubles as the macOS traffic-light clearance.
@@ -18,6 +19,7 @@ import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
 import { cn } from '../../lib/utils'
 import { isElectron } from '../../api/transport'
+import { useIsNarrowShell } from '../../hooks/useIsMobile'
 import { usePlatform } from './Header'
 
 type Destination = 'chat' | 'digital-humans' | 'knowledge' | 'store'
@@ -70,6 +72,7 @@ export function NavRail() {
   const currentSpace = useSpaceStore(s => s.currentSpace)
   const active = useActiveDestination()
   const platform = usePlatform()
+  const isNarrow = useIsNarrowShell()
 
   const goChat = () => navigate(currentSpace ? 'space' : 'home')
   const goDigitalHumans = () => {
@@ -95,10 +98,12 @@ export function NavRail() {
     ? { minWidth: `calc(${MAC_CHROME_CLEARANCE_PX}px / var(--display-scale, 1))` }
     : {}
 
+  if (isNarrow) return null
+
   return (
     <div
       style={chromeInset}
-      className="hidden sm:flex flex-col items-center w-14 h-full flex-shrink-0 bg-card border-r border-border"
+      className="flex flex-col items-center w-14 h-full flex-shrink-0 bg-card border-r border-border"
     >
       {/* Aligns with the per-page Header row; also clears macOS traffic lights. */}
       <div className="w-full h-10 flex-shrink-0 drag-region" />
