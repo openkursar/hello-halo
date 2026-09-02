@@ -640,6 +640,10 @@ class AISourceManager {
     const result = this.setCurrentModel(modelId)
     if (before.currentId) {
       const source = getCurrentSource(result)
+      console.log(
+        `[AISourceManager] Set current model: ${modelId} ` +
+        `(source=${before.currentId}, provider=${source?.provider ?? 'unknown'})`
+      )
       void analytics.track(AnalyticsEvents.SETTINGS_MODEL_SWITCH, {
         sourceId: before.currentId,
         sourceName: source?.name,
