@@ -690,8 +690,8 @@ function InstanceCard({
 
           {/* Name resolution — optional, resolves anonymized sender IDs to real names */}
           <NameResolutionField
-            value={(currentCfg.nameResolveApiKey as string) ?? ''}
-            onChange={(v) => handleConfigChange('nameResolveApiKey', v)}
+            value={(currentCfg.nameResolveUrl as string) ?? ''}
+            onChange={(v) => handleConfigChange('nameResolveUrl', v)}
             status={status?.identityResolution}
           />
 

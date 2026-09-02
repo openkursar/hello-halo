@@ -201,7 +201,7 @@ interface WecomBotProviderConfig {
    * The grant expires 7 days after authorization and must be re-pasted;
    * absence simply means chat IDs display as-is (feature is fully optional).
    */
-  nameResolveApiKey?: string
+  nameResolveUrl?: string
 }
 
 export class WecomBotProvider implements ImChannelProvider {
@@ -215,7 +215,7 @@ export class WecomBotProvider implements ImChannelProvider {
     { key: 'secret', label: 'Secret', type: 'password', required: true },
     { key: 'wsUrl', label: 'WebSocket URL', type: 'text', placeholder: 'wss://openws.work.weixin.qq.com' },
     { key: 'quoteReply', label: 'Quote Reply', type: 'toggle', default: true },
-    { key: 'nameResolveApiKey', label: 'Name Resolution URL', type: 'password', placeholder: 'https://qyapi.weixin.qq.com/mcp/v2/bot/msg?apikey=...' },
+    { key: 'nameResolveUrl', label: 'Name Resolution URL', type: 'password', placeholder: 'https://qyapi.weixin.qq.com/mcp/v2/bot/msg?apikey=...' },
   ]
 
   readonly defaultConfig: Record<string, unknown> = {
@@ -223,7 +223,7 @@ export class WecomBotProvider implements ImChannelProvider {
     secret: '',
     wsUrl: '',
     quoteReply: true,
-    nameResolveApiKey: '',
+    nameResolveUrl: '',
   }
 
   /**
@@ -234,7 +234,7 @@ export class WecomBotProvider implements ImChannelProvider {
    * reply window (an instance field, wiped by any recreate) every time a
    * 7-day-expiring credential gets re-pasted.
    */
-  readonly hotUpdatableConfigKeys = ['nameResolveApiKey']
+  readonly hotUpdatableConfigKeys = ['nameResolveUrl']
 
   createInstance(instanceId: string, config: Record<string, unknown>): ImChannelInstance {
     return new WecomBotInstance(instanceId, config as unknown as WecomBotProviderConfig)
@@ -334,7 +334,7 @@ class WecomBotInstance implements ImChannelInstance {
   }
 
   /**
-   * Apply a hot-updatable config change (currently: nameResolveApiKey only —
+   * Apply a hot-updatable config change (currently: nameResolveUrl only —
    * see WecomBotProvider.hotUpdatableConfigKeys) without touching the WS
    * connection. ImChannelManager only calls this when it has already
    * determined every OTHER field is unchanged.
@@ -346,8 +346,8 @@ class WecomBotInstance implements ImChannelInstance {
   }
 
   private buildIdentityCapability(config: WecomBotProviderConfig): ImIdentityCapability | undefined {
-    return config.nameResolveApiKey
-      ? { fetchIdentityDirectory: () => fetchWecomIdentityDirectory(config.nameResolveApiKey!) }
+    return config.nameResolveUrl
+      ? { fetchIdentityDirectory: () => fetchWecomIdentityDirectory(config.nameResolveUrl!) }
       : undefined
   }
 
@@ -518,7 +518,7 @@ class WecomBotInstance implements ImChannelInstance {
 
   /**
    * Identity resolution capability — only present when the member has
-   * supplied a nameResolveApiKey. Conditional (unlike fileCapability, which
+   * supplied a nameResolveUrl. Conditional (unlike fileCapability, which
    * every instance supports): its absence is how callers know there is
    * nothing to try, with zero cost, rather than attempting a call that
    * would only fail for lack of a credential. Not readonly: updateConfig()

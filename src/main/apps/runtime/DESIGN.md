@@ -607,7 +607,7 @@ interacted with the bot.
   auto-sync awareness fragment also resolve through `getImSessionDisplayName()`.
 
 A provider whose config carries a credential unrelated to its live
-connection (WeCom's `nameResolveApiKey`) should declare it in
+connection (WeCom's `nameResolveUrl`) should declare it in
 `hotUpdatableConfigKeys` so `ImChannelManager.applyConfig` calls
 `instance.updateConfig()` instead of a stop+recreate — otherwise every
 change resets whatever connection-scoped state (WS session, reply-window

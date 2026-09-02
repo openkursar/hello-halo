@@ -399,17 +399,17 @@ describe('ImChannelManager — hotUpdatableConfigKeys', () => {
   })
 
   it('applies a hot-updatable-only change via updateConfig(), without stop+recreate', () => {
-    const provider = makeProvider({ hotUpdatableConfigKeys: ['nameResolveApiKey'] })
+    const provider = makeProvider({ hotUpdatableConfigKeys: ['nameResolveUrl'] })
     manager.registerProvider(provider)
 
     manager.applyConfig(
-      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: '' } })],
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveUrl: '' } })],
       noopInbound,
     )
     const inst = manager.getInstance('i1') as FakeInstance
 
     manager.applyConfig(
-      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: 'https://qyapi.example/x?apikey=new' } })],
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveUrl: 'https://qyapi.example/x?apikey=new' } })],
       noopInbound,
     )
 
@@ -417,22 +417,22 @@ describe('ImChannelManager — hotUpdatableConfigKeys', () => {
     expect(provider.created).toHaveLength(1)
     expect(manager.getInstance('i1')).toBe(inst)
     expect(inst.updateConfigCalls).toEqual([
-      { botId: 'b1', nameResolveApiKey: 'https://qyapi.example/x?apikey=new' },
+      { botId: 'b1', nameResolveUrl: 'https://qyapi.example/x?apikey=new' },
     ])
   })
 
   it('still does a full stop+recreate when a non-hot-updatable field also changes', () => {
-    const provider = makeProvider({ hotUpdatableConfigKeys: ['nameResolveApiKey'] })
+    const provider = makeProvider({ hotUpdatableConfigKeys: ['nameResolveUrl'] })
     manager.registerProvider(provider)
 
     manager.applyConfig(
-      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: '' } })],
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveUrl: '' } })],
       noopInbound,
     )
     const inst = manager.getInstance('i1') as FakeInstance
 
     manager.applyConfig(
-      [makeConfig('i1', { config: { botId: 'b2', nameResolveApiKey: 'https://qyapi.example/x?apikey=new' } })],
+      [makeConfig('i1', { config: { botId: 'b2', nameResolveUrl: 'https://qyapi.example/x?apikey=new' } })],
       noopInbound,
     )
 
@@ -446,13 +446,13 @@ describe('ImChannelManager — hotUpdatableConfigKeys', () => {
     manager.registerProvider(provider)
 
     manager.applyConfig(
-      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: '' } })],
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveUrl: '' } })],
       noopInbound,
     )
     const inst = manager.getInstance('i1') as FakeInstance
 
     manager.applyConfig(
-      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: 'https://qyapi.example/x?apikey=new' } })],
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveUrl: 'https://qyapi.example/x?apikey=new' } })],
       noopInbound,
     )
 
@@ -513,13 +513,13 @@ describe('ImChannelManager — identityResolution status lifecycle', () => {
   it('clears tracked identity-resolution state when a hot-updatable credential changes', () => {
     const clearSpy = vi.spyOn(identityResolve, 'clearIdentityResolutionStatus')
     const provider = makeProvider({
-      hotUpdatableConfigKeys: ['nameResolveApiKey'],
+      hotUpdatableConfigKeys: ['nameResolveUrl'],
       nextInstanceOverrides: { identityCapability: fakeCapability() },
     })
     manager.registerProvider(provider)
 
     manager.applyConfig(
-      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: 'old' } })],
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveUrl: 'old' } })],
       noopInbound,
     )
     clearSpy.mockClear()
@@ -527,7 +527,7 @@ describe('ImChannelManager — identityResolution status lifecycle', () => {
     // Re-authorized with a fresh URL — a stale 'expired'/'error' status must
     // not linger past the fix.
     manager.applyConfig(
-      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: 'new' } })],
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveUrl: 'new' } })],
       noopInbound,
     )
     expect(clearSpy).toHaveBeenCalledWith('i1')
