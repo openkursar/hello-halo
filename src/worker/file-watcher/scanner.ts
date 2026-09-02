@@ -18,6 +18,7 @@ import {
   BASELINE_IGNORE_PATTERNS,
   TREE_HIDDEN_DIRS
 } from '../../shared/constants/ignore-patterns'
+import { isDiskRoot } from '../../shared/disk-paths'
 import type { CachedTreeNode, CachedArtifact } from '../../shared/types/artifact'
 
 // --- Constants ---
@@ -55,15 +56,6 @@ export function getFileIconId(ext: string): string {
 
 export function shouldHide(filePath: string): boolean {
   return HIDDEN_PATTERNS.some(pattern => pattern.test(filePath))
-}
-
-export function isDiskRoot(path: string): boolean {
-  if (/^[A-Z]:\\?$/i.test(path)) return true
-  if (path === '/') return true
-  if (/^\/Volumes\/[^/]+\/?$/.test(path)) return true
-  if (/^\/mnt\/[^/]+\/?$/.test(path)) return true
-  if (/^\/media\/[^/]+\/?$/.test(path)) return true
-  return false
 }
 
 // --- .gitignore ---

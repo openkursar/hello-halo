@@ -314,20 +314,86 @@ describe('Tlon Service', () => {
       const kb = createKB({ name: 'LD' })
       const scratch = makeScratchDir()
 
-      const linked = addLinkedDir(kb.id, { path: scratch, label: 'docs' })
-      expect(linked?.path).toBe(scratch)
+      const result = addLinkedDir(kb.id, { path: scratch, label: 'docs' })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.linked.path).toBe(scratch)
       // Duplicate path returns the existing link.
-      expect(addLinkedDir(kb.id, { path: scratch, label: 'again' })?.id).toBe(linked?.id)
+      expect(addLinkedDir(kb.id, { path: scratch, label: 'again' })).toMatchObject({
+        ok: true,
+        linked: { id: result.linked.id },
+      })
       expect(getKB(kb.id)?.linkedDirs).toHaveLength(1)
 
-      expect(removeLinkedDir(kb.id, linked!.id)).toBe(true)
+      expect(removeLinkedDir(kb.id, result.linked.id)).toBe(true)
       expect(getKB(kb.id)?.linkedDirs).toHaveLength(0)
-      expect(removeLinkedDir(kb.id, linked!.id)).toBe(false)
+      expect(removeLinkedDir(kb.id, result.linked.id)).toBe(false)
     })
 
     it('rejects a nonexistent path', () => {
       const kb = createKB({ name: 'LD2' })
-      expect(addLinkedDir(kb.id, { path: '/nonexistent/road', label: 'x' })).toBeNull()
+      expect(addLinkedDir(kb.id, { path: '/nonexistent/road', label: 'x' })).toEqual({
+        ok: false,
+        reason: 'path-missing',
+      })
+    })
+
+    it('rejects a disk root', () => {
+      const kb = createKB({ name: 'LD3' })
+      expect(addLinkedDir(kb.id, { path: path.parse(process.cwd()).root, label: 'root' })).toEqual({
+        ok: false,
+        reason: 'disk-root',
+      })
+      expect(getKB(kb.id)?.linkedDirs).toHaveLength(0)
+    })
+
+    it('rejects a folder with more accepted files than the cap', () => {
+      const kb = createKB({ name: 'LD4' })
+      const scratch = makeScratchDir()
+      for (let i = 0; i < 501; i++) {
+        fs.writeFileSync(path.join(scratch, `doc-${i}.md`), `doc ${i}`)
+      }
+
+      expect(addLinkedDir(kb.id, { path: scratch, label: 'huge' })).toEqual({
+        ok: false,
+        reason: 'too-many-files',
+        count: 501,
+        limit: 500,
+      })
+      expect(getKB(kb.id)?.linkedDirs).toHaveLength(0)
+    })
+
+    it('ignores non-document and dependency files when counting toward the cap', () => {
+      const kb = createKB({ name: 'LD5' })
+      const scratch = makeScratchDir()
+      for (let i = 0; i < 500; i++) {
+        fs.writeFileSync(path.join(scratch, `doc-${i}.md`), `doc ${i}`)
+      }
+      // Unaccepted extensions and ignored directories do not count. (Images DO
+      // count — they are OCR sources.)
+      fs.writeFileSync(path.join(scratch, 'code.ts'), 'const x = 1')
+      fs.mkdirSync(path.join(scratch, 'node_modules'), { recursive: true })
+      fs.writeFileSync(path.join(scratch, 'node_modules', 'dep.md'), 'dep')
+
+      expect(addLinkedDir(kb.id, { path: scratch, label: 'ok' })).toMatchObject({
+        ok: true,
+        linked: { path: scratch },
+      })
+    })
+
+    // fs.symlinkSync needs admin privileges on Windows.
+    it.skipIf(process.platform === 'win32')('does not descend into symlinked directories', () => {
+      const kb = createKB({ name: 'LD6' })
+      const outer = makeScratchDir()
+      const real = path.join(outer, 'real')
+      fs.mkdirSync(real, { recursive: true })
+      fs.writeFileSync(path.join(real, 'inside.md'), 'doc')
+      // A symlink pointing back at the watched root loops forever if followed.
+      fs.symlinkSync(outer, path.join(real, 'loop'))
+
+      expect(addLinkedDir(kb.id, { path: outer, label: 'sym' }).ok).toBe(true)
+      const statuses = getRawFileLearnedStatus(kb.id)
+      expect(statuses.filter(s => s.source === 'linked')).toHaveLength(1)
     })
   })
 
