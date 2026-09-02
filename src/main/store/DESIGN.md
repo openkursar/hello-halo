@@ -296,6 +296,14 @@ curated slug list that is authoritative for both membership and order). It is
 deliberately **not** in `shared/`: nothing outside this process resolves
 sections, and putting it in `shared/` would invite a renderer to try.
 
+**Collection membership resolves here too**, for the same reason and by the same
+rule. A collection travels from ops as slugs; the payload carries the entries.
+Resolving slugs in the renderer looks harmless — it is a map lookup — but the
+only map available there is the browse list, so a collection curated with more
+members than fit on catalog page 1 renders as however many happen to land in it.
+The type says so: `ResolvedDiscoverNode.collections` is `ResolvedCollection[]`,
+which carries `entries`, and the renderer has no way to build one.
+
 ### 3.11 Freshness is triggered by the user arriving, not by a timer
 
 Everything the store shows is cached — the index in SQLite, the page documents
