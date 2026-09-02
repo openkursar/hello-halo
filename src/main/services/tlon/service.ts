@@ -161,7 +161,11 @@ export function sha256(buf: Buffer | string): string {
  * Content-hash memo keyed by absolute path. Learned-status pulls and ingest
  * scans re-hash every source repeatedly (per progress pull, per boot); an
  * unchanged mtime+size reuses the digest instead of re-reading the bytes.
- * Bounded, FIFO eviction.
+ * Bounded, LRU eviction: Map iteration order tracks insertion order, and a
+ * hit re-inserts its entry so the oldest key is always the least recently
+ * used one — without this, a KB with more files than the cap would evict
+ * entries in the same 1Hz poll that just reused them, degrading every scan
+ * back to full re-reads.
  */
 const HASH_CACHE_MAX = 4096
 const hashCache = new Map<string, { mtimeMs: number; size: number; hash: string; binary: boolean }>()
@@ -175,7 +179,11 @@ export function _resetTlonHashCache(): void {
 export function hashFileCached(absolutePath: string): { hash: string; size: number; binary: boolean } {
   const st = statSync(absolutePath)
   const cached = hashCache.get(absolutePath)
-  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached
+  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+    hashCache.delete(absolutePath)
+    hashCache.set(absolutePath, cached)
+    return cached
+  }
 
   const buf = readFileSync(absolutePath)
   const entry = { mtimeMs: st.mtimeMs, size: st.size, hash: sha256(buf), binary: looksBinary(buf) }
@@ -402,6 +410,8 @@ export async function deleteKB(kbId: string): Promise<boolean> {
     for (const linked of entry.linkedDirs) {
       lastCapWarnStatus.delete(linked.path)
     }
+    lastCapWarnStatus.delete(getKBRawDir(kbId))
+    lastCapWarnStatus.delete(getKBTextDir(kbId))
 
     const dir = getKBDir(kbId)
     if (existsSync(dir)) {
@@ -497,6 +507,24 @@ function warnLinkedDirIgnored(linkedPath: string, status: 'too-many-files' | 'tr
       `[Tlon] Watched folder is over the ${MAX_LINKED_DIR_FILES}-file cap, ignoring it: ${linkedPath}`
     )
   }
+}
+
+/**
+ * Walk a KB's internal raw/ or text/ directory. Unlike `walkLinkedSources`
+ * these have no file-count cap — only the same entry-count walk budget
+ * applies — and truncation is warned once per path so an unexpectedly huge
+ * KB directory doesn't silently drop files from stats and listings instead
+ * of failing loudly.
+ */
+function walkKbDir(dirPath: string): WalkResult {
+  const result = walkFiles(dirPath)
+  if (result.truncated && lastCapWarnStatus.get(dirPath) !== 'truncated') {
+    lastCapWarnStatus.set(dirPath, 'truncated')
+    console.warn(
+      `[Tlon] Directory is too large to scan fully (over ${WALK_ENTRY_BUDGET} entries), listing is partial: ${dirPath}`
+    )
+  }
+  return result
 }
 
 type LinkedSourcesOutcome =
@@ -1025,7 +1053,8 @@ export function refreshStats(kbId: string): KBStats {
 
   let rawFileCount = 0
   let rawSizeBytes = 0
-  for (const rel of walkFiles(rawDir).files) {
+  const rawWalk = walkKbDir(rawDir)
+  for (const rel of rawWalk.files) {
     try {
       rawSizeBytes += statSync(join(rawDir, rel)).size
       rawFileCount++
@@ -1044,7 +1073,8 @@ export function refreshStats(kbId: string): KBStats {
       } catch { /* ignore */ }
     }
   }
-  const indexedCount = walkFiles(textDir).files.filter(r => r.toLowerCase().endsWith('.txt')).length
+  const textWalk = walkKbDir(textDir)
+  const indexedCount = textWalk.files.filter(r => r.toLowerCase().endsWith('.txt')).length
   // An over-cap watched folder contributes 0 above, but text extracted from it
   // earlier still counts here — floor the total so indexedCount never exceeds it.
   const rawFileCountFloored = Math.max(rawFileCount, indexedCount)
@@ -1129,7 +1159,8 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
     return { size, state, error }
   }
 
-  for (const rel of walkFiles(rawDir).files) {
+  const rawWalk = walkKbDir(rawDir)
+  for (const rel of rawWalk.files) {
     const recordedKey = rel.split(sep).join('/')
     const { size, state, error } = derive(recordedKey, join(rawDir, rel))
     result.push({
@@ -1218,7 +1249,8 @@ export function collectIngestCandidates(kbId: string): Array<{
   }
 
   const rawDir = getKBRawDir(kbId)
-  for (const rel of walkFiles(rawDir).files) {
+  const rawWalk = walkKbDir(rawDir)
+  for (const rel of rawWalk.files) {
     const sourcePath = rel.split(sep).join('/')
     consider(sourcePath, join(rawDir, rel), 'raw')
   }

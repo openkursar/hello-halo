@@ -512,6 +512,47 @@ describe('Tlon Service', () => {
       expect(hashFileCached(p).binary).toBe(true)
       expect(() => hashFileCached(path.join(scratch, 'missing'))).toThrow()
     })
+
+    it('evicts least-recently-used entries, not least-recently-inserted ones', () => {
+      const scratch = makeScratchDir()
+      // Whole-second mtimes so utimesSync below restores them exactly (Date
+      // truncates sub-millisecond precision, which a raw statSync().mtimeMs
+      // would otherwise still carry, breaking the memo comparison).
+      const mtime = new Date('2026-01-01T00:00:00Z')
+      const setMtime = (f: string) => fs.utimesSync(f, mtime, mtime)
+
+      // Matches HASH_CACHE_MAX in service.ts. Fills the cache to capacity so
+      // the next insert forces exactly one eviction.
+      const cacheMax = 4096
+      const files = Array.from({ length: cacheMax }, (_, i) => writeScratchFile(scratch, `f${i}.txt`, `${i}`))
+      files.forEach(setMtime)
+      for (const f of files) hashFileCached(f)
+
+      // Re-read the first (oldest-inserted) file: a cache hit should mark it
+      // most-recently-used, protecting it from the eviction below.
+      const hitBeforeHash = hashFileCached(files[0]).hash
+      expect(hitBeforeHash).toBe(sha256('0'))
+
+      // One new file over capacity evicts exactly one entry: whichever is now
+      // oldest. files[0] was just touched, so files[1] (never touched since
+      // insertion) is evicted instead.
+      hashFileCached(writeScratchFile(scratch, 'overflow.txt', 'new'))
+
+      // Mutate without changing size, so a surviving memo (same mtime + size)
+      // is indistinguishable from a real change except by presence in the
+      // cache — isolating what this test is actually checking.
+      //
+      // files[0]'s memo must have survived: the stale cached hash is served.
+      fs.writeFileSync(files[0], 'a')
+      setMtime(files[0])
+      expect(hashFileCached(files[0]).hash).toBe(hitBeforeHash)
+
+      // files[1]'s memo must be gone: the same kind of mutation is picked up
+      // as a fresh read rather than served from a surviving cache entry.
+      fs.writeFileSync(files[1], 'b')
+      setMtime(files[1])
+      expect(hashFileCached(files[1]).hash).toBe(sha256('b'))
+    })
   })
 
   describe('removeRawFile', () => {
