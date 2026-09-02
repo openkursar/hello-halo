@@ -16,12 +16,12 @@ import type { AsyncSubscription, Event as ParcelEvent } from '@parcel/watcher'
 import { join, relative } from 'path'
 import type { Ignore } from 'ignore'
 import { CPP_LEVEL_IGNORE_DIRS } from '../../shared/constants/ignore-patterns'
+import { isDiskRoot } from '../../shared/disk-paths'
 import type { ProcessedFsEvent } from '../../shared/protocol/file-watcher.protocol'
 import {
   loadIgnoreRules,
   isIgnored,
   shouldHide,
-  isDiskRoot,
   createArtifactFromPath,
   createTreeNodeFromArtifact
 } from './scanner'
