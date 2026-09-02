@@ -69,13 +69,16 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
       ? { ANTHROPIC_CUSTOM_HEADERS: params.delegatedRoutingHeader }
       : { ANTHROPIC_API_KEY: params.anthropicApiKey }),
   })),
-  buildBaseSdkOptions: vi.fn().mockReturnValue({
+  // Echoes back the caller's `mcpServers` (built by execute.ts from declared
+  // requires + always-on built-ins) instead of a fixed `{}` — that merge is
+  // exactly what the MCP-wiring tests below observe.
+  buildBaseSdkOptions: vi.fn((opts: { mcpServers?: Record<string, unknown> }) => ({
     model: 'test-model',
     cwd: '/tmp/test',
     maxTurns: 999,
     systemPrompt: '',
-    mcpServers: {},
-  }),
+    mcpServers: opts.mcpServers ?? {},
+  })),
 }))
 
 vi.mock('../../../../src/main/foundation/config.service', () => ({
@@ -191,8 +194,8 @@ import {
   providerRequiresFirstPartyClient
 } from '../../../../src/main/apps/runtime/execute'
 import { RunExecutionError } from '../../../../src/main/apps/runtime/errors'
-import { query as agentSdkQuery } from '../../../../src/main/services/agent/resolved-sdk'
-import { getApiCredentials } from '../../../../src/main/services/agent/helpers'
+import { query as agentSdkQuery, createSession } from '../../../../src/main/services/agent/resolved-sdk'
+import { getApiCredentials, getMcpServersForRequires } from '../../../../src/main/services/agent/helpers'
 import { resolveCredentialsForSdk } from '../../../../src/main/services/agent/sdk-config'
 
 // ============================================
@@ -656,6 +659,54 @@ describe('executeRun — compaction provider routing (#121)', () => {
       expect(memory.write.mock.calls[0][1].content).toContain('## State | compacted via one-shot query')
     },
   )
+})
+
+describe('executeRun — MCP wiring', () => {
+  beforeEach(() => {
+    // File-wide default (see the sdk-config mock above); reasserted here so
+    // this block's own override in the first test cannot leak into others.
+    vi.mocked(getMcpServersForRequires).mockReturnValue({})
+  })
+
+  it('passes an app-declared MCP dependency through to the SDK session', async () => {
+    const fakeMcpServer = { name: 'weather-mcp', _isMcpServer: true }
+    vi.mocked(getMcpServersForRequires).mockReturnValue({ 'weather-mcp': fakeMcpServer })
+
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    await executeRun({
+      app: makeApp({
+        spec: {
+          type: 'automation',
+          name: 'Test App',
+          config_schema: [],
+          permissions: [],
+          requires: { mcps: ['weather-mcp'] },
+        },
+      }),
+      trigger: baseTrigger,
+      store: makeStore(),
+      memory: makeMemory(),
+    })
+
+    expect(getMcpServersForRequires).toHaveBeenCalledWith(['weather-mcp'], 'space-1')
+    const sdkOptions = vi.mocked(createSession).mock.calls[0][0] as { mcpServers: Record<string, unknown> }
+    expect(sdkOptions.mcpServers).toEqual(expect.objectContaining({ 'weather-mcp': fakeMcpServer }))
+  })
+
+  it('still wires the built-in report/notify/memory MCP tools when the app declares no MCP requirement', async () => {
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    await executeRun({
+      app: makeApp(),
+      trigger: baseTrigger,
+      store: makeStore(),
+      memory: makeMemory(),
+    })
+
+    const sdkOptions = vi.mocked(createSession).mock.calls[0][0] as { mcpServers: Record<string, unknown> }
+    expect(Object.keys(sdkOptions.mcpServers)).toEqual(
+      expect.arrayContaining(['halo-memory', 'halo-report', 'halo-notify', 'web-search', 'ocr'])
+    )
+  })
 })
 
 describe('providerRequiresFirstPartyClient', () => {

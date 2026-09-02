@@ -5,6 +5,7 @@
 import type { Express, Request, Response } from 'express'
 import {
   analytics,
+  RENDERER_ALLOWED_EVENTS,
   electronApp,
   getEnabledAuthProviderConfigs,
 } from './_shared'
@@ -44,6 +45,14 @@ export function registerSystemRoutes(app: Express): void {
 
       if (!event || typeof event !== 'string') {
         res.status(400).json({ success: false, error: 'Missing event name' })
+        return
+      }
+
+      // Same boundary the IPC handler enforces (RENDERER_ALLOWED_EVENTS) —
+      // a remote/Capacitor client must not be able to report an event this
+      // check would reject on desktop.
+      if (!RENDERER_ALLOWED_EVENTS.has(event)) {
+        res.status(403).json({ success: false, error: `Event not allowed: ${event}` })
         return
       }
 

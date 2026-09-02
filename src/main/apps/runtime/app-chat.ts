@@ -31,6 +31,8 @@ import { writeFile } from 'fs/promises'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { getAppManager } from '../manager'
+import { analytics } from '../../services/analytics/analytics.service'
+import { AnalyticsEvents } from '../../services/analytics/types'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import type { MemoryCallerScope } from '../../platform/memory'
 import { getConfig } from '../../foundation/config.service'
@@ -399,6 +401,21 @@ export async function sendAppChatMessage(
 
   const app = manager.getApp(appId)
   if (!app) throw new Error(`App not found: ${appId}`)
+
+  // Counted here, not at the IPC/HTTP handlers, so every entry point into
+  // digital-human chat (desktop IPC, remote HTTP, IM inbound) is covered by
+  // one call site. `channel` separates those entries; IM additionally counts
+  // arrivals in dispatch-inbound, which includes messages rejected before
+  // they reach this function.
+  void analytics.track(AnalyticsEvents.MESSAGE_SENT, {
+    source: 'app-chat',
+    direction: 'inbound',
+    channel: parseAppChatKey(conversationId)?.channel ?? 'native',
+    appId,
+    specId: app.specId,
+    conversationId,
+    hasImages: Array.isArray(images) && images.length > 0,
+  })
 
   // Register external (HTTP/API) sessions for UI visibility + HTTP read parity.
   // No-op for native chat and for IM sessions (owned by dispatch-inbound).

@@ -175,7 +175,7 @@ export function registerConfigHandlers(): void {
       console.log('[Settings] ai-sources:switch-source - Switching to:', sourceId)
       try {
         const manager = getAISourceManager()
-        const result = manager.setCurrentSource(sourceId)
+        const result = manager.switchCurrentSource(sourceId)
         if (result.currentId !== sourceId) {
           return { success: false, error: `Source not found: ${sourceId}` }
         }
@@ -194,9 +194,7 @@ export function registerConfigHandlers(): void {
       console.log('[Settings] ai-sources:set-model - Setting model:', modelId)
       try {
         const manager = getAISourceManager()
-        const result = manager.setCurrentModel(modelId)
-        const src = manager.getCurrentSourceConfig()
-        console.log(`[Config] model_changed source=${src?.id || ''} provider=${src?.provider || ''} model=${modelId}`)
+        const result = manager.switchCurrentModel(modelId)
         emitConfigChange(['aiSources.model'])
         return { success: true, data: result }
       } catch (error: unknown) {

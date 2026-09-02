@@ -57,6 +57,8 @@ import { loadAuthProvidersAsync } from './auth-loader'
 import { loadProductConfig } from '../../foundation/product-config'
 import { decryptString } from '../../foundation/secure-storage.service'
 import { normalizeApiUrl } from '../../openai-compat-router'
+import { analytics } from '../analytics/analytics.service'
+import { AnalyticsEvents } from '../analytics/types'
 
 /**
  * Extended OAuth provider interface for token management
@@ -605,6 +607,47 @@ class AISourceManager {
     if (!aiSources.currentId) return aiSources
 
     return this.updateSource(aiSources.currentId, { model: modelId })
+  }
+
+  /**
+   * User-initiated source switch (Settings UI). Distinct from
+   * `setCurrentSource`, which also runs during login/token-refresh flows
+   * (`upsertDelegatedSource`) to auto-select the only available source —
+   * that isn't a choice the user made among alternatives, so it must not
+   * inflate this metric. Shared by IPC and HTTP so both transports are
+   * covered from one call site.
+   */
+  switchCurrentSource(sourceId: string): AISourcesConfig {
+    const result = this.setCurrentSource(sourceId)
+    if (result.currentId === sourceId) {
+      const switched = getCurrentSource(result)
+      void analytics.track(AnalyticsEvents.SETTINGS_SOURCE_SWITCH, {
+        sourceId,
+        sourceName: switched?.name,
+        provider: switched?.provider,
+        authType: switched?.authType,
+      })
+    }
+    return result
+  }
+
+  /**
+   * User-initiated model switch (Settings UI). Shared by IPC and HTTP so
+   * both transports are covered from one call site.
+   */
+  switchCurrentModel(modelId: string): AISourcesConfig {
+    const before = this.getAiSourcesConfig()
+    const result = this.setCurrentModel(modelId)
+    if (before.currentId) {
+      const source = getCurrentSource(result)
+      void analytics.track(AnalyticsEvents.SETTINGS_MODEL_SWITCH, {
+        sourceId: before.currentId,
+        sourceName: source?.name,
+        provider: source?.provider,
+        modelName: modelId,
+      })
+    }
+    return result
   }
 
   // ========== OAuth Methods ==========

@@ -208,6 +208,10 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Whitelist of SENSITIVE_KEYS property names permitted to be sent. Recognized keys: specId, spaceName, modelName, sourceName, mcpId, skillId, imBotName, inputTokens, outputTokens, errorCode."
+        },
+        "collectHostIdentity": {
+          "type": "boolean",
+          "description": "When true, every telemetry event's UserContext carries a hostIdentity block (OS username/domain, hostname, all non-internal network interfaces) so the anonymous per-install userId can be correlated with a real employee via corporate NAC/DHCP records. NOT filtered by allowedSensitiveFields/sanitize — sent verbatim. Only ever set true for builds operated inside an enterprise-managed, real-name-registered network. Omit or false (open-source default) disables collection."
         }
       }
     },

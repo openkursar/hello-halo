@@ -7,7 +7,17 @@
  * separate header, because its own OAuth token occupies the auth channel.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+// Newly reachable via ai-sources/manager.ts or mcp-manager.ts pulling in
+// analytics.service.ts (which statically imports providers/baidu.ts's
+// `BrowserWindow` from 'electron') — mock it out like every other test that
+// touches this transitive chain, so this file's own module graph controls
+// what it needs rather than the real telemetry provider stack.
+vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
+  analytics: { track: vi.fn(), trackErrorSurface: vi.fn() }
+}))
+
 import { buildSdkEnv, computeCredentialsFingerprint } from '../../../../src/main/services/agent/sdk-config'
 import { encodeBackendConfig, DELEGATED_ROUTING_HEADER } from '../../../../src/main/openai-compat-router'
 

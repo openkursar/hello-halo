@@ -528,6 +528,27 @@ export async function dispatchInboundMessage(
     return
   }
 
+  // Counted here, before every gate below (owner-claim, replyScope, /stop,
+  // /clear, busy-buffer). This is a true arrival count: the message.sent
+  // turn count downstream is a strict subset, and the gap between the two
+  // is messages the channel accepted but never handed to the engine. It is
+  // NOT a proxy for tool-permission denials — isOwner/guest policy (further
+  // down) restricts what a sender's turn may do, it does not drop the turn.
+  //
+  // Skipped for flushSupplementBuffer's merged re-dispatch (skipBusyCheck):
+  // each buffered message was already counted on its own original call: this
+  // one re-enters with a synthetic merged body, not a new arrival.
+  if (!options.skipBusyCheck) {
+    void analytics.track(AnalyticsEvents.MESSAGE_RECEIVED, {
+      source: 'im',
+      direction: 'inbound',
+      channel: msg.channel,
+      chatType: msg.chatType,
+      appId: app.id,
+      specId: app.specId,
+    })
+  }
+
   const channelManager = getActiveImChannelManager()
   let instanceCfg = channelManager?.getInstanceConfig(instanceId)
   // Default 'all': instances created before the field existed must not break.
@@ -835,16 +856,6 @@ export async function dispatchInboundMessage(
     `sender=${msg.from}(${senderName}), isOwner=${isOwner}`
   )
 
-  // Telemetry: count inbound IM messages (no content). specId is gated by
-  // SENSITIVE_KEYS in the telemetry provider; open-source builds drop it.
-  void analytics.track(AnalyticsEvents.MESSAGE_RECEIVED, {
-    source: 'im',
-    channel: msg.channel,
-    chatType: msg.chatType,
-    appId: app.id,
-    specId: app.specId,
-  })
-
   // Send an immediate acknowledgment so the user sees the <think> block appear
   // right away instead of staring at silence while session + MCP servers init.
   // On non-streaming channels the status cannot ride an existing stream — send
@@ -900,10 +911,9 @@ export async function dispatchInboundMessage(
 
       // Use streaming.finish when available, else fall back to one-shot send
       onReply: (finalContent: string) => {
-        // Telemetry: count outbound replies (no content). specId is gated
-        // by SENSITIVE_KEYS at sanitize time.
         void analytics.track(AnalyticsEvents.MESSAGE_SENT, {
           source: 'im-reply',
+          direction: 'outbound',
           channel: msg.channel,
           chatType: msg.chatType,
           appId: app.id,

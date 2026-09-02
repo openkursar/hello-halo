@@ -35,6 +35,12 @@ import {
 } from '../apps/runtime/im-channels/wecom-bot-scan-auth'
 import { wecomBotRpc } from '../../shared/rpc/contracts/wecom-bot.contract'
 import { registerRawRpcHandlers } from './rpc'
+import { analytics } from '../services/analytics/analytics.service'
+import { AnalyticsEvents } from '../services/analytics/types'
+import { deriveErrorCode } from '../services/analytics/error-code'
+
+/** Telemetry channel tag for every event emitted from this brand's setup flow. */
+const BIND_CHANNEL = 'wecom-bot'
 
 // ============================================
 // Scan-Auth Session State
@@ -110,8 +116,17 @@ export function registerWecomBotHandlers(): void {
         const existing = activeSessions.get(scode)
         if (existing) existing.abort.abort()
         activeSessions.set(scode, { abort: new AbortController(), startedAt: Date.now() })
+        void analytics.track(AnalyticsEvents.IM_BIND_QR_REQUEST, {
+          channel: BIND_CHANNEL,
+          result: 'success',
+        })
         return { success: true, data: { scode, authUrl } }
       } catch (err) {
+        void analytics.track(AnalyticsEvents.IM_BIND_QR_REQUEST, {
+          channel: BIND_CHANNEL,
+          result: 'fail',
+          errorCode: deriveErrorCode(err),
+        })
         return errorPayload(err)
       }
     },
@@ -127,8 +142,21 @@ export function registerWecomBotHandlers(): void {
       }
       try {
         const creds = await pollResult(scode, { signal: session.abort.signal })
+        void analytics.track(AnalyticsEvents.IM_BIND_RESULT, {
+          channel: BIND_CHANNEL,
+          result: 'success',
+        })
         return { success: true, data: creds }
       } catch (err) {
+        // A user-driven cancel aborts this poll; the cancel handler already
+        // reported that outcome, so don't also count it as a failure.
+        if (!session.abort.signal.aborted) {
+          void analytics.track(AnalyticsEvents.IM_BIND_RESULT, {
+            channel: BIND_CHANNEL,
+            result: err instanceof ScanAuthError && err.kind === 'expired' ? 'expired' : 'fail',
+            errorCode: err instanceof ScanAuthError ? err.kind : deriveErrorCode(err),
+          })
+        }
         return errorPayload(err)
       } finally {
         activeSessions.delete(scode)
@@ -144,6 +172,10 @@ export function registerWecomBotHandlers(): void {
       if (session) {
         session.abort.abort()
         activeSessions.delete(scode)
+        void analytics.track(AnalyticsEvents.IM_BIND_RESULT, {
+          channel: BIND_CHANNEL,
+          result: 'cancelled',
+        })
       }
       return { success: true }
     },

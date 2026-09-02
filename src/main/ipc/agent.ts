@@ -28,7 +28,6 @@ import { resolveCodexPendingQuestion } from '../services/agent/codex'
 import { getMainWindow } from '../foundation/window.service'
 import { broadcastToWebSocket, broadcastToAll } from '../http/websocket'
 import { analytics } from '../services/analytics/analytics.service'
-import { AnalyticsEvents } from '../services/analytics/types'
 import { agentRpc } from '../../shared/rpc/contracts/agent.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -101,12 +100,6 @@ export function registerAgentHandlers(): void {
       }
     ) => {
       try {
-        // Telemetry: count user-sent messages (no content)
-        void analytics.track(AnalyticsEvents.MESSAGE_SENT, {
-          source: 'agent',
-          spaceId: request.spaceId,
-          hasImages: Array.isArray(request.images) && request.images.length > 0,
-        })
         await sendMessage(request)
         return { success: true }
       } catch (error: unknown) {
@@ -240,8 +233,7 @@ export function registerAgentHandlers(): void {
     // Test MCP server connections
     testMcpConnections: async () => {
       try {
-        const result = await testMcpConnections()
-        return result
+        return await testMcpConnections()
       } catch (error: unknown) {
         const err = error as Error
         analytics.trackErrorSurface('mcp-connect', err)

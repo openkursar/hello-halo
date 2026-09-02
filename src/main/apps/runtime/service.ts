@@ -428,6 +428,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         startedAt: result.startedAt,
         finishedAt: result.finishedAt,
         durationMs: result.durationMs,
+        tokensUsed: result.tokensUsed,
         errorMessage: result.errorMessage,
       })
 

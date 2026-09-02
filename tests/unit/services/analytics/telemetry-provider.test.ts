@@ -160,6 +160,98 @@ describe('TelemetryProvider', () => {
     })
   })
 
+  // ── Nested identifiers (out of reach of the key-level gate) ───────────
+
+  describe('nested sanitization', () => {
+    const toolCalls = [
+      { name: 'Bash', count: 3, errors: 1 },
+      { name: 'mcp__ai-browser__browser_navigate', count: 2, errors: 0 },
+      { name: 'mcp__customer-crm__query', count: 4, errors: 1 },
+    ]
+
+    async function trackToolSummary(allowed: string[]): Promise<Record<string, unknown>> {
+      provider = new TelemetryProvider({
+        endpoint: TEST_ENDPOINT,
+        apiKey: TEST_API_KEY,
+        allowedSensitiveFields: allowed,
+      })
+      await provider.init('user-001')
+      await provider.track(
+        {
+          name: 'tool.usage_summary',
+          properties: {
+            source: 'agent',
+            conversationId: 'c1',
+            toolCalls,
+            skillCalls: [{ skillId: 'code-commit', count: 2 }],
+            totalCalls: 9,
+            totalErrors: 2,
+          },
+        },
+        makeContext()
+      )
+      await provider.destroy()
+      const [, options] = mockFetch.mock.calls[0]
+      return JSON.parse(options.body).events[0].properties
+    }
+
+    it('should keep MCP tool names when the build may receive mcpId', async () => {
+      const props = await trackToolSummary(['mcpId'])
+      expect(props.toolCalls).toEqual(toolCalls)
+    })
+
+    it('should fold MCP tool names into one bucket when mcpId is not permitted', async () => {
+      const props = await trackToolSummary([])
+      expect(props.toolCalls).toEqual([
+        { name: 'Bash', count: 3, errors: 1 },
+        { name: 'mcp__<redacted>', count: 6, errors: 1 },
+      ])
+    })
+
+    it('should keep skillCalls only when skillId is permitted', async () => {
+      const permitted = await trackToolSummary(['skillId'])
+      expect(permitted.skillCalls).toEqual([{ skillId: 'code-commit', count: 2 }])
+
+      mockFetch.mockClear()
+      const denied = await trackToolSummary([])
+      expect(denied).not.toHaveProperty('skillCalls')
+    })
+
+    const appSummaries = [
+      { appId: 'a1', specId: 'weoa-approval-agent', type: 'automation', version: '1.0', status: 'active', installedAt: 1 },
+      { appId: 'a2', specId: 'meeting-room-booker', type: 'automation', version: '1.0', status: 'active', installedAt: 2 },
+    ]
+
+    async function trackSnapshot(allowed: string[]): Promise<Record<string, unknown>> {
+      provider = new TelemetryProvider({
+        endpoint: TEST_ENDPOINT,
+        apiKey: TEST_API_KEY,
+        allowedSensitiveFields: allowed,
+      })
+      await provider.init('user-001')
+      await provider.track(
+        { name: 'installed_apps.snapshot', properties: { apps: appSummaries, count: 2 } },
+        makeContext()
+      )
+      await provider.destroy()
+      const [, options] = mockFetch.mock.calls[0]
+      return JSON.parse(options.body).events[0].properties
+    }
+
+    it('should keep specId in the snapshot array when the build may receive it', async () => {
+      const props = await trackSnapshot(['specId'])
+      expect(props.apps).toEqual(appSummaries)
+    })
+
+    it('should strip specId from every snapshot element when not permitted, keeping the rest', async () => {
+      const props = await trackSnapshot([])
+      expect(props.apps).toEqual([
+        { appId: 'a1', type: 'automation', version: '1.0', status: 'active', installedAt: 1 },
+        { appId: 'a2', type: 'automation', version: '1.0', status: 'active', installedAt: 2 },
+      ])
+    })
+  })
+
   // ── Flush triggers ────────────────────────────────────────────────────
 
   describe('flush behavior', () => {

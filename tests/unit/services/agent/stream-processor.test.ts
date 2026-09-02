@@ -204,3 +204,109 @@ describe('processStream thinking-only turns', () => {
     expect(result.finalContent).not.toContain('trailing junk')
   })
 })
+
+describe('processStream telemetry attribution', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  /**
+   * The stream_event frames one tool call produces. Tool usage is counted on
+   * this path only — parseSDKMessage skips tool_use blocks on plain assistant
+   * envelopes.
+   */
+  function toolUseFrames(
+    index: number,
+    name: string,
+    input: Record<string, unknown>
+  ): Record<string, unknown>[] {
+    return [
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index,
+          content_block: { type: 'tool_use', id: `tool_${index}`, name },
+        },
+      },
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          index,
+          delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) },
+        },
+      },
+      { type: 'stream_event', event: { type: 'content_block_stop', index } },
+    ]
+  }
+
+  function trackedEvent(name: string): Record<string, unknown> | undefined {
+    const call = track.mock.calls.find(([event]: unknown[]) => event === name)
+    return call?.[1] as Record<string, unknown> | undefined
+  }
+
+  it('parses appId and channel out of a channel-qualified conversationId', async () => {
+    await processStream(
+      baseParams({
+        conversationId: 'app-chat:app-123:wecom-bot:group:chat-9',
+        v2Session: fakeSession([
+          systemInit(),
+          ...toolUseFrames(0, 'Bash', { command: 'ls' }),
+          resultCarrying('done'),
+        ]),
+      })
+    )
+
+    // Slicing the "app-chat:" prefix instead of parsing would report the
+    // whole tail as the appId, splitting one digital human into one "app"
+    // per chat session.
+    expect(trackedEvent('tool.usage_summary')).toMatchObject({
+      source: 'app-chat',
+      appId: 'app-123',
+      channel: 'wecom-bot',
+    })
+  })
+
+  it('reports the native digital-human session without a channel qualifier', async () => {
+    await processStream(
+      baseParams({
+        conversationId: 'app-chat:app-123',
+        v2Session: fakeSession([
+          systemInit(),
+          ...toolUseFrames(0, 'Bash', { command: 'ls' }),
+          resultCarrying('done'),
+        ]),
+      })
+    )
+
+    expect(trackedEvent('tool.usage_summary')).toMatchObject({
+      source: 'app-chat',
+      appId: 'app-123',
+      channel: 'native',
+    })
+  })
+
+  it('breaks Skill invocations down by the skill named in the tool input', async () => {
+    await processStream(
+      baseParams({
+        v2Session: fakeSession([
+          systemInit(),
+          ...toolUseFrames(0, 'Skill', { skill: 'code-commit' }),
+          ...toolUseFrames(1, 'Skill', { skill: 'code-commit' }),
+          ...toolUseFrames(2, 'Skill', { skill: 'comment-review' }),
+          resultCarrying('done'),
+        ]),
+      })
+    )
+
+    const summary = trackedEvent('tool.usage_summary')
+    expect(summary).toMatchObject({ source: 'agent' })
+    expect(summary?.skillCalls).toEqual(
+      expect.arrayContaining([
+        { skillId: 'code-commit', count: 2 },
+        { skillId: 'comment-review', count: 1 },
+      ])
+    )
+  })
+})

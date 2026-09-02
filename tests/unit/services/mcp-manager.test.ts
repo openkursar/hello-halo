@@ -32,7 +32,12 @@ vi.mock('../../../src/main/services/agent/events', () => ({
   emitAgentBroadcast: vi.fn()
 }))
 vi.mock('../../../src/main/services/agent/sdk-config', () => ({
-  getCleanUserEnv: vi.fn(() => ({}))
+  getCleanUserEnv: vi.fn(() => ({})),
+  resolveCredentialsForSdk: vi.fn()
+}))
+const { track } = vi.hoisted(() => ({ track: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('../../../src/main/services/analytics/analytics.service', () => ({
+  analytics: { track }
 }))
 
 import {
@@ -40,8 +45,10 @@ import {
   getCachedMcpStatus,
   groupToolsByMcpServer,
   removeServerStatus,
+  testMcpConnections,
   updateServerStatus
 } from '../../../src/main/services/agent/mcp-manager'
+import { getApiCredentials } from '../../../src/main/services/agent/helpers'
 
 describe('groupToolsByMcpServer', () => {
   it('groups MCP tools by server name', () => {
@@ -178,5 +185,47 @@ describe('MCP status derivation', () => {
     broadcastMcpStatus([{ name: 'srv', status: 'failed' }])
 
     expect(entry('other-space')?.status).toBe('connected')
+  })
+})
+
+// ============================================
+// testMcpConnections() telemetry
+// ============================================
+
+describe('testMcpConnections telemetry', () => {
+  const credentialsMock = getApiCredentials as ReturnType<typeof vi.fn>
+
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('does not report any event when no API key is configured', async () => {
+    credentialsMock.mockResolvedValue({ apiKey: '', provider: 'anthropic' })
+
+    const result = await testMcpConnections()
+
+    expect(result).toMatchObject({ success: false, servers: [] })
+    expect(track).not.toHaveBeenCalled()
+  })
+
+  it('does not re-report the cached result when a test is already in progress', async () => {
+    // Held open until the test explicitly resolves it, so the first call
+    // stays "in progress" while the second call arrives concurrently.
+    let releaseFirstCall: (() => void) | undefined
+    credentialsMock.mockImplementation(
+      () => new Promise(resolve => { releaseFirstCall = () => resolve({ apiKey: '', provider: 'anthropic' }) })
+    )
+
+    const firstCall = testMcpConnections()
+    const secondCall = await testMcpConnections()
+
+    // The concurrent guard must return before touching the credentials
+    // resolver at all, so this call never emits telemetry — reporting here
+    // would re-count whatever the still-running first call eventually finds.
+    expect(secondCall).toMatchObject({ success: false, error: 'Test already in progress' })
+    expect(track).not.toHaveBeenCalled()
+
+    releaseFirstCall?.()
+    await firstCall
   })
 })

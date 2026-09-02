@@ -79,6 +79,16 @@ export async function sendMessage(
 
   console.log(`[Agent] sendMessage: conv=${conversationId}${images && images.length > 0 ? `, images=${images.length}` : ''}${thinkingEnabled ? ', thinking=ON' : ''}${canvasContext?.isOpen ? `, canvas tabs=${canvasContext.tabCount}` : ''}`)
 
+  // Counted here, not at the IPC handler, so every transport that reaches
+  // space chat (desktop IPC and remote HTTP) goes through one call site.
+  void analytics.track(AnalyticsEvents.MESSAGE_SENT, {
+    source: 'agent',
+    direction: 'inbound',
+    spaceId,
+    conversationId,
+    hasImages: Array.isArray(images) && images.length > 0,
+  })
+
   const config = getConfig()
   // "Chat with this KB" turns (knowledgeBaseId set) target one KB directly: the
   // working dir becomes that KB's text/ dir so Read/Glob/Grep search its

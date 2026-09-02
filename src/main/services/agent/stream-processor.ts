@@ -37,6 +37,7 @@ import {
   type SubAgentContext
 } from './subagent-handler'
 import { TRANSPARENT_TOOLS } from './constants'
+import { isAppChatKey, parseAppChatKey } from '../../../shared/apps/im-keys'
 import { analytics } from '../analytics/analytics.service'
 import { AnalyticsEvents } from '../analytics/types'
 import { deriveErrorCode } from '../analytics/error-code'
@@ -57,6 +58,8 @@ const FALLBACK_ERROR_HINT = 'Check logs in Settings > System > Logs.'
 interface ToolStats {
   toolCounts: Record<string, number>
   toolErrors: Record<string, number>
+  /** Per-skill invocation counts, keyed by the `skill` argument of the Skill tool. */
+  skillCounts: Record<string, number>
   startedAt: number
 }
 
@@ -66,16 +69,32 @@ const toolStatsMap = new Map<string, ToolStats>()
 function getOrCreateToolStats(conversationId: string): ToolStats {
   let stats = toolStatsMap.get(conversationId)
   if (!stats) {
-    stats = { toolCounts: {}, toolErrors: {}, startedAt: Date.now() }
+    stats = { toolCounts: {}, toolErrors: {}, skillCounts: {}, startedAt: Date.now() }
     toolStatsMap.set(conversationId, stats)
   }
   return stats
 }
 
-function incrementToolCall(conversationId: string, toolName: string): void {
+/** Tool name the SDK uses for skill invocation; the skill itself rides in the input. */
+const SKILL_TOOL_NAME = 'Skill'
+
+function incrementToolCall(
+  conversationId: string,
+  toolName: string,
+  toolInput?: Record<string, unknown>
+): void {
   if (!toolName) return
   const stats = getOrCreateToolStats(conversationId)
   stats.toolCounts[toolName] = (stats.toolCounts[toolName] ?? 0) + 1
+
+  // Every skill invocation shares the tool name "Skill", so the tool-name
+  // histogram alone cannot tell which skill ran — read it from the input.
+  if (toolName === SKILL_TOOL_NAME) {
+    const skill = toolInput?.skill
+    if (typeof skill === 'string' && skill) {
+      stats.skillCounts[skill] = (stats.skillCounts[skill] ?? 0) + 1
+    }
+  }
 }
 
 function incrementToolError(conversationId: string, toolName: string | undefined): void {
@@ -86,17 +105,16 @@ function incrementToolError(conversationId: string, toolName: string | undefined
 }
 
 /**
- * Drain accumulated tool stats for a conversation and return them as a
- * privacy-shaped summary. Returns null when no calls were recorded.
+ * Drain accumulated tool stats for a conversation. Returns null when no
+ * calls were recorded.
  *
- * Defence-in-depth for user-attached MCP tools: tool names of the form
- * `mcp:<server-name>` are rewritten to `mcp:<redacted>` before leaving this
- * function. The formal mechanism is the SENSITIVE_KEYS gate on `mcpId`, but
- * tool names ride inside a nested array (`toolCalls[].name`), so the gate
- * cannot reach them — explicit redaction here is the belt-and-suspenders.
+ * Reports raw tool names. Whether user-attached MCP server names may leave
+ * the process is a privacy policy decision owned by the telemetry provider's
+ * sanitize pass (gated on `mcpId`), not by this collection point.
  */
 export function flushToolStats(conversationId: string): {
   toolCalls: Array<{ name: string; count: number; errors: number }>
+  skillCalls: Array<{ skillId: string; count: number }>
   totalCalls: number
   totalErrors: number
   durationMs: number
@@ -107,14 +125,12 @@ export function flushToolStats(conversationId: string): {
 
   const merged: Record<string, { count: number; errors: number }> = {}
   for (const [name, count] of Object.entries(stats.toolCounts)) {
-    const redacted = name.startsWith('mcp:') ? 'mcp:<redacted>' : name
-    if (!merged[redacted]) merged[redacted] = { count: 0, errors: 0 }
-    merged[redacted].count += count
+    if (!merged[name]) merged[name] = { count: 0, errors: 0 }
+    merged[name].count += count
   }
   for (const [name, errors] of Object.entries(stats.toolErrors)) {
-    const redacted = name.startsWith('mcp:') ? 'mcp:<redacted>' : name
-    if (!merged[redacted]) merged[redacted] = { count: 0, errors: 0 }
-    merged[redacted].errors += errors
+    if (!merged[name]) merged[name] = { count: 0, errors: 0 }
+    merged[name].errors += errors
   }
 
   const toolCalls = Object.entries(merged).map(([name, agg]) => ({
@@ -122,12 +138,17 @@ export function flushToolStats(conversationId: string): {
     count: agg.count,
     errors: agg.errors,
   }))
+  const skillCalls = Object.entries(stats.skillCounts).map(([skillId, count]) => ({
+    skillId,
+    count,
+  }))
   const totalCalls = toolCalls.reduce((sum, t) => sum + t.count, 0)
   const totalErrors = toolCalls.reduce((sum, t) => sum + t.errors, 0)
   if (totalCalls === 0 && totalErrors === 0) return null
 
   return {
     toolCalls,
+    skillCalls,
     totalCalls,
     totalErrors,
     durationMs: Date.now() - stats.startedAt,
@@ -135,16 +156,25 @@ export function flushToolStats(conversationId: string): {
 }
 
 /**
- * Derive the telemetry `source` (and optional `appId`) for events emitted
- * from stream-processor. The agent service routes app-chat / im-reply
- * traffic through virtual conversationIds prefixed with `app-chat:`. When
- * the prefix is absent the stream is a normal interactive conversation.
+ * Derive the telemetry `source` / `appId` / `channel` for events emitted
+ * from stream-processor. Digital-human traffic rides virtual conversationIds
+ * under the `app-chat:` namespace; channel-qualified sessions (IM, HTTP,
+ * native multi-session) carry four more segments, so the appId must be
+ * parsed rather than sliced off the prefix — otherwise every chat session
+ * reports a distinct "appId" and per-digital-human aggregation breaks.
  */
-function deriveAnalyticsSource(conversationId: string): { source: 'agent' | 'app-chat'; appId?: string } {
-  if (conversationId.startsWith('app-chat:')) {
-    return { source: 'app-chat', appId: conversationId.slice('app-chat:'.length) }
+function deriveAnalyticsSource(
+  conversationId: string
+): { source: 'agent' | 'app-chat'; appId?: string; channel?: string } {
+  if (!isAppChatKey(conversationId)) {
+    return { source: 'agent' }
   }
-  return { source: 'agent' }
+  const parsed = parseAppChatKey(conversationId)
+  if (parsed) {
+    return { source: 'app-chat', appId: parsed.appId, channel: parsed.channel }
+  }
+  // Native default session: "app-chat:{appId}", no channel qualifier.
+  return { source: 'app-chat', appId: conversationId.slice('app-chat:'.length), channel: 'native' }
 }
 
 // ============================================
@@ -746,8 +776,7 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
               input: toolInput
             }
             emitAgentEvent('agent:tool-call', spaceId, conversationId, toolCall as unknown as Record<string, unknown>)
-            // Telemetry: track tool usage; mcp:* names are redacted at flush time.
-            incrementToolCall(conversationId, blockState.toolName || '')
+            incrementToolCall(conversationId, blockState.toolName || '', toolInput)
 
             if (is.dev) {
               console.log(`[Agent][${conversationId}] Tool block complete [${blockState.toolName}], input: ${JSON.stringify(toolInput).substring(0, 100)}`)
@@ -913,8 +942,8 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
             input: thought.toolInput || {}
           }
           emitAgentEvent('agent:tool-call', spaceId, conversationId, toolCall as unknown as Record<string, unknown>)
-          // Telemetry: track tool usage (non-stream_event path, e.g. assistant SDK messages).
-          incrementToolCall(conversationId, thought.toolName || '')
+          // Non-stream_event path, e.g. assistant SDK messages.
+          incrementToolCall(conversationId, thought.toolName || '', thought.toolInput)
         } else if (thought.type === 'error') {
           // SDK reported an error (rate_limit, authentication_failed, etc.)
           // Send error to frontend - user should see the actual error from provider

@@ -321,6 +321,20 @@ export interface ProductConfig {
     endpoint?: string
     apiKey?: string
     allowedSensitiveFields?: string[]
+    /**
+     * When true, `UserContext.hostIdentity` (OS username/domain, hostname,
+     * and all non-internal network interfaces) is collected on every
+     * `track()` call and forwarded to the telemetry backend so the
+     * anonymous per-install `userId` can be correlated with a real employee
+     * via corporate NAC/DHCP records. See `foundation/host-identity.ts`.
+     *
+     * Unlike `allowedSensitiveFields`, this is NOT filtered by the
+     * telemetry provider's sanitize pass — `UserContext` is sent verbatim.
+     * Omit/false (open-source default) disables collection entirely; the
+     * field must only be set to true for builds operating in an
+     * enterprise-managed, real-name-registered network.
+     */
+    collectHostIdentity?: boolean
   }
 
   /**

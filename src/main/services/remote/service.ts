@@ -4,7 +4,6 @@
  */
 
 import { BrowserWindow } from 'electron'
-import { networkInterfaces } from 'os'
 import {
   startHttpServer,
   stopHttpServer,
@@ -28,6 +27,7 @@ import {
   type NamedTunnelGrant,
 } from './issuer-client'
 import { getDeviceIdentity } from '../../foundation/device-identity'
+import { getLocalIp } from '../../foundation/host-identity'
 import { getConfig, saveConfig } from '../../foundation/config.service'
 import {
   setCustomAccessToken,
@@ -91,79 +91,6 @@ let tunnelFallbackReason: TunnelFallbackReason | null = null
 // Callback for status updates
 type StatusCallback = (status: RemoteAccessStatus) => void
 let statusCallback: StatusCallback | null = null
-
-/**
- * Check if a network interface name looks like a virtual adapter.
- * Virtual adapters include Docker, WSL, VPN, Hyper-V, VMware, VirtualBox,
- * sing-box TUN, etc.
- */
-function isVirtualInterface(name: string): boolean {
-  const virtualPatterns = [
-    /^docker/i,
-    /^br-/i,
-    /^veth/i,
-    /^vEthernet/i,
-    /^vmnet/i,
-    /^VMware/i,
-    /^VirtualBox/i,
-    /^vboxnet/i,
-    /^Hyper-V/i,
-    /^Default Switch/i,
-    /^WSL/i,
-    /^tun/i,
-    /^tap/i,
-    /^singbox/i,
-    /^sing-box/i,
-    /^clash/i,
-    /^utun/i,
-    /^tailscale/i,
-    /^Tailscale/i,
-    /^ZeroTier/i,
-    /^zt/i,
-    /^wg/i,
-    /^wireguard/i,
-    /^ham/i,
-    /^Hamachi/i,
-    /^npcap/i,
-    /^lo/i,
-  ]
-  return virtualPatterns.some((pattern) => pattern.test(name))
-}
-
-/**
- * Get local network IP address.
- * Prioritizes physical network interfaces (Ethernet, Wi-Fi) over virtual ones
- * (Docker, WSL, VPN, TUN adapters, etc.) to return an IP that is actually
- * reachable by other devices on the local network.
- */
-function getLocalIp(): string | null {
-  const interfaces = networkInterfaces()
-  let fallback: string | null = null
-
-  for (const name of Object.keys(interfaces)) {
-    const iface = interfaces[name]
-    if (!iface) continue
-
-    const virtual = isVirtualInterface(name)
-
-    for (const info of iface) {
-      // Skip internal and non-IPv4 addresses
-      if (info.internal || info.family !== 'IPv4') continue
-
-      // Prefer addresses from physical interfaces
-      if (!virtual) {
-        return info.address
-      }
-
-      // Keep the first virtual address as fallback
-      if (!fallback) {
-        fallback = info.address
-      }
-    }
-  }
-
-  return fallback
-}
 
 /**
  * Enable remote access (start HTTP server)

@@ -47,6 +47,7 @@ import { getImSessionRegistry } from '../../apps/runtime/im-session-registry'
 import { listAvailableSkills } from '../../apps/skill-discovery'
 import { deriveSkillCommandName } from '../../apps/spec/skill-identity'
 import { analytics } from '../../services/analytics/analytics.service'
+import { RENDERER_ALLOWED_EVENTS } from '../../services/analytics/types'
 import { broadcastToAll } from '../websocket'
 import * as appController from '../../controllers/app.controller'
 import type { AppErrorCode } from '../../controllers/app.controller'
@@ -222,6 +223,7 @@ export {
   WecomScanAuthError,
   agentController,
   analytics,
+  RENDERER_ALLOWED_EVENTS,
   appController,
   basename,
   broadcastToAll,

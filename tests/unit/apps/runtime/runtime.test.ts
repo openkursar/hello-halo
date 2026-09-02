@@ -216,6 +216,7 @@ import {
 } from '../../../../src/main/apps/runtime/errors'
 import { createAppRuntimeService } from '../../../../src/main/apps/runtime/service'
 import { executeRun } from '../../../../src/main/apps/runtime/execute'
+import { notifyAppEvent } from '../../../../src/main/services/notification.service'
 import { createReportToolServer } from '../../../../src/main/apps/runtime/report-tool'
 import type {
   AutomationRun,
@@ -2242,6 +2243,89 @@ describe('AppRuntimeService', () => {
       const trigger = vi.mocked(executeRun).mock.calls[0][0].trigger
       expect(trigger.type).toBe('continue_followup')
       expect(trigger.continue?.interactive).toBeFalsy()
+    })
+  })
+
+  describe('desktop notification on run completion (notificationLevel)', () => {
+    let testAppId: string
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      vi.mocked(notifyAppEvent).mockClear()
+      testAppId = randomUUID()
+    })
+
+    /** Mirrors execute.ts mock's default runId ('run-mock') for a fresh trigger. */
+    const MOCK_RUN_ID = 'run-mock'
+
+    function seedApp(userOverrides: Record<string, unknown> = {}) {
+      mockAppManager.getApp.mockReturnValue({
+        id: testAppId,
+        status: 'active',
+        spec: createTestSpec(),
+        userConfig: {},
+        userOverrides,
+        spaceId: 'space-001',
+      })
+    }
+
+    it('sends a desktop notification when notificationLevel is "all" and the run succeeds', async () => {
+      seedApp({ notificationLevel: 'all' })
+      const service = createService()
+
+      await service.triggerManually(testAppId)
+
+      expect(notifyAppEvent).toHaveBeenCalledTimes(1)
+      const [title, , options] = vi.mocked(notifyAppEvent).mock.calls[0]
+      expect(title).toBe(createTestSpec().name)
+      expect(options).toEqual(expect.objectContaining({ appId: testAppId }))
+    })
+
+    it('defaults to "important" — a plain completion does not qualify, so no notification fires', async () => {
+      seedApp() // no notificationLevel override → defaults to 'important'
+      const service = createService()
+
+      await service.triggerManually(testAppId)
+
+      expect(notifyAppEvent).not.toHaveBeenCalled()
+    })
+
+    it('skips the notification entirely when notificationLevel is "none"', async () => {
+      seedApp({ notificationLevel: 'none' })
+      const service = createService()
+
+      await service.triggerManually(testAppId)
+
+      expect(notifyAppEvent).not.toHaveBeenCalled()
+    })
+
+    it('does not double-notify when the AI already reported via report_to_user', async () => {
+      seedApp({ notificationLevel: 'all' })
+      // report-tool.ts sends its own notification and records a completion
+      // entry for the run; executeWithConcurrency must see it and skip.
+      const db = dbManager.getAppDatabase()
+      db.prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(testAppId, 'test-app', 'space-001', JSON.stringify(createTestSpec()), 'active', '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+      store.insertRun({
+        runId: MOCK_RUN_ID,
+        appId: testAppId,
+        sessionKey: 'sk-notify',
+        status: 'running',
+        triggerType: 'manual',
+        startedAt: Date.now(),
+      })
+      store.insertEntry(createTestEntry({
+        appId: testAppId,
+        runId: MOCK_RUN_ID,
+        type: 'run_complete',
+      }))
+
+      const service = createService()
+      await service.triggerManually(testAppId)
+
+      expect(notifyAppEvent).not.toHaveBeenCalled()
     })
   })
 

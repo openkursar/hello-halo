@@ -180,8 +180,18 @@ describe('glm-5.3 family — the one intended behavior change', () => {
 
   it('lets the exact entry beat the glm-5 blocklist entry for the bare id', () => {
     expect(supportsVisionById('GLM-5.3-Flash')).toBe(true)
-    // The prefix carries a substring signal ("glm-5") that the exact entry
-    // must not erase.
-    expect(supportsVisionById('Pro/zai-org/GLM-5.3-Flash')).toBe(false)
+  })
+
+  it('survives an inert routing prefix — a gateway id is still the same model', () => {
+    expect(supportsVisionById('Pro/zai-org/GLM-5.3-Flash')).toBe(true)
+    expect(supportsVisionById('zhipu/glm-5.3-flash')).toBe(true)
+    expect(supportsVisionById('openrouter/glm-5.3-flash')).toBe(true)
+    expect(resolveModelVision(null, 'Pro/zai-org/GLM-5.3-Flash')).toBe(true)
+  })
+
+  it('still honors a blocklist signal that lives in the discarded prefix itself', () => {
+    // "deepseek-proxy/gpt-4o" carries its own family signal ("deepseek") in
+    // the prefix — that must not be erased by the bare "gpt-4o" exact entry.
+    expect(supportsVisionById('deepseek-proxy/gpt-4o')).toBe(false)
   })
 })

@@ -25,6 +25,7 @@ import { createBaiduProvider } from './providers/baidu'
 import { createTelemetryProvider } from './providers/telemetry'
 import { getConfig, saveConfig } from '../../foundation/config.service'
 import { getAnalyticsConfig, getIdentitySource, getTelemetryConfig } from '../../foundation/product-config'
+import { getHostIdentity, type HostIdentity } from '../../foundation/host-identity'
 import { getCurrentSource } from '../../../shared/types'
 import { deriveErrorCode } from './error-code'
 
@@ -72,6 +73,17 @@ class AnalyticsService {
   private resolvedExternalId: { sourceId: string; path: string; uid: string } | null = null
 
   /**
+   * Cached host identity snapshot with a short TTL. `os.networkInterfaces()`
+   * is cheap but Halo is a long-running process — without a TTL a stale
+   * cache would keep reporting a days-old IP, and matching that against
+   * DHCP logs by event time would misattribute another employee's
+   * activity to this session. A per-call fresh read is unnecessary
+   * precision; the TTL balances staleness against per-track() overhead.
+   */
+  private hostIdentityCache: { value: HostIdentity; expiresAt: number } | null = null
+  private static readonly HOST_IDENTITY_TTL_MS = 60_000
+
+  /**
    * Resolves once `init()` has completed — whether it enabled providers or
    * opted out (dev mode, empty credentials). Consumers that only need to
    * know "has init been attempted" can `await whenSettled()` instead of
@@ -116,7 +128,7 @@ class AnalyticsService {
     // telemetry — unless a telemetry endpoint is explicitly configured (via
     // .env.local), which signals an intentional local telemetry test against a
     // self-hosted backend rather than the production one.
-    if (is.dev && !PROVIDER_CONFIG.telemetry.endpoint) {
+    if (is.dev && !loadProviderConfig().telemetry.endpoint) {
       console.log('[Analytics] Skipping in development mode (no telemetry endpoint configured)')
       this.markSettled()
       return
@@ -208,6 +220,7 @@ class AnalyticsService {
     // Refresh externalUserId lazily on each call so user login/logout between
     // events updates the telemetry identity without a service restart.
     this.refreshExternalUserId()
+    this.refreshHostIdentity()
 
     const event: AnalyticsEvent = {
       name: eventName,
@@ -381,6 +394,43 @@ class AnalyticsService {
       // Never let identity resolution break tracking.
       console.warn('[Analytics] externalUserId resolution failed:', err)
       this.userContext.externalUserId = undefined
+    }
+  }
+
+  /**
+   * Populate `userContext.hostIdentity` from the local OS/network
+   * environment when `product.json.telemetry.collectHostIdentity` is
+   * enabled. Gated per-call (not just at init) so toggling the product
+   * config between test runs, and builds where the flag is absent, never
+   * leak a stale snapshot into the context.
+   *
+   * Enterprise-internal only: this correlates the anonymous per-install
+   * `userId` with a real employee via OS username/domain, hostname, and
+   * network interfaces. Open-source builds never set the gating flag, so
+   * this is a no-op for them.
+   */
+  private refreshHostIdentity(): void {
+    if (!this.userContext) return
+
+    if (!getTelemetryConfig()?.collectHostIdentity) {
+      this.userContext.hostIdentity = undefined
+      return
+    }
+
+    const now = Date.now()
+    if (this.hostIdentityCache && this.hostIdentityCache.expiresAt > now) {
+      this.userContext.hostIdentity = this.hostIdentityCache.value
+      return
+    }
+
+    try {
+      const value = getHostIdentity()
+      this.hostIdentityCache = { value, expiresAt: now + AnalyticsService.HOST_IDENTITY_TTL_MS }
+      this.userContext.hostIdentity = value
+    } catch (err) {
+      // Never let host identity collection break tracking.
+      console.warn('[Analytics] hostIdentity collection failed:', err)
+      this.userContext.hostIdentity = undefined
     }
   }
 

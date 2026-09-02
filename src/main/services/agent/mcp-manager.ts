@@ -19,6 +19,8 @@ import {
 import { emitAgentBroadcast } from './events'
 import { getCleanUserEnv, resolveCredentialsForSdk } from './sdk-config'
 import { resolveModelId } from '../../../shared/types/ai-sources'
+import { analytics } from '../analytics/analytics.service'
+import { AnalyticsEvents } from '../analytics/types'
 
 // ============================================
 // MCP Status Cache
@@ -202,15 +204,34 @@ export function removeServerStatus(name: string): void {
 // Test MCP connections flag to prevent concurrent tests
 let mcpTestInProgress = false
 
+type McpConnectionTestResult = { success: boolean; servers: McpServerStatusInfo[]; error?: string }
+
 /**
- * Test MCP connections manually
- * Starts a temporary SDK query just to get MCP status
+ * Test MCP connections manually. Shared by every transport (IPC, HTTP) so
+ * the connection-attempt telemetry below covers all of them from one call
+ * site, and so a caller that only hits the in-progress guard never
+ * re-reports another caller's still-running test as a fresh result.
  */
-export async function testMcpConnections(): Promise<{ success: boolean; servers: McpServerStatusInfo[]; error?: string }> {
+export async function testMcpConnections(): Promise<McpConnectionTestResult> {
   if (mcpTestInProgress) {
     return { success: false, servers: cachedMcpStatus, error: 'Test already in progress' }
   }
 
+  const result = await runMcpConnectionTest()
+  for (const server of result.servers) {
+    void analytics.track(AnalyticsEvents.MCP_CONNECT, {
+      mcpId: server.name,
+      status: server.status,
+      toolCount: server.tools?.length ?? 0,
+    })
+  }
+  return result
+}
+
+/**
+ * Starts a temporary SDK query just to get MCP status.
+ */
+async function runMcpConnectionTest(): Promise<McpConnectionTestResult> {
   mcpTestInProgress = true
   console.log('[Agent] Starting MCP connection test...')
 

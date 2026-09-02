@@ -81,7 +81,7 @@ test.describe('Automation Run — entry points (UI only)', () => {
       await window.waitForTimeout(400)
     }
 
-    const viewProcess = await window.$('text=/View process|查看过程/i')
+    const viewProcess = await window.$('text=/View process|查看进程/i')
     if (!viewProcess) {
       test.skip(true, 'No finished run with a session transcript yet')
       return
@@ -90,8 +90,8 @@ test.describe('Automation Run — entry points (UI only)', () => {
     await viewProcess.click()
     await window.waitForTimeout(500)
 
-    // The run detail renders the breadcrumb "Run <shortId>".
-    const breadcrumb = await window.$('text=/^Run [a-z0-9]/i')
+    // The run detail renders the breadcrumb "Run <shortId>" ("运行 <shortId>" in Chinese).
+    const breadcrumb = await window.$('text=/^Run [a-z0-9]|^运行 [a-z0-9]/i')
     expect(breadcrumb).toBeTruthy()
 
     // A finished run is still a conversation: the reply input must be present
@@ -137,7 +137,7 @@ test.describe('Automation Run — live trigger + mid-run injection', () => {
     }
 
     const viewProcess = await window.waitForSelector(
-      'text=/View process|查看过程/i',
+      'text=/View process|查看进程/i',
       { timeout: 15000 }
     )
     await viewProcess.click()

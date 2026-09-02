@@ -11,7 +11,7 @@
  *   idle → loading → error | yaml-preview | bundle-preview → installing → success | partial | failed
  */
 
-import { useState, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef, lazy, Suspense } from 'react'
 import {
   X,
   Loader2,
@@ -26,6 +26,7 @@ import {
   ChevronDown,
 } from 'lucide-react'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import { api } from '../../api'
 import { useAppsStore, AppApiError } from '../../stores/apps.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
@@ -334,6 +335,10 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
   const [importState, setImportState] = useState<ImportState>({ phase: 'idle' })
   const bodyScrollRef = useRef<HTMLDivElement>(null)
 
+  useEffect(() => {
+    void api.trackEvent('apps.create.open', {})
+  }, [])
+
   // ── Form field updater ──
   const updateField = useCallback(<K extends keyof VisualFormState>(key: K, value: VisualFormState[K]) => {
     setForm(prev => ({ ...prev, [key]: value }))
@@ -472,8 +477,10 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
     try {
       await importApp(selectedSpaceId, yamlStr)
       await loadApps()
+      void api.trackEvent('apps.create.submit', { mode: 'import', sourceType: 'yaml', result: 'success' })
       onClose()
     } catch (err) {
+      void api.trackEvent('apps.create.submit', { mode: 'import', sourceType: 'yaml', result: 'failed' })
       setError(formatInstallError(err, t, 'digital_human'))
     } finally {
       setLoading(false)
@@ -539,12 +546,24 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
       await importApp(selectedSpaceId, result.yamlContent)
       await loadApps()
       const failedSkills = skillResults.filter(s => !s.success)
+      void api.trackEvent('apps.create.submit', {
+        mode: 'import',
+        sourceType: 'bundle',
+        result: failedSkills.length > 0 ? 'partial' : 'success',
+        skillCount: result.bundledSkills.length,
+      })
       if (failedSkills.length > 0) {
         setImportState({ phase: 'partial', result, skillResults })
       } else {
         setImportState({ phase: 'success', result, skillResults })
       }
     } catch (err) {
+      void api.trackEvent('apps.create.submit', {
+        mode: 'import',
+        sourceType: 'bundle',
+        result: 'failed',
+        skillCount: result.bundledSkills.length,
+      })
       setImportState({
         phase: 'failed',
         result,
@@ -559,14 +578,26 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
     setError(null)
     setLoading(true)
 
+    const trackSubmit = (result: string): void => {
+      void api.trackEvent('apps.create.submit', { mode, result })
+    }
+
     try {
       let specObj: AppSpec
 
       if (mode === 'visual') {
-        if (!form.name.trim()) { setError(t('App name is required')); setLoading(false); return }
-        if (!form.description.trim()) { setError(t('Description is required')); setLoading(false); return }
-        if (!form.author.trim()) { setError(t('Author is required')); setLoading(false); return }
-        if (!form.systemPrompt.trim()) { setError(t('System prompt is required')); setLoading(false); return }
+        const missingField =
+          !form.name.trim() ? t('App name is required')
+          : !form.description.trim() ? t('Description is required')
+          : !form.author.trim() ? t('Author is required')
+          : !form.systemPrompt.trim() ? t('System prompt is required')
+          : null
+        if (missingField) {
+          setError(missingField)
+          setLoading(false)
+          trackSubmit('validation_error')
+          return
+        }
         specObj = buildSpecFromForm(form)
       } else {
         try {
@@ -574,11 +605,13 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
         } catch {
           setError(t('Invalid YAML format. Please check your spec.'))
           setLoading(false)
+          trackSubmit('validation_error')
           return
         }
         if (!specObj || typeof specObj !== 'object') {
           setError(t('YAML must be an object'))
           setLoading(false)
+          trackSubmit('validation_error')
           return
         }
       }
@@ -589,11 +622,14 @@ export function AppInstallDialog({ onClose }: AppInstallDialogProps) {
           await updateAppOverrides(appId, { modelSourceId, modelId })
         }
         await loadApps()
+        trackSubmit('success')
         onClose()
       } else {
         setError(t('Installation failed. Check the spec and try again.'))
+        trackSubmit('failed')
       }
     } catch (err) {
+      trackSubmit('failed')
       // Skills are installed via the Visual/YAML mode only when the user
       // explicitly writes type: 'skill'; default mode produces automation
       // apps. Treat as digital human for messaging — skill conflicts are

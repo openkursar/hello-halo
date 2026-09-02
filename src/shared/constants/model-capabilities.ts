@@ -94,11 +94,19 @@ function inferVisionSupport(modelId: string): boolean {
 
   // A per-model statement that names the complete id wins outright — it is
   // how a multimodal variant inside a text-only family (glm-5.3-flash inside
-  // glm-5) is expressed. Proxy-prefixed forms do not match here: their
-  // stripped prefixes can carry substring signals the layers below must
-  // still honor ("deepseek-proxy/gpt-4o" must stay text-only).
-  const full = normalisedModels.get(lower)
-  if (full) return full.vision
+  // glm-5) is expressed. The lookup also tries the id with its routing prefix
+  // stripped, so a gateway id like "Pro/zai-org/GLM-5.3-Flash" still resolves
+  // to the same statement as the bare id. That stripped prefix is discarded
+  // only when it is itself inert: a prefix carrying its own blocklist signal
+  // ("deepseek-proxy/gpt-4o") means the id was rewritten into another
+  // family's name space, and that signal must still be honored.
+  const normalized = normalizeModelId(modelId)
+  const full = normalisedModels.get(normalized)
+  if (full) {
+    const prefix = lower.slice(0, lower.length - normalized.length)
+    const prefixCarriesBlocklistSignal = preset.vision?.blocklist.some(p => prefix.includes(p))
+    if (!prefixCarriesBlocklistSignal) return full.vision
+  }
 
   const lists = preset.vision
   if (lists?.allowlist.some(kw => lower.includes(kw))) return true
@@ -235,9 +243,22 @@ const DEFAULT_REASONING_EFFORT_PROFILE: ReasoningEffortProfile = {
 }
 
 /**
+ * `reasoning_effort` is not part of every GLM model's API — bigmodel.cn only
+ * documents it from GLM-5.2 onward. Sending it to an earlier model is sending
+ * a field that model's schema does not declare, so those models get no entry
+ * (they fall through to {@link DEFAULT_REASONING_EFFORT_PROFILE}'s `levels`,
+ * which only matters for a Halo-*inferred* level — see `resolveReasoningEffortValue`)
+ * and no `disableValue`, meaning the field is omitted rather than guessed.
+ * Their only real thinking toggle is the separate `thinking.type` field,
+ * which Halo does not send yet — "thinking off" is a no-op for them today.
+ */
+const NO_REASONING_EFFORT_FIELD: ReasoningEffortProfile = { levels: [] }
+
+/**
  * Upstreams that deviate from {@link DEFAULT_REASONING_EFFORT_PROFILE}.
  * Matched like the vision blacklist — lowercase substring, so proxy-prefixed
- * ids (`Pro/zai-org/GLM-5`) still resolve. First match wins.
+ * ids (`Pro/zai-org/GLM-5`) still resolve. First match wins, so entries must
+ * stay ordered from most to least specific.
  *
  * Deliberately short: an entry here is a claim about a specific upstream's API,
  * and a wrong claim fails as an HTTP 400 the user cannot act on.
@@ -247,16 +268,26 @@ const REASONING_EFFORT_PROFILES: ReadonlyArray<{
   profile: ReasoningEffortProfile
 }> = [
   // GLM-5.3 and GLM-5.3-FLASH always think: they reject every request that
-  // tries to stop them and only accept low/high/max, so a "thinking off"
-  // request must still send an effort, mapped to their lowest level.
-  // First match wins, so this must stay above the plain glm-5 entry.
+  // tries to stop them ("该模型始终思考，不支持关闭思考") and only accept
+  // low/high/max, so a "thinking off" request must still send an effort,
+  // mapped to their lowest level.
   {
     pattern: 'glm-5.3',
     profile: { levels: ['low', 'high', 'max'], disableValue: 'low' }
   },
-  // GLM-5 reasons by default, so omitting the field leaves it thinking; it
-  // takes an explicit value to stop.
-  { pattern: 'glm-5', profile: { levels: ['low', 'medium', 'high'], disableValue: 'none' } },
+  // GLM-5.2 is the earliest model in the family whose schema documents
+  // `reasoning_effort` at all. Its API silently remaps low/medium -> high and
+  // xhigh -> max, so only the two tiers that are not aliases of another tier
+  // are exposed. `none`/`minimal` both drop the model out of thinking; `none`
+  // is used as the disable value for clarity.
+  {
+    pattern: 'glm-5.2',
+    profile: { levels: ['high', 'max'], disableValue: 'none' }
+  },
+  // GLM-5, GLM-5.1, GLM-5-Turbo: pre-5.2, no reasoning_effort support.
+  { pattern: 'glm-5', profile: NO_REASONING_EFFORT_FIELD },
+  // GLM-4.7, GLM-4.6, GLM-4.5 and their variants: same pre-5.2 restriction.
+  { pattern: 'glm-4', profile: NO_REASONING_EFFORT_FIELD },
 ]
 
 /**

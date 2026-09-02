@@ -32,12 +32,14 @@ vi.mock('../../../../src/main/apps/manager', () => ({
 // ── app-chat: execution + real session-key format ──
 const sendAppChatMessageMock = vi.fn(async () => undefined)
 const clearImSessionMock = vi.fn(async () => undefined)
+// Mutable so the buffering test can flip a conversation "busy" without a
+// real generating session; defaults to false so every other test's message
+// takes the start-of-round path rather than being buffered.
+let conversationGenerating = false
 vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
   sendAppChatMessage: (...a: unknown[]) => sendAppChatMessageMock(...a),
   clearImSession: (...a: unknown[]) => clearImSessionMock(...a),
-  // Busy check: no conversation is generating in these tests, so every
-  // message takes the start-of-round path rather than being buffered.
-  isAppChatConversationGenerating: () => false,
+  isAppChatConversationGenerating: () => conversationGenerating,
   // Mirror the real deterministic joiner so we can assert derivation order.
   buildImSessionKey: (appId: string, channel: string, chatType: string, chatId: string) =>
     `app-chat:${appId}:${channel}:${chatType}:${chatId}`,
@@ -99,12 +101,20 @@ vi.mock('../../../../src/main/foundation/product-config', () => ({
   getImChannelsPermissionDefaults: vi.fn(() => undefined),
 }))
 
-import { dispatchInboundMessage } from '../../../../src/main/apps/runtime/dispatch-inbound'
+import { dispatchInboundMessage, flushSupplementBuffer } from '../../../../src/main/apps/runtime/dispatch-inbound'
 import {
   PendingRelayStore,
   setPendingRelayStore,
 } from '../../../../src/main/apps/runtime/pending-relays'
+import { analytics } from '../../../../src/main/services/analytics/analytics.service'
 import type { InboundMessage, ReplyHandle } from '../../../../src/shared/types/inbound-message'
+
+const trackMock = analytics.track as ReturnType<typeof vi.fn>
+
+/** Wait for the flushSupplementBuffer's setImmediate re-dispatch to run. */
+function flushSetImmediate(): Promise<void> {
+  return new Promise(resolve => setImmediate(resolve))
+}
 
 // ============================================
 // Helpers
@@ -148,6 +158,7 @@ const APP = {
 beforeEach(() => {
   vi.clearAllMocks()
   instanceCfg = undefined
+  conversationGenerating = false
   getAppMock.mockReturnValue(APP)
   getInstanceMock.mockReturnValue(undefined)
 })
@@ -499,5 +510,86 @@ describe('dispatchInboundMessage — relay context handoff', () => {
 
     expect(spool.count(TARGET)).toBe(0)
     expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+})
+
+// ============================================
+// message.received arrival telemetry
+//
+// Counted before every gate that can end the call early, so it must fire
+// even when the message never reaches sendAppChatMessage — and must not be
+// double-counted when a buffered supplement is merged and re-dispatched.
+// ============================================
+
+describe('dispatchInboundMessage — message.received arrival telemetry', () => {
+  function receivedCalls(): unknown[] {
+    return trackMock.mock.calls.filter(([name]) => name === 'message_received')
+  }
+
+  it('does not fire for an app the manager cannot resolve', async () => {
+    getAppMock.mockReturnValue(undefined)
+    await dispatchInboundMessage(makeMsg(), makeReply(false), 'app-1', 'inst-1')
+    expect(receivedCalls()).toHaveLength(0)
+  })
+
+  it('fires once for a normal message that reaches the engine', async () => {
+    await dispatchInboundMessage(makeMsg(), makeReply(false), 'app-1', 'inst-1')
+    expect(receivedCalls()).toHaveLength(1)
+    expect(receivedCalls()[0]).toEqual([
+      'message_received',
+      expect.objectContaining({
+        source: 'im',
+        direction: 'inbound',
+        channel: 'wecom-bot',
+        chatType: 'direct',
+        appId: 'app-1',
+        specId: 'spec-1',
+      }),
+    ])
+  })
+
+  it('fires even when the replyScope gate rejects the message', async () => {
+    instanceCfg = { replyScope: 'group' }
+    const reply = makeReply(false)
+    await dispatchInboundMessage(makeMsg({ chatType: 'direct' }), reply, 'app-1', 'inst-1')
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+    expect(receivedCalls()).toHaveLength(1)
+  })
+
+  it('fires even when the no-owner-bound gate blocks the message', async () => {
+    instanceCfg = { permissionEnabled: true, owners: [] }
+    const reply = makeReply(false)
+    await dispatchInboundMessage(makeMsg({ chatType: 'group' }), reply, 'app-1', 'inst-1')
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+    expect(receivedCalls()).toHaveLength(1)
+  })
+
+  it('fires even for a /stop command that never reaches the engine', async () => {
+    await dispatchInboundMessage(
+      makeMsg({ body: '/stop' }), makeReply(false), 'app-1', 'inst-1',
+    )
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+    expect(receivedCalls()).toHaveLength(1)
+  })
+
+  it('is not double-counted by the merged re-dispatch of a buffered message', async () => {
+    conversationGenerating = true
+    const reply = makeReply(false)
+
+    // First message arrives while busy: buffered, not sent to the engine —
+    // but it is a genuine arrival, so it must be counted once here.
+    await dispatchInboundMessage(makeMsg({ body: 'part one' }), reply, 'app-1', 'inst-1')
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+    expect(receivedCalls()).toHaveLength(1)
+
+    // Generation ends; the buffered supplement is merged and re-dispatched
+    // internally with skipBusyCheck. That re-entry must not add a second
+    // arrival for the same original message.
+    conversationGenerating = false
+    flushSupplementBuffer('app-chat:app-1:wecom-bot:direct:chat-1')
+    await flushSetImmediate()
+
+    expect(sendAppChatMessageMock).toHaveBeenCalledTimes(1)
+    expect(receivedCalls()).toHaveLength(1)
   })
 })

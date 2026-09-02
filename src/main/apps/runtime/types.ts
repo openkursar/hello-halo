@@ -234,6 +234,7 @@ export interface RunFinishedEvent {
   startedAt: number
   finishedAt: number
   durationMs: number
+  tokensUsed?: number
   errorMessage?: string
 }
 
