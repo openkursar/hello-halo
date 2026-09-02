@@ -38,6 +38,7 @@ import {
   ChevronDown,
 } from 'lucide-react'
 import { Switch } from '../ui/Switch'
+import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { parse as parseYaml } from 'yaml'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
@@ -107,6 +108,15 @@ interface FormSkill {
   appId?: string
   /** Imported source: installed on submit to obtain an appId, then co-published. */
   bundled?: BundledSkill
+  /** False when the author never marked this dependency `bundled: true` — it is
+   * packaged only because it doesn't resolve from any configured registry. */
+  declaredBundled?: boolean
+  /** Neither installed nor resolvable from any registry — publish will fail
+   * until this is fixed. Shown in the list (red) rather than silently omitted. */
+  missing?: boolean
+  /** Already resolves from a configured registry under its own listing — not
+   * packaged with this DH. Shown for visibility, with nothing to co-publish. */
+  fromStore?: boolean
 }
 
 /** A bundled skill that could not be co-listed, with the registry's reason (a
@@ -301,6 +311,13 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     : staged?.spec
   const sourceTags = sourceSpec?.store?.tags
   const sourceCategory = sourceSpec?.store?.category
+  // Where a missing dependency gets installed when the author supplies it
+  // locally: the source automation's own space (matching the scope
+  // `inspectSkillDeps` classifies against), or global for an imported folder
+  // not installed anywhere yet (matching its own scope: null / global-only).
+  const missingSkillInstallSpaceId = source === 'installed'
+    ? (apps.find(a => a.id === selectedInstalledId)?.spaceId ?? null)
+    : null
 
   // Draft persistence — keyed per installed target so an accidental close, a
   // crash, or a session-expired publish never loses the typed metadata.
@@ -423,28 +440,58 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
     if (!versionTouched) setVersion(suggestedVersion)
   }, [suggestedVersion, versionTouched])
 
+  // Skills that ship with a digital human — either explicitly bundled, or
+  // packaged anyway because they aren't resolvable from any registry — each
+  // can be co-listed as its own store entry. Two sources: an installed DH
+  // resolves them to installed skill apps (with an appId + a "published"
+  // probe); an imported package carries them inline (installed on submit, so
+  // no appId/probe yet).
+  const assoc = useAssociatedSkills(source === 'installed' ? (selectedInstalledId ?? undefined) : undefined, sourceSpec, debouncedAuthor)
+
+  // A `requires.skills` entry that resolves from no registry and matches no
+  // installed skill app blocks publish outright (collectFiles aborts at
+  // submit) — folded into the pre-flight so it surfaces before the user fills
+  // out the rest of the form. An imported folder's own bundled skills satisfy
+  // their matching dependency even though they aren't installed yet (they
+  // will be, into the staging space, ahead of this same check server-side).
+  const missingSkillIds = useMemo(() => {
+    if (source === 'installed') return assoc.missingSkillIds
+    const bundledIds = new Set((staged?.bundledSkills ?? []).map(b => b.name))
+    return assoc.missingSkillIds.filter(id => !bundledIds.has(id))
+  }, [source, assoc.missingSkillIds, staged])
+
+  const formSkills = useMemo<FormSkill[]>(() => {
+    // assoc.skills covers dependencies satisfied by an already-installed skill
+    // app — for an imported (not-yet-installed) automation that includes a
+    // dependency fixed locally via the missing-row import button, since that
+    // installs into the global scope rather than into `staged.bundledSkills`.
+    const resolvedFromAssoc: FormSkill[] = assoc.skills.map(s => ({ key: s.appId, name: s.name, published: s.published, appId: s.appId, declaredBundled: s.declaredBundled }))
+    const resolved: FormSkill[] = source === 'installed'
+      ? resolvedFromAssoc
+      : [
+          ...resolvedFromAssoc,
+          ...(staged?.bundledSkills ?? []).map(b => ({
+            key: `bundled:${b.name}`,
+            name: parseMd(b.files['SKILL.md'] ?? '').name || b.name,
+            published: false,
+            bundled: b,
+          })),
+        ]
+    const missing: FormSkill[] = missingSkillIds.map(id => ({ key: `missing:${id}`, name: id, published: false, missing: true }))
+    const storeLinked: FormSkill[] = assoc.storeLinkedSkills.map(s => ({ key: `store:${s.specId}`, name: s.name, published: false, fromStore: true }))
+    return [...resolved, ...storeLinked, ...missing]
+  }, [source, assoc.skills, assoc.storeLinkedSkills, staged, missingSkillIds])
+
   const preflight = useMemo<PreflightFinding[]>(() => {
     if (!sourceSpec) return []
-    return runPublishPreflight({ spec: sourceSpec, storeVersion, overrideName: name, overrideDescription: description, overrideVersion: version })
-  }, [sourceSpec, storeVersion, name, description, version])
+    const findings = runPublishPreflight({ spec: sourceSpec, storeVersion, overrideName: name, overrideDescription: description, overrideVersion: version })
+    if (missingSkillIds.length > 0) {
+      findings.push({ severity: 'error', code: 'missing-skill-dependency', detail: missingSkillIds.join(', ') })
+    }
+    return findings
+  }, [sourceSpec, storeVersion, name, description, version, missingSkillIds])
   const hasBlockingIssue = preflight.some(f => f.severity === 'error')
 
-  // Bundled skills that ship with a digital human — each can be co-listed as its
-  // own store entry. Two sources: an installed DH resolves them to installed
-  // skill apps (with an appId + a "published" probe); an imported package
-  // carries them inline (installed on submit, so no appId/probe yet).
-  const installedAssoc = useAssociatedSkills(source === 'installed' ? sourceSpec : undefined, debouncedAuthor)
-  const formSkills = useMemo<FormSkill[]>(() => {
-    if (source === 'installed') {
-      return installedAssoc.map(s => ({ key: s.appId, name: s.name, published: s.published, appId: s.appId }))
-    }
-    return (staged?.bundledSkills ?? []).map(b => ({
-      key: `bundled:${b.name}`,
-      name: parseMd(b.files['SKILL.md'] ?? '').name || b.name,
-      published: false,
-      bundled: b,
-    }))
-  }, [source, installedAssoc, staged])
   const [coPublishIds, setCoPublishIds] = useState<string[]>([])
   // Reset co-list selections when the underlying app/import changes so stale
   // keys never leak into a different publish.
@@ -1135,6 +1182,10 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
                       published={skill.published}
                       coListed={coPublishIds.includes(skill.key)}
                       onToggle={on => setCoPublishIds(ids => on ? [...ids, skill.key] : ids.filter(x => x !== skill.key))}
+                      declaredBundled={skill.declaredBundled}
+                      missing={skill.missing}
+                      fromStore={skill.fromStore}
+                      installSpaceId={missingSkillInstallSpaceId}
                     />
                   ))}
                 </div>
@@ -1280,6 +1331,8 @@ function describeFinding(f: PreflightFinding, t: (k: string, o?: Record<string, 
       return t('App name is required')
     case 'missing-description':
       return t('App description is empty — add one so others understand what this does.')
+    case 'missing-skill-dependency':
+      return t('Skill dependency not found: {{ids}}. Install it first (or include it in the imported folder), then try again.', { ids: f.detail ?? '' })
   }
 }
 
@@ -1295,14 +1348,54 @@ interface BundledSkillItemProps {
   published: boolean
   coListed: boolean
   onToggle: (on: boolean) => void
+  /** False when this dependency isn't declared `bundled: true` — it is packaged
+   * only because it doesn't resolve from any configured registry. */
+  declaredBundled?: boolean
+  /** Neither installed nor resolvable — publish will fail until this is fixed.
+   * Rendered as a plain red row with no co-list toggle (nothing to co-publish yet). */
+  missing?: boolean
+  /** Already resolves from a configured registry under its own listing — not
+   * packaged with this DH. No co-list toggle (nothing local to co-publish). */
+  fromStore?: boolean
+  /** Space a locally-supplied fix for a `missing` dependency installs into —
+   * the source automation's own space, or global (null) when imported. */
+  installSpaceId?: string | null
 }
 
-function BundledSkillItem({ name, published, coListed, onToggle }: BundledSkillItemProps) {
+function BundledSkillItem({ name, published, coListed, onToggle, declaredBundled = true, missing = false, fromStore = false, installSpaceId = null }: BundledSkillItemProps) {
   const { t } = useTranslation()
   return (
     <div className="flex items-center gap-2.5 px-3 py-2.5 bg-background text-[13px]">
-      <span className="flex-1 min-w-0 truncate text-foreground">{name}</span>
-      {published ? (
+      <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+        <span className={`truncate ${missing ? 'text-red-400' : 'text-foreground'}`}>{name}</span>
+        {missing && (
+          <span className="text-[11px] text-red-400/80">
+            {t('Not installed and not resolvable from a registry — publish will fail until this is resolved.')}
+          </span>
+        )}
+        {fromStore && (
+          <span className="text-[11px] text-muted-foreground">
+            {t('Already resolves from a registry — not packaged with this digital human.')}
+          </span>
+        )}
+        {!missing && !fromStore && !declaredBundled && !published && (
+          <span className="text-[11px] text-muted-foreground">
+            {t('Not resolvable from a registry — will be embedded in this package.')}
+          </span>
+        )}
+      </div>
+      {missing ? (
+        <>
+          <span className="flex-shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-px rounded text-[10.5px] leading-4 font-medium bg-red-500/10 text-red-400">
+            {t('Missing')}
+          </span>
+          <MissingSkillInstallButton depId={name} spaceId={installSpaceId} />
+        </>
+      ) : fromStore ? (
+        <span className="flex-shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-px rounded text-[10.5px] leading-4 font-medium bg-muted text-muted-foreground">
+          {t('From store')}
+        </span>
+      ) : published ? (
         <span className="flex-shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-px rounded text-[10.5px] leading-4 font-medium bg-app-skill/10 text-app-skill">
           {t('Already listed')}
         </span>
@@ -1313,6 +1406,107 @@ function BundledSkillItem({ name, published, coListed, onToggle }: BundledSkillI
         </>
       )}
     </div>
+  )
+}
+
+interface MissingSkillInstallButtonProps {
+  /** The `requires.skills[]` id this row is missing. The installed skill's
+   * `name` is forced to this exact value — classification matches an
+   * installed skill by exact `specId`, not by its authored frontmatter name. */
+  depId: string
+  /** Space to install into — the source automation's own space, or global
+   * (null) for an imported folder that has nothing installed yet. */
+  spaceId: string | null
+}
+
+/** Inline fix for a missing dependency row: pick a local skill file/folder,
+ * install it under the exact id the dependency needs, then close. The row
+ * itself updates on its own once `useAssociatedSkills` re-classifies against
+ * the refreshed installed-apps list. */
+function MissingSkillInstallButton({ depId, spaceId }: MissingSkillInstallButtonProps) {
+  const { t } = useTranslation()
+  const showToast = useNotificationStore(s => s.show)
+  const installApp = useAppsStore(s => s.installApp)
+  const [open, setOpen] = useState(false)
+  const [processing, setProcessing] = useState(false)
+  const [error, setError] = useState('')
+
+  const install = useCallback(async (parsed: ParsedSkill) => {
+    setProcessing(true)
+    setError('')
+    try {
+      const spec: SkillSpec = {
+        spec_version: '1.0',
+        version: '1.0',
+        name: depId,
+        description: parsed.description || depId,
+        type: 'skill',
+        skill_files: parsed.skillFiles,
+      }
+      const appId = await installApp(spaceId, spec)
+      if (!appId) throw new Error(t('Install failed.'))
+      showToast({ title: t('Skill installed'), variant: 'success', duration: 3000 })
+      setOpen(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('Install failed.'))
+    } finally {
+      setProcessing(false)
+    }
+  }, [depId, spaceId, installApp, showToast, t])
+
+  const handleFile = useCallback(async (file: File) => {
+    setError('')
+    const lower = file.name.toLowerCase()
+    try {
+      if (lower.endsWith('.md')) await install(await processMdFile(file))
+      else if (lower.endsWith('.zip')) await install(await processZipFile(file))
+      else setError(t('Unsupported file type. Choose a .md file, a .zip archive, or a skill folder.'))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('Failed to read file'))
+    }
+  }, [install, t])
+
+  const handleDirEntry = useCallback(async (entry: FileSystemDirectoryEntry) => {
+    setError('')
+    try {
+      await install(parseSkillFiles(await readDirectoryEntryToMap(entry), entry.name))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('Failed to read folder'))
+    }
+  }, [install, t])
+
+  const handleFolderList = useCallback(async (fileList: FileList) => {
+    setError('')
+    try {
+      const { files, folderName } = await readFileListToMap(fileList)
+      await install(parseSkillFiles(files, folderName))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('Failed to read folder'))
+    }
+  }, [install, t])
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        title={t('Import a local skill to satisfy this dependency')}
+        className="flex-shrink-0 inline-flex items-center justify-center w-6 h-6 rounded text-red-400 hover:bg-red-500/10 transition-colors"
+      >
+        <Upload className="w-3.5 h-3.5" />
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 p-3">
+        <FileImportZone
+          onFile={handleFile}
+          onDirectoryEntry={handleDirEntry}
+          onFolderFileList={handleFolderList}
+          fileAccept=".md,.zip"
+          dropLabel={t('Drop a skill file here')}
+          dropHint={t('Or click to choose · .md · .zip')}
+          folderLabel={t('Browse skill folder...')}
+          processing={processing}
+        />
+        {error && <p className="mt-2 text-[11px] text-red-400">{error}</p>}
+      </PopoverContent>
+    </Popover>
   )
 }
 

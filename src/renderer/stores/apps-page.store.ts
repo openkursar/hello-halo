@@ -16,6 +16,8 @@ import { persist } from 'zustand/middleware'
 import { api } from '../api'
 import { getCurrentLanguage } from '../i18n'
 import { categoryTaxonomyResource, discoverPageResource } from '../lib/store-resources'
+import { findInstalledApp, findEntryUpdate } from '../utils/store-install-state'
+import { useAppsStore } from './apps.store'
 import type { RegistryEntry, StoreAppDetail, UpdateInfo, StoreQuery, StoreQueryResponse, StoreInstallProgress } from '../../shared/store/store-types'
 import type { AppType } from '../../shared/apps/spec-types'
 import type { ImSessionRecord } from '../../shared/types/im-channel'
@@ -45,6 +47,30 @@ const storeListCache = new Map<string, { items: RegistryEntry[]; page: number; h
 
 function storeListCacheKey(q: { category?: string; type?: string; locale?: string }): string {
   return `${q.locale ?? ''}|${q.type ?? ''}|${q.category ?? ''}`
+}
+
+/**
+ * A detail fetch outlives the selection that started it: without invalidating
+ * it, a slow response lands on a state the user already left, repainting the
+ * detail they backed out of and counting a view for it.
+ */
+function abandonStoreDetail(): void {
+  storeDetailRequestSeq++
+}
+
+/**
+ * Reported from the action rather than from the detail view: every entry point
+ * routes through here, while the view also remounts on things that are not an
+ * open, such as leaving the store tab with a detail on screen and coming back.
+ */
+function reportDetailView(detail: StoreAppDetail, availableUpdates: UpdateInfo[]): void {
+  const installedApp = findInstalledApp(detail.entry, detail.registryId, useAppsStore.getState().apps)
+  const updateInfo = findEntryUpdate(installedApp, availableUpdates)
+  void api.trackEvent('store.detail.view', {
+    appId: detail.entry.slug,
+    appType: detail.entry.type,
+    installedState: updateInfo ? 'update' : installedApp ? 'installed' : 'new',
+  })
 }
 
 // ============================================
@@ -278,30 +304,33 @@ export const useAppsPageStore = create<AppsPageState>()(
     }
   },
 
-  reset: () => set({
-    selectedAppId: null,
-    detailView: null,
-    initialAppId: null,
-    showInstallDialog: false,
-    currentTab: 'my-digital-humans',
-    imPanelOpen: true,
-    selectedImSession: null,
-    imSessions: [],
-    imSessionsAppId: null,
-    storeApps: [],
-    storeLoading: false,
-    storeError: null,
-    storeSearchQuery: '',
-    storeCategory: null,
-    storeTypeFilter: null,
-    storePage: 1,
-    storeHasMore: false,
-    storeSelectedSlug: null,
-    storeSelectedDetail: null,
-    storeDetailLoading: false,
-    storeDetailError: null,
-    availableUpdates: [],
-  }),
+  reset: () => {
+    abandonStoreDetail()
+    set({
+      selectedAppId: null,
+      detailView: null,
+      initialAppId: null,
+      showInstallDialog: false,
+      currentTab: 'my-digital-humans',
+      imPanelOpen: true,
+      selectedImSession: null,
+      imSessions: [],
+      imSessionsAppId: null,
+      storeApps: [],
+      storeLoading: false,
+      storeError: null,
+      storeSearchQuery: '',
+      storeCategory: null,
+      storeTypeFilter: null,
+      storePage: 1,
+      storeHasMore: false,
+      storeSelectedSlug: null,
+      storeSelectedDetail: null,
+      storeDetailLoading: false,
+      storeDetailError: null,
+      availableUpdates: [],
+    })
+  },
 
   // ── Store Actions ──────────────────────────
 
@@ -503,7 +532,9 @@ export const useAppsPageStore = create<AppsPageState>()(
       if (requestId !== storeDetailRequestSeq) return
 
       if (res.success && res.data) {
-        set({ storeSelectedDetail: res.data as StoreAppDetail })
+        const detail = res.data as StoreAppDetail
+        set({ storeSelectedDetail: detail })
+        reportDetailView(detail, get().availableUpdates)
       } else {
         console.error('[AppsPageStore] selectStoreApp failed:', res.error)
         set({ storeDetailError: (res.error as string) || 'Failed to load app detail' })
@@ -513,18 +544,23 @@ export const useAppsPageStore = create<AppsPageState>()(
       console.error('[AppsPageStore] selectStoreApp error:', err)
       set({ storeDetailError: 'Failed to load app detail' })
     } finally {
-      set({ storeDetailLoading: false })
+      // A superseded response must not clear the flag its successor is still
+      // waiting on, or the detail renders as not-found until that one lands.
+      if (requestId === storeDetailRequestSeq) set({ storeDetailLoading: false })
     }
   },
 
-  clearStoreSelection: () => set({
-    storeSelectedSlug: null,
-    storeAutoInstall: false,
-    storeSelectedDetail: null,
-    storeDetailLoading: false,
-    storeDetailError: null,
-    storeError: null,
-  }),
+  clearStoreSelection: () => {
+    abandonStoreDetail()
+    set({
+      storeSelectedSlug: null,
+      storeAutoInstall: false,
+      storeSelectedDetail: null,
+      storeDetailLoading: false,
+      storeDetailError: null,
+      storeError: null,
+    })
+  },
 
   consumeStoreAutoInstall: () => {
     if (!get().storeAutoInstall) return false
@@ -535,6 +571,7 @@ export const useAppsPageStore = create<AppsPageState>()(
   openStorePublish: (type, appId) => {
     // Surface the store tab's header (which owns the publish dialog): leave any
     // detail/mine sub-view so StoreHeader renders and can consume the intent.
+    abandonStoreDetail()
     set({
       currentTab: 'store',
       storeMineOpen: false,

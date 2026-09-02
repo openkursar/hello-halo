@@ -103,16 +103,6 @@ export function StoreDetail() {
 
   const { installedApp, updateInfo } = useStoreEntryInstallState(entry, registryId)
 
-  // Store funnel: a detail page opened, tagged with the install state.
-  useEffect(() => {
-    if (!entry) return
-    void api.trackEvent('store.detail.view', {
-      appId: entry.slug,
-      appType: entry.type,
-      installedState: updateInfo ? 'update' : installedApp ? 'installed' : 'new',
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entry?.slug])
   const { start: startUpdate, busy: updating, dialogs: updateDialogs } = useStoreUpdateFlow(
     entry,
     updateInfo,
@@ -128,6 +118,26 @@ export function StoreDetail() {
   }, [categories, entry])
 
   const versions = useMemo(() => (entry ? getEntryVersions(entry) : []), [entry])
+
+  // Automation packages don't inline file content like a skill's `skill_files`
+  // does — a bundled dependency's files travel in the package but are only
+  // materialized on install. `declareBundledSkillFiles` (publish/index.ts)
+  // records each bundled dependency's relative file list on the wire spec
+  // precisely so this preview doesn't need to fetch package content: rebuild
+  // the `skills/<id>/...` paths it already declares.
+  const automationSkillFilePaths = useMemo(() => {
+    if (spec?.type !== 'automation') return []
+    const deps = spec.requires?.skills ?? []
+    const skillFiles = deps.flatMap(dep => {
+      if (typeof dep === 'string' || !dep.files?.length) return []
+      return dep.files.map(f => `skills/${dep.id}/${f}`)
+    })
+    if (skillFiles.length === 0) return []
+    // The DH's own manifest sits at the package root, a sibling of `skills/`
+    // — not nested under it. It never travels in the wire spec (metadata,
+    // not a content file), so it's added back here, display-only.
+    return ['spec.yaml', ...skillFiles]
+  }, [spec])
 
   useEffect(() => {
     if (installedApp) {
@@ -496,7 +506,13 @@ export function StoreDetail() {
             {/* Aside: tags + metadata cards */}
             <div className="sm:w-60 sm:flex-shrink-0 space-y-4">
               {spec.type === 'skill' && Object.keys(spec.skill_files ?? {}).length > 1 && (
-                <SkillFileTree paths={Object.keys(spec.skill_files ?? {})} />
+                // The manifest never travels in `skill_files` (stripped at
+                // packaging/fetch time — see collectFiles / halo.adapter.ts),
+                // but every skill ships one — added back here, display-only.
+                <SkillFileTree paths={[...Object.keys(spec.skill_files ?? {}), 'spec.yaml']} />
+              )}
+              {spec.type === 'automation' && automationSkillFilePaths.length > 0 && (
+                <SkillFileTree paths={automationSkillFilePaths} />
               )}
               {entry.tags.length > 0 && (
                 <div className="rounded-[10px] border border-border/60 bg-background p-3.5 space-y-2.5">

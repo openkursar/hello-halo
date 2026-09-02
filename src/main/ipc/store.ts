@@ -31,15 +31,17 @@ import {
   getPublishPreview,
   findAppByPublishSlug,
   collectFiles,
+  inspectSkillDeps,
   packDhpkg,
   packSkill,
   unpackDhpkg,
 } from '../store'
+import { deriveSlug } from '../store/publish/spec-enrich'
 import { getAppManager } from '../apps/manager'
 import { getAppRuntime } from '../apps/runtime'
 import { sendToRenderer } from '../foundation/window.service'
 import type { StoreInstallProgress } from '../../shared/store/store-types'
-import type { AppType } from '../../shared/apps/spec-types'
+import type { AppType, AppSpec } from '../../shared/apps/spec-types'
 import { storeRpc } from '../../shared/rpc/contracts/store.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -131,6 +133,40 @@ export function registerStoreHandlers(): void {
       }
     },
 
+    // ── store:inspect-skill-deps ─────────────────────────────────────────────
+    storeInspectSkillDeps: async (input: { appId: string }) => {
+      try {
+        const manager = getAppManager()
+        if (!manager) return { success: false, error: 'App Manager not ready' }
+        const app = manager.getApp(input.appId)
+        if (!app) return { success: false, error: `App not found: ${input.appId}` }
+        return { success: true, data: inspectSkillDeps(app.spec, manager, app.spaceId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[StoreIPC] store:inspect-skill-deps error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── store:inspect-skill-deps-for-spec ────────────────────────────────────
+    // Same classification as store:inspect-skill-deps, for a spec that has no
+    // installed app yet (the publish dialog's "import a folder" flow stages a
+    // spec client-side and only installs it on submit). Scoped to global-only
+    // skill apps (spaceId: null), matching the throwaway staging space that
+    // submit creates for this flow — it starts empty and only gains the
+    // folder's own bundled skills plus whatever is globally installed.
+    storeInspectSkillDepsForSpec: async (input: { spec: AppSpec }) => {
+      try {
+        const manager = getAppManager()
+        if (!manager) return { success: false, error: 'App Manager not ready' }
+        return { success: true, data: inspectSkillDeps(input.spec, manager, null) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[StoreIPC] store:inspect-skill-deps-for-spec error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
     // ── store:find-app-by-publish-slug ─────────────────────────────────────
     storeFindAppByPublishSlug: async (input: { slug: string; type?: AppType; author?: string }) => {
       try {
@@ -178,7 +214,7 @@ export function registerStoreHandlers(): void {
         const app = manager.getApp(input.appId)
         if (!app) return { success: false, error: `App not found: ${input.appId}` }
 
-        const safeName = (app.spec.store?.slug ?? app.spec.name).replace(/[^a-z0-9-]/gi, '-').toLowerCase()
+        const safeName = deriveSlug(app.spec.store?.slug ?? app.spec.name) || 'app'
         const dialogResult = await dialog.showSaveDialog({
           title: 'Export as .dhpkg',
           defaultPath: `${safeName}-${app.spec.version ?? '0.0.0'}.dhpkg`,
@@ -194,8 +230,9 @@ export function registerStoreHandlers(): void {
           return {
             success: false,
             error:
-              `Bundled skill dependencies are incomplete — exporting would produce a broken package. ` +
-              `Missing skills: ${missingSkillIds.join(', ')}. Install them first, then export again.`,
+              `Skill dependencies are unresolvable — exporting would produce a broken package. ` +
+              `Not found in any configured registry, and not installed locally: ${missingSkillIds.join(', ')}. ` +
+              `Install them first, then export again.`,
           }
         }
 
@@ -222,7 +259,7 @@ export function registerStoreHandlers(): void {
           return { success: false, error: `Not a skill: ${input.appId}` }
         }
 
-        const safeName = (app.spec.store?.slug ?? app.spec.name).replace(/[^a-z0-9-]/gi, '-').toLowerCase()
+        const safeName = deriveSlug(app.spec.store?.slug ?? app.spec.name) || 'app'
         const dialogResult = await dialog.showSaveDialog({
           title: 'Export skill',
           defaultPath: `${safeName}-${app.spec.version ?? '0.0.0'}.zip`,
