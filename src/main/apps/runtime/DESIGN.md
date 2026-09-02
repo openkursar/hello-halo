@@ -570,9 +570,48 @@ src/main/apps/runtime/
     manager.ts               -- Generic channel lifecycle (provider-agnostic)
     im-prompt.ts             -- IM entry/constraint builders + ImSessionContext
     file-send-mcp.ts         -- send_file_to_chat MCP tool (pre-bound to session)
+    identity-resolve.ts      -- Channel-agnostic opaque-chatId -> real-name resolution
+                                (opt-in via ImChannelInstance.identityCapability)
+    wecom-identity-resolve.ts -- WeCom-specific identityCapability implementation
+                                (message_aibot_sessions_list over MCP Streamable HTTP)
     *.provider.ts            -- Brand-specific provider implementations
                                 (wecom-bot.provider.ts, weixin-ilink.provider.ts, ...)
 ```
+
+### 4.1 identityCapability pattern
+
+Optional per-instance capability (same shape as `fileCapability`) letting a
+channel resolve opaque platform-side chat IDs to real display names via a
+separately-authorized directory lookup. Motivating case: WeCom anonymizes
+sender IDs for bots created after its April 2026 change; a member-authorized
+"message" permission can recover names for chats that have recently
+interacted with the bot.
+
+- `shared/types/im-channel.ts` — `ImIdentityCapability`, `ImIdentityAuthExpiredError`,
+  `ImChannelInstance.identityCapability` / `.updateConfig()`,
+  `ImChannelProvider.hotUpdatableConfigKeys`, `ImSessionRecord.resolvedName`,
+  `ImChannelInstanceStatus.identityResolution`, `getImSessionDisplayName()`
+  (single source of truth for the customName > resolvedName > displayName >
+  chatId priority chain — main and renderer both import it).
+- `im-channels/identity-resolve.ts` — throttled, coalesced, channel-agnostic
+  resolution + status tracking. Takes the capability as a parameter from the
+  caller rather than looking it up itself, to avoid a circular import back
+  through `manager.ts` (which imports this file for status reporting).
+- `dispatch-inbound.ts` — triggers resolution on inbound messages,
+  fire-and-forget (never awaited — see the "no await between the busy check
+  and generation start" invariant in that file). resolvedName only feeds
+  sender identity for **direct** chats: a resolved chat_id/chat_name pair is
+  session-level, so applying it to an individual sender inside a group would
+  mislabel every member with the group's own name.
+- `notify-tool.ts`, `prompt.ts` — the AI-facing contact directory and
+  auto-sync awareness fragment also resolve through `getImSessionDisplayName()`.
+
+A provider whose config carries a credential unrelated to its live
+connection (WeCom's `nameResolveApiKey`) should declare it in
+`hotUpdatableConfigKeys` so `ImChannelManager.applyConfig` calls
+`instance.updateConfig()` instead of a stop+recreate — otherwise every
+change resets whatever connection-scoped state (WS session, reply-window
+caches, ...) a full recreate would wipe.
 
 Tests live in `tests/unit/apps/runtime/` mirroring the source layout.
 

@@ -23,6 +23,7 @@ import { useWsRecovery } from '../../hooks/useWsRecovery'
 import { useTranslation } from '../../i18n'
 import type { Message } from '../../types'
 import type { ImSessionRecord, SessionSource } from '../../../shared/types/im-channel'
+import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 import { buildImSessionKey } from '../../../shared/apps/im-keys'
 import { CHANNEL_LABELS } from './im-channel-labels'
 
@@ -213,7 +214,7 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
     }
   }, [appId, spaceId, conversationId, fetchImSessions, selectImSession])
 
-  const displayName = session.customName || session.displayName || session.chatId
+  const displayName = getImSessionDisplayName(session)
   const channelLabel = CHANNEL_LABELS[session.channel] ?? session.channel
   const chatTypeLabel = session.chatType === 'group' ? t('Group') : t('Direct')
   const hasStreamingContent = isGenerating && (streamingContent || thoughts.length > 0 || isThinking)

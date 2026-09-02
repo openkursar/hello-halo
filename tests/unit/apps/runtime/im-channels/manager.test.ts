@@ -17,11 +17,13 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ImChannelManager } from '../../../../../src/main/apps/runtime/im-channels/manager'
+import * as identityResolve from '../../../../../src/main/apps/runtime/im-channels/identity-resolve'
 import type {
   ImChannelProvider,
   ImChannelInstance,
   ImChannelInstanceConfig,
   ImConnectionState,
+  ImIdentityCapability,
 } from '../../../../../src/shared/types/im-channel'
 
 // ============================================
@@ -35,6 +37,7 @@ interface FakeInstance extends ImChannelInstance {
   connectedFlag: boolean
   connectionState?: ImConnectionState
   inboundHandler: ((msg: any, reply: any) => void) | null
+  updateConfigCalls: Record<string, unknown>[]
 }
 
 function makeInstance(
@@ -50,6 +53,7 @@ function makeInstance(
     connectedFlag: true,
     connectionState: undefined,
     inboundHandler: null,
+    updateConfigCalls: [],
     start() {
       inst.started = true
     },
@@ -70,6 +74,9 @@ function makeInstance(
     },
     onInbound(handler) {
       inst.inboundHandler = handler
+    },
+    updateConfig(config) {
+      inst.updateConfigCalls.push(config)
     },
     ...overrides,
   }
@@ -381,5 +388,150 @@ describe('ImChannelManager.stopInstance — onInstanceStop resilience', () => {
     manager.applyConfig([makeConfig('i1')], noopInbound)
     expect(() => manager.applyConfig([], noopInbound)).not.toThrow()
     expect(manager.getInstance('i1')).toBeUndefined()
+  })
+})
+
+describe('ImChannelManager — hotUpdatableConfigKeys', () => {
+  let manager: ImChannelManager
+
+  beforeEach(() => {
+    manager = new ImChannelManager()
+  })
+
+  it('applies a hot-updatable-only change via updateConfig(), without stop+recreate', () => {
+    const provider = makeProvider({ hotUpdatableConfigKeys: ['nameResolveApiKey'] })
+    manager.registerProvider(provider)
+
+    manager.applyConfig(
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: '' } })],
+      noopInbound,
+    )
+    const inst = manager.getInstance('i1') as FakeInstance
+
+    manager.applyConfig(
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: 'https://qyapi.example/x?apikey=new' } })],
+      noopInbound,
+    )
+
+    expect(inst.stopped).toBe(false)
+    expect(provider.created).toHaveLength(1)
+    expect(manager.getInstance('i1')).toBe(inst)
+    expect(inst.updateConfigCalls).toEqual([
+      { botId: 'b1', nameResolveApiKey: 'https://qyapi.example/x?apikey=new' },
+    ])
+  })
+
+  it('still does a full stop+recreate when a non-hot-updatable field also changes', () => {
+    const provider = makeProvider({ hotUpdatableConfigKeys: ['nameResolveApiKey'] })
+    manager.registerProvider(provider)
+
+    manager.applyConfig(
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: '' } })],
+      noopInbound,
+    )
+    const inst = manager.getInstance('i1') as FakeInstance
+
+    manager.applyConfig(
+      [makeConfig('i1', { config: { botId: 'b2', nameResolveApiKey: 'https://qyapi.example/x?apikey=new' } })],
+      noopInbound,
+    )
+
+    expect(inst.stopped).toBe(true)
+    expect(provider.created).toHaveLength(2)
+    expect(inst.updateConfigCalls).toHaveLength(0)
+  })
+
+  it('falls back to stop+recreate when the provider declares no hotUpdatableConfigKeys', () => {
+    const provider = makeProvider() // no hotUpdatableConfigKeys
+    manager.registerProvider(provider)
+
+    manager.applyConfig(
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: '' } })],
+      noopInbound,
+    )
+    const inst = manager.getInstance('i1') as FakeInstance
+
+    manager.applyConfig(
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: 'https://qyapi.example/x?apikey=new' } })],
+      noopInbound,
+    )
+
+    expect(inst.stopped).toBe(true)
+    expect(provider.created).toHaveLength(2)
+  })
+})
+
+describe('ImChannelManager — identityResolution status lifecycle', () => {
+  let manager: ImChannelManager
+
+  beforeEach(() => {
+    manager = new ImChannelManager()
+  })
+
+  function fakeCapability(): ImIdentityCapability {
+    return { fetchIdentityDirectory: async () => new Map() }
+  }
+
+  it('omits identityResolution when the instance exposes no identityCapability', () => {
+    manager.registerProvider(makeProvider())
+    manager.applyConfig([makeConfig('i1')], noopInbound)
+    expect(manager.getInstanceStatus('i1')?.identityResolution).toBeUndefined()
+  })
+
+  it("reports 'pending' when identityCapability is present but no attempt has completed", () => {
+    const provider = makeProvider({
+      nextInstanceOverrides: { identityCapability: fakeCapability() },
+    })
+    manager.registerProvider(provider)
+    manager.applyConfig([makeConfig('i1')], noopInbound)
+    expect(manager.getInstanceStatus('i1')?.identityResolution).toEqual({ status: 'pending' })
+  })
+
+  it('clears tracked identity-resolution state on true removal, not on a mere disable', () => {
+    const clearSpy = vi.spyOn(identityResolve, 'clearIdentityResolutionStatus')
+    const provider = makeProvider({
+      nextInstanceOverrides: { identityCapability: fakeCapability() },
+    })
+    manager.registerProvider(provider)
+
+    manager.applyConfig([makeConfig('i1')], noopInbound)
+    clearSpy.mockClear()
+
+    // Disable — config change, not removal. Must NOT clear: the UI should
+    // keep showing the last known outcome rather than flashing to "pending".
+    manager.applyConfig([makeConfig('i1', { enabled: false })], noopInbound)
+    expect(clearSpy).not.toHaveBeenCalled()
+
+    // Re-enable, then remove entirely — MUST clear.
+    manager.applyConfig([makeConfig('i1')], noopInbound)
+    manager.applyConfig([], noopInbound)
+    expect(clearSpy).toHaveBeenCalledWith('i1')
+
+    clearSpy.mockRestore()
+  })
+
+  it('clears tracked identity-resolution state when a hot-updatable credential changes', () => {
+    const clearSpy = vi.spyOn(identityResolve, 'clearIdentityResolutionStatus')
+    const provider = makeProvider({
+      hotUpdatableConfigKeys: ['nameResolveApiKey'],
+      nextInstanceOverrides: { identityCapability: fakeCapability() },
+    })
+    manager.registerProvider(provider)
+
+    manager.applyConfig(
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: 'old' } })],
+      noopInbound,
+    )
+    clearSpy.mockClear()
+
+    // Re-authorized with a fresh URL — a stale 'expired'/'error' status must
+    // not linger past the fix.
+    manager.applyConfig(
+      [makeConfig('i1', { config: { botId: 'b1', nameResolveApiKey: 'new' } })],
+      noopInbound,
+    )
+    expect(clearSpy).toHaveBeenCalledWith('i1')
+
+    clearSpy.mockRestore()
   })
 })

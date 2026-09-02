@@ -17,7 +17,7 @@ import {
   Mail, MessageSquare, Bell, Webhook, Loader2,
   CheckCircle, XCircle, ChevronDown, RefreshCw, Bot,
   Plus, Trash2, MoreVertical, Smartphone, Info,
-  QrCode, ExternalLink,
+  QrCode, ExternalLink, UserCheck, Eye, EyeOff,
 } from 'lucide-react'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
@@ -322,6 +322,72 @@ function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
 }
 
 // ============================================
+// Name Resolution Field (WeCom anonymized-ID -> real name, optional)
+// ============================================
+
+interface NameResolutionFieldProps {
+  value: string
+  onChange: (value: string) => void
+  status?: ImChannelInstanceStatus['identityResolution']
+}
+
+function NameResolutionField({ value, onChange, status }: NameResolutionFieldProps) {
+  const { t } = useTranslation()
+  const [revealed, setRevealed] = useState(false)
+  const configured = value.trim().length > 0
+
+  const statusLabel = !configured
+    ? undefined
+    : status?.status === 'ok'
+      ? t('Active — sender names are being resolved')
+      : status?.status === 'expired'
+        ? t('Authorization expired (valid 7 days) — re-copy the link from WeCom and paste it here')
+        : status?.status === 'error'
+          ? t('Last attempt failed — will retry automatically')
+          : t('Saved — will take effect on the next incoming message')
+
+  const statusColor =
+    status?.status === 'ok'
+      ? 'text-green-500'
+      : status?.status === 'expired' || status?.status === 'error'
+        ? 'text-amber-500'
+        : 'text-muted-foreground'
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1.5">
+        <UserCheck className="w-3.5 h-3.5 text-muted-foreground" />
+        <label className="text-sm text-muted-foreground">{t('Name Resolution URL')}</label>
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+          {t('Optional')}
+        </span>
+      </div>
+      <div className="relative">
+        <input
+          type={revealed ? 'text' : 'password'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="https://qyapi.weixin.qq.com/mcp/v2/bot/msg?apikey=..."
+          className="w-full bg-muted border border-border rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+        />
+        <button
+          type="button"
+          onClick={() => setRevealed(!revealed)}
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground transition-colors"
+          title={revealed ? t('Hide') : t('Show')}
+        >
+          {revealed ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {t('Shows real names instead of anonymized IDs for people who message this bot. In the WeCom client: Workspace → Intelligent Bot → this bot → Permissions → authorize "Message", then paste the link here.')}
+      </p>
+      {statusLabel && <p className={`text-xs ${statusColor}`}>{statusLabel}</p>}
+    </div>
+  )
+}
+
+// ============================================
 // IM Channel Instance Card (Sub-card)
 // ============================================
 
@@ -621,6 +687,13 @@ function InstanceCard({
               />
             </div>
           </div>
+
+          {/* Name resolution — optional, resolves anonymized sender IDs to real names */}
+          <NameResolutionField
+            value={(currentCfg.nameResolveApiKey as string) ?? ''}
+            onChange={(v) => handleConfigChange('nameResolveApiKey', v)}
+            status={status?.identityResolution}
+          />
 
           {/* Digital Human selector */}
           <div className="space-y-1">

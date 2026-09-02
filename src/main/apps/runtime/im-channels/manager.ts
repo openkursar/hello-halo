@@ -21,6 +21,7 @@ import type {
   ImChannelType,
   ImChannelInstanceStatus,
 } from '../../../../shared/types/im-channel'
+import { getIdentityResolutionStatus, clearIdentityResolutionStatus } from './identity-resolve'
 
 // ============================================
 // Manager Implementation
@@ -98,10 +99,14 @@ export class ImChannelManager {
       oldConfigMap.set(c.id, c)
     }
 
-    // 1. Stop + remove instances that no longer exist in config
+    // 1. Stop + remove instances that no longer exist in config. Genuine
+    // removal — unlike the stop() a few lines down for config changes,
+    // this instance is never coming back, so its tracked identity-
+    // resolution state is dropped too.
     for (const [id] of this.instances) {
       if (!newConfigMap.has(id)) {
         this.stopInstance(id)
+        clearIdentityResolutionStatus(id)
       }
     }
 
@@ -115,7 +120,25 @@ export class ImChannelManager {
         continue
       }
 
-      // Stop old instance if it exists (config changed)
+      // Only a provider-declared hot-updatable key changed (e.g. WeCom's
+      // nameResolveApiKey) — apply in place instead of a stop+recreate, so
+      // an unrelated field doesn't reset live connection state (WS reconnect,
+      // in-instance caches) that a hot-updatable field was never meant to
+      // touch. Falls through to the normal stop+recreate path for providers/
+      // instances that don't support it.
+      if (existing && oldCfg && this.onlyHotUpdatableConfigChanged(oldCfg, cfg)) {
+        existing.updateConfig?.(cfg.config)
+        // A fresh credential deserves a fresh status rather than continuing
+        // to show whatever the previous one last reported.
+        clearIdentityResolutionStatus(cfg.id)
+        continue
+      }
+
+      // Stop old instance if it exists (config changed). Not a removal —
+      // identity-resolution status is intentionally left in place so the UI
+      // keeps showing the last known outcome instead of flashing back to
+      // "pending" for an instance that's either disabled or about to be
+      // recreated with the same credential.
       if (existing) {
         this.stopInstance(cfg.id)
       }
@@ -253,6 +276,12 @@ export class ImChannelManager {
     const connected = instance?.isConnected() ?? false
     const state = instance?.getConnectionState?.()
       ?? (connected ? 'online' : cfg.enabled ? 'connecting' : 'offline')
+    // Channel-agnostic: identityCapability presence, not provider type, gates
+    // whether this is surfaced at all. 'pending' covers "configured, first
+    // attempt not completed yet" (e.g. just pasted the credential).
+    const identityResolution = instance?.identityCapability
+      ? (getIdentityResolutionStatus(cfg.id) ?? { status: 'pending' as const })
+      : undefined
     return {
       id: cfg.id,
       type: cfg.type,
@@ -262,6 +291,7 @@ export class ImChannelManager {
       appId: cfg.appId,
       // Only meaningful while disconnected; a live instance has no failure.
       reason: connected ? undefined : this.statusReasons.get(cfg.id),
+      identityResolution,
     }
   }
 
@@ -344,5 +374,28 @@ export class ImChannelManager {
       a.appId === b.appId &&
       JSON.stringify(a.config) === JSON.stringify(b.config)
     )
+  }
+
+  /**
+   * True when the only difference between two configs is one or more keys
+   * the provider has declared hot-updatable (`ImChannelProvider.hotUpdatableConfigKeys`).
+   * Stays provider-agnostic: it reads the declared key list rather than
+   * knowing any field names itself — a provider with no such list (the
+   * common case) always returns false here, preserving today's stop+recreate
+   * behavior for every field.
+   */
+  private onlyHotUpdatableConfigChanged(a: ImChannelInstanceConfig, b: ImChannelInstanceConfig): boolean {
+    if (a.id !== b.id || a.type !== b.type || a.enabled !== b.enabled || a.appId !== b.appId) {
+      return false
+    }
+    const hotKeys = this.providers.get(b.type)?.hotUpdatableConfigKeys
+    if (!hotKeys || hotKeys.length === 0) return false
+
+    const strip = (cfg: Record<string, unknown>): Record<string, unknown> => {
+      const copy = { ...cfg }
+      for (const key of hotKeys) delete copy[key]
+      return copy
+    }
+    return JSON.stringify(strip(a.config)) === JSON.stringify(strip(b.config))
   }
 }

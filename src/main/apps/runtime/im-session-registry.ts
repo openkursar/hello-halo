@@ -213,6 +213,32 @@ export class ImSessionRegistry {
   }
 
   /**
+   * Set the automatically-resolved real name for a session, sourced from a
+   * channel's optional identity-resolution capability (e.g. WeCom's message
+   * capability, for bots whose sender IDs are otherwise opaque).
+   *
+   * Distinct from customName/displayName: unlike displayName, this is
+   * overwritten as fresher lookups succeed; unlike customName, callers must
+   * never let this override a user's own choice — see the UI's display
+   * priority (customName > resolvedName > displayName > chatId).
+   *
+   * No-ops for sessions not yet known — an identity directory can return
+   * entries with no local session record (e.g. a contact who hasn't
+   * messaged this app), which are simply not applicable here.
+   *
+   * @returns true if the session was found and updated
+   */
+  setResolvedName(appId: string, channel: string, chatId: string, name: string): boolean {
+    const key = this.buildKey(appId, channel, chatId)
+    const session = this.sessions.get(key)
+    if (!session) return false
+    if (session.resolvedName === name) return false
+    session.resolvedName = name
+    this.requestPersist(true)
+    return true
+  }
+
+  /**
    * Set the proactive flag for a session. When true, the assistant's final
    * text response is auto-pushed to this contact at run completion by
    * apps/runtime/im-auto-sync.ts. The AI is informed via a prompt fragment

@@ -16,6 +16,7 @@ import type { AutomationSpec } from '../spec'
 import type { MemorySnapshot } from '../../platform/memory/snapshot'
 import type { EscalationResponse } from './types'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../services/agent/system-prompt'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../../services/ai-browser'
 import { AI_TERMINAL_SYSTEM_PROMPT } from '../../services/ai-terminal'
@@ -159,7 +160,7 @@ not for routine reports.
  */
 function buildAutoSyncAwareness(sessions: ImSessionRecord[]): string {
   const bullets = sessions.map((s) => {
-    const name = s.customName || s.displayName || s.chatId
+    const name = getImSessionDisplayName(s)
     const type = s.chatType === 'group' ? 'Group' : 'Direct'
     return `- "${name}" (${type}) via ${s.channel}`
   }).join('\n')

@@ -22,6 +22,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Mail, MessageSquare, Bell, Webhook,
   ExternalLink, Users, User, Pencil, Trash2, Copy, Check, Search,
+  AlertTriangle, Info,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useAppStore } from '../../stores/app.store'
@@ -32,6 +33,7 @@ import type {
 } from '../../../shared/types/notification-channels'
 import { NOTIFICATION_CHANNEL_META } from '../../../shared/types/notification-channels'
 import type { ImSessionRecord, ImChannelInstanceStatus } from '../../../shared/types/im-channel'
+import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 
 // ============================================
 // Types
@@ -70,6 +72,34 @@ const IM_CHANNEL_DISPLAY: Record<string, { label: string; color: string }> = {
 
 function getImChannelDisplay(channel: string) {
   return IM_CHANNEL_DISPLAY[channel] ?? { label: channel, color: 'text-muted-foreground' }
+}
+
+/**
+ * WeCom's own documentation for the "message" permission capability — the
+ * exact page explaining how to authorize it and copy the URL this feature
+ * needs. Not a Halo-authored guide (this feature has none yet), but the
+ * authoritative source for the steps involved.
+ */
+const IM_NAME_RESOLUTION_DOC_URL = 'https://developer.work.weixin.qq.com/document/path/101764'
+
+/** LocalStorage-backed dismiss flag. Permanent until localStorage is cleared — matches "not a required setup step, don't keep asking". */
+function useDismissedFlag(key: string): [boolean, () => void] {
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(key) === '1'
+    } catch {
+      return false
+    }
+  })
+  const dismiss = useCallback(() => {
+    try {
+      localStorage.setItem(key, '1')
+    } catch {
+      // Ignore — worst case the banner reappears next session
+    }
+    setDismissed(true)
+  }, [key])
+  return [dismissed, dismiss]
 }
 
 function formatTime(ts: number): string {
@@ -161,6 +191,7 @@ function ChannelOverview() {
 function ContactsSection({ appId }: { appId: string }) {
   const { t } = useTranslation()
   const [sessions, setSessions] = useState<ImSessionRecord[]>([])
+  const [instanceStatuses, setInstanceStatuses] = useState<ImChannelInstanceStatus[]>([])
   const [loading, setLoading] = useState(true)
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
@@ -168,15 +199,27 @@ function ContactsSection({ appId }: { appId: string }) {
   const [query, setQuery] = useState('')
   const renameInputRef = useRef<HTMLInputElement>(null)
 
+  // Dismiss flags for the name-resolution guidance banner. Declared
+  // unconditionally here (not after the loading/empty early returns below)
+  // per the rules of hooks.
+  const [dismissedUnconfigured, dismissUnconfigured] = useDismissedFlag('halo.imNameResolution.dismissed.unconfigured')
+  const [dismissedExpired, dismissExpired] = useDismissedFlag('halo.imNameResolution.dismissed.expired')
+
   /** Above this count, surface a search box and keep the list height-bounded. */
   const SEARCH_THRESHOLD = 8
 
   const fetchSessions = useCallback(async () => {
     try {
-      const result = await api.imSessionsList(appId) as { success: boolean; data?: ImSessionRecord[] }
-      if (result.success && result.data) {
+      const [sessionsRes, statusRes] = await Promise.all([
+        api.imSessionsList(appId) as Promise<{ success: boolean; data?: ImSessionRecord[] }>,
+        api.imChannelsStatus() as Promise<{ success: boolean; data?: ImChannelInstanceStatus[] }>,
+      ])
+      if (sessionsRes.success && sessionsRes.data) {
         // Only IM sessions are pushable; HTTP sessions have no channel adapter.
-        setSessions(result.data.filter(s => s.source === 'im'))
+        setSessions(sessionsRes.data.filter(s => s.source === 'im'))
+      }
+      if (statusRes.success && statusRes.data) {
+        setInstanceStatuses(statusRes.data)
       }
     } catch {
       // Ignore
@@ -190,6 +233,77 @@ function ContactsSection({ appId }: { appId: string }) {
     const interval = setInterval(fetchSessions, 15_000)
     return () => clearInterval(interval)
   }, [fetchSessions])
+
+  // Name-resolution guidance banner: only for WeCom direct-message contacts
+  // that are still showing their raw (unresolved) id. 'Expired' takes
+  // priority over 'not yet configured' — it means the feature was working
+  // and regressed, which deserves fresh attention even if the user already
+  // dismissed the initial "did you know" nudge.
+  const wecomSessions = sessions.filter(s => s.channel === 'wecom-bot' && s.chatType === 'direct')
+  const hasUnresolvedWecomContact = wecomSessions.some(
+    s => !s.customName && !s.resolvedName && s.displayName === s.chatId
+  )
+  const wecomInstanceIds = new Set(wecomSessions.map(s => s.instanceId))
+  const wecomInstanceStatuses = instanceStatuses.filter(st => wecomInstanceIds.has(st.id))
+  const anyIdentityConfigured = wecomInstanceStatuses.some(st => st.identityResolution)
+  const anyIdentityExpired = wecomInstanceStatuses.some(st => st.identityResolution?.status === 'expired')
+  const showExpiredBanner = hasUnresolvedWecomContact && anyIdentityExpired && !dismissedExpired
+  const showUnconfiguredBanner =
+    hasUnresolvedWecomContact && !anyIdentityConfigured && !showExpiredBanner && !dismissedUnconfigured
+
+  const nameResolutionBanner = showExpiredBanner ? (
+    <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2">
+      <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+      <div className="flex-1 min-w-0 space-y-1">
+        <p className="text-xs text-foreground/80">
+          {t('Name resolution authorization expired (valid 7 days). New contacts will show raw IDs until you re-authorize in the WeCom client.')}
+        </p>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => { void api.openExternal(IM_NAME_RESOLUTION_DOC_URL) }}
+            className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+          >
+            {t('How to re-authorize')}
+            <ExternalLink className="w-3 h-3" />
+          </button>
+          <button
+            type="button"
+            onClick={dismissExpired}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {t('Dismiss')}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : showUnconfiguredBanner ? (
+    <div className="flex items-start gap-2 rounded-lg bg-primary/10 border border-primary/30 px-3 py-2">
+      <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+      <div className="flex-1 min-w-0 space-y-1">
+        <p className="text-xs text-foreground/80">
+          {t('Contacts show raw IDs because WeCom anonymizes senders for this bot. Authorize the "Message" capability in the WeCom client to show real names automatically — optional, but recommended.')}
+        </p>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => { void api.openExternal(IM_NAME_RESOLUTION_DOC_URL) }}
+            className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+          >
+            {t('Learn how')}
+            <ExternalLink className="w-3 h-3" />
+          </button>
+          <button
+            type="button"
+            onClick={dismissUnconfigured}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {t('Dismiss')}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null
 
   const handleRemove = useCallback(async (session: ImSessionRecord) => {
     try {
@@ -211,14 +325,14 @@ function ContactsSection({ appId }: { appId: string }) {
   const handleStartRename = useCallback((session: ImSessionRecord) => {
     const key = `${session.appId}:${session.channel}:${session.chatId}`
     setEditingKey(key)
-    setEditingName(session.customName ?? session.displayName)
+    setEditingName(getImSessionDisplayName(session))
     setTimeout(() => renameInputRef.current?.focus(), 0)
   }, [])
 
   const handleCommitRename = useCallback(async (session: ImSessionRecord) => {
     const trimmed = editingName.trim()
     setEditingKey(null)
-    if (!trimmed || trimmed === (session.customName ?? session.displayName)) return
+    if (!trimmed || trimmed === getImSessionDisplayName(session)) return
 
     try {
       const result = await api.imSessionsSetCustomName({
@@ -281,7 +395,7 @@ function ContactsSection({ appId }: { appId: string }) {
   }, [])
 
   const handleCopyContact = useCallback(async (session: ImSessionRecord) => {
-    const displayName = session.customName ?? session.displayName
+    const displayName = getImSessionDisplayName(session)
     const text = `Name: ${displayName} ID: ${session.instanceId}:${session.chatId}`
     try {
       await navigator.clipboard.writeText(text)
@@ -339,7 +453,7 @@ function ContactsSection({ appId }: { appId: string }) {
   const q = query.trim().toLowerCase()
   const filtered = q
     ? sessions.filter((s) => {
-        const name = (s.customName ?? s.displayName ?? '').toLowerCase()
+        const name = getImSessionDisplayName(s).toLowerCase()
         return name.includes(q) || s.chatId.toLowerCase().includes(q)
       })
     : sessions
@@ -347,6 +461,7 @@ function ContactsSection({ appId }: { appId: string }) {
   return (
     <div className="space-y-2">
       {header}
+      {nameResolutionBanner}
       {hint}
 
       {/* Search — only when the list is long enough to warrant filtering */}
@@ -374,7 +489,7 @@ function ContactsSection({ appId }: { appId: string }) {
         {filtered.map((session) => {
         const channelInfo = getImChannelDisplay(session.channel)
         const key = `${session.appId}:${session.channel}:${session.chatId}`
-        const displayName = session.customName ?? session.displayName
+        const displayName = getImSessionDisplayName(session)
         const proactiveOn = session.proactive === true
 
         return (

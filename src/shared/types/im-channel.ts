@@ -249,6 +249,17 @@ export interface ImChannelProvider {
   readonly defaultConfig: Record<string, unknown>
 
   /**
+   * Config keys that can be applied to a live instance via
+   * `ImChannelInstance.updateConfig()` instead of a full stop+recreate.
+   * ImChannelManager compares configs with these keys stripped first; if
+   * that leaves no difference, it calls `updateConfig()` and leaves the
+   * connection (and any other in-instance state — caches, reply windows,
+   * etc.) undisturbed. Omit entirely for providers where every config field
+   * is connection-relevant (the default, safe behavior).
+   */
+  readonly hotUpdatableConfigKeys?: string[]
+
+  /**
    * Create a running instance from persisted config.
    * The instance is NOT started automatically — call start() separately.
    */
@@ -302,6 +313,14 @@ export interface ImChannelInstance {
   isConnected(): boolean
 
   /**
+   * Apply an updated config in place, without disrupting the live
+   * connection. Only ever called by ImChannelManager for keys the provider
+   * listed in `ImChannelProvider.hotUpdatableConfigKeys` — providers that
+   * declare no such keys never need to implement this.
+   */
+  updateConfig?(config: Record<string, unknown>): void
+
+  /**
    * Optional fine-grained connection state. Providers that can distinguish a
    * standby (superseded-by-another-device) state implement this; the manager
    * falls back to deriving state from isConnected() when it is absent.
@@ -328,6 +347,14 @@ export interface ImChannelInstance {
    * Absence means the channel is text-only for outbound.
    */
   fileCapability?: ImFileCapability
+
+  /**
+   * Optional identity resolution capability — see {@link ImIdentityCapability}.
+   * Opt-in, like fileCapability. Absent when the provider has no such
+   * mechanism, or when the current instance config doesn't supply the
+   * (separate, member-authorized) credential it requires.
+   */
+  identityCapability?: ImIdentityCapability
 }
 
 // ============================================
@@ -377,6 +404,60 @@ export interface ImFileCapability {
     file: SanctionedFile,
     chatType: 'direct' | 'group',
   ): Promise<boolean>
+}
+
+// ============================================
+// ImIdentityCapability
+// ============================================
+
+/**
+ * Thrown by {@link ImIdentityCapability.fetchIdentityDirectory} when the
+ * platform-side authorization backing it has expired (e.g. WeCom's
+ * "message" capability grants expire 7 days after authorization). Callers
+ * catch this specifically to surface a "needs re-authorization" state,
+ * distinct from a transient network/server failure.
+ */
+export class ImIdentityAuthExpiredError extends Error {
+  constructor(message = 'Identity resolution authorization has expired') {
+    super(message)
+    this.name = 'ImIdentityAuthExpiredError'
+  }
+}
+
+/**
+ * Channel-agnostic identity resolution.
+ *
+ * Implemented by channel adapters that can map opaque platform-side chat
+ * IDs to human-readable display names via a separately-authorized identity
+ * directory. Motivating case: WeCom anonymizes sender IDs for bots created
+ * after its April 2026 change, but a member-authorized "message" capability
+ * (distinct from the bot's own connection credential) can recover real
+ * names for chats that have recently interacted with the bot. Optional —
+ * most providers omit this; absence means chat IDs display as-is.
+ *
+ * The directory is a point-in-time snapshot, not queryable by ID: callers
+ * fetch the whole thing and match against the IDs they care about.
+ *
+ * IMPORTANT — resolution is at chat/session granularity, not member
+ * granularity: a returned name identifies WHO a direct chat is with, or
+ * WHAT a group is called — never WHO WITHIN a group sent a given message.
+ * A group's own chatId can resolve to the group's real name (safe to use
+ * anywhere a session/conversation label is shown), but callers MUST NOT
+ * apply a resolved name to an individual sender inside that group.
+ */
+export interface ImIdentityCapability {
+  /**
+   * Fetch the current identity directory snapshot.
+   *
+   * Implementations MUST NOT let a rejected promise's message expose the
+   * credential this capability was constructed with — callers log rejection
+   * reasons verbatim (there is no generic, channel-agnostic way to redact a
+   * provider-specific credential shape downstream).
+   *
+   * @returns Map of platform-side chatId -> human-readable display name.
+   * @throws {@link ImIdentityAuthExpiredError} when the underlying grant has expired.
+   */
+  fetchIdentityDirectory(): Promise<Map<string, string>>
 }
 
 // ============================================
@@ -449,6 +530,26 @@ export interface ImChannelInstanceStatus {
    * Absent when connected or when no specific reason is available.
    */
   reason?: string
+
+  /**
+   * Identity-resolution status. Present only when the running instance
+   * exposes {@link ImIdentityCapability} (i.e. its provider supports name
+   * resolution AND the member-authorized credential it requires has been
+   * supplied) — absent otherwise, including when the capability exists in
+   * principle but no credential was configured. Channel-agnostic: the
+   * manager populates this purely from the capability's own tracked state,
+   * without branching on provider type.
+   *
+   *   'pending'  — capability configured, no resolution attempt has completed yet
+   *   'ok'       — last attempt succeeded
+   *   'expired'  — last attempt failed with an auth-expired error (needs re-authorization)
+   *   'error'    — last attempt failed for another reason (network, malformed response, ...)
+   */
+  identityResolution?: {
+    status: 'pending' | 'ok' | 'expired' | 'error'
+    /** Epoch ms of the last resolution attempt, if any. */
+    lastCheckedAt?: number
+  }
 }
 
 // ============================================
@@ -484,6 +585,14 @@ export interface ImSessionRecord {
   displayName: string
   /** User-assigned custom name — highest display priority */
   customName?: string
+  /**
+   * Real name recovered via a channel's optional identity-resolution
+   * capability (see {@link ImIdentityCapability}), for channels whose
+   * `chatId`/sender IDs are otherwise opaque. Display priority sits between
+   * customName and displayName — see the UI's name-resolution chain.
+   * Unlike displayName, this IS overwritten as fresher lookups succeed.
+   */
+  resolvedName?: string
   /** Most recent message sender name */
   lastSender?: string
   /** Most recent message preview (truncated to 50 chars) */
@@ -515,4 +624,16 @@ export interface ImSessionRecord {
    * first message captures the new forked session id. Absent thereafter.
    */
   pendingResumeSessionId?: string
+}
+
+/**
+ * Session display name priority: user's own rename beats everything;
+ * auto-resolved real name (see main/apps/runtime/im-channels/identity-resolve.ts)
+ * beats the first-registration snapshot; the raw chatId is the last resort.
+ * Single source of truth for this chain — main process (notify_bot contact
+ * directory, auto-sync prompt fragment) and renderer (session lists) both
+ * import this instead of re-deriving it.
+ */
+export function getImSessionDisplayName(session: ImSessionRecord): string {
+  return session.customName || session.resolvedName || session.displayName || session.chatId
 }

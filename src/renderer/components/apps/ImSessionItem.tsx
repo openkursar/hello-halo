@@ -14,6 +14,7 @@ import { Eraser, Square, User, Users, MessageSquare, Pencil, Trash2, Check, X } 
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 import { buildImSessionKey, buildLocalSessionKey } from '../../../shared/apps/im-keys'
 import { CHANNEL_LABELS } from './im-channel-labels'
 
@@ -64,7 +65,7 @@ export function ImSessionItem({ session, isSelected, onClick, onClearConfirm, on
   const trimmedDisplay = session.displayName?.trim() ? session.displayName : ''
   const displayName = isLocal
     ? (session.customName || trimmedDisplay || session.lastMessage || t('New chat'))
-    : (session.customName || session.displayName || session.chatId)
+    : getImSessionDisplayName(session)
   const channelLabel = CHANNEL_LABELS[session.channel] ?? session.channel
   const chatTypeLabel = session.chatType === 'group' ? t('Group') : t('Direct')
   const ChatTypeIcon = session.chatType === 'group' ? Users : User
@@ -91,9 +92,9 @@ export function ImSessionItem({ session, isSelected, onClick, onClearConfirm, on
 
   const handleRenameClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation()
-    setRenameValue(session.customName || trimmedDisplay || '')
+    setRenameValue(session.customName || session.resolvedName || trimmedDisplay || '')
     setIsRenaming(true)
-  }, [session.customName, trimmedDisplay])
+  }, [session.customName, session.resolvedName, trimmedDisplay])
 
   const submitRename = useCallback(() => {
     const name = renameValue.trim()

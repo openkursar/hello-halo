@@ -47,6 +47,7 @@ import {
 } from './pending-relays'
 import { resolveTranscriptPath } from './session-store'
 import { maybeClaimOwner } from './im-channels/owner-claim'
+import { resolveInboundIdentity } from './im-channels/identity-resolve'
 import { getImChannelsPermissionDefaults } from '../../foundation/product-config'
 
 // ============================================
@@ -719,12 +720,39 @@ export async function dispatchInboundMessage(
     return
   }
 
+  // ── Identity resolution (best-effort, channel-agnostic, fire-and-forget) ──
+  // Channels whose sender IDs are opaque (e.g. WeCom bots created after its
+  // April 2026 anonymization change) can expose identityCapability to
+  // recover real names via a separately-authorized directory lookup — see
+  // im-channels/identity-resolve.ts. Deliberately NOT awaited: the busy
+  // check above and the generation start further down have no other await
+  // between them, which is what lets a second inbound message on the same
+  // conversation see "still generating" and buffer instead of racing a
+  // concurrent turn. Awaiting a real network call here would reopen that
+  // window. The fetch runs in the background and benefits this sender's
+  // *next* message; this turn uses whatever is already cached.
+  const identityCapability = channelManager?.getInstance(instanceId)?.identityCapability
+  if (registry && identityCapability) {
+    void resolveInboundIdentity(instanceId, app.id, msg.channel, msg.chatId, identityCapability).catch((err) => {
+      console.error(`${LOG_TAG} Identity resolution failed (non-fatal):`, err)
+    })
+  }
+
   // ── Identity injection ───────────────────────────────
   // Direct: senderIdentity in system prompt. Group: per-message <msg-sender> tag.
   // Pre-built paths (from flushSupplementBuffer) short-circuit here.
   // Runtime tags are escaped out of the body first: the whole identity scheme
   // rests on those tags being system-emitted only.
-  const senderName = msg.fromName ?? msg.from
+  //
+  // resolvedName is a SESSION-level identity (a WeCom directory entry maps
+  // chat_id -> chat_name; for a group chat that chat_id is the group, not
+  // any individual member). It is only meaningful for direct chats, where
+  // chatId IS the counterpart. Applying it in a group would mislabel every
+  // member's <msg-sender> tag with the group's own name.
+  const resolvedSenderName = msg.chatType === 'direct'
+    ? registry?.findSession(app.id, msg.channel, msg.chatId)?.resolvedName
+    : undefined
+  const senderName = resolvedSenderName ?? msg.fromName ?? msg.from
   let messageText: string
   let senderIdentity: { id: string; name: string } | undefined
 
@@ -831,11 +859,14 @@ export async function dispatchInboundMessage(
   const imFileSend = resolveImFileSend(instanceId, msg.chatId, chatTypeNorm, exportGate)
 
   // Build IM session context for system prompt injection.
-  // Resolves display name with priority: customName > chatName > fromName > chatId.
-  // customName is user-set in the UI; chatName comes from the IM platform (often
-  // unavailable for group chats in WeCom); fromName/chatId are fallbacks.
+  // Resolves display name with priority: customName > resolvedName > chatName > fromName > chatId.
+  // customName is user-set in the UI; resolvedName is auto-recovered via a channel's
+  // optional identity resolution (see im-channels/identity-resolve.ts); chatName comes
+  // from the IM platform (often unavailable for group chats in WeCom); fromName/chatId
+  // are fallbacks.
   const registeredSession = registry?.findSession(app.id, msg.channel, msg.chatId)
   const sessionDisplayName = registeredSession?.customName
+    || registeredSession?.resolvedName
     || msg.chatName
     || msg.fromName
     || msg.chatId
