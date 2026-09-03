@@ -28,11 +28,11 @@ type Destination = 'chat' | 'digital-humans' | 'knowledge' | 'store'
 
 function useActiveDestination(): Destination | null {
   const view = useAppStore(s => s.view)
-  const appsTab = useAppsPageStore(s => s.currentTab)
 
   if (view === 'space') return 'chat'
   if (view === 'tlon') return 'knowledge'
-  if (view === 'apps') return appsTab === 'store' ? 'store' : 'digital-humans'
+  if (view === 'apps') return 'digital-humans'
+  if (view === 'store') return 'store'
   return null
 }
 
@@ -90,10 +90,7 @@ export function NavRail() {
     useAppsPageStore.getState().setCurrentTab('my-digital-humans')
     navigate('apps')
   }
-  const goStore = () => {
-    useAppsPageStore.getState().setCurrentTab('store')
-    navigate('apps')
-  }
+  const goStore = () => navigate('store')
   const goKnowledge = () => navigate('tlon')
   const goSettings = () => navigate('settings')
 

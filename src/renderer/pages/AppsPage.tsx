@@ -32,7 +32,6 @@ import { AppInstallDialog } from '../components/apps/AppInstallDialog'
 import { ManualAddDialog } from '../components/apps/ManualAddDialog'
 import { SkillInstallDialog } from '../components/apps/SkillInstallDialog'
 import { UninstalledDetailView } from '../components/apps/UninstalledDetailView'
-import { StoreView } from '../components/store/StoreView'
 import { useTranslation, getCurrentLanguage } from '../i18n'
 import { resolveSpecI18n } from '../utils/spec-i18n'
 import { useIsMobile } from '../hooks/useIsMobile'
@@ -74,7 +73,7 @@ export function AppsPage() {
     return null
   }, [currentTab])
 
-  /** Filter apps visible in the current tab (excludes store tab) */
+  /** Filter apps visible in the current tab */
   const appsForCurrentTab = useMemo(() => {
     if (!appTypeForCurrentTab) return []
     return apps.filter(a => a.spec.type === appTypeForCurrentTab)
@@ -131,13 +130,17 @@ export function AppsPage() {
     }
   }, [apps, initialAppId, selectApp, setInitialAppId, currentTab, setCurrentTab])
 
-  // Clear selection when switching between split-layout tabs
+  // Clear selection when switching between the 3 tabs (my-digital-humans /
+  // my-skills / my-mcp). Store is no longer one of these — it's a separate
+  // top-level view (P6-1) that unmounts this whole page while visiting it,
+  // so a round-trip through Store never runs this effect at all, and
+  // selectedAppId (held in the store, not component state) survives the
+  // unmount/remount untouched — no special-casing needed for it here.
   const prevTabRef = useRef(currentTab)
   useEffect(() => {
     const prev = prevTabRef.current
     prevTabRef.current = currentTab
-    // Only clear when switching between the two list tabs (not to/from store)
-    if (prev !== currentTab && prev !== 'store' && currentTab !== 'store') {
+    if (prev !== currentTab) {
       // Preserve the selection when it already belongs to the new tab. This is
       // the case for programmatic cross-tab navigation (e.g. opening an MCP or
       // skill detail from a digital human's settings), which sets the tab and
@@ -153,14 +156,13 @@ export function AppsPage() {
   // on mobile the user should see the full-width list first and tap to select)
   useEffect(() => {
     if (isMobile) return
-    if (currentTab === 'store') return
     if (!selectedAppId && appsForCurrentTab.length > 0) {
       const activeApps = appsForCurrentTab.filter(a => a.status !== 'uninstalled')
       const waitingApp = activeApps.find(a => a.status === 'waiting_user')
       const firstApp = waitingApp ?? activeApps[0] ?? appsForCurrentTab[0]
       selectApp(firstApp.id, firstApp.status === 'uninstalled' ? 'uninstalled' : firstApp.spec.type, firstApp.spaceId ?? undefined)
     }
-  }, [appsForCurrentTab, selectedAppId, selectApp, currentTab, isMobile])
+  }, [appsForCurrentTab, selectedAppId, selectApp, isMobile])
 
   // Resolve the selected app (for breadcrumb and detail panel)
   const selectedApp = useMemo(
@@ -273,17 +275,10 @@ export function AppsPage() {
           label={t('My MCP')}
           onClick={() => setCurrentTab('my-mcp')}
         />
-        <TabButton
-          active={currentTab === 'store'}
-          label={t('Marketplace')}
-          onClick={() => setCurrentTab('store')}
-        />
       </div>
 
       {/* Content area */}
-      {currentTab === 'store' ? (
-        <StoreView />
-      ) : !isMobile ? (
+      {!isMobile ? (
         /* ── Desktop: split layout — left sidebar + right detail (unchanged) ── */
         <div className="flex-1 flex overflow-hidden">
           {/* Left: App list (fixed 240px width) */}

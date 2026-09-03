@@ -53,10 +53,11 @@ const SpacePage = lazy(() => import('./pages/SpacePage').then(m => ({ default: m
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
 const AppsPage = lazy(() => import('./pages/AppsPage').then(m => ({ default: m.AppsPage })))
 const TlonPage = lazy(() => import('./pages/TlonPage').then(m => ({ default: m.TlonPage })))
+const StorePage = lazy(() => import('./pages/StorePage').then(m => ({ default: m.StorePage })))
 
 // Views that render inside the persistent shell (rail visible). Pre-app
 // screens (splash/setup/server connect/...) render full-bleed without it.
-const RAIL_VIEWS: AppView[] = ['space', 'settings', 'apps', 'tlon']
+const RAIL_VIEWS: AppView[] = ['space', 'settings', 'apps', 'tlon', 'store']
 
 // Page loading fallback - minimal spinner that matches app style
 function PageLoader() {
@@ -991,6 +992,12 @@ export default function App() {
         return (
           <Suspense fallback={<PageLoader />}>
             <TlonPage />
+          </Suspense>
+        )
+      case 'store':
+        return (
+          <Suspense fallback={<PageLoader />}>
+            <StorePage />
           </Suspense>
         )
       default:

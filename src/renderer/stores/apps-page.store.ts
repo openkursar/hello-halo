@@ -1,11 +1,14 @@
 /**
  * Apps Page Navigation Store
  *
- * Manages UI-level state within the AppsPage:
- * - Which app is selected
- * - Which detail panel is showing
- * - Install dialog visibility
- * - Store tab browsing state
+ * Manages UI-level state for AppsPage and StorePage:
+ * - Which app is selected (AppsPage)
+ * - Which detail panel is showing (AppsPage)
+ * - Install dialog visibility (AppsPage)
+ * - Store browsing state (StorePage — a separate top-level view, not an
+ *   AppsPage tab; kept in this store rather than a new one so the two
+ *   marketplace-opening actions below can carry filter state across the
+ *   navigation in one atomic set())
  *
  * Intentionally separate from apps.store.ts (data) so that
  * page navigation changes don't cause unnecessary data re-fetches.
@@ -14,6 +17,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { api } from '../api'
+import { useAppStore } from './app.store'
 import { getCurrentLanguage } from '../i18n'
 import { categoryTaxonomyResource, discoverPageResource } from '../lib/store-resources'
 import { findInstalledApp, findEntryUpdate } from '../utils/store-install-state'
@@ -89,7 +93,7 @@ export type AppsDetailView =
   | { type: 'uninstalled-detail'; appId: string }
   | null
 
-export type AppsPageTab = 'my-digital-humans' | 'my-skills' | 'my-mcp' | 'store'
+export type AppsPageTab = 'my-digital-humans' | 'my-skills' | 'my-mcp'
 
 /**
  * Map an app type to its owning AppsPage tab.
@@ -517,10 +521,17 @@ export const useAppsPageStore = create<AppsPageState>()(
   setStoreMineOpen: (open) => set({ storeMineOpen: open }),
 
   openMarketplaceFilteredBy: async (type) => {
-    // Set filter + tab atomically before kicking off the fetch so the
-    // marketplace UI renders with the new filter already applied while
-    // the new list is loading.
-    set({ storeTypeFilter: type, currentTab: 'store' })
+    // Set the filter before kicking off the fetch so the marketplace UI
+    // renders with it already applied while the new list is loading, then
+    // navigate the shell to StorePage — a separate top-level view since
+    // P6-1 (was an AppsPage tab; store = getting something new, not one of
+    // "my-X" I already own). Cross-store call (apps-page.store -> app.store,
+    // new dependency edge, LAWS L3): every caller of this action wants the
+    // navigation, and a store action is the one place that can guarantee it
+    // happens instead of relying on each of the four call sites to remember
+    // to add it themselves.
+    set({ storeTypeFilter: type })
+    useAppStore.getState().navigate('store')
     await get().loadStoreApps()
   },
 
@@ -569,11 +580,13 @@ export const useAppsPageStore = create<AppsPageState>()(
   },
 
   openStorePublish: (type, appId) => {
-    // Surface the store tab's header (which owns the publish dialog): leave any
-    // detail/mine sub-view so StoreHeader renders and can consume the intent.
+    // Navigate to StorePage (same cross-store edge as openMarketplaceFilteredBy
+    // above, LAWS L3) and surface its header, which owns the publish dialog:
+    // leave any detail/mine sub-view so StoreHeader renders and can consume
+    // the intent.
     abandonStoreDetail()
+    useAppStore.getState().navigate('store')
     set({
-      currentTab: 'store',
       storeMineOpen: false,
       storeSelectedSlug: null,
       storePublishIntent: { type, appId },

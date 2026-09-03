@@ -46,10 +46,7 @@ export function NarrowNavSheet() {
     navigate('apps')
   })
   const goKnowledge = () => close(() => navigate('tlon'))
-  const goStore = () => close(() => {
-    useAppsPageStore.getState().setCurrentTab('store')
-    navigate('apps')
-  })
+  const goStore = () => close(() => navigate('store'))
   const goSettings = () => close(() => navigate('settings'))
   const goTasks = () => close(openTaskPanel)
 
