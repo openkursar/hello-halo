@@ -17,6 +17,7 @@ import { getAppRuntime } from '../runtime'
 import { ConcurrencyLimitError } from '../runtime/errors'
 import { validateAppSpec } from '../spec'
 import { installFromStore, installRequiredSkills } from '../../store/registry.service'
+import { readOfficialDoc } from '../../services/official-docs.service'
 
 // ============================================
 // Helpers
@@ -32,6 +33,16 @@ function textResult(text: string, isError = false) {
 
 /** Error message returned when services are not yet initialised. */
 const NOT_READY = 'App services are not initialized. Please try again shortly.'
+
+/**
+ * Guide the AI must consult before authoring a spec. The path is hard-coded
+ * here and nowhere else; renaming the published document would strand every
+ * shipped client, so it is fixed for the lifetime of the tool.
+ */
+const CREATE_GUIDE_PATH = 'create-digital-human/SKILL.md'
+
+/** Everything under this prefix counts as "the authoring guide was consulted". */
+const CREATE_GUIDE_PREFIX = 'create-digital-human/'
 
 /**
  * Wait for AppManager to become available (handles bootstrap race condition).
@@ -62,6 +73,53 @@ async function waitForAppManager(maxMs = 5000, intervalMs = 200) {
 // ============================================
 
 function buildTools(spaceId: string) {
+  /**
+   * Whether the authoring guide was consulted in this session. The MCP server
+   * instance is created per session (see toolsets/broker.ts), so this closure
+   * is exactly session-scoped. Set on any guide read attempt, successful or
+   * not: the point is that the AI tried, and readOfficialDoc's offline
+   * fallback must never be able to lock creation out on an air-gapped machine.
+   */
+  let guideConsulted = false
+
+  const read_halo_doc = tool(
+    'read_halo_doc',
+    "Read official Halo documentation and return its raw markdown — Halo's own account of how it " +
+    'works, kept current independently of this Halo version. Paths are relative to the ' +
+    'documentation root: read "index.md" for the list of available documents, or ' +
+    `"${CREATE_GUIDE_PATH}" before creating or updating a digital human. Each entry document ` +
+    'lists its companion documents.',
+    {
+      path: z.string().describe(
+        `Document path relative to the guide root, e.g. "${CREATE_GUIDE_PATH}".`
+      )
+    },
+    async (args) => {
+      const path = args.path.trim()
+      if (path.startsWith(CREATE_GUIDE_PREFIX)) {
+        guideConsulted = true
+      }
+
+      try {
+        const result = await readOfficialDoc(path)
+        if (!result.ok) {
+          const hint = result.available.length > 0
+            ? `\n\nDocuments available offline:\n${result.available.map(d => `- ${d}`).join('\n')}`
+            : ''
+          return textResult(`${result.reason}${hint}`, true)
+        }
+
+        const provenance = result.source === 'bundled'
+          ? `<!-- source: offline snapshot bundled with this Halo version${result.snapshotDate ? ` (${result.snapshotDate})` : ''} — the documentation host was unreachable, content may be outdated -->`
+          : `<!-- source: ${result.source === 'remote' ? 'documentation host (current)' : 'documentation host (cached this session)'} -->`
+
+        return textResult(`${provenance}\n\n${result.text}`)
+      } catch (e) {
+        return textResult(`Error reading guide document: ${(e as Error).message}`, true)
+      }
+    }
+  )
+
   const list_automation_apps = tool(
     'list_automation_apps',
     'List all automation apps installed in the current space. Returns app ID, name, description, status, and schedule.',
@@ -95,35 +153,21 @@ function buildTools(spaceId: string) {
     'create_automation_app',
     'Create and install a new automation app (digital human) in the current space. ' +
     'Accepts a full App Spec object (type is forced to "automation"). Returns the new app ID on success.\n\n' +
-    'IMPORTANT — Before calling this tool, you MUST confirm the following with the user:\n' +
-    '  1. Schedule frequency — ask explicitly (e.g. every 30m / 1h / 24h / 7d, or a cron expression). Do NOT assume.\n' +
-    '  2. Notifications — ask if they want desktop notifications on completion (output.notify.system: true, the default). External channel notifications (email, webhook, etc.) are AI-driven: during each run the digital human decides whether to notify via the notify_channel tool based on configured channels in Settings. No need to configure channels per-app.\n' +
-    '  2b. IM Push — ask if they want the digital human to proactively send messages to IM contacts (e.g., WeCom bot chats). If yes, add "im-push" to permissions[]. The AI will use the notify_bot tool to decide when and whom to message.\n' +
-    '  3. User-specific values — if the task requires URLs, keywords, API endpoints, or other dynamic inputs, define them as config_schema fields so the user can fill them in, rather than hardcoding guessed values.\n' +
-    'Do NOT call this tool until you have the user\'s answers to the above. Guessing these values leads to a poor experience.\n\n' +
-    'CRITICAL — config_schema restrictions:\n' +
-    '  - NEVER create config fields for cookies, session tokens, or any login credentials. The App runs inside the user\'s Halo browser with shared session — authentication is automatic.\n\n' +
-    'spec schema (JSON object):\n' +
-    '  name*: string — Short descriptive name\n' +
-    '  description*: string — One sentence describing what this automation does\n' +
-    '  system_prompt*: string — The sole driver of this automation. Follow the user\'s task requirements to craft a high-quality automation prompt using strong prompt-engineering practices. Mentally execute the task end-to-end as if you were the runtime agent — every action, decision, and edge case you encounter during this simulation should be captured in the prompt. The agent receives no other context.\n' +
-    '    CRITICAL — AI BROWSER: Any task involving web interaction (visiting pages, clicking, filling forms, posting comments, monitoring pages, scraping, etc.) MUST include "ai-browser" in permissions AND instruct the agent to use ai_browser tools. Do NOT use HTTP fetch or MCP for browser tasks.\n' +
-    '  subscriptions*: array — At least one trigger source. Each item:\n' +
-    '    { source: { type: "schedule", config: { every?: "30m"|"1h"|"24h"|"7d", cron?: string } } }\n' +
-    '    { source: { type: "file", config: { pattern?: string, path?: string } } }\n' +
-    '    { source: { type: "webhook", config: { path?: string, secret?: string } } }\n' +
-    '    { source: { type: "webpage", config: { watch?: string, selector?: string, url?: string } } }\n' +
-    '    { source: { type: "rss", config: { url?: string } } }\n' +
-    '    { source: { type: "custom", config: Record<string,unknown> } }\n' +
-    '  requires?: { mcps?: [{ id: string, reason?: string }], skills?: string[] } — External MCP/skill dependencies\n' +
-    '  output?: { notify?: { system?: boolean }, format?: string } — notification config (system desktop notification). External channel notifications are AI-driven at runtime.\n' +
-    '  filters?: array — Filter rules: [{ field: string, op: "eq"|"neq"|"contains"|"matches"|"gt"|"lt"|"gte"|"lte", value: any }]\n' +
-    '  config_schema?: array — User configuration fields: [{ key, label, type: "url"|"text"|"string"|"number"|"select"|"boolean"|"email", required?, description?, default?, placeholder?, options?: [{label,value}] }]\n' +
-    '  permissions?: string[] — e.g. ["ai-browser", "im-push"]\n' +
-    '  memory_schema?: Record<string, { type: string, description?: string }> — Persistent memory fields\n' +
-    '  escalation?: { enabled?: boolean, timeout_hours?: number }\n' +
-    '  version?: string (default "1.0")\n' +
-    '  author?: string (default "Halo")',
+    `REQUIRED FIRST STEP: call read_halo_doc with path "${CREATE_GUIDE_PATH}" and follow it. ` +
+    'It holds the current authoring guide — interview checklist, real trigger mechanics, and the ' +
+    'full field reference — and is updated independently of this Halo version.\n\n' +
+    'Rules that hold even when that guide cannot be reached:\n' +
+    '  - Ask the user for the schedule interval or cron expression. Never assume one.\n' +
+    '  - A digital human triggered by WeCom/IM messages needs NO subscriptions: inbound routing comes from binding a channel instance to the app in Settings, not from the spec.\n' +
+    '  - Never create config_schema fields for passwords, cookies, or session tokens. Declare login-gated sites in browser_login instead; the app runs in the user\'s own browser session.\n' +
+    '  - Any task touching the web must declare permissions ["ai-browser"] and instruct the agent to use AI Browser tools — never HTTP fetch.\n\n' +
+    'spec fields: name*, description*, system_prompt* (the sole driver of every run — write it so the ' +
+    'agent can execute end to end without improvising; it receives no other context), subscriptions?, ' +
+    'config_schema?, requires?, filters?, memory_schema?, output?, escalation?, permissions?, ' +
+    'browser_login?, version? (default "1.0"), author? (default "Halo").\n' +
+    'Working subscription sources: { source: { type: "schedule", config: { every: "30m" | cron: "0 8 * * *" } } }, ' +
+    '{ source: { type: "file", config: { pattern?, path? } } }, ' +
+    '{ source: { type: "webhook", config: { path?, secret? } } }.',
     {
       spec: z.string().describe(
         'JSON string of the App Spec object. Must include name, description, system_prompt, and subscriptions. ' +
@@ -132,6 +176,15 @@ function buildTools(spaceId: string) {
     },
     async (args) => {
       try {
+        if (!guideConsulted) {
+          return textResult(
+            `Read the authoring guide first: call read_halo_doc with path "${CREATE_GUIDE_PATH}", ` +
+            'follow it (in particular its interview checklist), then call this tool again. ' +
+            'The guide carries platform behavior this description cannot keep current.',
+            true
+          )
+        }
+
         const manager = await waitForAppManager()
         if (!manager) {
           return textResult(NOT_READY, true)
@@ -626,6 +679,7 @@ function buildTools(spaceId: string) {
   )
 
   return [
+    read_halo_doc,
     list_automation_apps,
     create_automation_app,
     update_automation_app,

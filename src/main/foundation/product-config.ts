@@ -170,6 +170,21 @@ export interface ImChannelsProductConfig {
 }
 
 /**
+ * Official AI-guide hosting section of product.json.
+ *
+ * The guides are agent-facing raw markdown served as static files by the
+ * documentation site; `read_halo_doc` fetches them at runtime so a content fix
+ * reaches users without shipping a client. Unlike most product.json sections,
+ * omitting this one does NOT disable the feature — it falls back to the public
+ * docs host, because the guides are core self-knowledge every build needs.
+ * Enterprise builds point it at their own mirror.
+ */
+export interface OfficialContentProductConfig {
+  /** Base URL of the ai-guides directory; document paths are appended to it. */
+  baseUrl?: string
+}
+
+/**
  * Store section of product.json.
  *
  * `categories` is the no-server scene-category enumeration: a deployment
@@ -216,6 +231,10 @@ export interface ProductConfig {
    * everyone.
    */
   announcementsUrl?: string
+  /**
+   * Official AI-guide host (optional; falls back to the public docs host).
+   */
+  officialContent?: OfficialContentProductConfig
   /**
    * Enterprise service defaults (optional).
    * Pre-populates service configurations so internal users don't need manual setup.
@@ -462,6 +481,22 @@ export function getServiceDefaults(): ServiceDefaults | undefined {
  */
 export function getAnnouncementsUrl(): string | undefined {
   return loadProductConfig().announcementsUrl?.trim() || undefined
+}
+
+/**
+ * Public docs host used when product.json declares no `officialContent.baseUrl`.
+ * Kept here rather than in the reader so open-source builds work unconfigured.
+ */
+const DEFAULT_OFFICIAL_CONTENT_BASE_URL = 'https://haloxe.com/docs/ai-guides'
+
+/**
+ * Base URL of the official AI guides, never empty and never trailing-slashed.
+ * Callers append a document path directly.
+ */
+export function getOfficialContentBaseUrl(): string {
+  const configured = loadProductConfig().officialContent?.baseUrl?.trim()
+  const base = configured || DEFAULT_OFFICIAL_CONTENT_BASE_URL
+  return base.replace(/\/+$/, '')
 }
 
 /**

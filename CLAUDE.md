@@ -6,6 +6,7 @@
 ```
 No need to write translation files because the translation is automated.
 Run `npm run i18n` before commit by user.
+Run `npm run sync:ai-guides` before cutting a release when the AI guides changed (see halo-dev `quick.md` §3F).
 Before making any changes, you must read the halo-dev skill.
 
 **Long-term principle**

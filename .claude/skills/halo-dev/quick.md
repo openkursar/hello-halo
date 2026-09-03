@@ -191,6 +191,21 @@
 5. If it affects Canvas layout, consider `useCanvasLifecycle` and `useLayoutPreferences` hooks.
 6. If it shows files/artifacts, handle Web mode limitations (no local file open).
 
+### F) Change behavior the AI guides describe
+
+The agent-facing guides (`read_halo_doc`) document runtime behavior: App Spec fields, IM/WeCom
+routing, permissions, capability setup. They live in the **halo-website** repository
+(`docs-src/public/ai-guides/`) and are served as raw markdown, so a fix reaches users without a
+client release.
+
+1. Update the affected document in halo-website and deploy the docs site. This is what actually
+   fixes it for users.
+2. Run `npm run sync:ai-guides` to refresh the offline copy in `resources/ai-guides/` — the
+   fallback served when the docs host is unreachable. Required before cutting a release;
+   skipping it leaves offline users on outdated guidance.
+3. Never rename `index.md` or `create-digital-human/SKILL.md` — both paths are hard-coded in
+   `apps/conversation-mcp/index.ts` and shipped clients cannot follow a rename.
+
 ## 4) Known Gaps You Must Account For
 
 1. App activity HTTP route currently uses `limit` and `before`; renderer option names include `since/offset/type` (not all are consumed by backend).

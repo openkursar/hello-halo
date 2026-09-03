@@ -162,6 +162,17 @@
       "description": "URL of a static JSON announcement feed (see src/shared/types/announcement.ts). Polled every 6h; new entries are shown as in-app toasts. Omit or leave empty to disable. Independent of updateConfig — release notes only reach users on older versions, this reaches everyone.",
       "examples": ["https://example.com/announcements.json"]
     },
+    "officialContent": {
+      "type": "object",
+      "description": "Where the official AI guides (agent-facing raw markdown, read by the read_halo_doc tool) are published. Omit to use the built-in public docs host; enterprise builds point this at their own mirror.",
+      "properties": {
+        "baseUrl": {
+          "type": "string",
+          "description": "Base URL of the ai-guides directory, without a trailing slash. Document paths are appended verbatim, e.g. '<baseUrl>/create-digital-human/SKILL.md'.",
+          "examples": ["https://haloxe.com/docs/ai-guides"]
+        }
+      }
+    },
     "browserPolicy": {
       "type": "object",
       "description": "Browser network access policy. Controls which domains the embedded browser can navigate to. Omit for unrestricted access (default).",
