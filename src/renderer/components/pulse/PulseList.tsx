@@ -2,10 +2,12 @@
  * PulseList - Shared presentational component for rendering pulse task items
  *
  * Pure list rendering of active tasks, unseen completions, and pinned conversations.
- * Used by TaskPanel and SpacePage.
+ * Used by TaskPanel.
  *
  * Responsibilities:
- * - Renders grouped items (active first, then pinned idle)
+ * - Renders grouped items: "Continue" (waiting / completed-unseen / error —
+ *   needs the user) and "Running" (generating), each with a header + count,
+ *   then pinned idle conversations last
  * - Status indicators per item
  * - Pin/unpin toggle
  * - Cross-space navigation on click
@@ -108,7 +110,12 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
     useChatStore.getState().toggleStarConversation(item.spaceId, item.conversationId, !item.starred)
   }, [])
 
-  const activeItems = items.filter(i => i.status !== 'idle')
+  // "Continue" = needs the user (waiting for input, done but unseen, or
+  // errored). "Running" = actively generating. Was one undifferentiated
+  // group distinguished only by inline status-color text; split so the
+  // panel reads at a glance instead of line-by-line.
+  const continueItems = items.filter(i => i.status === 'waiting' || i.status === 'completed-unseen' || i.status === 'error')
+  const runningItems = items.filter(i => i.status === 'generating')
   const pinnedIdleItems = items.filter(i => i.status === 'idle')
 
   if (items.length === 0) {
@@ -124,6 +131,13 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
 
   const py = compact ? 'py-1.5' : 'py-2.5'
   const px = compact ? 'px-3' : 'px-4'
+
+  const renderSectionHeader = (label: string, count: number) => (
+    <div className={`${px} pt-2 pb-1 flex items-center gap-1.5`}>
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <span className="text-xs text-muted-foreground/60 tabular-nums">{count}</span>
+    </div>
+  )
 
   const renderItem = (item: PulseItem) => {
     const isRead = !!item.readAt
@@ -176,15 +190,27 @@ export function PulseList({ maxHeight, onItemClick, compact = false }: PulseList
 
   return (
     <div className="overflow-auto scrollbar-thin" style={maxHeight ? { maxHeight } : undefined}>
-      {/* Active items */}
-      {activeItems.length > 0 && (
-        <div className="py-1">
-          {activeItems.map(renderItem)}
+      {/* Continue: waiting for input, done but unseen, or errored */}
+      {continueItems.length > 0 && (
+        <div className="pb-1">
+          {renderSectionHeader(t('Continue'), continueItems.length)}
+          {continueItems.map(renderItem)}
         </div>
       )}
 
-      {/* Divider */}
-      {activeItems.length > 0 && pinnedIdleItems.length > 0 && (
+      {continueItems.length > 0 && (runningItems.length > 0 || pinnedIdleItems.length > 0) && (
+        <div className="mx-4 border-t border-border/30" />
+      )}
+
+      {/* Running: actively generating */}
+      {runningItems.length > 0 && (
+        <div className="pb-1">
+          {renderSectionHeader(t('Running'), runningItems.length)}
+          {runningItems.map(renderItem)}
+        </div>
+      )}
+
+      {runningItems.length > 0 && pinnedIdleItems.length > 0 && (
         <div className="mx-4 border-t border-border/30" />
       )}
 
