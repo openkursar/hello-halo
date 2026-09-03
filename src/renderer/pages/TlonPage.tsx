@@ -92,7 +92,7 @@ export function TlonPage() {
   return (
     <div className="h-full flex flex-col bg-background relative">
       <Header
-        left={<span className="text-sm font-medium text-muted-foreground">{t('Knowledge')}</span>}
+        left={<span className="text-sm font-medium text-muted-foreground">{t('Knowledge Bases')}</span>}
         right={
           <button
             onClick={() => navigate('settings')}
