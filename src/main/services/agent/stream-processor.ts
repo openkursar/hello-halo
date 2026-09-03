@@ -26,7 +26,12 @@ import type {
 } from './types'
 import { emitAgentEvent } from './events'
 import { parseSDKMessage } from './message-utils'
-import { extractRealAssistantUsage, buildTokenUsage, isSyntheticAssistantMessage } from './context-usage'
+import {
+  extractRealAssistantUsage,
+  extractStreamDeltaUsage,
+  buildTokenUsage,
+  isSyntheticAssistantMessage
+} from './context-usage'
 import { broadcastMcpStatus } from './mcp-manager'
 import { probeUnhealthyServers } from './mcp-probe'
 import {
@@ -365,19 +370,39 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   // `llm.invocation` per call (count must never be lost), with token fields
   // attached only when usage was observed.
   let pendingInvocation: { messageId: string | undefined; usage: SingleCallUsage | null } | null = null
+  // Telemetry: message_delta usage, keyed by the message_start id it follows —
+  // this is the only frame carrying token counts for providers that omit usage
+  // elsewhere (see extractStreamDeltaUsage), and it arrives after the
+  // assistant frames of the same call, so it is read at flush time. Keyed
+  // rather than a single variable so attribution holds even if a turn's calls
+  // interleave.
+  const streamUsageByMessageId = new Map<string, SingleCallUsage>()
+  // Telemetry: message id of the call currently streaming, taken from
+  // `message_start` — `message_delta` carries no id of its own.
+  let streamingMessageId: string | undefined
+
+  /** Streamed usage for `messageId`, consumed so it can be attributed only once. */
+  const takeStreamUsage = (messageId: string | undefined): SingleCallUsage | null => {
+    if (!messageId) return null
+    const usage = streamUsageByMessageId.get(messageId)
+    if (!usage) return null
+    streamUsageByMessageId.delete(messageId)
+    return usage
+  }
 
   const flushPendingInvocation = (): void => {
     if (!pendingInvocation) return
     const now = Date.now()
+    const usage = pendingInvocation.usage ?? takeStreamUsage(pendingInvocation.messageId)
     void analytics.track(AnalyticsEvents.LLM_INVOCATION, {
       ...deriveAnalyticsSource(conversationId),
       conversationId,
       modelName: displayModel,
       durationMs: now - lastInvocationEmitAt,
       status: 'ok',
-      ...(pendingInvocation.usage && {
-        inputTokens: pendingInvocation.usage.inputTokens,
-        outputTokens: pendingInvocation.usage.outputTokens,
+      ...(usage && {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
       }),
     })
     lastInvocationEmitAt = now
@@ -547,6 +572,18 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
           console.debug(`[Agent][${conversationId}] +${elapsed}ms message_start:`, JSON.stringify(event))
         } else {
           console.debug(`[Agent][${conversationId}] +${elapsed}ms stream_event: type=${event.type}, index=${event.index}`)
+        }
+      }
+
+      // Telemetry: token accounting for the call currently streaming. The id
+      // comes from message_start, the counts from message_delta — see
+      // streamUsageByMessageId.
+      if (event.type === 'message_start') {
+        streamingMessageId = event.message?.id
+      } else if (event.type === 'message_delta') {
+        const deltaUsage = extractStreamDeltaUsage(event)
+        if (deltaUsage && streamingMessageId) {
+          streamUsageByMessageId.set(streamingMessageId, deltaUsage)
         }
       }
 
@@ -1260,6 +1297,11 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   // calls into failures, and double-emitting `ok` + `error` for the same
   // turn with no turnId would corrupt dashboard aggregates.
   if (!invocationOkEmitted && (hasErrorThought || isInterrupted || wasAborted)) {
+    // A failed call is still billed if the provider reported usage for it.
+    // Reaching here means no flush happened yet, so this usage was never
+    // attributed elsewhere. Streams that died before producing output report
+    // nothing by design — nothing is fabricated here to replace it.
+    const usage = takeStreamUsage(streamingMessageId)
     void analytics.track(AnalyticsEvents.LLM_INVOCATION, {
       ...deriveAnalyticsSource(conversationId),
       conversationId,
@@ -1267,6 +1309,10 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       durationMs: Date.now() - lastInvocationEmitAt,
       status: 'error',
       errorCode: deriveErrorCode(errorThought?.content ?? (wasAborted ? 'aborted' : 'interrupted')),
+      ...(usage && {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+      }),
     })
   }
 

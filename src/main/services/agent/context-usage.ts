@@ -4,8 +4,8 @@
  * Reproduces claude-code's `/context` headline number without depending on any
  * specific SDK. Halo runs multiple engines (claude-agent-sdk, codex, hello-halo)
  * that all normalize to the same per-turn frame contract, so this module reads
- * only the normalized `assistant`/`result` usage and our own model-capability
- * table — never an SDK-specific control method or field.
+ * only the normalized `assistant`/`result`/`message_delta` usage and our own
+ * model-capability table — never an SDK-specific control method or field.
  *
  * The "current context size" equals the most recent real (non-synthetic)
  * assistant message's `input_tokens + cache_creation + cache_read`. This mirrors
@@ -35,12 +35,7 @@ const SYNTHETIC_MESSAGE_TEXTS = new Set<string>([
 interface RawAssistantMessage {
   message?: {
     model?: string
-    usage?: {
-      input_tokens?: number
-      output_tokens?: number
-      cache_read_input_tokens?: number
-      cache_creation_input_tokens?: number
-    }
+    usage?: RawUsage
     content?: Array<{ type?: string; text?: string }>
   }
 }
@@ -48,12 +43,39 @@ interface RawAssistantMessage {
 /** Minimal shape of a normalized result frame this module reads. */
 interface RawResultMessage {
   total_cost_usd?: number
-  usage?: {
-    input_tokens?: number
-    output_tokens?: number
-    cache_read_input_tokens?: number
-    cache_creation_input_tokens?: number
+  usage?: RawUsage
+}
+
+/** Minimal shape of a normalized `message_delta` stream event this module reads. */
+interface RawMessageDeltaEvent {
+  usage?: RawUsage
+}
+
+interface RawUsage {
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+}
+
+/**
+ * Normalize a raw usage object, or null when it reports nothing.
+ *
+ * Engines split one API response into several frames (per content block /
+ * streaming start); only one carries real usage, the rest report an all-zero
+ * placeholder. Returning null for the all-zero case lets callers keep the
+ * last real usage instead of a trailing placeholder zeroing it out.
+ */
+function toSingleCallUsage(u: RawUsage | undefined): SingleCallUsage | null {
+  if (!u) return null
+  const inputTokens = u.input_tokens || 0
+  const outputTokens = u.output_tokens || 0
+  const cacheReadTokens = u.cache_read_input_tokens || 0
+  const cacheCreationTokens = u.cache_creation_input_tokens || 0
+  if (inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheCreationTokens === 0) {
+    return null
   }
+  return { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }
 }
 
 export function isSyntheticAssistantMessage(msg: RawAssistantMessage): boolean {
@@ -75,20 +97,22 @@ export function isSyntheticAssistantMessage(msg: RawAssistantMessage): boolean {
  */
 export function extractRealAssistantUsage(msg: RawAssistantMessage): SingleCallUsage | null {
   if (isSyntheticAssistantMessage(msg)) return null
-  const u = msg.message?.usage
-  if (!u) return null
-  const inputTokens = u.input_tokens || 0
-  const outputTokens = u.output_tokens || 0
-  const cacheReadTokens = u.cache_read_input_tokens || 0
-  const cacheCreationTokens = u.cache_creation_input_tokens || 0
-  // Engines split one API response into several assistant frames (per content
-  // block / streaming start); only one carries real usage, the rest report an
-  // all-zero placeholder. Skipping the all-zero ones keeps the last REAL usage
-  // instead of letting a trailing placeholder zero out the context size.
-  if (inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheCreationTokens === 0) {
-    return null
-  }
-  return { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }
+  return toSingleCallUsage(msg.message?.usage)
+}
+
+/**
+ * Per-call usage from a `message_delta` stream event.
+ *
+ * The aggregate `assistant` frame is built from `message_start`, which only
+ * knows what the upstream reported before generating — for providers that
+ * omit usage, the openai-compat router's bias-high estimate lands here
+ * instead, making `message_delta` the only frame with a per-call token count.
+ *
+ * Callers must attribute the result to the message id from `message_start`:
+ * the delta itself carries no id, and a turn may contain several calls.
+ */
+export function extractStreamDeltaUsage(event: RawMessageDeltaEvent): SingleCallUsage | null {
+  return toSingleCallUsage(event.usage)
 }
 
 /**
@@ -148,14 +172,5 @@ export function buildTokenUsage(
 }
 
 function resultUsageFallback(resultMsg: RawResultMessage): SingleCallUsage | null {
-  const u = resultMsg.usage
-  if (!u) return null
-  const inputTokens = u.input_tokens || 0
-  const outputTokens = u.output_tokens || 0
-  const cacheReadTokens = u.cache_read_input_tokens || 0
-  const cacheCreationTokens = u.cache_creation_input_tokens || 0
-  if (inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheCreationTokens === 0) {
-    return null
-  }
-  return { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }
+  return toSingleCallUsage(resultMsg.usage)
 }

@@ -310,3 +310,163 @@ describe('processStream telemetry attribution', () => {
     )
   })
 })
+
+/**
+ * Providers behind the openai-compat router report no usage of their own, so
+ * the router writes a zero placeholder into `message_start` and puts the real
+ * or estimated counts into the final `message_delta`. The aggregate assistant
+ * envelope is built from `message_start`, so reading only that path reports a
+ * turn with no token fields at all — which is what production showed for ~96%
+ * of `llm.invocation` rows.
+ */
+describe('processStream llm.invocation token attribution', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  function messageStart(id: string): Record<string, unknown> {
+    return {
+      type: 'stream_event',
+      event: {
+        type: 'message_start',
+        message: { id, role: 'assistant', content: [], usage: { input_tokens: 0, output_tokens: 0 } },
+      },
+    }
+  }
+
+  function messageDelta(usage: Record<string, number>): Record<string, unknown> {
+    return {
+      type: 'stream_event',
+      event: { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage },
+    }
+  }
+
+  /** Aggregate envelope as the SDK builds it from message_start — usage all zero. */
+  function assistantText(id: string, text: string, usage?: Record<string, number>): Record<string, unknown> {
+    return {
+      type: 'assistant',
+      message: {
+        id,
+        role: 'assistant',
+        content: [{ type: 'text', text }],
+        usage: usage ?? { input_tokens: 0, output_tokens: 0 },
+      },
+    }
+  }
+
+  function invocations(): Record<string, unknown>[] {
+    return track.mock.calls
+      .filter(([event]: unknown[]) => event === 'llm.invocation')
+      .map(([, props]: unknown[]) => props as Record<string, unknown>)
+  }
+
+  it('attributes message_delta counts to the call whose message_start carried the id', async () => {
+    await processStream(
+      baseParams({
+        v2Session: fakeSession([
+          systemInit(),
+          messageStart('msg_1'),
+          assistantText('msg_1', 'Answer.'),
+          messageDelta({ input_tokens: 9_100, output_tokens: 240 }),
+          resultCarrying('Answer.'),
+        ]),
+      })
+    )
+
+    expect(invocations()).toEqual([
+      expect.objectContaining({ status: 'ok', inputTokens: 9_100, outputTokens: 240 }),
+    ])
+  })
+
+  it('keeps per-call attribution across a multi-call turn', async () => {
+    await processStream(
+      baseParams({
+        v2Session: fakeSession([
+          systemInit(),
+          messageStart('msg_1'),
+          assistantText('msg_1', 'First.'),
+          messageDelta({ input_tokens: 1_000, output_tokens: 10 }),
+          messageStart('msg_2'),
+          assistantText('msg_2', 'Second.'),
+          messageDelta({ input_tokens: 2_000, output_tokens: 20 }),
+          resultCarrying('Second.'),
+        ]),
+      })
+    )
+
+    // Emission order is call order: msg_1 flushes at msg_2's assistant
+    // boundary, msg_2 at stream end. A single shared "last usage" variable
+    // would report 2_000/20 twice.
+    expect(invocations()).toEqual([
+      expect.objectContaining({ inputTokens: 1_000, outputTokens: 10 }),
+      expect.objectContaining({ inputTokens: 2_000, outputTokens: 20 }),
+    ])
+  })
+
+  it('prefers real assistant-frame usage over the delta', async () => {
+    await processStream(
+      baseParams({
+        v2Session: fakeSession([
+          systemInit(),
+          messageStart('msg_1'),
+          assistantText('msg_1', 'Answer.', { input_tokens: 7, output_tokens: 3 }),
+          messageDelta({ input_tokens: 9_999, output_tokens: 9_999 }),
+          resultCarrying('Answer.'),
+        ]),
+      })
+    )
+
+    expect(invocations()).toEqual([
+      expect.objectContaining({ inputTokens: 7, outputTokens: 3 }),
+    ])
+  })
+
+  it('still emits the call when nothing reported usage', async () => {
+    await processStream(
+      baseParams({
+        v2Session: fakeSession([
+          systemInit(),
+          messageStart('msg_1'),
+          assistantText('msg_1', 'Answer.'),
+          messageDelta({ output_tokens: 0 }),
+          resultCarrying('Answer.'),
+        ]),
+      })
+    )
+
+    const [invocation] = invocations()
+    expect(invocation).toMatchObject({ status: 'ok' })
+    expect(invocation).not.toHaveProperty('inputTokens')
+    expect(invocation).not.toHaveProperty('outputTokens')
+  })
+
+  it('attributes usage to a call that failed before any assistant envelope', async () => {
+    await processStream(
+      baseParams({
+        // No result frame → isInterrupted, and no assistant envelope → the
+        // error tail-emit is the only llm.invocation for this turn.
+        v2Session: fakeSession([
+          systemInit(),
+          messageStart('msg_1'),
+          messageDelta({ input_tokens: 4_200, output_tokens: 15 }),
+        ]),
+      })
+    )
+
+    expect(invocations()).toEqual([
+      expect.objectContaining({ status: 'error', inputTokens: 4_200, outputTokens: 15 }),
+    ])
+  })
+
+  it('reports no tokens for a failed call that never produced output', async () => {
+    await processStream(
+      baseParams({
+        v2Session: fakeSession([systemInit(), messageStart('msg_1')]),
+      })
+    )
+
+    const [invocation] = invocations()
+    expect(invocation).toMatchObject({ status: 'error' })
+    expect(invocation).not.toHaveProperty('inputTokens')
+  })
+})
