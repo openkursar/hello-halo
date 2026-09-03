@@ -4,6 +4,14 @@ Read this whenever the digital human should be reachable via WeCom (or another I
 should proactively push messages to IM contacts. This is where guessing produces the most
 visibly wrong questions, because the mechanism is genuinely not part of the App Spec.
 
+**Scope boundary**: this document covers what the App Spec can/cannot express and how a bound
+channel's messages reach `create_automation_app`/`update_automation_app` semantics (this tool's
+world). It does not cover creating or authorizing the IM channel connection itself — setting up
+a WeCom bot instance, scanning a QR code, reply scope, permission control (owners/guests), or
+distinguishing WeCom Intelligent Bot from WeChat iLink Bot. For all of that, read
+`message-channels/index.md` (+ `wecom-bot.md`, `weixin-ilink.md`) — it is written for the same
+Settings-page flow a user would ask about after this app already exists.
+
 ## Two separate mechanisms — do not conflate them
 
 ### A. Inbound: someone messages the bot, it replies (conversational)

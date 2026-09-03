@@ -11,11 +11,19 @@ in opposite directions.
    creation needs no trigger config and that binding happens afterwards in Settings → Message
    Channels (`create-digital-human/im-triggers.md`). For `schedule`, get an explicit interval or
    cron; never assume one.
-2. **Desktop notification.** Do they want a system toast when a run finishes
-   (`output.notify.system`)?
-3. **External notification channels.** Should a completed run push to email / WeCom / DingTalk /
-   Feishu / webhook? Channel credentials are configured once in Settings, not per app — you are
-   only choosing whether and where this app pushes.
+2. **External notification.** If the task needs to reliably notify someone (email/wecom/dingtalk/
+   feishu/webhook, or an IM contact via `notify_bot`), **say so explicitly in `system_prompt`** —
+   e.g. "when X happens, call `notify_channel` to email the result." There is no spec field that
+   configures this: `output.notify` is schema-only and the runtime never reads it: delivery is
+   entirely the agent's own runtime decision (`notify_channel`/`notify_bot` tool calls), not
+   something `create_automation_app` sets up. Channel credentials are configured once, globally,
+   in Settings — never per app. Don't ask "which channels should it push to" as if it were a spec
+   field to fill in; the real answer belongs in the prompt.
+3. **Desktop toast.** Don't ask about this at creation time — it isn't spec-configurable at all.
+   It's a per-app **user override** (`app.userOverrides.notificationLevel`) the user sets
+   afterward in that app's own Settings panel, defaulting to `'important'` (milestones/
+   escalations/outputs, not every run). If they ask about it, point them there rather than
+   inventing a spec field.
 4. **Proactive IM push.** Does it need to message a person or group on its own initiative,
    rather than only replying? If yes → `permissions: ["im-push"]`, and tell the user it only
    works once the bot has a known contact.

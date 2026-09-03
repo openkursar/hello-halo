@@ -84,9 +84,10 @@ function buildTools(spaceId: string) {
 
   const read_halo_doc = tool(
     'read_halo_doc',
-    "Read official Halo documentation and return its raw markdown — Halo's own account of how it " +
-    'works, kept current independently of this Halo version. Paths are relative to the ' +
-    'documentation root: read "index.md" for the list of available documents, or ' +
+    "Read official Halo documentation and return its raw markdown. This is the authoritative, " +
+    'independently updated source for how Halo (yourself) works — consult it whenever the user asks about ' +
+    "Halo's features, capabilities, or usage. Paths are relative to the documentation root: " +
+    'read "index.md" for the list of available documents, or ' +
     `"${CREATE_GUIDE_PATH}" before creating or updating a digital human. Each entry document ` +
     'lists its companion documents.',
     {

@@ -2,11 +2,23 @@
   "syncedAt": "2026-09-03",
   "source": "/Volumes/one_tb/code2/halo-website/docs-src/public/ai-guides",
   "files": [
+    "ai-browser/index.md",
+    "ai-browser/scripting.md",
+    "ai-model-setup/index.md",
+    "ai-model-setup/troubleshooting.md",
     "create-digital-human/SKILL.md",
     "create-digital-human/examples.md",
     "create-digital-human/im-triggers.md",
     "create-digital-human/interview-checklist.md",
     "create-digital-human/spec-reference.md",
-    "index.md"
+    "email-setup/index.md",
+    "getting-started/index.md",
+    "index.md",
+    "message-channels/index.md",
+    "message-channels/wecom-bot.md",
+    "message-channels/weixin-ilink.md",
+    "remote-access/index.md",
+    "skills-and-mcp/index.md",
+    "spaces-and-agents/index.md"
   ]
 }
