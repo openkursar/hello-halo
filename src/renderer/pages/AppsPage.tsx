@@ -131,11 +131,11 @@ export function AppsPage() {
   }, [apps, initialAppId, selectApp, setInitialAppId, currentTab, setCurrentTab])
 
   // Clear selection when switching between the 3 tabs (my-digital-humans /
-  // my-skills / my-mcp). Store is no longer one of these — it's a separate
-  // top-level view (P6-1) that unmounts this whole page while visiting it,
-  // so a round-trip through Store never runs this effect at all, and
-  // selectedAppId (held in the store, not component state) survives the
-  // unmount/remount untouched — no special-casing needed for it here.
+  // my-skills / my-mcp). Store is a separate top-level view that unmounts
+  // this whole page while visiting it, so a round-trip through Store never
+  // runs this effect at all, and selectedAppId (held in the store, not
+  // component state) survives the unmount/remount untouched — no
+  // special-casing needed for it here.
   const prevTabRef = useRef(currentTab)
   useEffect(() => {
     const prev = prevTabRef.current

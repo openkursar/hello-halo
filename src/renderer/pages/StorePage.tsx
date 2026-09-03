@@ -3,10 +3,10 @@
  *
  * Independent top-level destination for browsing/installing from the
  * marketplace — separate from AppsPage (digital humans = what I already
- * own; store = getting something new), per the P4/P5 information
- * architecture. StoreView already owns its full layout (search, category
- * filter, grid/detail, publish dialog); this page only supplies the
- * shared Header chrome, matching AppsPage's own Header usage.
+ * own; store = getting something new). StoreView already owns its full
+ * layout (search, category filter, grid/detail, publish dialog); this
+ * page only supplies the shared Header chrome, matching AppsPage's own
+ * Header usage.
  */
 
 import { useAppStore } from '../stores/app.store'

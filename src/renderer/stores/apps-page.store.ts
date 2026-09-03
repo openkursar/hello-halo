@@ -523,13 +523,12 @@ export const useAppsPageStore = create<AppsPageState>()(
   openMarketplaceFilteredBy: async (type) => {
     // Set the filter before kicking off the fetch so the marketplace UI
     // renders with it already applied while the new list is loading, then
-    // navigate the shell to StorePage — a separate top-level view since
-    // P6-1 (was an AppsPage tab; store = getting something new, not one of
-    // "my-X" I already own). Cross-store call (apps-page.store -> app.store,
-    // new dependency edge, LAWS L3): every caller of this action wants the
-    // navigation, and a store action is the one place that can guarantee it
-    // happens instead of relying on each of the four call sites to remember
-    // to add it themselves.
+    // navigate the shell to StorePage — a separate top-level view (store =
+    // getting something new, not one of "my-X" I already own). Cross-store
+    // call (apps-page.store -> app.store, new dependency edge, LAWS L3):
+    // every caller of this action wants the navigation, and a store action
+    // is the one place that can guarantee it happens instead of relying on
+    // each of the four call sites to remember to add it themselves.
     set({ storeTypeFilter: type })
     useAppStore.getState().navigate('store')
     await get().loadStoreApps()
