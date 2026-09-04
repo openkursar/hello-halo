@@ -20,7 +20,7 @@
  */
 
 import { useState, useRef, useEffect, useMemo, KeyboardEvent, ClipboardEvent, DragEvent } from 'react'
-import { Plus, ImagePlus, Loader2, AlertCircle, Atom } from 'lucide-react'
+import { Plus, ImagePlus, Loader2, AlertCircle, Atom, MessageSquare } from 'lucide-react'
 import { useAppStore } from '../../stores/app.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
@@ -36,10 +36,22 @@ import { getCurrentSource, resolveModelVision } from '../../types'
 import { useTranslation } from '../../i18n'
 import { SlashCommandMenu, filterSlashCommands } from './SlashCommandMenu'
 import type { SlashCommandItem } from '../../types/slash-command'
+import { ConversationMentionRow } from './cross-conversation'
+import type { ConversationMentionCandidate } from './cross-conversation'
+import { decideConversationMentionCandidates } from './mentionMenuDecision'
+import { formatConversationReference } from '../../../shared/conversation-reference'
 
-// ── @ mention helpers ──
+// ── mention helpers ──
+//
+// Two independent triggers, never combined: `@` opens the file candidate
+// line (unchanged from before conversations ever touched it), `#` opens the
+// conversation candidate line. Only the token immediately before the cursor
+// can match, and it can only ever start with one of the two characters, so
+// exactly one trigger is ever active — there is no "closer one wins" logic
+// to write, the regex shape already guarantees it.
 
 interface MentionMatch {
+  trigger: '@' | '#'
   query: string
   start: number
   end: number
@@ -47,10 +59,15 @@ interface MentionMatch {
 
 function getMentionMatch(value: string, cursorPosition: number): MentionMatch | null {
   const beforeCursor = value.slice(0, cursorPosition)
-  const match = beforeCursor.match(/(^|\s)@([^\s@]*)$/)
-  if (!match || match.index === undefined) return null
-  const start = match.index + match[1].length
-  return { query: match[2] || '', start, end: cursorPosition }
+  const atMatch = beforeCursor.match(/(^|\s)@([^\s@#]*)$/)
+  if (atMatch && atMatch.index !== undefined) {
+    return { trigger: '@', query: atMatch[2] || '', start: atMatch.index + atMatch[1].length, end: cursorPosition }
+  }
+  const hashMatch = beforeCursor.match(/(^|\s)#([^\s@#]*)$/)
+  if (hashMatch && hashMatch.index !== undefined) {
+    return { trigger: '#', query: hashMatch[2] || '', start: hashMatch.index + hashMatch[1].length, end: cursorPosition }
+  }
+  return null
 }
 
 function normalizePathLike(value: string): string {
@@ -76,6 +93,18 @@ function formatArtifactReference(relativePath: string): string {
   return `\`${relativePath}\``
 }
 
+// A picked conversation is inserted as the shared reference form
+// (`shared/conversation-reference.ts`): the same string the user sees is what
+// gets sent, so nothing is rewritten behind their back on send.
+
+/**
+ * One row of the @ menu. The menu is a single mechanism over several candidate
+ * kinds — adding a kind means adding a variant here, never a second picker.
+ */
+type MentionCandidate =
+  | { kind: 'conversation'; key: string; text: string; conversation: ConversationMentionCandidate }
+  | { kind: 'artifact'; key: string; text: string; artifact: Artifact }
+
 interface InputAreaProps {
   onSend: (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => void
   /** Called when user submits a message while generation is in progress (mid-turn inject) */
@@ -91,6 +120,12 @@ interface InputAreaProps {
   slashCommands?: SlashCommandItem[]
   /** Artifacts available for @ mention suggestions */
   mentionArtifacts?: Artifact[]
+  /**
+   * Conversations available for # mention suggestions. Omitted by surfaces that
+   * cannot deliver across conversations (digital-human / team chat), which then
+   * keep the # entry point disabled and never open that candidate line.
+   */
+  mentionConversations?: ConversationMentionCandidate[]
   /**
    * Hide the on-demand toolset broker control ("Tools" button). Digital-human
    * chat sets this: a digital human's tools are governed by its Capabilities
@@ -116,7 +151,7 @@ interface ImageError {
   message: string
 }
 
-export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [], mentionArtifacts = [], hideToolsetControls = false, hideKnowledgeControls = false }: InputAreaProps) {
+export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [], mentionArtifacts = [], mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false }: InputAreaProps) {
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
@@ -143,7 +178,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
   // Slash-command autocomplete
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
-  // @ mention autocomplete (P1 fix: track cursor as state for correct useMemo deps)
+  // @/# mention autocomplete; cursorPos is tracked as state for correct useMemo deps
   const [mentionMenuOpen, setMentionMenuOpen] = useState(false)
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0)
   const [cursorPos, setCursorPos] = useState(0)
@@ -345,6 +380,34 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     fileInputRef.current?.click()
   }
 
+  // Handle "Reference a conversation" click (from attachment menu) — inserts
+  // "#" at the cursor and opens the exact same state a hand-typed "#" would
+  // (mentionMenuOpen, trigger '#', empty query), rather than a separate
+  // picker: this is the only way the two entry points are guaranteed to stay
+  // in sync, since they share this one code path instead of two written
+  // separately.
+  const handleReferenceConversationClick = () => {
+    setShowAttachMenu(false)
+    const cursor = textareaRef.current?.selectionStart ?? content.length
+    const before = content.slice(0, cursor)
+    const needsLeadingSpace = before.length > 0 && !/\s$/.test(before)
+    const insertText = `${needsLeadingSpace ? ' ' : ''}#`
+    const nextContent = before + insertText + content.slice(cursor)
+    const nextCursor = cursor + insertText.length
+
+    setContent(nextContent)
+    setMentionMenuOpen(true)
+    setMentionSelectedIndex(0)
+
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus()
+        textareaRef.current.setSelectionRange(nextCursor, nextCursor)
+        setCursorPos(nextCursor)
+      }
+    })
+  }
+
   // Auto-resize textarea
   useEffect(() => {
     const textarea = textareaRef.current
@@ -380,15 +443,15 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     [slashCommands, slashFilter, slashMenuOpen]
   )
 
-  // @ mention match — depends on both content and cursor position (P1 fix)
+  // Depends on cursorPos, not just content, so moving the caret alone re-evaluates the match
   const mentionMatch = useMemo(
     () => getMentionMatch(content, cursorPos),
     [content, cursorPos]
   )
 
-  // Filtered & scored mention artifacts — only computed when menu is open
+  // Filtered & scored mention artifacts (@ trigger only) — only computed when the menu is open
   const filteredMentionArtifacts = useMemo(() => {
-    if (!mentionMenuOpen) return []
+    if (!mentionMenuOpen || mentionMatch?.trigger !== '@') return []
     const query = mentionMatch?.query.trim() || ''
     const normalizedQuery = normalizePathLike(query)
 
@@ -414,6 +477,34 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       .slice(0, 50)
   }, [mentionArtifacts, mentionMatch, mentionMenuOpen])
 
+  // Conversations (# trigger only) — a bare "#" deliberately lists everything
+  // (see mentionMenuDecision.ts), a typed query narrows it. Matching logic
+  // lives there, shared with the open/close decision below so the two can
+  // never disagree.
+  const filteredMentionConversations = useMemo(() => {
+    if (!mentionMenuOpen || mentionMatch?.trigger !== '#') return []
+    return decideConversationMentionCandidates({
+      query: mentionMatch.query,
+      conversations: mentionConversations,
+    }).candidates
+  }, [mentionConversations, mentionMatch, mentionMenuOpen])
+
+  // Single list backing both rendering and keyboard navigation.
+  const mentionCandidates = useMemo<MentionCandidate[]>(() => [
+    ...filteredMentionConversations.map((conversation): MentionCandidate => ({
+      kind: 'conversation',
+      key: `conversation:${conversation.id}`,
+      text: formatConversationReference(conversation.title, conversation.id),
+      conversation,
+    })),
+    ...filteredMentionArtifacts.map((artifact): MentionCandidate => ({
+      kind: 'artifact',
+      key: `artifact:${artifact.path}:${artifact.type}`,
+      text: formatArtifactReference(artifact.relativePath),
+      artifact,
+    })),
+  ], [filteredMentionConversations, filteredMentionArtifacts])
+
   const handleSlashClose = () => {
     setSlashMenuOpen(false)
     setSlashSelectedIndex(0)
@@ -424,12 +515,11 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     setMentionSelectedIndex(0)
   }
 
-  const insertMention = (relativePath: string) => {
+  const insertMention = (mentionText: string) => {
     const currentCursor = textareaRef.current?.selectionStart ?? content.length
     const match = getMentionMatch(content, currentCursor)
     if (!match) return
 
-    const mentionText = formatArtifactReference(relativePath)
     const suffix = content.slice(match.end)
     const needsTrailingSpace = suffix.length === 0 || !/^\s/.test(suffix)
     const nextContent = `${content.slice(0, match.start)}${mentionText}${needsTrailingSpace ? ' ' : ''}${suffix}`
@@ -510,9 +600,9 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     // This prevents Enter from sending the message while confirming IME candidates
     if (e.nativeEvent.isComposing) return
 
-    // ── @ mention menu navigation ──────────────────────────────────────────────
-    if (mentionMenuOpen && filteredMentionArtifacts.length > 0) {
-      const mLen = filteredMentionArtifacts.length
+    // ── @/# mention menu navigation ─────────────────────────────────────────────
+    if (mentionMenuOpen && mentionCandidates.length > 0) {
+      const mLen = mentionCandidates.length
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         setMentionSelectedIndex(i => (i + 1) % mLen)
@@ -525,8 +615,8 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
       }
       if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
         e.preventDefault()
-        const selected = filteredMentionArtifacts[mentionSelectedIndex]
-        if (selected) insertMention(selected.relativePath)
+        const selected = mentionCandidates[mentionSelectedIndex]
+        if (selected) insertMention(selected.text)
         return
       }
       if (e.key === 'Escape') {
@@ -662,25 +752,32 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
               onClose={handleSlashClose}
             />
           )}
-          {/* @ mention autocomplete menu */}
-          {mentionMenuOpen && filteredMentionArtifacts.length > 0 && (
+          {/* @ mention autocomplete menu — one menu, one keyboard model, one
+              row shell; only the row content differs per candidate kind. */}
+          {mentionMenuOpen && mentionCandidates.length > 0 && (
             <div className="absolute bottom-full left-0 mb-2 w-full max-w-md bg-popover border border-border rounded-xl shadow-lg z-30 overflow-hidden">
               <div className="max-h-[336px] overflow-y-auto py-1">
-                {filteredMentionArtifacts.map((artifact, index) => {
+                {mentionCandidates.map((candidate, index) => {
                   const isSelected = index === mentionSelectedIndex
                   return (
                     <button
-                      key={`${artifact.path}-${artifact.type}`}
+                      key={candidate.key}
                       onMouseDown={(e) => {
                         e.preventDefault()
-                        insertMention(artifact.relativePath)
+                        insertMention(candidate.text)
                       }}
-                      className={`w-full flex items-center gap-2 text-left min-h-[38px] border-l-2 ${isSelected ? 'bg-primary/10 border-primary pl-2.5 pr-3' : 'border-transparent pl-2.5 pr-3 hover:bg-muted/50'}`}
+                      className={`w-full flex items-center gap-2 text-left min-h-[38px] py-1 border-l-2 ${isSelected ? 'bg-primary/10 border-primary pl-2.5 pr-3' : 'border-transparent pl-2.5 pr-3 hover:bg-muted/50'}`}
                     >
-                      <span className="text-xs font-medium text-primary/80 shrink-0">
-                        {artifact.type === 'folder' ? t('Folder') : t('File')}
-                      </span>
-                      <span className="text-sm truncate flex-1 min-w-0">{artifact.relativePath}</span>
+                      {candidate.kind === 'conversation' ? (
+                        <ConversationMentionRow candidate={candidate.conversation} />
+                      ) : (
+                        <>
+                          <span className="text-xs font-medium text-primary/80 shrink-0">
+                            {candidate.artifact.type === 'folder' ? t('Folder') : t('File')}
+                          </span>
+                          <span className="text-sm truncate flex-1 min-w-0">{candidate.artifact.relativePath}</span>
+                        </>
+                      )}
                     </button>
                   )
                 })}
@@ -756,11 +853,22 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
                   setSlashMenuOpen(false)
                 }
 
-                // @ mention detection (P1 fix: track cursor position as state)
                 const nextCursor = e.target.selectionStart ?? val.length
                 setCursorPos(nextCursor)
                 const nextMentionMatch = getMentionMatch(val, nextCursor)
-                if (nextMentionMatch && mentionArtifacts.length > 0) {
+                // @ keeps its original, pre-conversations behavior exactly:
+                // any file candidates at all opens it, unfiltered. # opens
+                // whenever this space has any other conversation — the same
+                // decision filteredMentionConversations renders from, so the
+                // two can never disagree (see mentionMenuDecision.ts for why
+                // a bare # is allowed to list everything, unlike @).
+                const shouldOpenForTrigger =
+                  nextMentionMatch?.trigger === '@'
+                    ? mentionArtifacts.length > 0
+                    : nextMentionMatch?.trigger === '#'
+                      ? decideConversationMentionCandidates({ query: nextMentionMatch.query, conversations: mentionConversations }).shouldOpenMenu
+                      : false
+                if (nextMentionMatch && shouldOpenForTrigger) {
                   setMentionMenuOpen(true)
                   setMentionSelectedIndex(0)
                 } else {
@@ -795,6 +903,8 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             onImageClick={handleImageButtonClick}
             imageCount={images.length}
             maxImages={MAX_IMAGES}
+            onReferenceConversationClick={handleReferenceConversationClick}
+            hasReferenceableConversations={mentionConversations.length > 0}
             canSend={canSend}
             onSend={handleSend}
             onStop={onStop}
@@ -826,6 +936,10 @@ interface InputToolbarProps {
   onImageClick: () => void
   imageCount: number
   maxImages: number
+  /** Inserts "#" and opens the conversation mention menu — same code path as typing "#" by hand. */
+  onReferenceConversationClick: () => void
+  /** Whether this space has any other conversation to reference — disables the menu item (never hides it) when false. */
+  hasReferenceableConversations: boolean
   canSend: boolean
   onSend: () => void
   onStop?: () => void
@@ -846,6 +960,8 @@ function InputToolbar({
   onImageClick,
   imageCount,
   maxImages,
+  onReferenceConversationClick,
+  hasReferenceableConversations,
   canSend,
   onSend,
   onStop,
@@ -908,6 +1024,21 @@ function InputToolbar({
                     {imageCount}/{maxImages}
                   </span>
                 )}
+              </button>
+              <button
+                onClick={onReferenceConversationClick}
+                disabled={!hasReferenceableConversations}
+                className={`w-full px-3 py-2 flex items-center gap-3 text-sm
+                  transition-colors duration-150
+                  ${!hasReferenceableConversations
+                    ? 'text-muted-foreground/40 cursor-not-allowed'
+                    : 'text-foreground hover:bg-muted/50'
+                  }
+                `}
+                title={!hasReferenceableConversations ? t('No other conversations in this space yet') : undefined}
+              >
+                <MessageSquare size={16} className="text-muted-foreground" />
+                <span>{t('Reference a conversation')}</span>
               </button>
             </PopoverContent>
           </Popover>

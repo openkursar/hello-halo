@@ -44,7 +44,11 @@ import {
 import { createFederationManager } from '../../../../../src/main/apps/runtime/federation/manager'
 import { createFederation } from '../../../../../src/main/apps/runtime/federation/index'
 import { LanMeshLink } from '../../../../../src/main/apps/runtime/federation/lan-mesh-provider'
-import { makeLocationAwareSessionDeps, withOwnerResolvedSpace } from '../../../../../src/main/apps/runtime/federation/session-deps'
+import {
+  makeLocationAwareSessionDeps,
+  withOwnerResolvedSpace,
+  WAKE_COMPLETION_BACKSTOP_MS,
+} from '../../../../../src/main/apps/runtime/federation/session-deps'
 import { createMessageBus } from '../../../../../src/main/apps/runtime/team/message-bus'
 import type {
   TeamDeliveryHooks,
@@ -57,7 +61,7 @@ import type {
   OfficeCredentialLike,
 } from '../../../../../src/main/apps/runtime/federation'
 import type { OrchestrationSessionDeps } from '../../../../../src/main/apps/runtime/team'
-import { SELF_NODE_ID, TEAM_CIRCUIT_DEFAULTS } from '../../../../../src/shared/apps/team-types'
+import { SELF_NODE_ID } from '../../../../../src/shared/apps/team-types'
 import type { Team, TeamMember, TeamEpoch, TeamTriggerContext } from '../../../../../src/main/apps/team/types'
 
 const OFFICE = 'office-1'
@@ -369,7 +373,7 @@ describe('federation remote wake (position transparency)', () => {
       expect(registered).not.toBeNull()
       // Advance past the run's max duration: the backstop reclaims the dead wake and
       // reports it as UNDELIVERED (not a fake empty success).
-      await vi.advanceTimersByTimeAsync(TEAM_CIRCUIT_DEFAULTS.maxDurationMs + 1000)
+      await vi.advanceTimersByTimeAsync(WAKE_COMPLETION_BACKSTOP_MS + 1000)
       await expect(pending).resolves.toEqual({
         finalMessage: null,
         undelivered: { reason: 'no-completion-signal' },

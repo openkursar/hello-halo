@@ -16,6 +16,7 @@ import { useOnboardingStore } from '../../stores/onboarding.store'
 import { MessageList } from './MessageList'
 import type { MessageListHandle } from './MessageList'
 import { InputArea } from './InputArea'
+import { useConversationMentionCandidates } from './cross-conversation'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
 import { Sparkles } from '../icons/ToolIcons'
 import {
@@ -68,6 +69,8 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
   const [mockStreamingContent, setMockStreamingContent] = useState<string>('')
   // Artifact list for @ mention suggestions in InputArea
   const [mentionArtifacts, setMentionArtifacts] = useState<Artifact[]>([])
+  // Sibling candidate source for the same @ menu: conversations in this space
+  const mentionConversations = useConversationMentionCandidates()
   // Tracks the space a fetch was issued for, so stale responses (after a space
   // switch) can be discarded instead of overwriting the current list.
   const mentionSpaceIdRef = useRef<string | undefined>(undefined)
@@ -469,6 +472,7 @@ export function ChatView({ isCompact = false }: ChatViewProps) {
         isCompact={isCompact}
         slashCommands={slashCommands}
         mentionArtifacts={mentionArtifacts}
+        mentionConversations={mentionConversations}
       />
     </div>
   )

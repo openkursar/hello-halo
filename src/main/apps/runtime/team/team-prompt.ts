@@ -289,10 +289,11 @@ function buildTeamRules(ctx: TeamPromptContext): string {
       '- If a teammate goes offline mid-run, you will be told promptly instead of',
       '  waiting out a long timeout. Reassign or hold their in-flight task; never',
       '  block the whole run on one unavailable teammate.',
-      '- A teammate ending its turn does not notify you, so no answer arriving is',
-      '  not proof they failed — they may simply not have sent one. Chase it with',
-      '  `team_send` or `team_read_board()`; never quietly reassign work that may',
-      '  already be done.'
+      '- A teammate ending its turn tells you that it ended — never what it did or',
+      '  whether it worked. "No error" is not "finished": a teammate that stopped',
+      '  early ends exactly the same way. So no answer arriving is not proof they',
+      '  failed either. Chase it with `team_send` or `team_read_board()`; never',
+      '  quietly reassign work that may already be done.'
     )
   }
 

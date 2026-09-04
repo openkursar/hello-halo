@@ -432,11 +432,12 @@ export interface TeamTriggerContext {
   wait: boolean
   taskId?: string
   /**
-   * Drives inbound header rendering. 'periodic_check' and 'human_message' are
-   * delivered verbatim — the first already carries its own header, the second is
-   * a person's words, which no teammate framing may impersonate.
+   * Drives inbound header rendering. 'periodic_check', 'human_message' and
+   * 'member_stopped' are delivered verbatim — the first and last carry their own
+   * header, and the middle one is a person's words, which no teammate framing
+   * may impersonate.
    */
-  kind?: 'run_start' | 'message' | 'periodic_check' | 'human_message'
+  kind?: 'run_start' | 'message' | 'periodic_check' | 'human_message' | 'member_stopped'
   /**
    * Position of this turn in the chain that caused it; the circuit breaker's
    * `maxForwardDepth` counts it. Must travel with the trigger — a chain that
@@ -1092,9 +1093,8 @@ export const TEAM_IPC = {
 } as const
 
 export const TEAM_CIRCUIT_DEFAULTS = {
-  maxMessages: 200,
+  maxMessages: 2000,
   maxForwardDepth: 8,
-  maxDurationMs: 2 * 60 * 60 * 1000,
 } as const
 
 /** Default member turn timeout (ms) when `agent.teamTurnTimeoutMs` is unset. */

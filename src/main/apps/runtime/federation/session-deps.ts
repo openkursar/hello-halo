@@ -19,7 +19,7 @@
  * (sendWake/registerTurnComplete/resolveOfficeId) are INJECTED by bootstrap.
  */
 
-import { SELF_NODE_ID, TEAM_CIRCUIT_DEFAULTS } from '../../../../shared/apps/team-types'
+import { SELF_NODE_ID } from '../../../../shared/apps/team-types'
 import type { OrchestrationSessionDeps } from '../team'
 import type { TurnCompletion } from '../team/message-bus'
 import type { SerializedWakeRequest } from './types'
@@ -57,15 +57,13 @@ const LOG_TAG = '[FedSessionDeps]'
 
 /**
  * Backstop for a remote wake whose `turn-complete` never returns (frame lost,
- * owner crashed mid-turn). Bounded at the run's own max duration: a turn cannot
- * legitimately outlive the run circuit that spawns it, so timing out here never
- * truncates a live turn — it only reclaims a genuinely dead wake instead of
- * leaking the waiter and hanging the orchestration turn forever. The common
- * "owner went offline" case is resolved far sooner by the bus's
- * resolvePendingWaitsForMember on confirmed-offline; this only catches the
- * pathological lost-completion path.
+ * owner crashed mid-turn). Timing out here never truncates a live turn — it
+ * only reclaims a genuinely dead wake instead of leaking the waiter and
+ * hanging the orchestration turn forever. The common "owner went offline"
+ * case is resolved far sooner by the bus's resolvePendingWaitsForMember on
+ * confirmed-offline; this only catches the pathological lost-completion path.
  */
-const WAKE_COMPLETION_BACKSTOP_MS = TEAM_CIRCUIT_DEFAULTS.maxDurationMs
+export const WAKE_COMPLETION_BACKSTOP_MS = 2 * 60 * 60 * 1000
 
 function serialize(request: SendAppChatRequest): SerializedWakeRequest {
   return {

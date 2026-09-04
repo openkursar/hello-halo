@@ -46,7 +46,7 @@ interface CapabilityGroup {
   /** CC SDK tools to add/remove from disabledTools (empty for MCP-only capabilities) */
   tools: readonly string[]
   /** Optional: dedicated AgentConfig boolean flag (for MCP servers, env vars, etc.) */
-  configKey?: 'enableTeams' | 'enableDigitalHumans'
+  configKey?: 'enableTeams' | 'enableDigitalHumans' | 'enableConversationInterop' | 'enableConversationSend'
   /** Default value when configKey is not set in config (default: false) */
   configDefault?: boolean
 }
@@ -91,6 +91,22 @@ const CAPABILITY_GROUPS: readonly CapabilityGroup[] = [
     configKey: 'enableDigitalHumans',
     configDefault: true,
   },
+  {
+    id: 'conversationInterop',
+    labelKey: 'Cross-Conversation Interop',
+    descKey: 'Let this conversation list, read, and message other conversations in the same space.',
+    tools: [],
+    configKey: 'enableConversationInterop',
+    configDefault: true,
+  },
+  {
+    id: 'conversationInteropSend',
+    labelKey: 'Cross-Conversation Sending',
+    descKey: 'Also allow delivering messages to other conversations, not just reading them. Only applies when Cross-Conversation Interop above is on.',
+    tools: [],
+    configKey: 'enableConversationSend',
+    configDefault: true,
+  },
 ]
 
 // ─── Component ──────────────────────────────────────────────────────────────────
@@ -133,9 +149,6 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
     maxMessages: config?.agent?.teamCircuitLimits?.maxMessages ?? TEAM_CIRCUIT_DEFAULTS.maxMessages,
     maxForwardDepth:
       config?.agent?.teamCircuitLimits?.maxForwardDepth ?? TEAM_CIRCUIT_DEFAULTS.maxForwardDepth,
-    maxDurationMinutes: Math.round(
-      (config?.agent?.teamCircuitLimits?.maxDurationMs ?? TEAM_CIRCUIT_DEFAULTS.maxDurationMs) / 60000
-    ),
   })
   const [teamMaxConcurrentTurns, setTeamMaxConcurrentTurnsState] = useState(
     config?.agent?.teamMaxConcurrentTurns ?? TEAM_DEFAULT_MAX_CONCURRENT_TURNS
@@ -246,7 +259,6 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
         teamCircuitLimits: {
           maxMessages: next.maxMessages,
           maxForwardDepth: next.maxForwardDepth,
-          maxDurationMs: next.maxDurationMinutes * 60000,
         },
       })
     } catch (error) {
@@ -558,7 +570,7 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
               {t('Safety limits that automatically stop a digital team run if it loses control')}
             </p>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="flex flex-col gap-1">
               <span className="text-xs text-muted-foreground">{t('Max messages per run')}</span>
               <input
@@ -578,7 +590,10 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">{t('Max forward depth')}</span>
+              <span className="text-xs text-muted-foreground">{t('Max chained replies')}</span>
+              <span className="text-[11px] text-muted-foreground/70">
+                {t('Digital humans replying back and forth without pause; resets when a person steps in')}
+              </span>
               <input
                 type="number"
                 min={1}
@@ -591,24 +606,6 @@ export function AdvancedSection({ config, setConfig }: AdvancedSectionProps) {
                 onBlur={(e) => {
                   const val = parseInt(e.target.value, 10)
                   if (!isNaN(val)) handleTeamCircuitLimitChange({ maxForwardDepth: val })
-                }}
-                className="w-full px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-primary/50"
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">{t('Max run duration (minutes)')}</span>
-              <input
-                type="number"
-                min={5}
-                max={1440}
-                value={teamCircuitLimits.maxDurationMinutes}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10)
-                  if (!isNaN(val)) setTeamCircuitLimitsState((prev) => ({ ...prev, maxDurationMinutes: val }))
-                }}
-                onBlur={(e) => {
-                  const val = parseInt(e.target.value, 10)
-                  if (!isNaN(val)) handleTeamCircuitLimitChange({ maxDurationMinutes: val })
                 }}
                 className="w-full px-3 py-1.5 text-sm bg-secondary border border-border rounded-lg text-right focus:outline-none focus:ring-2 focus:ring-primary/50"
               />

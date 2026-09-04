@@ -36,6 +36,8 @@ Platform Layer (src/main/platform)
   - event       : event routing/filter/dedup
   - memory      : scoped memory tools + files (SDK primitives injected via memory/sdk)
   - background  : keep-alive + tray + daemon browser
+  - turn-gate   : generic "one turn per session key" lock + FIFO mailbox
+                  (shared by apps/runtime/team and services/agent; see its DESIGN.md)
 
 Foundation Layer (src/main/foundation)  ← bedrock, zero upward deps
   - config.service, config-encryption, crypto-envelope, credential-safety

@@ -118,6 +118,21 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   trains the reader to skip the block, taking the real facts with it. If stalled
   work needs surfacing, it belongs to something whose job is judgment (a lead's
   sweep, a periodic check) — not to the delta.
+- `turn-report.ts` — the lead is told, once, whenever a member's turn ends.
+  Everything else here is pull or opt-in, so a member that finishes without
+  calling `team_send` left the lead with nothing to react to AND no turn in which
+  to notice — see "Output is not delivery" below for why that is not a prompt
+  problem. What travels is the FACT of an ending and never a word the member
+  said, which is what keeps it clear of the rule that killed auto-delivery.
+  Three constraints shape it, and each cost more than it looks. It never
+  concludes: "ended with no error" is stated as exactly that, because a model
+  that quit early ends the same way as one that is done, and a reassuring word is
+  the one output that stops the lead looking. It claims a member filed NOTHING
+  only when it watched the whole turn — that combination is the strongest
+  evidence of an early quit, which is precisely why it must never be guessed. And
+  it counts acts as they are FILED rather than reading them back afterwards: on a
+  joined office a member's writes travel to the authority and return replicated,
+  so the store can still be empty at the moment its own turn ends.
 - `checks.ts` — periodic checks: one member's standing instruction for another
   ("from now on, every half hour, look at this"). Two rules shape it: the alarm
   is armed only on the machine that OWNS the target (so the setter can shut their
@@ -208,16 +223,44 @@ is not visible to other agents — to communicate you must call the tool*. The
 cost is that a model which forgets to call `team_send` leaves its colleague
 waiting.
 
-**This is a known gap, and nothing currently closes it.** The digest once tried
-and could not (see `board-digest.ts` above): nothing in the record distinguishes
-"nobody replied" from "the reply was a new message", so the warning fired on every
-send forever and had to go. No code has taken its place — today only a person
-reading the office record notices, and no code prompts them to look. Do not read
-the sentence "a lead will notice" into this: no sweep exists. If it needs closing,
-`checks.ts` is the infrastructure that could carry it (a standing instruction is
-already a periodic, judgment-shaped job), and the design constraint is the one
-that killed the digest attempt: whatever fires must be able to tell a missing
-reply from a reply that took another shape, or it will be ignored the same way.
+**The rule governs CONTENT, and only content.** It was over-applied once, and
+the cost was the whole feature going quiet: with no forwarding at all, a member
+that forgot to call the tool — or crashed, or was stopped by hand — produced no
+signal of any kind, so the lead took no further turn and no code looked. That is
+not the same problem. Which listener a closing line was meant for is
+unanswerable; **who stopped** is not a sentence anyone uttered, it is something
+the system watched happen. `turn-report.ts` sends that and nothing else. The
+digest's failed attempt is the constraint it had to clear (see `board-digest.ts`:
+an inference from absence fires forever and trains the reader to skip the block)
+and it clears it — every line is a fate that was observed, and a turn that was
+not watched produces no claim about it.
+
+**What is still open.** Only the lead is told: a member that messages a PEER and
+gets no answer learns nothing, exactly as before. And the content gap is
+untouched by design — knowing that someone stopped is not knowing what they
+found, and the only way to hear that is still their own `team_send`.
+
+Two reporters, one notice, because no single point sees every ending. The
+session layer reports every turn that actually RAN — the one place a person's
+turn, a relayed turn and an IM-backed turn all converge, and the only place a
+hand-stopped turn surfaces at all. Orchestration reports the two endings no turn
+can report about itself: a wake that never became a turn, and a turn cut off at
+the time limit. They overlap on purpose and de-duplicate on the wake's
+correlation id, first one through winning — the timeout is reported *before* the
+session is torn down precisely so the truer description wins that race.
+
+**A turn is described only by the machine that ran it.** Otherwise a remote
+member's ending is announced twice, once by its owner and once by whoever was
+waiting for it. The exception is the pair above: nothing ran anywhere, so the
+waiting side is the only witness there will ever be.
+
+Endings that land while the lead is still reading the last notice merge into the
+next one, rather than each waking it — the trigger is the lead's own turn ending,
+which this module is already told about, so no timer and no second queue. It
+holds nothing back for a lead on ANOTHER machine, which can never tell us it has
+read one; that lead gets a notice per ending. A notice shed by mailbox overflow
+also strands whatever had accumulated behind it, which is a bound worth knowing
+and not worth machinery until it is seen.
 
 ## The two channels (do not conflate)
 
@@ -314,8 +357,8 @@ Three reasons, and the first is the one that matters:
   itself as "you asked X and got no answer" about a question it never asked.
 - **The budget guards AI loops.** The circuit breaker exists to stop digital
   humans ping-ponging without supervision. A person cannot loop: every message
-  costs them a keystroke. Charging one only let a chat eat the run's allowance
-  and start `maxDurationMs` before the team began working.
+  costs them a keystroke. Charging one only let a chat eat into the run's
+  message allowance for free.
 
 This is also what makes remote match local: a local 1:1 chat never touched the
 bus at all (`app-chat` runs the turn directly), so the record stayed clean —
@@ -465,7 +508,6 @@ team-level overridable via `circuitOverrides`:
   `TeamTriggerContext` into the woken turn and back out through the `team_send`
   that turn makes (`TeamMcpContext.forwardDepth`) — a chain restarting at 0 per
   hop is a chain this limit can never see.
-- `maxDurationMs` — wall-clock since the epoch's first TEAMMATE send.
 
 A person's 1:1 message charges nothing at all (see "A person is not a member").
 
@@ -526,10 +568,14 @@ but depend on the session tier (`app-chat`, `report-tool`); they are the only
 files here allowed to.
 
 - `index.ts` — `createTeamRuntime({ store, session? })` constructs the bus +
-  blackboard + checks + digest + archive + orchestration and returns them behind
-  `TeamRuntime` (the epoch lifecycle, `captureReport`, `buildPromptContext`, the
-  member-status projections, `reconcileAwaitingDecision`, `resumeFromEscalation`
-  — the interface in that file is the surface, this list is not). The bus is built first with a
+  blackboard + checks + digest + archive + turn-report + orchestration and
+  returns them behind `TeamRuntime` (the epoch lifecycle, `captureReport`,
+  `buildPromptContext`, the member-status projections, the turn-start/turn-end
+  notices, `reconcileAwaitingDecision`, `resumeFromEscalation`
+  — the interface in that file is the surface, this list is not). The blackboard
+  it hands out is the routed one with an act tap in front, so a member's writes
+  are counted where they are made rather than where they land (`turn-report.ts`).
+  The bus is built first with a
   thin hook shim that forwards to the orchestration once it exists (breaking the
   bus↔orchestration construction cycle). `session` defaults to an app-chat-backed
   `OrchestrationSessionDeps` (loaded via dynamic import so app-chat stays out of
@@ -551,7 +597,7 @@ files here allowed to.
   a prompt, not a gate"). Owns `reconcileAwaitingDecision` — what the office reads
   about a member waiting on its own person, derived rather than pushed (see "Who
   is waiting on whom is derived, not routed"). Its own wakes (escalation resume, quiescence nudge,
-  periodic check) go out through `bus.deliverRuntimeWake`, never `wakeTarget`
+  periodic check, turn-end report) go out through `bus.deliverRuntimeWake`, never `wakeTarget`
   directly — the bus owns the busy gate.
 - `team-prompt.ts` — `buildTeamEntry(ctx)` / `buildTeamConstraints(ctx)`, the
   Team Entry/Constraint layers (parallel to `im-prompt`). Rendered from a

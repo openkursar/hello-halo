@@ -54,6 +54,32 @@ export function setSessionInvalidator(invalidator: SessionInvalidator): void {
   invalidateSessionForRebuild = invalidator
 }
 
+/**
+ * Same shape as the seam above, for the same reason: `conversation-interop`
+ * imports `session-manager.ts` (its busyness check composes
+ * `activeSessions`/`getConsumerHandle`), and `session-manager.ts` imports
+ * FROM this file (`setSessionInvalidator`/`buildCreationTimeServers`). A
+ * static top-level `import { createConversationInteropMcpServer } from
+ * '../../conversation-interop'` here would close that into a real cycle —
+ * `session-manager → broker → conversation-interop → session-manager` —
+ * pulling the entire agent stack (and `foundation/logging`'s module-level
+ * config subscription) into this registry's own module-load time, which is
+ * exactly what broke `broker.test.ts` / `toolsets-last-used.test.ts` (they
+ * mock `config.service` without `onAgentConfigChange`, which only that cycle
+ * ever needed). Bootstrap wires the real implementation in once, after both
+ * modules exist, the same way it wires `setActiveTeamRuntime`/`setMemorySdk`.
+ */
+type ConversationInteropFactory = (
+  scope: { spaceId: string; conversationId: string },
+  includeSend: boolean
+) => unknown
+
+let createConversationInteropMcpServer: ConversationInteropFactory | null = null
+
+export function setConversationInteropFactory(factory: ConversationInteropFactory): void {
+  createConversationInteropMcpServer = factory
+}
+
 // ============================================
 // Server record assembly
 // ============================================
@@ -78,6 +104,23 @@ export function buildMcpServerRecord(scope: ToolsetScope): Record<string, unknow
   add('web-search', () => createWebSearchMcpServer())
   if (getConfig().agent?.enableDigitalHumans !== false) {
     add('halo-apps', () => createHaloAppsMcpServer(scope.spaceId))
+  }
+  // Boolean-gated, always-on — a brand-new conversation already has
+  // conversation_read with no per-conversation setup. enableConversationSend
+  // is a sub-switch: false builds conversation_read only ("omit, don't
+  // error" shape), never a second gate a conversation could be missing both.
+  // `createConversationInteropMcpServer` is null until bootstrap wires it in
+  // (see the seam above) — never true in the running app, only in a unit
+  // test that imports this file without also calling
+  // `setConversationInteropFactory`.
+  if (createConversationInteropMcpServer && getConfig().agent?.enableConversationInterop !== false) {
+    const factory = createConversationInteropMcpServer
+    add('halo-conversations', () =>
+      factory(
+        { spaceId: scope.spaceId, conversationId: scope.conversationId },
+        getConfig().agent?.enableConversationSend !== false
+      )
+    )
   }
 
   // On-demand toolsets currently enabled for this conversation

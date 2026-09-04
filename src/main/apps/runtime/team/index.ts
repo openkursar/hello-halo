@@ -10,6 +10,8 @@ import { createOrchestration } from './orchestration'
 import { createTeamChecks } from './checks'
 import { createBoardDigest } from './board-digest'
 import { createBoardArchive } from './board-archive'
+import { createTurnReport } from './turn-report'
+import type { MemberTurnFate } from './turn-report'
 import type { TeamChecks } from './checks'
 import type { BoardDigest } from './board-digest'
 import type { BoardArchive } from './board-archive'
@@ -27,6 +29,7 @@ import type {
   RosterBusyEntry,
   TeamCheck,
   TeamDelegatedPolicy,
+  TeamTriggerContext,
 } from '../../../../shared/apps/team-types'
 import { buildTeamSessionKey } from '../../../../shared/apps/team-types'
 import type { SchedulerService } from '../../../platform/scheduler'
@@ -127,6 +130,27 @@ export interface TeamRuntime {
    * announce AFTER the ledger write, never before.
    */
   noteMemberStatusChanged(teamId: string): void
+  /**
+   * A member's team-channel turn began on this machine. Opens the window its
+   * acts are counted in, so the turn-end report can tell "filed nothing" apart
+   * from "was not watched" (see `turn-report.ts`).
+   */
+  noteMemberTurnStarted(params: { appId: string; teamId: string; epochId: string }): void
+  /**
+   * …and ended, however it ended — normally, on an error, or killed by hand.
+   * This is what tells the lead a teammate stopped when the teammate itself did
+   * not say so; without it the run goes quiet and nothing looks. Called from the
+   * one point every team turn converges on, so it covers the paths the team
+   * orchestration never sees (a person's chat, a relayed turn, an IM-backed one).
+   */
+  noteMemberTurnEnded(params: {
+    appId: string
+    teamId: string
+    epochId: string
+    fate: MemberTurnFate
+    correlationId?: string
+    triggerKind?: TeamTriggerContext['kind']
+  }): void
   /**
    * Re-derive whether a member owned by this machine still owes its own person
    * an answer, and share the result with the office. Only the owner can see the
@@ -285,6 +309,8 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     syncWaitTimeoutMs: deps.syncWaitTimeoutMs,
   })
 
+  const turnReport = createTurnReport({ store, bus })
+
   orchestration = createOrchestration({
     store,
     bus,
@@ -298,6 +324,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     hasPendingEscalation: deps.hasPendingEscalation,
     describeChatKey: deps.describeChatKey,
     renderDigest: (teamId, epochId, viewerAppId) => digest.render({ teamId, epochId, viewerAppId }),
+    noteTurnEnded: (input) => turnReport.noteTurnEnded(input),
     // A 'stopped' epoch (pause) is reopenable — noteEpochTurn wakes it back up
     // on the next message — so its periodic checks must survive the seal.
     // Every other end reason (completed/timeout/error) really is final.
@@ -305,6 +332,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
       if (endReason !== 'stopped') checks?.clearEpoch(teamId, epochId)
       digest.clearEpoch(epochId)
       archive.clearEpoch(epochId)
+      turnReport.clearEpoch(epochId)
     },
   })
 
@@ -339,7 +367,18 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
   })
   // The location-aware decorator (if injected) routes shadow-office writes to the
   // authority; the authority's own runtime gets the kernel blackboard unwrapped.
-  const blackboard = deps.wrapBlackboard ? deps.wrapBlackboard(baseBlackboard) : baseBlackboard
+  const routedBlackboard = deps.wrapBlackboard ? deps.wrapBlackboard(baseBlackboard) : baseBlackboard
+  // Acts are counted where they are FILED, outside the routing decision above: on
+  // a joined office a member's write travels to the authority and comes back
+  // replicated, so reading the store at its turn's end can still show nothing.
+  // Watching the call is the only observation true on every machine.
+  const blackboard: Blackboard = {
+    ...routedBlackboard,
+    postActivity: (input) => {
+      turnReport.noteAct(input)
+      return routedBlackboard.postActivity(input)
+    },
+  }
   board = blackboard
 
   console.log(`${LOG_TAG} created`)
@@ -355,6 +394,8 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     getMemberStatus: memberStatus,
     getMemberBusy: (appId, teamId) => orchestration!.getMemberBusy(appId, teamId),
     noteMemberStatusChanged: (teamId) => orchestration!.noteMemberStatusChanged(teamId),
+    noteMemberTurnStarted: (params) => turnReport.noteTurnStarted(params),
+    noteMemberTurnEnded: (params) => turnReport.noteTurnEnded(params),
     reconcileAwaitingDecision: (appId) => orchestration!.reconcileAwaitingDecision(appId),
     startEpoch: (teamId, trigger) => orchestration!.startEpoch(teamId, trigger),
     ensureConversationEpoch: (teamId, chatKey, title) =>
@@ -452,4 +493,6 @@ export { createBoardDigest } from './board-digest'
 export type { BoardDigest } from './board-digest'
 export { createBoardArchive } from './board-archive'
 export type { BoardArchive } from './board-archive'
+export { createTurnReport } from './turn-report'
+export type { TurnReport, MemberTurnFate } from './turn-report'
 export { renderBoardMarkdown } from './board-render'

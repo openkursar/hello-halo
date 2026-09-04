@@ -12,6 +12,12 @@ import { MessageItem } from './MessageItem'
 import { CollapsedThoughtProcess, LazyCollapsedThoughtProcess } from './CollapsedThoughtProcess'
 import { TeamSnapshotPanel } from './TeamPanel'
 import { InjectionAnnotation } from './InjectionAnnotation'
+import {
+  CrossConversationMessage,
+  CrossConversationNotice,
+  isCrossConversationMessage,
+  isCrossConversationNotice,
+} from './cross-conversation'
 import type { Message, Thought } from '../../types'
 
 export interface MessageRowProps {
@@ -54,6 +60,25 @@ export const MessageRow = memo(function MessageRow({
   injectionMessages,
   className = '',
 }: MessageRowProps) {
+  // System-sourced rows are routed before the bubble branches below: MessageItem
+  // only distinguishes user from assistant, so anything reaching it would be
+  // dressed as one of the two. This is the only place that decision is made.
+  if (isCrossConversationMessage(message)) {
+    return (
+      <div className={`pb-4 ${className}`}>
+        <CrossConversationMessage message={message} />
+      </div>
+    )
+  }
+
+  if (isCrossConversationNotice(message)) {
+    return (
+      <div className={className}>
+        <CrossConversationNotice message={message} />
+      </div>
+    )
+  }
+
   const hasInlineThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0
   const hasSeparatedThoughts = message.thoughts === null && !!message.thoughtsSummary
 

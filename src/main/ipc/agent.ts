@@ -31,6 +31,7 @@ import { analytics } from '../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../services/analytics/types'
 import { agentRpc } from '../../shared/rpc/contracts/agent.contract'
 import { registerRawRpcHandlers } from './rpc'
+import { markIntentionalStop } from '../apps/runtime'
 
 // Module-level subscription disposables (lifetime = process lifetime)
 // Stored to establish correct Disposable pattern; these are never disposed
@@ -119,6 +120,10 @@ export function registerAgentHandlers(): void {
     // Stop generation for a specific conversation (or all if not specified)
     stopGeneration: async (conversationId?: string) => {
       try {
+        // Marked BEFORE stopping: a team member's stop kills its CC subprocess
+        // outright (see control.ts), which surfaces the same way a crash does —
+        // this is the only thing that tells turn-report.ts the difference.
+        if (conversationId) markIntentionalStop(conversationId)
         stopGeneration(conversationId)
         return { success: true }
       } catch (error: unknown) {

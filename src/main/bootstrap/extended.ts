@@ -44,6 +44,12 @@ import { registerGitBashHandlers, initializeGitBashOnStartup } from '../ipc/git-
 import { cleanupAllCaches } from '../services/artifact-cache.service'
 import { flushSpaceActivity } from '../services/space.service'
 import { disposeSearchContext } from '../services/web-search'
+import {
+  initConversationInterop,
+  disposeConversationInterop,
+  createConversationInteropMcpServer,
+} from '../services/conversation-interop'
+import { setConversationInteropFactory } from '../services/agent/toolsets/broker'
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
@@ -174,6 +180,19 @@ async function initPlatformAndApps(): Promise<void> {
   // Peer of the App Manager: owns the six Digital Team tables under the
   // 'app_team' migration namespace on the shared app database.
   initTeamStore({ db })
+
+  // Cross-Conversation Interop: subscribes to onAgentEvent for the
+  // waitForReply no_reply signal (services/conversation-interop/turn-end-watch.ts).
+  // No DB/store dependency — dormant until the halo-conversations toolset
+  // (services/agent/toolsets/broker.ts) actually registers a wait.
+  initConversationInterop()
+
+  // Wire the toolset broker's dependency-inversion seam (mirrors
+  // setSessionInvalidator/setActiveTeamRuntime/setMemorySdk): broker.ts must
+  // not import conversation-interop statically, since conversation-interop
+  // imports session-manager.ts, which imports FROM broker.ts — a real cycle
+  // that pulled the whole agent stack into broker's own module-load time.
+  setConversationInteropFactory(createConversationInteropMcpServer)
 
   // ── Federation data layer ────────────────────────────────────────────────
   // Peer of the Team data layer: owns the office_nodes / office_credentials
@@ -1323,6 +1342,9 @@ export async function cleanupExtendedServices(): Promise<void> {
 
   // Store: Shutdown registry service (before app manager)
   shutdownRegistryService()
+
+  // Cross-Conversation Interop: drop the onAgentEvent subscription.
+  disposeConversationInterop()
 
   // Team: Tear down the service + runtime accessor and the data layer before
   // the App Manager goes away (the service holds an App Manager reference).

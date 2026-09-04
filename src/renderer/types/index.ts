@@ -132,13 +132,14 @@ export interface AgentConfig {
   customConfigDir?: string;  // Custom config dir path (when configDirMode === 'custom')
   enableTeams?: boolean;    // Enable Agent Teams (multi-agent collaboration)
   enableDigitalHumans?: boolean; // Enable Digital Humans MCP tools (automation app management)
+  enableConversationInterop?: boolean; // Master switch for Cross-Conversation Interop (conversation_read/conversation_send). Undefined/true = on.
+  enableConversationSend?: boolean; // Sub-switch, only meaningful when enableConversationInterop is on: false = read-only (no conversation_send)
   disabledTools?: string[]; // Tools disabled by user (Extended Capabilities toggles)
   developerMode?: boolean;   // [Developer] Enable verbose diagnostic logging across the system
   teamTurnTimeoutMs?: number; // Team member turn timeout in ms (overrides the built-in default)
   teamCircuitLimits?: {       // Team circuit breaker overrides (per-epoch limits)
     maxMessages?: number;
     maxForwardDepth?: number;
-    maxDurationMs?: number;
   };
   teamMaxConcurrentTurns?: number; // Cap on team member turns running at once on this machine
 }
@@ -530,9 +531,25 @@ export interface Message {
   tokenUsage?: TokenUsage;  // Token usage for this assistant message
   metadata?: {
     fileChanges?: FileChangesSummary;  // Lightweight file changes for immediate display
+    // Provenance of a `source: 'cross-conversation'` message. Mirrors the flat
+    // shape the delivery path persists — the title is a snapshot taken at
+    // delivery time, so it survives the source being renamed or deleted.
+    fromConversationId?: string;
+    fromConversationTitle?: string;
+    summary?: string;
+    forwardDepth?: number;
+    correlationId?: string;
   };
   error?: string;  // Error message when assistant response failed (e.g., 429 rate limit)
-  source?: 'injection';  // How the message entered the conversation (SDK-agnostic)
+  /**
+   * How the message entered the conversation (SDK-agnostic).
+   * - `injection`: user text folded into an in-flight turn
+   * - `cross-conversation`: delivered by another conversation in the same space;
+   *   persisted as `role: 'system'` so it can never read as the owner speaking
+   * - `cross-conversation-notice`: system notice written into the sending
+   *   conversation (e.g. delivery cooldown)
+   */
+  source?: 'injection' | 'cross-conversation' | 'cross-conversation-notice';
   sources?: KBSource[];  // Knowledge-base documents the agent Read this turn (clickable citations)
 }
 

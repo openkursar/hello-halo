@@ -38,6 +38,7 @@ import type {
   WakeDisposition,
 } from './message-bus'
 import type { TeamPromptContext } from './team-prompt'
+import type { NoteTurnEndedInput } from './turn-report'
 
 const LOG_TAG = '[TeamOrch]'
 
@@ -247,6 +248,13 @@ export interface OrchestrationDeps {
    * (checks are constructed after orchestration). Never thrown into the seal path.
    */
   onEpochArchived?: (teamId: string, epochId: string, endReason: EpochEndReason) => void
+  /**
+   * Report an ending the woken member itself cannot: a wake that never became a
+   * turn, and a turn cut off for running too long. Every other ending is reported
+   * by the session layer, which is the one place ALL of them converge (a person's
+   * turn and a relayed turn never come through here). Absent → nothing is told.
+   */
+  noteTurnEnded?: (input: NoteTurnEndedInput) => void
 }
 
 // Long tasks (coding, multi-step research) routinely exceed 30 minutes; the
@@ -297,6 +305,14 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     }, STATUS_PUSH_COALESCE_MS)
     if (typeof timer.unref === 'function') timer.unref()
     statusPushTimers.set(teamId, timer)
+  }
+
+  function reportTurnEnded(input: NoteTurnEndedInput): void {
+    try {
+      deps.noteTurnEnded?.(input)
+    } catch (err) {
+      console.error(`${LOG_TAG} noteTurnEnded observer failed:`, err)
+    }
   }
 
   function notifyMemberStatusChanged(teamId: string): void {
@@ -403,6 +419,13 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     const spaceId = session.getMemberSpaceId(appId)
     if (!spaceId) {
       console.error(`${LOG_TAG} wakeTarget: no space for app=${appId}; reporting error completion`)
+      reportTurnEnded({
+        appId,
+        teamId,
+        epochId,
+        fate: { kind: 'never_ran', reason: 'the member has no workspace on its machine' },
+        correlationId: trigger.correlationId,
+      })
       bus.completeTurn({ sessionKey, trigger, outcome: { kind: 'error', message: 'Member has no space' } })
       return
     }
@@ -449,6 +472,17 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         async (err): Promise<TurnCompletion> => {
           if (err instanceof TurnTimeoutError) {
             timedOut = true
+            // Reported BEFORE the teardown below, which is what makes the
+            // session layer's own turn-end fire: whoever reports first wins, and
+            // "cut off at the time limit" is the truer of the two descriptions.
+            reportTurnEnded({
+              appId,
+              teamId,
+              epochId,
+              fate: { kind: 'timeout' },
+              correlationId: trigger.correlationId,
+              ...(trigger.kind ? { triggerKind: trigger.kind } : {}),
+            })
             // Actually tear down the still-running turn instead of merely
             // abandoning the promise — otherwise the member's session stays
             // occupied by the timed-out generation while the sender may
@@ -474,6 +508,17 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         notifyMemberStatusChanged(teamId)
         if (outcome.kind === 'escalation') {
           markEscalationToUser(teamId, epochId, appId)
+        }
+        if (outcome.kind === 'undelivered') {
+          // Nothing ran anywhere, on this machine or the owner's, so this is the
+          // only place the ending can be witnessed at all.
+          reportTurnEnded({
+            appId,
+            teamId,
+            epochId,
+            fate: { kind: 'never_ran', reason: outcome.reason },
+            correlationId: trigger.correlationId,
+          })
         }
         bus.completeTurn({ sessionKey, trigger, outcome })
 
@@ -646,8 +691,12 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
    */
   function renderEnvelope(envelope: TeamEnvelope, trigger: TeamTriggerContext): string {
     // A periodic check arrives with its own header (who set it, the original
-    // words, which round this is) already rendered by the checks module.
-    if (trigger.kind === 'periodic_check') return withDigest(envelope.body, envelope)
+    // words, which round this is) already rendered by the checks module; a
+    // turn-end report carries its own for the same reason, and must additionally
+    // never be framed as if a teammate had written it.
+    if (trigger.kind === 'periodic_check' || trigger.kind === 'member_stopped') {
+      return withDigest(envelope.body, envelope)
+    }
     // A person's 1:1 message arrives verbatim — no teammate header, and no team
     // bookkeeping either: talking to your own digital human is not coordinating a
     // team, and the appended lines would both derail the reply and read as noise
@@ -1309,8 +1358,8 @@ function describeBreach(reason: CircuitBreachEvent['reason']): string {
       return 'it reached the message limit for one run'
     case 'maxForwardDepth':
       return 'a message-forwarding loop was detected'
-    case 'maxDurationMs':
-      return 'it exceeded the maximum run duration'
+    case 'turnReportFlood':
+      return 'it woke the lead with turn-end reports far more than normal'
     default:
       return 'a safety limit was reached'
   }

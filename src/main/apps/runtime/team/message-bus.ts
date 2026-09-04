@@ -8,6 +8,8 @@
 import { randomUUID } from 'crypto'
 import { broadcastToAll } from '../../../http/websocket'
 import { sendToRenderer } from '../../../foundation/window.service'
+import { createTurnGate } from '../../../platform/turn-gate'
+import type { TurnGate, BusyDisposition, DeliverDisposition } from '../../../platform/turn-gate'
 import {
   buildTeamSessionKey,
   TEAM_EVENTS,
@@ -96,12 +98,11 @@ export class CircuitBreakerError extends TeamBusError {
 
 // ── Circuit breaker ─────────────────────────────────────────────────────────
 
-export type CircuitBreachReason = 'maxMessages' | 'maxForwardDepth' | 'maxDurationMs'
+export type CircuitBreachReason = 'maxMessages' | 'maxForwardDepth' | 'turnReportFlood'
 
 export interface CircuitLimits {
   maxMessages: number
   maxForwardDepth: number
-  maxDurationMs: number
 }
 
 export interface EpochStats {
@@ -154,16 +155,19 @@ export interface SendInput {
  *   must not be lost (an escalation answer the member is blocked on).
  * - `skip`: drop it. For a wake that repeats on its own rhythm (a periodic
  *   check) — queueing those only piles up rounds the member already missed.
+ *
+ * Sourced from the generic `platform/turn-gate` (the session-exclusivity layer
+ * this bus delegates to) so the two can never drift.
  */
-export type BusyDisposition = 'buffer' | 'skip'
+export type { BusyDisposition }
 
-export type WakeDisposition = 'dispatched' | 'buffered' | 'skipped'
+export type WakeDisposition = DeliverDisposition
 
 export interface MessageBus {
   send(input: SendInput): Promise<TeamSendAsyncResult | TeamSendSyncResult>
   /**
    * Start a turn the RUNTIME itself asked for (escalation resume, self-nudge,
-   * periodic check) rather than a member's `team_send`. Carries no delivery
+   * periodic check, turn-end report) rather than a member's `team_send`. Carries no delivery
    * receipt and does not charge the circuit breaker, but must go through the
    * SAME busy gate as `send`: only the bus knows whether a session already has a
    * turn running or a wake in flight, and a second concurrent turn on one
@@ -209,6 +213,16 @@ export interface MessageBus {
   resolvePendingWaitsForMember(appId: string, outcome: TurnCompletion): number
   getEpochStats(epochId: string): EpochStats
   resetEpoch(epochId: string): void
+  /**
+   * Trip the SAME breach channel (`onBreach`, epoch seal, one-shot-per-epoch)
+   * a message-volume circuit breach uses, for a cap this bus does not itself
+   * track — e.g. `turn-report.ts`'s own report-wake flood guard. Kept
+   * separate from `chargeCircuit`'s `messageCount`/`forwardDepth` on purpose:
+   * report-wake volume scales with member-turn count, not member-initiated
+   * `team_send` traffic, and charging it into that budget would let report
+   * noise exhaust the allowance real team communication needs.
+   */
+  tripExternal(teamId: string, epochId: string, reason: CircuitBreachReason): void
   onBreach(listener: (event: CircuitBreachEvent) => void): () => void
   hasBufferedMessages(epochId: string): boolean
   /**
@@ -253,61 +267,50 @@ interface PendingWait {
   toAppId: string
 }
 
-/**
- * One queued turn for a busy session. Two shapes, one FIFO: an ENVELOPE is
- * dispatched through `hooks.wakeTarget` (the session layer renders and books it),
- * a RELAYED turn is already rendered and booked by the node that sent it and only
- * needs its `run` called. One queue, so a session has one line, one cap and one
- * drain regardless of where the work came from.
- */
-type MailboxEntry =
-  | { kind: 'envelope'; envelope: TeamEnvelope; trigger: TeamTriggerContext; appId: string }
-  | {
-      kind: 'relayed'
-      /** Called with the session slot already reserved; releases it when it settles. */
-      start: () => void
-      /** The queue was discarded (epoch reset) — fail the caller rather than strand it. */
-      cancel: (reason: string) => void
-    }
-
-const DEFAULT_SYNC_WAIT_TIMEOUT_MS = TEAM_CIRCUIT_DEFAULTS.maxDurationMs
+/** A queued envelope: the job type the session-exclusivity layer buffers for us. */
+interface EnvelopeJob {
+  envelope: TeamEnvelope
+  trigger: TeamTriggerContext
+}
 
 /**
- * Upper bound of buffered deliveries per busy member session. The mailbox is
- * volatile (never replicated, dropped on epoch seal), so an unbounded buffer is
- * OOM exposure under a runaway sender. Overflow sheds the OLDEST entry: the
- * newest instruction is worth most, and the blackboard is the durable fallback
- * for anything shed.
+ * Ceiling on a completion receipt (`SendInput.wait`) when the caller does not
+ * pass its own `syncWaitTimeoutMs`. Independent of the circuit breaker (which
+ * no longer bounds run duration) — this only stops a person's cross-machine
+ * 1:1 wait from hanging forever if the completion signal is lost.
  */
-const MAILBOX_BUFFER_CAP = 128
-
-/** Backstop recheck after buffering (see mailboxRechecks). */
-const MAILBOX_RECHECK_MS = 3000
+const DEFAULT_SYNC_WAIT_TIMEOUT_MS = 2 * 60 * 60 * 1000
 
 export function createMessageBus(deps: MessageBusDeps): MessageBus {
   const { store, hooks } = deps
   const limits: CircuitLimits = {
     maxMessages: deps.circuitOverrides?.maxMessages ?? TEAM_CIRCUIT_DEFAULTS.maxMessages,
     maxForwardDepth: deps.circuitOverrides?.maxForwardDepth ?? TEAM_CIRCUIT_DEFAULTS.maxForwardDepth,
-    maxDurationMs: deps.circuitOverrides?.maxDurationMs ?? TEAM_CIRCUIT_DEFAULTS.maxDurationMs,
   }
   const syncWaitTimeoutMs = deps.syncWaitTimeoutMs ?? DEFAULT_SYNC_WAIT_TIMEOUT_MS
 
   const pendingWaits = new Map<string, PendingWait>()
-  const mailboxBuffers = new Map<string, MailboxEntry[]>()
   const epochStats = new Map<string, EpochStats>()
   const breachListeners = new Set<(event: CircuitBreachEvent) => void>()
-  // Session keys with a turn dispatched but not yet completed. `hooks.isBusy`
-  // only turns true once the session layer registers the turn, asynchronously
-  // after dispatch — two deliveries inside that window both read "idle" and race
-  // two turns onto one session. Reserving the key synchronously at dispatch
-  // closes it. Released by completeTurn, by a relayed turn settling, or on a
-  // dispatch failure.
-  const wakesInFlight = new Set<string>()
-  // One pending recheck per session: a delivery buffered against a busy probe can
-  // race the target going idle between the probe and the push, and no turn-end
-  // fires for it. A backstop only — the turn-end drains stay the primary path.
-  const mailboxRechecks = new Map<string, NodeJS.Timeout>()
+  // The session-exclusivity mechanics (reservation, FIFO mailbox, cap, drain,
+  // recheck backstop) are generic and shared with ordinary conversations — see
+  // platform/turn-gate/DESIGN.md. Team semantics (topology, circuit breaker,
+  // the office record, completion receipts) stay here and call into it.
+  const turnGate: TurnGate<EnvelopeJob> = createTurnGate<EnvelopeJob>(
+    {
+      dispatch: (sessionKey, job) =>
+        hooks.wakeTarget({
+          sessionKey,
+          appId: job.envelope.toAppId,
+          teamId: job.envelope.teamId,
+          epochId: job.envelope.epochId,
+          envelope: job.envelope,
+          trigger: job.trigger,
+        }),
+      isBusy: (sessionKey) => hooks.isBusy(sessionKey),
+    },
+    { describeJob: (job) => `messageId=${job.envelope.id}` }
+  )
 
   function statsFor(epochId: string): EpochStats {
     let s = epochStats.get(epochId)
@@ -340,13 +343,6 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     const now = Date.now()
     if (stats.firstSendAt === null) stats.firstSendAt = now
 
-    if (now - stats.firstSendAt > limits.maxDurationMs) {
-      trip(teamId, epochId, 'maxDurationMs')
-      throw new CircuitBreakerError(
-        'maxDurationMs',
-        `Team epoch exceeded its maximum duration (${limits.maxDurationMs}ms). The run has been stopped.`
-      )
-    }
     if (forwardDepth > limits.maxForwardDepth) {
       trip(teamId, epochId, 'maxForwardDepth')
       throw new CircuitBreakerError(
@@ -473,87 +469,13 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     })
   }
 
-  function describeMailboxEntry(entry: MailboxEntry): string {
-    return entry.kind === 'envelope' ? `messageId=${entry.envelope.id}` : 'relayed turn'
-  }
-
-  function bufferEntry(sessionKey: string, entry: MailboxEntry): void {
-    const buffer = mailboxBuffers.get(sessionKey) ?? []
-    if (buffer.length >= MAILBOX_BUFFER_CAP) {
-      const shed = buffer.shift()
-      console.warn(
-        `${LOG_TAG} Mailbox full (${MAILBOX_BUFFER_CAP}); shed oldest: session=${sessionKey} ` +
-          `${shed ? describeMailboxEntry(shed) : ''}`
-      )
-      // A shed relayed turn has a caller on another node holding a promise;
-      // failing it now beats leaving it to a backstop measured in hours.
-      if (shed?.kind === 'relayed') shed.cancel('mailbox overflow')
-    }
-    buffer.push(entry)
-    mailboxBuffers.set(sessionKey, buffer)
-    console.log(
-      `${LOG_TAG} Target busy, buffered: session=${sessionKey} ` +
-        `${describeMailboxEntry(entry)} bufferSize=${buffer.length}`
-    )
-    scheduleMailboxRecheck(sessionKey)
-  }
-
-  /**
-   * Take the session's single turn slot, or report that it is taken. A session
-   * runs at most one turn, whoever asked for it and from whichever machine.
-   */
-  function tryReserve(sessionKey: string): boolean {
-    if (hooks.isBusy(sessionKey) || wakesInFlight.has(sessionKey)) return false
-    wakesInFlight.add(sessionKey)
-    return true
-  }
-
-  function releaseAndDrain(sessionKey: string): void {
-    wakesInFlight.delete(sessionKey)
-    drainMailbox(sessionKey)
-  }
-
-  function scheduleMailboxRecheck(sessionKey: string): void {
-    if (mailboxRechecks.has(sessionKey)) return
-    const timer = setTimeout(() => {
-      mailboxRechecks.delete(sessionKey)
-      drainMailbox(sessionKey)
-    }, MAILBOX_RECHECK_MS)
-    if (typeof timer.unref === 'function') timer.unref()
-    mailboxRechecks.set(sessionKey, timer)
-  }
-
   async function deliver(
     env: TeamEnvelope,
     trigger: TeamTriggerContext,
     onBusy: BusyDisposition = 'buffer'
   ): Promise<WakeDisposition> {
     const sessionKey = buildTeamSessionKey(env.toAppId, env.teamId, env.epochId)
-    if (!tryReserve(sessionKey)) {
-      if (onBusy === 'skip') {
-        console.log(`${LOG_TAG} Target busy, skipped: session=${sessionKey} kind=${trigger.kind}`)
-        return 'skipped'
-      }
-      bufferEntry(sessionKey, { kind: 'envelope', envelope: env, trigger, appId: env.toAppId })
-      return 'buffered'
-    }
-    try {
-      await hooks.wakeTarget({
-        sessionKey,
-        appId: env.toAppId,
-        teamId: env.teamId,
-        epochId: env.epochId,
-        envelope: env,
-        trigger,
-      })
-    } catch (err) {
-      // The dispatch itself failed — no turn is running and no completeTurn
-      // will come. Release the reservation or the session key stays fake-busy
-      // and every later delivery strands in the mailbox.
-      wakesInFlight.delete(sessionKey)
-      throw err
-    }
-    return 'dispatched'
+    return turnGate.deliver(sessionKey, { envelope: env, trigger }, onBusy)
   }
 
   function deliverRuntimeWake(params: {
@@ -565,42 +487,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
   }
 
   function runRelayedTurn<T>(params: { sessionKey: string; run: () => Promise<T> }): Promise<T> {
-    const { sessionKey, run } = params
-    return new Promise<T>((resolve, reject) => {
-      // Called with the slot already reserved by whoever dequeued us; it is ours
-      // to hand back on every exit, or the session stays fake-busy forever.
-      const start = (): void => {
-        let running: Promise<T>
-        try {
-          running = run()
-        } catch (err) {
-          releaseAndDrain(sessionKey)
-          reject(err)
-          return
-        }
-        running.then(
-          (value) => {
-            releaseAndDrain(sessionKey)
-            resolve(value)
-          },
-          (err) => {
-            releaseAndDrain(sessionKey)
-            reject(err)
-          }
-        )
-      }
-
-      if (tryReserve(sessionKey)) {
-        console.log(`${LOG_TAG} Relayed turn dispatched: session=${sessionKey}`)
-        start()
-        return
-      }
-      bufferEntry(sessionKey, {
-        kind: 'relayed',
-        start,
-        cancel: (reason) => reject(new Error(`Relayed turn dropped before it ran: ${reason}`)),
-      })
-    })
+    return turnGate.runExclusive(params.sessionKey, params.run)
   }
 
   async function send(input: SendInput): Promise<TeamSendAsyncResult | TeamSendSyncResult> {
@@ -841,7 +728,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     const { trigger, outcome, sessionKey } = params
     // Released before the epoch guard below: a sealed epoch must not leave the
     // session fake-busy forever.
-    wakesInFlight.delete(sessionKey)
+    turnGate.release(sessionKey)
     console.log(
       `${LOG_TAG} completeTurn: session=${sessionKey} corr=${trigger.correlationId} ` +
         `receipted=${!!trigger.wait} outcome=${outcome.kind}`
@@ -868,49 +755,11 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     // so a teammate hears back only through an explicit `team_send`.
     if (trigger.wait) resolvePendingWait(trigger.correlationId, outcome)
 
-    drainMailbox(sessionKey)
+    turnGate.drain(sessionKey)
   }
 
   function drainMailbox(sessionKey: string): void {
-    const buffer = mailboxBuffers.get(sessionKey)
-    if (!buffer || buffer.length === 0) return
-    if (hooks.isBusy(sessionKey) || wakesInFlight.has(sessionKey)) {
-      // Re-arm: this recheck is already consumed, so leaving now would pin the
-      // mail on the current turn ending — a turn that may hang for minutes.
-      scheduleMailboxRecheck(sessionKey)
-      return
-    }
-
-    const next = buffer.shift()!
-    if (buffer.length === 0) mailboxBuffers.delete(sessionKey)
-    console.log(
-      `${LOG_TAG} Draining mailbox: session=${sessionKey} ` +
-        `${describeMailboxEntry(next)} remaining=${buffer.length}`
-    )
-    wakesInFlight.add(sessionKey)
-
-    if (next.kind === 'relayed') {
-      // Already rendered and booked by the node that sent it: just run it. It
-      // releases the slot and drains the next entry when it settles.
-      next.start()
-      return
-    }
-
-    void hooks
-      .wakeTarget({
-        sessionKey,
-        appId: next.appId,
-        teamId: next.envelope.teamId,
-        epochId: next.envelope.epochId,
-        envelope: next.envelope,
-        trigger: next.trigger,
-      })
-      .catch((err) => {
-        wakesInFlight.delete(sessionKey)
-        console.error(`${LOG_TAG} Failed to deliver buffered envelope:`, err)
-        // The rest of the buffer must not strand behind a failed dispatch.
-        scheduleMailboxRecheck(sessionKey)
-      })
+    turnGate.drain(sessionKey)
   }
 
   function getEpochStats(epochId: string): EpochStats {
@@ -927,28 +776,11 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       pendingWaits.delete(corr)
     }
     // A hard seal abandons undelivered deliveries (re-waking would reignite the
-    // run we're stopping); count the drop so it isn't silent.
-    let droppedEnvelopes = 0
-    for (const key of [...mailboxBuffers.keys()]) {
-      if (!key.endsWith(`:${epochId}`)) continue
-      const dropped = mailboxBuffers.get(key) ?? []
-      droppedEnvelopes += dropped.length
-      mailboxBuffers.delete(key)
-      // A queued relayed turn has a caller on another node awaiting completion;
-      // dropping it silently would hang that node until its hours-long backstop.
-      for (const entry of dropped) {
-        if (entry.kind === 'relayed') entry.cancel('the run was stopped')
-      }
-    }
-    for (const [key, timer] of [...mailboxRechecks]) {
-      if (key.endsWith(`:${epochId}`)) {
-        clearTimeout(timer)
-        mailboxRechecks.delete(key)
-      }
-    }
-    for (const key of [...wakesInFlight]) {
-      if (key.endsWith(`:${epochId}`)) wakesInFlight.delete(key)
-    }
+    // run we're stopping); count the drop so it isn't silent. A queued relayed
+    // turn has a caller on another node awaiting completion — dropping it
+    // silently would hang that node until its hours-long backstop, so the gate
+    // rejects it with a reason instead.
+    const droppedEnvelopes = turnGate.discard((key) => key.endsWith(`:${epochId}`), 'the run was stopped')
     if (droppedEnvelopes > 0) {
       console.warn(
         `${LOG_TAG} resetEpoch dropped ${droppedEnvelopes} undelivered buffered envelope(s): epoch=${epochId}`
@@ -962,13 +794,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
   }
 
   function hasBufferedMessages(epochId: string): boolean {
-    for (const key of mailboxBuffers.keys()) {
-      if (key.endsWith(`:${epochId}`)) {
-        const buf = mailboxBuffers.get(key)
-        if (buf && buf.length > 0) return true
-      }
-    }
-    return false
+    return turnGate.hasAnyBuffered((key) => key.endsWith(`:${epochId}`))
   }
 
   return {
@@ -981,6 +807,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     resolvePendingWaitsForMember,
     getEpochStats,
     resetEpoch,
+    tripExternal: trip,
     onBreach,
     hasBufferedMessages,
     drainMailbox,

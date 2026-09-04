@@ -584,6 +584,10 @@ interface HaloConfig {
     enableTeams?: boolean
     /** Enable Digital Humans MCP tools (automation app management) */
     enableDigitalHumans?: boolean
+    /** Master switch for Cross-Conversation Interop (conversation_read/conversation_send). Undefined/true = on. */
+    enableConversationInterop?: boolean
+    /** Sub-switch, only meaningful when enableConversationInterop is on: false = read-only (no conversation_send). */
+    enableConversationSend?: boolean
     /** Tools disabled by user (Extended Capabilities toggles) */
     disabledTools?: string[]
     /** Developer: enable verbose diagnostic logging (HTTP payloads, session lifecycle, stream events, scheduler) */
@@ -594,7 +598,6 @@ interface HaloConfig {
     teamCircuitLimits?: {
       maxMessages?: number
       maxForwardDepth?: number
-      maxDurationMs?: number
     }
     /** Cap on team member turns running at once on this machine. Overrides the built-in default when set. */
     teamMaxConcurrentTurns?: number

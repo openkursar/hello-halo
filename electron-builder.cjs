@@ -97,9 +97,28 @@ function resolvePublish() {
   )
 }
 
+/**
+ * Files that must ship for the packaged app to behave like dev.
+ *
+ * Dev loads every non-builtin auth provider listed in product.json via dynamic
+ * import from its `path`. In a packaged build the same import resolves inside
+ * app.asar, so each declared provider file must be added to the packaging file
+ * list — deriving it here from the same product.json keeps "what dev loads" and
+ * "what the package contains" a single source of truth. A variant that forgets
+ * this wiring would otherwise build fine and fail only at login time with
+ * "Unknown provider type".
+ */
+function resolveProviderFiles() {
+  const providers = product.content.authProviders ?? []
+  return providers
+    .filter((p) => p.enabled !== false && typeof p.path === 'string' && p.path.trim())
+    .map((p) => p.path.trim().replace(/^\.\//, ''))
+}
+
 module.exports = {
   ...loadBaseConfig(),
   productName: field('name'),
   appId: field('appId'),
-  publish: resolvePublish()
+  publish: resolvePublish(),
+  files: [...(loadBaseConfig().files ?? []), ...resolveProviderFiles()]
 }

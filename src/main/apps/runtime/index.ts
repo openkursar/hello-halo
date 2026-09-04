@@ -119,6 +119,9 @@ export type { AppChatRequest, NativeSessionResult } from './app-chat'
 // Re-export inbound dispatch
 export { dispatchInboundMessage } from './dispatch-inbound'
 
+// Re-export intentional-stop marker (called by IPC/HTTP stop handlers, read by app-chat.ts)
+export { markIntentionalStop } from './intentional-stop'
+
 // Re-export IM permission registry
 export {
   setImPermissionContext,

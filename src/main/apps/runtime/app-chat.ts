@@ -75,6 +75,7 @@ import { NATIVE_CHAT_ENTRY } from './prompt/entry-native'
 import { buildImEntry, buildImConstraints, type ImSessionContext } from './im-channels/im-prompt'
 import { buildTeamEntry, buildTeamConstraints, buildTeamImBridge } from './team/team-prompt'
 import { getActiveTeamRuntime } from './team'
+import { consumeIntentionalStop } from './intentional-stop'
 import { createTeamMcpServer } from './team/team-tools'
 import { TEAM_MCP_SERVER_NAME } from '../../../shared/apps/team-types'
 import { computeDisallowedBuiltins, filterMcpServersByPolicy, isBorrowedTeamTurn } from './capability-policy'
@@ -687,6 +688,9 @@ async function runAppChatTurn(
   const sink = getAppChatSink({ appId, conversationId, runId: chatRunId, spacePath })
 
   let round: AppChatRoundHandle | undefined
+  // Carried to the finally below, which is where a team turn's ending is
+  // reported: the block runs for every exit, but only the catch knows which one.
+  let turnFailure: string | null = null
   try {
     const t0 = Date.now()
 
@@ -729,7 +733,12 @@ async function runAppChatTurn(
     // must follow that write — an earlier one re-reads the member as idle.
     const startedTeamSession = parseTeamSessionKey(conversationId)
     if (startedTeamSession) {
-      getActiveTeamRuntime()?.noteMemberStatusChanged(startedTeamSession.teamId)
+      const runtime = getActiveTeamRuntime()
+      runtime?.noteMemberStatusChanged(startedTeamSession.teamId)
+      // Opens the window this turn's board writes and messages are counted in,
+      // so the report at the other end can say the member filed nothing without
+      // guessing (see apps/runtime/team/turn-report.ts).
+      runtime?.noteMemberTurnStarted(startedTeamSession)
     }
 
     // Set thinking tokens dynamically
@@ -790,6 +799,7 @@ async function runAppChatTurn(
     console.log(`[AppChat][${appId}] Chat message processed successfully`)
   } catch (error: unknown) {
     const err = error as Error
+    turnFailure = err.message || 'Unknown error during app chat'
 
     console.error(`[AppChat][${appId}] Error:`, error)
     emitAgentEvent('agent:error', spaceId, conversationId, {
@@ -851,6 +861,28 @@ async function runAppChatTurn(
       // office is re-baselined periodically, so a 1:1 turn would otherwise leave
       // the member's own machine showing it as working forever.
       getActiveTeamRuntime()?.noteMemberStatusChanged(endedTeamSession.teamId)
+      // Tell the lead the member stopped. Nothing else will: the member's own
+      // words reach no teammate, so a turn that ends without a team_send — the
+      // ordinary shape of a model that quit early, crashed, or was stopped by
+      // hand — otherwise leaves the run frozen with nobody woken to notice.
+      try {
+        getActiveTeamRuntime()?.noteMemberTurnEnded({
+          ...endedTeamSession,
+          // A hard stop (team mode kills the CC subprocess outright — see
+          // control.ts's stopGeneration) lands in the same unconditional-
+          // reject path a genuine crash does; consumeIntentionalStop is the
+          // only thing that tells them apart (see intentional-stop.ts).
+          fate: turnFailure
+            ? consumeIntentionalStop(conversationId)
+              ? { kind: 'stopped' }
+              : { kind: 'error', message: turnFailure }
+            : { kind: 'ended' },
+          ...(teamContext?.correlationId ? { correlationId: teamContext.correlationId } : {}),
+          ...(teamContext?.kind ? { triggerKind: teamContext.kind } : {}),
+        })
+      } catch (err) {
+        console.error(`[AppChat][${appId}] turn-end report failed:`, err)
+      }
       // Nudge the bus mailbox: only bus-driven turns pass through completeTurn's
       // drain, so without this a lead kept busy by human 1:1 chat on the same
       // session key strands its teammates' buffered completions forever.
