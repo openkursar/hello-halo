@@ -48,6 +48,11 @@ vi.mock('../../../../src/main/foundation/product-config', () => ({
 
 vi.mock('uuid', () => ({ v4: () => `uuid-${++uuidCounter.n}` }))
 
+const { track } = vi.hoisted(() => ({ track: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
+  analytics: { track }
+}))
+
 import { AISourceManager } from '../../../../src/main/services/ai-sources/manager'
 import type { AISource, AISourcesConfig } from '../../../../src/shared/types'
 
@@ -94,6 +99,7 @@ beforeEach(() => {
   store.value = {}
   uuidCounter.n = 0
   saveConfig.mockClear()
+  track.mockClear()
 })
 
 describe('getBackendConfig — API key path', () => {
@@ -300,6 +306,62 @@ describe('single-source create / update / delete', () => {
     const cfg = new AISourceManager().deleteSource('s1')
     expect(cfg.sources).toEqual([])
     expect(cfg.currentId).toBeNull()
+  })
+})
+
+describe('user-initiated switch telemetry', () => {
+  it('reports settings.source_switch only on the tracked wrapper, not the raw setter', () => {
+    seed({
+      currentId: 's1',
+      sources: [apiKeySource({ id: 's1' }), apiKeySource({ id: 's2', name: 'other' })]
+    })
+    const mgr = new AISourceManager()
+
+    mgr.setCurrentSource('s2')
+    expect(track).not.toHaveBeenCalled()
+
+    mgr.switchCurrentSource('s1')
+    expect(track).toHaveBeenCalledWith('settings.source_switch', expect.objectContaining({
+      sourceId: 's1',
+      sourceName: 'src',
+      provider: 'openai',
+    }))
+  })
+
+  it('does not report a switch when the source id is unknown', () => {
+    seed({ currentId: 's1', sources: [apiKeySource({ id: 's1' })] })
+    const mgr = new AISourceManager()
+
+    const result = mgr.switchCurrentSource('does-not-exist')
+
+    expect(result.currentId).toBe('s1')
+    expect(track).not.toHaveBeenCalled()
+  })
+
+  it('reports settings.model_switch with the switching source attribution', () => {
+    seed({ currentId: 's1', sources: [apiKeySource({ id: 's1' })] })
+    const mgr = new AISourceManager()
+
+    mgr.switchCurrentModel('gpt-5')
+
+    expect(track).toHaveBeenCalledWith('settings.model_switch', expect.objectContaining({
+      sourceId: 's1',
+      sourceName: 'src',
+      provider: 'openai',
+      modelName: 'gpt-5',
+    }))
+  })
+
+  it('does not auto-select-report the delegated source created during login', async () => {
+    seed({ currentId: null, sources: [] })
+    const mgr = new AISourceManager()
+
+    await mgr.upsertDelegatedSource('user@example.com')
+
+    // upsertDelegatedSource auto-selects the source it just created/refreshed
+    // via the raw setCurrentSource — that's bookkeeping, not a user choosing
+    // among alternatives, so it must not appear as a switch event.
+    expect(track).not.toHaveBeenCalled()
   })
 })
 

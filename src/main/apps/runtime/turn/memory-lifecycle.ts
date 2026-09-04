@@ -10,7 +10,8 @@ import type { TriggerContext, AppRunResult } from '../types'
 import { truncateUtf16Safe } from '../text-truncate'
 import { query as agentSdkQuery } from '../../../services/agent/resolved-sdk'
 import { getHeadlessElectronPath, getWorkingDir } from '../../../services/agent/helpers'
-import { getCleanUserEnv } from '../../../services/agent/sdk-config'
+import { buildSdkEnv } from '../../../services/agent/sdk-config'
+import type { ResolvedModelCapabilities } from '../../../services/agent/types'
 
 // ── Prepare (turn start) ──
 
@@ -59,6 +60,10 @@ export interface CompactionCredentials {
   /** Raw provider fields — decide which compaction path to take (#121 fork). */
   provider?: string
   oauthProvider?: string
+  /** Delegated sources (e.g. Claude Code CLI) hold no key — routed via delegatedRoutingHeader instead. */
+  delegatedAuth?: boolean
+  delegatedRoutingHeader?: string
+  capabilities?: ResolvedModelCapabilities
 }
 
 /** Injected so this module stays decoupled from InstalledApp / config. */
@@ -260,9 +265,18 @@ const COMPACTION_AGENT_SDK_TIMEOUT_MS = 120_000
  * subprocess, which carries Anthropic's request signing. Other OAuth providers
  * ride the same local OpenAI-compat router as their normal chat turns, which
  * is not first-party-locked (#121).
+ *
+ * Delegated sources join the first-party bucket too: they hold no key at all,
+ * and the CLI subprocess is their only credential carrier — a raw SDK call
+ * would reach the router with an empty key and no routing header, fail, and
+ * silently fall back to the heuristic compaction summary.
  */
-function providerRequiresFirstPartyClient(provider?: string, oauthProvider?: string): boolean {
-  return provider === 'oauth' && oauthProvider === 'claude'
+function providerRequiresFirstPartyClient(
+  provider?: string,
+  oauthProvider?: string,
+  delegatedAuth?: boolean
+): boolean {
+  return delegatedAuth || (provider === 'oauth' && oauthProvider === 'claude')
 }
 
 /**
@@ -279,7 +293,7 @@ async function generateCompactionSummary(
 ): Promise<string> {
   try {
     const resolved = await credsProvider()
-    if (providerRequiresFirstPartyClient(resolved.provider, resolved.oauthProvider)) {
+    if (providerRequiresFirstPartyClient(resolved.provider, resolved.oauthProvider, resolved.delegatedAuth)) {
       return await generateCompactionViaAgentSdk(content, appName, scope, resolved, runTag)
     }
     return await generateCompactionViaRawSdk(content, appName, resolved, runTag)
@@ -316,24 +330,21 @@ async function generateCompactionViaAgentSdk(
     const queryIterator = agentSdkQuery({
       prompt: buildCompactionPrompt(truncatedContent, appName),
       options: {
-        apiKey: resolved.anthropicApiKey,
         model: resolved.sdkModel,
         anthropicBaseUrl: resolved.anthropicBaseUrl,
         cwd: getWorkingDir(scope.spaceId),
         executable: getHeadlessElectronPath(),
         executableArgs: ['--no-warnings'],
-        env: {
-          ...getCleanUserEnv(),
-          ELECTRON_RUN_AS_NODE: '1',
-          ELECTRON_NO_ATTACH_CONSOLE: '1',
-          ANTHROPIC_API_KEY: resolved.anthropicApiKey,
-          ANTHROPIC_BASE_URL: resolved.anthropicBaseUrl,
-          NO_PROXY: 'localhost,127.0.0.1',
-          no_proxy: 'localhost,127.0.0.1',
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-          DISABLE_TELEMETRY: '1',
-          DISABLE_COST_WARNINGS: '1',
-        },
+        // Same env builder as regular sessions: it routes delegated sources via
+        // ANTHROPIC_CUSTOM_HEADERS — never ANTHROPIC_API_KEY, which would
+        // override the CLI's own credential — and pins CLAUDE_CONFIG_DIR,
+        // where the delegated CLI looks up that credential.
+        env: buildSdkEnv({
+          anthropicApiKey: resolved.anthropicApiKey ?? '',
+          anthropicBaseUrl: resolved.anthropicBaseUrl ?? '',
+          delegatedRoutingHeader: resolved.delegatedRoutingHeader,
+          capabilities: resolved.capabilities,
+        }),
         permissionMode: 'bypassPermissions',
         abortController,
         maxTurns: 1,

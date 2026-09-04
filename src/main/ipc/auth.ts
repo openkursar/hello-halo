@@ -14,12 +14,16 @@
  * - auth:get-providers - Get list of available auth providers
  * - auth:get-builtin-providers - Get list of built-in providers
  * - auth:get-quota (sourceId) - Report metered quota for a source (by ID)
+ * - auth:delegated-status - Login state of the bundled CLI's credential slot
+ * - auth:delegated-activate - Create/refresh the delegated source after login
  */
 
 import { BrowserWindow, nativeTheme, session } from 'electron'
 import { getAISourceManager, getEnabledAuthProviderConfigs } from '../services/ai-sources'
 import { BUILTIN_PROVIDERS } from '../../shared/constants'
 import { buildLoginLoadingPage, buildLoginErrorPage, loginPageBg } from '../services/browser-login-pages'
+import { readCliAuthState } from '../services/agent/cli-auth'
+import { buildCliLoginCommand } from '../services/agent/sdk-config'
 import type { ProviderId } from '../../shared/types'
 import { authRpc } from '../../shared/rpc/contracts/auth.contract'
 import { registerRawRpcHandlers } from './rpc'
@@ -299,6 +303,52 @@ export function registerAuthHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error(`[Auth IPC] Get quota error for ${sourceId}:`, err)
+        return { success: false, error: err.message }
+      }
+    },
+
+    /**
+     * Login state of the bundled CLI's credential slot, with the command that
+     * signs it in. `supported` is false where the credential store layout is
+     * unverified, which is also where the source is not registered.
+     */
+    authDelegatedStatus: async () => {
+      try {
+        const supported = process.platform === 'darwin'
+        const state = readCliAuthState()
+        return {
+          success: true,
+          data: {
+            supported,
+            loggedIn: state.loggedIn,
+            account: state.account,
+            configDir: state.configDir,
+            loginCommand: supported ? buildCliLoginCommand() : ''
+          }
+        }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[Auth IPC] Delegated status error:', err)
+        return { success: false, error: err.message }
+      }
+    },
+
+    /**
+     * Turn a completed CLI login into a usable source. Verifies the slot first:
+     * the renderer polls this after the user runs the login command, and a
+     * source created before the login lands would fail on its first turn.
+     */
+    authDelegatedActivate: async () => {
+      try {
+        const state = readCliAuthState()
+        if (!state.loggedIn) {
+          return { success: false, error: 'Claude Code CLI is not signed in yet' }
+        }
+        const source = manager.upsertDelegatedSource(state.account)
+        return { success: true, data: { sourceId: source.id, account: state.account } }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[Auth IPC] Delegated activate error:', err)
         return { success: false, error: err.message }
       }
     },

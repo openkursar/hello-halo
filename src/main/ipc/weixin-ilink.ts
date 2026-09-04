@@ -27,6 +27,12 @@ import { ILINK_BASE_URL, fetchJson } from '../apps/runtime/im-channels/ilink-api
 import { saveIlinkToken, disconnectIlink } from '../controllers/weixin-ilink.controller'
 import { weixinIlinkRpc } from '../../shared/rpc/contracts/weixin-ilink.contract'
 import { registerRawRpcHandlers } from './rpc'
+import { analytics } from '../services/analytics/analytics.service'
+import { AnalyticsEvents } from '../services/analytics/types'
+import { deriveErrorCode } from '../services/analytics/error-code'
+
+/** Telemetry channel tag for every event emitted from this brand's setup flow. */
+const BIND_CHANNEL = 'weixin-ilink'
 
 // ============================================
 // IPC Handler Registration
@@ -56,9 +62,18 @@ export function registerWeixinIlinkHandlers(): void {
         const response = await fetchJson<QrCodeResponse>('GET', url, {})
 
         if (!response.qrcode) {
+          void analytics.track(AnalyticsEvents.IM_BIND_QR_REQUEST, {
+            channel: BIND_CHANNEL,
+            result: 'fail',
+            errorCode: 'no-qrcode',
+          })
           return { success: false, error: 'iLink API returned no qrcode token' }
         }
 
+        void analytics.track(AnalyticsEvents.IM_BIND_QR_REQUEST, {
+          channel: BIND_CHANNEL,
+          result: 'success',
+        })
         return {
           success: true,
           data: {
@@ -69,6 +84,11 @@ export function registerWeixinIlinkHandlers(): void {
         }
       } catch (error: unknown) {
         console.error('[WeixinIlink] request-qrcode error:', error)
+        void analytics.track(AnalyticsEvents.IM_BIND_QR_REQUEST, {
+          channel: BIND_CHANNEL,
+          result: 'fail',
+          errorCode: deriveErrorCode(error),
+        })
         return { success: false, error: (error as Error).message }
       }
     },
@@ -128,9 +148,20 @@ export function registerWeixinIlinkHandlers(): void {
      */
     weixinIlinkSaveToken: async (instanceId: string, botToken: string, baseUrl?: string, accountId?: string) => {
       try {
-        return await saveIlinkToken(instanceId, botToken, baseUrl, accountId)
+        const result = await saveIlinkToken(instanceId, botToken, baseUrl, accountId)
+        void analytics.track(AnalyticsEvents.IM_BIND_RESULT, {
+          channel: BIND_CHANNEL,
+          result: result.success ? 'success' : 'fail',
+          errorCode: result.success ? undefined : deriveErrorCode(result.error),
+        })
+        return result
       } catch (error: unknown) {
         console.error('[WeixinIlink] save-token error:', error)
+        void analytics.track(AnalyticsEvents.IM_BIND_RESULT, {
+          channel: BIND_CHANNEL,
+          result: 'fail',
+          errorCode: deriveErrorCode(error),
+        })
         return { success: false, error: (error as Error).message }
       }
     },

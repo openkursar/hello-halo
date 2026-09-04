@@ -36,6 +36,13 @@ export interface ControllerResponse<T = unknown> {
   success: boolean
   data?: T
   error?: string
+  /**
+   * Stable failure discriminator (e.g. 'TOO_MANY_FILES'), mirroring
+   * ApiResponse.code: lets the UI render localized messages without parsing
+   * the raw error text. Known rejection modes carry structured detail in
+   * `data`; absent for unknown/unexpected failures.
+   */
+  code?: string
 }
 
 function ok<T>(data: T): ControllerResponse<T> {
@@ -120,8 +127,27 @@ export function addLinkedDir(
   dir: { path: string; label: string }
 ): ControllerResponse {
   try {
-    const linked = svcAddLinkedDir(kbId, dir)
-    return linked ? ok(linked) : { success: false, error: 'Failed to add linked directory' }
+    const result = svcAddLinkedDir(kbId, dir)
+    if (result.ok) return ok(result.linked)
+    switch (result.reason) {
+      case 'too-many-files':
+        return {
+          success: false,
+          error: 'Linked folder contains too many files',
+          code: 'TOO_MANY_FILES',
+          data: { count: result.count, limit: result.limit },
+        }
+      case 'disk-root':
+        return { success: false, error: 'Cannot watch a disk root', code: 'DISK_ROOT' }
+      case 'folder-too-large':
+        return { success: false, error: 'Linked folder is too large', code: 'FOLDER_TOO_LARGE' }
+      case 'path-missing':
+        return { success: false, error: 'Folder does not exist', code: 'PATH_NOT_FOUND' }
+      case 'kb-not-found':
+        return { success: false, error: 'Knowledge base not found', code: 'KB_NOT_FOUND' }
+      default:
+        return { success: false, error: 'Failed to add linked directory' }
+    }
   } catch (e) { return fail(e) }
 }
 

@@ -8,6 +8,7 @@
 
 import { testChannel } from '../services/notify-channels'
 import { getConfig } from '../foundation/config.service'
+import { getNotifyChannelsConfig } from '../foundation/product-config'
 import { clearAllTokenCaches } from '../services/notify-channels'
 import type { NotificationChannelType } from '../../shared/types/notification-channels'
 import { notificationChannelsRpc } from '../../shared/rpc/contracts/notification-channels.contract'
@@ -38,6 +39,14 @@ export function registerNotificationChannelHandlers(): void {
     clearNotificationChannelCache: async () => {
       clearAllTokenCaches()
       return { success: true }
+    },
+    // Product-level channel customizations (help links) for the Settings UI
+    notifyChannelsProductConfig: async () => {
+      try {
+        return { success: true, data: getNotifyChannelsConfig() ?? null }
+      } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
+      }
     },
   })
 

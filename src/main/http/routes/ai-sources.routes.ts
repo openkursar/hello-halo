@@ -20,7 +20,7 @@ export function registerAiSourcesRoutes(app: Express): void {
     try {
       const { sourceId } = req.body
       const manager = getAISourceManager()
-      const result = manager.setCurrentSource(sourceId)
+      const result = manager.switchCurrentSource(sourceId)
       if (result.currentId !== sourceId) {
         res.json({ success: false, error: `Source not found: ${sourceId}` })
         return
@@ -35,7 +35,7 @@ export function registerAiSourcesRoutes(app: Express): void {
     try {
       const { modelId } = req.body
       const manager = getAISourceManager()
-      const result = manager.setCurrentModel(modelId)
+      const result = manager.switchCurrentModel(modelId)
       res.json({ success: true, data: result })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })

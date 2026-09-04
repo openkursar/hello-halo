@@ -927,6 +927,9 @@ function buildCompactionCreds(app: InstalledApp): CompactionCredentialsProvider 
       sdkModel: resolved.sdkModel,
       provider: credentials.provider,
       oauthProvider: credentials.oauthProvider,
+      delegatedAuth: credentials.delegatedAuth,
+      delegatedRoutingHeader: resolved.delegatedRoutingHeader,
+      capabilities: resolved.capabilities,
     }
   }
 }

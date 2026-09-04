@@ -94,6 +94,10 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
 vi.mock('../../../../src/main/services/agent/permission-handler', () => ({
   createCanUseTool: vi.fn(),
 }))
+vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
+  analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
+}))
+
 vi.mock('../../../../src/main/services/agent/events', () => ({
   emitAgentEvent: vi.fn(),
 }))

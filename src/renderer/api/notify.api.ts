@@ -9,6 +9,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import type { NotifyChannelsProductConfig } from '../../shared/types/notification-channels'
 
 export const notifyApi = {
   // ===== Notification Channels =====
@@ -24,6 +25,13 @@ export const notifyApi = {
       return window.halo.clearNotificationChannelCache()
     }
     return httpRequest('POST', '/api/notify-channels/clear-cache')
+  },
+
+  notifyChannelsProductConfig: async (): Promise<ApiResponse<NotifyChannelsProductConfig | null>> => {
+    if (isElectron()) {
+      return window.halo.notifyChannelsProductConfig()
+    }
+    return httpRequest('GET', '/api/notify-channels/product-config')
   },
 
   // ===== Notification (in-app toast) =====

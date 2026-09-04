@@ -11,7 +11,7 @@ import type {
   ApiResponse,
 } from './_shared'
 import type { StoreSignInStatus } from '../../shared/store/store-types'
-import type { AppType } from '../../shared/apps/spec-types'
+import type { AppType, AppSpec } from '../../shared/apps/spec-types'
 
 export const storeApi = {
   // ===== Store (App Registry) =====
@@ -146,6 +146,20 @@ export const storeApi = {
       return window.halo.storePublishPreview({ appId, author, name })
     }
     return httpRequest('POST', `/api/store/publish/preview`, { appId, author, name })
+  },
+
+  storeInspectSkillDeps: async (appId: string): Promise<ApiResponse<Array<{ id: string; declaredBundled: boolean; resolvable: boolean; installed: boolean; appId: string | null; storeName: string | null }>>> => {
+    if (isElectron()) {
+      return window.halo.storeInspectSkillDeps({ appId })
+    }
+    return { success: false, error: 'Not supported outside Electron' }
+  },
+
+  storeInspectSkillDepsForSpec: async (spec: AppSpec): Promise<ApiResponse<Array<{ id: string; declaredBundled: boolean; resolvable: boolean; installed: boolean; appId: string | null; storeName: string | null }>>> => {
+    if (isElectron()) {
+      return window.halo.storeInspectSkillDepsForSpec({ spec })
+    }
+    return { success: false, error: 'Not supported outside Electron' }
   },
 
   storeFindAppByPublishSlug: async (slug: string, type?: AppType, author?: string): Promise<ApiResponse<{ appId: string | null }>> => {

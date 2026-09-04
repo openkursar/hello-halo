@@ -17,6 +17,10 @@ export type PreflightCode =
   | 'version-not-incremented'
   | 'missing-name'
   | 'missing-description'
+  /** Not produced by `runPublishPreflight` — it needs the async skill-dependency
+   * classification `useAssociatedSkills` already fetches, so the caller appends
+   * it into the same findings list instead of duplicating that lookup here. */
+  | 'missing-skill-dependency'
 
 export interface PreflightFinding {
   severity: 'error' | 'warning'

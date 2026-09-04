@@ -83,6 +83,58 @@ describe('ImSessionRegistry — channel source classification', () => {
   })
 })
 
+describe('ImSessionRegistry — resolvedName', () => {
+  let dir: string
+  let file: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'im-reg-'))
+    file = join(dir, 'sessions.json')
+  })
+
+  afterEach(async () => {
+    await new Promise(resolve => setTimeout(resolve, 20))
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('sets resolvedName on an existing session and returns true', () => {
+    const reg = new ImSessionRegistry(file)
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1')
+    expect(reg.setResolvedName('app1', 'wecom-bot', 'chat-1', 'Real Name')).toBe(true)
+    expect(reg.findSession('app1', 'wecom-bot', 'chat-1')?.resolvedName).toBe('Real Name')
+  })
+
+  it('no-ops for a session that is not yet registered', () => {
+    const reg = new ImSessionRegistry(file)
+    expect(reg.setResolvedName('app1', 'wecom-bot', 'unknown-chat', 'Real Name')).toBe(false)
+  })
+
+  it('no-ops (and reports no change) when the value is already current', () => {
+    const reg = new ImSessionRegistry(file)
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1')
+    expect(reg.setResolvedName('app1', 'wecom-bot', 'chat-1', 'Real Name')).toBe(true)
+    expect(reg.setResolvedName('app1', 'wecom-bot', 'chat-1', 'Real Name')).toBe(false)
+  })
+
+  it('overwrites a stale resolvedName as fresher lookups succeed (unlike displayName)', () => {
+    const reg = new ImSessionRegistry(file)
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1')
+    reg.setResolvedName('app1', 'wecom-bot', 'chat-1', 'Old Name')
+    reg.setResolvedName('app1', 'wecom-bot', 'chat-1', 'New Name')
+    expect(reg.findSession('app1', 'wecom-bot', 'chat-1')?.resolvedName).toBe('New Name')
+  })
+
+  it('never overwrites customName, and customName is not required to set resolvedName', () => {
+    const reg = new ImSessionRegistry(file)
+    reg.register('app1', 'wecom-bot', 'chat-1', 'direct', 'inst-1')
+    reg.setCustomName('app1', 'wecom-bot', 'chat-1', 'My Own Label')
+    reg.setResolvedName('app1', 'wecom-bot', 'chat-1', 'Real Name')
+    const session = reg.findSession('app1', 'wecom-bot', 'chat-1')
+    expect(session?.customName).toBe('My Own Label')
+    expect(session?.resolvedName).toBe('Real Name')
+  })
+})
+
 describe('ImSessionRegistry — HTTP session bounds', () => {
   let dir: string
   let file: string

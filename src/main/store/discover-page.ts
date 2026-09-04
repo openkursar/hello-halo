@@ -19,6 +19,7 @@ import { BUILTIN_DISCOVER_LAYOUT } from '../../shared/store/store-types'
 import type {
   DiscoverNode,
   RegistryEntry,
+  ResolvedCollection,
   ResolvedDiscover,
   ResolvedDiscoverNode,
   StoreCollection,
@@ -111,11 +112,36 @@ function resolveNode(node: DiscoverNode, ctx: ResolveContext): ResolvedDiscoverN
   }
 
   if (node.layout === 'collections') {
-    return ctx.collections.length > 0 ? { ...base, collections: ctx.collections } : null
+    const collections = resolveCollections(ctx.collections, ctx.entries)
+    return collections.length > 0 ? { ...base, collections } : null
   }
 
   const entries = resolveSection(node.source, ctx.entries)
   return entries.length > 0 ? { ...base, entries } : null
+}
+
+/**
+ * A collection is a curated slug list, which is the section semantics a
+ * `slugs` source already expresses — so it resolves through the same code
+ * rather than a second copy of it.
+ *
+ * A member the index does not carry — unpublished since it was curated, or
+ * never synced — drops out, but is counted in a warning: a curated list quietly
+ * losing members is otherwise invisible to whoever configured it.
+ */
+function resolveCollections(collections: StoreCollection[], entries: RegistryEntry[]): ResolvedCollection[] {
+  const out: ResolvedCollection[] = []
+  for (const { memberSlugs, ...collection } of collections) {
+    const members = resolveSection({ slugs: memberSlugs }, entries)
+    const missing = memberSlugs.length - members.length
+    if (missing > 0) {
+      console.warn(
+        `[discover-page] collection "${collection.id}": ${missing}/${memberSlugs.length} members not in the index`,
+      )
+    }
+    if (members.length > 0) out.push({ ...collection, entries: members })
+  }
+  return out
 }
 
 function hasCollectionsSection(node: DiscoverNode): boolean {

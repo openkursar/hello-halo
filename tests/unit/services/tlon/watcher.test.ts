@@ -14,7 +14,7 @@ import { getTestDir } from '../../setup'
 type WatchCallback = (err: Error | null, events: Array<{ type: string; path: string }>) => void
 
 const subscriptions = new Map<string, { cb: WatchCallback; unsubscribe: ReturnType<typeof vi.fn> }>()
-const subscribeMock = vi.fn(async (dir: string, cb: WatchCallback) => {
+const subscribeMock = vi.fn(async (dir: string, cb: WatchCallback, _options?: { ignore?: string[] }) => {
   const unsubscribe = vi.fn(async () => {
     subscriptions.delete(dir)
   })
@@ -23,7 +23,10 @@ const subscribeMock = vi.fn(async (dir: string, cb: WatchCallback) => {
 })
 
 vi.mock('@parcel/watcher', () => ({
-  default: { subscribe: (dir: string, cb: WatchCallback) => subscribeMock(dir, cb) },
+  default: {
+    subscribe: (dir: string, cb: WatchCallback, options?: { ignore?: string[] }) =>
+      subscribeMock(dir, cb, options),
+  },
 }))
 
 const enqueueFiles = vi.fn()
@@ -38,6 +41,7 @@ vi.mock('../../../../src/main/services/tlon/ingest', () => ({
 import {
   _resetTlonRegistry,
   createKB,
+  getKB,
   updateKB,
   addRawFiles,
 } from '../../../../src/main/services/tlon/service'
@@ -111,6 +115,42 @@ describe('Tlon Watcher', () => {
       updateKB(kb.id, { status: 'paused' })
       await startWatchersForKB(kb.id)
       expect(subscriptions.has(getKBRawDir(kb.id))).toBe(false)
+    })
+
+    it('refuses to subscribe to a disk root', async () => {
+      const kb = await createKbAndSettle('Root')
+      const root = path.parse(process.cwd()).root
+      await startLinkedDirWatch(kb.id, { id: 'r1', path: root, label: 'root', watching: true })
+      expect(subscriptions.has(root)).toBe(false)
+    })
+
+    it('subscribes with a native ignore list for dependency and VCS dirs', async () => {
+      const linked = makeScratchDir()
+      await createKbAndSettle('Ignore', [{ path: linked, label: 'docs' }])
+
+      const call = subscribeMock.mock.calls.find(c => c[0] === linked)
+      expect(call).toBeDefined()
+      expect(call![2]).toEqual(
+        expect.objectContaining({
+          ignore: expect.arrayContaining([
+            path.join(linked, 'node_modules'),
+            path.join(linked, '.git'),
+          ]),
+        })
+      )
+    })
+
+    it('does not watch a linked dir marked watching=false', async () => {
+      const linked = makeScratchDir()
+      const kb = await createKbAndSettle('NoWatch', [{ path: linked, label: 'off' }])
+      const entry = getKB(kb.id)
+      if (!entry) throw new Error('KB missing')
+      entry.linkedDirs[0].watching = false
+
+      await stopWatchersForKB(kb.id)
+      await startWatchersForKB(kb.id)
+      expect(subscriptions.has(linked)).toBe(false)
+      expect(subscriptions.has(getKBRawDir(kb.id))).toBe(true)
     })
   })
 

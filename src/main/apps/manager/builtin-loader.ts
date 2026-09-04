@@ -27,17 +27,25 @@
  *      b. Stamp `spec.store.install_source = 'builtin'` on the parent and on
  *         every bundled skill — this is the marker every other layer uses.
  *      c. Look up `(specId, spaceId)` in the App Manager.
- *         - Not present: install fresh, install bundled skills, runtime.activate(),
+ *         - Not present: install fresh, install every `requires.skills` entry
+ *           (bundled from disk, non-bundled from the store — delegated to
+ *           registry.service.ts:installRequiredSkills), runtime.activate(),
  *           apply default status (active or paused) per manifest.
  *         - Present, status='uninstalled': respect user choice; skip refresh.
  *           User can re-enable via the standard reinstall flow at any time.
  *         - Present, version unchanged: no-op (cheap by-spec lookup, no I/O).
  *         - Present, version differs: in-place spec refresh via updateSpec().
  *           userConfig / status / overrides are preserved automatically because
- *           updateSpec only touches the spec_json column.
+ *           updateSpec only touches the spec_json column. Bundled skills are
+ *           refreshed by content diff regardless of parent version; non-bundled
+ *           skills are (re)installed from the store if missing.
  *   3. Garbage-collect: any installed app marked install_source='builtin' that
  *      is no longer in the current manifest (renamed, removed, swapped to a
  *      different product variant) is hard-deleted along with its bundled skills.
+ *      Non-bundled skill dependencies installed via the store are NOT stamped
+ *      `install_source='builtin'` — they are ordinary store installs (so they
+ *      follow the normal store update/uninstall path) and this GC pass leaves
+ *      them alone.
  *
  * Performance notes:
  *   - Runs as a Tier-3 idle task (registerIdleTask) so it never delays the UI.
@@ -240,6 +248,40 @@ function stampBuiltin<T extends AppSpec>(spec: T): T {
 }
 
 // ---------------------------------------------------------------------------
+// Required-skill installation
+// ---------------------------------------------------------------------------
+
+/**
+ * Install every dependency in `spec.requires.skills` — both the ones bundled
+ * under `<appDir>/skills/` (passed in `bundledSkills`, matched by `dep.id`)
+ * and any plain store-slug reference (e.g. `halo-team/weoa-todo-list`), which
+ * this delegates to `installFromStore()` the same way a store-installed app's
+ * dependencies are resolved. Without this, a builtin whose spec declares a
+ * non-bundled skill dependency would install with that dependency silently
+ * missing, since `buildBundledSkillSpecs()` only ever sees what physically
+ * shipped under `skills/`.
+ *
+ * Dynamic import mirrors the runtime.activate() call below — it keeps
+ * registry.service.ts's transitive electron/network module graph out of the
+ * module-load path for consumers that only need the manifest-scanning parts
+ * of this file (e.g. builtin-gc-flag.ts, unit tests).
+ */
+async function installRequiredSkillsForBuiltin(
+  spec: AppSpec,
+  spaceId: string | null,
+  bundledSkills: SkillSpec[],
+): Promise<void> {
+  if (!spec.requires?.skills?.length) return
+  try {
+    const { installRequiredSkills } = await import('../../store/registry.service')
+    const bundledMap = new Map(bundledSkills.map(s => [s.name, s]))
+    await installRequiredSkills(spec, spaceId, bundledMap)
+  } catch (err) {
+    console.warn(`[BuiltinLoader] Failed to install required skills for "${spec.name}":`, err)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Per-entry processing
 // ---------------------------------------------------------------------------
 
@@ -326,27 +368,9 @@ async function processEntry(
       return { parsed: true }
     }
 
-    // Install bundled skills (mirror of registry.service.ts:installRequiredSkills)
-    for (const skillSpec of bundledSkills) {
-      try {
-        await appManager.install(entry.spaceId, skillSpec, {})
-      } catch (err) {
-        if (err instanceof AppAlreadyInstalledError) {
-          // Another path already installed this skill — refresh its content.
-          const existingSkill = appManager.listApps({ spaceId: entry.spaceId, type: 'skill' })
-            .find(a => a.specId === skillSpec.name)
-          if (existingSkill) {
-            try {
-              appManager.updateSpec(existingSkill.id, skillSpec as unknown as Record<string, unknown>)
-            } catch (refreshErr) {
-              console.warn(`[BuiltinLoader] Failed to refresh existing bundled skill "${skillSpec.name}":`, refreshErr)
-            }
-          }
-        } else {
-          console.warn(`[BuiltinLoader] Failed to install bundled skill "${skillSpec.name}":`, err)
-        }
-      }
-    }
+    // Install every declared skill dependency — bundled (from `skills/` on
+    // disk) and non-bundled (fetched from the store by slug) alike.
+    await installRequiredSkillsForBuiltin(stampedSpec, entry.spaceId, bundledSkills)
 
     // Activate runtime so subscriptions and event sources wire up.
     // Dynamic import keeps the apps/runtime module graph (and its transitive
@@ -449,6 +473,36 @@ async function processEntry(
         console.warn(`[BuiltinLoader] Failed to refresh bundled skill "${skillSpec.name}":`, err)
       }
     }
+  }
+
+  // Non-bundled requires.skills entries (store slug references) aren't covered
+  // by the loop above, which only walks `skills/` on disk. Only entries with no
+  // existing DB record are passed through: installRequiredSkills()'s network
+  // fetch (registry auth + spec download) happens before its own
+  // AppAlreadyInstalledError check, so without this filter every launch would
+  // pay a store round-trip per dependency regardless of whether it's already
+  // installed. This also protects a skill the user explicitly uninstalled —
+  // the bundled-skill branch of installRequiredSkills() force-reinstalls on
+  // AppAlreadyInstalledError, which would otherwise undo the `continue` above.
+  //
+  // Matched by spec.store.slug rather than specId: a non-bundled dep's `id`
+  // (e.g. "halo-team/weoa-todo-list") is the registry slug it was installed
+  // under, which withInstallStoreMetadata() persists as spec.store.slug —
+  // specId instead holds the fetched spec's own `name` field, which is not
+  // guaranteed to equal the slug's second segment.
+  const missingNonBundledDeps = stampedSpec.requires?.skills?.filter(dep => {
+    if (typeof dep !== 'string' && dep.bundled === true) return false
+    const skillId = typeof dep === 'string' ? dep : dep.id
+    return !appManager.listApps({ spaceId: entry.spaceId, type: 'skill' })
+      .some(a => a.spec.store?.slug === skillId)
+  })
+
+  if (missingNonBundledDeps?.length) {
+    const nonBundledSpec: AppSpec = {
+      ...stampedSpec,
+      requires: { ...stampedSpec.requires, skills: missingNonBundledDeps },
+    }
+    await installRequiredSkillsForBuiltin(nonBundledSpec, entry.spaceId, [])
   }
 
   return { parsed: true }

@@ -40,6 +40,10 @@ export async function collectDiagnosticReport(): Promise<DiagnosticReport> {
         apiUrlHost = currentSource.apiUrl ? new URL(currentSource.apiUrl).hostname : ''
       } else if (currentSource.authType === 'oauth') {
         hasApiKey = !!(currentSource.accessToken)
+      } else if (currentSource.authType === 'delegated') {
+        // The credential lives in the CLI, not in Halo's config; reporting
+        // "no key" here would read as a broken install.
+        hasApiKey = true
       }
     }
   }

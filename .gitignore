@@ -25,6 +25,7 @@ resources/git-bash/
 
 # E2E test results
 tests/e2e/results/
+tests/e2e/fixtures/.e2e-seed-tmp/
 
 app.log
 # Local docs

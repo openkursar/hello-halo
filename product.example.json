@@ -28,6 +28,25 @@
     },
 
     {
+      "type": "claude-cli",
+      "displayName": {
+        "en": "Claude Code CLI",
+        "zh-CN": "Claude Code CLI"
+      },
+      "recommended": false,
+      "description": {
+        "en": "The bundled official Claude Code CLI signs in and sends requests, behaving exactly like the official client; switch to this when the regular Claude login stops working",
+        "zh-CN": "由内置官方 Claude Code CLI 登录并发送请求，行为与官方客户端完全一致；普通 Claude 登录失效时可改用此方式"
+      },
+      "icon": "terminal",
+      "iconBgColor": "#D97757",
+      "builtin": true,
+      "enabled": true,
+      "setupHidden": true,
+      "platforms": ["darwin"]
+    },
+
+    {
       "type": "custom",
       "displayName": {
         "en": "Custom API",

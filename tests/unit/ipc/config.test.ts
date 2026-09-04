@@ -37,6 +37,10 @@ vi.mock('../../../src/main/services/api-validator.service', () => ({
   fetchModelsFromApi: fetchModelsFromApiMock
 }))
 
+vi.mock('../../../src/main/services/analytics/analytics.service', () => ({
+  analytics: { track: vi.fn(), trackErrorSurface: vi.fn() },
+}))
+
 vi.mock('../../../src/main/services/health', () => ({
   runConfigProbe: vi.fn(),
   emitConfigChange: vi.fn()

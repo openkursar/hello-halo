@@ -8,6 +8,9 @@
  *   - Preset data lives in src/shared/data/model-capabilities.json
  *   - Users can override any field per-model inside their AISource config
  *   - Priority: user override > JSON preset > built-in defaults
+ *   - Vision has its own resolution chain implemented in
+ *     src/shared/constants/model-capabilities.ts — every consumer
+ *     (renderer hint, backend config, image fallback) resolves through it.
  */
 
 import type { ReasoningEffortSetting } from '../constants/reasoning-effort'
@@ -53,12 +56,29 @@ export type ModelCapabilityOverride = Partial<ModelCapability> & UserModelSettin
 /** Preset capability merged with the user's own settings. */
 export type ResolvedModelCapability = ModelCapability & UserModelSettings
 
+/**
+ * Substring lists driving the vision id-heuristic
+ * (see shared/constants/model-capabilities.ts for the full chain).
+ */
+export interface VisionKeywordLists {
+  /**
+   * Substrings that mark a model vision-capable (e.g. "-vl", "vision").
+   * Checked before the blocklist so entries like "glm-4v" are rescued from
+   * the "glm-4" block entry.
+   */
+  allowlist: string[]
+  /** Substrings that mark a model text-only (e.g. "deepseek", "glm-4") */
+  blocklist: string[]
+}
+
 /** Top-level structure of model-capabilities.json */
 export interface ModelCapabilitiesPreset {
   /** Schema version for future migration support */
   version: number
   /** ISO date of when this preset was last updated */
   updatedAt: string
+  /** Substring lists for the vision id-heuristic */
+  vision?: VisionKeywordLists
   /**
    * Prefix-based fallback patterns.
    * When no exact match exists in `models`, the service tries the longest

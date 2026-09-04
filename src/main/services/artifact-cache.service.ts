@@ -25,6 +25,7 @@ import {
   shutdown as shutdownWorker
 } from './watcher-host.service'
 import type { ProcessedFsEvent } from '../../shared/protocol/file-watcher.protocol'
+import { isDiskRoot } from '../../shared/disk-paths'
 
 // Re-export shared types for downstream consumers (artifact.service.ts etc.)
 export type {
@@ -163,19 +164,6 @@ function removeTreeNodeDescendants(cache: SpaceCache, dirPath: string): void {
       cache.loadedDirs.delete(key)
     }
   }
-}
-
-/**
- * Check if path is a disk root directory.
- * Disk roots are dangerous to scan/watch due to massive file counts.
- */
-function isDiskRoot(path: string): boolean {
-  if (/^[A-Z]:\\?$/i.test(path)) return true
-  if (path === '/') return true
-  if (/^\/Volumes\/[^/]+\/?$/.test(path)) return true
-  if (/^\/mnt\/[^/]+\/?$/.test(path)) return true
-  if (/^\/media\/[^/]+\/?$/.test(path)) return true
-  return false
 }
 
 // ============================================

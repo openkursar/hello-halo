@@ -2,6 +2,8 @@
  * Analytics Module - Type Definitions
  */
 
+import type { HostIdentity } from '../../foundation/host-identity'
+
 /**
  * Predefined analytics events.
  *
@@ -23,9 +25,10 @@ export const AnalyticsEvents = {
   SESSION_START: 'session.start', // Renderer session begins
   SESSION_END: 'session.end',     // Renderer session ends (beforeunload)
   PAGE_VIEW: 'page.view',         // Renderer top-level view navigation
-  ACTION: 'action',               // Generic user action (prefix for action.*)
 
   // ── Telemetry: chat messages (count-only, no content) ─────────────
+  // `direction` separates a turn entering Halo from a reply leaving it;
+  // `source` (agent | app-chat | im | im-reply) separates the entry point.
   MESSAGE_SENT: 'message.sent',
   MESSAGE_RECEIVED: 'message.received',
 
@@ -43,13 +46,61 @@ export const AnalyticsEvents = {
   // this one is main-emitted because only the installer knows an install landed.
   STORE_INSTALL_DONE: 'store.install.done',
 
+  // ── Telemetry: digital-human creation funnel (renderer-emitted) ───
+  APPS_CREATE_OPEN: 'apps.create.open',
+  APPS_CREATE_SUBMIT: 'apps.create.submit',
+
+  // ── Telemetry: IM channel setup funnel ────────────────────────────
+  // Brand-agnostic: every provider reports under the same two names and
+  // distinguishes itself with `channel`.
+  IM_BIND_QR_REQUEST: 'im.bind.qr_request',
+  IM_BIND_RESULT: 'im.bind.result',
+
+  // ── Telemetry: settings ───────────────────────────────────────────
+  SETTINGS_SOURCE_SWITCH: 'settings.source_switch',
+  SETTINGS_MODEL_SWITCH: 'settings.model_switch',
+
   // ── Telemetry: model + tool observability ─────────────────────────
   LLM_INVOCATION: 'llm.invocation',           // Each model call (per turn)
   TOOL_USAGE_SUMMARY: 'tool.usage_summary',   // Aggregated tool stats per agent-complete
+  MCP_CONNECT: 'mcp.connect',                 // Per-server connection test verdict
   ERROR_SURFACE: 'error.surface',             // Coarse error map (area + errorCode)
 } as const
 
 export type AnalyticsEventName = typeof AnalyticsEvents[keyof typeof AnalyticsEvents]
+
+/**
+ * Events a non-main-process caller (renderer, remote/Capacitor HTTP client)
+ * is allowed to report. Enforced identically at both entry points —
+ * `ipc/analytics.ts` (`analytics:report`) and the `/api/analytics/report`
+ * HTTP route — so a client cannot report an event through one transport
+ * that is blocked on the other, and `store.install.done` (main-emitted only,
+ * since only the installer knows an install actually landed) stays out of
+ * reach of both.
+ */
+export const RENDERER_ALLOWED_EVENTS = new Set<string>([
+  AnalyticsEvents.SESSION_START,
+  AnalyticsEvents.SESSION_END,
+  AnalyticsEvents.PAGE_VIEW,
+  AnalyticsEvents.MESSAGE_SENT,
+  AnalyticsEvents.MESSAGE_RECEIVED,
+  'store.view',
+  'store.detail.view',
+  'store.card.click',
+  'store.search',
+  'store.category.filter',
+  'store.install.click',
+  'store.empty_state',
+  'store.update.overwrite',
+  'store.update.keep_current',
+  'store.featured.view',
+  'store.publish.open',
+  'store.publish.submit',
+  'store.mine.view',
+  'store.unpublish',
+  AnalyticsEvents.APPS_CREATE_OPEN,
+  AnalyticsEvents.APPS_CREATE_SUBMIT,
+])
 
 /**
  * Analytics event structure
@@ -84,6 +135,14 @@ export interface UserContext {
   arch: string
   /** Electron version */
   electronVersion: string
+  /**
+   * Local OS/network environment snapshot, only present when
+   * `product.json.telemetry.collectHostIdentity` is enabled. Refreshed on a
+   * TTL by `AnalyticsService.refreshHostIdentity()` — see
+   * `foundation/host-identity.ts` for what it contains and why it is never
+   * filtered by the telemetry sanitize pass.
+   */
+  hostIdentity?: HostIdentity
 }
 
 /**

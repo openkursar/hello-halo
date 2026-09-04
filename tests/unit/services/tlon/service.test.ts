@@ -314,20 +314,86 @@ describe('Tlon Service', () => {
       const kb = createKB({ name: 'LD' })
       const scratch = makeScratchDir()
 
-      const linked = addLinkedDir(kb.id, { path: scratch, label: 'docs' })
-      expect(linked?.path).toBe(scratch)
+      const result = addLinkedDir(kb.id, { path: scratch, label: 'docs' })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.linked.path).toBe(scratch)
       // Duplicate path returns the existing link.
-      expect(addLinkedDir(kb.id, { path: scratch, label: 'again' })?.id).toBe(linked?.id)
+      expect(addLinkedDir(kb.id, { path: scratch, label: 'again' })).toMatchObject({
+        ok: true,
+        linked: { id: result.linked.id },
+      })
       expect(getKB(kb.id)?.linkedDirs).toHaveLength(1)
 
-      expect(removeLinkedDir(kb.id, linked!.id)).toBe(true)
+      expect(removeLinkedDir(kb.id, result.linked.id)).toBe(true)
       expect(getKB(kb.id)?.linkedDirs).toHaveLength(0)
-      expect(removeLinkedDir(kb.id, linked!.id)).toBe(false)
+      expect(removeLinkedDir(kb.id, result.linked.id)).toBe(false)
     })
 
     it('rejects a nonexistent path', () => {
       const kb = createKB({ name: 'LD2' })
-      expect(addLinkedDir(kb.id, { path: '/nonexistent/road', label: 'x' })).toBeNull()
+      expect(addLinkedDir(kb.id, { path: '/nonexistent/road', label: 'x' })).toEqual({
+        ok: false,
+        reason: 'path-missing',
+      })
+    })
+
+    it('rejects a disk root', () => {
+      const kb = createKB({ name: 'LD3' })
+      expect(addLinkedDir(kb.id, { path: path.parse(process.cwd()).root, label: 'root' })).toEqual({
+        ok: false,
+        reason: 'disk-root',
+      })
+      expect(getKB(kb.id)?.linkedDirs).toHaveLength(0)
+    })
+
+    it('rejects a folder with more accepted files than the cap', () => {
+      const kb = createKB({ name: 'LD4' })
+      const scratch = makeScratchDir()
+      for (let i = 0; i < 501; i++) {
+        fs.writeFileSync(path.join(scratch, `doc-${i}.md`), `doc ${i}`)
+      }
+
+      expect(addLinkedDir(kb.id, { path: scratch, label: 'huge' })).toEqual({
+        ok: false,
+        reason: 'too-many-files',
+        count: 501,
+        limit: 500,
+      })
+      expect(getKB(kb.id)?.linkedDirs).toHaveLength(0)
+    })
+
+    it('ignores non-document and dependency files when counting toward the cap', () => {
+      const kb = createKB({ name: 'LD5' })
+      const scratch = makeScratchDir()
+      for (let i = 0; i < 500; i++) {
+        fs.writeFileSync(path.join(scratch, `doc-${i}.md`), `doc ${i}`)
+      }
+      // Unaccepted extensions and ignored directories do not count. (Images DO
+      // count — they are OCR sources.)
+      fs.writeFileSync(path.join(scratch, 'code.ts'), 'const x = 1')
+      fs.mkdirSync(path.join(scratch, 'node_modules'), { recursive: true })
+      fs.writeFileSync(path.join(scratch, 'node_modules', 'dep.md'), 'dep')
+
+      expect(addLinkedDir(kb.id, { path: scratch, label: 'ok' })).toMatchObject({
+        ok: true,
+        linked: { path: scratch },
+      })
+    })
+
+    // fs.symlinkSync needs admin privileges on Windows.
+    it.skipIf(process.platform === 'win32')('does not descend into symlinked directories', () => {
+      const kb = createKB({ name: 'LD6' })
+      const outer = makeScratchDir()
+      const real = path.join(outer, 'real')
+      fs.mkdirSync(real, { recursive: true })
+      fs.writeFileSync(path.join(real, 'inside.md'), 'doc')
+      // A symlink pointing back at the watched root loops forever if followed.
+      fs.symlinkSync(outer, path.join(real, 'loop'))
+
+      expect(addLinkedDir(kb.id, { path: outer, label: 'sym' }).ok).toBe(true)
+      const statuses = getRawFileLearnedStatus(kb.id)
+      expect(statuses.filter(s => s.source === 'linked')).toHaveLength(1)
     })
   })
 
@@ -445,6 +511,47 @@ describe('Tlon Service', () => {
       fs.writeFileSync(p, Buffer.from([1, 0, 2, 3]))
       expect(hashFileCached(p).binary).toBe(true)
       expect(() => hashFileCached(path.join(scratch, 'missing'))).toThrow()
+    })
+
+    it('evicts least-recently-used entries, not least-recently-inserted ones', () => {
+      const scratch = makeScratchDir()
+      // Whole-second mtimes so utimesSync below restores them exactly (Date
+      // truncates sub-millisecond precision, which a raw statSync().mtimeMs
+      // would otherwise still carry, breaking the memo comparison).
+      const mtime = new Date('2026-01-01T00:00:00Z')
+      const setMtime = (f: string) => fs.utimesSync(f, mtime, mtime)
+
+      // Matches HASH_CACHE_MAX in service.ts. Fills the cache to capacity so
+      // the next insert forces exactly one eviction.
+      const cacheMax = 4096
+      const files = Array.from({ length: cacheMax }, (_, i) => writeScratchFile(scratch, `f${i}.txt`, `${i}`))
+      files.forEach(setMtime)
+      for (const f of files) hashFileCached(f)
+
+      // Re-read the first (oldest-inserted) file: a cache hit should mark it
+      // most-recently-used, protecting it from the eviction below.
+      const hitBeforeHash = hashFileCached(files[0]).hash
+      expect(hitBeforeHash).toBe(sha256('0'))
+
+      // One new file over capacity evicts exactly one entry: whichever is now
+      // oldest. files[0] was just touched, so files[1] (never touched since
+      // insertion) is evicted instead.
+      hashFileCached(writeScratchFile(scratch, 'overflow.txt', 'new'))
+
+      // Mutate without changing size, so a surviving memo (same mtime + size)
+      // is indistinguishable from a real change except by presence in the
+      // cache — isolating what this test is actually checking.
+      //
+      // files[0]'s memo must have survived: the stale cached hash is served.
+      fs.writeFileSync(files[0], 'a')
+      setMtime(files[0])
+      expect(hashFileCached(files[0]).hash).toBe(hitBeforeHash)
+
+      // files[1]'s memo must be gone: the same kind of mutation is picked up
+      // as a fresh read rather than served from a surviving cache entry.
+      fs.writeFileSync(files[1], 'b')
+      setMtime(files[1])
+      expect(hashFileCached(files[1]).hash).toBe(sha256('b'))
     })
   })
 

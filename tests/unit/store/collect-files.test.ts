@@ -6,12 +6,22 @@
 
 import { describe, it, expect, vi } from 'vitest'
 
+
+// Newly reachable via ai-sources/manager.ts or mcp-manager.ts pulling in
+// analytics.service.ts (which statically imports providers/baidu.ts's
+// `BrowserWindow` from 'electron') — mock it out like every other test that
+// touches this transitive chain, so this file's own module graph controls
+// what it needs rather than the real telemetry provider stack.
+vi.mock('../../../src/main/services/analytics/analytics.service', () => ({
+  analytics: { track: vi.fn(), trackErrorSurface: vi.fn() }
+}))
+
 // collectFiles itself is pure, but publish/index.ts also wires the publish()
 // entry point to app-manager bootstrap, product config, and the registry —
 // none of which can load in plain Node. Stub those siblings out.
 vi.mock('../../../src/main/apps/manager', () => ({ getAppManager: () => null }))
 vi.mock('../../../src/main/services/ai-sources/auth-loader', () => ({ loadProductConfig: () => ({}) }))
-vi.mock('../../../src/main/store/registry.service', () => ({ getRegistries: () => [] }))
+vi.mock('../../../src/main/store/registry.service', () => ({ getRegistries: () => [], findStoreEntry: () => null }))
 
 import { collectFiles } from '../../../src/main/store/publish'
 import { pack, unpack } from '../../../src/main/store/dhpkg'
@@ -76,11 +86,11 @@ describe('store/collectFiles', () => {
     expect(missingSkillIds).toEqual(['absent-skill'])
   })
 
-  it('digital human: non-bundled and string deps contribute no files', () => {
+  it('digital human: non-bundled and string deps are flagged missing when unresolvable and not installed', () => {
     const spec = dhSpec({ skills: ['plain-dep', { id: 'soft-dep', bundled: false }] })
     const { files, missingSkillIds } = collectFiles(spec, fakeManager([]), 'space-1')
     expect(files).toEqual({})
-    expect(missingSkillIds).toEqual([])
+    expect(missingSkillIds).toEqual(['plain-dep', 'soft-dep'])
   })
 
   it('packs into a dhpkg whose entries match the registry layout', async () => {

@@ -165,6 +165,7 @@ async function emitRunsReplay(
       trigger: run.triggerType,
       status: run.status,
       durationMs: run.durationMs ?? 0,
+      tokensUsed: run.tokensUsed,
       errorCode: run.errorMessage ? deriveErrorCode(run.errorMessage) : undefined,
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,

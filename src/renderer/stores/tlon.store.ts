@@ -163,6 +163,48 @@ function notifyRejected(rejected: string[]) {
   })
 }
 
+/** Localized toast for a rejected watched folder — codes come from tlon.controller. */
+function notifyLinkedDirRejection(res: { error?: string; code?: string; data?: unknown }) {
+  const detail = (res.data ?? {}) as { count?: number; limit?: number }
+  switch (res.code) {
+    case 'TOO_MANY_FILES':
+      useNotificationStore.getState().show({
+        title: i18n.t('Folder has too many files ({{count}}). Watched folders are limited to {{limit}} files.', { count: detail.count ?? 0, limit: detail.limit ?? 0 }),
+        variant: 'warning',
+        duration: 6000,
+      })
+      break
+    case 'FOLDER_TOO_LARGE':
+      useNotificationStore.getState().show({
+        title: i18n.t('This folder is too large to watch. Watched folders are meant for a small set of documents.'),
+        variant: 'warning',
+        duration: 6000,
+      })
+      break
+    case 'DISK_ROOT':
+      useNotificationStore.getState().show({
+        title: i18n.t('A whole disk cannot be watched. Pick a documents folder instead.'),
+        variant: 'warning',
+        duration: 6000,
+      })
+      break
+    case 'PATH_NOT_FOUND':
+      useNotificationStore.getState().show({
+        title: i18n.t('Folder does not exist.'),
+        variant: 'warning',
+        duration: 5000,
+      })
+      break
+    default:
+      if (res.error) console.error('[TlonStore] addLinkedDir rejected:', res.error)
+      useNotificationStore.getState().show({
+        title: i18n.t('Failed to add watched folder'),
+        variant: 'error',
+        duration: 5000,
+      })
+  }
+}
+
 export const useTlonStore = create<TlonState>((set, get) => ({
   kbs: [],
   selectedKBId: null,
@@ -340,6 +382,7 @@ export const useTlonStore = create<TlonState>((set, get) => ({
         await get().refreshKB(kbId)
         return true
       }
+      notifyLinkedDirRejection(res)
       return false
     } catch (err) {
       console.error('[TlonStore] addLinkedDir error:', err)

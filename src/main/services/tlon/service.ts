@@ -20,10 +20,12 @@ import {
   readFileSync,
   writeFileSync,
   readdirSync,
+  realpathSync,
   statSync,
   rmSync,
   renameSync,
   copyFileSync,
+  type Dirent,
 } from 'fs'
 import { v4 as uuidv4 } from 'uuid'
 import type {
@@ -58,6 +60,8 @@ import {
   DEFAULT_LOG_MD,
 } from './defaults'
 import { isExtractable } from './extract'
+import { CPP_LEVEL_IGNORE_DIRS } from '../../../shared/constants/ignore-patterns'
+import { isDiskRoot } from '../../../shared/disk-paths'
 
 // ============================================================================
 // Accepted source extensions (case-insensitive). Everything else is rejected.
@@ -84,6 +88,25 @@ const IGNORED_IMPORT_DIRS = new Set([
   'dist', 'build', '.next', 'target', 'vendor', 'coverage',
   '.idea', '.vscode', '.cache', '.gradle',
 ])
+
+/**
+ * Watched folders hold a small set of documents, not bulk corpora. Linking a
+ * folder with more accepted source files than this is rejected up front, and a
+ * folder that grows past the cap after linking is ignored by ingest, listing,
+ * and stats until it drops back under it.
+ */
+export const MAX_LINKED_DIR_FILES = 500
+
+/**
+ * Ceiling on directory entries visited by a single walk. Bounds the cost of
+ * scanning huge trees regardless of file-type mix: a walk that hits the
+ * ceiling reports itself truncated instead of grinding through millions of
+ * entries.
+ */
+const WALK_ENTRY_BUDGET = 20000
+
+/** Directory names pruned from every watched-folder walk — matches the watcher's native `ignore` list. */
+const CPP_IGNORED_DIR_NAMES = new Set(CPP_LEVEL_IGNORE_DIRS)
 
 /** True when the path has an accepted (document-like) text extension. */
 export function isAcceptedTextFile(filePath: string): boolean {
@@ -138,7 +161,11 @@ export function sha256(buf: Buffer | string): string {
  * Content-hash memo keyed by absolute path. Learned-status pulls and ingest
  * scans re-hash every source repeatedly (per progress pull, per boot); an
  * unchanged mtime+size reuses the digest instead of re-reading the bytes.
- * Bounded, FIFO eviction.
+ * Bounded, LRU eviction: Map iteration order tracks insertion order, and a
+ * hit re-inserts its entry so the oldest key is always the least recently
+ * used one — without this, a KB with more files than the cap would evict
+ * entries in the same 1Hz poll that just reused them, degrading every scan
+ * back to full re-reads.
  */
 const HASH_CACHE_MAX = 4096
 const hashCache = new Map<string, { mtimeMs: number; size: number; hash: string; binary: boolean }>()
@@ -152,7 +179,11 @@ export function _resetTlonHashCache(): void {
 export function hashFileCached(absolutePath: string): { hash: string; size: number; binary: boolean } {
   const st = statSync(absolutePath)
   const cached = hashCache.get(absolutePath)
-  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached
+  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+    hashCache.delete(absolutePath)
+    hashCache.set(absolutePath, cached)
+    return cached
+  }
 
   const buf = readFileSync(absolutePath)
   const entry = { mtimeMs: st.mtimeMs, size: st.size, hash: sha256(buf), binary: looksBinary(buf) }
@@ -376,6 +407,11 @@ export async function deleteKB(kbId: string): Promise<boolean> {
     // Same lazy-import pattern (ingest.ts imports service.ts).
     const { evictIngestState } = await import('./ingest')
     evictIngestState(kbId)
+    for (const linked of entry.linkedDirs) {
+      lastCapWarnStatus.delete(linked.path)
+    }
+    lastCapWarnStatus.delete(getKBRawDir(kbId))
+    lastCapWarnStatus.delete(getKBTextDir(kbId))
 
     const dir = getKBDir(kbId)
     if (existsSync(dir)) {
@@ -444,18 +480,122 @@ export function unbindFromApp(kbId: string, appId: string): boolean {
 // Linked directories
 // ============================================================================
 
+/** addLinkedDir outcome: the created (or pre-existing) link, or a machine-readable rejection. */
+export type AddLinkedDirResult =
+  | { ok: true; linked: LinkedDirectory }
+  | {
+      ok: false
+      reason: 'kb-not-found' | 'path-missing' | 'disk-root' | 'folder-too-large' | 'too-many-files'
+      /** Accepted source files counted (exact — the walk completed). */
+      count?: number
+      limit?: number
+    }
+
+const lastCapWarnStatus = new Map<string, string>()
+
+function warnLinkedDirIgnored(linkedPath: string, status: 'too-many-files' | 'truncated'): void {
+  // Learned-status listing runs at up to 1Hz during ingest; warn once per path
+  // per status so a later status change still gets its own warning.
+  if (lastCapWarnStatus.get(linkedPath) === status) return
+  lastCapWarnStatus.set(linkedPath, status)
+  if (status === 'truncated') {
+    console.warn(
+      `[Tlon] Watched folder is too large to scan (over ${WALK_ENTRY_BUDGET} entries), ignoring it: ${linkedPath}`
+    )
+  } else {
+    console.warn(
+      `[Tlon] Watched folder is over the ${MAX_LINKED_DIR_FILES}-file cap, ignoring it: ${linkedPath}`
+    )
+  }
+}
+
+/**
+ * Walk a KB's internal raw/ or text/ directory. Unlike `walkLinkedSources`
+ * these have no file-count cap — only the same entry-count walk budget
+ * applies — and truncation is warned once per path so an unexpectedly huge
+ * KB directory doesn't silently drop files from stats and listings instead
+ * of failing loudly.
+ */
+function walkKbDir(dirPath: string): WalkResult {
+  const result = walkFiles(dirPath)
+  if (result.truncated && lastCapWarnStatus.get(dirPath) !== 'truncated') {
+    lastCapWarnStatus.set(dirPath, 'truncated')
+    console.warn(
+      `[Tlon] Directory is too large to scan fully (over ${WALK_ENTRY_BUDGET} entries), listing is partial: ${dirPath}`
+    )
+  }
+  return result
+}
+
+type LinkedSourcesOutcome =
+  | { status: 'ok'; files: string[] }
+  | { status: 'too-many-files'; count: number }
+  | { status: 'truncated' }
+
+/**
+ * Walk one watched folder under the single cap policy shared by add-time
+ * rejection and every runtime read. Resolves symlinks first so all consumers
+ * (add, ingest, listing, stats) classify the same physical tree.
+ */
+function walkLinkedSources(linkedPath: string): LinkedSourcesOutcome {
+  let resolved = linkedPath
+  try {
+    resolved = realpathSync(linkedPath)
+  } catch { /* keep the original path */ }
+  const walk = walkFiles(resolved, { skipDir: name => CPP_IGNORED_DIR_NAMES.has(name) })
+  if (walk.truncated) return { status: 'truncated' }
+  const files = walk.files.filter(isAcceptedSourceFile)
+  if (files.length > MAX_LINKED_DIR_FILES) {
+    return { status: 'too-many-files', count: files.length }
+  }
+  return { status: 'ok', files }
+}
+
+/**
+ * Accepted source files of one watched folder, or null when the folder is over
+ * the cap or too large to walk. Shared by ingest, learned-status listing, and
+ * stats so an over-cap folder is ignored consistently everywhere — the same
+ * policy that rejects it at add time.
+ */
+function listLinkedSourceFiles(linkedPath: string): string[] | null {
+  const outcome = walkLinkedSources(linkedPath)
+  if (outcome.status === 'ok') return outcome.files
+  warnLinkedDirIgnored(linkedPath, outcome.status)
+  return null
+}
+
 export function addLinkedDir(
   kbId: string,
   dir: { path: string; label: string }
-): LinkedDirectory | null {
+): AddLinkedDirResult {
   const entry = getRegistry().get(kbId)
-  if (!entry) return null
+  if (!entry) return { ok: false, reason: 'kb-not-found' }
   if (!existsSync(dir.path)) {
     console.warn(`[Tlon] addLinkedDir: path does not exist: ${dir.path}`)
-    return null
+    return { ok: false, reason: 'path-missing' }
+  }
+  // Resolve symlinks so a link pointing at a whole volume is still caught.
+  let resolved = dir.path
+  try {
+    resolved = realpathSync(dir.path)
+  } catch { /* keep the original path */ }
+  if (isDiskRoot(resolved)) {
+    console.warn(`[Tlon] addLinkedDir: refusing disk root: ${dir.path}`)
+    return { ok: false, reason: 'disk-root' }
   }
   if (entry.linkedDirs.some(d => d.path === dir.path)) {
-    return entry.linkedDirs.find(d => d.path === dir.path) || null
+    return { ok: true, linked: entry.linkedDirs.find(d => d.path === dir.path) as LinkedDirectory }
+  }
+  const outcome = walkLinkedSources(resolved)
+  if (outcome.status === 'truncated') {
+    console.warn(`[Tlon] addLinkedDir: folder too large to walk: ${dir.path}`)
+    return { ok: false, reason: 'folder-too-large' }
+  }
+  if (outcome.status === 'too-many-files') {
+    console.warn(
+      `[Tlon] addLinkedDir: folder over the ${MAX_LINKED_DIR_FILES}-file cap: ${dir.path}`
+    )
+    return { ok: false, reason: 'too-many-files', count: outcome.count, limit: MAX_LINKED_DIR_FILES }
   }
   const linked: LinkedDirectory = {
     id: uuidv4(),
@@ -471,7 +611,7 @@ export function addLinkedDir(
     .then(({ startLinkedDirWatch }) => startLinkedDirWatch(kbId, linked))
     .catch(err => console.error('[Tlon] addLinkedDir watch start failed:', err))
 
-  return linked
+  return { ok: true, linked }
 }
 
 export function removeLinkedDir(kbId: string, linkId: string): boolean {
@@ -481,6 +621,7 @@ export function removeLinkedDir(kbId: string, linkId: string): boolean {
   if (!linked) return false
   entry.linkedDirs = entry.linkedDirs.filter(d => d.id !== linkId)
   saveEntry(entry)
+  lastCapWarnStatus.delete(linked.path)
 
   import('./watcher')
     .then(({ stopLinkedDirWatch }) => stopLinkedDirWatch(kbId, linked))
@@ -517,7 +658,8 @@ export function addRawFiles(kbId: string, inputPaths: string[]): AddRawFilesResu
     }
     if (st.isDirectory()) {
       const folderName = src.split(/[\\/]/).filter(Boolean).pop() || 'imported'
-      for (const rel of walkFiles(src, name => IGNORED_IMPORT_DIRS.has(name))) {
+      const walk = walkFiles(src, { skipDir: name => IGNORED_IMPORT_DIRS.has(name) })
+      for (const rel of walk.files) {
         copyRawFile(rawDir, join(src, rel), join(folderName, rel), result)
       }
     } else if (st.isFile()) {
@@ -582,35 +724,50 @@ function copyRawFile(
   }
 }
 
+interface WalkResult {
+  files: string[]
+  /** True when the entry budget was hit — `files` is a partial list. */
+  truncated: boolean
+}
+
 /**
- * Recursively list relative paths of all files under a directory. `skipDir`,
- * when provided, prunes a subdirectory by name before descending into it.
+ * Recursively list relative paths of all files under a directory.
+ *
+ * Dirent entries carry the file type from readdir itself, so no per-entry
+ * stat is needed, and symlinks match neither isDirectory() nor isFile() —
+ * they are skipped rather than followed, which also makes symlink cycles
+ * impossible. `skipDir` prunes a subdirectory by name before descending into
+ * it; `maxEntries` bounds the total entries visited and leaves `truncated`
+ * true when the ceiling was hit.
  */
-function walkFiles(root: string, skipDir?: (name: string) => boolean): string[] {
-  const out: string[] = []
-  if (!existsSync(root)) return out
-  const stack = ['']
+function walkFiles(
+  root: string,
+  opts: { skipDir?: (name: string) => boolean; maxEntries?: number } = {}
+): WalkResult {
+  const files: string[] = []
+  if (!existsSync(root)) return { files, truncated: false }
+  const maxEntries = opts.maxEntries ?? WALK_ENTRY_BUDGET
+  let entriesVisited = 0
+  const stack: string[] = ['']
   while (stack.length > 0) {
     const rel = stack.pop() as string
     const abs = join(root, rel)
-    let entries: string[]
+    let dirents: Dirent[]
     try {
-      entries = readdirSync(abs)
+      dirents = readdirSync(abs, { withFileTypes: true })
     } catch { continue }
-    for (const name of entries) {
-      const childRel = rel ? join(rel, name) : name
-      const childAbs = join(root, childRel)
-      let st
-      try { st = statSync(childAbs) } catch { continue }
-      if (st.isDirectory()) {
-        if (skipDir && skipDir(name)) continue
+    for (const dirent of dirents) {
+      if (++entriesVisited > maxEntries) return { files, truncated: true }
+      const childRel = rel ? join(rel, dirent.name) : dirent.name
+      if (dirent.isDirectory()) {
+        if (opts.skipDir && opts.skipDir(dirent.name)) continue
         stack.push(childRel)
-      } else if (st.isFile()) {
-        out.push(childRel)
+      } else if (dirent.isFile()) {
+        files.push(childRel)
       }
     }
   }
-  return out
+  return { files, truncated: false }
 }
 
 export function listRawFiles(kbId: string): RawFileStatus[] {
@@ -896,7 +1053,8 @@ export function refreshStats(kbId: string): KBStats {
 
   let rawFileCount = 0
   let rawSizeBytes = 0
-  for (const rel of walkFiles(rawDir)) {
+  const rawWalk = walkKbDir(rawDir)
+  for (const rel of rawWalk.files) {
     try {
       rawSizeBytes += statSync(join(rawDir, rel)).size
       rawFileCount++
@@ -906,19 +1064,23 @@ export function refreshStats(kbId: string): KBStats {
   // total too — otherwise indexedCount (which includes them) could exceed it.
   for (const linked of entry?.linkedDirs ?? []) {
     if (!existsSync(linked.path)) continue
-    for (const rel of walkFiles(linked.path)) {
-      const abs = join(linked.path, rel)
-      if (!isAcceptedSourceFile(abs)) continue
+    const sources = listLinkedSourceFiles(linked.path)
+    if (sources === null) continue
+    for (const rel of sources) {
       try {
-        rawSizeBytes += statSync(abs).size
+        rawSizeBytes += statSync(join(linked.path, rel)).size
         rawFileCount++
       } catch { /* ignore */ }
     }
   }
-  const indexedCount = walkFiles(textDir).filter(r => r.toLowerCase().endsWith('.txt')).length
+  const textWalk = walkKbDir(textDir)
+  const indexedCount = textWalk.files.filter(r => r.toLowerCase().endsWith('.txt')).length
+  // An over-cap watched folder contributes 0 above, but text extracted from it
+  // earlier still counts here — floor the total so indexedCount never exceeds it.
+  const rawFileCountFloored = Math.max(rawFileCount, indexedCount)
 
   const stats: KBStats = {
-    rawFileCount,
+    rawFileCount: rawFileCountFloored,
     indexedCount,
     rawSizeBytes,
     lastIngestAt: entry?.stats.lastIngestAt,
@@ -997,7 +1159,8 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
     return { size, state, error }
   }
 
-  for (const rel of walkFiles(rawDir)) {
+  const rawWalk = walkKbDir(rawDir)
+  for (const rel of rawWalk.files) {
     const recordedKey = rel.split(sep).join('/')
     const { size, state, error } = derive(recordedKey, join(rawDir, rel))
     result.push({
@@ -1015,9 +1178,10 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
   // list them too — otherwise a folder's files learn invisibly.
   for (const linked of entry?.linkedDirs ?? []) {
     if (!existsSync(linked.path)) continue
-    for (const rel of walkFiles(linked.path)) {
+    const sources = listLinkedSourceFiles(linked.path)
+    if (sources === null) continue
+    for (const rel of sources) {
       const abs = join(linked.path, rel)
-      if (!isAcceptedSourceFile(abs)) continue
       const { size, state, error } = derive(abs, abs)
       result.push({
         name: rel.split(sep).pop() || rel,
@@ -1085,14 +1249,17 @@ export function collectIngestCandidates(kbId: string): Array<{
   }
 
   const rawDir = getKBRawDir(kbId)
-  for (const rel of walkFiles(rawDir)) {
+  const rawWalk = walkKbDir(rawDir)
+  for (const rel of rawWalk.files) {
     const sourcePath = rel.split(sep).join('/')
     consider(sourcePath, join(rawDir, rel), 'raw')
   }
 
   for (const linked of entry.linkedDirs) {
     if (!existsSync(linked.path)) continue
-    for (const rel of walkFiles(linked.path)) {
+    const sources = listLinkedSourceFiles(linked.path)
+    if (sources === null) continue
+    for (const rel of sources) {
       const absolutePath = join(linked.path, rel)
       // Linked files are keyed by absolute path in hashes.json.
       consider(absolutePath, absolutePath, 'linked')

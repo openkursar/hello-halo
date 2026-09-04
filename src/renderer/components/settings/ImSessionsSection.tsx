@@ -24,6 +24,7 @@ import { MessageSquare, Radio, Users, User, Trash2, Pencil, Copy, Check } from '
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 
 // ============================================
 // Types
@@ -141,7 +142,7 @@ export function ImSessionsSection({ appId, appName, compact }: ImSessionsSection
   const handleStartRename = useCallback((session: ImSessionRecord) => {
     const key = `${session.appId}:${session.channel}:${session.chatId}`
     setEditingKey(key)
-    setEditingName(session.customName ?? session.displayName)
+    setEditingName(getImSessionDisplayName(session))
     // Focus input on next tick after render
     setTimeout(() => renameInputRef.current?.focus(), 0)
   }, [])
@@ -149,7 +150,7 @@ export function ImSessionsSection({ appId, appName, compact }: ImSessionsSection
   const handleCommitRename = useCallback(async (session: ImSessionRecord) => {
     const trimmed = editingName.trim()
     setEditingKey(null)
-    if (!trimmed || trimmed === (session.customName ?? session.displayName)) return
+    if (!trimmed || trimmed === getImSessionDisplayName(session)) return
 
     try {
       const result = await api.imSessionsSetCustomName({
@@ -173,7 +174,7 @@ export function ImSessionsSection({ appId, appName, compact }: ImSessionsSection
   }, [editingName])
 
   const handleCopyContact = useCallback(async (session: ImSessionRecord) => {
-    const displayName = session.customName ?? session.displayName
+    const displayName = getImSessionDisplayName(session)
     const text = `Name: ${displayName} ID: ${session.instanceId}:${session.chatId}`
     try {
       await navigator.clipboard.writeText(text)
@@ -235,7 +236,7 @@ export function ImSessionsSection({ appId, appName, compact }: ImSessionsSection
                     ) : (
                       <>
                         <span className="text-sm font-medium truncate">
-                          {session.customName ?? session.displayName}
+                          {getImSessionDisplayName(session)}
                         </span>
                         <button
                           type="button"

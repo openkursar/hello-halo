@@ -5,7 +5,7 @@
 import { getConfig, saveConfig, getCredentialDecodeFailures } from '../foundation/config.service'
 import { getAISourceManager } from '../services/ai-sources'
 import { decryptString } from '../foundation/secure-storage.service'
-import { maskConfigFields, unmaskSentinels } from '../foundation/config-encryption'
+import { unmaskSentinels } from '../foundation/config-encryption'
 import { validateApiConnection } from '../services/api-validator.service'
 import { fetchModels as controllerFetchModels } from '../controllers/config.controller'
 import { runConfigProbe, emitConfigChange } from '../services/health'
@@ -35,11 +35,8 @@ export function registerConfigHandlers(): void {
           config.api.apiKey = decryptString(config.api.apiKey)
         }
 
-        // Mask all sensitive fields before returning to renderer.
-        const masked = maskConfigFields(config)
-
         console.log('[Settings] config:get - Loaded, aiSources v2, currentId:', config.aiSources?.currentId || 'none')
-        return { success: true, data: masked }
+        return { success: true, data: config }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] config:get - Failed:', err.message)
@@ -111,7 +108,7 @@ export function registerConfigHandlers(): void {
           })
         }
 
-        return { success: true, data: maskConfigFields(config as Record<string, unknown>) }
+        return { success: true, data: config }
       } catch (error: unknown) {
         const err = error as Error
         console.error('[Settings] config:set - Failed:', err.message)
@@ -175,7 +172,7 @@ export function registerConfigHandlers(): void {
       console.log('[Settings] ai-sources:switch-source - Switching to:', sourceId)
       try {
         const manager = getAISourceManager()
-        const result = manager.setCurrentSource(sourceId)
+        const result = manager.switchCurrentSource(sourceId)
         if (result.currentId !== sourceId) {
           return { success: false, error: `Source not found: ${sourceId}` }
         }
@@ -194,9 +191,7 @@ export function registerConfigHandlers(): void {
       console.log('[Settings] ai-sources:set-model - Setting model:', modelId)
       try {
         const manager = getAISourceManager()
-        const result = manager.setCurrentModel(modelId)
-        const src = manager.getCurrentSourceConfig()
-        console.log(`[Config] model_changed source=${src?.id || ''} provider=${src?.provider || ''} model=${modelId}`)
+        const result = manager.switchCurrentModel(modelId)
         emitConfigChange(['aiSources.model'])
         return { success: true, data: result }
       } catch (error: unknown) {

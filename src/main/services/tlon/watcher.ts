@@ -12,7 +12,10 @@
 
 import parcelWatcher from '@parcel/watcher'
 import type { AsyncSubscription } from '@parcel/watcher'
-import { existsSync } from 'fs'
+import { existsSync, realpathSync } from 'fs'
+import { join } from 'path'
+import { CPP_LEVEL_IGNORE_DIRS } from '../../../shared/constants/ignore-patterns'
+import { isDiskRoot } from '../../../shared/disk-paths'
 import type { LinkedDirectory } from '../../../shared/types/tlon'
 import { getKBRawDir } from './paths'
 import { listKBs, getKB, collectIngestCandidates } from './service'
@@ -49,6 +52,16 @@ function scheduleScan(kbId: string): void {
 
 async function subscribe(key: string, dir: string, kbId: string): Promise<void> {
   if (handles.has(key)) return
+  // Resolve symlinks so a stored path aliasing a whole volume (legacy links
+  // created before add-time validation) is still refused here.
+  let resolved = dir
+  try {
+    resolved = realpathSync(dir)
+  } catch { /* keep the original path */ }
+  if (isDiskRoot(resolved)) {
+    console.warn(`[Tlon] Refusing to watch a disk root: ${dir}`)
+    return
+  }
   if (!existsSync(dir)) {
     console.warn(`[Tlon] Watch path missing, skipping: ${dir}`)
     return
@@ -60,6 +73,12 @@ async function subscribe(key: string, dir: string, kbId: string): Promise<void> 
         return
       }
       scheduleScan(kbId)
+    }, {
+      // Native-level exclusion: events from top-level dependency/cache/VCS
+      // directories never reach JavaScript. Nested ones (a monorepo's
+      // packages/*/node_modules) still arrive but only re-arm the debounced
+      // scan, whose walk prunes them by name.
+      ignore: CPP_LEVEL_IGNORE_DIRS.map(d => join(dir, d)),
     })
     handles.set(key, { key, subscription })
     console.log(`[Tlon] Watching ${key}: ${dir}`)
@@ -88,6 +107,9 @@ export async function startWatchersForKB(kbId: string): Promise<void> {
   if (!kb || kb.status !== 'active') return
   await subscribe(`${kbId}:raw`, getKBRawDir(kbId), kbId)
   for (const linked of kb.linkedDirs) {
+    // `watching === false` marks a link recorded but not watchable (e.g. the
+    // path was missing at creation); the settings UI shows it as unavailable.
+    if (!linked.watching) continue
     await startLinkedDirWatch(kbId, linked)
   }
 }

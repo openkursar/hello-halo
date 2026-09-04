@@ -17,6 +17,7 @@ import { existsSync } from 'fs'
 import { app } from 'electron'
 import { type AuthProviderConfig } from '../../shared/types'
 import type { CategoryTaxonomy, RegistrySource } from '../../shared/store/store-types'
+import type { NotifyChannelsProductConfig } from '../../shared/types/notification-channels'
 
 // AuthProviderConfig is defined in src/shared/types/ai-sources.ts so the main
 // loader and the renderer setup UI share one source of truth. Re-exported here
@@ -116,12 +117,16 @@ export interface RegistryOverride {
 /**
  * Enterprise service defaults — pre-populated configuration for internal services.
  *
- * Each key maps to a service's config type with optional fields.
- * At runtime, these defaults are merged under user config (user values take precedence).
- * Open-source builds omit this entirely; enterprise builds set values in product.json.
+ * Each key maps to a service's config type with optional fields. They are
+ * seeded into the user's config on first run (`config.service.ts`), so from
+ * then on the user owns — and can see and edit — every value. Open-source
+ * builds omit this entirely; enterprise builds set values in product.json.
+ *
+ * Credentials never belong here: product.json ships inside the package and is
+ * readable by any user.
  */
 export interface ServiceDefaults {
-  /** Default email channel configuration (partial — user config wins) */
+  /** Initial email channel configuration (seeded once; user edits win afterwards) */
   email?: Partial<import('../../shared/types/notification-channels').EmailChannelConfig>
 }
 
@@ -162,6 +167,21 @@ export interface ImChannelsPermissionDefaults {
 export interface ImChannelsProductConfig {
   /** Default permission settings for new IM channel instances */
   permissionControl?: ImChannelsPermissionDefaults
+}
+
+/**
+ * Official AI-guide hosting section of product.json.
+ *
+ * The guides are agent-facing raw markdown served as static files by the
+ * documentation site; `read_halo_doc` fetches them at runtime so a content fix
+ * reaches users without shipping a client. Unlike most product.json sections,
+ * omitting this one does NOT disable the feature — it falls back to the public
+ * docs host, because the guides are core self-knowledge every build needs.
+ * Enterprise builds point it at their own mirror.
+ */
+export interface OfficialContentProductConfig {
+  /** Base URL of the ai-guides directory; document paths are appended to it. */
+  baseUrl?: string
 }
 
 /**
@@ -212,6 +232,10 @@ export interface ProductConfig {
    */
   announcementsUrl?: string
   /**
+   * Official AI-guide host (optional; falls back to the public docs host).
+   */
+  officialContent?: OfficialContentProductConfig
+  /**
    * Enterprise service defaults (optional).
    * Pre-populates service configurations so internal users don't need manual setup.
    * Open-source builds omit this field entirely.
@@ -247,6 +271,14 @@ export interface ProductConfig {
    * Open-source builds omit this (no restrictions by default).
    */
   imChannels?: ImChannelsProductConfig
+
+  /**
+   * Notification channel customizations (optional, enterprise/custom builds only).
+   *
+   * Presentation-only (help links). Endpoint defaults live in
+   * `serviceDefaults`; open-source builds omit both.
+   */
+  notifyChannels?: NotifyChannelsProductConfig
 
   /**
    * Store configuration (optional).
@@ -308,6 +340,20 @@ export interface ProductConfig {
     endpoint?: string
     apiKey?: string
     allowedSensitiveFields?: string[]
+    /**
+     * When true, `UserContext.hostIdentity` (OS username/domain, hostname,
+     * and all non-internal network interfaces) is collected on every
+     * `track()` call and forwarded to the telemetry backend so the
+     * anonymous per-install `userId` can be correlated with a real employee
+     * via corporate NAC/DHCP records. See `foundation/host-identity.ts`.
+     *
+     * Unlike `allowedSensitiveFields`, this is NOT filtered by the
+     * telemetry provider's sanitize pass — `UserContext` is sent verbatim.
+     * Omit/false (open-source default) disables collection entirely; the
+     * field must only be set to true for builds operating in an
+     * enterprise-managed, real-name-registered network.
+     */
+    collectHostIdentity?: boolean
   }
 
   /**
@@ -446,6 +492,31 @@ export function getServiceDefaults(): ServiceDefaults | undefined {
  */
 export function getAnnouncementsUrl(): string | undefined {
   return loadProductConfig().announcementsUrl?.trim() || undefined
+}
+
+/**
+ * Public docs host used when product.json declares no `officialContent.baseUrl`.
+ * Kept here rather than in the reader so open-source builds work unconfigured.
+ */
+const DEFAULT_OFFICIAL_CONTENT_BASE_URL = 'https://haloxe.com/docs/ai-guides'
+
+/**
+ * Base URL of the official AI guides, never empty and never trailing-slashed.
+ * Callers append a document path directly.
+ */
+export function getOfficialContentBaseUrl(): string {
+  const configured = loadProductConfig().officialContent?.baseUrl?.trim()
+  const base = configured || DEFAULT_OFFICIAL_CONTENT_BASE_URL
+  return base.replace(/\/+$/, '')
+}
+
+/**
+ * Get notification-channel customizations from product.json.
+ * Returns undefined when not configured (open-source builds) — the settings
+ * UI then renders no help links.
+ */
+export function getNotifyChannelsConfig(): NotifyChannelsProductConfig | undefined {
+  return loadProductConfig().notifyChannels
 }
 
 /**

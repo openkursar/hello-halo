@@ -17,16 +17,19 @@ import {
   Mail, MessageSquare, Bell, Webhook, Loader2,
   CheckCircle, XCircle, ChevronDown, RefreshCw, Bot,
   Plus, Trash2, MoreVertical, Smartphone, Info,
-  QrCode,
+  QrCode, ExternalLink, UserCheck, Eye, EyeOff,
 } from 'lucide-react'
-import { useTranslation } from '../../i18n'
+import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
 import type { HaloConfig } from '../../types'
+import { resolveLocalizedText } from '../../../shared/types'
 import { NOTIFICATION_CHANNEL_META } from '../../../shared/types/notification-channels'
 import type {
+  ChannelDocsLink,
   NotificationChannelType,
   NotificationChannelsConfig,
+  NotifyChannelsProductConfig,
 } from '../../../shared/types/notification-channels'
 import type {
   ImChannelInstanceConfig,
@@ -81,7 +84,6 @@ interface NotifyChannelDef {
   labelKey: string
   descriptionKey: string
   fields: FieldDef[]
-  defaults: Record<string, unknown>
 }
 
 // ============================================
@@ -106,7 +108,6 @@ function buildNotifyChannelDefs(): NotifyChannelDef[] {
         { key: 'caldavUrl', label: 'CalDAV URL', type: 'text', placeholder: 'https://{host}/dav/users/{email}/calendars/default/', group: 'advanced' },
         { key: 'tlsCiphers', label: 'TLS Ciphers', type: 'text', placeholder: 'Auto (system default)', group: 'advanced' },
       ],
-      defaults: { enabled: false, smtp: { host: '', port: 465, secure: true, user: '', password: '' }, defaultTo: '' },
     },
     {
       id: 'wecom',
@@ -121,7 +122,6 @@ function buildNotifyChannelDefs(): NotifyChannelDef[] {
         { key: 'defaultToUser', label: 'Default User ID', type: 'text', placeholder: 'userid (optional)' },
         { key: 'defaultToParty', label: 'Default Party ID', type: 'text', placeholder: 'party id (optional)' },
       ],
-      defaults: { enabled: false, corpId: '', agentId: 0, secret: '', defaultToUser: '', defaultToParty: '' },
     },
     {
       id: 'dingtalk',
@@ -136,7 +136,6 @@ function buildNotifyChannelDefs(): NotifyChannelDef[] {
         { key: 'robotCode', label: 'Robot Code', type: 'text', placeholder: 'Robot code (optional)' },
         { key: 'defaultChatId', label: 'Default Chat ID', type: 'text', placeholder: 'Chat ID (optional)' },
       ],
-      defaults: { enabled: false, appKey: '', appSecret: '', agentId: 0, robotCode: '', defaultChatId: '' },
     },
     {
       id: 'feishu',
@@ -150,7 +149,6 @@ function buildNotifyChannelDefs(): NotifyChannelDef[] {
         { key: 'defaultChatId', label: 'Default Chat ID', type: 'text', placeholder: 'Chat ID (optional)' },
         { key: 'defaultUserId', label: 'Default User ID', type: 'text', placeholder: 'User open_id (optional)' },
       ],
-      defaults: { enabled: false, appId: '', appSecret: '', defaultChatId: '', defaultUserId: '' },
     },
     {
       id: 'webhook',
@@ -167,7 +165,6 @@ function buildNotifyChannelDefs(): NotifyChannelDef[] {
         { key: 'headers', label: 'Headers (JSON)', type: 'text', placeholder: '{"Authorization": "Bearer ..."}' },
         { key: 'secret', label: 'HMAC Secret', type: 'password', placeholder: 'Signing secret (optional)' },
       ],
-      defaults: { enabled: false, url: '', method: 'POST', headers: undefined, secret: '' },
     },
   ]
 }
@@ -215,9 +212,11 @@ interface ChannelFieldProps {
   field: FieldDef
   value: unknown
   onChange: (value: unknown) => void
+  /** Help link rendered under the input (product.json `notifyChannels`) */
+  docs?: ChannelDocsLink
 }
 
-function ChannelField({ field, value, onChange }: ChannelFieldProps) {
+function ChannelField({ field, value, onChange, docs }: ChannelFieldProps) {
   const { t } = useTranslation()
 
   if (field.type === 'toggle') {
@@ -307,6 +306,84 @@ function ChannelField({ field, value, onChange }: ChannelFieldProps) {
         placeholder={field.placeholder ? t(field.placeholder) : undefined}
         className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
       />
+      {docs && (
+        <button
+          type="button"
+          onClick={() => { void api.openExternal(docs.url) }}
+          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+        >
+          {docs.label
+            ? resolveLocalizedText(docs.label, getCurrentLanguage())
+            : t('How to get it? View guide')}
+          <ExternalLink className="w-3 h-3" />
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ============================================
+// Name Resolution Field (WeCom anonymized-ID -> real name, optional)
+// ============================================
+
+interface NameResolutionFieldProps {
+  value: string
+  onChange: (value: string) => void
+  status?: ImChannelInstanceStatus['identityResolution']
+}
+
+function NameResolutionField({ value, onChange, status }: NameResolutionFieldProps) {
+  const { t } = useTranslation()
+  const [revealed, setRevealed] = useState(false)
+  const configured = value.trim().length > 0
+
+  const statusLabel = !configured
+    ? undefined
+    : status?.status === 'ok'
+      ? t('Active — sender names are being resolved')
+      : status?.status === 'expired'
+        ? t('Authorization expired (valid 7 days) — re-copy the link from WeCom and paste it here')
+        : status?.status === 'error'
+          ? t('Last attempt failed — will retry automatically')
+          : t('Saved — will take effect on the next incoming message')
+
+  const statusColor =
+    status?.status === 'ok'
+      ? 'text-green-500'
+      : status?.status === 'expired' || status?.status === 'error'
+        ? 'text-amber-500'
+        : 'text-muted-foreground'
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1.5">
+        <UserCheck className="w-3.5 h-3.5 text-muted-foreground" />
+        <label className="text-sm text-muted-foreground">{t('Name Resolution URL')}</label>
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+          {t('Optional')}
+        </span>
+      </div>
+      <div className="relative">
+        <input
+          type={revealed ? 'text' : 'password'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="https://qyapi.weixin.qq.com/mcp/v2/bot/msg?apikey=..."
+          className="w-full bg-muted border border-border rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+        />
+        <button
+          type="button"
+          onClick={() => setRevealed(!revealed)}
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground transition-colors"
+          title={revealed ? t('Hide') : t('Show')}
+        >
+          {revealed ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {t('Shows real names instead of anonymized IDs for people who message this bot. In the WeCom client: Workspace → Intelligent Bot → this bot → Permissions → authorize "Message", then paste the link here.')}
+      </p>
+      {statusLabel && <p className={`text-xs ${statusColor}`}>{statusLabel}</p>}
     </div>
   )
 }
@@ -629,6 +706,13 @@ function InstanceCard({
               />
             </div>
           </div>
+
+          {/* Name resolution — optional, resolves anonymized sender IDs to real names */}
+          <NameResolutionField
+            value={(currentCfg.nameResolveUrl as string) ?? ''}
+            onChange={(v) => handleConfigChange('nameResolveUrl', v)}
+            status={status?.identityResolution}
+          />
 
           {/* Backend selector — a single digital human OR a team (team = its
               lead + members, same binding surface). */}
@@ -963,6 +1047,8 @@ interface NotifyChannelCardProps {
   onTest: (channelType: string) => void
   isTesting: boolean
   testResult?: TestResult
+  /** Help link this build declares for the channel, if any */
+  docs?: ChannelDocsLink
 }
 
 function NotifyChannelCard({
@@ -974,11 +1060,16 @@ function NotifyChannelCard({
   onTest,
   isTesting,
   testResult,
+  docs,
 }: NotifyChannelCardProps) {
   const { t } = useTranslation()
   const Icon = def.icon
   const isEnabled = Boolean(channelConfig?.enabled)
   const [showAdvanced, setShowAdvanced] = useState(false)
+
+  // The help link answers "where do I get this credential", so it hangs off the
+  // channel's secret input rather than a hard-coded field name.
+  const credentialFieldKey = def.fields.find(f => f.type === 'password')?.key
 
   const [draft, setDraft] = useState<Record<string, unknown> | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1063,6 +1154,7 @@ function NotifyChannelCard({
                 field={field}
                 value={getFieldValue(field)}
                 onChange={(value) => handleFieldChange(field.key, value, field.nested)}
+                docs={field.key === credentialFieldKey ? docs : undefined}
               />
             ))}
           </div>
@@ -1132,6 +1224,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [imStatuses, setImStatuses] = useState<ImChannelInstanceStatus[]>([])
   const [permissionDefaults, setPermissionDefaults] = useState<PermissionDefaults | null>(null)
+  const [notifyProductConfig, setNotifyProductConfig] = useState<NotifyChannelsProductConfig | null>(null)
   const [scanDialogOpen, setScanDialogOpen] = useState(false)
 
   // Load automation apps for the digital human selector
@@ -1161,6 +1254,15 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
         if (res.success && res.data) setPermissionDefaults(res.data)
       })
       .catch(() => { /* defaults stay null — no restrictions */ })
+  }, [])
+
+  // Load product-level notification channel customizations (once)
+  useEffect(() => {
+    api.notifyChannelsProductConfig()
+      .then((res) => {
+        if (res.success && res.data) setNotifyProductConfig(res.data)
+      })
+      .catch(() => { /* stays null — no help links */ })
   }, [])
 
   // Poll IM channel statuses
@@ -1595,6 +1697,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
             onTest={handleTestChannel}
             isTesting={testingChannel === def.notifyType}
             testResult={testResults[def.notifyType]}
+            docs={notifyProductConfig?.[def.notifyType]?.docs}
           />
         ))}
       </div>

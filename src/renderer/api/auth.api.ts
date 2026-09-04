@@ -106,6 +106,26 @@ export const authApi = {
     return { success: true, data: null }
   },
 
+  /**
+   * Login state of the bundled CLI's credential slot, plus the command that
+   * signs it in. Desktop-only: the login runs in a local terminal session, so
+   * remote clients report "not signed in" rather than offering a flow they
+   * cannot complete.
+   */
+  authDelegatedStatus: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.authDelegatedStatus()
+    }
+    return { success: true, data: { loggedIn: false, account: '', loginCommand: '', supported: false } }
+  },
+
+  authDelegatedActivate: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.authDelegatedActivate()
+    }
+    return { success: false, error: 'Delegated login requires the desktop app' }
+  },
+
   onAuthLoginProgress: (callback: (data: { provider: string; status: string }) => void) =>
     onEvent('auth:login-progress', callback),
 

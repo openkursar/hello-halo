@@ -40,6 +40,10 @@
  *      builds omit the product field entirely, so the gate drops every
  *      sensitive field — in addition to the empty-endpoint
  *      provider-disabled safety net.
+ *      The same gate is applied to identifiers nested inside array values
+ *      (`toolCalls[].name`, `skillCalls`, `apps[].specId`), which the
+ *      key-level pass cannot reach — see `sanitizeToolCalls` /
+ *      `sanitizeAppSummaries`.
  *
  * Disabled when endpoint or apiKey is empty. When disabled the provider
  * never starts its timer and `track()` is a no-op — safe to use in
@@ -63,6 +67,12 @@ const DEBOUNCE_FLUSH_MS = 5_000
 
 /** Budget for the final flush during destroy(). */
 const SHUTDOWN_FLUSH_TIMEOUT_MS = 3_000
+
+/** Tool-name prefix the SDK gives tools contributed by an MCP server. */
+const MCP_TOOL_PREFIX = 'mcp__'
+
+/** Replacement bucket for MCP tool names when `mcpId` is not permitted. */
+const REDACTED_MCP_TOOL = 'mcp__<redacted>'
 
 /**
  * Property keys that must NEVER be forwarded to the telemetry backend.
@@ -125,8 +135,8 @@ const SENSITIVE_KEYS = new Set<string>([
  *
  * When a name is present in this map, only the listed keys survive.
  * When absent, the event keeps the caller-provided keys minus anything in
- * BLOCKED_KEYS (used for renderer-driven generic events where the key set
- * is harder to enumerate, e.g. `action.*`).
+ * BLOCKED_KEYS. Every event Halo emits is expected to have an entry here —
+ * a missing entry means new properties ship unreviewed.
  */
 const EVENT_WHITELIST: Record<string, readonly string[]> = {
   // Session / navigation
@@ -152,26 +162,41 @@ const EVENT_WHITELIST: Record<string, readonly string[]> = {
   'store.unpublish':           ['appId'],
 
   // Chat message counts (identifiers only — never content)
-  'message.sent':     ['source', 'appId', 'specId', 'channel', 'instanceId', 'conversationId', 'spaceId', 'hasImages',
-                       'modelProvider', 'modelName', 'engine', 'replyDurationMs'],
-  'message.received': ['source', 'appId', 'specId', 'channel', 'instanceId', 'conversationId', 'spaceId'],
+  'message.sent':     ['source', 'direction', 'appId', 'specId', 'channel', 'chatType', 'instanceId', 'conversationId',
+                       'spaceId', 'hasImages', 'modelProvider', 'modelName', 'engine', 'replyDurationMs'],
+  'message.received': ['source', 'direction', 'appId', 'specId', 'channel', 'chatType', 'instanceId', 'conversationId',
+                       'spaceId'],
 
   // Digital human lifecycle
   'app.installed':      ['appId', 'specId', 'version', 'type', 'installSource', 'durationMs'],
   'app.uninstalled':    ['appId', 'specId', 'type'],
   'app.run.started':    ['appId', 'specId', 'runId', 'trigger'],
-  'app.run.completed':  ['appId', 'specId', 'runId', 'trigger', 'status', 'durationMs'],
-  'app.run.failed':     ['appId', 'specId', 'runId', 'trigger', 'status', 'durationMs', 'errorCode'],
-  'app.run.replay':     ['appId', 'specId', 'runId', 'trigger', 'status', 'durationMs', 'errorCode', 'startedAt', 'finishedAt'],
+  'app.run.completed':  ['appId', 'specId', 'runId', 'trigger', 'status', 'durationMs', 'tokensUsed'],
+  'app.run.failed':     ['appId', 'specId', 'runId', 'trigger', 'status', 'durationMs', 'tokensUsed', 'errorCode'],
+  'app.run.replay':     ['appId', 'specId', 'runId', 'trigger', 'status', 'durationMs', 'tokensUsed', 'errorCode',
+                         'startedAt', 'finishedAt'],
+
+  // Digital human creation funnel
+  'apps.create.open':   [],
+  'apps.create.submit': ['mode', 'sourceType', 'result', 'skillCount'],
+
+  // IM channel setup funnel
+  'im.bind.qr_request': ['channel', 'result', 'errorCode'],
+  'im.bind.result':     ['channel', 'result', 'errorCode'],
+
+  // Settings
+  'settings.source_switch': ['sourceId', 'sourceName', 'provider', 'authType'],
+  'settings.model_switch':  ['sourceId', 'sourceName', 'provider', 'modelName'],
 
   // Startup snapshot
   'installed_apps.snapshot': ['apps', 'count'],
 
   // Model + tool observability
-  'llm.invocation':       ['source', 'appId', 'conversationId', 'engine', 'modelProvider', 'modelName',
+  'llm.invocation':       ['source', 'channel', 'appId', 'conversationId', 'engine', 'modelProvider', 'modelName',
                            'durationMs', 'status', 'errorCode', 'inputTokens', 'outputTokens'],
-  'tool.usage_summary':   ['source', 'appId', 'runId', 'conversationId', 'toolCalls',
+  'tool.usage_summary':   ['source', 'channel', 'appId', 'runId', 'conversationId', 'toolCalls', 'skillCalls',
                            'totalCalls', 'totalErrors', 'durationMs'],
+  'mcp.connect':          ['mcpId', 'status', 'toolCount'],
   'error.surface':        ['area', 'errorCode'],
 }
 
@@ -373,10 +398,72 @@ export class TelemetryProvider extends BaseProvider {
       if (whitelist && !whitelist.includes(key)) continue
       // 3. SENSITIVE_KEYS gate — drop unless the build opted in.
       if (SENSITIVE_KEYS.has(key) && !this.allowedSensitiveFields.has(key)) continue
+
+      if (key === 'toolCalls') {
+        out[key] = this.sanitizeToolCalls(value)
+        continue
+      }
+      if (key === 'skillCalls') {
+        // The skill identifier is the entire payload of this key — without it
+        // the counts carry no information the `Skill` tool-name tally lacks.
+        if (!this.allowedSensitiveFields.has('skillId')) continue
+        out[key] = value
+        continue
+      }
+      if (key === 'apps') {
+        // `installed_apps.snapshot` — each element carries a nested specId.
+        out[key] = this.sanitizeAppSummaries(value)
+        continue
+      }
+
       out[key] = value
     }
 
     return Object.keys(out).length > 0 ? out : undefined
+  }
+
+  /**
+   * Apply the `mcpId` gate to tool names, which ride inside a nested array
+   * and are therefore out of reach of the key-level pass above.
+   *
+   * A user-attached MCP server contributes tools named
+   * `mcp__<server>__<tool>`, so the server name is user-authored content.
+   * Builds not permitted to receive `mcpId` get every MCP tool folded into a
+   * single redacted bucket (counts summed, so call volume survives); the
+   * first-party tool tally is unaffected either way.
+   */
+  private sanitizeToolCalls(value: unknown): unknown {
+    if (!Array.isArray(value)) return value
+    if (this.allowedSensitiveFields.has('mcpId')) return value
+
+    const merged = new Map<string, { name: string; count: number; errors: number }>()
+    for (const entry of value) {
+      const item = entry as { name?: unknown; count?: unknown; errors?: unknown }
+      const rawName = typeof item?.name === 'string' ? item.name : ''
+      const name = rawName.startsWith(MCP_TOOL_PREFIX) ? REDACTED_MCP_TOOL : rawName
+      const acc = merged.get(name) ?? { name, count: 0, errors: 0 }
+      acc.count += typeof item?.count === 'number' ? item.count : 0
+      acc.errors += typeof item?.errors === 'number' ? item.errors : 0
+      merged.set(name, acc)
+    }
+    return Array.from(merged.values())
+  }
+
+  /**
+   * Apply the `specId` gate to the installed-apps snapshot array, which the
+   * key-level pass cannot reach. Mirrors `sanitizeToolCalls`: drop the
+   * sensitive field per-element rather than the whole element, since
+   * `appId`/`type`/`version`/`status`/`installedAt` remain useful on their own.
+   */
+  private sanitizeAppSummaries(value: unknown): unknown {
+    if (!Array.isArray(value)) return value
+    if (this.allowedSensitiveFields.has('specId')) return value
+
+    return value.map(entry => {
+      if (!entry || typeof entry !== 'object') return entry
+      const { specId: _specId, ...rest } = entry as Record<string, unknown>
+      return rest
+    })
   }
 
   /** Expose queue length for tests. */

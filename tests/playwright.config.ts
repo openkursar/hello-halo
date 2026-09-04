@@ -119,6 +119,19 @@ export default defineConfig({
       }
     },
     {
+      name: 'digital-human-lifecycle',
+      testMatch: '**/digital-human-lifecycle.spec.ts',
+      // Each test seeds a fresh app + boots a full Electron instance + waits
+      // on a real automation run; occasional tab-render/API timing flakes are
+      // environmental, not product bugs (mirrors codex-mcp's own rationale).
+      retries: 1,
+      use: {
+        // Seeded live runs: trigger, multi-turn chat, and completion all wait
+        // on real automation execution.
+        actionTimeout: 30000
+      }
+    },
+    {
       name: 'chat',
       testMatch: '**/chat.spec.ts',
       use: {

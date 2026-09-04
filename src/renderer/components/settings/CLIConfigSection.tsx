@@ -259,8 +259,11 @@ function CLIConfigSectionInner() {
                 <span className="text-xs px-1.5 py-0.5 bg-amber-500/10 text-amber-600 dark:text-amber-400 rounded-full flex items-center gap-1">
                   <AlertTriangle className="w-3 h-3" /> {t('High Risk')}
                 </span>
+                <span className="text-xs px-1.5 py-0.5 bg-muted text-muted-foreground rounded-full">
+                  {t('Not Recommended')}
+                </span>
               </div>
-              <p className="text-xs text-muted-foreground mt-0.5">{t("Share Claude CLI's ~/.claude directory. Skills and settings are shared but changes in Claude CLI will affect Halo.")}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{t("Share Claude CLI's ~/.claude directory. Not recommended — skills and settings are shared, but changes in Claude CLI will affect Halo and you may run into unexpected problems.")}</p>
               {paths && (
                 <p className="text-xs font-mono text-muted-foreground mt-1 truncate">{paths.ccDefault}</p>
               )}
@@ -586,7 +589,7 @@ function CLIConfigSectionInner() {
               <li>{t('Changes made by Claude CLI will immediately affect Halo')}</li>
               <li>{t('Skills installed in Halo will appear in Claude CLI')}</li>
               <li>{t('MCP server changes are shared bidirectionally')}</li>
-              <li>{t('Custom API keys and endpoint URLs will be shared and may be overwritten')}</li>
+              <li>{t('If your standalone Claude CLI has a custom API key or endpoint configured, it will take priority over the model selected in Halo, which may break chat')}</li>
             </ul>
             <p className="text-sm font-medium">{t('Are you sure you want to proceed?')}</p>
             <div className="flex gap-2">

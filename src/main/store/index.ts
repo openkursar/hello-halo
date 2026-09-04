@@ -24,7 +24,8 @@ export {
 
 export { checkNow as checkUpgradesNow, startUpgradeScheduler, stopUpgradeScheduler } from './upgrade.service'
 
-export { publish, collectFiles, getPublishPreview, findAppByPublishSlug } from './publish'
+export { publish, collectFiles, inspectSkillDeps, getPublishPreview, findAppByPublishSlug } from './publish'
+export type { SkillDepInspection } from './publish'
 export { pack as packDhpkg, unpack as unpackDhpkg } from './dhpkg'
 export { packSkill } from './skill-pkg'
 export { getStoreCapabilities } from './backend/capabilities'

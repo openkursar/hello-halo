@@ -50,8 +50,9 @@ import type {
   HealthCheckResponse,
   ImageAttachment
 } from '../shared/types'
+import type { NotifyChannelsProductConfig } from '../shared/types/notification-channels'
 import type { StoreInstallProgress, StoreCapabilities, CategoryTaxonomy, DiscoverLayout, ResolvedDiscover, MyPublication, StoreCollection, StoreSignInStatus } from '../shared/store/store-types'
-import type { AppType } from '../shared/apps/spec-types'
+import type { AppType, AppSpec } from '../shared/apps/spec-types'
 
 // Seed --display-scale before the renderer's first paint. The main process
 // passes the persisted scale via additionalArguments at window creation;
@@ -82,6 +83,8 @@ export interface HaloAPI {
   authCheckToken: (sourceId: string) => Promise<IpcResponse>
   authLogout: (sourceId: string) => Promise<IpcResponse>
   authGetQuota: (sourceId: string) => Promise<IpcResponse>
+  authDelegatedStatus: () => Promise<IpcResponse>
+  authDelegatedActivate: () => Promise<IpcResponse>
   onAuthLoginProgress: (callback: (data: { provider: string; status: string }) => void) => () => void
 
   // Config
@@ -472,6 +475,7 @@ export interface HaloAPI {
   // Notification Channels
   testNotificationChannel: (channelType: string) => Promise<IpcResponse>
   clearNotificationChannelCache: () => Promise<IpcResponse>
+  notifyChannelsProductConfig: () => Promise<IpcResponse<NotifyChannelsProductConfig | null>>
 
   // WeCom Bot (企业微信智能机器人) — legacy compat
   getWecomBotStatus: () => Promise<IpcResponse>
@@ -659,6 +663,8 @@ export interface HaloAPI {
   storeApplyUpgrade: (input: { appId: string; mode?: 'patch_minor' | 'major' | 'force' }) => Promise<IpcResponse>
   storePublish: (input: { appId: string; author?: string; version?: string; changelog?: string; category?: string; name?: string; description?: string; tags?: string[] }) => Promise<IpcResponse>
   storePublishPreview: (input: { appId: string; author?: string; name?: string }) => Promise<IpcResponse<{ slug: string; localVersion: string; storeVersion: string | null }>>
+  storeInspectSkillDeps: (input: { appId: string }) => Promise<IpcResponse<Array<{ id: string; declaredBundled: boolean; resolvable: boolean; installed: boolean; appId: string | null; storeName: string | null }>>>
+  storeInspectSkillDepsForSpec: (input: { spec: AppSpec }) => Promise<IpcResponse<Array<{ id: string; declaredBundled: boolean; resolvable: boolean; installed: boolean; appId: string | null; storeName: string | null }>>>
   storeFindAppByPublishSlug: (input: { slug: string; type?: AppType; author?: string }) => Promise<IpcResponse<{ appId: string | null }>>
   storeExportDhpkg: (input: { appId: string }) => Promise<IpcResponse<{ path: string }>>
   storeExportSkill: (input: { appId: string }) => Promise<IpcResponse<{ path: string }>>

@@ -43,7 +43,7 @@
   | Frame | When | Carries |
   |---|---|---|
   | `system.init` | Once at turn start | session_id, model, tools, mcp_servers |
-  | `stream_event` (message_start / content_block_* / message_delta / message_stop) | Token-level | UI streaming deltas |
+  | `stream_event` (message_start / content_block_* / message_delta / message_stop) | Token-level | UI streaming deltas; `message_start.message.id` + `message_delta.usage` are also the per-call token accounting an adapter MUST carry when its provider reports usage only at stream end (see `context-usage.ts extractStreamDeltaUsage`) |
   | `assistant` (aggregate) | At each block boundary | One content block in final form. **For `tool_use` blocks this MUST precede the corresponding `user.tool_result`** so id-based linking works during JSONL replay. |
   | `user` (tool_result) | When a tool item completes | `tool_use_id`, content, is_error |
   | `result` | Once at turn end | stop_reason, cumulative usage |

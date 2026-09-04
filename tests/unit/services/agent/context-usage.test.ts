@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest'
 import {
   isSyntheticAssistantMessage,
   extractRealAssistantUsage,
+  extractStreamDeltaUsage,
   computeContextUsed,
   resolveContextWindow,
   buildTokenUsage
@@ -103,6 +104,35 @@ describe('computeContextUsed', () => {
         cacheCreationTokens: 0
       })
     ).toBe(43_200)
+  })
+})
+
+describe('extractStreamDeltaUsage', () => {
+  it('reads the counts a provider only reports on message_delta', () => {
+    expect(
+      extractStreamDeltaUsage({
+        usage: { input_tokens: 12_400, output_tokens: 830, cache_read_input_tokens: 5_000 }
+      })
+    ).toEqual({
+      inputTokens: 12_400,
+      outputTokens: 830,
+      cacheReadTokens: 5_000,
+      cacheCreationTokens: 0
+    })
+  })
+
+  it('reads an output-only delta (the shape a well-behaved upstream sends)', () => {
+    expect(extractStreamDeltaUsage({ usage: { output_tokens: 42 } })).toEqual({
+      inputTokens: 0,
+      outputTokens: 42,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0
+    })
+  })
+
+  it('returns null for an absent or all-zero usage so callers keep what they had', () => {
+    expect(extractStreamDeltaUsage({})).toBeNull()
+    expect(extractStreamDeltaUsage({ usage: { input_tokens: 0, output_tokens: 0 } })).toBeNull()
   })
 })
 

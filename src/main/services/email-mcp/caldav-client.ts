@@ -5,7 +5,7 @@
  * Stateless HTTP client — each request is independent with Basic auth.
  *
  * The CalDAV URL is configured via `config.caldavUrl` (supports {host} and {email}
- * placeholders). Enterprise builds pre-populate this via product.json serviceDefaults.
+ * placeholders).
  */
 
 import https from 'https'
@@ -59,7 +59,6 @@ export class CalDavClient {
     const email = config.smtp.user
     const host = config.smtp.host
 
-    // Resolve CalDAV URL from config (set by user or pre-populated by product.json serviceDefaults)
     this.calendarUrl = (config.caldavUrl || '')
       .replace(/\{host\}/g, host)
       .replace(/\{email\}/g, email)

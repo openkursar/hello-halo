@@ -961,3 +961,12 @@ This document must be kept in sync with the following files:
 - `src/main/apps/spec/parse.ts` — alias and shorthand normalization rules
 
 **Whenever a field is added, modified, or removed in `schema.ts`, the corresponding section of this document must be updated.**
+
+The agent-facing authoring guide is a second consumer of the same facts and lives in another
+repository: `halo-website/docs-src/public/ai-guides/create-digital-human/`, served as raw
+markdown and read at runtime by the `read_halo_doc` tool. It also describes runtime behavior
+this document does not cover — IM/WeCom routing, permission resolution, capability setup — so
+changes to `schema.ts`, `apps/runtime/dispatch-inbound.ts`, `apps/runtime/notify-tool.ts`, or
+the permission model must be reflected there as well. Publishing the docs site is what delivers
+the fix; `npm run sync:ai-guides` refreshes the offline copy shipped in `resources/ai-guides/`
+before a release.

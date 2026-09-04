@@ -73,7 +73,6 @@ import { getSpace } from '../services/space.service'
 import { broadcastToAll } from '../http/websocket'
 import * as appController from '../controllers/app.controller'
 import { analytics } from '../services/analytics/analytics.service'
-import { AnalyticsEvents } from '../services/analytics/types'
 import { appRpc } from '../../shared/rpc/contracts/app.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -533,16 +532,6 @@ export function registerAppHandlers(): void {
     // ── app:chat-send ─────────────────────────────────────────────────────
     appChatSend: async (request: AppChatRequest) => {
       try {
-        // Telemetry: count user-sent messages to app chat (no content).
-        // specId is reverse-looked-up so dashboards can label the digital
-        // human; the SENSITIVE_KEYS gate drops it for open-source builds.
-        const specId = getAppManager()?.getApp(request.appId)?.specId
-        void analytics.track(AnalyticsEvents.MESSAGE_SENT, {
-          source: 'app-chat',
-          appId: request.appId,
-          specId,
-        })
-
         // Fire-and-forget: streaming events are pushed to renderer via agent:* channels.
         // We don't await the full completion here because the renderer listens for
         // real-time events (agent:message, agent:thought, etc.) keyed by conversationId.

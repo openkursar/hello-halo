@@ -8,6 +8,8 @@
  * (email, WeCom, DingTalk, Feishu, webhook).
  */
 
+import type { LocalizedText } from './ai-sources'
+
 // ============================================
 // Channel Type Enum
 // ============================================
@@ -197,6 +199,35 @@ export interface NotifySendResult {
   success: boolean
   error?: string
 }
+
+// ============================================
+// Product-level Channel Customization
+// ============================================
+
+/**
+ * Help-doc link rendered inside a channel's settings card (e.g. how to obtain
+ * an SMTP authorization code). Declared per deployment in product.json;
+ * builds that omit it render no link.
+ */
+export interface ChannelDocsLink {
+  url: string
+  /** Localized link label. A generic string is used when omitted. */
+  label?: LocalizedText
+}
+
+/** Per-channel customization entry */
+export interface NotifyChannelProductConfig {
+  /** Help link rendered under the channel's credential field */
+  docs?: ChannelDocsLink
+}
+
+/**
+ * Notification-channel customizations a deployment declares in product.json.
+ *
+ * Presentation-only: credentials and endpoints belong to `serviceDefaults`
+ * (seeded into the user's config) or to the user, never here.
+ */
+export type NotifyChannelsProductConfig = Partial<Record<NotificationChannelType, NotifyChannelProductConfig>>
 
 // ============================================
 // Channel Test Result (for Settings UI)

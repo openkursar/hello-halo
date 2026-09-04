@@ -52,7 +52,7 @@ interface ElectronFixtures {
  * Get the app entry point path.
  * Requires "npm run build" to produce out/main/index.mjs.
  */
-function getAppEntryPath(): string {
+export function getAppEntryPath(): string {
   const projectRoot = path.resolve(__dirname, '../../..')
   const appEntryPath = path.join(projectRoot, 'out/main/index.mjs')
 
@@ -108,8 +108,13 @@ function ensureProductJson(projectRoot: string): void {
  *
  * IMPORTANT: Also creates the headless-electron symlink required by Claude Agent SDK.
  * Without this symlink, SDK child processes fail with EPIPE error.
+ *
+ * Exported so other fixtures (e.g. electron-with-app.ts) can seed data into
+ * `{testConfigDir}/.halo/` between this call and launchElectronApp() —
+ * anything written to the SQLite/config files before the app opens them is
+ * picked up on boot exactly like a real prior install.
  */
-function createTestConfigDir(appPath: string): string {
+export function createTestConfigDir(appPath: string): string {
   const testDir = path.join(
     process.env.TMPDIR || '/tmp',
     `halo-e2e-test-${Date.now()}`
@@ -228,7 +233,7 @@ function createTestConfigDir(appPath: string): string {
 /**
  * Clean up test config directory
  */
-function cleanupTestConfigDir(testDir: string): void {
+export function cleanupTestConfigDir(testDir: string): void {
   try {
     if (fs.existsSync(testDir)) {
       fs.rmSync(testDir, { recursive: true, force: true })
@@ -239,6 +244,43 @@ function cleanupTestConfigDir(testDir: string): void {
 }
 
 /**
+ * Launch the built app against an already-prepared test config directory.
+ *
+ * Split out from the `electronApp` fixture so other fixtures (e.g.
+ * electron-with-app.ts) can seed data into `{testConfigDir}/.halo/` between
+ * `createTestConfigDir()` and this call, then reuse the exact same launch
+ * behavior (env vars, GPU/accel flags) instead of duplicating it.
+ */
+export async function launchElectronApp(appEntryPath: string, testConfigDir: string): Promise<ElectronApplication> {
+  console.log(`[E2E] App entry: ${appEntryPath}`)
+  console.log(`[E2E] Test config dir: ${testConfigDir}`)
+
+  // Build a clean env without ELECTRON_RUN_AS_NODE.
+  // Halo sets ELECTRON_RUN_AS_NODE=1 for its child processes (Claude Agent SDK),
+  // which forces Electron into plain Node.js mode. E2E tests inherit this env var,
+  // but Playwright needs Electron in full app mode to connect via CDP.
+  const { ELECTRON_RUN_AS_NODE: _, ...cleanEnv } = process.env
+
+  return electron.launch({
+    args: [appEntryPath],
+    env: {
+      ...cleanEnv,
+      // Use test-specific config directory
+      HOME: testConfigDir,
+      USERPROFILE: testConfigDir,
+      // Point app config to the test .halo dir directly.
+      // config.service.ts checks HALO_DATA_DIR first (highest priority),
+      // bypassing the .halo vs .halo-dev dev-mode logic.
+      HALO_DATA_DIR: path.join(testConfigDir, '.halo'),
+      // Disable hardware acceleration for CI
+      ELECTRON_DISABLE_GPU: '1',
+      // Mark as E2E test
+      HALO_E2E_TEST: '1'
+    }
+  })
+}
+
+/**
  * Extended test fixture with Electron support
  */
 export const test = base.extend<ElectronFixtures>({
@@ -246,33 +288,7 @@ export const test = base.extend<ElectronFixtures>({
   electronApp: async ({}, use) => {
     const appEntryPath = getAppEntryPath()
     const testConfigDir = createTestConfigDir(appEntryPath)
-
-    console.log(`[E2E] App entry: ${appEntryPath}`)
-    console.log(`[E2E] Test config dir: ${testConfigDir}`)
-
-    // Build a clean env without ELECTRON_RUN_AS_NODE.
-    // Halo sets ELECTRON_RUN_AS_NODE=1 for its child processes (Claude Agent SDK),
-    // which forces Electron into plain Node.js mode. E2E tests inherit this env var,
-    // but Playwright needs Electron in full app mode to connect via CDP.
-    const { ELECTRON_RUN_AS_NODE: _, ...cleanEnv } = process.env
-
-    const app = await electron.launch({
-      args: [appEntryPath],
-      env: {
-        ...cleanEnv,
-        // Use test-specific config directory
-        HOME: testConfigDir,
-        USERPROFILE: testConfigDir,
-        // Point app config to the test .halo dir directly.
-        // config.service.ts checks HALO_DATA_DIR first (highest priority),
-        // bypassing the .halo vs .halo-dev dev-mode logic.
-        HALO_DATA_DIR: path.join(testConfigDir, '.halo'),
-        // Disable hardware acceleration for CI
-        ELECTRON_DISABLE_GPU: '1',
-        // Mark as E2E test
-        HALO_E2E_TEST: '1'
-      }
-    })
+    const app = await launchElectronApp(appEntryPath, testConfigDir)
 
     // Use the app in tests
     await use(app)

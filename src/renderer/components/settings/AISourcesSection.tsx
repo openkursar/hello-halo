@@ -28,9 +28,11 @@ import { getBuiltinProvider, isOAuthProvider as isOAuthProviderFn } from '../../
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
 import { ProviderSelector } from './ProviderSelector'
+import { DelegatedLoginDialog } from './DelegatedLoginDialog'
 import { getBrandIcon } from '../icons/BrandIcons'
 import { ProviderIconTile } from '../icons/ProviderIconTile'
 import { resolveLocalizedText, type LocalizedText, type AuthProviderConfig } from '../../../shared/types'
+import { CLI_DELEGATED_PROVIDER_ID } from '../../../shared/constants/claude-models'
 
 // ============================================================================
 // Helper functions for dynamic providers
@@ -100,6 +102,9 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
 
   // Claude OAuth dialog state
   const [claudeLogin, setClaudeLogin] = useState<ClaudeLoginState | null>(null)
+
+  // Delegated (CLI-managed) login dialog
+  const [delegatedLoginOpen, setDelegatedLoginOpen] = useState(false)
 
   // Dynamic OAuth providers from product.json
   const [oauthProviders, setOAuthProviders] = useState<AuthProviderConfig[]>([])
@@ -362,6 +367,9 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
     const isExpanded = expandedSourceId === source.id
     const displayInfo = getSourceDisplayInfo(source)
     const isOAuth = source.authType === 'oauth'
+    const isDelegated = source.authType === 'delegated'
+    // Neither kind stores a key in Halo, so both hide the key-editing affordances.
+    const isCredentialless = isOAuth || isDelegated
 
     return (
       <div
@@ -399,7 +407,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
             {(() => {
               const Brand = getBrandIcon(source.provider)
               if (Brand) return <Brand size={18} className="text-text-secondary" />
-              return isOAuth
+              return isCredentialless
                 ? <Globe size={18} className="text-text-secondary" />
                 : <Key size={18} className="text-text-secondary" />
             })()}
@@ -415,8 +423,8 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
             </div>
           </div>
 
-          {/* User info for OAuth */}
-          {isOAuth && source.user?.name && (
+          {/* Signed-in account */}
+          {isCredentialless && source.user?.name && (
             <span className="text-xs text-text-secondary px-2 py-1 bg-surface-tertiary rounded">
               {source.user.name}
             </span>
@@ -443,12 +451,12 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
               <div className="flex justify-between text-sm">
                 <span className="text-text-secondary">{t('Auth Type')}</span>
                 <span className="text-text-primary">
-                  {isOAuth ? 'OAuth' : 'API Key'}
+                  {isDelegated ? t('Claude Code CLI') : isOAuth ? 'OAuth' : 'API Key'}
                 </span>
               </div>
 
-              {/* API URL (non-OAuth only) */}
-              {!isOAuth && (
+              {/* API URL — only sources that own an endpoint */}
+              {!isCredentialless && (
                 <div className="flex justify-between text-sm">
                   <span className="text-text-secondary">{t('API URL')}</span>
                   <span className="text-text-primary truncate max-w-[200px]">
@@ -459,8 +467,9 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
 
               {/* Actions */}
               <div className="flex gap-2 pt-2">
-                {isOAuth ? (
-                  // OAuth: only logout
+                {isCredentialless ? (
+                  // No key to edit. For delegated sources this only removes the
+                  // source — the CLI keeps its own credential either way.
                   <button
                     onClick={() => handleOAuthLogout(source.id)}
                     disabled={loggingOutSourceId === source.id}
@@ -472,7 +481,7 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                     ) : (
                       <LogOut size={14} />
                     )}
-                    {t('Logout')}
+                    {isDelegated ? t('Remove') : t('Logout')}
                   </button>
                 ) : (
                   // API Key: edit and delete
@@ -825,7 +834,14 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
                 </h4>
                 <div className="space-y-2">
                   {availableOAuthProviders.map(provider =>
-                    renderProviderButton(provider, () => handleOAuthLogin(provider.type as ProviderId))
+                    renderProviderButton(
+                      provider,
+                      provider.type === CLI_DELEGATED_PROVIDER_ID
+                        // Delegated sign-in has no OAuth flow to start: the CLI
+                        // owns the credential, so the dialog only runs its login.
+                        ? () => setDelegatedLoginOpen(true)
+                        : () => handleOAuthLogin(provider.type as ProviderId)
+                    )
                   )}
                 </div>
               </div>
@@ -833,6 +849,15 @@ export function AISourcesSection({ config, setConfig }: AISourcesSectionProps) {
           </div>
         )
       })()}
+
+      <DelegatedLoginDialog
+        open={delegatedLoginOpen}
+        onClose={() => setDelegatedLoginOpen(false)}
+        onComplete={async () => {
+          await reloadConfig()
+          setDelegatedLoginOpen(false)
+        }}
+      />
     </div>
   )
 }

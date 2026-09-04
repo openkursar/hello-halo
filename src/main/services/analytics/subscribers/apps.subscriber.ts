@@ -103,6 +103,7 @@ export function installAppsSubscribers(
         trigger: evt.triggerType,
         status: evt.status,
         durationMs: evt.durationMs,
+        tokensUsed: evt.tokensUsed,
         // Only include errorCode on failures. Keep it to a short identifier;
         // the detailed message is never forwarded.
         errorCode:

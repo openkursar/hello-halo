@@ -5,6 +5,15 @@
 import type { BackendConfig } from '../types'
 
 /**
+ * Header carrying the backend config for delegated sources.
+ *
+ * Those requests come from a CLI subprocess that authenticates itself, so
+ * `x-api-key` is absent and `Authorization` belongs to the upstream — leaving
+ * no room for the encoded config on either standard channel.
+ */
+export const DELEGATED_ROUTING_HEADER = 'x-halo-backend'
+
+/**
  * Encode backend configuration to base64 string
  */
 export function encodeBackendConfig(config: BackendConfig): string {
@@ -19,8 +28,9 @@ export function decodeBackendConfig(encoded: string): BackendConfig | null {
   try {
     const decoded = Buffer.from(encoded, 'base64').toString('utf-8')
     const parsed = JSON.parse(decoded) as BackendConfig
-    // Validate required fields
-    if (parsed?.url && parsed?.key) {
+    // Validate required fields. Delegated configs legitimately carry no key —
+    // the caller's own Authorization header is the credential.
+    if (parsed?.url && (parsed.key || parsed.delegatedAuth)) {
       return parsed
     }
   } catch {

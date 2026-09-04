@@ -130,6 +130,23 @@ export function StoreMine() {
     else showToast({ title: res.error || t('Take down failed. Please try again.'), variant: 'error', duration: 4000 })
   }, [load, showConfirm, showToast, t])
 
+  // Emitted so that every opened detail has a click behind it. `source` records
+  // that this one is an author reopening their own publication rather than
+  // catalog traffic; nothing splits the funnel on it today, so these clicks do
+  // count towards the store-wide click rate.
+  //
+  // A publication carries no type once it leaves the public index — which is
+  // exactly the taken-down state this page exists to show. The dimension is left
+  // off there rather than filled with a value that is not an app type.
+  const openDetail = useCallback((pub: MyPublication) => {
+    void api.trackEvent('store.card.click', {
+      appId: pub.slug,
+      ...(pub.type ? { appType: pub.type } : {}),
+      source: 'mine',
+    })
+    void selectStoreApp(pub.slug)
+  }, [selectStoreApp])
+
   const openPublish = useCallback((pub: MyPublication) => {
     setPublishType(pub.type === 'skill' || pub.type === 'automation' ? pub.type : undefined)
     setPublishTarget({
@@ -240,7 +257,7 @@ export function StoreMine() {
                           key={`${pub.slug}@${pub.version}`}
                           pub={pub}
                           busy={busySlug === pub.slug}
-                          onOpen={() => void selectStoreApp(pub.slug)}
+                          onOpen={() => openDetail(pub)}
                           onUnpublish={() => handleUnpublish(pub.slug)}
                           onPublishVersion={() => openPublish(pub)}
                         />

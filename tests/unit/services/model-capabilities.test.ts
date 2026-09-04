@@ -88,10 +88,11 @@ describe('legacy claude-3 patterns', () => {
     expect(cap.vision).toBe(true)
   })
 
-  it('claude-3.5 haiku is text-only', () => {
+  it('claude-3.5 haiku resolves vision via the shared heuristic', () => {
     const cap = modelCapabilitiesService.resolve('claude-3-5-haiku-20241022')
     expect(cap.maxOutputTokens).toBe(8192)
-    expect(cap.vision).toBe(false)
+    // Vision resolves through the shared id heuristic, not this pattern blob.
+    expect(cap.vision).toBe(true)
   })
 
   it('claude-3.7 supports 64K output and thinking', () => {

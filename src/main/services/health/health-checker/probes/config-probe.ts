@@ -101,6 +101,10 @@ export async function runConfigProbe(): Promise<ConfigProbeResult> {
           apiKeyConfigured = !!(currentSource.apiKey && typeof currentSource.apiKey === 'string' && currentSource.apiKey.length > 0)
         } else if (authType === 'oauth') {
           apiKeyConfigured = !!(currentSource.accessToken && typeof currentSource.accessToken === 'string')
+        } else if (authType === 'delegated') {
+          // Credential ownership sits with the CLI; the health check would
+          // otherwise flag a working install as unconfigured.
+          apiKeyConfigured = true
         }
       }
     } else {

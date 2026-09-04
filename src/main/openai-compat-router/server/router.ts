@@ -6,7 +6,7 @@
 
 import express, { type Express, type Request, type Response } from 'express'
 import type { AnthropicRequest } from '../types'
-import { decodeBackendConfig } from '../utils'
+import { decodeBackendConfig, DELEGATED_ROUTING_HEADER } from '../utils'
 import { handleMessagesRequest, handleCountTokensRequest } from './request-handler'
 import { handleResponsesRequest } from './codex-responses-handler'
 
@@ -47,8 +47,10 @@ export function createApp(options: RouterOptions = {}): Express {
   app.post('/v1/messages', async (req: Request, res: Response) => {
     const anthropicRequest = (req.body || {}) as AnthropicRequest
 
-    // Extract API key from header
-    const rawKey = req.headers['x-api-key']
+    // Extract API key from header. Delegated callers authenticate themselves,
+    // so their Authorization header belongs to the upstream and x-api-key is
+    // absent — their backend config arrives on a dedicated header instead.
+    const rawKey = req.headers['x-api-key'] ?? req.headers[DELEGATED_ROUTING_HEADER]
     const rawKeyStr = Array.isArray(rawKey) ? rawKey[0] : rawKey
 
     if (!rawKeyStr) {
@@ -78,7 +80,11 @@ export function createApp(options: RouterOptions = {}): Express {
     // Forward all SDK headers for transparent passthrough, excluding hop-by-hop
     // headers and those that will be overridden by fetchAnthropicUpstream.
     // Upstream may validate any header at any time — we must not silently drop them.
-    const HOP_BY_HOP = new Set(['host', 'connection', 'content-length', 'transfer-encoding', 'x-api-key'])
+    const HOP_BY_HOP = new Set([
+      'host', 'connection', 'content-length', 'transfer-encoding', 'x-api-key',
+      // Router-local routing identity; upstream must never see it.
+      DELEGATED_ROUTING_HEADER
+    ])
     const sdkHeaders: Record<string, string> = {}
     for (const [key, value] of Object.entries(req.headers)) {
       if (!HOP_BY_HOP.has(key) && value) {

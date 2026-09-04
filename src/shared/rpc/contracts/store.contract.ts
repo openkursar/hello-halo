@@ -21,6 +21,8 @@ export const storeRpc = {
   storeApplyUpgrade: rawRpcMethod('store:apply-upgrade'),
   storePublish: rawRpcMethod('store:publish'),
   storePublishPreview: rawRpcMethod('store:publish-preview'),
+  storeInspectSkillDeps: rawRpcMethod('store:inspect-skill-deps'),
+  storeInspectSkillDepsForSpec: rawRpcMethod('store:inspect-skill-deps-for-spec'),
   storeFindAppByPublishSlug: rawRpcMethod('store:find-app-by-publish-slug'),
   storeExportDhpkg: rawRpcMethod('store:export-dhpkg'),
   storeExportSkill: rawRpcMethod('store:export-skill'),

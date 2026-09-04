@@ -436,7 +436,7 @@ export interface ResolvedDiscoverNode {
   /** Resolved entries for a section, or the first catalog page. */
   entries?: RegistryEntry[]
   /** Only for the `collections` layout. */
-  collections?: StoreCollection[]
+  collections?: ResolvedCollection[]
   /** Only for `catalog`: whether further pages exist behind the browse query. */
   hasMore?: boolean
 }
@@ -477,6 +477,21 @@ export interface StoreCollection {
   description: string
   /** Ordered member app slugs. */
   memberSlugs: string[]
+}
+
+/**
+ * A collection whose members have been looked up in the index. Resolution
+ * belongs to the main process, which holds the full mirror: the renderer only
+ * has a page of the catalog, so resolving there drops every member outside it.
+ *
+ * `memberSlugs` is dropped rather than carried alongside `entries`, so a
+ * consumer has no second, resolvable-looking representation of membership to
+ * reach for — which is exactly how the members ended up being resolved against
+ * the browse list before.
+ */
+export interface ResolvedCollection extends Omit<StoreCollection, 'memberSlugs'> {
+  /** Members present in the index, in the curated order. */
+  entries: RegistryEntry[]
 }
 
 // ============================================

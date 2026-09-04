@@ -61,13 +61,26 @@ describe('reasoningEffortProfileById', () => {
   })
 
   it('matches proxy-prefixed wire ids', () => {
-    expect(reasoningEffortProfileById('Pro/zai-org/GLM-5').disableValue)
-      .toBe(reasoningEffortProfileById('glm-5').disableValue)
+    expect(reasoningEffortProfileById('Pro/zai-org/GLM-5.3').disableValue)
+      .toBe(reasoningEffortProfileById('glm-5.3').disableValue)
   })
 
   it('assumes the narrow ladder for an unknown model', () => {
     expect(reasoningEffortProfileById('some-proxy-model').levels).toEqual(['low', 'medium', 'high'])
     expect(reasoningEffortProfileById(undefined).disableValue).toBeUndefined()
+  })
+
+  it('marks GLM-5/5.1/5-Turbo/4.7/4.6 as not supporting reasoning_effort at all', () => {
+    // docs.bigmodel.cn: the field is documented from GLM-5.2 onward only.
+    for (const id of ['glm-5', 'glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4.6', 'glm-4.5']) {
+      expect(reasoningEffortProfileById(id).levels, id).toEqual([])
+      expect(reasoningEffortProfileById(id).disableValue, id).toBeUndefined()
+    }
+  })
+
+  it('gives GLM-5.2 the two effort tiers its API does not silently alias', () => {
+    expect(reasoningEffortProfileById('glm-5.2').levels).toEqual(['high', 'max'])
+    expect(reasoningEffortProfileById('glm-5.2').disableValue).toBe('none')
   })
 })
 
@@ -92,9 +105,29 @@ describe('resolveReasoningEffortValue', () => {
     expect(resolveReasoningEffortValue(undefined, undefined, 'gpt-4o')).toBeUndefined()
   })
 
-  it('sends an explicit off to upstreams that think by default', () => {
-    expect(resolveReasoningEffortValue(disabled, undefined, 'glm-5')).toBe('none')
-    expect(resolveReasoningEffortValue(enabled(32_000), 'off', 'glm-5.1')).toBe('none')
+  it('omits the field for GLM-5/5.1/4.7 — reasoning_effort is not in their API surface', () => {
+    // Their only real thinking toggle is `thinking.type`, which Halo does not
+    // send yet, so an inferred "off" here has no wire value to carry it.
+    expect(resolveReasoningEffortValue(disabled, undefined, 'glm-5')).toBeUndefined()
+    expect(resolveReasoningEffortValue(enabled(32_000), 'off', 'glm-5.1')).toBeUndefined()
+    expect(resolveReasoningEffortValue(disabled, undefined, 'glm-4.7')).toBeUndefined()
+  })
+
+  it('still forwards a user-declared value verbatim even where Halo infers nothing', () => {
+    // "Sent to the provider as-is" is opt-in per Model Config; the model
+    // family not supporting the field otherwise must not suppress it.
+    expect(resolveReasoningEffortValue(enabled(10_240), 'max', 'glm-5')).toBe('max')
+  })
+
+  it('sends an explicit off to GLM-5.2, the earliest model reasoning_effort applies to', () => {
+    expect(resolveReasoningEffortValue(disabled, undefined, 'glm-5.2')).toBe('none')
+    expect(resolveReasoningEffortValue(enabled(32_000), 'off', 'glm-5.2')).toBe('none')
+  })
+
+  it('clamps GLM-5.2 to the two tiers that are not aliases of another tier', () => {
+    expect(resolveReasoningEffortValue(enabled(5_120), undefined, 'glm-5.2')).toBe('high')
+    expect(resolveReasoningEffortValue(enabled(2_048), undefined, 'glm-5.2')).toBe('high')
+    expect(resolveReasoningEffortValue(enabled(32_000), undefined, 'glm-5.2')).toBe('max')
   })
 
   it('maps thinking-off to the lowest level for always-thinking models', () => {

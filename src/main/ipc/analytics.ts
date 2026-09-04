@@ -9,7 +9,10 @@
  *   Main validates the payload shape, then forwards to analytics.track().
  *
  * Security notes:
- *   - Only whitelisted event names are accepted.
+ *   - Only whitelisted event names are accepted — `RENDERER_ALLOWED_EVENTS`
+ *     in `services/analytics/types.ts`, shared with the `/api/analytics/report`
+ *     HTTP route so desktop and remote/Capacitor clients are held to the
+ *     same boundary.
  *   - Properties are shallow-validated (must be plain object or undefined).
  *   - The TelemetryProvider applies its own per-event whitelist and global
  *     blocklist on top, so even if the renderer sends unexpected keys they
@@ -18,32 +21,7 @@
 
 import { ipcMain } from 'electron'
 import { analytics } from '../services/analytics/analytics.service'
-
-/** Events the renderer is allowed to report. */
-const RENDERER_ALLOWED_EVENTS = new Set([
-  'session.start',
-  'session.end',
-  'page.view',
-  'message.sent',
-  'message.received',
-  // Store funnel. `store.install.done` is deliberately absent: it is emitted by
-  // the main-process installer, so accepting it from the renderer would let the
-  // UI report installs that never happened.
-  'store.view',
-  'store.detail.view',
-  'store.card.click',
-  'store.search',
-  'store.category.filter',
-  'store.install.click',
-  'store.empty_state',
-  'store.update.overwrite',
-  'store.update.keep_current',
-  'store.featured.view',
-  'store.publish.open',
-  'store.publish.submit',
-  'store.mine.view',
-  'store.unpublish',
-])
+import { RENDERER_ALLOWED_EVENTS } from '../services/analytics/types'
 
 /**
  * Register the analytics IPC listener.

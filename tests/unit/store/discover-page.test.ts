@@ -137,11 +137,52 @@ describe('discover-page', () => {
 
     const withSection = await load(
       { version: 1, nodes: [{ type: 'section', layout: 'collections' }] },
-      { collections: [{ id: 'c', label: 'l', name: 'n', description: '', memberSlugs: [] }] },
+      {
+        byType: { skill: [entry('c1', 'skill')] },
+        collections: [{ id: 'c', label: 'l', name: 'n', description: '', memberSlugs: ['c1'] }],
+      },
     )
     const result = await withSection.getDiscoverPage('en', 30)
     expect(withSection.fetchCollections).toHaveBeenCalled()
     expect(result.nodes[0].collections).toHaveLength(1)
+  })
+
+  it('resolves every collection member from the index, not from the catalog page', async () => {
+    const members = Array.from({ length: 18 }, (_, i) => entry(`m${i}`, 'skill'))
+    const { getDiscoverPage } = await load(
+      { version: 1, nodes: [{ type: 'section', layout: 'collections' }] },
+      {
+        byType: { skill: members },
+        // The catalog page holds a fraction of them: resolving there would cap
+        // the collection at whatever fits.
+        catalog: { items: members.slice(0, 6), hasMore: true },
+        collections: [{
+          id: 'c', label: 'l', name: 'n', description: '',
+          memberSlugs: members.map(m => m.slug),
+        }],
+      },
+    )
+
+    const result = await getDiscoverPage('en', 30)
+
+    expect(result.nodes[0].collections?.[0].entries).toHaveLength(18)
+  })
+
+  it('drops collection members the index does not carry', async () => {
+    const { getDiscoverPage } = await load(
+      { version: 1, nodes: [{ type: 'section', layout: 'collections' }] },
+      {
+        byType: { skill: [entry('kept', 'skill')] },
+        collections: [{
+          id: 'c', label: 'l', name: 'n', description: '',
+          memberSlugs: ['kept', 'unpublished'],
+        }],
+      },
+    )
+
+    const result = await getDiscoverPage('en', 30)
+
+    expect(result.nodes[0].collections?.[0].entries.map(e => e.slug)).toEqual(['kept'])
   })
 
   it('keeps the page alive when one type\'s index query fails', async () => {

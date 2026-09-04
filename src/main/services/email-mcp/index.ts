@@ -10,7 +10,6 @@
  * - CalDAV (fetch): calendar operations — stateless HTTP per-request (when caldavUrl is configured)
  *
  * All protocols share credentials from config.notificationChannels.email.
- * Enterprise builds pre-populate TLS ciphers and CalDAV URL via product.json serviceDefaults.
  *
  * Lifecycle:
  * - Created per executeRun() when email permission is granted
@@ -52,24 +51,23 @@ type SdkMcpServer = ReturnType<typeof createSdkMcpServer>
 // ============================================
 
 /**
- * Merge product.json serviceDefaults.email into user config.
- * User-provided values always take precedence over defaults.
+ * Fall back to product.json serviceDefaults for the two advanced fields.
+ *
+ * Exists only for configs created before `serviceDefaults.email` was seeded
+ * into config.json: those never carry a CalDAV URL, and without it the
+ * calendar tools below stay unregistered. Everything else — including the
+ * SMTP endpoint — comes from the user's config verbatim, so what the settings
+ * "Test" button verifies is exactly what these tools use.
  */
-function mergeEmailDefaults(userConfig: EmailChannelConfig): EmailChannelConfig {
+function resolveAdvancedDefaults(userConfig: EmailChannelConfig): EmailChannelConfig {
   const defaults = getServiceDefaults()?.email
   if (!defaults) return userConfig
 
   return {
-    ...defaults,
     ...userConfig,
-    smtp: {
-      ...defaults.smtp,
-      ...userConfig.smtp,
-    },
-    // Prefer user-set values; fall back to serviceDefaults
     caldavUrl: userConfig.caldavUrl ?? defaults.caldavUrl,
     tlsCiphers: userConfig.tlsCiphers ?? defaults.tlsCiphers,
-  } as EmailChannelConfig
+  }
 }
 
 /**
@@ -80,14 +78,11 @@ function mergeEmailDefaults(userConfig: EmailChannelConfig): EmailChannelConfig 
  * - SMTP: direct from config (same as notify-channels/email.ts)
  * - CalDAV: only registered when config.caldavUrl is set
  *
- * Enterprise builds pre-populate defaults via product.json serviceDefaults —
- * internal users get working config out of the box.
- *
  * @param rawConfig - Email channel config from config.notificationChannels.email
  * @returns An SDK MCP server instance
  */
 export function createEmailMcpServer(rawConfig: EmailChannelConfig): SdkMcpServer {
-  const config = mergeEmailDefaults(rawConfig)
+  const config = resolveAdvancedDefaults(rawConfig)
   const userEmail = config.smtp.user
 
   // Create protocol clients

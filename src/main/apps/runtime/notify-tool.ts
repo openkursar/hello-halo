@@ -31,6 +31,7 @@ import { getPendingRelayStore, type RelaySubject } from './pending-relays'
 import { buildImSessionKey } from '../../../shared/apps/im-keys'
 import type { NotificationChannelType } from '../../../shared/types/notification-channels'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 
 // ============================================
 // Types
@@ -98,7 +99,7 @@ function buildContactDirectory(sessions: ImSessionRecord[]): string {
   if (sessions.length === 0) return ''
 
   const lines = sessions.map((s) => {
-    const name = s.customName || s.displayName || s.chatId
+    const name = getImSessionDisplayName(s)
     const type = s.chatType === 'group' ? 'Group' : 'Direct'
     const id = `${s.instanceId}:${s.chatId}`
     return `- "${name}" (${type}) via ${s.channel} — ID: ${id}`
@@ -348,7 +349,7 @@ function buildNotifyBotTool(context: NotifyToolContext) {
         try {
           const sent = instance.pushToChat(chatId, input.message, session.chatType)
           if (sent) {
-            const contactName = session.customName || session.displayName || chatId
+            const contactName = getImSessionDisplayName(session)
             console.log(`[Runtime][${runTag}] Bot message sent to "${contactName}" (${chatId})`)
             results.push(`Message sent to "${contactName}".`)
             sentMessage = true
@@ -397,7 +398,7 @@ function buildNotifyBotTool(context: NotifyToolContext) {
             chatId, file, session.chatType
           )
           if (sent) {
-            const contactName = session.customName || session.displayName || chatId
+            const contactName = getImSessionDisplayName(session)
             console.log(`[Runtime][${runTag}] Bot file sent to "${contactName}": ${file.displayName}`)
             results.push(`File "${file.displayName}" sent to "${contactName}".`)
             sentFile = { name: file.displayName }
