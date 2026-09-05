@@ -271,7 +271,7 @@ const COMPACTION_AGENT_SDK_TIMEOUT_MS = 120_000
  * would reach the router with an empty key and no routing header, fail, and
  * silently fall back to the heuristic compaction summary.
  */
-function providerRequiresFirstPartyClient(
+export function providerRequiresFirstPartyClient(
   provider?: string,
   oauthProvider?: string,
   delegatedAuth?: boolean

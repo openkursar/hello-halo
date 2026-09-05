@@ -189,10 +189,8 @@ vi.mock('../../../../src/main/apps/runtime/prompt', () => ({
   buildEscalationResumeMessage: vi.fn().mockReturnValue('ESCALATION RESUME'),
 }))
 
-import {
-  executeRun,
-  providerRequiresFirstPartyClient
-} from '../../../../src/main/apps/runtime/execute'
+import { executeRun } from '../../../../src/main/apps/runtime/execute'
+import { providerRequiresFirstPartyClient } from '../../../../src/main/apps/runtime/turn/memory-lifecycle'
 import { RunExecutionError } from '../../../../src/main/apps/runtime/errors'
 import { query as agentSdkQuery, createSession } from '../../../../src/main/services/agent/resolved-sdk'
 import { getApiCredentials, getMcpServersForRequires } from '../../../../src/main/services/agent/helpers'
