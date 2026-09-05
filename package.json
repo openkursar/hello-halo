@@ -42,6 +42,8 @@
     "test:e2e:smoke": "playwright test --config tests/playwright.config.ts --project=smoke",
     "test:e2e:codex-mcp": "playwright test --config tests/playwright.config.ts --project=codex-mcp",
     "test:e2e:team-render": "playwright test --config tests/playwright.config.ts --project=team-render",
+    "test:perf": "playwright test --config tests/playwright.config.ts --project=perf",
+    "test:perf:record-build": "node tests/perf/record-build.mjs",
     "test:team": "node tests/decentralized/run.mjs",
     "i18n:extract": "i18next",
     "i18n:translate": "node scripts/translate-i18n.mjs",

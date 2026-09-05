@@ -15,6 +15,7 @@
 
 import { app } from 'electron'
 import { markSessionCleanExit } from '../foundation/session-integrity'
+import { logFatal } from '../foundation/logging'
 import { markCleanExit } from './health/process-guardian'
 
 /**
@@ -22,7 +23,7 @@ import { markCleanExit } from './health/process-guardian'
  * `reason` is logged for attribution only. Does not return — the process exits.
  */
 export function relaunchApp(reason: string): void {
-  console.log(`[Lifecycle] Clean relaunch: ${reason}`)
+  logFatal(`[Lifecycle] Clean relaunch: ${reason}`)
   markSessionCleanExit()
   markCleanExit()
   app.relaunch()

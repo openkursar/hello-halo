@@ -162,6 +162,20 @@ export default defineConfig({
       }
     },
     {
+      name: 'perf',
+      testDir: './perf/specs',
+      testMatch: '**/*.spec.ts',
+      // Perf scenarios launch the app themselves, stream real API replies
+      // (S2+), and some intentionally wait out a load timeout up to 90s
+      // (S5 csv extreme) before a 60s idle-CPU sample — give real headroom
+      // instead of the 30s default so a slow-but-succeeding measurement
+      // never gets killed by test-runner teardown before it can write out.
+      timeout: 240000,
+      use: {
+        actionTimeout: 30000
+      }
+    },
+    {
       name: 'codex-mcp',
       testMatch: '**/codex-mcp.spec.ts',
       // Upstream LLM providers occasionally return 429 / transient stream

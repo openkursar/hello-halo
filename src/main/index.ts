@@ -21,6 +21,10 @@ const isDev = process.env.NODE_ENV === 'development'
 log.transports.file.level = 'info'           // Always log info+ to file
 log.transports.console.level = isDev ? 'debug' : 'info'
 log.transports.file.maxSize = 5 * 1024 * 1024 // 5MB per file, auto-rotate
+// Default is sync fs.writeFileSync per line, which blocks the main process
+// event loop (and every window with it) on every log call. Async queues
+// writes instead.
+log.transports.file.writeAsync = true
 
 // Catch unhandled errors and log them.
 // Use onError callback to suppress benign/transient errors — returning false prevents
@@ -130,7 +134,7 @@ app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
 import { getDataFolderName, DEFAULT_DATA_FOLDER_NAME } from './foundation/product-config'
 import { isHostnameTrustedForCertificates } from './services/browser-policy.service'
 import { join as joinPath } from 'path'
-import { isolateLogPath } from './foundation/logging'
+import { isolateLogPath, logFatal } from './foundation/logging'
 const dataFolderName = getDataFolderName()
 if (dataFolderName !== DEFAULT_DATA_FOLDER_NAME) {
   const appDataPath = app.getPath('appData')
@@ -567,7 +571,7 @@ app.whenReady().then(async () => {
     await bootServerMode().catch((err) => {
       // Fail fast with a non-zero exit so the orchestrator restarts the
       // container instead of leaving a process up with no HTTP server.
-      console.error('[ServerMode] fatal boot error, exiting:', (err as Error)?.stack || err)
+      logFatal('[ServerMode] fatal boot error, exiting:', (err as Error)?.stack || err)
       app.exit(1)
     })
     return

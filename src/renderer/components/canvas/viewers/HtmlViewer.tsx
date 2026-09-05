@@ -10,12 +10,12 @@
  * - "Open in Browser" mode for full rendering capabilities
  */
 
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef } from 'react'
 import { Copy, Check, Code, Eye, ExternalLink, Globe } from 'lucide-react'
-import { highlightCodeSync } from '../../../lib/highlight-loader'
 import { useTranslation } from '../../../i18n'
 import { api } from '../../../api'
 import { useCanvasStore, type CanvasTab } from '../../../stores/canvas.store'
+import { CodeMirrorEditor } from './CodeMirrorEditor'
 
 interface HtmlViewerProps {
   tab: CanvasTab
@@ -28,12 +28,6 @@ export function HtmlViewer({ tab }: HtmlViewerProps) {
   const [copied, setCopied] = useState(false)
 
   const content = tab.content || ''
-
-  // Highlighted source code (HTML/XML is pre-loaded)
-  const highlightedSource = useMemo(() => {
-    if (!content) return ''
-    return highlightCodeSync(content, 'html')
-  }, [content])
 
   // Copy content
   const handleCopy = async () => {
@@ -178,24 +172,7 @@ export function HtmlViewer({ tab }: HtmlViewerProps) {
             title={tab.title}
           />
         ) : (
-          <div className="flex h-full font-mono text-sm overflow-auto">
-            {/* Line numbers */}
-            <div className="sticky left-0 flex-shrink-0 select-none bg-background border-r border-border/50 text-right text-muted-foreground/40 pr-3 pl-4 py-4 leading-6">
-              {lines.map((_, i) => (
-                <div key={i + 1}>
-                  {i + 1}
-                </div>
-              ))}
-            </div>
-
-            {/* Code */}
-            <pre className="flex-1 py-4 pl-4 pr-4 overflow-x-auto m-0">
-              <code
-                className="hljs language-html"
-                dangerouslySetInnerHTML={{ __html: highlightedSource }}
-              />
-            </pre>
-          </div>
+          <CodeMirrorEditor content={content} language="html" readOnly />
         )}
       </div>
     </div>

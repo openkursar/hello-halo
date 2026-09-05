@@ -764,7 +764,9 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
               thought.isStreaming = false
             }
 
-            console.log(`[Agent][${conversationId}] Thinking block complete, length: ${blockState.content.length}`)
+            if (isDeveloperMode()) {
+              console.log(`[Agent][${conversationId}] Thinking block complete, length: ${blockState.content.length}`)
+            }
           } else if (blockState.type === 'tool_use') {
             // Tool use block complete - parse JSON and send final state
             let toolInput: Record<string, unknown> = {}
@@ -836,7 +838,9 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
           })
           // Update lastTextContent — currentStreamingText already contains merged consecutive blocks
           lastTextContent = currentStreamingText
-          console.log(`[Agent][${conversationId}] Text block completed, length: ${currentStreamingText.length}`)
+          if (isDeveloperMode()) {
+            console.log(`[Agent][${conversationId}] Text block completed, length: ${currentStreamingText.length}`)
+          }
         }
       }
 
@@ -854,11 +858,15 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       continue  // Sub-agent message handled, skip main processing
     }
 
-    // DEBUG: Log all SDK messages with timestamp
-    const elapsed = Date.now() - t1
-    console.log(`[Agent] SDK messages [${conversationId}] 🔵 +${elapsed}ms ${sdkMessage.type}:`,
-      JSON.stringify(sdkMessage, null, 2)
-    )
+    // DEBUG: Log all SDK messages with timestamp.
+    // Guard JSON.stringify with isDeveloperMode() to avoid compute + sync disk
+    // write on this hot path (fires once per SDK message) when disabled.
+    if (isDeveloperMode()) {
+      const elapsed = Date.now() - t1
+      console.log(`[Agent] SDK messages [${conversationId}] 🔵 +${elapsed}ms ${sdkMessage.type}:`,
+        JSON.stringify(sdkMessage, null, 2)
+      )
+    }
 
     // Capture per-call usage from real assistant messages (represents current
     // context size). Synthetic messages (interrupt/cancel/reject) are skipped
@@ -923,7 +931,9 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
             incrementToolError(conversationId, toolUseThought?.toolName)
           }
 
-          console.log(`[Agent][${conversationId}] Tool result merged into thought ${toolUseThoughtId}`)
+          if (isDeveloperMode()) {
+            console.log(`[Agent][${conversationId}] Tool result merged into thought ${toolUseThoughtId}`)
+          }
         } else {
           // No mapping found - fall back to separate thought (shouldn't happen normally)
           sessionState.thoughts.push(thought)
@@ -938,7 +948,9 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
           if (thought.isError) {
             incrementToolError(conversationId, thought.toolName)
           }
-          console.log(`[Agent][${conversationId}] Tool result fallback (no mapping): ${thought.id}`)
+          if (isDeveloperMode()) {
+            console.log(`[Agent][${conversationId}] Tool result fallback (no mapping): ${thought.id}`)
+          }
         }
       } else {
         // Non tool_result thoughts - handle normally

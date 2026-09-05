@@ -27,6 +27,11 @@ resources/git-bash/
 tests/e2e/results/
 tests/e2e/fixtures/.e2e-seed-tmp/
 
+# Perf measurement output. A baseline worth keeping is added deliberately with
+# `git add -f`; everything else is per-run residue that must not enter history.
+tests/perf/results/
+test-results/
+
 app.log
 # Local docs
 local_docs/

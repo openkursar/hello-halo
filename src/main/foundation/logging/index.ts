@@ -9,6 +9,7 @@
  *   http-transport.ts — Dedicated http-raw.log for raw HTTP traffic (DevMode only)
  *   sdk-transport.ts  — Dedicated halo-sdk.log for SDK runtime events (always-on info)
  *   redact.ts         — Shared redaction utilities for log sanitization
+ *   fatal.ts          — Synchronous write for lines that must outlive app.exit()
  *
  * Contract:
  *   - Only controller.ts subscribes to config changes.
@@ -25,6 +26,9 @@ export { isDeveloperMode } from './controller'
 
 // Early-bootstrap log path isolation (per-variant / per-cluster-node)
 export { isolateLogPath } from './log-isolation'
+
+// Synchronous logging for paths that exit the process on the next statement
+export { logFatal } from './fatal'
 
 // HTTP transport
 export {
