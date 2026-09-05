@@ -9,13 +9,21 @@
 
 import log from 'electron-log/main.js'
 
+/**
+ * Only the open file object can still be switched to synchronous writing.
+ * `transports.file.sync` is read once, when the registry creates that object,
+ * so changing it here would apply to nothing.
+ */
+type OpenLogFile = { writeAsync: boolean }
+
 /** Log at error level, synchronously. Use only where the process is about to exit. */
 export function logFatal(message: string, ...args: unknown[]): void {
-  const { writeAsync } = log.transports.file
-  log.transports.file.writeAsync = false
+  const file = log.transports.file.getFile() as unknown as OpenLogFile
+  const { writeAsync } = file
+  file.writeAsync = false
   try {
     log.error(message, ...args)
   } finally {
-    log.transports.file.writeAsync = writeAsync
+    file.writeAsync = writeAsync
   }
 }

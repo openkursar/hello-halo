@@ -23,8 +23,9 @@ log.transports.console.level = isDev ? 'debug' : 'info'
 log.transports.file.maxSize = 5 * 1024 * 1024 // 5MB per file, auto-rotate
 // Default is sync fs.writeFileSync per line, which blocks the main process
 // event loop (and every window with it) on every log call. Async queues
-// writes instead.
-log.transports.file.writeAsync = true
+// writes instead. Must be set before the first log call: the file object
+// caches this at creation and ignores later changes.
+log.transports.file.sync = false
 
 // Catch unhandled errors and log them.
 // Use onError callback to suppress benign/transient errors — returning false prevents
