@@ -1,0 +1,118 @@
+{
+  "scenario": "s10-csv-crash-loop",
+  "label": "dev",
+  "gitSha": "919b417d95fcecc27c7c71eb78ed249d30221aea-dirty",
+  "observeWindowMs": 90000,
+  "pollIntervalMs": 5000,
+  "timeline": [
+    {
+      "tMs": 10520,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true
+    },
+    {
+      "tMs": 20527,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0020527ms.png"
+    },
+    {
+      "tMs": 28490,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0028490ms.png"
+    },
+    {
+      "tMs": 34027,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0034027ms.png"
+    },
+    {
+      "tMs": 39601,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0039601ms.png"
+    },
+    {
+      "tMs": 45101,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0045101ms.png"
+    },
+    {
+      "tMs": 50660,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0050660ms.png"
+    },
+    {
+      "tMs": 56184,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0056184ms.png"
+    },
+    {
+      "tMs": 61736,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0061736ms.png"
+    },
+    {
+      "tMs": 67322,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0067322ms.png"
+    },
+    {
+      "tMs": 72840,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0072840ms.png"
+    },
+    {
+      "tMs": 78400,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0078400ms.png"
+    },
+    {
+      "tMs": 83903,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0083903ms.png"
+    },
+    {
+      "tMs": 89472,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0089472ms.png"
+    },
+    {
+      "tMs": 94993,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "screenshot": "dev/s10-screenshots/t0094993ms.png"
+    }
+  ],
+  "summary": {
+    "maxCrashCountObserved": 0,
+    "everUnreachable": false,
+    "finalProcessAlive": true
+  }
+}

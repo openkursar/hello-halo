@@ -27,9 +27,19 @@ resources/git-bash/
 tests/e2e/results/
 tests/e2e/fixtures/.e2e-seed-tmp/
 
-# Perf measurement output. A baseline worth keeping is added deliberately with
-# `git add -f`; everything else is per-run residue that must not enter history.
-tests/perf/results/
+# Perf measurement output: per-run residue, except the two frozen baselines the
+# gate's self-test grades itself against and every published number reconciles
+# to. Those are tracked so neither a fresh clone nor `git clean` can leave the
+# self-test with no fixtures — a check whose inputs can vanish proves nothing.
+# `/*` rather than `/`: git cannot re-include anything under an excluded
+# directory, so excluding the directory itself makes the negations below silently
+# match nothing.
+tests/perf/results/*
+!tests/perf/results/report-snapshot/
+!tests/perf/results/final-frozen/
+tests/perf/results/final-frozen/s10-screenshots/
+# Reproduced from tests/perf/fixtures/generate.py; manifest.json is tracked instead.
+tests/perf/fixtures/generated/
 test-results/
 
 app.log

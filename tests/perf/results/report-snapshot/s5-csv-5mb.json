@@ -1,0 +1,92 @@
+{
+  "scenario": "s5-csv-5mb",
+  "label": "baseline-final2",
+  "gitSha": "919b417d95fcecc27c7c71eb78ed249d30221aea-dirty",
+  "throttle": 1,
+  "durationMs": 18531,
+  "cpu": {
+    "byProcessType": {
+      "browser": {
+        "avg": 0.0614669438208597,
+        "max": 0.5929475730854705
+      },
+      "gpu": {
+        "avg": 0.5700458348124032,
+        "max": 7.067776533298931
+      },
+      "utility": {
+        "avg": 0.0004720912186456683,
+        "max": 0.010363830232488614
+      },
+      "renderer": {
+        "avg": 16.947859221949486,
+        "max": 51.9995284832726
+      }
+    }
+  },
+  "mem": {
+    "byProcessType": {
+      "browser": {
+        "avgMB": 195.27195945945945,
+        "maxMB": 247.546875,
+        "deltaMB": -143.78125
+      },
+      "gpu": {
+        "avgMB": 66.00506756756756,
+        "maxMB": 75.484375,
+        "deltaMB": -5.34375
+      },
+      "utility": {
+        "avgMB": 39.3758445945946,
+        "maxMB": 45.5,
+        "deltaMB": -17.296875
+      },
+      "renderer": {
+        "avgMB": 3194.224239864865,
+        "maxMB": 5542.859375,
+        "deltaMB": 5127.796875
+      }
+    }
+  },
+  "sampling": {
+    "plannedTicks": 37,
+    "succeededTicks": 37
+  },
+  "longtask": null,
+  "eventLatency": null,
+  "heap": {
+    "startMB": 20.58376693725586,
+    "endMB": null,
+    "deltaMB": null
+  },
+  "nodes": {
+    "start": 509,
+    "end": null,
+    "delta": null
+  },
+  "listeners": {
+    "start": 234,
+    "end": null,
+    "delta": null
+  },
+  "unresponsiveCount": 0,
+  "rendererReloads": 0,
+  "crashCount": 1,
+  "valid": false,
+  "unmeasuredMetrics": [
+    "longtask",
+    "eventLatency"
+  ],
+  "status": "error",
+  "note": "Failed for a reason other than a load timeout: page.waitForSelector: Target crashed \nCall log:\n\u001b[2m  - waiting for locator('text=/Loading\\\\.\\\\.\\\\./i') to be hidden\u001b[22m\n\u001b[2m    - waiting for\" file:///Volumes/one_tb/code2/hello-halo/out/renderer/index.html\" navigation to finish...\u001b[22m\n\u001b[2m    - navigated to \"file:///Volumes/one_tb/code2/hello-halo/out/renderer/index.html\"\u001b[22m\n",
+  "warnings": [
+    "longtask/eventLatency: window.__perf read failed (page.evaluate: Target crashed ) — reported as null, not a fabricated 0.",
+    "longtask: PerformanceObserver never attached (entryType unsupported) — null, not \"0 observed\".",
+    "eventLatency: PerformanceObserver never attached (entryType unsupported) — null, not \"0 observed\"."
+  ],
+  "loadAverage": [
+    2.962890625,
+    3.50830078125,
+    5.03076171875
+  ]
+}

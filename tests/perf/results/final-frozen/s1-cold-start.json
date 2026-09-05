@@ -1,0 +1,90 @@
+{
+  "scenario": "s1-cold-start",
+  "label": "final",
+  "gitSha": "919b417d95fcecc27c7c71eb78ed249d30221aea-dirty",
+  "throttle": 1,
+  "durationMs": 5364,
+  "cpu": {
+    "byProcessType": {
+      "browser": {
+        "avg": 1.3881462326417808,
+        "max": 10.466367052978796
+      },
+      "utility": {
+        "avg": 0.038231397903610624,
+        "max": 0.2827465860725065
+      },
+      "gpu": {
+        "avg": 0.291998943741167,
+        "max": 2.6076551165163253
+      },
+      "renderer": {
+        "avg": 0.630727158906772,
+        "max": 5.671320098875353
+      }
+    }
+  },
+  "mem": {
+    "byProcessType": {
+      "browser": {
+        "avgMB": 216.140625,
+        "maxMB": 237.53125,
+        "deltaMB": 39.859375
+      },
+      "utility": {
+        "avgMB": 39.35,
+        "maxMB": 43.640625,
+        "deltaMB": 7.5
+      },
+      "gpu": {
+        "avgMB": 56.826388888888886,
+        "maxMB": 69.984375,
+        "deltaMB": 13.828125
+      },
+      "renderer": {
+        "avgMB": 93.6875,
+        "maxMB": 140.1875,
+        "deltaMB": 52.3125
+      }
+    }
+  },
+  "sampling": {
+    "plannedTicks": 10,
+    "succeededTicks": 10
+  },
+  "longtask": {
+    "count": 0,
+    "totalMs": 0,
+    "maxMs": 0,
+    "p95Ms": 0
+  },
+  "eventLatency": {
+    "count": 0,
+    "maxMs": 0
+  },
+  "heap": {
+    "startMB": 9.552749633789062,
+    "endMB": 11.414226531982422,
+    "deltaMB": 1.8614768981933594
+  },
+  "nodes": {
+    "start": 268,
+    "end": 271,
+    "delta": 3
+  },
+  "listeners": {
+    "start": 160,
+    "end": 186,
+    "delta": 26
+  },
+  "unresponsiveCount": 0,
+  "rendererReloads": 0,
+  "crashCount": 0,
+  "valid": true,
+  "note": "longtask/eventLatency observation window starts at first-screen-interactive (post waitForHomePage), not at process launch — pre-first-paint boot work is outside what this scenario can measure.",
+  "loadAverage": [
+    7.4130859375,
+    13.37890625,
+    18.7177734375
+  ]
+}

@@ -1,0 +1,131 @@
+{
+  "scenario": "s7b-browser-view",
+  "label": "final",
+  "gitSha": "919b417d95fcecc27c7c71eb78ed249d30221aea-dirty",
+  "throttle": 1,
+  "durationMs": 8038,
+  "cpu": {
+    "byProcessType": {
+      "browser": {
+        "avg": 0.1392912780044291,
+        "max": 1.1290217922993222
+      },
+      "gpu": {
+        "avg": 0.15034208372337768,
+        "max": 1.3328028943201762
+      },
+      "utility": {
+        "avg": 0.0010097375116185805,
+        "max": 0.007312729240334719
+      },
+      "renderer": {
+        "avg": 0.06666129780086016,
+        "max": 1.512271482081959
+      }
+    }
+  },
+  "mem": {
+    "byProcessType": {
+      "browser": {
+        "avgMB": 245.27297794117646,
+        "maxMB": 245.375,
+        "deltaMB": 0.890625
+      },
+      "gpu": {
+        "avgMB": 77.953125,
+        "maxMB": 78.296875,
+        "deltaMB": 1.125
+      },
+      "utility": {
+        "avgMB": 43.71875,
+        "maxMB": 43.71875,
+        "deltaMB": 0
+      },
+      "renderer": {
+        "avgMB": 134.1401515151515,
+        "maxMB": 192.4375,
+        "deltaMB": -116.9375
+      }
+    }
+  },
+  "sampling": {
+    "plannedTicks": 17,
+    "succeededTicks": 17
+  },
+  "longtask": {
+    "count": 0,
+    "totalMs": 0,
+    "maxMs": 0,
+    "p95Ms": 0
+  },
+  "eventLatency": {
+    "count": 0,
+    "maxMs": 0
+  },
+  "heap": {
+    "startMB": 21.496112823486328,
+    "endMB": 22.941062927246094,
+    "deltaMB": 1.4449501037597656
+  },
+  "nodes": {
+    "start": 584,
+    "end": 590,
+    "delta": 6
+  },
+  "listeners": {
+    "start": 256,
+    "end": 258,
+    "delta": 2
+  },
+  "unresponsiveCount": 0,
+  "rendererReloads": 0,
+  "crashCount": 0,
+  "valid": true,
+  "perProcess": [
+    {
+      "pid": 8673,
+      "type": "Browser",
+      "cpuAvg": 0.1392912780044291,
+      "cpuMax": 1.1290217922993222,
+      "memAvgMB": 245.27297794117646,
+      "memMaxMB": 245.375
+    },
+    {
+      "pid": 8678,
+      "type": "GPU",
+      "cpuAvg": 0.15034208372337768,
+      "cpuMax": 1.3328028943201762,
+      "memAvgMB": 77.953125,
+      "memMaxMB": 78.296875
+    },
+    {
+      "pid": 8679,
+      "type": "Utility",
+      "cpuAvg": 0.0010097375116185805,
+      "cpuMax": 0.007312729240334719,
+      "memAvgMB": 43.71875,
+      "memMaxMB": 43.71875
+    },
+    {
+      "pid": 8691,
+      "type": "Tab",
+      "cpuAvg": 0.12834701646283503,
+      "cpuMax": 1.512271482081959,
+      "memAvgMB": 192.1433823529412,
+      "memMaxMB": 192.4375
+    },
+    {
+      "pid": 8714,
+      "type": "Tab",
+      "cpuAvg": 0.0011202217225118603,
+      "cpuMax": 0.012491830342955706,
+      "memAvgMB": 72.51171875,
+      "memMaxMB": 72.53125
+    }
+  ],
+  "loadAverage": [
+    2.48828125,
+    2.27294921875,
+    3.58056640625
+  ]
+}

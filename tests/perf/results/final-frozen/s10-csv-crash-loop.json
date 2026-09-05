@@ -1,0 +1,235 @@
+{
+  "scenario": "s10-csv-crash-loop",
+  "label": "final",
+  "gitSha": "919b417d95fcecc27c7c71eb78ed249d30221aea-dirty",
+  "loadAverageAtStart": [
+    3.46240234375,
+    10.44189453125,
+    16.98876953125
+  ],
+  "observeWindowMs": 90000,
+  "pollIntervalMs": 5000,
+  "timeline": [
+    {
+      "tMs": 10201,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        6.85888671875,
+        12.96728515625,
+        18.4775390625
+      ],
+      "screenshot": "final/s10-screenshots/t0010201ms.png"
+    },
+    {
+      "tMs": 15341,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        6.5498046875,
+        12.8017578125,
+        18.38671875
+      ],
+      "screenshot": "final/s10-screenshots/t0015341ms.png"
+    },
+    {
+      "tMs": 20510,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        6.42529296875,
+        12.671875,
+        18.30810546875
+      ],
+      "screenshot": "final/s10-screenshots/t0020510ms.png"
+    },
+    {
+      "tMs": 25680,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        6.23095703125,
+        12.52783203125,
+        18.22412109375
+      ],
+      "screenshot": "final/s10-screenshots/t0025680ms.png"
+    },
+    {
+      "tMs": 30823,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        6.13232421875,
+        12.40283203125,
+        18.146484375
+      ],
+      "screenshot": "final/s10-screenshots/t0030823ms.png"
+    },
+    {
+      "tMs": 35973,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        6.04150390625,
+        12.27978515625,
+        18.0693359375
+      ],
+      "screenshot": "final/s10-screenshots/t0035973ms.png"
+    },
+    {
+      "tMs": 41122,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        5.7177734375,
+        12.10888671875,
+        17.97509765625
+      ],
+      "screenshot": "final/s10-screenshots/t0041122ms.png"
+    },
+    {
+      "tMs": 46298,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        5.5,
+        11.95751953125,
+        17.88720703125
+      ],
+      "screenshot": "final/s10-screenshots/t0046298ms.png"
+    },
+    {
+      "tMs": 51472,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        5.4599609375,
+        11.841796875,
+        17.8115234375
+      ],
+      "screenshot": "final/s10-screenshots/t0051472ms.png"
+    },
+    {
+      "tMs": 56654,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        5.2626953125,
+        11.69482421875,
+        17.724609375
+      ],
+      "screenshot": "final/s10-screenshots/t0056654ms.png"
+    },
+    {
+      "tMs": 61848,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        5.1611328125,
+        11.56689453125,
+        17.64404296875
+      ],
+      "screenshot": "final/s10-screenshots/t0061848ms.png"
+    },
+    {
+      "tMs": 67018,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        4.98779296875,
+        11.42431640625,
+        17.55810546875
+      ],
+      "screenshot": "final/s10-screenshots/t0067018ms.png"
+    },
+    {
+      "tMs": 72156,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        4.66845703125,
+        11.2509765625,
+        17.4609375
+      ],
+      "screenshot": "final/s10-screenshots/t0072156ms.png"
+    },
+    {
+      "tMs": 77324,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        4.53466796875,
+        11.11376953125,
+        17.3759765625
+      ],
+      "screenshot": "final/s10-screenshots/t0077324ms.png"
+    },
+    {
+      "tMs": 82498,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        4.25146484375,
+        10.94580078125,
+        17.27978515625
+      ],
+      "screenshot": "final/s10-screenshots/t0082498ms.png"
+    },
+    {
+      "tMs": 87677,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        3.91064453125,
+        10.763671875,
+        17.17822265625
+      ],
+      "screenshot": "final/s10-screenshots/t0087677ms.png"
+    },
+    {
+      "tMs": 92834,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        3.67724609375,
+        10.6015625,
+        17.0830078125
+      ],
+      "screenshot": "final/s10-screenshots/t0092834ms.png"
+    },
+    {
+      "tMs": 98023,
+      "crashCount": 0,
+      "unresponsiveCount": 0,
+      "processAlive": true,
+      "loadAverage": [
+        3.46240234375,
+        10.44189453125,
+        16.98876953125
+      ],
+      "screenshot": "final/s10-screenshots/t0098023ms.png"
+    }
+  ],
+  "summary": {
+    "maxCrashCountObserved": 0,
+    "everUnreachable": false,
+    "finalProcessAlive": true
+  }
+}

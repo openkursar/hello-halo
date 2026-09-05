@@ -1,0 +1,94 @@
+{
+  "scenario": "s8-digital-human-run",
+  "label": "final",
+  "gitSha": "919b417d95fcecc27c7c71eb78ed249d30221aea-dirty",
+  "throttle": 1,
+  "durationMs": 60923,
+  "cpu": {
+    "byProcessType": {
+      "browser": {
+        "avg": 0.5591210625409714,
+        "max": 4.039803946987904
+      },
+      "gpu": {
+        "avg": 0.004672658563039796,
+        "max": 0.3508237337284706
+      },
+      "utility": {
+        "avg": 0.00037262783354955414,
+        "max": 0.019730050893028615
+      },
+      "renderer": {
+        "avg": 0.08053165763431318,
+        "max": 1.1849759754602207
+      }
+    }
+  },
+  "mem": {
+    "byProcessType": {
+      "browser": {
+        "avgMB": 234.10399590163934,
+        "maxMB": 245,
+        "deltaMB": -14.40625
+      },
+      "gpu": {
+        "avgMB": 71.31582991803279,
+        "maxMB": 73.703125,
+        "deltaMB": -2.546875
+      },
+      "utility": {
+        "avgMB": 43.78880635245902,
+        "maxMB": 43.796875,
+        "deltaMB": 0.046875
+      },
+      "renderer": {
+        "avgMB": 179.95837602459017,
+        "maxMB": 183.921875,
+        "deltaMB": -3.984375
+      }
+    }
+  },
+  "sampling": {
+    "plannedTicks": 122,
+    "succeededTicks": 122
+  },
+  "longtask": {
+    "count": 0,
+    "totalMs": 0,
+    "maxMs": 0,
+    "p95Ms": 0
+  },
+  "eventLatency": {
+    "count": 0,
+    "maxMs": 0
+  },
+  "heap": {
+    "startMB": 16.108524322509766,
+    "endMB": 14.944927215576172,
+    "deltaMB": -1.1635971069335938
+  },
+  "nodes": {
+    "start": 360,
+    "end": 340,
+    "delta": -20
+  },
+  "listeners": {
+    "start": 198,
+    "end": 198,
+    "delta": 0
+  },
+  "unresponsiveCount": 0,
+  "rendererReloads": 0,
+  "crashCount": 0,
+  "valid": false,
+  "status": "precondition-failed",
+  "note": "No \".streaming-cursor\" was ever observed — the run does not look like it produced any real output (durationMs is likely just the sum of this test's own wait timeouts, not actual work).",
+  "warnings": [
+    "Never reached \"View process\" — run may not have started visibly within 45s."
+  ],
+  "loadAverage": [
+    2.65478515625,
+    2.3544921875,
+    3.5126953125
+  ]
+}

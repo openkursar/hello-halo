@@ -1,0 +1,90 @@
+{
+  "scenario": "s2-long-stream",
+  "label": "dev",
+  "gitSha": "919b417d95fcecc27c7c71eb78ed249d30221aea-dirty",
+  "throttle": 1,
+  "durationMs": 45072,
+  "cpu": {
+    "byProcessType": {
+      "browser": {
+        "avg": 0.6635357354349275,
+        "max": 3.864350082604344
+      },
+      "gpu": {
+        "avg": 1.3362105130772968,
+        "max": 2.2444692846615757
+      },
+      "utility": {
+        "avg": 0.0015022494051310923,
+        "max": 0.0927093339737432
+      },
+      "renderer": {
+        "avg": 4.433588690584662,
+        "max": 11.675666090570335
+      }
+    }
+  },
+  "mem": {
+    "byProcessType": {
+      "browser": {
+        "avgMB": 234.52690972222223,
+        "maxMB": 244.671875,
+        "deltaMB": -16.4375
+      },
+      "gpu": {
+        "avgMB": 80.44461805555555,
+        "maxMB": 80.90625,
+        "deltaMB": 4.28125
+      },
+      "utility": {
+        "avgMB": 45.78142361111111,
+        "maxMB": 46.03125,
+        "deltaMB": 0.421875
+      },
+      "renderer": {
+        "avgMB": 296.19930555555555,
+        "maxMB": 315.25,
+        "deltaMB": 128.96875
+      }
+    }
+  },
+  "sampling": {
+    "plannedTicks": 90,
+    "succeededTicks": 90
+  },
+  "longtask": {
+    "count": 0,
+    "totalMs": 0,
+    "maxMs": 0,
+    "p95Ms": 0
+  },
+  "eventLatency": {
+    "count": 0,
+    "maxMs": 0
+  },
+  "heap": {
+    "startMB": 20.528640747070312,
+    "endMB": 29.04775619506836,
+    "deltaMB": 8.519115447998047
+  },
+  "nodes": {
+    "start": 504,
+    "end": 4764,
+    "delta": 4260
+  },
+  "listeners": {
+    "start": 234,
+    "end": 326,
+    "delta": 92
+  },
+  "unresponsiveCount": 0,
+  "rendererReloads": 0,
+  "crashCount": 0,
+  "valid": true,
+  "status": "ok",
+  "loadAverage": [
+    3.453125,
+    5.50830078125,
+    7.68505859375
+  ]
+}
