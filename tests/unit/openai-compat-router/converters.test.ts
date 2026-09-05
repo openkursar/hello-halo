@@ -778,6 +778,37 @@ describe('Response Converters', () => {
       expect(result.usage.output_tokens).toBe(8)
     })
 
+    it('should exclude cache_read_input_tokens from input_tokens (GLM Coding Plan regression)', () => {
+      // prompt_tokens under OpenAI semantics already includes the cached
+      // portion; Anthropic's input_tokens must exclude it or every consumer
+      // that sums input_tokens + cache_read_input_tokens double-counts.
+      const response: OpenAIChatResponse = {
+        id: 'chatcmpl-789',
+        object: 'chat.completion',
+        created: Date.now(),
+        model: 'glm-5.2-zp',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'Hello!' },
+            finish_reason: 'stop'
+          }
+        ],
+        usage: {
+          prompt_tokens: 131186,
+          completion_tokens: 79,
+          total_tokens: 131265,
+          cache_read_input_tokens: 130304
+        } as OpenAIChatResponse['usage']
+      }
+
+      const result = convertOpenAIChatToAnthropic(response)
+
+      expect(result.usage.input_tokens).toBe(882)
+      expect(result.usage.output_tokens).toBe(79)
+      expect(result.usage.cache_read_input_tokens).toBe(130304)
+    })
+
     it('should convert tool_calls to tool_use', () => {
       const response: OpenAIChatResponse = {
         id: 'chatcmpl-456',

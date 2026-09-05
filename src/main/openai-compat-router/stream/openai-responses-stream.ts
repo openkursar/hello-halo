@@ -11,6 +11,7 @@ import {
   type StreamHandlerOptions
 } from './base-stream-handler'
 import { safeJsonParse } from '../utils'
+import { normalizeOpenAIInputTokens } from '../utils/usage-normalizer'
 import type { AnthropicStopReason } from '../types'
 
 // Event types from OpenAI Responses API
@@ -103,7 +104,13 @@ export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
     // Update usage from response
     if (responseObj.usage) {
       this.updateUsage({
-        inputTokens: responseObj.usage.input_tokens || responseObj.usage.prompt_tokens,
+        inputTokens: normalizeOpenAIInputTokens({
+          promptTokens: responseObj.usage.input_tokens || responseObj.usage.prompt_tokens,
+          completionTokens: responseObj.usage.output_tokens || responseObj.usage.completion_tokens,
+          totalTokens: responseObj.usage.total_tokens,
+          cacheReadTokens: responseObj.usage.cache_read_input_tokens,
+          providerLabel: this.state.model
+        }),
         outputTokens: responseObj.usage.output_tokens || responseObj.usage.completion_tokens,
         cacheReadTokens: responseObj.usage.cache_read_input_tokens
       })
@@ -283,7 +290,13 @@ export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
     // Update final usage
     if (response.usage) {
       this.updateUsage({
-        inputTokens: response.usage.input_tokens || response.usage.prompt_tokens,
+        inputTokens: normalizeOpenAIInputTokens({
+          promptTokens: response.usage.input_tokens || response.usage.prompt_tokens,
+          completionTokens: response.usage.output_tokens || response.usage.completion_tokens,
+          totalTokens: response.usage.total_tokens,
+          cacheReadTokens: response.usage.cache_read_input_tokens,
+          providerLabel: this.state.model
+        }),
         outputTokens: response.usage.output_tokens || response.usage.completion_tokens,
         cacheReadTokens: response.usage.cache_read_input_tokens
       })

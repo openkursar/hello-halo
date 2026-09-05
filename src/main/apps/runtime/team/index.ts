@@ -271,6 +271,16 @@ export interface CreateTeamRuntimeDeps {
   publishCheck?: (change: { op: 'upsert' | 'delete'; check: TeamCheck }) => void
   /** A team's periodic checks changed → refresh any open board. */
   onChecksChanged?: (teamId: string) => void
+  /**
+   * The turn-end report's busy probe. See `TurnReportDeps.isLeadGenerating`
+   * for what it must be and why. Required, not optional: `createTeamRuntime`
+   * has exactly one production caller (`bootstrap/extended.ts`) and no test
+   * caller at all, so an optional field with a silent fallback here is
+   * precisely what let this dependency go unwired — and unnoticed — before.
+   * A caller that forgets to pass it now gets a type error, not a silently
+   * dead busy-gate.
+   */
+  isLeadGenerating: (sessionKey: string) => boolean
 }
 
 export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
@@ -309,7 +319,10 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     syncWaitTimeoutMs: deps.syncWaitTimeoutMs,
   })
 
-  const turnReport = createTurnReport({ store, bus })
+  // No forward shim needed here (unlike the bus's own `hooks.isBusy` above):
+  // `isLeadGenerating` does not depend on `orchestration`, so it is available
+  // before that is constructed.
+  const turnReport = createTurnReport({ store, bus, isLeadGenerating: deps.isLeadGenerating })
 
   orchestration = createOrchestration({
     store,

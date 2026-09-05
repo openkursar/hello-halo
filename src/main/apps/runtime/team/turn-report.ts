@@ -32,7 +32,7 @@
  */
 
 import { randomUUID } from 'crypto'
-import { isRemoteMember } from '../../../../shared/apps/team-types'
+import { buildTeamSessionKey, isRemoteMember } from '../../../../shared/apps/team-types'
 import type { TeamActivityKind, TeamTriggerContext } from '../../../../shared/apps/team-types'
 import type { TeamStore } from '../../team'
 import type { PostActivityInput } from './blackboard'
@@ -86,6 +86,24 @@ export interface TurnReport {
 export interface TurnReportDeps {
   store: TeamStore
   bus: MessageBus
+  /**
+   * Whether the lead's own team session is actively generating a turn RIGHT
+   * NOW. Sourced from the same live signal app-chat itself uses
+   * (`isAppChatConversationGenerating`) — deliberately NOT
+   * `orchestration.isBusy` / `MessageBusDeps.hooks.isBusy`: those read
+   * `activeSessions`, a status map app-chat stopped writing to once
+   * "generating" state moved off it (apps/runtime/DESIGN.md §2.12,
+   * "Generating state moved off `activeSessions`") — dead for every current
+   * reader, including the bus's own turn-gate. Do NOT rename this back to
+   * `isBusy`; the different name is deliberate so nobody re-wires it to that
+   * dead source by pattern-matching the sibling field.
+   *
+   * Reads false for a REMOTE lead — there is no local conversation to probe.
+   * That is fine: `requestFlush` then simply takes its idle path, the same
+   * coalescing a remote lead already got before this dependency existed (see
+   * `FLUSH_WINDOW_MS`).
+   */
+  isLeadGenerating(sessionKey: string): boolean
 }
 
 /** One act a member filed, kept only long enough to describe the turn it fell in. */
@@ -114,8 +132,12 @@ interface StopFact {
  */
 const ACTS_PER_MEMBER = 32
 
-/** Members named in one notice. Past this the notice stops being read. */
-const FACTS_PER_NOTICE = 12
+/**
+ * Members named in one notice. Past this the notice stops being read, so the
+ * overflow is dropped from the front of the queue — but counted, not silently
+ * lost (see `droppedSinceLastFlush` and the notice's own dropped-count line).
+ */
+export const FACTS_PER_NOTICE = 12
 
 /** Acts described per member. The rest becomes a count. */
 const ACTS_DESCRIBED = 4
@@ -127,15 +149,42 @@ const REPORTED_CAP = 512
 const FATE_MESSAGE_MAX = 500
 
 /**
- * Coalescing window for report wakes. Endings arriving within this long of
- * the last flush pile into the NEXT one instead of each waking the lead —
- * time-based rather than "does the lead have an outstanding notice" (the
- * prior design): that signal only exists when the lead is on THIS machine
- * (see the removed `leadIsLocal` check), so a remote lead never cleared it
- * and every ending woke it individually. A window bounds the wake rate the
- * same way regardless of where the lead runs.
+ * Coalescing window for report wakes, used only while the lead is idle.
+ * Endings arriving within this long of the last flush pile into the NEXT one
+ * instead of each waking the lead — time-based rather than "does the lead
+ * have an outstanding notice" (the prior design): that signal only exists
+ * when the lead is on THIS machine (see the removed `leadIsLocal` check), so
+ * a remote lead never cleared it and every ending woke it individually. A
+ * window bounds the wake rate the same way regardless of where the lead runs.
+ *
+ * While the lead is BUSY this window plays no part at all — see
+ * `requestFlush` for the busy-gated path and `LEAD_BUSY_RECHECK_MS` for its
+ * own backstop.
  */
 export const FLUSH_WINDOW_MS = 15_000
+
+/**
+ * Backstop recheck interval while the lead reads busy. The primary path is
+ * event-driven — the lead's own turn ending flushes an entire busy stretch
+ * immediately and unconditionally (`noteTurnEnded`'s `appId === leadAppId`
+ * branch) — so this only exists to catch a wrong or stuck busy reading that
+ * left something sitting in `pending` with no other trigger left to release
+ * it: exactly the "run goes quiet and nobody notices" failure this module
+ * exists to prevent, just one level up.
+ *
+ * `platform/turn-gate` has the identical shape (buffer while busy → recheck
+ * → re-arm while still busy, `DEFAULT_RECHECK_MS = 3000`) but at a DIFFERENT
+ * granularity: it drains one buffered TURN per session key the instant its
+ * target frees up, so it has to be responsive. This backstop bundles many
+ * FACTS into one notice and only ever needs to catch a signal that should
+ * already have resolved itself through the event-driven path — reusing
+ * turn-gate's per-session job mailbox for that would force this module's
+ * per-epoch fact-bundling into an abstraction it does not fit. An order of
+ * magnitude slower than turn-gate's own recheck is deliberate: retrying every
+ * 3s for the length of a busy stretch buys nothing (the event-driven path
+ * already covers the common case) and only adds timer churn.
+ */
+export const LEAD_BUSY_RECHECK_MS = 4 * FLUSH_WINDOW_MS
 
 /**
  * Hard cap on report wakes per epoch — independent of `chargeCircuit`'s
@@ -155,7 +204,7 @@ export const FLUSH_WINDOW_MS = 15_000
 export const REPORT_WAKE_CAP = 960
 
 export function createTurnReport(deps: TurnReportDeps): TurnReport {
-  const { store, bus } = deps
+  const { store, bus, isLeadGenerating } = deps
 
   /** Open turn windows, keyed by member session. */
   const turnStartedAt = new Map<string, number>()
@@ -165,10 +214,14 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
   const reported = new Map<string, string>()
   /** Endings waiting for a lead turn to carry them. */
   const pending = new Map<string, StopFact[]>()
+  /** Endings dropped from `pending` by the `FACTS_PER_NOTICE` cap, kept until the next notice reports them. */
+  const droppedSinceLastFlush = new Map<string, number>()
   /** When each epoch's pending queue last actually went out. */
   const lastFlushAt = new Map<string, number>()
-  /** A flush already scheduled for the end of the current coalescing window. */
+  /** A flush already scheduled for the end of the current idle coalescing window. */
   const flushTimer = new Map<string, ReturnType<typeof setTimeout>>()
+  /** A busy-backstop recheck already scheduled — see `LEAD_BUSY_RECHECK_MS`. */
+  const busyRecheck = new Map<string, ReturnType<typeof setTimeout>>()
   /** Report wakes delivered this epoch — see `REPORT_WAKE_CAP`. */
   const reportWakeCount = new Map<string, number>()
 
@@ -242,17 +295,78 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
     }
   }
 
+  /** The lead's own session key for this epoch, resolved only when a team/lead exist. */
+  function leadSessionKey(teamId: string, epochId: string): string | null {
+    const leadAppId = store.getTeamById(teamId)?.leadAppId
+    return leadAppId ? buildTeamSessionKey(leadAppId, teamId, epochId) : null
+  }
+
   /**
-   * Flush now if it has been at least `FLUSH_WINDOW_MS` since the last one
-   * for this epoch; otherwise schedule exactly one trailing flush for the
-   * remainder of the window (a second call while one is already scheduled is
-   * a no-op — everything queued by then rides that same flush). An isolated
-   * ending — the common case — still goes out immediately, since the window
-   * has necessarily elapsed since a flush that never happened.
+   * Whether the lead's own team session has a turn running right now. Absent
+   * team/lead reads as idle — `requestFlush`'s caller already returned early
+   * on that same condition, so this only ever matters once a lead exists.
+   */
+  function isLeadBusy(teamId: string, epochId: string): boolean {
+    const key = leadSessionKey(teamId, epochId)
+    return key !== null && isLeadGenerating(key)
+  }
+
+  /**
+   * Arm the busy-backstop recheck for this epoch, unless one is already
+   * armed. See `LEAD_BUSY_RECHECK_MS` for why this exists and why it is not
+   * simply `platform/turn-gate`'s own recheck primitive.
+   */
+  function scheduleBusyRecheck(teamId: string, epochId: string): void {
+    const key = epochKey(teamId, epochId)
+    if (busyRecheck.has(key)) return
+    const timer = setTimeout(() => {
+      busyRecheck.delete(key)
+      requestFlush(teamId, epochId)
+    }, LEAD_BUSY_RECHECK_MS)
+    if (typeof timer.unref === 'function') timer.unref()
+    busyRecheck.set(key, timer)
+  }
+
+  function clearBusyRecheck(key: string): void {
+    const timer = busyRecheck.get(key)
+    if (timer) {
+      clearTimeout(timer)
+      busyRecheck.delete(key)
+    }
+  }
+
+  /**
+   * While the lead is BUSY, this schedules no flush at all — everything
+   * accumulates in `pending`, however long the stretch runs or however many
+   * endings pile up. A fixed-period timer ticking regardless of busyness is
+   * what used to cut one busy stretch into several independently-queued
+   * notices: each `requestFlush` call fired its own buffered turn, and the
+   * lead surfaced from one only to find the next already queued behind it.
+   * The lead's OWN turn ending (`noteTurnEnded`'s `appId === leadAppId`
+   * branch) is what actually flushes a busy stretch — unconditionally, in one
+   * shot, the instant it is free again. `scheduleBusyRecheck` arms alongside
+   * it so a wrong or stuck busy reading cannot strand a notice in `pending`
+   * forever if that primary path is somehow missed (see `LEAD_BUSY_RECHECK_MS`).
+   *
+   * While the lead is IDLE: flush now if it has been at least
+   * `FLUSH_WINDOW_MS` since the last one for this epoch; otherwise schedule
+   * exactly one trailing flush for the remainder of the window (a second call
+   * while one is already scheduled is a no-op — everything queued by then
+   * rides that same flush). An isolated ending — the common case — still goes
+   * out immediately, since the window has necessarily elapsed since a flush
+   * that never happened. The trailing timer rechecks busyness when it fires,
+   * since the lead can go from idle to busy (a person starts chatting with
+   * it) in the interval between scheduling and firing — deferring to the busy
+   * path above instead of flushing into a now-busy session.
    */
   function requestFlush(teamId: string, epochId: string): void {
     const key = epochKey(teamId, epochId)
     if (flushTimer.has(key)) return
+    if (isLeadBusy(teamId, epochId)) {
+      scheduleBusyRecheck(teamId, epochId)
+      return
+    }
+    clearBusyRecheck(key)
     const since = lastFlushAt.get(key)
     const elapsed = since === undefined ? Infinity : Date.now() - since
     if (elapsed >= FLUSH_WINDOW_MS) {
@@ -261,6 +375,10 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
     }
     const timer = setTimeout(() => {
       flushTimer.delete(key)
+      if (isLeadBusy(teamId, epochId)) {
+        scheduleBusyRecheck(teamId, epochId)
+        return
+      }
       void flush(teamId, epochId)
     }, FLUSH_WINDOW_MS - elapsed)
     if (typeof timer.unref === 'function') timer.unref()
@@ -279,8 +397,8 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
 
       // The lead's own ending never wakes the lead — that is the whole loop
       // guard. It is also the earliest moment the lead is free again, so
-      // anything piled up during the window goes out now rather than waiting
-      // out the rest of it.
+      // anything piled up (idle-window or busy-stretch alike) goes out now
+      // rather than waiting on either timer.
       if (appId === leadAppId) {
         const key = epochKey(teamId, epochId)
         const timer = flushTimer.get(key)
@@ -288,6 +406,7 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
           clearTimeout(timer)
           flushTimer.delete(key)
         }
+        clearBusyRecheck(key)
         void flush(teamId, epochId)
         return
       }
@@ -329,7 +448,11 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
       const key = epochKey(teamId, epochId)
       const queue = pending.get(key) ?? []
       queue.push(fact)
-      if (queue.length > FACTS_PER_NOTICE) queue.splice(0, queue.length - FACTS_PER_NOTICE)
+      const overflow = queue.length - FACTS_PER_NOTICE
+      if (overflow > 0) {
+        queue.splice(0, overflow)
+        droppedSinceLastFlush.set(key, (droppedSinceLastFlush.get(key) ?? 0) + overflow)
+      }
       pending.set(key, queue)
 
       requestFlush(teamId, epochId)
@@ -347,10 +470,13 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
     const leadAppId = store.getTeamById(teamId)?.leadAppId
     if (!leadAppId) {
       pending.delete(key)
+      droppedSinceLastFlush.delete(key)
       return
     }
 
     pending.delete(key)
+    const dropped = droppedSinceLastFlush.get(key) ?? 0
+    droppedSinceLastFlush.delete(key)
     // Set BEFORE the await, not after it resolves: `requestFlush` reads this
     // synchronously to decide whether to coalesce. Several endings can land
     // back-to-back, all before `deliverRuntimeWake` below ever resolves — if
@@ -367,7 +493,7 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
           epochId,
           fromAppId: leadAppId,
           toAppId: leadAppId,
-          body: renderNotice(facts),
+          body: renderNotice(facts, dropped),
           correlationId,
           createdAt: Date.now(),
         },
@@ -379,8 +505,16 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
       if (wakes > REPORT_WAKE_CAP) bus.tripExternal(teamId, epochId, 'turnReportFlood')
     } catch (err) {
       // Put them back rather than swallow them: an ending nobody hears about is
-      // the exact failure this module exists to prevent.
-      pending.set(key, [...facts, ...(pending.get(key) ?? [])].slice(-FACTS_PER_NOTICE))
+      // the exact failure this module exists to prevent. Facts that landed
+      // WHILE this attempt was in flight may now push the merged queue back
+      // over the cap — that overflow must be counted here too, the same as
+      // the overflow in `noteTurnEnded`, or the delivery-failure path becomes
+      // the one silent way to lose an ending this module claims to close.
+      const merged = [...facts, ...(pending.get(key) ?? [])]
+      const overflow = Math.max(0, merged.length - FACTS_PER_NOTICE)
+      pending.set(key, merged.slice(-FACTS_PER_NOTICE))
+      const carry = dropped + overflow
+      if (carry > 0) droppedSinceLastFlush.set(key, (droppedSinceLastFlush.get(key) ?? 0) + carry)
       console.error(`${LOG_TAG} could not reach the lead:`, err)
     }
   }
@@ -398,6 +532,9 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
     for (const k of [...pending.keys()]) {
       if (k.endsWith(`:${epochId}`)) pending.delete(k)
     }
+    for (const k of [...droppedSinceLastFlush.keys()]) {
+      if (k.endsWith(`:${epochId}`)) droppedSinceLastFlush.delete(k)
+    }
     for (const k of Array.from(lastFlushAt.keys())) {
       if (k.endsWith(`:${epochId}`)) lastFlushAt.delete(k)
     }
@@ -405,6 +542,12 @@ export function createTurnReport(deps: TurnReportDeps): TurnReport {
       if (k.endsWith(`:${epochId}`)) {
         clearTimeout(timer)
         flushTimer.delete(k)
+      }
+    }
+    for (const [k, timer] of Array.from(busyRecheck)) {
+      if (k.endsWith(`:${epochId}`)) {
+        clearTimeout(timer)
+        busyRecheck.delete(k)
       }
     }
     for (const k of Array.from(reportWakeCount.keys())) {
@@ -456,12 +599,20 @@ function renderFact(fact: StopFact): string {
  * nothing: a model woken with no reason to act will invent one, and a run full of
  * invented follow-ups is worse than the silence this replaced.
  */
-function renderNotice(facts: readonly StopFact[]): string {
+function renderNotice(facts: readonly StopFact[], droppedCount: number): string {
   return [
     '[System] Turn-end report. The system noticed these teammates stop — nobody sent this, ' +
       'and it contains nothing any of them said.',
     '',
     ...facts.map(renderFact),
+    ...(droppedCount > 0
+      ? [
+          '',
+          `(${droppedCount} earlier ending${droppedCount === 1 ? '' : 's'} piled up before this notice went ` +
+            'out and were dropped to keep it readable — the underlying record was not affected, only this ' +
+            'summary.)',
+        ]
+      : []),
     '',
     '"No error" means only that the turn ended without throwing. It is NOT a claim that the ' +
       'work is done: a model that stopped early ends exactly the same way. A member that ' +

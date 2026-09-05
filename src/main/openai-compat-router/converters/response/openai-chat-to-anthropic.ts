@@ -17,6 +17,7 @@ import {
 } from '../content-blocks'
 
 import { generateMessageId, generateServerToolUseId } from '../../utils'
+import { normalizeOpenAIInputTokens } from '../../utils/usage-normalizer'
 
 // ============================================================================
 // Stop Reason Mapping
@@ -219,7 +220,13 @@ export function convertOpenAIChatToAnthropic(
     stop_reason: stopReason,
     stop_sequence: null,
     usage: {
-      input_tokens: openaiResponse.usage?.prompt_tokens || 0,
+      input_tokens: normalizeOpenAIInputTokens({
+        promptTokens: openaiResponse.usage?.prompt_tokens,
+        completionTokens: openaiResponse.usage?.completion_tokens,
+        totalTokens: openaiResponse.usage?.total_tokens,
+        cacheReadTokens: openaiResponse.usage?.cache_read_input_tokens,
+        providerLabel: openaiResponse.model
+      }) ?? 0,
       output_tokens: openaiResponse.usage?.completion_tokens || 0,
       cache_read_input_tokens: openaiResponse.usage?.cache_read_input_tokens
     }

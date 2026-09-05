@@ -171,6 +171,59 @@ describe('OpenAIChatStreamHandler empty-response repair', () => {
     expect(msgDelta?.data.delta.stop_reason).toBe('end_turn')
   })
 
+  it('excludes cache_read_input_tokens from input_tokens when a provider bolts it onto an OpenAI-inclusive prompt_tokens (GLM Coding Plan regression)', async () => {
+    // Real numbers from the production incident: prompt_tokens already
+    // includes the cached portion (OpenAI semantics), so input_tokens must
+    // be the difference — not prompt_tokens verbatim — or every downstream
+    // consumer that sums input_tokens + cache_read_input_tokens double-counts
+    // the cached tokens and reports ~2x the real context size.
+    const { res, chunks } = createMockRes()
+    const stream = chatSSE([
+      { id: 'c1', model: 'glm-5.2-zp', choices: [{ index: 0, delta: { role: 'assistant', content: 'hi' }, finish_reason: null }] },
+      { id: 'c1', model: 'glm-5.2-zp', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 131186, completion_tokens: 79, total_tokens: 131265, cache_read_input_tokens: 130304 } }
+    ])
+
+    await streamOpenAIChatToAnthropic(stream, res, 'glm-5.2-zp')
+
+    const events = parseSSEEvents(chunks)
+    const msgDelta = events.find(e => e.event === 'message_delta')
+    expect(msgDelta?.data.usage.input_tokens).toBe(882)
+    expect(msgDelta?.data.usage.output_tokens).toBe(79)
+  })
+
+  it('leaves input_tokens unchanged when a provider never sends cache_read_input_tokens', async () => {
+    // The overwhelming majority of OpenAI-compatible providers omit this
+    // field entirely — normalization must be a no-op for them.
+    const { res, chunks } = createMockRes()
+    const stream = chatSSE([
+      { id: 'c1', model: 'deepseek-v4-flash', choices: [{ index: 0, delta: { role: 'assistant', content: 'hi' }, finish_reason: null }] },
+      { id: 'c1', model: 'deepseek-v4-flash', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1000, completion_tokens: 20, total_tokens: 1020 } }
+    ])
+
+    await streamOpenAIChatToAnthropic(stream, res, 'deepseek-v4-flash')
+
+    const events = parseSSEEvents(chunks)
+    const msgDelta = events.find(e => e.event === 'message_delta')
+    expect(msgDelta?.data.usage.input_tokens).toBe(1000)
+  })
+
+  it('leaves input_tokens unchanged when total_tokens does not confirm either the OpenAI-inclusive or the Anthropic-exclusive identity', async () => {
+    // A provider that sends cache_read_input_tokens but whose total_tokens
+    // matches neither expected identity — the safe default is to not touch
+    // prompt_tokens rather than guess which convention it meant.
+    const { res, chunks } = createMockRes()
+    const stream = chatSSE([
+      { id: 'c1', model: 'some-other-provider', choices: [{ index: 0, delta: { role: 'assistant', content: 'hi' }, finish_reason: null }] },
+      { id: 'c1', model: 'some-other-provider', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 131186, completion_tokens: 79, total_tokens: 999999, cache_read_input_tokens: 130304 } }
+    ])
+
+    await streamOpenAIChatToAnthropic(stream, res, 'some-other-provider')
+
+    const events = parseSSEEvents(chunks)
+    const msgDelta = events.find(e => e.event === 'message_delta')
+    expect(msgDelta?.data.usage.input_tokens).toBe(131186)
+  })
+
   it('does not inject placeholder when the response is tool calls', async () => {
     const { res, chunks } = createMockRes()
     const stream = chatSSE([

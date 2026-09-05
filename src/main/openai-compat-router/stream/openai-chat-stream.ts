@@ -11,6 +11,7 @@ import {
   type StreamHandlerOptions
 } from './base-stream-handler'
 import { safeJsonParse } from '../utils'
+import { normalizeOpenAIInputTokens } from '../utils/usage-normalizer'
 import type { OpenAIChatChunk, OpenAIChatAnnotation, AnthropicStopReason } from '../types'
 
 export class OpenAIChatStreamHandler extends BaseStreamHandler {
@@ -91,7 +92,13 @@ export class OpenAIChatStreamHandler extends BaseStreamHandler {
     // Update usage if provided
     if (chunk.usage) {
       this.updateUsage({
-        inputTokens: chunk.usage.prompt_tokens,
+        inputTokens: normalizeOpenAIInputTokens({
+          promptTokens: chunk.usage.prompt_tokens,
+          completionTokens: chunk.usage.completion_tokens,
+          totalTokens: chunk.usage.total_tokens,
+          cacheReadTokens: chunk.usage.cache_read_input_tokens,
+          providerLabel: this.state.model
+        }),
         outputTokens: chunk.usage.completion_tokens,
         cacheReadTokens: chunk.usage.cache_read_input_tokens
       })

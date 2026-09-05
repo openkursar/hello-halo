@@ -79,7 +79,7 @@ import { SELF_NODE_ID, TEAM_EVENTS, buildTeamSessionKey } from '../../shared/app
 import type { BlackboardTask, BlackboardFinding, TaskStatus, TeamActivity, TeamUpdatedEvent, TeamEpoch, TeamCheck } from '../../shared/apps/team-types'
 import { parseTeamSessionKey, parseTeamChatKey } from '../../shared/apps/im-keys'
 import { createTeamRuntime, setActiveTeamRuntime, getActiveTeamRuntime, createTeamTriggerScheduler, createDefaultSessionDeps, createTeamArtifactReader, createLocalArtifactResolver, RemoteArtifactError } from '../apps/runtime/team'
-import { readTeamMemberMessages } from '../apps/runtime/app-chat'
+import { readTeamMemberMessages, isAppChatConversationGenerating } from '../apps/runtime/app-chat'
 import type { TeamTriggerScheduler } from '../apps/runtime/team'
 import { createSpace, deleteSpace, getSpace, getSpaceDir } from '../services/space.service'
 import { listArtifacts } from '../services/artifact.service'
@@ -879,6 +879,8 @@ async function initPlatformAndApps(): Promise<void> {
           broadcastToAll(TEAM_EVENTS.updated, payload)
           sendToRenderer(TEAM_EVENTS.updated, payload)
         },
+        // See `TurnReportDeps.isLeadGenerating` for the contract this fills.
+        isLeadGenerating: isAppChatConversationGenerating,
         onBlackboardWrite: (record) => getFederationManager()?.routeAuthorityWrite(record),
         // Auto-seal (quiescence) / breach end a run without going through the
         // service-level pauseTeam, so they must also push the rested run-state to
