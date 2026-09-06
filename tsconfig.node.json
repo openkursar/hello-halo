@@ -2,6 +2,9 @@
   "compilerOptions": {
     "composite": true,
     "outDir": "out/types-node",
+    // The bundler emits for a modern runtime. Without this tsc assumes ES5 and
+    // reports every `for...of` over a Map as a downlevel-iteration error.
+    "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,

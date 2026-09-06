@@ -8,10 +8,10 @@ const __filename = fileURLToPath(import.meta.url)
 const resultsRoot = path.resolve(path.dirname(__filename), '../results')
 
 /**
- * Per Lead: every result must carry the machine's load average at write
- * time, so a number can't be read without also seeing how busy the machine
- * was — S4 alone swung 8.5s -> 23s max-longtask across two identical runs
- * purely from other processes competing for the CPU (see memory notes).
+ * Every result carries the machine's load average at write time, so a number
+ * can't be read without also seeing how busy the machine was — S4 alone swung
+ * 8.5s -> 23s max-longtask across two identical runs purely from other
+ * processes competing for the CPU.
  * Injected centrally here (every scenario already ends by calling
  * `writeResult`) instead of copy-pasted into every spec file.
  */

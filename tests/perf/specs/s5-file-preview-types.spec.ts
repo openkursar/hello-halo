@@ -5,10 +5,15 @@
  * says "不同类型的 canvas 卡的程度还不一样", so blending them into one number
  * would hide exactly what we're looking for.
  *
- * csv gets three tiers (50KB/500KB/5MB): CsvViewer.tsx renders
- * `dataRows.map()` with no virtualization, so the 5MB tier is expected to
- * hang — that hang is itself the result (`toleratesHang: true`, recorded as
- * `status: "hung"`, never thrown as a test failure).
+ * csv gets three tiers (50KB/500KB/5MB) so that node count can be read across
+ * a 100x size range in one run — the ratio is what shows whether row
+ * virtualization is still decoupling rendering from file size, and it is the
+ * one comparison that carries no cross-machine noise.
+ *
+ * The two large tiers keep `toleratesHang: true` so a hang is written to the
+ * result JSON and then asserted on, rather than thrown from inside the
+ * scenario with nothing recorded. Before virtualization both hung; that is now
+ * a regression, not the expected finding.
  *
  * pdf opens via BrowserViewer, a *separate* Electron renderer process
  * (Chromium's native PDF viewer in a BrowserView) — `includePerProcess`
@@ -63,7 +68,7 @@ test('S5 csv medium (500KB)', async () => {
     openTimeoutMs: 90000,
     toleratesHang: true
   })
-  expect(['ok', 'hung', 'error']).toContain(result.status)
+  expect(result.status).toBe('ok')
 })
 
 test('S5 csv extreme (5MB)', async () => {
@@ -74,11 +79,7 @@ test('S5 csv extreme (5MB)', async () => {
     openTimeoutMs: 90000,
     toleratesHang: true
   })
-  // A hang OR a crash is the expected finding here (CsvViewer has no
-  // virtualization) — not a test failure. `runFilePreviewScenario` already
-  // throws for anything it can't classify, so reaching this line at all
-  // means the run completed and produced a result JSON either way.
-  expect(['ok', 'hung', 'error']).toContain(result.status)
+  expect(result.status).toBe('ok')
 })
 
 test('S5 image (huge png)', async () => {

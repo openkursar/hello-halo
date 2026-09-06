@@ -1,13 +1,11 @@
 /**
- * S9-PROBE — WP-C2 experiment 2: does the renderer listener leak found in S9
- * soak depend on opening files through ArtifactTree (react-arborist,
- * NodeApi.select()/focus() per click), or does it reproduce with an
- * equivalent open path that never touches react-arborist?
+ * S9-PROBE — does the renderer listener leak found in S9 soak depend on
+ * opening files through ArtifactTree (react-arborist, NodeApi.select()/focus()
+ * per click), or does it reproduce with an equivalent open path that never
+ * touches react-arborist?
  *
- * This is a throwaway probe copy, not a permanent addition to the perf
- * suite — kept separate from s9-soak.spec.ts (the frozen baseline script)
- * per Lead's instruction not to touch product code or the original spec
- * while the engineer is mid-edit on src/.
+ * A probe copy, kept separate from s9-soak.spec.ts (the frozen baseline
+ * script) so that script's numbers stay comparable across rounds.
  *
  * Controlled by S9_PROBE_VIEWMODE:
  *   'tree' (default) — reproduces the original S9 path: ArtifactRail's
@@ -22,8 +20,8 @@
  * sampling) is copied verbatim from s9-soak.spec.ts so the two runs are
  * comparable apples-to-apples.
  *
- * WP-C2 experiment 1 (bundled into this same run so we only need one probe
- * script): a `getEventListeners()` snapshot of `document` and `window`,
+ * Bundled into the same run so only one probe script is needed: a
+ * `getEventListeners()` snapshot of `document` and `window`,
  * taken twice — once early in the loop, once 20 cycles later — diffed by
  * `type:useCapture` to see which listener type is actually accumulating and
  * on which target. See `captureListenerDistribution()` below for the CDP
@@ -44,13 +42,13 @@ import {
 import { navigateToChat } from '../../e2e/fixtures/helpers'
 import { CdpMetricsCollector } from '../lib/cdp-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
-import { seedArtifact, clickArtifactByName, waitForCanvasLoaded } from '../lib/open-artifact'
+import { seedArtifact, beginOpenObservation, clickArtifactByName, waitForCanvasLoaded } from '../lib/open-artifact'
+import { fixturePath } from '../lib/fixture-store'
 import type { CDPSession } from '@playwright/test'
 import { currentLabel } from '../lib/result-writer'
-import { getBuildIdentityString } from '../lib/build-identity'
+import { getBuildIdentity } from '../lib/build-identity'
 
 const __filename = fileURLToPath(import.meta.url)
-const FIXTURES_ROOT = path.resolve(path.dirname(__filename), '../../../halo-local/temp/perf-fixtures')
 const RESULTS_ROOT = path.resolve(path.dirname(__filename), '../results')
 
 const TYPICAL_FIXTURES = [
@@ -64,11 +62,10 @@ const TYPICAL_FIXTURES = [
   'pdf-typical.pdf'
 ]
 
-const DURATION_MS = Number(process.env.S9_DURATION_MS || 45 * 60 * 1000)
-// Two accepted spellings for the same knob — Lead's message suggested
-// PROBE_SKIP_TREE_CLICK=1, the version written before that used
-// S9_PROBE_VIEWMODE=card. Both work; card view is what actually skips the
-// ArtifactTree/react-arborist click path (see file header).
+const DURATION_MS = Number(process.env.S9_DURATION_MS || 10 * 60 * 1000)
+// Two accepted spellings for the same knob, kept because both are already in
+// use. Card view is what actually skips the ArtifactTree/react-arborist click
+// path (see file header).
 const PROBE_VIEWMODE =
   process.env.S9_PROBE_VIEWMODE === 'card' || process.env.PROBE_SKIP_TREE_CLICK === '1'
     ? 'card'
@@ -76,7 +73,7 @@ const PROBE_VIEWMODE =
 
 // Cycle at which to take the first getEventListeners() snapshot (let the
 // loop run a few iterations past startup/onboarding jitter first), and how
-// many cycles later to take the second one for the diff. 20, per Lead.
+// many cycles later to take the second one for the diff.
 const LISTENER_DIFF_START_CYCLE = 10
 const LISTENER_DIFF_CYCLE_GAP = 20
 
@@ -119,13 +116,11 @@ interface ListenerSnapshot {
  * `includeCommandLineAPI` param in the CDP spec; this is the same call
  * shape Puppeteer users use for the identical purpose.
  *
- * NOT verified by actually running this yet (Lead asked for the probe to be
- * written and reviewed before any execution). If `includeCommandLineAPI`
- * turns out not to inject `getEventListeners` in this Electron/Chromium
- * build for some reason, `raw.exceptionDetails` will say so and this
- * function reports `ok: false` with the error message instead of crashing
- * the whole soak run — the rest of the probe (the tree-vs-card A/B, which
- * is the higher-value experiment per Lead) still completes either way.
+ * If `includeCommandLineAPI` turns out not to inject `getEventListeners` in
+ * this Electron/Chromium build, `raw.exceptionDetails` will say so and this
+ * function reports `ok: false` with the error message instead of crashing the
+ * whole soak run — the tree-vs-card A/B, the higher-value experiment, still
+ * completes either way.
  *
  * `getEventListeners(target)` returns `{ [type]: Array<{ useCapture,
  * passive, once, listener }> }`. `listener` (a function) is not
@@ -206,7 +201,7 @@ test('S9 soak probe', async () => {
   const label = currentLabel()
   const appEntryPath = getAppEntryPath()
   const testConfigDir = createTestConfigDir(appEntryPath)
-  for (const f of TYPICAL_FIXTURES) seedArtifact(testConfigDir, path.join(FIXTURES_ROOT, f))
+  for (const f of TYPICAL_FIXTURES) seedArtifact(testConfigDir, fixturePath(f))
 
   const app = await launchElectronApp(appEntryPath, testConfigDir)
 
@@ -288,6 +283,7 @@ test('S9 soak probe', async () => {
             await expandButton.click()
           }
         }
+        await beginOpenObservation(window)
         await clickArtifactByName(window, fixtureName)
         await waitForCanvasLoaded(window, 20000).catch(() => {})
         await closeAllTabs()
@@ -310,7 +306,7 @@ test('S9 soak probe', async () => {
         }
       }
 
-      // WP-C2 experiment 1: two getEventListeners() snapshots, LISTENER_DIFF_CYCLE_GAP
+      // Two getEventListeners() snapshots, LISTENER_DIFF_CYCLE_GAP
       // cycles apart, diffed after the loop ends (see bottom of test for the diff + write-out).
       if (cycle === LISTENER_DIFF_START_CYCLE || cycle === LISTENER_DIFF_START_CYCLE + LISTENER_DIFF_CYCLE_GAP) {
         const snap = await captureListenerDistribution(listenerCdp, cycle, Date.now() - t0)
@@ -380,7 +376,7 @@ test('S9 soak probe', async () => {
       scenario: 's9-soak-probe',
       probeViewMode: PROBE_VIEWMODE,
       label,
-      gitSha: getBuildIdentityString(),
+      build: getBuildIdentity(),
       loadAverageAtStart: os.loadavg(),
       durationMs: Date.now() - t0,
       configuredDurationMs: DURATION_MS,

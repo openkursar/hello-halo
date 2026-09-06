@@ -1,9 +1,6 @@
 {
   "compilerOptions": {
-    "composite": true,
-    "outDir": "out/types-web",
-    // The bundler emits for a modern runtime. Without this tsc assumes ES5 and
-    // reports every `for...of` over a Map as a downlevel-iteration error.
+    "noEmit": true,
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -12,13 +9,14 @@
     "strict": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "isolatedModules": true,
-    "jsx": "react-jsx",
     "lib": ["DOM", "DOM.Iterable", "ESNext"],
+    "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/renderer/*"]
+      "@shared": ["src/shared"],
+      "@shared/*": ["src/shared/*"]
     }
   },
-  "include": ["src/renderer/**/*", "src/shared/**/*"]
+  "include": ["tests/**/*.ts", "tests/**/*.mts"],
+  "exclude": ["tests/perf/fixtures/generated"]
 }

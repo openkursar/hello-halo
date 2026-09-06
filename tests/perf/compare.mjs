@@ -64,7 +64,7 @@ function fmt(n) {
 }
 
 /**
- * WP7 harness audit P1-5: `null` means "the collector could not measure
+ * `null` means "the collector could not measure
  * this" (see types.ts), which must never be treated as the number 0 — that
  * would either compute a nonsense delta (arithmetic coerces null to 0) or,
  * if both sides happen to be null, print a clean "0%" that looks identical
@@ -103,7 +103,7 @@ function samplingNote(result) {
   return null
 }
 
-// Per Lead: the report needs a 6-metric-per-scenario view, not the full
+// The report needs a 6-metric-per-scenario view, not the full
 // ~40-metric dump — durationMs (user wait), longtask.maxMs (freeze length,
 // closest to "卡"), nodes.delta (DOM scale / virtualization evidence),
 // mem.byProcessType.renderer.deltaMB (memory cost), idleCpu.first15AvgPercent
@@ -132,7 +132,7 @@ lines.push(`CPU metrics below are converted to **% of one core** (raw Electron v
 lines.push('')
 lines.push(`**⚠️ DOM node counts (\`nodes.*\`) are only comparable within the same kind of screen** — e.g. S5's file types against each other (all "opened one file in the canvas"). S1 (Home page) vs S4/S5/S6 (chat+canvas view) is not a valid comparison; they are different screens by definition, not a virtualization regression. This table diffs the same scenario across labels, which is always valid — the warning is for anyone eyeballing raw numbers across *different* scenario rows.`)
 lines.push('')
-// WP7 harness audit P1-9: a scenario that hung so badly the test itself
+// A scenario that hung so badly the test itself
 // timed out never gets a JSON written — previously that only showed up as
 // one easy-to-miss line buried in its own section. A totally missing
 // scenario and a totally healthy one looked equally unremarkable in a long

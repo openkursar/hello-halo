@@ -1,18 +1,16 @@
 /**
- * S6 — Preview + chat overlay: open a large markdown preview, record an idle
- * CPU baseline *before* starting a chat (so "preview alone" vs "preview +
- * streaming chat" can be told apart), then send a long-reply prompt against
- * the WP9 local mock and measure through to stream completion.
+ * Preview + chat overlay: open a large markdown preview, record an idle CPU
+ * baseline *before* starting a chat (so "preview alone" vs "preview + streaming
+ * chat" can be told apart), then send a long-reply prompt against the local SSE
+ * mock and measure through to stream completion.
  *
  * This is the scenario user feedback points at most directly: "打开文件预览
- * 之后，再和 AI 聊天，CPU 起来很明显。" Per Lead: without a pre-chat idle
- * baseline there's no way to attribute the overlay's cost to chat specifically
- * versus the preview simply not having settled yet.
+ * 之后，再和 AI 聊天，CPU 起来很明显。" Without a pre-chat idle baseline there
+ * is no way to attribute the overlay's cost to chat specifically versus the
+ * preview simply not having settled yet.
  */
 
 import { test, expect } from '@playwright/test'
-import path from 'path'
-import { fileURLToPath } from 'url'
 import {
   getAppEntryPath,
   createTestConfigDir,
@@ -26,23 +24,22 @@ import { ProcessMetricsSampler } from '../lib/process-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
 import { installReloadGuard } from '../lib/reload-guard'
 import { sampleIdleCpu } from '../lib/idle-cpu'
-import { seedArtifact, clickArtifactByName, waitForCanvasLoaded } from '../lib/open-artifact'
+import { seedArtifact, beginOpenObservation, clickArtifactByName, waitForCanvasLoaded } from '../lib/open-artifact'
+import { fixturePath } from '../lib/fixture-store'
 import { writeResult, currentLabel, currentThrottle } from '../lib/result-writer'
-import { getBuildIdentityString } from '../lib/build-identity'
+import { writeSkipResult } from '../lib/skip-record'
+import { getBuildIdentity } from '../lib/build-identity'
 import type { PerfResult } from '../types'
-
-const __filename = fileURLToPath(import.meta.url)
-const FIXTURES_ROOT = path.resolve(path.dirname(__filename), '../../../halo-local/temp/perf-fixtures')
 
 const LONG_REPLY_PROMPT =
   'Write a complete React todo app. Give me the full code for 5 separate components ' +
   '(App, TodoList, TodoItem, AddTodoForm, FilterBar) with explanations for each, in Markdown ' +
   'with fenced code blocks. Do not use any tools, just write the answer directly in the chat.'
 
-// Per Lead: a control run swapping only the fixture size (extreme 2MB vs
-// typical 5KB) isolates whether a hang is "the 2MB markdown's 536K nodes
-// make every subsequent UI interaction slow" versus an environment/test
-// issue — everything else in the scenario is identical.
+// A control run swapping only the fixture size (extreme 2MB vs typical 5KB)
+// isolates whether a hang is "the 2MB markdown's 536K nodes make every
+// subsequent UI interaction slow" versus an environment/test issue —
+// everything else in the scenario is identical.
 const FIXTURE_FILE = process.env.S6_FIXTURE || 'md-extreme-2mb.md'
 const SCENARIO_NAME = FIXTURE_FILE === 'md-extreme-2mb.md' ? 's6-preview-plus-chat' : 's6-control-typical-md'
 
@@ -52,38 +49,19 @@ test(`S6 preview + chat overlay (${FIXTURE_FILE})`, async () => {
   // instead of the project default.
   test.setTimeout(360000)
   if (!process.env.HALO_TEST_API_KEY) {
-    // Per WP7 harness audit P1#9: don't let this vanish silently from the
-    // comparison table — write an explicit status:'skipped' stub.
-    const skipResult: PerfResult = {
-      scenario: SCENARIO_NAME,
-      label: currentLabel(),
-      gitSha: getBuildIdentityString(),
-      throttle: currentThrottle(),
-      durationMs: 0,
-      cpu: { byProcessType: {} },
-      mem: { byProcessType: {} },
-      sampling: { plannedTicks: 0, succeededTicks: 0 },
-      longtask: null,
-      eventLatency: null,
-      heap: { startMB: 0, endMB: null, deltaMB: null },
-      nodes: { start: 0, end: null, delta: null },
-      listeners: { start: 0, end: null, delta: null },
-      unresponsiveCount: 0,
-      rendererReloads: 0,
-      crashCount: 0,
-      valid: false,
-      status: 'skipped',
-      note: 'HALO_TEST_API_KEY not set — point HALO_TEST_* at the WP9 mock or a real source to run this.'
-    }
-    writeResult(skipResult)
-    test.skip(true, 'Skipping S6: HALO_TEST_API_KEY not set (point it at the WP9 mock or a real source)')
+    writeSkipResult(
+      SCENARIO_NAME,
+      'no-api-key',
+      'Point HALO_TEST_* at tests/perf/mock/sse-server.mjs or a real source to run this.'
+    )
+    test.skip(true, 'HALO_TEST_API_KEY not set (point it at tests/perf/mock/sse-server.mjs or a real source)')
     return
   }
   const warnings: string[] = []
 
   const appEntryPath = getAppEntryPath()
   const testConfigDir = createTestConfigDir(appEntryPath)
-  const { name: artifactName } = seedArtifact(testConfigDir, path.join(FIXTURES_ROOT, FIXTURE_FILE))
+  const { name: artifactName } = seedArtifact(testConfigDir, fixturePath(FIXTURE_FILE))
 
   const app = await launchElectronApp(appEntryPath, testConfigDir)
 
@@ -107,20 +85,20 @@ test(`S6 preview + chat overlay (${FIXTURE_FILE})`, async () => {
     sampler.start()
     const t0 = Date.now()
 
-    // Per Lead: a bare total duration or timeout only tells you *that*
-    // something was slow, not *which step* — record a checkpoint at every
-    // phase transition so a stuck run is a one-glance answer instead of
-    // "read不到明确阻塞点".
+    // A bare total duration or timeout only tells you *that* something was
+    // slow, not *which step* — record a checkpoint at every phase transition
+    // so a stuck run points at the blocking step directly.
     const steps: Array<{ label: string; tMs: number }> = []
     const markStep = (label: string) => steps.push({ label, tMs: Date.now() - t0 })
 
+    await beginOpenObservation(window)
     await clickArtifactByName(window, artifactName)
-    await waitForCanvasLoaded(window, 60000)
-    markStep('preview-opened')
+    const previewOpenMs = await waitForCanvasLoaded(window, 60000)
+    steps.push({ label: 'preview-opened', tMs: Math.round(previewOpenMs) })
 
-    // Per Lead: assert both halves of "preview + chat overlay" actually
-    // happened, not just that the wait calls returned without error. Preview
-    // half: the canvas should have real nodes in it after opening a 2MB file.
+    // Assert both halves of "preview + chat overlay" actually happened, not
+    // just that the wait calls returned without error. Preview half: the
+    // canvas should have real nodes in it after opening a 2MB file.
     let preconditionFailure: string | undefined
     const afterPreviewSnapshot = await cdp.snapshot().catch(() => null)
     if (afterPreviewSnapshot && afterPreviewSnapshot.nodes - heapStart.nodes <= 0) {
@@ -134,7 +112,7 @@ test(`S6 preview + chat overlay (${FIXTURE_FILE})`, async () => {
     }
     markStep('idle-baseline-done')
 
-    // Per Lead's hypothesis: App.tsx's no-selector useChatStore() re-renders
+    // Hypothesis: App.tsx's no-selector useChatStore() re-renders
     // the whole root on every streamed token, on top of the 536K nodes the
     // markdown preview left in the document — the two effects may multiply
     // rather than add, to the point the chat phase might not complete in any
@@ -148,7 +126,7 @@ test(`S6 preview + chat overlay (${FIXTURE_FILE})`, async () => {
     let status: PerfResult['status'] = 'ok'
     let note: string | undefined
 
-    // Per Lead: eventLatency (the event-timing observer, durationThreshold
+    // eventLatency (the event-timing observer, durationThreshold
     // 100ms) has nothing to measure unless the user actually interacts
     // during streaming — S2 ran the whole 45s hands-off and eventLatency
     // came back {count: 0}, which isn't "no jank", it's "no interaction was
@@ -266,7 +244,7 @@ test(`S6 preview + chat overlay (${FIXTURE_FILE})`, async () => {
       warnings.push('eventLatency: PerformanceObserver never attached — null, not "0 observed".')
     }
 
-    // Per Lead: `valid` = contamination-free AND action completed
+    // `valid` = contamination-free AND action completed
     // (status === 'ok'); a single unmeasured metric alone must not sink it
     // (see `unmeasuredMetrics`).
     const valid = noReloadOrCrash && status === 'ok'
@@ -275,7 +253,7 @@ test(`S6 preview + chat overlay (${FIXTURE_FILE})`, async () => {
     const result: PerfResult = {
       scenario: SCENARIO_NAME,
       label: currentLabel(),
-      gitSha: getBuildIdentityString(),
+      build: getBuildIdentity(),
       throttle,
       durationMs,
       cpu,
@@ -307,7 +285,7 @@ test(`S6 preview + chat overlay (${FIXTURE_FILE})`, async () => {
       note,
       warnings: warnings.length ? warnings : undefined,
       idleCpu,
-      // Per Lead: getAppMetrics() aggregates by `type`, blending the main
+      // getAppMetrics() aggregates by `type`, blending the main
       // window's renderer with any other renderer-type process Halo has
       // running (AI browser offscreen window, daemon, overlay) — S6's
       // "main window re-renders 536K nodes per token" claim needs a per-pid

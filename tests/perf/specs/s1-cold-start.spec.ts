@@ -5,8 +5,7 @@
  * electron-vite production build) via the e2e fixture's own env prep
  * (isolated HOME/HALO_DATA_DIR, product.json path rewrite, OAuth source
  * loading, SDK symlink). Not the shared `perf-electron` `test.extend`
- * fixture, so timing starts at the `launchElectronApp()` call itself,
- * matching "记启动耗时 + 启动期 longtask" in the WP1 brief.
+ * fixture, so timing starts at the `launchElectronApp()` call itself.
  */
 
 import { test, expect } from '@playwright/test'
@@ -23,7 +22,7 @@ import { ProcessMetricsSampler } from '../lib/process-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
 import { installReloadGuard } from '../lib/reload-guard'
 import { writeResult, currentLabel, currentThrottle } from '../lib/result-writer'
-import { getBuildIdentityString } from '../lib/build-identity'
+import { getBuildIdentity } from '../lib/build-identity'
 import type { PerfResult } from '../types'
 
 test('S1 cold start', async () => {
@@ -40,14 +39,13 @@ test('S1 cold start', async () => {
 
     const window = await app.firstWindow()
 
-    // WP7 harness audit P0-2: installUnresponsiveTracker must run after the
-    // window exists — BrowserWindow.getAllWindows() right after launch can
+    // installUnresponsiveTracker must run after the window exists — BrowserWindow.getAllWindows() right after launch can
     // still be empty, which used to hook zero windows and made
     // unresponsiveCount structurally 0 for this scenario regardless of what
     // actually happened.
     await installUnresponsiveTracker(app)
 
-    // WP6 root cause: addInitScript (installRenderObservers) only affects a
+    // addInitScript (installRenderObservers) only affects a
     // *future* navigation. By the time app.firstWindow() resolves, Halo's
     // one-and-only navigation has already started, so the deferred script
     // never got a next navigation to attach to and longtask.count was
@@ -63,9 +61,9 @@ test('S1 cold start', async () => {
     await cdp.setCpuThrottlingRate(throttle)
     const heapStart = await cdp.snapshot()
 
-    // First-screen-interactive marker. Per Lead: the old `Promise.race`
-    // against 4 selectors (including `[data-testid="splash-screen"]`)
-    // resolved as soon as the *splash screen* appeared, not real content —
+    // First-screen-interactive marker. A `Promise.race` against several
+    // selectors (including a splash-screen one) resolves as soon as the
+    // *splash screen* appears, not real content —
     // S1's nodes.end (~180-270) was landing below S4's nodes.start (446,
     // the app's already-loaded baseline), proving it was timing the splash,
     // not "interactive". `waitForHomePage` waits specifically for
@@ -87,8 +85,8 @@ test('S1 cold start', async () => {
     // Gates whether it's even worth attempting the final CDP snapshot below
     // (reload/crash invalidate the execution context). The result's `valid`
     // field is computed later, once we also know whether the longtask/event
-    // observers actually attached — per Lead, "collector never worked" must
-    // sink `valid` exactly like "renderer reloaded" does.
+    // observers actually attached — "collector never worked" must sink
+    // `valid` exactly like "renderer reloaded" does.
     const noReloadOrCrash = rendererReloads === 0 && crashCount === 0
 
     sampler.stop()
@@ -127,7 +125,7 @@ test('S1 cold start', async () => {
       warnings.push('eventLatency: PerformanceObserver never attached — null, not "0 observed".')
     }
 
-    // Per Lead: `valid` answers "was this run contaminated" (reload/crash),
+    // `valid` answers "was this run contaminated" (reload/crash),
     // not "was every metric measured" — a single unmeasured field (like
     // S1's longtask, which is physically unobservable pre-first-paint) must
     // not sink the whole run's otherwise-good duration/nodes/memory/CPU out
@@ -139,7 +137,7 @@ test('S1 cold start', async () => {
     const result: PerfResult = {
       scenario: 's1-cold-start',
       label: currentLabel(),
-      gitSha: getBuildIdentityString(),
+      build: getBuildIdentity(),
       throttle,
       durationMs,
       cpu,
@@ -167,7 +165,7 @@ test('S1 cold start', async () => {
       crashCount,
       valid,
       unmeasuredMetrics: unmeasuredMetrics.length ? unmeasuredMetrics : undefined,
-      // Per Lead: a true "supported:true, count:0" reads to a human as "cold
+      // A true "supported:true, count:0" reads to a human as "cold
       // start has no jank", but the longtask/eventLatency observers can only
       // attach after waitForHomePage resolves (external-CDP limitation — see
       // the comment above installRenderObserversNow's call site) — the boot

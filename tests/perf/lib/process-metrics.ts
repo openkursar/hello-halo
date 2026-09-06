@@ -31,7 +31,7 @@ function normalizeType(type: string): ProcessType | null {
  * apart — every other layer only sees the renderer it is attached to.
  *
  * Failed ticks (app unreachable — the exact moment a real hang would cause
- * this) are counted, not just dropped: per WP7 harness audit P0-4, silently
+ * this) are counted, not just dropped — silently
  * averaging only the ticks that survived biases every summary toward
  * whatever was happening *before* the app seized up, since that's disproportionately
  * what remains once the bad stretch stops responding.
@@ -107,7 +107,7 @@ export class ProcessMetricsSampler {
         avgMB: average(memValuesMB),
         maxMB: Math.max(...memValuesMB),
         // A single surviving sample makes first===last, i.e. a fabricated
-        // "zero growth" — exactly the shape P0-4 warns about. Report
+        // "zero growth" — the shape a silently-failed probe takes. Report
         // callers should treat deltaMB as unreliable whenever
         // `sampling.succeededTicks` is small; we don't have a per-type
         // count here so the scenario-level `sampling` field is the signal.

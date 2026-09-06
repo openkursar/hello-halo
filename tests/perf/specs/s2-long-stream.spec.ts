@@ -17,7 +17,8 @@ import { ProcessMetricsSampler } from '../lib/process-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
 import { installReloadGuard } from '../lib/reload-guard'
 import { writeResult, currentLabel, currentThrottle } from '../lib/result-writer'
-import { getBuildIdentityString } from '../lib/build-identity'
+import { writeSkipResult } from '../lib/skip-record'
+import { getBuildIdentity } from '../lib/build-identity'
 import type { PerfResult } from '../types'
 
 const LONG_REPLY_PROMPT =
@@ -27,33 +28,12 @@ const LONG_REPLY_PROMPT =
 
 test('S2 long stream', async ({ electronApp, window }, testInfo) => {
   if (!hasApiKey()) {
-    // Per WP7 harness audit P1#9: a silently skipped scenario is invisible
-    // in the comparison table (as easy to overlook as a genuinely healthy
-    // run) — write a stub result with status:'skipped' so it shows up
-    // explicitly instead of just vanishing from the results directory.
-    const skipResult: PerfResult = {
-      scenario: 's2-long-stream',
-      label: currentLabel(),
-      gitSha: getBuildIdentityString(),
-      throttle: currentThrottle(),
-      durationMs: 0,
-      cpu: { byProcessType: {} },
-      mem: { byProcessType: {} },
-      sampling: { plannedTicks: 0, succeededTicks: 0 },
-      longtask: null,
-      eventLatency: null,
-      heap: { startMB: 0, endMB: null, deltaMB: null },
-      nodes: { start: 0, end: null, delta: null },
-      listeners: { start: 0, end: null, delta: null },
-      unresponsiveCount: 0,
-      rendererReloads: 0,
-      crashCount: 0,
-      valid: false,
-      status: 'skipped',
-      note: 'HALO_TEST_API_KEY not set — point HALO_TEST_* at the WP9 mock (halo-local/temp/wp9-sse-mock-server.mjs) or a real source to run this.'
-    }
-    writeResult(skipResult)
-    testInfo.skip(true, 'Skipping S2: HALO_TEST_API_KEY not set')
+    writeSkipResult(
+      's2-long-stream',
+      'no-api-key',
+      'Point HALO_TEST_* at tests/perf/mock/sse-server.mjs or a real source to run this.'
+    )
+    testInfo.skip(true, 'HALO_TEST_API_KEY not set (point it at tests/perf/mock/sse-server.mjs or a real source)')
     return
   }
   const warnings: string[] = []
@@ -86,12 +66,12 @@ test('S2 long stream', async ({ electronApp, window }, testInfo) => {
   const durationMs = Date.now() - t0
   sampler.stop()
 
-  // Per Lead: "measured a real number" and "actually happened" are
-  // different claims — a scenario that resolves early (e.g. a stale/broken
-  // completion detector) can still write out a plausible-looking
-  // valid:true result. `waitForStreamComplete` returning isn't proof by
-  // itself; check the thing S2 exists to measure actually occurred, the
-  // same way file-preview-scenario.ts will assert nodes.delta > 0.
+  // "Measured a real number" and "actually happened" are different claims —
+  // a scenario that resolves early (e.g. a stale/broken completion detector)
+  // can still write out a plausible-looking valid:true result.
+  // `waitForStreamComplete` returning isn't proof by itself; check the thing
+  // this scenario exists to measure actually occurred, the same way
+  // file-preview-scenario.ts asserts nodes.delta > 0.
   const assistantTextLength: number = await window.evaluate(() => {
     const nodes = document.querySelectorAll('.message-assistant [data-message-content]')
     let total = 0
@@ -147,10 +127,10 @@ test('S2 long stream', async ({ electronApp, window }, testInfo) => {
     warnings.push('eventLatency: PerformanceObserver never attached (entryType unsupported) — null, not "0 observed".')
   }
 
-  // Per Lead: `valid` answers "was this run contaminated" (reload/crash)
-  // "and did the action complete" (status === 'ok', which now also covers
-  // the precondition self-check above) — not "was every metric measured",
-  // see `unmeasuredMetrics` for per-field gaps.
+  // `valid` answers "was this run contaminated" (reload/crash) "and did the
+  // action complete" (status === 'ok', which also covers the precondition
+  // self-check above) — not "was every metric measured", see
+  // `unmeasuredMetrics` for per-field gaps.
   const valid = noReloadOrCrash && status === 'ok'
 
   const unresponsiveCount = await readUnresponsiveCount(electronApp)
@@ -158,7 +138,7 @@ test('S2 long stream', async ({ electronApp, window }, testInfo) => {
   const result: PerfResult = {
     scenario: 's2-long-stream',
     label: currentLabel(),
-    gitSha: getBuildIdentityString(),
+    build: getBuildIdentity(),
     throttle,
     durationMs,
     cpu,

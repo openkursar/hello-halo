@@ -11,7 +11,7 @@ import type { ElectronApplication } from '@playwright/test'
  * which the reload-guard's `page.on('load')` listener may not reliably see
  * if the crash tears down the CDP session before a new 'load' fires.
  *
- * Per WP7 harness audit P0-2: call this only after the target window
+ * Call this only after the target window
  * actually exists — `BrowserWindow.getAllWindows()` at the moment right
  * after `launchElectronApp()` returns can be empty (main process creates the
  * window slightly later), which hooks zero windows and makes

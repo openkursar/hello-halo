@@ -1,8 +1,6 @@
 /**
- * S10 — Observe the crash/reload cycle live: open the 5MB CSV (known to
- * crash the renderer — see S5 csv-5mb), then keep watching for up to 90s
- * instead of ending the test at the first crash. Per Lead, this is meant to
- * catch the full mechanism in one recording:
+ * S10 — Watch a 5MB CSV open for 90s instead of ending at the first crash, so
+ * the whole mechanism lands in one recording:
  *
  *   crash (render-process-gone) -> recoverRenderer() silently reloads ->
  *   [if it crashes 3x within 60s] -> relaunchApp() (app.relaunch() +
@@ -13,12 +11,19 @@
  * are what the user actually sees, which crashCount/reloadCount alone
  * cannot show.
  *
+ * The fixture is the *tall* 5MB CSV (269k short rows), not the wide one S5
+ * opens. Row count is what the crash tracked: the wide 5MB file holds ~67k
+ * rows and stopped crashing once row virtualization landed, while the narrow
+ * shape kept throwing from a per-row spread argument inside a `useMemo`,
+ * where the nearest boundary is the renderer root. Pointing this at the file
+ * that no longer crashes would have left the check permanently green.
+ *
  * This does not fit the standard S1-S9 PerfResult schema (it is a timeline,
  * not a single before/after measurement) — it writes its own JSON alongside
  * a directory of timestamped screenshots.
  */
 
-import { test } from '@playwright/test'
+import { expect, test } from '@playwright/test'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -32,11 +37,12 @@ import {
 import { navigateToChat } from '../../e2e/fixtures/helpers'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
 import { seedArtifact, clickArtifactByName } from '../lib/open-artifact'
+import { isRendererFatal } from '../lib/renderer-fatal'
+import { fixturePath } from '../lib/fixture-store'
 import { currentLabel } from '../lib/result-writer'
-import { getBuildIdentityString } from '../lib/build-identity'
+import { getBuildIdentity } from '../lib/build-identity'
 
 const __filename = fileURLToPath(import.meta.url)
-const FIXTURES_ROOT = path.resolve(path.dirname(__filename), '../../../halo-local/temp/perf-fixtures')
 const RESULTS_ROOT = path.resolve(path.dirname(__filename), '../results')
 
 interface TimelineEntry {
@@ -44,7 +50,9 @@ interface TimelineEntry {
   crashCount: number | 'unreachable'
   unresponsiveCount: number | 'unreachable'
   processAlive: boolean
-  /** Per Lead: crash likelihood appears load-dependent (S4 froze at low load, crashed at high load) — record it at every sample, not just once. */
+  /** React caught the throw and replaced the UI — no crash, no reload, nothing left. */
+  rendererFatal: boolean
+  /** Crash likelihood appears load-dependent (S4 froze at low load, crashed at high load) — record it at every sample, not just once. */
   loadAverage: [number, number, number]
   screenshot?: string
 }
@@ -58,7 +66,7 @@ test('S10 csv crash-loop observation', async () => {
 
   const appEntryPath = getAppEntryPath()
   const testConfigDir = createTestConfigDir(appEntryPath)
-  const { name: artifactName } = seedArtifact(testConfigDir, path.join(FIXTURES_ROOT, 'csv-extreme-large.csv'))
+  const { name: artifactName } = seedArtifact(testConfigDir, fixturePath('csv-extreme-tall.csv'))
 
   const app = await launchElectronApp(appEntryPath, testConfigDir)
   const t0 = Date.now()
@@ -84,6 +92,7 @@ test('S10 csv crash-loop observation', async () => {
     let crashCount: number | 'unreachable' = 'unreachable'
     let unresponsiveCount: number | 'unreachable' = 'unreachable'
     let processAlive = false
+    let rendererFatal = false
     let screenshot: string | undefined
 
     try {
@@ -103,6 +112,7 @@ test('S10 csv crash-loop observation', async () => {
       const liveWindow = await app.firstWindow().catch(() => null)
       if (liveWindow) {
         window = liveWindow
+        rendererFatal = await isRendererFatal(window)
         const shotPath = path.join(outDir, `t${String(tMs).padStart(7, '0')}ms.png`)
         await window.screenshot({ path: shotPath, timeout: 5000 })
         screenshot = path.relative(RESULTS_ROOT, shotPath)
@@ -111,14 +121,14 @@ test('S10 csv crash-loop observation', async () => {
       // Screenshot failure (no reachable window) is itself informative — recorded as absent.
     }
 
-    timeline.push({ tMs, crashCount, unresponsiveCount, processAlive, loadAverage: os.loadavg() as [number, number, number], screenshot })
-    console.log(`[perf] S10 t+${tMs}ms crashCount=${crashCount} unresponsive=${unresponsiveCount} processAlive=${processAlive} screenshot=${screenshot ?? 'none'}`)
+    timeline.push({ tMs, crashCount, unresponsiveCount, processAlive, rendererFatal, loadAverage: os.loadavg() as [number, number, number], screenshot })
+    console.log(`[perf] S10 t+${tMs}ms crashCount=${crashCount} unresponsive=${unresponsiveCount} processAlive=${processAlive} rendererFatal=${rendererFatal} screenshot=${screenshot ?? 'none'}`)
   }
 
   const result = {
     scenario: 's10-csv-crash-loop',
     label,
-    gitSha: getBuildIdentityString(),
+    build: getBuildIdentity(),
     loadAverageAtStart: os.loadavg(),
     observeWindowMs,
     pollIntervalMs,
@@ -126,6 +136,7 @@ test('S10 csv crash-loop observation', async () => {
     summary: {
       maxCrashCountObserved: Math.max(0, ...timeline.map((e) => (typeof e.crashCount === 'number' ? e.crashCount : 0))),
       everUnreachable: timeline.some((e) => e.crashCount === 'unreachable'),
+      everRendererFatal: timeline.some((e) => e.rendererFatal),
       finalProcessAlive: timeline[timeline.length - 1]?.processAlive ?? null
     }
   }
@@ -137,4 +148,13 @@ test('S10 csv crash-loop observation', async () => {
 
   await app.close().catch(() => {})
   cleanupTestConfigDir(testConfigDir)
+
+  // Asserted after the artifacts are written: the screenshots and timeline are
+  // what a failure gets diagnosed from, so they must survive it.
+  expect(result.summary.everUnreachable, 'the main process went unreachable — the app relaunched itself').toBe(false)
+  expect(result.summary.maxCrashCountObserved, 'the renderer crashed opening a 5MB CSV').toBe(0)
+  // Listed last because it is the one that actually fires: the throw this
+  // scenario guards against is caught by React, so the process survives and
+  // only this flag moves.
+  expect(result.summary.everRendererFatal, 'the UI was replaced by the root error boundary').toBe(false)
 })

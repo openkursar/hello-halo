@@ -14,7 +14,7 @@ declare global {
 /**
  * Runs in-page: sets up the longtask + slow-interaction observers.
  *
- * Per Lead: a `catch` that leaves the bucket empty makes "entryType
+ * A `catch` that leaves the bucket empty makes "entryType
  * unsupported, observer never attached" and "observer worked fine and
  * genuinely saw zero" produce the exact same `{count: 0}` — the one case
  * this harness must never allow, since it's indistinguishable from "zero
@@ -31,7 +31,7 @@ function attachObservers(): void {
       }
     })
     // buffered: true replays any longtask entries Chromium already recorded
-    // before this observer was attached (WP7 harness audit P2-10) — free
+    // before this observer was attached — free
     // extra coverage for the addInitScript path, and it does no harm on the
     // evaluate() path either.
     longtaskObserver.observe({ entryTypes: ['longtask'], buffered: true })

@@ -162,15 +162,46 @@ export default defineConfig({
       }
     },
     {
+      // Everything except the soaks. Bounded on purpose: a suite nobody can
+      // afford to run is a suite nobody runs, and this one has to be runnable
+      // from a release script.
       name: 'perf',
       testDir: './perf/specs',
       testMatch: '**/*.spec.ts',
+      testIgnore: '**/s9-*.spec.ts',
       // Perf scenarios launch the app themselves, stream real API replies
       // (S2+), and some intentionally wait out a load timeout up to 90s
       // (S5 csv extreme) before a 60s idle-CPU sample — give real headroom
       // instead of the 30s default so a slow-but-succeeding measurement
       // never gets killed by test-runner teardown before it can write out.
       timeout: 240000,
+      use: {
+        actionTimeout: 30000
+      }
+    },
+    {
+      // What a release blocks on: the scenarios `RELEASE_GATE_SCENARIOS` in
+      // scripts/perf-gate/thresholds.mjs has a ceiling for, plus the crash
+      // observation. Deliberately narrower than `perf` — a release gate has to
+      // be short enough that nobody is tempted to skip it, and the scenarios
+      // left out (cold start, terminal, browser view, streaming) have no
+      // threshold that can be gated at any number.
+      name: 'perf-release',
+      testDir: './perf/specs',
+      testMatch: /s(4|5|10)-.*\.spec\.ts$/,
+      timeout: 240000,
+      use: {
+        actionTimeout: 30000
+      }
+    },
+    {
+      // Opt-in. The soaks measure growth per open/close cycle, so their cost is
+      // duration and their result is a rate — see S9_DURATION_MS in the specs
+      // for what a shorter run does and does not still tell you.
+      name: 'perf-soak',
+      testDir: './perf/specs',
+      testMatch: '**/s9-*.spec.ts',
+      timeout: 4200000,
       use: {
         actionTimeout: 30000
       }

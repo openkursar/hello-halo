@@ -24,7 +24,7 @@ import { ProcessMetricsSampler } from '../lib/process-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
 import { installReloadGuard } from '../lib/reload-guard'
 import { writeResult, currentLabel, currentThrottle } from '../lib/result-writer'
-import { getBuildIdentityString } from '../lib/build-identity'
+import { getBuildIdentity } from '../lib/build-identity'
 import type { PerfResult } from '../types'
 
 const SEEDED_MESSAGE_COUNT = 120
@@ -121,8 +121,7 @@ test('S3 long-list scroll', async () => {
       }
     }
 
-    // Per Lead's "自证前提" requirement: a resolved wheel-event loop isn't
-    // proof the list actually scrolled. Virtuoso exposes no scroll-position
+    // A resolved wheel-event loop isn't proof the list actually scrolled. Virtuoso exposes no scroll-position
     // API here, so read the native scrollTop the same way MessageList's own
     // scrollToEnd() does.
     if (!preconditionFailure) {
@@ -161,7 +160,7 @@ test('S3 long-list scroll', async () => {
     const result: PerfResult = {
       scenario: 's3-long-list-scroll',
       label: currentLabel(),
-      gitSha: getBuildIdentityString(),
+      build: getBuildIdentity(),
       throttle,
       durationMs,
       cpu,

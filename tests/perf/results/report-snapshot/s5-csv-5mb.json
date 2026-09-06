@@ -78,7 +78,7 @@
     "eventLatency"
   ],
   "status": "error",
-  "note": "Failed for a reason other than a load timeout: page.waitForSelector: Target crashed \nCall log:\n\u001b[2m  - waiting for locator('text=/Loading\\\\.\\\\.\\\\./i') to be hidden\u001b[22m\n\u001b[2m    - waiting for\" file:///Volumes/one_tb/code2/hello-halo/out/renderer/index.html\" navigation to finish...\u001b[22m\n\u001b[2m    - navigated to \"file:///Volumes/one_tb/code2/hello-halo/out/renderer/index.html\"\u001b[22m\n",
+  "note": "Failed for a reason other than a load timeout: page.waitForSelector: Target crashed \nCall log:\n\u001b[2m  - waiting for locator('text=/Loading\\\\.\\\\.\\\\./i') to be hidden\u001b[22m\n\u001b[2m    - waiting for\" file://<repo>/out/renderer/index.html\" navigation to finish...\u001b[22m\n\u001b[2m    - navigated to \"file://<repo>/out/renderer/index.html\"\u001b[22m\n",
   "warnings": [
     "longtask/eventLatency: window.__perf read failed (page.evaluate: Target crashed ) — reported as null, not a fabricated 0.",
     "longtask: PerformanceObserver never attached (entryType unsupported) — null, not \"0 observed\".",

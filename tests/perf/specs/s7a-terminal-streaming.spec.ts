@@ -1,8 +1,8 @@
 /**
- * S7-a — terminal (TerminalViewer, xterm.js, scrollback: 10000). Per Lead
- * this is a high-frequency streaming scenario (closer in kind to S2's chat
- * stream than to S5's one-shot file renders): run a command that prints a
- * large volume of output fast, and check two specific things:
+ * S7-a — terminal (TerminalViewer, xterm.js, scrollback: 10000). A
+ * high-frequency streaming scenario, closer in kind to S2's chat stream than
+ * to S5's one-shot file renders: run a command that prints a large volume of
+ * output fast, and check two specific things:
  *   1. Does the 10000-line scrollback cap actually bound memory growth?
  *   2. Does high-frequency output block the main thread (longtask)?
  */
@@ -21,7 +21,7 @@ import { ProcessMetricsSampler } from '../lib/process-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
 import { installReloadGuard } from '../lib/reload-guard'
 import { writeResult, currentLabel, currentThrottle } from '../lib/result-writer'
-import { getBuildIdentityString } from '../lib/build-identity'
+import { getBuildIdentity } from '../lib/build-identity'
 import type { PerfResult } from '../types'
 
 test('S7a terminal high-volume output', async () => {
@@ -116,7 +116,7 @@ test('S7a terminal high-volume output', async () => {
       warnings.push('eventLatency: PerformanceObserver never attached — null, not "0 observed".')
     }
 
-    // Per Lead: `valid` = contamination-free (no status field here — this
+    // `valid` = contamination-free (no status field here — this
     // scenario either completes or throws, no hang/error state of its own).
     const valid = noReloadOrCrash
     const unresponsiveCount = await readUnresponsiveCount(app)
@@ -124,7 +124,7 @@ test('S7a terminal high-volume output', async () => {
     const result: PerfResult = {
       scenario: 's7a-terminal-streaming',
       label: currentLabel(),
-      gitSha: getBuildIdentityString(),
+      build: getBuildIdentity(),
       throttle,
       durationMs,
       cpu,

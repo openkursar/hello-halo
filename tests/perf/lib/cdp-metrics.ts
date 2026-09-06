@@ -42,7 +42,7 @@ export class CdpMetricsCollector {
   }
 
   /**
-   * Per WP7 harness audit P1-6: these are stable Chromium metric names that
+   * These are stable Chromium metric names that
    * should always be present once `Performance.enable` has run — if one is
    * ever missing, that's a signal the session isn't in the state we think it
    * is (not ready yet, or torn down), not a legitimate "0". `?? 0` would

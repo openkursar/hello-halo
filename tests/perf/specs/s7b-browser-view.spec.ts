@@ -4,7 +4,7 @@
  * process — `includePerProcess`-style per-pid breakdown is required (not
  * just the type-level aggregate) so the cost can actually be attributed to
  * that process rather than blended into the main window's renderer numbers
- * (per Lead, this is exactly what the PDF run already proved is possible).
+ * (the PDF run already proved this is possible).
  *
  * Content: the same html-extreme-2mb.html fixture S5 used for HtmlViewer
  * (iframe srcDoc), loaded here instead through the BrowserView's own address
@@ -27,12 +27,12 @@ import { CdpMetricsCollector, type CdpSnapshot } from '../lib/cdp-metrics'
 import { ProcessMetricsSampler } from '../lib/process-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
 import { installReloadGuard } from '../lib/reload-guard'
+import { fixturePath } from '../lib/fixture-store'
 import { writeResult, currentLabel, currentThrottle } from '../lib/result-writer'
-import { getBuildIdentityString } from '../lib/build-identity'
+import { getBuildIdentity } from '../lib/build-identity'
 import type { PerfResult } from '../types'
 
 const __filename = fileURLToPath(import.meta.url)
-const FIXTURES_ROOT = path.resolve(path.dirname(__filename), '../../../halo-local/temp/perf-fixtures')
 
 test('S7b browser view (heavy html)', async () => {
   const appEntryPath = getAppEntryPath()
@@ -71,7 +71,7 @@ test('S7b browser view (heavy html)', async () => {
     sampler.start()
     const t0 = Date.now()
 
-    const fileUrl = `file://${path.join(FIXTURES_ROOT, 'html-extreme-2mb.html')}`
+    const fileUrl = `file://${fixturePath('html-extreme-2mb.html')}`
     await addressBar.fill(fileUrl)
     await addressBar.press('Enter')
 
@@ -123,14 +123,14 @@ test('S7b browser view (heavy html)', async () => {
       warnings.push('eventLatency: PerformanceObserver never attached — null, not "0 observed".')
     }
 
-    // Per Lead: `valid` = contamination-free (no status field here).
+    // `valid` = contamination-free (no status field here).
     const valid = noReloadOrCrash
     const unresponsiveCount = await readUnresponsiveCount(app)
 
     const result: PerfResult = {
       scenario: 's7b-browser-view',
       label: currentLabel(),
-      gitSha: getBuildIdentityString(),
+      build: getBuildIdentity(),
       throttle,
       durationMs,
       cpu,
@@ -159,7 +159,7 @@ test('S7b browser view (heavy html)', async () => {
       valid,
       unmeasuredMetrics: unmeasuredMetrics.length ? unmeasuredMetrics : undefined,
       warnings: warnings.length ? warnings : undefined,
-      // Per Lead: BrowserView is a separate process — must be broken out by
+      // BrowserView is a separate process — must be broken out by
       // pid, not just blended into the renderer-type aggregate (same
       // requirement as S5 pdf).
       perProcess: sampler.summarizeByPid()

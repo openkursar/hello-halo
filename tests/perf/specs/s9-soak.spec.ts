@@ -1,6 +1,6 @@
 /**
- * S9 — 45-minute soak: not "how much does one open cost" (that's S5/S7),
- * but "does repeatedly opening and closing things leak". Cycles through
+ * S9 — soak: not "how much does one open cost" (that's S5/S7), but "does
+ * repeatedly opening and closing things leak". Cycles through
  * typical-size fixtures (never the extreme/crash-prone ones — a crash would
  * drown the leak signal in crash noise) opening then closing via "Close all
  * tabs", plus terminal and browser open/close, recording CDP nodes/listeners
@@ -11,8 +11,16 @@
  * cycles (a monotonic-growth leak signal) is for a human to read off the
  * result JSON, not a threshold this script invents.
  *
- * Duration is configurable via S9_DURATION_MS (default 45 minutes) so a
- * short run can validate the mechanism before committing to the real thing.
+ * Duration is `S9_DURATION_MS`, default 10 minutes. What this scenario reports
+ * is growth *per open/close cycle*, so a shorter run measures the same quantity
+ * with a wider error bar rather than a different one — the recorded baselines
+ * agree to within 8% (0.97 / 1.00 / 0.92 listeners per cycle) across three
+ * 45-minute runs, and ~170 cycles is enough to separate that rate from zero.
+ * What a short run cannot see is anything that only appears after sustained
+ * use: fragmentation, cache eviction, a growth curve that bends. Set
+ * S9_DURATION_MS=2700000 to reproduce the 45-minute baselines.
+ *
+ * This scenario is not in the `perf` project — run it with `--project=perf-soak`.
  */
 
 import { test } from '@playwright/test'
@@ -29,12 +37,12 @@ import {
 import { navigateToChat } from '../../e2e/fixtures/helpers'
 import { CdpMetricsCollector } from '../lib/cdp-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
-import { seedArtifact, clickArtifactByName, waitForCanvasLoaded } from '../lib/open-artifact'
+import { seedArtifact, beginOpenObservation, clickArtifactByName, waitForCanvasLoaded } from '../lib/open-artifact'
+import { fixturePath } from '../lib/fixture-store'
 import { currentLabel } from '../lib/result-writer'
-import { getBuildIdentityString } from '../lib/build-identity'
+import { getBuildIdentity } from '../lib/build-identity'
 
 const __filename = fileURLToPath(import.meta.url)
-const FIXTURES_ROOT = path.resolve(path.dirname(__filename), '../../../halo-local/temp/perf-fixtures')
 const RESULTS_ROOT = path.resolve(path.dirname(__filename), '../results')
 
 const TYPICAL_FIXTURES = [
@@ -48,7 +56,7 @@ const TYPICAL_FIXTURES = [
   'pdf-typical.pdf'
 ]
 
-const DURATION_MS = Number(process.env.S9_DURATION_MS || 45 * 60 * 1000)
+const DURATION_MS = Number(process.env.S9_DURATION_MS || 10 * 60 * 1000)
 
 /**
  * `S9_FORCE_GC=1` collects garbage before every sample, which separates a real
@@ -77,7 +85,7 @@ test('S9 soak', async () => {
   const label = currentLabel()
   const appEntryPath = getAppEntryPath()
   const testConfigDir = createTestConfigDir(appEntryPath)
-  for (const f of TYPICAL_FIXTURES) seedArtifact(testConfigDir, path.join(FIXTURES_ROOT, f))
+  for (const f of TYPICAL_FIXTURES) seedArtifact(testConfigDir, fixturePath(f))
 
   const app = await launchElectronApp(appEntryPath, testConfigDir)
 
@@ -137,6 +145,7 @@ test('S9 soak', async () => {
         if (await expandButton.isVisible().catch(() => false)) {
           await expandButton.click()
         }
+        await beginOpenObservation(window)
         await clickArtifactByName(window, fixtureName)
         await waitForCanvasLoaded(window, 20000).catch(() => {})
         await closeAllTabs()
@@ -145,10 +154,10 @@ test('S9 soak', async () => {
         console.warn(`[perf] S9 cycle ${cycle} file-open failed: ${err instanceof Error ? err.message : String(err)}`)
       }
 
-      // Every 5th cycle, also exercise terminal open/close — per Lead's
-      // action list, not just file preview.
+      // Every 5th cycle, also exercise terminal open/close, not just file
+      // preview.
       //
-      // Known simplification (not the literal action list): "Open browser"
+      // Known simplification: "Open browser"
       // is deliberately excluded from this loop. handleOpenBrowser
       // (ArtifactRail.tsx) auto-collapses the artifacts rail, and that
       // collapse persisted through closing the tab and through every
@@ -174,7 +183,7 @@ test('S9 soak', async () => {
         }
       }
 
-      // Known gap, not attempted: "switch spaces" from Lead's action list.
+      // Known gap, not attempted: switching spaces.
       // `navigateToChat` (the only proven way into a space in this suite)
       // requires starting from the Home page's halo-space card, and there is
       // no proven, reliable "return to Home from inside a space" control in
@@ -225,7 +234,7 @@ test('S9 soak', async () => {
     const result = {
       scenario: 's9-soak',
       label,
-      gitSha: getBuildIdentityString(),
+      build: getBuildIdentity(),
       loadAverageAtStart: os.loadavg(),
       durationMs: Date.now() - t0,
       configuredDurationMs: DURATION_MS,

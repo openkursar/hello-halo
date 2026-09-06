@@ -3,7 +3,7 @@ import type { ElectronApplication } from '@playwright/test'
 export interface IdleCpuResult {
   avgPercent: number
   maxPercent: number
-  /** Average of the first 15 samples — per Lead, the "rendering tail" signal (e.g. markdown's post-open CPU burn) lives here, and gets diluted into invisibility by a 60s-window avgPercent. */
+  /** Average of the first 15 samples — the "rendering tail" signal (e.g. markdown's post-open CPU burn) lives here, and gets diluted into invisibility by a 60s-window avgPercent. */
   first15AvgPercent: number
   samples: number[]
   failedTicks: number
@@ -12,13 +12,13 @@ export interface IdleCpuResult {
 
 /**
  * Samples total CPU (sum of `percentCPUUsage` across every process) once a
- * second for `durationMs`, while the caller does nothing else. Required by
- * Lead for S4/S5/S6, same cadence VS Code is measured with (WP2), so the two
- * sides are comparable: "a normal editor should fall back near 0 once a file
+ * second for `durationMs`, while the caller does nothing else. Same cadence
+ * VS Code was measured with, so the two sides are comparable: "a normal
+ * editor should fall back near 0 once a file
  * is done rendering — if it doesn't, that's the smoking gun for 打开预览后
  * CPU 起不来 that stays up once you start chatting."
  *
- * Per WP7 harness audit P0-3: if the app is genuinely hung for the whole
+ * If the app is genuinely hung for the whole
  * window — exactly the case this sampler exists to catch — every tick fails
  * and an empty `samples` array used to report `avgPercent: 0`, i.e. "idled
  * perfectly", which is the opposite of what happened. `failedTicks` /
