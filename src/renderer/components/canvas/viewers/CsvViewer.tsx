@@ -100,8 +100,15 @@ export function CsvViewer({ tab, onScrollChange }: CsvViewerProps) {
     const headers = parsed[0] || []
     const dataRows = parsed.slice(1)
 
-    // Normalize column count (some rows may have different lengths)
-    const maxCols = Math.max(...parsed.map(row => row.length))
+    // Normalize column count (some rows may have different lengths).
+    // Spreading the row lengths into Math.max passes one argument per row and
+    // blows the stack somewhere past 100k rows — a 5MB file of short rows
+    // reaches that easily, and the throw happens inside this useMemo, where the
+    // only boundary is the renderer root.
+    let maxCols = 0
+    for (const row of parsed) {
+      if (row.length > maxCols) maxCols = row.length
+    }
 
     return {
       rows: parsed,

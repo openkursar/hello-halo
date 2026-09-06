@@ -1,11 +1,11 @@
 /**
  * Unit tests for splitMarkdownIntoChunks's correctness guards.
  *
- * These pin down the fixes for kimi3's chunk-boundary counterexamples
- * (perf-round2-wpe) and the follow-up false-positive regression found by
- * running the fixed splitter against this repo's own real markdown corpus
- * (perf-round2-wpe-followup): an unclosed HTML block/comment/raw-text
- * element, or a footnote *definition*, must never be split across chunks,
+ * These pin down two rounds of fixes: a set of chunk-boundary counterexamples,
+ * and the false-positive regression found afterwards by running the fixed
+ * splitter against this repo's own real markdown corpus. An unclosed HTML
+ * block/comment/raw-text element, or a footnote *definition*, must never be
+ * split across chunks,
  * and a new chunk may never start on an indented line — but none of that may
  * come at the cost of collapsing an ordinary long document (or one that
  * merely *resembles* HTML inside a code span, a regex, or a pasted stack
@@ -129,8 +129,8 @@ describe('splitMarkdownIntoChunks — unclosed HTML guards', () => {
   // The self-closing check must apply to the specific tag HTML_OPEN_RE matched,
   // not to however the line happens to end — otherwise a block-level open tag
   // followed later on the same line by an unrelated self-closed tag reads as
-  // "this line is self-closing" and the guard never engages (perf-round2-wpe
-  // final gate: all three of these leaked real hidden content open).
+  // "this line is self-closing" and the guard never engages. All three shapes
+  // below leaked real hidden content open before this was fixed.
   it('keeps a <div> open across a same-line trailing self-closed tag (GitHub README header form)', () => {
     const doc = [
       '<div align="center">',
@@ -216,8 +216,7 @@ describe('splitMarkdownIntoChunks — nested same-name HTML tags', () => {
   // (nested) open on the same or a later line was never pushed. So the
   // inner tag's own close popped the *outer* tag's stack entry early,
   // leaving the outer tag's real close to fall through unmatched and the
-  // outer container to be split open (perf-round2 final gate, round 6 on
-  // this file). Checking close and open independently, unconditionally,
+  // outer container to be split open. Checking close and open independently, unconditionally,
   // fixes it — both real content forms below are things people actually
   // write (centered image/badge groups, multi-level collapsible FAQs).
   it('keeps a nested <div> (centered image/card group) intact when the inner </div> closes first', () => {
@@ -285,9 +284,9 @@ describe('splitMarkdownIntoChunks — sticky states are never forced closed earl
   // No fence/comment/raw-text/HTML-tag state is ever timed out, no matter how
   // large — an earlier version force-closed a stuck state after a character
   // budget, which recovered chunking on documents with an isolated unclosed
-  // fence but could also slice open a real, oversized <details> or comment
-  // (perf-round2-wpe-followup-2). Removed: losing virtualization on a
-  // misdetected document is an acceptable cost, exposing hidden content isn't.
+  // fence but could also slice open a real, oversized <details> or comment.
+  // Removed: losing virtualization on a misdetected document is an acceptable
+  // cost, exposing hidden content isn't.
   it('keeps a very large <details> container intact regardless of size', () => {
     const doc = [
       '<details>',
@@ -417,7 +416,7 @@ describe('splitMarkdownIntoChunks — splitting still works (no over-wide guard)
 })
 
 describe('splitMarkdownIntoChunks — false-positive resistance (real corpus shapes)', () => {
-  // These four all come from real documents in this repo (perf-round2-wpe-followup):
+  // These four all come from real documents in this repo:
   // a line-based, non-tokenizing HTML guard can mistake any of them for a
   // block-level open tag or a footnote, and get stuck for the rest of the file.
   function longDoc(middle: string): string {
@@ -450,6 +449,40 @@ describe('splitMarkdownIntoChunks — false-positive resistance (real corpus sha
     const chunks = splitMarkdownIntoChunks(doc, SMALL)
     expect(chunks.length).toBeGreaterThanOrEqual(minProportionalChunks(doc.length, SMALL.maxChars))
   })
+
+  // The four above all place the tag mid-line, where HTML_OPEN_RE's `^` anchor
+  // already excludes it — they exercise a shape that cannot fail. The ones
+  // below start the line with the tag, which is the shape that did fail: any
+  // word in angle brackets at column zero used to push onto the HTML stack and
+  // never come off, turning virtualization off for the rest of the document.
+  //
+  // `minProportionalChunks` is too blunt to see this. Everything before the
+  // tag still splits normally, so a document that glues its entire second half
+  // into one chunk still clears that bar. Asserting that the text after the
+  // tag went on splitting is what actually distinguishes the two outcomes.
+  it.each([
+    ['<webview> starting a sentence about the tag', '<webview> is how the browser panel embeds a page.'],
+    ['<anonymous> at the start of a stack frame line', '<anonymous> (node:electron/js2c/browser_init:2:78381)'],
+    ['<Star> written as a bare JSX element', '<Star className="h-4 w-4" >'],
+    ['<tool_call> opening a pasted agent transcript', '<tool_call>\nname: Read\npath: /tmp/x']
+  ])('a line starting with %s does not stick to end of file', (_label, middle) => {
+    const chunks = splitMarkdownIntoChunks(longDoc(middle), SMALL)
+    const heading = chunkContaining(chunks, '## Later')
+    expect(heading).toBeGreaterThanOrEqual(0)
+    expect(lastChunkContaining(chunks, 'after-19')).toBeGreaterThan(heading)
+  })
+
+  // The other half of the same boundary: restricting the stack to CommonMark's
+  // block-level names must not stop guarding the containers that do wrap
+  // content in the DOM.
+  it.each(['div', 'details', 'table', 'section', 'blockquote'])(
+    'nothing is split away from an unclosed <%s>',
+    (tag) => {
+      const doc = longDoc(`<${tag}>\n\nBody that must not be split away from its container.`)
+      const chunks = splitMarkdownIntoChunks(doc, SMALL)
+      expect(chunkContaining(chunks, `<${tag}>`)).toBe(chunks.length - 1)
+    }
+  )
 })
 
 describe('splitMarkdownIntoChunks — fenced code block (regression protection)', () => {

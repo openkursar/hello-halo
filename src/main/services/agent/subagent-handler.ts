@@ -15,6 +15,7 @@
  */
 
 import type { Thought, TaskProgress, SessionState } from './types'
+import { isDeveloperMode } from '../../foundation/logging'
 import { emitAgentEvent } from './events'
 
 // ============================================
@@ -255,8 +256,9 @@ export function handleSubAgentMessage(
 // Task Lifecycle Events
 // ============================================
 
-// [TEAM-DEBUG] Track timing of task lifecycle events relative to their arrival
-const taskStartedAt = new Map<string, number>()  // taskId → timestamp
+/** taskId -> start timestamp. The SDK's own `duration_ms` covers only the time
+ *  it attributes to the task; wall time is what shows a task sitting idle. */
+const taskStartedAt = new Map<string, number>()
 
 /**
  * Handle task_started event — associate taskId with the parent Task thought
@@ -270,9 +272,10 @@ export function handleTaskStarted(
   const taskId = msg.task_id as string
   const toolUseId = msg.tool_use_id as string | undefined
 
-  // [TEAM-DEBUG] Record start time for duration tracking
   taskStartedAt.set(taskId, Date.now())
-  console.log(`[TEAM-DEBUG][${conversationId}] task_started: taskId=${taskId} toolUseId=${toolUseId ?? 'none'} @ ${new Date().toISOString()}`)
+  if (isDeveloperMode()) {
+    console.log(`[SubAgent][${conversationId}] task_started: taskId=${taskId} toolUseId=${toolUseId ?? 'none'} @ ${new Date().toISOString()}`)
+  }
 
   if (!toolUseId) return
 
@@ -298,9 +301,10 @@ export function handleTaskStarted(
 
     console.log(`[SubAgent][${conversationId}] task_started: ${taskId} → thought ${taskThought.id}`)
   } else {
-    // [TEAM-DEBUG] No matching thought — toolIdToThoughtId mapping may be incomplete
-    console.log(
-      `[TEAM-DEBUG][${conversationId}] task_started: no thought found for toolUseId=${toolUseId}` +
+    // No matching thought — the toolIdToThoughtId mapping is incomplete, so
+    // this task will render no progress at all.
+    console.warn(
+      `[SubAgent][${conversationId}] task_started: no thought found for toolUseId=${toolUseId}` +
       ` | toolIdToThoughtId size=${ctx.toolIdToThoughtId.size}`
     )
   }
@@ -317,15 +321,17 @@ export function handleTaskProgress(
   const taskId = msg.task_id as string
   const usage = msg.usage as { total_tokens: number; tool_uses: number; duration_ms: number } | undefined
 
-  // [TEAM-DEBUG] Log progress events so we can see their frequency relative to result
-  const startedAt = taskStartedAt.get(taskId)
-  const wallMs = startedAt ? Date.now() - startedAt : null
-  console.log(
-    `[TEAM-DEBUG][${conversationId}] task_progress: taskId=${taskId}` +
-    ` lastTool=${String(msg.last_tool_name ?? '?')}` +
-    ` tools=${usage?.tool_uses ?? 0} tokens=${usage?.total_tokens ?? 0}` +
-    (wallMs !== null ? ` +${wallMs}ms` : '')
-  )
+  // Fires once per sub-agent tool use — the hottest of the three lifecycle events.
+  if (isDeveloperMode()) {
+    const startedAt = taskStartedAt.get(taskId)
+    const wallMs = startedAt ? Date.now() - startedAt : null
+    console.log(
+      `[SubAgent][${conversationId}] task_progress: taskId=${taskId}` +
+      ` lastTool=${String(msg.last_tool_name ?? '?')}` +
+      ` tools=${usage?.tool_uses ?? 0} tokens=${usage?.total_tokens ?? 0}` +
+      (wallMs !== null ? ` +${wallMs}ms` : '')
+    )
+  }
 
   // Find the Task thought with matching taskProgress.taskId
   const taskThought = sessionState.thoughts.find(
@@ -360,15 +366,15 @@ export function handleTaskNotification(
   const status = (msg.status as string) ?? 'completed'
   const usage = msg.usage as { total_tokens: number; tool_uses: number; duration_ms: number } | undefined
 
-  // [TEAM-DEBUG] Log timing relative to task_started
-  const startedAt = taskStartedAt.get(taskId)
-  const wallMs = startedAt ? Date.now() - startedAt : null
-  console.log(
-    `[TEAM-DEBUG][${conversationId}] task_notification: taskId=${taskId} status=${status}` +
-    ` @ ${new Date().toISOString()}` +
-    (wallMs !== null ? ` | wall-time since task_started: ${wallMs}ms` : ' | (no task_started recorded)')
-  )
-  // Clean up tracking entry
+  if (isDeveloperMode()) {
+    const startedAt = taskStartedAt.get(taskId)
+    const wallMs = startedAt ? Date.now() - startedAt : null
+    console.log(
+      `[SubAgent][${conversationId}] task_notification: taskId=${taskId} status=${status}` +
+      ` @ ${new Date().toISOString()}` +
+      (wallMs !== null ? ` | wall-time since task_started: ${wallMs}ms` : ' | (no task_started recorded)')
+    )
+  }
   taskStartedAt.delete(taskId)
 
   const taskThought = sessionState.thoughts.find(
@@ -389,9 +395,10 @@ export function handleTaskNotification(
 
     console.log(`[SubAgent][${conversationId}] task_notification: ${taskId} status=${status}`)
   } else {
-    // [TEAM-DEBUG] Thought not found — task may have completed before task_started was processed
-    console.log(
-      `[TEAM-DEBUG][${conversationId}] task_notification: no thought found for taskId=${taskId}` +
+    // Thought not found — the task finished before its task_started was
+    // processed, so its final status never reaches the UI.
+    console.warn(
+      `[SubAgent][${conversationId}] task_notification: no thought found for taskId=${taskId}` +
       ` | thoughts with taskProgress: ${sessionState.thoughts.filter(t => t.taskProgress).length}`
     )
   }

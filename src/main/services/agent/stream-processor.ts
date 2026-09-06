@@ -430,10 +430,9 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   let drainStartTime: number | null = null
   const DRAIN_TIMEOUT_MS = 5_000  // Safety: force break if result never arrives
 
-  // [TEAM-DEBUG] Diagnostic tracking for post-result stream behavior
-  let resultReceivedAt: number | null = null  // Timestamp when first result arrived
-  let postResultEventCount = 0               // Events received AFTER result
-  let loopIterationCount = 0                 // Total loop iterations
+  let resultReceivedAt: number | null = null
+  let postResultEventCount = 0
+  let loopIterationCount = 0
 
   // Text block merge strategy:
   // AI sometimes splits its final reply across consecutive text blocks. We merge them.
@@ -540,17 +539,20 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       continue
     }
 
-    // [TEAM-DEBUG] Log every message that arrives AFTER result to understand SDK stream lifecycle
+    // The SDK keeps emitting after `result`; how long it does so and what it
+    // sends is the only visibility into that tail.
     if (resultReceivedAt !== null) {
-      const msSinceResult = Date.now() - resultReceivedAt
-      const subtype = (sdkMessage as any).subtype ?? ''
-      const parentId = (sdkMessage as any).parent_tool_use_id ?? null
       postResultEventCount++
-      console.log(
-        `[TEAM-DEBUG][${conversationId}] POST-RESULT event #${postResultEventCount}` +
-        ` +${msSinceResult}ms | type=${sdkMessage.type}${subtype ? ` subtype=${subtype}` : ''}` +
-        `${parentId ? ` parent=${String(parentId).slice(0, 8)}` : ''}`
-      )
+      if (isDeveloperMode()) {
+        const msSinceResult = Date.now() - resultReceivedAt
+        const subtype = (sdkMessage as any).subtype ?? ''
+        const parentId = (sdkMessage as any).parent_tool_use_id ?? null
+        console.log(
+          `[Agent][${conversationId}] post-result event #${postResultEventCount}` +
+          ` +${msSinceResult}ms | type=${sdkMessage.type}${subtype ? ` subtype=${subtype}` : ''}` +
+          `${parentId ? ` parent=${String(parentId).slice(0, 8)}` : ''}`
+        )
+      }
     }
 
     // Notify caller of raw SDK message (for JSONL persistence in automation)
@@ -1104,24 +1106,20 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       receivedResult = true  // Mark that we received a result message
       resultReceivedAt = Date.now()
 
-      // [TEAM-DEBUG] Snapshot active team agents at result time
-      const teamThoughts = sessionState.thoughts.filter(
-        t => t.type === 'tool_use' && t.toolName === 'Agent' && (t.toolInput as any)?.team_name
-      )
-      if (teamThoughts.length > 0) {
-        const summary = teamThoughts.map(t =>
-          `${(t.toolInput as any)?.name ?? '?'}(${t.taskProgress?.status ?? 'no-task-started'})`
-        ).join(', ')
-        console.log(
-          `[TEAM-DEBUG][${conversationId}] result received at iteration #${loopIterationCount}` +
-          ` | team agents: [${summary}]` +
-          ` | subtype=${(sdkMessage as any).subtype ?? 'success'}`
+      // Which teammates were still mid-task when the turn ended — the shape a
+      // stalled team turn leaves behind.
+      if (isDeveloperMode()) {
+        const teamThoughts = sessionState.thoughts.filter(
+          t => t.type === 'tool_use' && t.toolName === 'Agent' && (t.toolInput as any)?.team_name
         )
-      } else {
+        const summary = teamThoughts.length > 0
+          ? `team agents: [${teamThoughts.map(t =>
+              `${(t.toolInput as any)?.name ?? '?'}(${t.taskProgress?.status ?? 'no-task-started'})`
+            ).join(', ')}]`
+          : 'no team agents in session'
         console.log(
-          `[TEAM-DEBUG][${conversationId}] result received at iteration #${loopIterationCount}` +
-          ` | no team agents in session` +
-          ` | subtype=${(sdkMessage as any).subtype ?? 'success'}`
+          `[Agent][${conversationId}] result received at iteration #${loopIterationCount}` +
+          ` | ${summary} | subtype=${(sdkMessage as any).subtype ?? 'success'}`
         )
       }
 

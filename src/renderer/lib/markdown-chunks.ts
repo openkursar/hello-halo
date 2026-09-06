@@ -46,11 +46,12 @@ const INDENTED_START_RE = /^\s/
  *
  * We don't have a tokenizer, only line regexes, so we can't reproduce that
  * classification — this is NOT the same trade-off streamdown makes, it is a
- * strictly leakier approximation. Anchoring the match to the start of the
- * line (CommonMark HTML blocks require this too) and excluding a tag that
- * closes itself on the same line cuts the false-positive rate a lot, but
- * real documents still trip it (a pasted JS stack trace's `<anonymous>`, a
- * `<script src="…" defer />` reference in prose).
+ * strictly leakier approximation. Three restrictions carry most of the
+ * accuracy: the match is anchored to the start of the line (CommonMark HTML
+ * blocks require this too), a tag that closes itself on the same line is
+ * excluded, and the name must be one CommonMark treats as block-level
+ * (`HTML_BLOCK_TAGS`). What still leaks through is a block-level tag name
+ * appearing at column zero in prose or in a pasted fragment.
  *
  * None of the four sticky states below (this stack, the fence, the comment,
  * the raw-text close) is ever timed out. A false positive here can only cost
@@ -83,6 +84,33 @@ const INDENTED_START_RE = /^\s/
  */
 const HTML_OPEN_RE = /^ {0,3}<(\w+)([\s/>]|$)/
 const HTML_CLOSE_RE = /<\/(\w+)>/
+/**
+ * CommonMark HTML block type 6. Only a tag on this list starts a block that
+ * can wrap the lines after it; anything else is type 7 at most, which ends at
+ * the next blank line and therefore parses the same whether or not a chunk
+ * boundary lands there.
+ *
+ * Without this restriction any line beginning with an angle bracket and a word
+ * — `<tool_call>` opening a pasted agent transcript, `<webview>` starting a
+ * prose sentence — pushed onto the stack and never came off, silently turning
+ * virtualization off for the rest of the document. The unit tests missed it
+ * because all of them put the tag mid-line, where the `^` anchor above already
+ * excludes it; the shape that fails is the one at column zero.
+ *
+ * Using the standard's list rather than a hand-picked one matters here: this
+ * file's history is a series of hand-picked rules that each became the next
+ * round's bug.
+ */
+const HTML_BLOCK_TAGS = new Set([
+  'address', 'article', 'aside', 'base', 'basefont', 'blockquote', 'body',
+  'caption', 'center', 'col', 'colgroup', 'dd', 'details', 'dialog', 'dir',
+  'div', 'dl', 'dt', 'fieldset', 'figcaption', 'figure', 'footer', 'form',
+  'frame', 'frameset', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header',
+  'hr', 'html', 'iframe', 'legend', 'li', 'link', 'main', 'menu', 'menuitem',
+  'nav', 'noframes', 'ol', 'optgroup', 'option', 'p', 'param', 'search',
+  'section', 'summary', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead',
+  'title', 'tr', 'track', 'ul'
+])
 const HTML_VOID_TAGS = new Set([
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
   'link', 'meta', 'param', 'source', 'track', 'wbr'
@@ -175,6 +203,7 @@ export function splitMarkdownIntoChunks(
       if (
         open &&
         openTagLower &&
+        HTML_BLOCK_TAGS.has(openTagLower) &&
         !isSelfClosingAt(line, open.index) &&
         !HTML_VOID_TAGS.has(openTagLower) &&
         !line.includes(`</${open[1]}>`)
@@ -199,6 +228,7 @@ export function splitMarkdownIntoChunks(
       } else if (
         open &&
         openTagLower &&
+        HTML_BLOCK_TAGS.has(openTagLower) &&
         !selfClosing &&
         !HTML_VOID_TAGS.has(openTagLower) &&
         !line.includes(`</${open[1]}>`)
