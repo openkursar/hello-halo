@@ -16,7 +16,7 @@ import { CdpMetricsCollector, type CdpSnapshot } from '../lib/cdp-metrics'
 import { ProcessMetricsSampler } from '../lib/process-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
 import { installReloadGuard } from '../lib/reload-guard'
-import { writeResult, currentLabel, currentThrottle } from '../lib/result-writer'
+import { writeResult, beginScenario, currentLabel, currentThrottle } from '../lib/result-writer'
 import { writeSkipResult } from '../lib/skip-record'
 import { getBuildIdentity } from '../lib/build-identity'
 import type { PerfResult } from '../types'
@@ -27,6 +27,7 @@ const LONG_REPLY_PROMPT =
   'with fenced code blocks. Do not use any tools, just write the answer directly in the chat.'
 
 test('S2 long stream', async ({ electronApp, window }, testInfo) => {
+  beginScenario('s2-long-stream')
   if (!hasApiKey()) {
     writeSkipResult(
       's2-long-stream',

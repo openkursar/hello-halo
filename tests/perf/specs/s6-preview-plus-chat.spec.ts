@@ -26,7 +26,7 @@ import { installReloadGuard } from '../lib/reload-guard'
 import { sampleIdleCpu } from '../lib/idle-cpu'
 import { seedArtifact, beginOpenObservation, clickArtifactByName, waitForCanvasLoaded } from '../lib/open-artifact'
 import { fixturePath } from '../lib/fixture-store'
-import { writeResult, currentLabel, currentThrottle } from '../lib/result-writer'
+import { writeResult, beginScenario, currentLabel, currentThrottle } from '../lib/result-writer'
 import { writeSkipResult } from '../lib/skip-record'
 import { getBuildIdentity } from '../lib/build-identity'
 import type { PerfResult } from '../types'
@@ -44,6 +44,7 @@ const FIXTURE_FILE = process.env.S6_FIXTURE || 'md-extreme-2mb.md'
 const SCENARIO_NAME = FIXTURE_FILE === 'md-extreme-2mb.md' ? 's6-preview-plus-chat' : 's6-control-typical-md'
 
 test(`S6 preview + chat overlay (${FIXTURE_FILE})`, async () => {
+  beginScenario(SCENARIO_NAME)
   // Two heavy phases back to back (60s idle CPU window + up to 90s stream)
   // on top of an already-expensive markdown open — give real headroom
   // instead of the project default.

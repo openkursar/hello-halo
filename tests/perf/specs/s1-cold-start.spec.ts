@@ -21,11 +21,12 @@ import { CdpMetricsCollector, type CdpSnapshot } from '../lib/cdp-metrics'
 import { ProcessMetricsSampler } from '../lib/process-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
 import { installReloadGuard } from '../lib/reload-guard'
-import { writeResult, currentLabel, currentThrottle } from '../lib/result-writer'
+import { writeResult, beginScenario, currentLabel, currentThrottle } from '../lib/result-writer'
 import { getBuildIdentity } from '../lib/build-identity'
 import type { PerfResult } from '../types'
 
 test('S1 cold start', async () => {
+  beginScenario('s1-cold-start')
   const appEntryPath = getAppEntryPath()
   const testConfigDir = createTestConfigDir(appEntryPath)
   const warnings: string[] = []

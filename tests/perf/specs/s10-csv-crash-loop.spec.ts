@@ -39,7 +39,7 @@ import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } fro
 import { seedArtifact, clickArtifactByName } from '../lib/open-artifact'
 import { isRendererFatal } from '../lib/renderer-fatal'
 import { fixturePath } from '../lib/fixture-store'
-import { currentLabel } from '../lib/result-writer'
+import { beginScenario, currentLabel } from '../lib/result-writer'
 import { getBuildIdentity } from '../lib/build-identity'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -58,6 +58,7 @@ interface TimelineEntry {
 }
 
 test('S10 csv crash-loop observation', async () => {
+  beginScenario('s10-csv-crash-loop')
   test.setTimeout(180000)
 
   const label = currentLabel()

@@ -6,6 +6,28 @@ interface RawSample {
   type: string
   cpuPercent: number
   memKB: number
+  /** Which poll produced this sample, so the processes alive at one instant can be summed. */
+  tick: number
+}
+
+export interface ProcessWindowStat {
+  cpuAvg: number
+  cpuMax: number
+  rssAvgMB: number
+  rssMaxMB: number
+  sampleCount: number
+}
+
+function summarizeWindow(list: RawSample[]): ProcessWindowStat {
+  const cpuValues = list.map((s) => s.cpuPercent)
+  const rssValuesMB = list.map((s) => s.memKB / 1024)
+  return {
+    cpuAvg: average(cpuValues),
+    cpuMax: Math.max(...cpuValues),
+    rssAvgMB: average(rssValuesMB),
+    rssMaxMB: Math.max(...rssValuesMB),
+    sampleCount: list.length
+  }
 }
 
 /** Maps Electron's `ProcessMetric.type` to our normalized bucket. */
@@ -38,6 +60,7 @@ function normalizeType(type: string): ProcessType | null {
  */
 export class ProcessMetricsSampler {
   private samples: RawSample[] = []
+  private drainCursor = 0
   private plannedTicks = 0
   private succeededTicks = 0
   private timer: NodeJS.Timeout | null = null
@@ -47,7 +70,7 @@ export class ProcessMetricsSampler {
   start(): void {
     if (this.timer) return
     const tick = async () => {
-      this.plannedTicks++
+      const tickIndex = this.plannedTicks++
       try {
         const metrics = await this.app.evaluate(({ app }) =>
           app.getAppMetrics().map((m) => ({
@@ -57,7 +80,7 @@ export class ProcessMetricsSampler {
             memKB: m.memory.workingSetSize
           }))
         )
-        this.samples.push(...metrics)
+        this.samples.push(...metrics.map((m) => ({ ...m, tick: tickIndex })))
         this.succeededTicks++
       } catch {
         // App unreachable this tick — counted in plannedTicks/succeededTicks
@@ -116,6 +139,50 @@ export class ProcessMetricsSampler {
     }
 
     return { cpu: { byProcessType: cpu }, mem: { byProcessType: mem } }
+  }
+
+  /**
+   * Summarizes the samples taken since the previous call, then advances past
+   * them. `summarize()` answers what a scenario cost; a soak asks whether that
+   * cost is drifting, and a run-long average hides a curve by construction.
+   *
+   * Both views come from one call because they share a cursor. The per-pid view
+   * is not a refinement of the per-type one: `normalizeType` folds `Tab` and
+   * `Renderer` together, so a scenario that opens a PDF — its own renderer
+   * process — gets the main window's memory averaged against a second, much
+   * smaller process on exactly those cycles. Asking about one window means
+   * asking by pid.
+   */
+  drain(): { byType: Partial<Record<ProcessType, ProcessWindowStat>>; byPid: Map<number, ProcessWindowStat>; totalRssAvgMB: number | null } {
+    const taken = this.samples.slice(this.drainCursor)
+    this.drainCursor = this.samples.length
+
+    const byTypeSamples = new Map<ProcessType, RawSample[]>()
+    const byPidSamples = new Map<number, RawSample[]>()
+    const rssByTick = new Map<number, number>()
+    for (const sample of taken) {
+      const type = normalizeType(sample.type)
+      if (type) {
+        const list = byTypeSamples.get(type) ?? []
+        list.push(sample)
+        byTypeSamples.set(type, list)
+      }
+      const pidList = byPidSamples.get(sample.pid) ?? []
+      pidList.push(sample)
+      byPidSamples.set(sample.pid, pidList)
+      rssByTick.set(sample.tick, (rssByTick.get(sample.tick) ?? 0) + sample.memKB / 1024)
+    }
+
+    const byType: Partial<Record<ProcessType, ProcessWindowStat>> = {}
+    for (const [type, list] of byTypeSamples) byType[type] = summarizeWindow(list)
+    const byPid = new Map<number, ProcessWindowStat>()
+    for (const [pid, list] of byPidSamples) byPid.set(pid, summarizeWindow(list))
+
+    // Summed per tick before averaging: a tick where one process failed to
+    // report would otherwise pull the whole-app total down as if memory had
+    // been released.
+    const tickTotals = [...rssByTick.values()]
+    return { byType, byPid, totalRssAvgMB: tickTotals.length ? average(tickTotals) : null }
   }
 
   /**

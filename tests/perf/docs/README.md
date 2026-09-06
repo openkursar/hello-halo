@@ -65,13 +65,18 @@ compare rates only with `S9_DURATION_MS=2700000`.** Nothing that takes 45 minute
 belongs in a path anyone is expected to run before shipping.
 
 Streaming scenarios (S2/S6/S8) need a deterministic local mock — fixed token
-count, fixed interval — at `tests/perf/mock/sse-server.mjs`, pointed at by
-`HALO_TEST_PROVIDER` / `HALO_TEST_API_URL` / `HALO_TEST_API_KEY` /
-`HALO_TEST_MODEL`. Pointing them at a real provider produces numbers that are not
-before/after comparable, because the response rate is not under your control.
-Leaving them unset is fine: each writes a registered skip record instead of
-quietly passing. Note that `.env.local` is loaded automatically, so these may
-already be set to a real source without you having chosen that.
+count, fixed interval — at `tests/perf/mock/sse-server.mjs`. Every `test:perf*`
+script goes through `scripts/run-perf.mjs`, which starts that mock on a free port
+and points `HALO_TEST_*` at it before Playwright loads. This is not a
+convenience: `tests/playwright.config.ts` loads `.env.local` for every project,
+so without it these scenarios silently measure whatever provider that file
+happens to name, at a response rate nobody controls. That is how S2, S6 and S8
+produced no usable evidence for two rounds.
+
+`PERF_REAL_API=1` keeps `.env.local` instead — correct when the question is about
+a real provider, wrong for any before/after comparison. Either way every result
+records its `aiSource`, and `verify-run` fails a label directory whose files
+disagree, since that means it holds more than one run.
 
 ## What is kept in git, and what is not
 

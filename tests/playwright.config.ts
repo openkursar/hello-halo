@@ -65,7 +65,10 @@ export default defineConfig({
   // Reporter to use
   reporter: [
     ['list'],
-    ['html', { open: 'never', outputFolder: 'e2e/report' }]
+    ['html', { open: 'never', outputFolder: 'e2e/report' }],
+    // Records perf scenarios that died before writing a result. It acts only on
+    // markers the current run created, so the e2e projects are unaffected.
+    ['./perf/reporter/in-flight.ts']
   ],
 
   // Global setup/teardown

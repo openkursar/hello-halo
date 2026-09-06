@@ -28,13 +28,14 @@ import { ProcessMetricsSampler } from '../lib/process-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
 import { installReloadGuard } from '../lib/reload-guard'
 import { fixturePath } from '../lib/fixture-store'
-import { writeResult, currentLabel, currentThrottle } from '../lib/result-writer'
+import { writeResult, beginScenario, currentLabel, currentThrottle } from '../lib/result-writer'
 import { getBuildIdentity } from '../lib/build-identity'
 import type { PerfResult } from '../types'
 
 const __filename = fileURLToPath(import.meta.url)
 
 test('S7b browser view (heavy html)', async () => {
+  beginScenario('s7b-browser-view')
   const appEntryPath = getAppEntryPath()
   const testConfigDir = createTestConfigDir(appEntryPath)
   const warnings: string[] = []

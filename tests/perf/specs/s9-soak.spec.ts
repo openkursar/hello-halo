@@ -36,10 +36,12 @@ import {
 } from '../../e2e/fixtures/electron'
 import { navigateToChat } from '../../e2e/fixtures/helpers'
 import { CdpMetricsCollector } from '../lib/cdp-metrics'
+import { ProcessMetricsSampler } from '../lib/process-metrics'
+import { installRenderObserversNow, resetRenderObservers, readRenderMetrics } from '../lib/render-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
 import { seedArtifact, beginOpenObservation, clickArtifactByName, waitForCanvasLoaded } from '../lib/open-artifact'
 import { fixturePath } from '../lib/fixture-store'
-import { currentLabel } from '../lib/result-writer'
+import { beginScenario, currentLabel } from '../lib/result-writer'
 import { getBuildIdentity } from '../lib/build-identity'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -73,6 +75,25 @@ interface CycleSample {
   heapMB: number
   nodes: number
   listeners: number
+  /**
+   * Working set: the window under test by pid, the main process, and the whole
+   * app summed. `heapMB` is V8's JS heap only — DOM nodes live in native memory
+   * outside it, so nodes can climb while heapMB stays flat.
+   */
+  mainWindowRssMB: number | null
+  browserRssMB: number | null
+  totalRssMB: number | null
+  /** CPU over this cycle's window only. A run-long average cannot show a drift. */
+  mainWindowCpuAvg: number | null
+  browserCpuAvg: number | null
+  /** Longtasks attributed to this cycle alone — the observer buffers are reset after every read. */
+  longtaskCount: number | null
+  longtaskMaxMs: number | null
+  /** Interactions past the observer's 100ms threshold, this cycle alone. */
+  slowEventCount: number | null
+  slowEventMaxMs: number | null
+  /** How long this cycle's open took. `null` on a cycle that did not open a file, or whose open never settled. */
+  openMs: number | null
   unresponsiveCount: number
   crashCount: number
   /** Load can drift meaningfully over 45 minutes — recorded per-sample, not just once at the top. */
@@ -80,6 +101,7 @@ interface CycleSample {
 }
 
 test('S9 soak', async () => {
+  beginScenario('s9-soak')
   test.setTimeout(DURATION_MS + 120000)
 
   const label = currentLabel()
@@ -88,15 +110,30 @@ test('S9 soak', async () => {
   for (const f of TYPICAL_FIXTURES) seedArtifact(testConfigDir, fixturePath(f))
 
   const app = await launchElectronApp(appEntryPath, testConfigDir)
+  const sampler = new ProcessMetricsSampler(app)
 
   try {
     const window = await app.firstWindow()
     await window.waitForLoadState('domcontentloaded')
     await navigateToChat(window)
     await installUnresponsiveTracker(app)
+    await installRenderObserversNow(window)
 
     const cdp = new CdpMetricsCollector(window)
     await cdp.connect()
+
+    // Memory has to be attributed to this window by pid: the PDF fixture opens
+    // in its own renderer process, and a per-type average would blend the two
+    // on exactly those cycles.
+    const mainWindowPid: number | null = await app
+      .evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.getOSProcessId() ?? null)
+      .catch(() => null)
+
+    // The 500ms poll and the two PerformanceObservers are work the recorded
+    // baselines did not carry, so CPU here sits slightly above an
+    // uninstrumented run. Nodes and listeners are unaffected — neither
+    // registers a DOM listener.
+    sampler.start()
 
     const closeAllTabs = async () => {
       const btn = window.getByTitle(/Close all tabs|关闭所有标签页/).first()
@@ -109,12 +146,17 @@ test('S9 soak', async () => {
     const t0 = Date.now()
     let cycle = 0
 
-    const recordSample = async (action: string) => {
+    const recordSample = async (action: string, openMs: number | null = null) => {
       try {
         if (FORCE_GC) await cdp.collectGarbage()
         const snap = await cdp.snapshot()
         const unresponsiveCount = await readUnresponsiveCount(app)
         const crashCount = await readCrashCount(app).catch(() => 0)
+        const drained = sampler.drain()
+        const mainWindow = mainWindowPid === null ? undefined : drained.byPid.get(mainWindowPid)
+        // Read and clear together: what the next cycle observes must be its own.
+        const render = await readRenderMetrics(window).catch(() => null)
+        await resetRenderObservers(window).catch(() => {})
         samples.push({
           cycle,
           tMs: Date.now() - t0,
@@ -122,6 +164,16 @@ test('S9 soak', async () => {
           heapMB: snap.heapMB,
           nodes: snap.nodes,
           listeners: snap.listeners,
+          mainWindowRssMB: mainWindow?.rssAvgMB ?? null,
+          browserRssMB: drained.byType.browser?.rssAvgMB ?? null,
+          totalRssMB: drained.totalRssAvgMB,
+          mainWindowCpuAvg: mainWindow?.cpuAvg ?? null,
+          browserCpuAvg: drained.byType.browser?.cpuAvg ?? null,
+          longtaskCount: render?.longtask?.count ?? null,
+          longtaskMaxMs: render?.longtask?.maxMs ?? null,
+          slowEventCount: render?.eventLatency?.count ?? null,
+          slowEventMaxMs: render?.eventLatency?.maxMs ?? null,
+          openMs,
           unresponsiveCount,
           crashCount,
           loadAverage: os.loadavg() as [number, number, number]
@@ -147,9 +199,12 @@ test('S9 soak', async () => {
         }
         await beginOpenObservation(window)
         await clickArtifactByName(window, fixtureName)
-        await waitForCanvasLoaded(window, 20000).catch(() => {})
+        // The same eight files are reopened all run, so each open is comparable
+        // to the identical open earlier on. `null` rather than a number when the
+        // open never settled, which would otherwise read as a fast one.
+        const openMs = await waitForCanvasLoaded(window, 20000).catch(() => null)
         await closeAllTabs()
-        await recordSample(`file:${fixtureName}`)
+        await recordSample(`file:${fixtureName}`, openMs)
       } catch (err) {
         console.warn(`[perf] S9 cycle ${cycle} file-open failed: ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -194,41 +249,50 @@ test('S9 soak', async () => {
       // of silently-broken code.
     }
 
-    const nodesSeries = samples.map((s) => s.nodes)
-    const listenersSeries = samples.map((s) => s.listeners)
-    const heapSeries = samples.map((s) => s.heapMB)
     const quarter = Math.max(1, Math.floor(samples.length / 4))
-    const avg = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0)
+
+    /**
+     * First-quarter against last-quarter is what makes this file readable: the
+     * question is never the absolute level but whether it drifts. Samples with
+     * nothing measured are dropped rather than counted as zero — a cycle whose
+     * observers failed and a cycle that genuinely saw no longtask must not
+     * average into the same number, and `measured` says how many were real.
+     */
+    const series = (values: Array<number | null>) => {
+      const present = values.filter((v): v is number => v !== null)
+      const avg = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null)
+      const firstQuarter = values.slice(0, quarter).filter((v): v is number => v !== null)
+      const lastQuarter = values.slice(-quarter).filter((v): v is number => v !== null)
+      return {
+        start: present[0] ?? null,
+        end: present[present.length - 1] ?? null,
+        min: present.length ? Math.min(...present) : null,
+        max: present.length ? Math.max(...present) : null,
+        firstQuarterAvg: avg(firstQuarter),
+        lastQuarterAvg: avg(lastQuarter),
+        measured: present.length
+      }
+    }
 
     const summary = {
       totalCycles: cycle,
       totalSamples: samples.length,
-      nodes: {
-        start: nodesSeries[0] ?? null,
-        end: nodesSeries[nodesSeries.length - 1] ?? null,
-        min: nodesSeries.length ? Math.min(...nodesSeries) : null,
-        max: nodesSeries.length ? Math.max(...nodesSeries) : null,
-        firstQuarterAvg: avg(nodesSeries.slice(0, quarter)),
-        lastQuarterAvg: avg(nodesSeries.slice(-quarter))
-      },
-      listeners: {
-        start: listenersSeries[0] ?? null,
-        end: listenersSeries[listenersSeries.length - 1] ?? null,
-        min: listenersSeries.length ? Math.min(...listenersSeries) : null,
-        max: listenersSeries.length ? Math.max(...listenersSeries) : null,
-        firstQuarterAvg: avg(listenersSeries.slice(0, quarter)),
-        lastQuarterAvg: avg(listenersSeries.slice(-quarter))
-      },
-      heapMB: {
-        start: heapSeries[0] ?? null,
-        end: heapSeries[heapSeries.length - 1] ?? null,
-        min: heapSeries.length ? Math.min(...heapSeries) : null,
-        max: heapSeries.length ? Math.max(...heapSeries) : null,
-        firstQuarterAvg: avg(heapSeries.slice(0, quarter)),
-        lastQuarterAvg: avg(heapSeries.slice(-quarter))
-      },
+      nodes: series(samples.map((s) => s.nodes)),
+      listeners: series(samples.map((s) => s.listeners)),
+      heapMB: series(samples.map((s) => s.heapMB)),
+      mainWindowRssMB: series(samples.map((s) => s.mainWindowRssMB)),
+      browserRssMB: series(samples.map((s) => s.browserRssMB)),
+      totalRssMB: series(samples.map((s) => s.totalRssMB)),
+      mainWindowCpuAvg: series(samples.map((s) => s.mainWindowCpuAvg)),
+      browserCpuAvg: series(samples.map((s) => s.browserCpuAvg)),
+      longtaskCount: series(samples.map((s) => s.longtaskCount)),
+      longtaskMaxMs: series(samples.map((s) => s.longtaskMaxMs)),
+      slowEventCount: series(samples.map((s) => s.slowEventCount)),
+      slowEventMaxMs: series(samples.map((s) => s.slowEventMaxMs)),
+      openMs: series(samples.map((s) => s.openMs)),
       maxUnresponsiveCount: Math.max(0, ...samples.map((s) => s.unresponsiveCount)),
-      maxCrashCount: Math.max(0, ...samples.map((s) => s.crashCount))
+      maxCrashCount: Math.max(0, ...samples.map((s) => s.crashCount)),
+      sampling: sampler.getSamplingStats()
     }
 
     const result = {
@@ -247,9 +311,19 @@ test('S9 soak', async () => {
     fs.mkdirSync(path.dirname(resultPath), { recursive: true })
     fs.writeFileSync(resultPath, JSON.stringify(result, null, 2))
     console.log(`[perf] S9 result written to ${resultPath} (${cycle} cycles, ${samples.length} samples)`)
-    console.log(`[perf] S9 nodes: start=${summary.nodes.start} end=${summary.nodes.end} firstQ=${summary.nodes.firstQuarterAvg.toFixed(0)} lastQ=${summary.nodes.lastQuarterAvg.toFixed(0)}`)
-    console.log(`[perf] S9 listeners: start=${summary.listeners.start} end=${summary.listeners.end} firstQ=${summary.listeners.firstQuarterAvg.toFixed(0)} lastQ=${summary.listeners.lastQuarterAvg.toFixed(0)}`)
+    const drift = (name: string, s: { firstQuarterAvg: number | null; lastQuarterAvg: number | null; measured: number }, digits = 0) =>
+      console.log(`[perf] S9 ${name}: firstQ=${s.firstQuarterAvg?.toFixed(digits) ?? 'n/a'} lastQ=${s.lastQuarterAvg?.toFixed(digits) ?? 'n/a'} (${s.measured} measured)`)
+    drift('nodes', summary.nodes)
+    drift('listeners', summary.listeners)
+    drift('heapMB', summary.heapMB, 1)
+    drift('window RSS MB', summary.mainWindowRssMB, 1)
+    drift('app total RSS MB', summary.totalRssMB, 1)
+    drift('window CPU %', summary.mainWindowCpuAvg, 1)
+    drift('longtasks/cycle', summary.longtaskCount, 1)
+    drift('slow events/cycle', summary.slowEventCount, 1)
+    drift('open ms', summary.openMs)
   } finally {
+    sampler.stop()
     await app.close().catch(() => {})
     cleanupTestConfigDir(testConfigDir)
   }

@@ -45,7 +45,7 @@ import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } fro
 import { seedArtifact, beginOpenObservation, clickArtifactByName, waitForCanvasLoaded } from '../lib/open-artifact'
 import { fixturePath } from '../lib/fixture-store'
 import type { CDPSession } from '@playwright/test'
-import { currentLabel } from '../lib/result-writer'
+import { beginScenario, currentLabel } from '../lib/result-writer'
 import { getBuildIdentity } from '../lib/build-identity'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -196,6 +196,7 @@ function diffDistributions(before: ListenerDistribution = {}, after: ListenerDis
 }
 
 test('S9 soak probe', async () => {
+  beginScenario('s9-soak-probe')
   test.setTimeout(DURATION_MS + 120000)
 
   const label = currentLabel()

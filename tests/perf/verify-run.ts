@@ -168,6 +168,21 @@ if (dirty.length > 0) {
   else failures.push(message)
 }
 
+// Results from one run agree on their AI source, so disagreement proves the
+// directory holds more than one. It does not prove the converse — two runs
+// against the same source merge undetected — but a mock/external mix is the
+// case that silently makes half the numbers incomparable. Results written
+// before this field existed read as `unrecorded`, a single value, so a frozen
+// baseline still verifies clean.
+const sources = [...new Set(results.map((r) => r.aiSource ?? 'unrecorded'))].sort()
+console.log(`[7] AI source: ${sources.join(', ')}`)
+if (sources.length > 1) {
+  failures.push(`results/${label}/ mixes AI sources (${sources.join(', ')}) — these files are not one run, so nothing in here can be compared`)
+}
+if (sources.includes('external')) {
+  console.log('      note: an external source streams a different token count and timing every run — those scenarios are not a baseline')
+}
+
 console.log()
 if (failures.length === 0) {
   console.log(`PASS — results/${label}/ is a complete, trustworthy run`)

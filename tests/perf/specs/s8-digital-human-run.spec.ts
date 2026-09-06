@@ -22,7 +22,7 @@ import { CdpMetricsCollector, type CdpSnapshot } from '../lib/cdp-metrics'
 import { ProcessMetricsSampler } from '../lib/process-metrics'
 import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } from '../lib/unresponsive'
 import { installReloadGuard } from '../lib/reload-guard'
-import { writeResult, currentLabel, currentThrottle } from '../lib/result-writer'
+import { writeResult, beginScenario, currentLabel, currentThrottle } from '../lib/result-writer'
 import { writeSkipResult } from '../lib/skip-record'
 import { getBuildIdentity } from '../lib/build-identity'
 import type { PerfResult } from '../types'
@@ -33,6 +33,7 @@ const RUN_NOW_SELECTOR = [
 ].join(', ')
 
 test('S8 digital human run', async ({ electronApp, window, seededApp }, testInfo) => {
+  beginScenario('s8-digital-human-run')
   if (!process.env.HALO_TEST_API_KEY) {
     writeSkipResult(
       's8-digital-human-run',

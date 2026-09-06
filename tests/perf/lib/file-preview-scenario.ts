@@ -12,7 +12,7 @@ import { installUnresponsiveTracker, readUnresponsiveCount, readCrashCount } fro
 import { installReloadGuard } from './reload-guard'
 import { sampleIdleCpu } from './idle-cpu'
 import { seedArtifact, beginOpenObservation, clickArtifactByName, waitForCanvasLoaded, waitForPdfLoaded } from './open-artifact'
-import { writeResult, currentLabel, currentThrottle } from './result-writer'
+import { writeResult, beginScenario, currentLabel, currentThrottle } from './result-writer'
 import { getBuildIdentity } from './build-identity'
 import { fixturePath } from './fixture-store'
 import type { PerfResult } from '../types'
@@ -47,6 +47,7 @@ export interface FilePreviewScenarioOptions {
  * harness must never do.
  */
 export async function runFilePreviewScenario(opts: FilePreviewScenarioOptions): Promise<PerfResult> {
+  beginScenario(opts.scenario)
   const openTimeoutMs = opts.openTimeoutMs ?? 60000
   const idleCpuMs = opts.idleCpuMs ?? 60000
 

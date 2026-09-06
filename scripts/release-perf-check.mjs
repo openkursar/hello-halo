@@ -32,7 +32,7 @@ const label = process.env.PERF_LABEL || `release-${new Date().toISOString().slic
 const steps = [
   { name: 'generate/verify fixtures', argv: ['npx', 'tsx', 'tests/perf/fixtures/ensure.ts'] },
   { name: 'record build identity', argv: ['node', 'tests/perf/record-build.mjs'] },
-  { name: 'measure gated scenarios', argv: ['npx', 'playwright', 'test', '--config', 'tests/playwright.config.ts', '--project=perf-release'] },
+  { name: 'measure gated scenarios', argv: ['node', 'scripts/run-perf.mjs', '--project=perf-release'] },
   { name: 'verify the run happened', argv: ['npx', 'tsx', 'tests/perf/verify-run.ts', '--set=release', label] },
   { name: 'apply thresholds', argv: ['node', 'scripts/perf-gate/index.mjs', '--results', `tests/perf/results/${label}`, '--require-fresh-build'] }
 ]

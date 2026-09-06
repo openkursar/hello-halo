@@ -132,6 +132,13 @@ export interface PerfResult {
   skipReason?: string
   note?: string
   /**
+   * Injected centrally by `writeResult`. `'mock'` only when the perf runner
+   * started the local SSE mock itself; `'external'` is anything else with a key
+   * configured, whose token count and timing vary run to run and so cannot be
+   * compared against another run.
+   */
+  aiSource?: 'mock' | 'external' | 'none'
+  /**
    * `os.loadavg()` at write time (1/5/15 min), injected centrally by
    * `writeResult`. A raw number can't be trusted without knowing how busy the
    * machine was — S4 alone swung 8.5s -> 23s max-longtask across two identical
