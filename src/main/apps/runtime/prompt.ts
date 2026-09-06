@@ -20,6 +20,7 @@ import { getImSessionDisplayName } from '../../../shared/types/im-channel'
 import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../services/agent/system-prompt'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../../services/ai-browser'
 import { AI_TERMINAL_SYSTEM_PROMPT } from '../../services/ai-terminal'
+import { HALO_API_USAGE_GUIDE } from '../../services/api-ref'
 import { getKBReferencesForApp } from '../../services/tlon'
 
 // ============================================
@@ -205,6 +206,8 @@ export interface AppPromptOptions {
   usesAIBrowser?: boolean
   /** Whether the App uses AI Terminal (appends the terminal usage guide) */
   usesTerminal?: boolean
+  /** Whether the App may operate Halo itself (appends the Halo-API usage guide) */
+  usesHaloApi?: boolean
   /** Working directory for the agent (passed to base system prompt) */
   workDir: string
   /** Display model name (passed to base system prompt) */
@@ -265,6 +268,12 @@ export function buildAppSystemPrompt(options: AppPromptOptions): string {
   // Append the terminal usage guide when the App has the ai-terminal permission.
   if (options.usesTerminal) {
     basePrompt += '\n\n' + AI_TERMINAL_SYSTEM_PROMPT.trim()
+  }
+  // Same rule for operating Halo itself: the guide is appended only when the
+  // permission actually loaded the tool, so the prompt can never describe a
+  // capability this run does not have.
+  if (options.usesHaloApi) {
+    basePrompt += '\n\n' + HALO_API_USAGE_GUIDE.trim()
   }
   sections.push(basePrompt)
 

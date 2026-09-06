@@ -16,6 +16,7 @@ import {
   AI_TERMINAL_SYSTEM_PROMPT
 } from '../../ai-terminal'
 import { createOcrMcpServer } from '../../ocr'
+import { createApiRefMcpServer, HALO_API_TOOLSET_ID, HALO_API_USAGE_GUIDE } from '../../api-ref'
 import type { ToolsetDefinition, ToolsetScope } from './types'
 
 const definitions: ToolsetDefinition[] = []
@@ -79,4 +80,25 @@ registerToolset({
     'Chinese recognition is serviceable but not exact.',
   isAvailable: () => true,
   createServer: () => createOcrMcpServer()
+})
+
+/**
+ * The id doubles as the MCP server name, so it stays `halo-api-ref` (the tool
+ * is `mcp__halo-api-ref__halo_api_ref`); the display name describes the
+ * capability the user is granting, which is operating Halo itself.
+ *
+ * Being a toolset is what keeps the three halves of this capability from
+ * disagreeing: the manual tool, the `HALO_API_*` credentials
+ * (`selfApiAccess` in sdk-config) and the usage guide are all derived from
+ * this one switch. When it was always-on, the prompt told every session to
+ * call a tool that only some of them had.
+ */
+registerToolset({
+  id: HALO_API_TOOLSET_ID,
+  displayName: 'Operate Halo',
+  summary:
+    "Operate Halo itself over its local HTTP API: spaces, conversations, digital humans, knowledge bases, channels, settings and the app store.",
+  usageGuide: HALO_API_USAGE_GUIDE,
+  isAvailable: () => true,
+  createServer: () => createApiRefMcpServer()
 })

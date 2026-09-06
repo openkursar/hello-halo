@@ -1,0 +1,33 @@
+{
+  "totalRoutes": 181,
+  "expose": {
+    "ai": 121,
+    "wrapped": 11,
+    "internal": 49,
+    "unlabeled": 0
+  },
+  "groups": {
+    "conversation": 9,
+    "workspace": 20,
+    "digital-human": 36,
+    "knowledge-base": 20,
+    "channels": 16,
+    "settings": 6,
+    "store": 25,
+    "terminal": 6
+  },
+  "files": [
+    "config",
+    "ai-sources",
+    "space",
+    "agent",
+    "terminal",
+    "artifact",
+    "notify",
+    "im",
+    "system",
+    "apps",
+    "store",
+    "tlon"
+  ]
+}

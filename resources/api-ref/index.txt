@@ -1,0 +1,132 @@
+GET    /api/config                                                 [ai]       settings                Read the global configuration
+GET    /api/config/credential-failures                             [ai]       settings                List credential fields that failed to decrypt at rest
+POST   /api/ai-sources/switch-source                               [ai]       settings                Switch to a different configured model source
+POST   /api/ai-sources/set-model                                   [ai]       settings                Switch the model within the current source
+GET    /api/model-capabilities/all                                 [ai]       settings                List what every known model supports (vision, tools, context)
+GET    /api/spaces/default-path                                    [ai]       workspace               Read the directory new spaces are created under
+GET    /api/spaces                                                 [ai]       workspace               List all spaces
+POST   /api/spaces                                                 [ai]       workspace               Create a space
+PUT    /api/spaces/reorder                                         [ai]       workspace               Set the display order of spaces
+GET    /api/spaces/$HALO_SPACE_ID                                  [ai]       workspace               Read one space
+PUT    /api/spaces/$HALO_SPACE_ID                                  [ai]       workspace               Rename a space or change its icon
+DELETE /api/spaces/$HALO_SPACE_ID                                  [ai]       workspace               Delete a space and everything inside it
+POST   /api/spaces/$HALO_SPACE_ID/open                             [ai]       workspace               Get a space working directory path
+GET    /api/spaces/$HALO_SPACE_ID/conversations                    [ai]       conversation            List conversations in a space
+POST   /api/spaces/$HALO_SPACE_ID/conversations                    [ai]       conversation            Create an empty conversation
+GET    /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>   [ai]       conversation            Read a conversation with its messages
+PUT    /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>   [ai]       conversation            Update a conversation title or metadata
+DELETE /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>   [ai]       conversation            Delete a conversation
+POST   /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>/star[ai]       conversation            Star or unstar a conversation
+POST   /api/agent/stop                                             [ai]       conversation            Stop whatever Halo is currently doing in a conversation
+GET    /api/agent/sessions                                         [ai]       conversation            List conversations Halo is currently working on
+GET    /api/agent/generating/<conversationId>                      [ai]       conversation            Check whether Halo is still working on a reply in one conversation
+GET    /api/terminal/list                                          [wrapped]  terminal                List open terminal sessions
+POST   /api/terminal/create                                        [wrapped]  terminal                Open a terminal session
+POST   /api/terminal/input                                         [wrapped]  terminal                Send keystrokes to a terminal session
+POST   /api/terminal/resize                                        [wrapped]  terminal                Resize a terminal session
+POST   /api/terminal/kill                                          [wrapped]  terminal                Close a terminal session
+POST   /api/terminal/replay                                        [wrapped]  terminal                Read back a terminal session buffer
+GET    /api/spaces/$HALO_SPACE_ID/artifacts                        [ai]       workspace               List files and folders in a space
+GET    /api/spaces/$HALO_SPACE_ID/artifacts/tree                   [ai]       workspace               Get the full lazy-loadable file tree for a space
+POST   /api/spaces/$HALO_SPACE_ID/artifacts/children               [ai]       workspace               Load one folder's children in the file tree
+POST   /api/artifacts/save                                         [ai]       workspace               Overwrite a file's content
+GET    /api/artifacts/detect-type                                  [ai]       workspace               Detect whether a file is text or binary and how it would be viewed
+POST   /api/spaces/$HALO_SPACE_ID/artifacts/file                   [ai]       workspace               Create a new file in a space
+POST   /api/spaces/$HALO_SPACE_ID/artifacts/folder                 [ai]       workspace               Create a new folder in a space
+POST   /api/spaces/$HALO_SPACE_ID/artifacts/reconcile              [ai]       workspace               Resync the file list with what is actually on disk
+DELETE /api/spaces/$HALO_SPACE_ID/artifacts                        [ai]       workspace               Move a file or folder to the trash
+POST   /api/spaces/$HALO_SPACE_ID/artifacts/rename                 [ai]       workspace               Rename a file or folder
+POST   /api/spaces/$HALO_SPACE_ID/artifacts/move                   [ai]       workspace               Move a file or folder to a different directory
+POST   /api/notify-channels/test                                   [ai]       channels                Send a test notification through one configured channel
+GET    /api/wecom-bot/status                                       [ai]       channels                Check whether a WeCom bot channel is configured and connected
+POST   /api/wecom-bot/reconnect                                    [ai]       channels                Reconnect all configured WeCom bot instances
+GET    /api/im-channels/status                                     [ai]       channels                Get connection status for all IM channel instances, or one via ?instanceId=
+POST   /api/im-channels/reconnect                                  [ai]       channels                Reconnect one IM channel instance
+POST   /api/im-channels/reload                                     [ai]       channels                Reload all IM channel instances from saved config
+GET    /api/im-channels/providers                                  [ai]       channels                List available IM channel provider types and their config fields
+GET    /api/im-channels/permission-defaults                        [ai]       channels                Get this build's default guest-access permission settings for new IM instances
+POST   /api/weixin-ilink/save-token                                [ai]       channels                Set the bot token for an already-configured WeChat iLink instance
+POST   /api/weixin-ilink/disconnect                                [ai]       channels                Clear WeChat iLink credentials for an instance and stop it
+GET    /api/im-sessions                                            [ai]       channels                List known IM contacts/chats bound to digital humans, optional ?appId= filter
+POST   /api/im-sessions/set-proactive                              [ai]       channels                Toggle whether a run's result is auto-pushed to this chat when it finishes
+POST   /api/im-sessions/remove                                     [ai]       channels                Remove a chat binding from the IM session registry
+POST   /api/im-sessions/set-custom-name                            [ai]       channels                Set a custom display name for a chat binding
+GET    /api/system/version                                         [ai]       settings                Read the running Halo version
+GET    /api/apps                                                   [ai]       digital-human           List digital humans (and other installed apps) in a space
+POST   /api/apps/install                                           [wrapped]  digital-human           Install a digital human (or other app type) from its full definition (spec) object
+GET    /api/apps/<appId>                                           [ai]       digital-human           Get one installed digital human (or other app) by id
+GET    /api/apps/<appId>/available-skills                          [ai]       digital-human           List skills this digital human can load (global + space-local)
+DELETE /api/apps/<appId>                                           [ai]       digital-human           Soft-delete (uninstall) a digital human; recoverable via reinstall
+POST   /api/apps/<appId>/reinstall                                 [ai]       digital-human           Reinstall a previously soft-deleted (uninstalled) digital human
+POST   /api/apps/<appId>/move-space                                [ai]       digital-human,workspace Move a digital human to a different space (or make it global)
+POST   /api/apps/<appId>/clear-memory                              [ai]       digital-human           Delete all of a digital human's memory files
+DELETE /api/apps/<appId>/permanent                                 [wrapped]  digital-human           Permanently delete a digital human and all its data
+POST   /api/apps/<appId>/pause                                     [ai]       digital-human           Pause a digital human (stops scheduling)
+POST   /api/apps/<appId>/resume                                    [ai]       digital-human           Resume a paused digital human
+POST   /api/apps/<appId>/trigger                                   [wrapped]  digital-human           Manually trigger a digital human to run immediately
+GET    /api/apps/<appId>/activity                                  [ai]       digital-human           Get the activity/run-history entries for a digital human
+POST   /api/apps/<appId>/escalation/<entryId>/respond              [ai]       digital-human           Answer a digital human's pending question (it stopped to ask a human before continuing)
+POST   /api/apps/<appId>/runs/<runId>/continue                     [ai]       digital-human           Resume a run that stopped prematurely on an error
+POST   /api/apps/<appId>/runs/<runId>/inject                       [ai]       digital-human           Inject a text message into a currently active run
+POST   /api/apps/<appId>/config                                    [ai]       digital-human           Replace a digital human's user configuration values
+PATCH  /api/apps/<appId>/overrides                                 [ai]       digital-human           Merge-patch per-installation overrides (frequency, notification level, model)
+POST   /api/apps/<appId>/frequency                                 [ai]       digital-human           Change how often a digital human runs, without editing its full definition (spec)
+POST   /api/apps/<appId>/permissions/grant                         [ai]       digital-human           Grant a named permission to a digital human
+POST   /api/apps/<appId>/upgrade-strategy                          [ai]       digital-human,store     Set how a store-installed digital human handles version upgrades
+POST   /api/apps/<appId>/permissions/revoke                        [ai]       digital-human           Revoke a named permission from a digital human
+PATCH  /api/apps/<appId>/spec                                      [wrapped]  digital-human           Edit part of a digital human's definition (spec) without replacing all of it
+GET    /api/apps/<appId>/state                                     [ai]       digital-human           Get real-time run state of a digital human (running/queued/idle/etc.)
+POST   /api/apps/import-spec                                       [wrapped]  digital-human           Install a digital human (or other app type) from a YAML definition (spec) string
+POST   /api/apps/<appId>/chat/stop                                 [ai]       digital-human           Stop a digital human's in-progress chat reply
+GET    /api/apps/<appId>/chat/status                               [ai]       digital-human           Check whether a digital human chat is currently generating a reply
+POST   /api/apps/<appId>/chat/clear                                [ai]       digital-human           Clear a digital human's chat history
+POST   /api/apps/<appId>/chat/restart                              [ai]       digital-human           Restart a digital human's chat agent process (reloads system prompt and config)
+POST   /api/apps/<appId>/im-chat/clear                             [ai]       digital-human,channels  Clear a digital human's chat history in a bound IM chat
+POST   /api/apps/<appId>/im-chat/stop                              [ai]       digital-human,channels  Stop a digital human's in-progress reply in a bound IM chat (keeps history)
+POST   /api/apps/<appId>/sessions/create                           [ai]       digital-human           Start a new chat thread with a digital human
+POST   /api/apps/<appId>/sessions/fork                             [ai]       digital-human           Branch an existing chat thread into a new one, copying its history
+POST   /api/apps/<appId>/sessions/delete                           [ai]       digital-human           Delete a chat thread with a digital human
+POST   /api/store/query                                            [ai]       store                   Paginated search over store listings (primary browse endpoint)
+GET    /api/store/apps                                             [ai]       store                   List store listings (legacy, non-paginated; prefer POST /api/store/query)
+GET    /api/store/apps/<slug>                                      [ai]       store                   Get full detail for one store listing by slug
+GET    /api/store/app-document                                     [ai]       store                   Get a listing's SKILL.md/README document
+POST   /api/store/install                                          [ai]       store                   Install an app from the store by slug
+POST   /api/store/apps/<slug>/install                              [ai]       store                   Install an app from the store by slug (REST-style path variant)
+POST   /api/store/refresh                                          [ai]       store                   Force a full re-download of the store registry index
+GET    /api/store/updates                                          [ai]       store                   List available updates for installed apps
+GET    /api/store/registries                                       [ai]       store                   List configured store registry sources
+GET    /api/store/capabilities                                     [ai]       store                   Get which store features this build supports (publish, reviews, install counts)
+GET    /api/store/category-taxonomy                                [ai]       store                   Get the store category enum used for browsing and publishing
+POST   /api/store/revalidate                                       [ai]       store                   Cheap conditional freshness check for the store index
+GET    /api/store/discover-page                                    [ai]       store                   Get the curated store home page (featured/trending sections)
+GET    /api/store/my-publications                                  [ai]       store                   List the signed-in creator's own published apps
+POST   /api/store/unpublish                                        [ai]       store                   Take down one of the creator's own published apps
+POST   /api/store/ignore-version                                   [ai]       store                   Dismiss an available update so it stops appearing as pending
+POST   /api/store/registries                                       [ai]       store                   Add a new registry source
+DELETE /api/store/registries/<registryId>                          [ai]       store                   Remove a configured registry source
+POST   /api/store/registries/<registryId>/toggle                   [ai]       store                   Enable or disable a configured registry source
+PATCH  /api/store/registries/<registryId>/adapter-config           [ai]       store                   Update a registry source's adapter config (e.g. its API key)
+POST   /api/store/updates/check-now                                [ai]       store                   Re-check all installed apps for available updates right now
+POST   /api/store/updates/<appId>/apply                            [ai]       store                   Apply an available update to an installed app
+POST   /api/store/publish/preview                                  [ai]       store                   Preview the slug and version a publish of an app would produce
+POST   /api/store/publish/find-app                                 [ai]       store                   Find the installed app that a store slug would resolve to
+POST   /api/tlon                                                   [ai]       knowledge-base          Create a knowledge collection
+GET    /api/tlon                                                   [ai]       knowledge-base          List all knowledge collections
+GET    /api/tlon/for-space/$HALO_SPACE_ID                          [ai]       knowledge-base          List knowledge collections bound to a space (or the default one)
+POST   /api/tlon/set-default                                       [ai]       knowledge-base          Set (or clear) the collection new conversations auto-load
+GET    /api/tlon/<kbId>                                            [ai]       knowledge-base          Get one knowledge collection by id
+PUT    /api/tlon/<kbId>                                            [ai]       knowledge-base          Rename or edit a collection's description/status
+DELETE /api/tlon/<kbId>                                            [ai]       knowledge-base          Delete a knowledge collection and all its data
+POST   /api/tlon/<kbId>/bind-space                                 [ai]       knowledge-base          Bind a knowledge collection to a space
+POST   /api/tlon/<kbId>/unbind-space                               [ai]       knowledge-base          Unbind a knowledge collection from a space
+POST   /api/tlon/<kbId>/bind-app                                   [ai]       knowledge-base,digital-humanBind a knowledge collection so a digital human can read it
+POST   /api/tlon/<kbId>/unbind-app                                 [ai]       knowledge-base,digital-humanUnbind a knowledge collection from a digital human
+POST   /api/tlon/<kbId>/linked-dirs                                [ai]       knowledge-base          Watch a server-local directory as a live document source
+DELETE /api/tlon/<kbId>/linked-dirs/<linkId>                       [ai]       knowledge-base          Stop watching a linked directory
+POST   /api/tlon/<kbId>/files                                      [ai]       knowledge-base          Add existing server-local files to a collection by absolute path
+GET    /api/tlon/<kbId>/raw                                        [ai]       knowledge-base          List the raw source files added to a collection
+POST   /api/tlon/<kbId>/remove-raw                                 [ai]       knowledge-base          Remove one document (raw source file) from a collection
+GET    /api/tlon/<kbId>/index                                      [ai]       knowledge-base          Read a collection's document map (index.md)
+POST   /api/tlon/<kbId>/ingest                                     [ai]       knowledge-base          Start indexing a collection's documents (fire-and-forget)
+POST   /api/tlon/<kbId>/clear-relearn                              [ai]       knowledge-base          Wipe extracted text and re-index a collection from scratch
+GET    /api/tlon/<kbId>/ingest-status                              [ai]       knowledge-base          Get the current indexing progress for a collection

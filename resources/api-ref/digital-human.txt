@@ -1,0 +1,330 @@
+## digital-human — create, run and configure digital humans
+covers: install and uninstall, pause and resume, manual trigger, schedule and
+        user config, chat with a digital human, run history and activity
+not here:
+  binding a digital human to an IM chat -> channels
+  files a digital human produced -> workspace
+  installing from the app store -> store
+  knowledge a digital human reads -> knowledge-base
+
+operations on this page:
+  GET    /api/apps                                                   List digital humans (and other installed apps) in a space
+  GET    /api/apps/<appId>                                           Get one installed digital human (or other app) by id
+  DELETE /api/apps/<appId>                                           Soft-delete (uninstall) a digital human; recoverable via reinstall
+  GET    /api/apps/<appId>/activity                                  Get the activity/run-history entries for a digital human
+  GET    /api/apps/<appId>/available-skills                          List skills this digital human can load (global + space-local)
+  POST   /api/apps/<appId>/chat/clear                                Clear a digital human's chat history   !! destructive
+  POST   /api/apps/<appId>/chat/restart                              Restart a digital human's chat agent process (reloads system prompt and config)
+  GET    /api/apps/<appId>/chat/status                               Check whether a digital human chat is currently generating a reply
+  POST   /api/apps/<appId>/chat/stop                                 Stop a digital human's in-progress chat reply
+  POST   /api/apps/<appId>/clear-memory                              Delete all of a digital human's memory files   !! destructive
+  POST   /api/apps/<appId>/config                                    Replace a digital human's user configuration values
+  POST   /api/apps/<appId>/escalation/<entryId>/respond              Answer a digital human's pending question (it stopped to ask a human before continuing)   !! destructive
+  POST   /api/apps/<appId>/frequency                                 Change how often a digital human runs, without editing its full definition (spec)
+  POST   /api/apps/<appId>/im-chat/clear                             Clear a digital human's chat history in a bound IM chat   !! destructive
+  POST   /api/apps/<appId>/im-chat/stop                              Stop a digital human's in-progress reply in a bound IM chat (keeps history)
+  POST   /api/apps/<appId>/move-space                                Move a digital human to a different space (or make it global)
+  PATCH  /api/apps/<appId>/overrides                                 Merge-patch per-installation overrides (frequency, notification level, model)
+  POST   /api/apps/<appId>/pause                                     Pause a digital human (stops scheduling)
+  DELETE /api/apps/<appId>/permanent                                 Permanently delete a digital human and all its data
+  POST   /api/apps/<appId>/permissions/grant                         Grant a named permission to a digital human
+  POST   /api/apps/<appId>/permissions/revoke                        Revoke a named permission from a digital human
+  POST   /api/apps/<appId>/reinstall                                 Reinstall a previously soft-deleted (uninstalled) digital human
+  POST   /api/apps/<appId>/resume                                    Resume a paused digital human
+  POST   /api/apps/<appId>/runs/<runId>/continue                     Resume a run that stopped prematurely on an error   !! destructive
+  POST   /api/apps/<appId>/runs/<runId>/inject                       Inject a text message into a currently active run   !! destructive
+  POST   /api/apps/<appId>/sessions/create                           Start a new chat thread with a digital human
+  POST   /api/apps/<appId>/sessions/delete                           Delete a chat thread with a digital human   !! destructive
+  POST   /api/apps/<appId>/sessions/fork                             Branch an existing chat thread into a new one, copying its history
+  PATCH  /api/apps/<appId>/spec                                      Edit part of a digital human's definition (spec) without replacing all of it
+  GET    /api/apps/<appId>/state                                     Get real-time run state of a digital human (running/queued/idle/etc.)
+  POST   /api/apps/<appId>/trigger                                   Manually trigger a digital human to run immediately
+  POST   /api/apps/<appId>/upgrade-strategy                          Set how a store-installed digital human handles version upgrades
+  POST   /api/apps/import-spec                                       Install a digital human (or other app type) from a YAML definition (spec) string
+  POST   /api/apps/install                                           Install a digital human (or other app type) from its full definition (spec) object
+  POST   /api/tlon/<kbId>/bind-app                                   Bind a knowledge collection so a digital human can read it
+  POST   /api/tlon/<kbId>/unbind-app                                 Unbind a knowledge collection from a digital human
+
+GET    /api/apps                                                   List digital humans (and other installed apps) in a space
+     curl -s "$HALO_API_URL/api/apps" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{id,specId,spaceId,spec,status,userConfig,userOverrides,permissions,installedAt,lastRunAt?,lastRunOutcome?,errorMessage?}]}  — userConfig/spec.mcp_server.env/headers values are redacted to "[redacted]", keys are preserved
+     # note: Optional query: ?spaceId=, ?status=. Without ?status, uninstalled apps are excluded by default.
+
+GET    /api/apps/<appId>                                           Get one installed digital human (or other app) by id
+     curl -s "$HALO_API_URL/api/apps/<appId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:InstalledApp|null}  — same shape as GET /api/apps entries, redacted the same way
+
+DELETE /api/apps/<appId>                                           Soft-delete (uninstall) a digital human; recoverable via reinstall
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX DELETE "$HALO_API_URL/api/apps/<appId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true}
+     # note: No body. There is a ?purge=true query param but it is currently a no-op (ignored by the handler) — it does not delete on-disk data. This is reversible (see POST /:appId/reinstall). For permanent, unrecoverable deletion use delete_automation_app instead.
+
+GET    /api/apps/<appId>/activity                                  Get the activity/run-history entries for a digital human
+     curl -s "$HALO_API_URL/api/apps/<appId>/activity" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{id,appId,runId,type:"run_complete"|"run_skipped"|"run_error"|"milestone"|"escalation"|"output",ts,content,userResponse?}]}
+     # note: Query params: limit (max entries), before (only entries with ts older than this epoch ms)
+
+GET    /api/apps/<appId>/available-skills                          List skills this digital human can load (global + space-local)
+     curl -s "$HALO_API_URL/api/apps/<appId>/available-skills" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{name,description,scope:"global"|"space",dirName,path}]}
+     # err: 404-equivalent = {success:false,error:"App not found or has no space"} — the app must have a spaceId
+
+POST   /api/apps/<appId>/chat/clear                                Clear a digital human's chat history
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/chat/clear" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"spaceId":"<spaceId — a uuid from GET /api/spaces>"}'
+     # body: {"spaceId": "<spaceId — a uuid from GET /api/spaces>"}
+     # out: {success:true}
+     # note: spaceId is required even though the app is already scoped to one. Optional conversationId clears one specific session instead of the default one.
+
+POST   /api/apps/<appId>/chat/restart                              Restart a digital human's chat agent process (reloads system prompt and config)
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/chat/restart" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{sessionsClosed:number}}
+     # note: Interrupts any in-flight turn. Conversation history is preserved.
+
+GET    /api/apps/<appId>/chat/status                               Check whether a digital human chat is currently generating a reply
+     curl -s "$HALO_API_URL/api/apps/<appId>/chat/status" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{isGenerating:boolean,conversationId}}
+     # note: Use this to poll a chat that is already running instead of guessing a wait time; back off (2s, then double), never poll tightly
+
+POST   /api/apps/<appId>/chat/stop                                 Stop a digital human's in-progress chat reply
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/chat/stop" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"conversationId":"<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}'
+     # body: {"conversationId": "<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}
+     # out: {success:true}
+     # note: conversationId is optional — omit it (or send {}) to stop every session of this app
+
+POST   /api/apps/<appId>/clear-memory                              Delete all of a digital human's memory files
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/clear-memory" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{filesRemoved:number}}
+
+POST   /api/apps/<appId>/config                                    Replace a digital human's user configuration values
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/config" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"someField":"value"}'
+     # body: {"someField": "value"}
+     # out: {success:true}
+     # note: Body is the full config object, keyed by config_schema field id. This replaces userConfig wholesale; read current values first with GET /:appId to avoid dropping fields.
+
+POST   /api/apps/<appId>/escalation/<entryId>/respond              Answer a digital human's pending question (it stopped to ask a human before continuing)
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/escalation/<entryId>/respond" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"choice":"approve","text":"optional free-text explanation"}'
+     # body: {"choice": "approve", "text": "optional free-text explanation"}
+     # out: {success:true}
+     # note: choice and text are both optional (send whichever the pending question asked for). Find the pending entryId via GET /:appId/activity (type:"escalation") or by app.status==="waiting_user". This is the human decision it was waiting for — answer with the user's actual input, never a guessed one, and there is no way to un-answer it afterward.
+
+POST   /api/apps/<appId>/frequency                                 Change how often a digital human runs, without editing its full definition (spec)
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/frequency" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"subscriptionId":"<subscriptionId — read app.spec.subscriptions via GET /api/apps/<appId>>","frequency":"30m"}'
+     # body: {"subscriptionId": "<subscriptionId — read app.spec.subscriptions via GET /api/apps/<appId>>", "frequency": "30m"}
+     # out: {success:true}
+     # note: frequency can also be a cron expression (e.g. "0 8 * * *"). subscriptionId must already exist — read app.spec.subscriptions via GET /:appId first. This sets a non-destructive override; it does not change the spec.
+
+POST   /api/apps/<appId>/im-chat/clear                             Clear a digital human's chat history in a bound IM chat
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/im-chat/clear" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"spaceId":"<spaceId — a uuid from GET /api/spaces>","channel":"wecom","chatType":"direct","chatId":"<chatId — from GET /api/im-sessions>"}'
+     # body: {"spaceId": "<spaceId — a uuid from GET /api/spaces>", "channel": "wecom", "chatType": "direct", "chatId": "<chatId — from GET /api/im-sessions>"}
+     # out: {success:true}
+     # note: All four body fields are required, 400 otherwise. chatType is "direct" or "group".
+
+POST   /api/apps/<appId>/im-chat/stop                              Stop a digital human's in-progress reply in a bound IM chat (keeps history)
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/im-chat/stop" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"channel":"wecom","chatType":"direct","chatId":"<chatId — from GET /api/im-sessions>"}'
+     # body: {"channel": "wecom", "chatType": "direct", "chatId": "<chatId — from GET /api/im-sessions>"}
+     # out: {success:true,data:{stopped:boolean}}
+     # note: chatType is "direct" or "group". Unlike im-chat/clear, this only aborts the current turn — the session and its history continue on the next inbound message.
+
+POST   /api/apps/<appId>/move-space                                Move a digital human to a different space (or make it global)
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/move-space" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"newSpaceId":"<spaceId — a uuid from GET /api/spaces>"}'
+     # body: {"newSpaceId": "<spaceId — a uuid from GET /api/spaces>"}
+     # out: {success:true,data:{activationWarning?:string}}
+     # note: Send {"newSpaceId": null} to make it global (available in every space). 404 if appId does not exist; 400 if newSpaceId is an empty string.
+
+PATCH  /api/apps/<appId>/overrides                                 Merge-patch per-installation overrides (frequency, notification level, model)
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX PATCH "$HALO_API_URL/api/apps/<appId>/overrides" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"notificationLevel":"important"}'
+     # body: {"notificationLevel": "important"}
+     # out: {success:true}
+     # note: Other fields you can set the same way: frequency (object keyed by subscriptionId), modelSourceId, modelId. JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model).
+
+POST   /api/apps/<appId>/pause                                     Pause a digital human (stops scheduling)
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/pause" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true}
+     # err: 404-equivalent: manager.pause throws for an unknown appId
+
+DELETE /api/apps/<appId>/permanent                                 Permanently delete a digital human and all its data
+     # use delete_automation_app instead — a raw call would skip: the deactivate -> soft-uninstall -> hard-delete sequencing; calling this alone on an app that is not already uninstalled fails. If you only want it gone from view but recoverable, DELETE /api/apps/:appId (soft, no wrapper needed) is the narrower operation.
+     # If that tool is not available to you, this capability is switched off in this build's settings —
+     # say that, and do not say Halo cannot do it.
+
+POST   /api/apps/<appId>/permissions/grant                         Grant a named permission to a digital human
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/permissions/grant" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"permission":"ai-browser"}'
+     # body: {"permission": "ai-browser"}
+     # out: {success:true}
+
+POST   /api/apps/<appId>/permissions/revoke                        Revoke a named permission from a digital human
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/permissions/revoke" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"permission":"ai-browser"}'
+     # body: {"permission": "ai-browser"}
+     # out: {success:true}
+
+POST   /api/apps/<appId>/reinstall                                 Reinstall a previously soft-deleted (uninstalled) digital human
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/reinstall" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{activationWarning?:string}} — activationWarning is set (non-fatal) if restarting it failed
+     # err: 404-equivalent: manager.reinstall throws if appId was never installed or is not currently uninstalled
+
+POST   /api/apps/<appId>/resume                                    Resume a paused digital human
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/resume" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true}
+     # err: 404-equivalent: manager.resume throws for an unknown appId
+
+POST   /api/apps/<appId>/runs/<runId>/continue                     Resume a run that stopped prematurely on an error
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/runs/<runId>/continue" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true}
+     # note: Only valid for a run that ended in a premature-stop error, not any run. This re-opens the run with full tool permissions (bypassPermissions) and can take real-world action that Halo cannot undo.
+
+POST   /api/apps/<appId>/runs/<runId>/inject                       Inject a text message into a currently active run
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/runs/<runId>/inject" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"text":"your message here"}'
+     # body: {"text": "your message here"}
+     # out: {success:true}
+     # err: 400 if text is missing or the run is not currently active. This can resume/redirect a run with full tool permissions (bypassPermissions) and take real-world action that Halo cannot undo.
+
+POST   /api/apps/<appId>/sessions/create                           Start a new chat thread with a digital human
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/sessions/create" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{conversationId}}
+
+POST   /api/apps/<appId>/sessions/delete                           Delete a chat thread with a digital human
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/sessions/delete" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"spaceId":"<spaceId — a uuid from GET /api/spaces>","conversationId":"<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}'
+     # body: {"spaceId": "<spaceId — a uuid from GET /api/spaces>", "conversationId": "<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}
+     # out: {success:true}
+     # err: 400 if spaceId or conversationId is missing
+
+POST   /api/apps/<appId>/sessions/fork                             Branch an existing chat thread into a new one, copying its history
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/sessions/fork" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"spaceId":"<spaceId — a uuid from GET /api/spaces>","sourceConversationId":"<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}'
+     # body: {"spaceId": "<spaceId — a uuid from GET /api/spaces>", "sourceConversationId": "<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}
+     # out: {success:true,data:{conversationId}}
+     # err: 400 if spaceId or sourceConversationId is missing
+
+PATCH  /api/apps/<appId>/spec                                      Edit part of a digital human's definition (spec) without replacing all of it
+     # use update_automation_app instead — a raw call would skip: the guard against changing spec.type, and the "frequency" shorthand that rewrites the schedule subscription for you.
+     # If that tool is not available to you, this capability is switched off in this build's settings —
+     # say that, and do not say Halo cannot do it.
+
+GET    /api/apps/<appId>/state                                     Get real-time run state of a digital human (running/queued/idle/etc.)
+     curl -s "$HALO_API_URL/api/apps/<appId>/state" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{status:"running"|"queued"|"idle"|"paused"|"waiting_user"|"error",nextRunAtMs?,runningRunId?,lastRunAtMs?,lastStatus?,lastError?,consecutiveErrors?,pendingEscalationId?}}
+     # note: More detail than the "status" field on GET /:appId alone (adds nextRunAtMs, queued/idle distinction)
+
+POST   /api/apps/<appId>/trigger                                   Manually trigger a digital human to run immediately
+     # use trigger_automation_app instead — a raw call would skip: the friendly "already running or queued, please wait" message — a raw call surfaces this as a plain error instead.
+     # If that tool is not available to you, this capability is switched off in this build's settings —
+     # say that, and do not say Halo cannot do it.
+
+POST   /api/apps/<appId>/upgrade-strategy                          Set how a store-installed digital human handles version upgrades
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/upgrade-strategy" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"strategy":"auto"}'
+     # body: {"strategy": "auto"}
+     # out: {success:true}
+     # note: strategy is one of "auto" (silent patch/minor, notify on major), "notify" (always notify), or "manual" (no automatic checks)
+
+POST   /api/apps/import-spec                                       Install a digital human (or other app type) from a YAML definition (spec) string
+     # use create_automation_app instead — a raw call would skip: the authoring-guide gate and automatic required-skill install with rollback on failure.
+     # If that tool is not available to you, this capability is switched off in this build's settings —
+     # say that, and do not say Halo cannot do it.
+
+POST   /api/apps/install                                           Install a digital human (or other app type) from its full definition (spec) object
+     # use create_automation_app instead — a raw call would skip: the authoring-guide gate, forcing type to "automation", and automatic required-skill install with rollback on failure.
+     # If that tool is not available to you, this capability is switched off in this build's settings —
+     # say that, and do not say Halo cannot do it.
+
+POST   /api/tlon/<kbId>/bind-app                                   Bind a knowledge collection so a digital human can read it
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/tlon/<kbId>/bind-app" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"appId":"<appId — a uuid from GET /api/apps>"}'
+     # body: {"appId":"<appId — a uuid from GET /api/apps>"}
+     # out: {success:true,data:<updated entry>}
+     # err: 400 if appId is missing.
+
+POST   /api/tlon/<kbId>/unbind-app                                 Unbind a knowledge collection from a digital human
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/tlon/<kbId>/unbind-app" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"appId":"<appId — a uuid from GET /api/apps>"}'
+     # body: {"appId":"<appId — a uuid from GET /api/apps>"}
+     # out: {success:true,data:<updated entry>}
+     # err: 400 if appId is missing.
+
+-----------------------------------------------------------------------
+$HALO_API_URL, $HALO_API_TOKEN and $HALO_SPACE_ID are already set in your Bash
+  environment. Copy commands as-is; never expand or print those variables.
+Replace only <angle-bracket> placeholders. Get real ids from a list call above.
+Read the response body and check "success". HTTP 200 alone does not mean it
+  worked - many failures return 200 with {"success":false}.
+Pipe long responses through `| head -c 4000` so you do not flood your context.
+A POST that timed out may still have taken effect. List before you retry.
+Waiting on something? Back off (2s, then double), give up after 5 tries and
+  tell the user it is still running.
+Large or binary files do not go through this API - use Read / Write / Bash.
+403 = the endpoint exists but is closed to me in this build. Tell the user to
+  do it in the Halo app. Do not tell them Halo cannot do it.
+404 with a "code" field = my path is wrong. 404 without one = the id is wrong.
+Only call paths listed on this page or in the index. Never write one from
+  memory. If this page has left your context, call halo_api_ref again.
+Full index of every endpoint: {{API_REF_INDEX_PATH}}/index.txt
+  grep -i "<keyword>" {{API_REF_INDEX_PATH}}/index.txt
+Not listed here does NOT mean not supported — that is a real, deliverable
+  answer, not a failed search. Grep the index before you say "Halo can't do that".

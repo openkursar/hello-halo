@@ -101,6 +101,10 @@ export interface SdkEnvParams {
    * that don't have a resolved model can omit this safely).
    */
   capabilities?: ResolvedModelCapabilities
+  /** Self-API loopback info. Omitted (env vars absent, not empty-string) when the listener failed to start. */
+  selfApi?: { url: string; token: string }
+  /** Current session's space, exported as HALO_SPACE_ID alongside `selfApi` and only with it. */
+  spaceId?: string
 }
 
 // ============================================
@@ -208,6 +212,16 @@ export interface BaseSdkOptionsParams {
   maxTurns?: number
   /** System prompt profile ('official' | 'halo') */
   promptProfile?: 'official' | 'halo'
+  /**
+   * Whether this session gets Halo's self-API credentials.
+   *
+   * Must be the same condition that loads the `halo-api-ref` toolset — the
+   * open-set for chat, the app permission for a digital human. A session
+   * holding the token without the manual cannot discover the API, so the
+   * credential adds no capability and only widens what an injected
+   * instruction can reach.
+   */
+  selfApiAccess?: boolean
   /** Claude CLI config directory mode */
   configDirMode?: 'halo' | 'cc' | 'custom'
   /** Custom config dir path (when configDirMode === 'custom') */
@@ -593,6 +607,19 @@ export function buildSdkEnv(params: SdkEnvParams): Record<string, string | numbe
       : { ANTHROPIC_API_KEY: params.anthropicApiKey }),
     ANTHROPIC_BASE_URL: params.anthropicBaseUrl,
 
+    // Halo's own HTTP API, for the agent to operate Halo itself (see halo_api_ref).
+    // All three or none: HALO_SPACE_ID is only ever read by the manual's own curl
+    // examples, so setting it for a session without the API describes a capability
+    // that session does not have. Omitted entirely when the loopback listener
+    // failed to start — no half-working URL.
+    ...(params.selfApi
+      ? {
+          HALO_API_URL: params.selfApi.url,
+          HALO_API_TOKEN: params.selfApi.token,
+          ...(params.spaceId ? { HALO_SPACE_ID: params.spaceId } : {}),
+        }
+      : {}),
+
     // Claude config dir: resolved from configDirMode (halo default / cc default / custom)
     CLAUDE_CONFIG_DIR: (() => {
       const configDir = resolveClaudeConfigDir(params.configDirMode, params.customConfigDir)
@@ -802,7 +829,7 @@ function validateSpawnInputs(electronPath: string, cliPath: string, workDir: str
  * @param params - SDK options parameters
  * @returns Base SDK options object
  */
-export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string, any> {
+export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise<Record<string, any>> {
   const {
     credentials,
     workDir,
@@ -816,6 +843,21 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
   console.log(`[SDK Config] buildBaseSdkOptions: workDir="${workDir}", spaceId="${spaceId}", configDirMode="${params.configDirMode ?? 'halo'}"`)
   console.debug(`[SDK Config] buildBaseSdkOptions details: model=${credentials.sdkModel}, displayModel=${credentials.displayModel}, maxTurns=${params.maxTurns}, promptProfile=${params.promptProfile}, enableTeams=${params.enableTeams}, disabledTools=[${(params.disabledTools || []).join(', ')}]`)
 
+  // Best-effort: a session still works without Halo's self-API if the loopback
+  // listener fails to start (e.g. no port available), just without that capability.
+  let selfApi: { url: string; token: string } | undefined
+  if (params.selfApiAccess) {
+    try {
+      // Imported here, not at module scope: a static edge would pull the whole
+      // http/routes graph into every consumer of this module, and the listener
+      // is only ever needed once a session actually asks for it.
+      const { ensureSelfApiServer } = await import('../../http/self-api')
+      selfApi = await ensureSelfApiServer(spaceId)
+    } catch (error) {
+      console.error('[SDK Config] Self-API loopback server failed to start; HALO_API_* env vars omitted:', error)
+    }
+  }
+
   // Build environment variables
   const env = buildSdkEnv({
     anthropicApiKey: credentials.anthropicApiKey,
@@ -825,6 +867,8 @@ export function buildBaseSdkOptions(params: BaseSdkOptionsParams): Record<string
     customConfigDir: params.customConfigDir,
     enableTeams: params.enableTeams,
     capabilities: credentials.capabilities,
+    selfApi,
+    spaceId,
   })
 
   const cliPath = resolveClaudeCodeCliPath()

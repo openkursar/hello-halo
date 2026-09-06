@@ -88,9 +88,17 @@ src/
 │   │                                  #   protocol, logging/, product-config
 │   ├── controllers/                   # Business logic shared by IPC & HTTP
 │   ├── http/                          # Remote Access: Express + WebSocket
-│   │   └── routes/                    #   Per-domain route modules (*.routes.ts) +
-│   │                                  #   _shared.ts (imports/helpers barrel) +
-│   │                                  #   index.ts (thin aggregator). NO business logic.
+│   │   ├── routes/                    #   Per-domain route modules (*.routes.ts) +
+│   │   │                              #   _shared.ts (imports/helpers barrel) +
+│   │   │                              #   index.ts (thin aggregator). NO business logic.
+│   │   │                              #   *.routes.meta.ts declare each route's AI exposure
+│   │   │                              #   (ai/wrapped/internal); _meta-types.ts + _meta-groups.ts
+│   │   │                              #   are their contract. Build-time input only — never
+│   │   │                              #   imported by a handler.
+│   │   └── self-api/                  #   Second, loopback-only Express listener the agent
+│   │                                  #   drives with curl. Same registerApiRoutes handlers
+│   │                                  #   behind its own token, allow-list and response
+│   │                                  #   redaction. See services/api-ref.
 │   ├── ipc/                           # IPC handlers (one module per domain)
 │   │   └── rpc.ts                     #   registerRpcHandlers() — typed-RPC registrar
 │   ├── apps/                          # Apps Layer (spec, manager, runtime, conversation-mcp)
@@ -105,6 +113,11 @@ src/
 │       ├── ai-terminal/              # AI Terminal (pty + xterm headless + MCP tools). See ai-terminal/DESIGN.md
 │       ├── ai-sources/                # Multi-provider auth + providers/
 │       ├── analytics/                 # Usage analytics
+│       ├── api-ref/                   # `halo_api_ref` toolset — the manual for Halo's own
+│       │                              #   HTTP API, generated at build time into
+│       │                              #   resources/api-ref/ by scripts/gen-api-ref.mjs.
+│       │                              #   Reads generated files only: the coupling to the
+│       │                              #   transport layer is build-time, never runtime.
 │       ├── email-mcp/                 # Email-as-MCP tool server
 │       ├── git-bash/                   # Windows bash env for Claude Code CLI (detection + installer + mock fallback)
 │       ├── health/                    # Diagnostics & recovery
@@ -622,6 +635,25 @@ Notes:
 Desktop mode: renderer -> preload -> IPC -> main.
 Remote mode: renderer -> HTTP/WS -> main.
 
+### 17.1 Self-API (the agent operating Halo)
+
+A third consumer of the same routes: the agent itself, over a loopback-only
+listener (`src/main/http/self-api/`) reached with curl.
+
+- **Capability switch**: the `halo-api-ref` toolset ("Operate Halo"). One switch
+  drives all three halves — the `halo_api_ref` manual tool, the `HALO_API_*`
+  credentials (`selfApiAccess` in `sdk-config.ts`), and the usage guide appended
+  to the prompt. Never wire one without the others: a session told to use a tool
+  it lacks is the failure this design exists to prevent.
+- **Digital humans**: same capability as an app permission (`halo-api-ref`),
+  **default OFF** — unlike every other built-in capability. Never granted to IM
+  guests.
+- **What a session may call** is `resources/api-ref/scope.json`, generated from
+  the `expose` field in `*.routes.meta.ts`. That allow-list is the real bound;
+  the middleware's `spaceId` handling is a default scope, not isolation.
+- **Adding a route** means adding its meta entry too — `npm run test:api-ref`
+  fails the build when the generated tree and the routes have drifted.
+
 ## 18) Logging
 
 **Production logging requirements:**
@@ -656,7 +688,7 @@ See `quick.md §4` for the current list. Keep the two documents in sync when clo
 
 When touching a module, read its design doc first:
 - `src/main/services/agent/DESIGN.md` — Agent engine (largest subsystem, read this before any agent-related change)
-- `src/main/services/agent/toolsets/DESIGN.md` — Toolset Broker (on-demand in-process MCP loading; how tool capabilities enter a session)
+- `src/main/services/agent/toolsets/DESIGN.md` — Toolset Broker (on-demand in-process MCP loading; how tool capabilities enter a session, including the self-API switch — see §17.1)
 - `src/main/services/ai-terminal/DESIGN.md` — AI Terminal (pty + xterm headless, MCP tools, xterm.js viewer)
 - `src/main/apps/spec/DESIGN.md`
 - `src/main/apps/manager/DESIGN.md`

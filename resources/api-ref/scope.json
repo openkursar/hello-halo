@@ -1,0 +1,486 @@
+[
+  {
+    "method": "GET",
+    "path": "/api/config"
+  },
+  {
+    "method": "GET",
+    "path": "/api/config/credential-failures"
+  },
+  {
+    "method": "POST",
+    "path": "/api/ai-sources/switch-source"
+  },
+  {
+    "method": "POST",
+    "path": "/api/ai-sources/set-model"
+  },
+  {
+    "method": "GET",
+    "path": "/api/model-capabilities/all"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/default-path"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/spaces/reorder"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/spaces/:spaceId"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/spaces/:spaceId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/open"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/conversations"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/conversations"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/conversations/:conversationId"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/spaces/:spaceId/conversations/:conversationId"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/spaces/:spaceId/conversations/:conversationId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/conversations/:conversationId/star"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/stop"
+  },
+  {
+    "method": "GET",
+    "path": "/api/agent/sessions"
+  },
+  {
+    "method": "GET",
+    "path": "/api/agent/generating/:conversationId"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/artifacts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/artifacts/tree"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/children"
+  },
+  {
+    "method": "POST",
+    "path": "/api/artifacts/save"
+  },
+  {
+    "method": "GET",
+    "path": "/api/artifacts/detect-type"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/file"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/folder"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/reconcile"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/spaces/:spaceId/artifacts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/rename"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/move"
+  },
+  {
+    "method": "POST",
+    "path": "/api/notify-channels/test"
+  },
+  {
+    "method": "GET",
+    "path": "/api/wecom-bot/status"
+  },
+  {
+    "method": "POST",
+    "path": "/api/wecom-bot/reconnect"
+  },
+  {
+    "method": "GET",
+    "path": "/api/im-channels/status"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-channels/reconnect"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-channels/reload"
+  },
+  {
+    "method": "GET",
+    "path": "/api/im-channels/providers"
+  },
+  {
+    "method": "GET",
+    "path": "/api/im-channels/permission-defaults"
+  },
+  {
+    "method": "POST",
+    "path": "/api/weixin-ilink/save-token"
+  },
+  {
+    "method": "POST",
+    "path": "/api/weixin-ilink/disconnect"
+  },
+  {
+    "method": "GET",
+    "path": "/api/im-sessions"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-sessions/set-proactive"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-sessions/remove"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-sessions/set-custom-name"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/version"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/available-skills"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/apps/:appId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/reinstall"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/move-space"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/clear-memory"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/pause"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/resume"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/activity"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/escalation/:entryId/respond"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/runs/:runId/continue"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/runs/:runId/inject"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/config"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/apps/:appId/overrides"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/frequency"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/permissions/grant"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/upgrade-strategy"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/permissions/revoke"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/state"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/chat/stop"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/chat/status"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/chat/clear"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/chat/restart"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/im-chat/clear"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/im-chat/stop"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/sessions/create"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/sessions/fork"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/sessions/delete"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/query"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/apps"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/apps/:slug"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/app-document"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/install"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/apps/:slug/install"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/refresh"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/updates"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/registries"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/capabilities"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/category-taxonomy"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/revalidate"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/discover-page"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/my-publications"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/unpublish"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/ignore-version"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/registries"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/store/registries/:registryId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/registries/:registryId/toggle"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/store/registries/:registryId/adapter-config"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/updates/check-now"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/updates/:appId/apply"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/publish/preview"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/publish/find-app"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tlon"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tlon/for-space/:spaceId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/set-default"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tlon/:kbId"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tlon/:kbId"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/tlon/:kbId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/bind-space"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/unbind-space"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/bind-app"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/unbind-app"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/linked-dirs"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/tlon/:kbId/linked-dirs/:linkId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/files"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tlon/:kbId/raw"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/remove-raw"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tlon/:kbId/index"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/ingest"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/clear-relearn"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tlon/:kbId/ingest-status"
+  }
+]

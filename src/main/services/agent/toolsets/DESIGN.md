@@ -107,6 +107,18 @@ All built-in capabilities default ON (only an explicit user deny turns one off �
 see PROTOCOL.md §13); `ai-terminal` is still excluded for guests
 (conservative allowlist in `app-chat.ts` `buildGuestMcpServers`).
 
+**One exception to default-ON: `halo-api-ref` ("Operate Halo").** It is resolved
+with `resolvePermission(app, 'halo-api-ref', false)` at both call sites, and is
+withheld from IM guests entirely. It operates Halo's own configuration and data
+rather than the outside world, and its tool schema plus usage guide would
+otherwise be a permanent per-run token cost for every digital human that never
+needs it. Deliberately absent from `prompt/capabilities.ts`
+`TOGGLEABLE_CAPABILITIES`: listing an off-by-default capability there would make
+the "disabled capabilities" fragment render on every run, which is the same cost
+by another route. If you add another default-off capability, pass the matching
+default at *every* `resolvePermission` call for it — the renderer switch included,
+or the panel shows the opposite of what the session loaded.
+
 ## 7) Session rebuild contract
 
 Rebuilds are driven by `credentialsGeneration` (global model / API-config changes),

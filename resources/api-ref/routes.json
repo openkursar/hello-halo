@@ -1,0 +1,858 @@
+[
+  {
+    "method": "GET",
+    "path": "/api/security/policy"
+  },
+  {
+    "method": "GET",
+    "path": "/api/config",
+    "group": "settings"
+  },
+  {
+    "method": "POST",
+    "path": "/api/config"
+  },
+  {
+    "method": "GET",
+    "path": "/api/config/credential-failures",
+    "group": "settings"
+  },
+  {
+    "method": "POST",
+    "path": "/api/config/validate"
+  },
+  {
+    "method": "POST",
+    "path": "/api/config/fetch-models"
+  },
+  {
+    "method": "POST",
+    "path": "/api/config/refresh-ai-sources"
+  },
+  {
+    "method": "POST",
+    "path": "/api/ai-sources/switch-source",
+    "group": "settings"
+  },
+  {
+    "method": "POST",
+    "path": "/api/ai-sources/set-model",
+    "group": "settings"
+  },
+  {
+    "method": "POST",
+    "path": "/api/ai-sources/sources"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/ai-sources/sources/:sourceId"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/ai-sources/sources/:sourceId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/model-capabilities/resolve"
+  },
+  {
+    "method": "GET",
+    "path": "/api/model-capabilities/preset/:modelId"
+  },
+  {
+    "method": "GET",
+    "path": "/api/model-capabilities/all",
+    "group": "settings"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/halo"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/default-path",
+    "group": "workspace"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces",
+    "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces",
+    "group": "workspace"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/spaces/reorder",
+    "group": "workspace"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId",
+    "group": "workspace"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/spaces/:spaceId",
+    "group": "workspace"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/spaces/:spaceId",
+    "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/open",
+    "group": "workspace"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/conversations",
+    "group": "conversation"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/conversations",
+    "group": "conversation"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/conversations/:conversationId",
+    "group": "conversation"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/spaces/:spaceId/conversations/:conversationId",
+    "group": "conversation"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/spaces/:spaceId/conversations/:conversationId",
+    "group": "conversation"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/conversations/:conversationId/messages"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/spaces/:spaceId/conversations/:conversationId/messages/last"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/conversations/:conversationId/messages/:messageId/thoughts"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/conversations/:conversationId/star",
+    "group": "conversation"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/message"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/stop",
+    "group": "conversation"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/approve"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/reject"
+  },
+  {
+    "method": "GET",
+    "path": "/api/agent/sessions",
+    "group": "conversation"
+  },
+  {
+    "method": "GET",
+    "path": "/api/agent/generating/:conversationId",
+    "group": "conversation"
+  },
+  {
+    "method": "GET",
+    "path": "/api/agent/session/:conversationId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/answer-question"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/test-mcp"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/probe-mcp"
+  },
+  {
+    "method": "GET",
+    "path": "/api/agent/engine-capabilities"
+  },
+  {
+    "method": "GET",
+    "path": "/api/agent/engine-availability"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/toolsets/list"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/toolsets/open"
+  },
+  {
+    "method": "POST",
+    "path": "/api/agent/toolsets/close"
+  },
+  {
+    "method": "GET",
+    "path": "/api/terminal/list",
+    "group": "terminal"
+  },
+  {
+    "method": "POST",
+    "path": "/api/terminal/create",
+    "group": "terminal"
+  },
+  {
+    "method": "POST",
+    "path": "/api/terminal/input",
+    "group": "terminal"
+  },
+  {
+    "method": "POST",
+    "path": "/api/terminal/resize",
+    "group": "terminal"
+  },
+  {
+    "method": "POST",
+    "path": "/api/terminal/kill",
+    "group": "terminal"
+  },
+  {
+    "method": "POST",
+    "path": "/api/terminal/replay",
+    "group": "terminal"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/artifacts",
+    "group": "workspace"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/artifacts/tree",
+    "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/children",
+    "group": "workspace"
+  },
+  {
+    "method": "GET",
+    "path": "/api/artifacts/download"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/artifacts/download-all"
+  },
+  {
+    "method": "GET",
+    "path": "/api/artifacts/content"
+  },
+  {
+    "method": "POST",
+    "path": "/api/artifacts/save",
+    "group": "workspace"
+  },
+  {
+    "method": "GET",
+    "path": "/api/artifacts/detect-type",
+    "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/file",
+    "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/folder",
+    "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/reconcile",
+    "group": "workspace"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/spaces/:spaceId/artifacts",
+    "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/rename",
+    "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/artifacts/move",
+    "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/notify-channels/test",
+    "group": "channels"
+  },
+  {
+    "method": "POST",
+    "path": "/api/notify-channels/clear-cache"
+  },
+  {
+    "method": "GET",
+    "path": "/api/notify-channels/product-config"
+  },
+  {
+    "method": "GET",
+    "path": "/api/wecom-bot/status",
+    "group": "channels"
+  },
+  {
+    "method": "POST",
+    "path": "/api/wecom-bot/reconnect",
+    "group": "channels"
+  },
+  {
+    "method": "POST",
+    "path": "/api/wecom-bot/scan-auth/start"
+  },
+  {
+    "method": "POST",
+    "path": "/api/wecom-bot/scan-auth/poll"
+  },
+  {
+    "method": "POST",
+    "path": "/api/wecom-bot/scan-auth/cancel"
+  },
+  {
+    "method": "POST",
+    "path": "/api/wecom-bot/scan-auth/create-assistant"
+  },
+  {
+    "method": "GET",
+    "path": "/api/im-channels/status",
+    "group": "channels"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-channels/reconnect",
+    "group": "channels"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-channels/reload",
+    "group": "channels"
+  },
+  {
+    "method": "GET",
+    "path": "/api/im-channels/providers",
+    "group": "channels"
+  },
+  {
+    "method": "GET",
+    "path": "/api/im-channels/permission-defaults",
+    "group": "channels"
+  },
+  {
+    "method": "POST",
+    "path": "/api/weixin-ilink/request-qrcode"
+  },
+  {
+    "method": "POST",
+    "path": "/api/weixin-ilink/poll-auth-status"
+  },
+  {
+    "method": "POST",
+    "path": "/api/weixin-ilink/save-token",
+    "group": "channels"
+  },
+  {
+    "method": "POST",
+    "path": "/api/weixin-ilink/disconnect",
+    "group": "channels"
+  },
+  {
+    "method": "GET",
+    "path": "/api/im-sessions",
+    "group": "channels"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-sessions/set-proactive",
+    "group": "channels"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-sessions/remove",
+    "group": "channels"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-sessions/set-custom-name",
+    "group": "channels"
+  },
+  {
+    "method": "GET",
+    "path": "/api/auth/providers"
+  },
+  {
+    "method": "GET",
+    "path": "/api/system/version",
+    "group": "settings"
+  },
+  {
+    "method": "POST",
+    "path": "/api/analytics/report"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/install",
+    "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId",
+    "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/available-skills",
+    "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/skills/command-name"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/apps/:appId",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/reinstall",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/move-space",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/clear-memory",
+    "group": "digital-human"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/apps/:appId/permanent",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/pause",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/resume",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/trigger",
+    "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/activity",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/escalation/:entryId/respond",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/runs/:runId/continue",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/runs/:runId/inject",
+    "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/runs/:runId/session"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/config",
+    "group": "digital-human"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/apps/:appId/overrides",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/frequency",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/permissions/grant",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/upgrade-strategy",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/permissions/revoke",
+    "group": "digital-human"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/apps/:appId/spec",
+    "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/state",
+    "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/export-spec"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/import-spec",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/chat/send"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/chat/stop",
+    "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/chat/status",
+    "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/chat/messages"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/chat/session-state"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/im-chat/messages"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/chat/clear",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/chat/restart",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/im-chat/clear",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/im-chat/stop",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/sessions/create",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/sessions/fork",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/sessions/delete",
+    "group": "digital-human"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/query",
+    "group": "store"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/apps",
+    "group": "store"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/apps/:slug",
+    "group": "store"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/app-document",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/install",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/apps/:slug/install",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/refresh",
+    "group": "store"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/updates",
+    "group": "store"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/registries",
+    "group": "store"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/capabilities",
+    "group": "store"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/category-taxonomy",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/revalidate",
+    "group": "store"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/discover-page",
+    "group": "store"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/my-publications",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/unpublish",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/ignore-version",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/registries",
+    "group": "store"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/store/registries/:registryId",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/registries/:registryId/toggle",
+    "group": "store"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/store/registries/:registryId/adapter-config",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/updates/check-now",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/updates/:appId/apply",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/publish/preview",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/publish/find-app",
+    "group": "store"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/publish"
+  },
+  {
+    "method": "POST",
+    "path": "/api/store/import-dhpkg"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tlon",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tlon/for-space/:spaceId",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/set-default",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tlon/:kbId",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/tlon/:kbId",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/tlon/:kbId",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/bind-space",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/unbind-space",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/bind-app",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/unbind-app",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/linked-dirs",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/tlon/:kbId/linked-dirs/:linkId",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/files",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tlon/:kbId/raw",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/remove-raw",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tlon/:kbId/index",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/resolve-sources"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/ingest",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "POST",
+    "path": "/api/tlon/:kbId/clear-relearn",
+    "group": "knowledge-base"
+  },
+  {
+    "method": "GET",
+    "path": "/api/tlon/:kbId/ingest-status",
+    "group": "knowledge-base"
+  }
+]

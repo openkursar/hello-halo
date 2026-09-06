@@ -33,7 +33,7 @@ vi.mock('../../../../../src/main/services/agent/toolsets/meta-server', () => ({
   CAPABILITIES_SERVER_NAME: 'capabilities'
 }))
 
-const ALL = ['ai-browser', 'ai-terminal']
+const ALL = ['ai-browser', 'ai-terminal', 'halo-api-ref']
 vi.mock('../../../../../src/main/services/agent/toolsets/registry', () => ({
   getAvailableToolsets: vi.fn(() => ALL.map(id => ({ id }))),
   getToolset: vi.fn((id: string) =>
@@ -102,6 +102,21 @@ describe('buildMcpServerRecord — fresh instances per build', () => {
     const a = buildMcpServerRecord(scope)
     const b = buildMcpServerRecord({ ...scope, conversationId: 'conv-2' })
     expect(b['web-search']).not.toBe(a['web-search'])
+  })
+})
+
+describe('buildMcpServerRecord — halo-api-ref is on demand', () => {
+  it('is absent from the always-on set', () => {
+    // It was always-on once, while the credential and the prompt paragraph
+    // were decided elsewhere — so sessions were told to use a tool they could
+    // not authenticate. It is a registry toolset now; nothing here may add it.
+    setOpen([])
+    expect(buildMcpServerRecord(scope)['halo-api-ref']).toBeUndefined()
+  })
+
+  it('is present once the toolset is open', () => {
+    setOpen(['halo-api-ref'])
+    expect(buildMcpServerRecord(scope)['halo-api-ref']).toEqual({ tag: 'toolset-halo-api-ref' })
   })
 })
 

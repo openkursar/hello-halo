@@ -1,0 +1,94 @@
+## settings — Halo version and model capability reference
+covers: application version, model capability presets
+not here:
+  per-space settings -> workspace
+  per-digital-human config -> digital-human
+  notification channel setup, IM accounts, bot binding -> channels
+  sending a notification -> use the notify_channel tool
+  stopping something Halo is doing -> conversation
+  installing or updating store items -> store
+  knowledge collection settings -> knowledge-base
+  where a space keeps its files -> workspace
+
+(no endpoint) updating Halo itself — Halo updates itself; there is no upgrade endpoint. /api/store/updates covers installed store items, not the app. Tell the user Halo updates on its own.
+
+operations on this page:
+  POST   /api/ai-sources/set-model                                   Switch the model within the current source
+  POST   /api/ai-sources/switch-source                               Switch to a different configured model source
+  GET    /api/config                                                 Read the global configuration
+  GET    /api/config/credential-failures                             List credential fields that failed to decrypt at rest
+  GET    /api/model-capabilities/all                                 List what every known model supports (vision, tools, context)
+  GET    /api/system/version                                         Read the running Halo version
+
+POST   /api/ai-sources/set-model                                   Switch the model within the current source
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/ai-sources/set-model" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"modelId":"deepseek-chat"}'
+     # body: {"modelId":"deepseek-chat"}
+     # out: {"success":true,"data":{"currentId":"<uuid>","currentModel":"deepseek-chat"}}
+     # note: Applies to what Halo runs next, including this assistant. Switch back the same way.
+
+POST   /api/ai-sources/switch-source                               Switch to a different configured model source
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/ai-sources/switch-source" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"sourceId":"<sourceId — a uuid from GET /api/config>"}'
+     # body: {"sourceId":"<sourceId — a uuid from GET /api/config>"}
+     # out: {"success":true,"data":{"currentId":"<uuid>","currentModel":"..."}}
+     # note: Picks among sources the user already configured. It cannot create one or change a key.
+     # note: Applies to what Halo runs next, including this assistant. Switch back the same way.
+     # note: "Source not found" = wrong sourceId; read the configured list from GET /api/config first.
+
+GET    /api/config                                                 Read the global configuration
+     curl -s "$HALO_API_URL/api/config" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":{...}}  // secret fields come back as "***"
+     # note: Read-only here. The write side is not opened to the assistant.
+
+GET    /api/config/credential-failures                             List credential fields that failed to decrypt at rest
+     curl -s "$HALO_API_URL/api/config/credential-failures" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":[{"path":"...","label":"..."}]}
+     # note: Path and label only, never ciphertext. Non-empty means the user must re-enter that credential in the Halo app.
+
+GET    /api/model-capabilities/all                                 List what every known model supports (vision, tools, context)
+     curl -s "$HALO_API_URL/api/model-capabilities/all" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":{"<modelId>":{...capability flags}}}
+     # note: Read-only presets. It does not say which model is currently in use.
+
+GET    /api/system/version                                         Read the running Halo version
+     curl -s "$HALO_API_URL/api/system/version" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":"2.1.15"}
+
+Halo does all of these; you do not. Say so, and say where:
+  - Add, edit or delete a model source, or change an API key — the user does this in Settings > AI Model.
+  - Change remote-access settings (port, token, tunnel) — the user does this in Settings > Remote Access, on the desktop app only; it is not in the remote web UI.
+  - Test or diagnose a configured MCP server connection — the user does this in Settings > Advanced.
+That list is complete for this area and the search has already been done for
+  you: do not grep the index for these, and do not guess a path — it will 403.
+For anything NOT on that list the normal rule still applies: grep the index
+  before you tell the user something is impossible.
+After saying where, tell the user which nearby parts you CAN do for them —
+  a hand-off reads very differently from a refusal.
+
+-----------------------------------------------------------------------
+$HALO_API_URL, $HALO_API_TOKEN and $HALO_SPACE_ID are already set in your Bash
+  environment. Copy commands as-is; never expand or print those variables.
+Replace only <angle-bracket> placeholders. Get real ids from a list call above.
+Read the response body and check "success". HTTP 200 alone does not mean it
+  worked - many failures return 200 with {"success":false}.
+Pipe long responses through `| head -c 4000` so you do not flood your context.
+A POST that timed out may still have taken effect. List before you retry.
+Waiting on something? Back off (2s, then double), give up after 5 tries and
+  tell the user it is still running.
+Large or binary files do not go through this API - use Read / Write / Bash.
+403 = the endpoint exists but is closed to me in this build. Tell the user to
+  do it in the Halo app. Do not tell them Halo cannot do it.
+404 with a "code" field = my path is wrong. 404 without one = the id is wrong.
+Only call paths listed on this page or in the index. Never write one from
+  memory. If this page has left your context, call halo_api_ref again.
+Full index of every endpoint: {{API_REF_INDEX_PATH}}/index.txt
+  grep -i "<keyword>" {{API_REF_INDEX_PATH}}/index.txt
+Not listed here does NOT mean not supported — that is a real, deliverable
+  answer, not a failed search. Grep the index before you say "Halo can't do that".

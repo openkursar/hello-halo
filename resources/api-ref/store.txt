@@ -1,0 +1,246 @@
+## store — browse and install from the app store
+covers: browse and search store listings, read a listing, install and
+        uninstall store items, skills
+not here:
+  configuring an installed digital human -> digital-human
+  knowledge collections -> knowledge-base
+  installing or removing a skill -> use the skill_manage tool
+
+operations on this page:
+  POST   /api/apps/<appId>/upgrade-strategy                          Set how a store-installed digital human handles version upgrades
+  GET    /api/store/app-document                                     Get a listing's SKILL.md/README document
+  GET    /api/store/apps                                             List store listings (legacy, non-paginated; prefer POST /api/store/query)
+  GET    /api/store/apps/<slug>                                      Get full detail for one store listing by slug
+  POST   /api/store/apps/<slug>/install                              Install an app from the store by slug (REST-style path variant)
+  GET    /api/store/capabilities                                     Get which store features this build supports (publish, reviews, install counts)
+  GET    /api/store/category-taxonomy                                Get the store category enum used for browsing and publishing
+  GET    /api/store/discover-page                                    Get the curated store home page (featured/trending sections)
+  POST   /api/store/ignore-version                                   Dismiss an available update so it stops appearing as pending
+  POST   /api/store/install                                          Install an app from the store by slug
+  GET    /api/store/my-publications                                  List the signed-in creator's own published apps
+  POST   /api/store/publish/find-app                                 Find the installed app that a store slug would resolve to
+  POST   /api/store/publish/preview                                  Preview the slug and version a publish of an app would produce
+  POST   /api/store/query                                            Paginated search over store listings (primary browse endpoint)
+  POST   /api/store/refresh                                          Force a full re-download of the store registry index
+  GET    /api/store/registries                                       List configured store registry sources
+  POST   /api/store/registries                                       Add a new registry source
+  DELETE /api/store/registries/<registryId>                          Remove a configured registry source
+  PATCH  /api/store/registries/<registryId>/adapter-config           Update a registry source's adapter config (e.g. its API key)
+  POST   /api/store/registries/<registryId>/toggle                   Enable or disable a configured registry source
+  POST   /api/store/revalidate                                       Cheap conditional freshness check for the store index
+  POST   /api/store/unpublish                                        Take down one of the creator's own published apps
+  GET    /api/store/updates                                          List available updates for installed apps
+  POST   /api/store/updates/<appId>/apply                            Apply an available update to an installed app
+  POST   /api/store/updates/check-now                                Re-check all installed apps for available updates right now
+
+POST   /api/apps/<appId>/upgrade-strategy                          Set how a store-installed digital human handles version upgrades
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/apps/<appId>/upgrade-strategy" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"strategy":"auto"}'
+     # body: {"strategy": "auto"}
+     # out: {success:true}
+     # note: strategy is one of "auto" (silent patch/minor, notify on major), "notify" (always notify), or "manual" (no automatic checks)
+
+GET    /api/store/app-document                                     Get a listing's SKILL.md/README document
+     curl -s "$HALO_API_URL/api/store/app-document" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{content:string|null}}
+     # note: slug is a query param (?slug=...), not a path segment — scoped slugs like "owner/repo" contain "/". content is null when the source has no document.
+
+GET    /api/store/apps                                             List store listings (legacy, non-paginated; prefer POST /api/store/query)
+     curl -s "$HALO_API_URL/api/store/apps" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{slug,name,version,author,description,type,category,tags,...}]}
+     # note: Query params: search, locale, category, type, tags (comma-separated).
+
+GET    /api/store/apps/<slug>                                      Get full detail for one store listing by slug
+     curl -s "$HALO_API_URL/api/store/apps/<slug>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{entry:{slug,name,version,...},spec:<AppSpec>,registryId}} or {success:false,error}
+
+POST   /api/store/apps/<slug>/install                              Install an app from the store by slug (REST-style path variant)
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/store/apps/<slug>/install" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"spaceId":"$HALO_SPACE_ID"}'
+     # body: {"spaceId":"$HALO_SPACE_ID"}
+     # out: {success:true,data:{appId}} or {success:false,error,code?}
+     # note: Always send spaceId. The handler treats an omitted spaceId as a GLOBAL install, not as "the current space" — leaving it out silently installs somewhere the user did not ask for.
+     # note: Pass "spaceId":null only when the user explicitly asked for a global install (mcp/skill types only).
+     # note: Optional field: userConfig (object).
+     # note: Identical behavior to POST /api/store/install (slug in path instead of body), including the 403 MCP_COMMAND_BLOCKED case.
+
+GET    /api/store/capabilities                                     Get which store features this build supports (publish, reviews, install counts)
+     curl -s "$HALO_API_URL/api/store/capabilities" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{catalog:true,installs:boolean,publish:boolean,reviewWorkflow:boolean,identity:"none"|string}}
+     # note: Reports what this build supports. Publishing itself is not open to you — if the user wants to publish, tell them to do it in the Halo app.
+
+GET    /api/store/category-taxonomy                                Get the store category enum used for browsing and publishing
+     curl -s "$HALO_API_URL/api/store/category-taxonomy" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{default:[{id,label|labelKey,icon?}],<appType>?:[...]}}
+     # note: Categories are keyed per app type (skill/automation/mcp/extension) with "default" as the fallback list for types without their own entry.
+
+GET    /api/store/discover-page                                    Get the curated store home page (featured/trending sections)
+     curl -s "$HALO_API_URL/api/store/discover-page" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{version,nodes:[{type,title?,subtitle?,entries?:[RegistryEntry],collections?,hasMore?}]}}
+     # note: Query params: locale?, pageSize?. Falls back to a single paginated catalog node when no curated layout is configured.
+
+POST   /api/store/ignore-version                                   Dismiss an available update so it stops appearing as pending
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/store/ignore-version" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"appId":"<appId — a uuid from GET /api/apps>","version":"1.2.0"}'
+     # body: {"appId":"<appId — a uuid from GET /api/apps>","version":"1.2.0"}
+     # out: {success:true,data:null}
+     # note: Only hides that one version; a newer update still surfaces normally.
+
+POST   /api/store/install                                          Install an app from the store by slug
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/store/install" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"slug":"author/app-id","spaceId":"$HALO_SPACE_ID"}'
+     # body: {"slug":"author/app-id","spaceId":"$HALO_SPACE_ID"}
+     # out: {success:true,data:{appId}} or {success:false,error,code?}
+     # note: Always send spaceId. The handler treats an omitted spaceId as a GLOBAL install, not as "the current space" — leaving it out silently installs somewhere the user did not ask for.
+     # note: Pass "spaceId":null only when the user explicitly asked for a global install (mcp/skill types only).
+     # note: Optional field: userConfig (object).
+     # err: 400 = missing slug.
+     # err: 403 with code=MCP_COMMAND_BLOCKED when the slug resolves to an MCP server blocked by build policy — do not retry, tell the user it is blocked.
+     # note: Same operation as POST /api/store/apps/:slug/install (slug in body vs in path); use either.
+
+GET    /api/store/my-publications                                  List the signed-in creator's own published apps
+     curl -s "$HALO_API_URL/api/store/my-publications" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{slug,name?,displayName?,type?,version,status:"listed"|"hidden"|"rejected",takedownBy?,rejectReason?,submittedAt?,channel?,installs?}]}
+     # note: Fails when no creator identity is signed in — this build may not support publishing at all (check GET /api/store/capabilities first).
+
+POST   /api/store/publish/find-app                                 Find the installed app that a store slug would resolve to
+     curl -sX POST "$HALO_API_URL/api/store/publish/find-app" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"slug":"author/app-id"}'
+     # body: {"slug":"author/app-id"}
+     # out: {success:true,data:{appId: string|null}}
+     # note: Optional fields: type, author. appId is null when no locally installed app uniquely matches.
+
+POST   /api/store/publish/preview                                  Preview the slug and version a publish of an app would produce
+     curl -sX POST "$HALO_API_URL/api/store/publish/preview" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"appId":"<appId — a uuid from GET /api/apps>"}'
+     # body: {"appId":"<appId — a uuid from GET /api/apps>"}
+     # out: {success:true,data:{slug,localVersion,storeVersion:string|null}}
+     # note: Optional fields: author, name (override the store name before deriving the slug). storeVersion is null when the slug has never been published.
+
+POST   /api/store/query                                            Paginated search over store listings (primary browse endpoint)
+     curl -sX POST "$HALO_API_URL/api/store/query" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"search":"weather","page":1,"pageSize":20}'
+     # body: {"search":"weather","page":1,"pageSize":20}
+     # out: {success:true,data:{items:[{slug,name,version,author,description,type,category,tags,...}],total?,hasMore,groups?:[{type,count,hasMore}],sources:[{registryId,status,error?}]}}
+     # note: All fields optional: search, type, category, page, pageSize, locale.
+
+POST   /api/store/refresh                                          Force a full re-download of the store registry index
+     curl -sX POST "$HALO_API_URL/api/store/refresh" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:undefined}
+     # note: Heavier than POST /api/store/revalidate — use revalidate for a cheap freshness check.
+
+GET    /api/store/registries                                       List configured store registry sources
+     curl -s "$HALO_API_URL/api/store/registries" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{id,name,url,enabled,isDefault?,sourceType?,adapterConfig?:{...,"apiKey":"[redacted]"}}]}
+     # note: adapterConfig values (e.g. API keys) come back redacted.
+
+POST   /api/store/registries                                       Add a new registry source
+     curl -sX POST "$HALO_API_URL/api/store/registries" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"name":"My Registry","url":"https://example.com/registry"}'
+     # body: {"name":"My Registry","url":"https://example.com/registry"}
+     # out: {success:true,data:{id,name,url,enabled,isDefault:false,sourceType?,adapterConfig?:{...,"apiKey":"[redacted]"}}} or {success:false,error}
+     # note: Optional fields: sourceType (string), adapterConfig (object, adapter-specific — e.g. an API key).
+     # note: url must be http(s) and not point to a loopback/private/link-local host. Fails if a registry with the same URL already exists.
+
+DELETE /api/store/registries/<registryId>                          Remove a configured registry source
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX DELETE "$HALO_API_URL/api/store/registries/<registryId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:undefined} or {success:false,error}
+     # note: Fails with an error (not thrown) when the target is the built-in/default registry — those cannot be removed. Can be added back with POST /api/store/registries.
+
+PATCH  /api/store/registries/<registryId>/adapter-config           Update a registry source's adapter config (e.g. its API key)
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX PATCH "$HALO_API_URL/api/store/registries/<registryId>/adapter-config" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"apiKey":"sk-..."}'
+     # body: {"apiKey":"sk-..."}
+     # out: {success:true,data:undefined}
+     # note: Body is a flat JSON object of adapter-specific fields — exact keys depend on the registry's sourceType.
+     # note: Write-only: the response never echoes the config back, so this is safe for setting credentials. 400 if the body is missing or not a plain object.
+
+POST   /api/store/registries/<registryId>/toggle                   Enable or disable a configured registry source
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/store/registries/<registryId>/toggle" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"enabled":true}'
+     # body: {"enabled":true}
+     # out: {success:true,data:undefined}
+     # err: 400 if enabled is missing or not a boolean.
+
+POST   /api/store/revalidate                                       Cheap conditional freshness check for the store index
+     curl -sX POST "$HALO_API_URL/api/store/revalidate" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{changed:boolean}}
+     # note: changed:false means the index did not move (a 304-equivalent); the browse list does not need refetching.
+
+POST   /api/store/unpublish                                        Take down one of the creator's own published apps
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/store/unpublish" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"slug":"author/app-id"}'
+     # body: {"slug":"author/app-id"}
+     # out: {success:true,data:null}
+     # note: Can be republished later; already-installed/downloaded copies elsewhere are not affected either way.
+
+GET    /api/store/updates                                          List available updates for installed apps
+     curl -s "$HALO_API_URL/api/store/updates" -H "Authorization: Bearer $HALO_API_TOKEN" | head -c 4000
+     # out: {success:true,data:[{appId,currentVersion,latestVersion,entry,strategy,severity}]}
+
+POST   /api/store/updates/<appId>/apply                            Apply an available update to an installed app
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/store/updates/<appId>/apply" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"mode":"force"}'
+     # body: {"mode":"force"}
+     # out: {success:true,data:{appId,from,to,severity}} or {success:false,error}
+     # note: mode is optional: "patch_minor"|"major"|"force", defaults to "force". No built-in downgrade path — reinstalling the old version is the way back.
+
+POST   /api/store/updates/check-now                                Re-check all installed apps for available updates right now
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/store/updates/check-now" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:[{appId,currentVersion,latestVersion,entry,strategy,severity}]}
+     # note: Apps set to auto-update silently apply any patch/minor update found — this is not just a read.
+
+-----------------------------------------------------------------------
+$HALO_API_URL, $HALO_API_TOKEN and $HALO_SPACE_ID are already set in your Bash
+  environment. Copy commands as-is; never expand or print those variables.
+Replace only <angle-bracket> placeholders. Get real ids from a list call above.
+Read the response body and check "success". HTTP 200 alone does not mean it
+  worked - many failures return 200 with {"success":false}.
+Pipe long responses through `| head -c 4000` so you do not flood your context.
+A POST that timed out may still have taken effect. List before you retry.
+Waiting on something? Back off (2s, then double), give up after 5 tries and
+  tell the user it is still running.
+Large or binary files do not go through this API - use Read / Write / Bash.
+403 = the endpoint exists but is closed to me in this build. Tell the user to
+  do it in the Halo app. Do not tell them Halo cannot do it.
+404 with a "code" field = my path is wrong. 404 without one = the id is wrong.
+Only call paths listed on this page or in the index. Never write one from
+  memory. If this page has left your context, call halo_api_ref again.
+Full index of every endpoint: {{API_REF_INDEX_PATH}}/index.txt
+  grep -i "<keyword>" {{API_REF_INDEX_PATH}}/index.txt
+Not listed here does NOT mean not supported — that is a real, deliverable
+  answer, not a failed search. Grep the index before you say "Halo can't do that".

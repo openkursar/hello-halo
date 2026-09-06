@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { SlidersHorizontal, Globe, TerminalSquare, ScanText } from 'lucide-react'
+import { SlidersHorizontal, Globe, TerminalSquare, ScanText, Settings2 } from 'lucide-react'
 import { useToolsetsStore, type ToolsetStatus } from '../../stores/toolsets.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useSpaceStore } from '../../stores/space.store'
@@ -26,6 +26,8 @@ function toolsetIcon(id: string, size = 15) {
       return <TerminalSquare size={size} />
     case 'ocr':
       return <ScanText size={size} />
+    case 'halo-api-ref':
+      return <Settings2 size={size} />
     default:
       return <SlidersHorizontal size={size} />
   }
@@ -44,6 +46,8 @@ function toolsetLabel(t: (key: string) => string, ts: ToolsetStatus): string {
       return t('Terminal')
     case 'ocr':
       return t('Text Extraction (OCR)')
+    case 'halo-api-ref':
+      return t('Operate Halo')
     default:
       return ts.displayName
   }
@@ -62,6 +66,8 @@ function toolsetDescription(t: (key: string) => string, ts: ToolsetStatus): stri
       return t('Let AI use interactive terminals')
     case 'ocr':
       return t('Let AI read text from images')
+    case 'halo-api-ref':
+      return t('Let AI manage Halo itself: spaces, digital humans, knowledge bases and settings')
     default:
       return ts.summary
   }

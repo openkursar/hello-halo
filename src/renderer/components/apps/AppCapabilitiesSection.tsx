@@ -22,7 +22,7 @@
 import { useState, useEffect } from 'react'
 import {
   Globe, TerminalSquare, Mail, Send, AlertTriangle,
-  ChevronRight, Search, Brain,
+  ChevronRight, Search, Brain, Settings2,
 } from 'lucide-react'
 import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
@@ -116,6 +116,9 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
   const aiTerminalOn = resolvePermission(app, 'ai-terminal')
   const emailOn = resolvePermission(app, 'email')
   const imPushOn = resolvePermission(app, 'im-push')
+  // Off unless granted — must pass the same default the runtime uses
+  // (apps/runtime/execute.ts), or the switch shows the opposite of reality.
+  const haloApiOn = resolvePermission(app, 'halo-api-ref', false)
 
   return (
     <div className="space-y-4">
@@ -139,6 +142,15 @@ export function AppCapabilitiesSection({ app, appId, onRequireRestart }: AppCapa
         description={t('Allow this app to run shell commands and interactive terminals')}
         checked={aiTerminalOn}
         onToggle={next => setPermission('ai-terminal', next)}
+      />
+
+      {/* Operate Halo */}
+      <ToggleRow
+        icon={Settings2}
+        label={t('Operate Halo')}
+        description={t('Allow this app to manage Halo itself: spaces, digital humans, knowledge bases and settings')}
+        checked={haloApiOn}
+        onToggle={next => setPermission('halo-api-ref', next)}
       />
 
       {/* Email */}

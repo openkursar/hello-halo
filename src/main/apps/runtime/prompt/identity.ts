@@ -15,6 +15,7 @@ import type { AppSpec } from '../../spec'
 import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../../services/agent/system-prompt'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../../../services/ai-browser'
 import { AI_TERMINAL_SYSTEM_PROMPT } from '../../../services/ai-terminal'
+import { HALO_API_USAGE_GUIDE } from '../../../services/api-ref'
 import { getKBReferencesForApp } from '../../../services/tlon'
 
 export interface IdentityFragmentsInput {
@@ -24,6 +25,7 @@ export interface IdentityFragmentsInput {
   userConfig?: Record<string, unknown>
   usesAIBrowser?: boolean
   usesTerminal?: boolean
+  usesHaloApi?: boolean
   workDir: string
   modelInfo?: string
   /**
@@ -55,6 +57,9 @@ export function buildIdentityFragments(input: IdentityFragmentsInput): string[] 
     : buildSystemPrompt(promptCtx)
   if (input.usesTerminal) {
     base += '\n\n' + AI_TERMINAL_SYSTEM_PROMPT.trim()
+  }
+  if (input.usesHaloApi) {
+    base += '\n\n' + HALO_API_USAGE_GUIDE.trim()
   }
   fragments.push(base)
 
