@@ -2,7 +2,7 @@
  * apps/runtime/federation -- LAN mesh link (concrete transport)
  *
  * Concrete FederationLink that rides a pluggable WS sender. It carries no
- * discovery/addressing of its own — the Lead's WS wiring at the http layer
+ * discovery/addressing of its own — the WS wiring at the http layer
  * supplies a WsSender (to=null → broadcast) and calls deliver() when a
  * federation frame arrives on /ws. This keeps websocket.ts decoupled: the WS
  * layer only knows deliver(); the link forwards inbound frames to the

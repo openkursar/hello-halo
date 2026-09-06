@@ -4,7 +4,7 @@
  * S3 (long-list scroll) needs 100+ messages already in a conversation before
  * the app ever opens it — going through the chat UI to send/receive that many
  * turns would be slow, flaky, and would itself burn the AI quota this harness
- * is trying to avoid depending on (see WP9 mock rationale). Real messages
+ * is trying to avoid depending on (see the mock rationale below). Real messages
  * scroll and render identically to seeded ones since MessageList reads the
  * same JSON conversation file regardless of how it was written.
  *

@@ -6,7 +6,7 @@
  * wires each one's transport to the correct pipe:
  *
  *   HOST role   — inbound 'federation' frames arrive on the host's WS server and
- *                 are routed here by the Lead's websocket.ts via handleHostInbound.
+ *                 are routed here by http/websocket.ts via handleHostInbound.
  *                 Outbound frames to a joiner go through the injected hostSend,
  *                 resolved nodeId → clientId from a per-office map learned when a
  *                 join-request first arrives on a clientId.

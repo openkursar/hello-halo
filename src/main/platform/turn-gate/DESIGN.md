@@ -1,7 +1,7 @@
 # Turn Gate — Design Decisions
 
 > Module: `src/main/platform/turn-gate/`
-> Extracted from: `apps/runtime/team/message-bus.ts` (Cross-Conversation Interop, WP1)
+> Extracted from: `apps/runtime/team/message-bus.ts` (Cross-Conversation Interop)
 > Status: Implementation reference
 
 ## 1. Module Purpose

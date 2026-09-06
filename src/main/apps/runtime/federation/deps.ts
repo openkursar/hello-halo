@@ -3,7 +3,7 @@
  *
  * The coordinator depends on the persistence contract from apps/federation and
  * a structural credential shape — NOT on http/auth. Credential verification is
- * passed in by the Lead's wiring (which lives in the transport tier), so this
+ * passed in by the transport tier's wiring, so this
  * module imports nothing from http/* and the dependency direction stays
  * downward-only.
  */

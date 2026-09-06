@@ -1,10 +1,10 @@
-# Cross-Conversation Interop — Backend Core (WP6)
+# Cross-Conversation Interop — Backend Core
 
 > Module: `src/main/services/conversation-interop/`
 > Scope: list/read, delivery, `waitForReply`, circuit breaker. Native
 > conversations only (D10) — no digital-human app-chat, no team epoch.
-> The MCP tool layer (`conversation_read` / `conversation_send`, WP2 spec)
-> and the renderer (WP4) consume this module but are separate, later work.
+> The MCP tool layer (`conversation_read` / `conversation_send`) and the
+> renderer consume this module but are separate, later work.
 
 ## 1. Why this needed zero changes to `services/agent`
 
@@ -68,7 +68,7 @@ additive, backward-compatible, and outside `services/agent`.
 **Why id-keyed, re-read-then-mutate, not a snapshot-and-replace.** An earlier
 version did `const messages = [...conversation.messages]; messages[last] =
 {...}; updateConversation(..., { messages })` — a full-array write built from
-a snapshot taken right after step 3. Lead caught the consequence: the turn
+a snapshot taken right after step 3. The consequence: the turn
 `sendMessage` started is genuinely still running by that point (see step 3),
 so the session consumer's own `addMessage` (its assistant placeholder) can
 land in the real window between that snapshot and the write-back — and the
@@ -87,7 +87,7 @@ this same real, persisted id — never a synthesized one. A `'queued'` result
 has no id to report: the message does not exist yet until the buffered job
 actually dispatches later.
 
-## 3. D9/D17, corrected twice (WP5 review, then Lead's follow-up)
+## 3. D9/D17, corrected twice under review
 
 The approved spec's original pending-wait shape — key a wait by the
 `(source, target)` conversation pair — has two defects the review found
@@ -111,7 +111,7 @@ by then nothing is armed for it.
 
 **Cycle guard, corrected a second time.** The first cut only checked the
 DIRECT reverse pair (does the target already wait on the source?), which
-Lead's own line-by-line read caught as still vulnerable to a 3+-party ring:
+a line-by-line read caught as still vulnerable to a 3+-party ring:
 registering C's wait on A never looks at what B is doing, so A→B→C→A sails
 through untouched. Since a conversation can hold at most one outstanding wait
 at a time (it is blocked inside the very tool call that registered it), the
@@ -133,7 +133,7 @@ refused (B asks a THIRD conversation instead of replying to A, then that one
 tries to wait back on A) — proven end-to-end in `delivery.test.ts`, not just
 at the `pending-wait.ts` unit level.
 
-**Stale-correlation defense (Lead's second finding).** `armActiveCorrelation`
+**Stale-correlation defense.** `armActiveCorrelation`
 and `clearActiveCorrelation` originally overwrote/dropped the "current turn
 context" association without checking whether a wait was still live under it.
 Under the stated invariant (`noteTurnEnded` always fires before the next turn
@@ -157,8 +157,8 @@ sign-offs until a breaker trips" failure the team's own DESIGN.md records.
 
 An ordinary conversation has no run/epoch to scope a budget to and reset on
 seal, so `circuit-breaker.ts` is its own always-live sliding-window limiter:
-a per-`(source, target)` pair cap and a per-source total (WP2 spec §9
-numbers), independent of each other so neither masks the failure mode the
+a per-`(source, target)` pair cap and a per-source total (numbers from the
+approved spec), independent of each other so neither masks the failure mode the
 other exists for. Check order — depth, then pair rate, then source rate —
 mirrors team's `chargeCircuit` ("structural before counting"), per D19.
 
@@ -177,9 +177,9 @@ delivery from hours ago must not inflate a fresh chain's depth.
 **D19 — a breach is a HARD STOP, resolved after product input (not this
 module's own default).** The first cut left this as a soft failure (an
 `isError` tool result, conversation left running) with a note that hard-stop
-was an open product question — WP5's review flagged that as the same
+was an open product question — review flagged that as the same
 "safety judgment handed to the model" mistake rule two exists to prevent, and
-Lead + product settled it: a rate breach now starts a FIXED cooldown
+It was settled as: a rate breach now starts a FIXED cooldown
 (`cooldownMs`, default 5 minutes) — deliberately not "wait for the sliding
 window to decay", since decay is gradual, the exact unblock moment is fuzzy,
 and it invites "just unblocked, immediately re-tripped" flapping. Cooldown
@@ -225,7 +225,7 @@ than silently fixing it: with the breaker checked first, a source stuck in a
 cooldown could never send its reply back to whoever it owes a wait to
 either — turning the cooldown itself into a fresh deadlock source, exactly
 what D9 exists to prevent (A blocked on B, B wants to reply but is
-cooled-down, A can now only reach its own timeout). Lead confirmed the fix
+cooled-down, A can now only reach its own timeout). The fix was confirmed
 before any code shipped: resolving an existing wait produces no new send
 volume (nothing queued, no turn started, no message persisted) — a ping-pong
 loop needs NEW sends to sustain itself, and those are still charged normally,
@@ -235,16 +235,16 @@ so the exemption does not reopen the loop the breaker exists to stop.
 
 `platform/turn-gate`'s own overflow behavior is "shed the oldest buffered
 entry" (correct for team, where the blackboard is a durable fallback for
-anything dropped). The WP2 spec wants a full mailbox to reject the NEW send
+anything dropped). The approved spec wants a full mailbox to reject the NEW send
 as `queue_full` instead. Rather than change turn-gate's already-reviewed
 overflow semantics, `delivery.ts` tracks its own per-target buffered count
 (`bufferedCounts`, incremented when `turnGate.deliver` returns `'buffered'`,
 decremented at the start of every dispatch — safe to call unconditionally,
 since an immediately-dispatched job by construction found nothing buffered
 ahead of it) and refuses a delivery before ever calling `turnGate.deliver`
-once that count reaches the WP2 cap (50).
+once that count reaches the spec's cap (50).
 
-## 7. The MCP tools (WP7) and the broker cycle it exposed
+## 7. The MCP tools and the broker cycle they exposed
 
 `mcp-server.ts` builds `halo-conversations` (`conversation_read` /
 `conversation_send`, D13's naming) following `ocr/mcp-server.ts`'s template
@@ -303,7 +303,7 @@ imports; the seam is the only thing standing between broker.ts and the cycle.
   `setConversationInteropFactory(...)` (broker.ts) are both wired from
   bootstrap now — the feature is live once the two config keys default on.
 - The renderer (D15/D16 rendering — the "From @X" line, `role:'system'`
-  branch in `MessageRow`/`MessageItem`) — built in parallel by design/WP4,
+  branch in `MessageRow`/`MessageItem`) — built in parallel,
   not part of this backend work.
 - Slash-command inertness (D8) required no code change: slash parsing lives
   entirely in `InputArea.tsx` (renderer autocomplete only); the send path

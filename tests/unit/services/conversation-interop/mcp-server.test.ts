@@ -28,14 +28,14 @@ vi.mock('../../../../src/main/services/conversation-interop/list-read', () => ({
   readConversationForInterop: (...args: unknown[]) => readConversationForInterop(...args),
 }))
 
-const deliverToConversation = vi.fn()
-const deliverToConversationAndWait = vi.fn()
+const deliverToConversation = vi.fn((..._args: unknown[]) => undefined as unknown)
+const deliverToConversationAndWait = vi.fn((..._args: unknown[]) => undefined as unknown)
 vi.mock('../../../../src/main/services/conversation-interop/delivery', () => ({
   deliverToConversation: (...args: unknown[]) => deliverToConversation(...args),
   deliverToConversationAndWait: (...args: unknown[]) => deliverToConversationAndWait(...args),
 }))
 
-const getInboundForwardDepth = vi.fn(() => 0)
+const getInboundForwardDepth = vi.fn((..._args: unknown[]) => 0)
 vi.mock('../../../../src/main/services/conversation-interop/circuit-breaker', () => ({
   circuitBreaker: { getInboundForwardDepth: (...args: unknown[]) => getInboundForwardDepth(...args) },
   DEFAULT_CIRCUIT_LIMITS: { cooldownMs: 5 * 60_000 },
@@ -45,15 +45,18 @@ vi.mock('../../../../src/main/services/conversation-interop/circuit-breaker', ()
 // test's assumption that `target` reaches list-read/delivery unchanged.
 // Tests that exercise resolution itself use `mockReturnValueOnce` so the
 // override never leaks into a later, unrelated test.
-const resolveConversationTarget = vi.fn((_spaceId: string, _callerId: string, target: string) => ({
-  ok: true,
-  conversationId: target,
-}))
+const resolveConversationTarget = vi.fn(
+  (_spaceId: string, _callerId: string, target: string): ResolveTargetResult => ({
+    ok: true,
+    conversationId: target,
+  })
+)
 vi.mock('../../../../src/main/services/conversation-interop/target-resolution', () => ({
   resolveConversationTarget: (...args: unknown[]) => resolveConversationTarget(...(args as [string, string, string])),
 }))
 
 import { createConversationInteropMcpServer } from '../../../../src/main/services/conversation-interop/mcp-server'
+import type { ResolveTargetResult } from '../../../../src/main/services/conversation-interop/target-resolution'
 
 interface ToolReply {
   content: Array<{ type: 'text'; text: string }>
@@ -76,10 +79,10 @@ describe('createConversationInteropMcpServer', () => {
 
   it('builds both tools when includeSend is true, only conversation_read when false', () => {
     const withSend = createConversationInteropMcpServer(SCOPE, true)
-    expect(withSend.tools.map((t) => t.name)).toEqual(['conversation_read', 'conversation_send'])
+    expect(withSend.tools.map((t: { name: string }) => t.name)).toEqual(['conversation_read', 'conversation_send'])
 
     const readOnly = createConversationInteropMcpServer(SCOPE, false)
-    expect(readOnly.tools.map((t) => t.name)).toEqual(['conversation_read'])
+    expect(readOnly.tools.map((t: { name: string }) => t.name)).toEqual(['conversation_read'])
   })
 
   describe('conversation_read', () => {
@@ -205,7 +208,7 @@ describe('createConversationInteropMcpServer', () => {
     })
 
     it('waitForReply=true consumed as a reply says the wait was NOT honored, with a distinct status', async () => {
-      // Lead's follow-up finding: the caller explicitly asked to wait for ITS
+      // The caller explicitly asked to wait for ITS
       // OWN answer. If this send instead got consumed as the reply someone
       // else needed, a plain "delivered" status reads as "sent, now
       // waiting" — the caller would wait forever on a reply that never
