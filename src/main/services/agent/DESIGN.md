@@ -114,16 +114,26 @@ that the sink boundary is being bypassed.
 
 Do not bypass `subagent-handler` for nested invocations — it owns the lifecycle, resource limits, and result translation.
 
-## 5) External Injection (IM / Scheduled / Programmatic)
+## 5) External Injection (Mid-Turn Delivery)
 
-`inject-message.ts` is the single entry for pushing messages into a live session from outside the normal user-input path. Callers include:
-- `apps/runtime/dispatch-inbound.ts` (IM inbound messages)
-- `apps/runtime/execute.ts` (scheduled / event-triggered runs)
+Two entries push text into a session's RUNNING turn from outside the normal
+user-input path. Both ride the same engine primitive — the subprocess absorbs
+the text at the turn's next tool-round boundary and still ends with a single
+result; no second turn starts. They differ in who owns the record of the
+message:
 
-Injection rules:
-- Must specify target `sessionId` and role-equivalent metadata.
-- Cannot inject mid-turn — injection waits for the current turn to settle.
-- Permission context (owner vs guest for IM) is attached at injection time; the stream respects it until the turn ends.
+- `inject-message.ts` (`injectMessage`) — persists to the conversation store
+  (source: 'injection'), then sends. Throws when no live session exists. Backs
+  the user's "type while generating"; called from `ipc/agent.ts`.
+- `live-turn.ts` (`hasLiveTurn`, `sendIntoLiveTurn`) — the turn-in-flight probe
+  plus the same send with NO persistence, for a caller that owns its own record
+  (an app chat's JSONL transcript). Returns false instead of throwing whenever
+  nothing reached the engine, so a caller holding a fallback queue can take the
+  message back. Consumed by `apps/runtime/app-chat-live-turn.ts` for the team
+  runtime's mid-turn delivery.
+
+Callers wanting the ordinary "wait for the current turn, then start a new one"
+behavior do not inject — they go through the normal send path and queue.
 
 ## 6) Integration Points
 

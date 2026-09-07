@@ -16,6 +16,7 @@
  * - stream-processor.ts - Core stream processing (shared by send-message + app-chat)
  * - session-consumer.ts - Persistent REPL consumer (mirrors CC's REPL model)
  * - send-message.ts    - Main conversation message sending (send-only, consumer handles response)
+ * - live-turn.ts       - Turn-in-flight probe + persistence-free mid-turn send
  * - control.ts         - Generation control (stop, status)
  */
 
@@ -65,6 +66,10 @@ export { sendMessage } from './send-message'
 
 // Inject message into active session mid-turn (Agent Team / deadlock recovery)
 export { injectMessage } from './inject-message'
+
+// Turn-in-flight probe + persistence-free mid-turn delivery, for callers that
+// own their own record of the message (an app chat's transcript)
+export { hasLiveTurn, sendIntoLiveTurn } from './live-turn'
 
 // Stream processor (shared core for main agent + app chat)
 export { processStream } from './stream-processor'

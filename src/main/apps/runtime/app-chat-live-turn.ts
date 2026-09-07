@@ -9,9 +9,13 @@
  * reading idle while it is not. Of their own, because the team runtime asks
  * both, synchronously, and cannot import `app-chat.ts` (that module imports the
  * team runtime accessor, so the edge back would close a cycle).
+ *
+ * The engine half of both answers comes from its own surface
+ * (`services/agent/live-turn.ts`); this module adds only what is app-chat's to
+ * add — the pre-engine round window, and the transcript.
  */
 
-import { getConsumerHandle, v2Sessions } from '../../services/agent/session-manager'
+import { hasLiveTurn, sendIntoLiveTurn } from '../../services/agent/live-turn'
 import { hasActiveAppChatRound, peekAppChatSink } from './app-chat-sink'
 
 const LOG_TAG = '[AppChatLiveTurn]'
@@ -30,63 +34,24 @@ const LOG_TAG = '[AppChatLiveTurn]'
  * the session just as much as a solicited one.
  */
 export function isAppChatConversationGenerating(conversationId: string): boolean {
-  if (hasActiveAppChatRound(conversationId)) return true
-  const consumer = getConsumerHandle(conversationId)
-  return !!(consumer?.isRunning && consumer.getActiveSessionState())
+  return hasActiveAppChatRound(conversationId) || hasLiveTurn(conversationId)
 }
 
 /**
- * Deliver `text` into the turn `conversationId` is already running.
+ * Deliver `text` into the turn `conversationId` is already running, and record
+ * it in the app chat's transcript. The mid-turn mechanics — and the guarantee
+ * that false means "nothing reached the engine" — are the engine's
+ * (`sendIntoLiveTurn`); what is added here is the record, because an app chat's
+ * history is its JSONL transcript, owned by the sink, not the conversation
+ * store that space chat writes.
  *
- * The engine absorbs it at that turn's next tool-round boundary, which still
- * ends with a single result — no second turn is started and nothing is
- * interrupted. Same primitive that backs a person typing while their agent is
- * generating (`services/agent/inject-message.ts`), rebuilt here because the two
- * differ in exactly one thing: where the message is persisted. Space chat writes
- * to the conversation store; an app chat's record is its JSONL transcript, owned
- * by the sink.
- *
- * Returns false — never throws — whenever the message did NOT reach the engine,
- * so a caller holding a slower fallback (the team mailbox) can take it back. A
- * false answer must therefore be cheap to be wrong about, and it is: the cost is
- * latency. A true answer must not be, which is why nothing is written down until
- * the engine has taken the message.
+ * Returns false — never throws — so a caller holding a slower fallback (the
+ * team mailbox) can take the message back. A false answer must be cheap to be
+ * wrong about, and it is: the cost is latency. A true answer must not be,
+ * which is why nothing is written down until the engine has taken the message.
  */
 export function injectIntoAppChat(conversationId: string, text: string): boolean {
-  const info = v2Sessions.get(conversationId)
-  if (!info) {
-    console.warn(`${LOG_TAG} No live session for ${conversationId}; not delivered`)
-    return false
-  }
-
-  // A live session is not a live TURN. Between the engine emitting a turn's
-  // result and the consumer tearing the subprocess down there is a window where
-  // the session object is still here and nothing is listening: text sent into it
-  // goes nowhere, and the caller would have been told it was delivered. Of the
-  // two ways to be wrong, "queued a little late" is recoverable and "reported as
-  // delivered but never arrived" is not, so this checks the narrowest signal
-  // available — a turn the consumer is actively processing — and declines
-  // otherwise.
-  //
-  // It narrows the window rather than closing it: the turn can still end in the
-  // microseconds after this reads true. That residue is why the caller must
-  // treat false as "use your slower path" and never as "lost".
-  const consumer = getConsumerHandle(conversationId)
-  if (!consumer?.isRunning || !consumer.getActiveSessionState()) {
-    console.warn(`${LOG_TAG} No turn in flight for ${conversationId}; not delivered`)
-    return false
-  }
-
-  try {
-    info.session.send(text)
-  } catch (err) {
-    // Nothing reached the engine, and nothing was written down: the caller takes
-    // it back. Recording it here would leave the member reading the same message
-    // twice — once from a transcript line for a delivery that failed, once from
-    // the mailbox that legitimately re-delivers it.
-    console.error(`${LOG_TAG} Delivery into the running turn of ${conversationId} failed:`, err)
-    return false
-  }
+  if (!sendIntoLiveTurn(conversationId, text)) return false
 
   // Written only once the engine has taken it, and deliberately after: the
   // transcript is a record of what happened, and until the send returns nothing
