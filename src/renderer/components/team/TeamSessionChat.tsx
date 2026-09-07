@@ -75,6 +75,14 @@ export function TeamSessionChat({
   const [messages, setMessages] = useState<Message[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [isStale, setIsStale] = useState(false)
+  /**
+   * A send that arrived but started no turn, so no reply is coming on this
+   * screen. Deliberately not routed through `setSessionError`: that is the error
+   * channel, and `errorType` / `InterruptedBubble` / the failure branches below
+   * all key off it — a success told through it reads as a failure everywhere
+   * that asks. Cleared as soon as anything actually happens here.
+   */
+  const [deliveredNoReply, setDeliveredNoReply] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const session = useChatStore(s => s.getSession(conversationId))
@@ -108,6 +116,7 @@ export function TeamSessionChat({
     seqCursorRef.current = 0
     ownTurnRef.current = false
     setIsStale(false)
+    setDeliveredNoReply(null)
   }, [appId, epochId])
 
   const loadMessages = useCallback(async (silent = false) => {
@@ -218,6 +227,8 @@ export function TeamSessionChat({
 
     resetSession(convId)
     ownTurnRef.current = true
+    // A new send answers the previous one's notice, whatever it said.
+    setDeliveredNoReply(null)
     const userMsg: Message = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -235,10 +246,43 @@ export function TeamSessionChat({
         ? await api.teamSendToMember({ teamId, appId, epochId: eid, message: content, images, thinkingEnabled })
         : await api.appChatSend({ appId, spaceId, message: content, images, thinkingEnabled, conversationId: convId, teamContext })
 
-      const remoteResult = isRemote && res.success ? (res.data as { ok?: boolean; reason?: string } | undefined) : undefined
+      const remoteResult = isRemote && res.success
+        ? (res.data as { ok?: boolean; reason?: string; delivery?: 'queued' | 'mid_turn' } | undefined)
+        : undefined
+      // Accepted, but no turn starts from this surface now — the message is
+      // either waiting behind the teammate's current turn or was folded into
+      // it. Two consequences, and both are needed.
+      //
+      // The latch must come off, otherwise the turn this message eventually
+      // influences is mistaken for ours and the words it answers are never
+      // pulled into view.
+      //
+      // And it must be SAID. This screen otherwise shows a sent bubble and then
+      // nothing at all, for as long as the teammate stays busy — indistinguishable
+      // from a message that vanished. The two cases are told apart on purpose:
+      // "queued" means they have not read it yet, "mid_turn" means they already
+      // have and any answer arrives as its own message, so telling someone to
+      // wait here would be wrong.
+      const owner = ownerName || t('this teammate')
+      if (remoteResult?.delivery === 'queued') {
+        ownTurnRef.current = false
+        // "Queued", not "Delivered": on the bus this means the mailbox took it
+        // and the target's session has not. Saying delivered would be the one
+        // thing this notice exists to prevent. And the turn it waits behind runs
+        // in THIS conversation — same app, same team, same epoch, so the same
+        // session key — which is why it is named as the turn above rather than
+        // as other work somewhere else.
+        setDeliveredNoReply(
+          t('Queued. {{owner}} is still finishing the turn above — yours is next in line.', { owner })
+        )
+      } else if (remoteResult?.delivery === 'mid_turn') {
+        ownTurnRef.current = false
+        setDeliveredNoReply(
+          t('Delivered. {{owner}} picked it up inside the work in progress; a reply will arrive as a separate message.', { owner })
+        )
+      }
       const failed = isRemote ? !res.success || remoteResult?.ok === false : !res.success
       if (failed) {
-        const owner = ownerName || t('this teammate')
         const remoteReason = (): string => {
           switch (remoteResult?.reason) {
             case 'TIMEOUT': return t('No reply from {{owner}} in time — they may be busy. Try again shortly.', { owner })
@@ -344,6 +388,30 @@ export function TeamSessionChat({
               <p className="pb-4 pt-1 text-center text-xs text-muted-foreground/60">
                 {t('This is what they did just now.')}
               </p>
+            )}
+
+            {/*
+              Only while this view is otherwise quiet. A remote member's turn IS
+              relayed into this store (`agent-events` preserves it as the only
+              local record), so the turn this message waits behind is usually on
+              screen and streaming — and a notice explaining the wait, printed
+              beside the thing being waited for, is noise.
+
+              The cost is real and worth stating: for `queued` the quiet window
+              can be brief — it opens when that turn ends and closes when this
+              message gets its own turn — so the notice may barely appear. The
+              alternative, showing it regardless, needs a rule for taking it down
+              again or it outlives what it describes, and a line that says
+              "yours is next in line" long after the answer arrived is worse than
+              one that flashed. Unverified in practice: this path needs a remote
+              member, so it has never been watched live.
+            */}
+            {deliveredNoReply && !isGenerating && !error && (
+              <div className="flex justify-start pb-4">
+                <div className="w-[85%] rounded-2xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+                  <p className="text-sm text-foreground">{deliveredNoReply}</p>
+                </div>
+              </div>
             )}
 
             {!isGenerating && error && errorType === 'interrupted' && (

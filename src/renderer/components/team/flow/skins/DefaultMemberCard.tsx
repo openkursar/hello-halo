@@ -75,7 +75,7 @@ export function DefaultMemberCard({ view, selected, active }: { view: MemberView
       {waitsOnOwner ? (
         <WaitingOnOwnerBadge ownerName={presence.ownerName} className="self-start" />
       ) : (
-        <span className="truncate text-xs text-muted-foreground">
+        <span className="truncate text-xs text-muted-foreground" title={summary || undefined}>
           {summary || (isLead ? t('Team Lead') : '\u00A0')}
         </span>
       )}

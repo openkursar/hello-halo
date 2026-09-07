@@ -198,6 +198,29 @@ function notifyMembersJoined(officeName: string, joined: Array<{ ownerDisplayNam
 }
 
 /** Sort: waiting-for-decision first, then running, then most-recent activity. */
+// A burst of first-sighting `team:updated` events (bulk create, federation
+// catch-up) would each fire a full list refetch, racing N wholesale overwrites
+// of `teams` where the last response wins regardless of order. Coalesce to one
+// fetch at a time plus one trailing rerun — the rerun starts after the last
+// request, so a team created mid-fetch is never dropped by a stale snapshot.
+let teamsRefreshRunning = false
+let teamsRefreshQueued = false
+async function refreshTeamsCoalesced(load: () => Promise<void>): Promise<void> {
+  if (teamsRefreshRunning) {
+    teamsRefreshQueued = true
+    return
+  }
+  teamsRefreshRunning = true
+  try {
+    do {
+      teamsRefreshQueued = false
+      await load()
+    } while (teamsRefreshQueued)
+  } finally {
+    teamsRefreshRunning = false
+  }
+}
+
 function sortTeams(teams: TeamListItem[]): TeamListItem[] {
   const rank = (t: TeamListItem): number => {
     // hasWaitingUser alone: it already means "a decision is waiting on YOU",
@@ -717,11 +740,20 @@ export const useTeamStore = create<TeamState>((set, get) => ({
             (team.hostNodeId == null && team.status === 'waiting_user') ||
             (existing?.hasWaitingUser ?? false),
           leadAppId: team.leadAppId,
+          // A Team event carries no roster, and the roster drives who can be
+          // picked as a channel's backend — so carry the known one forward
+          // rather than guess. A team we have never listed has none to carry;
+          // that case refetches below instead of publishing an empty roster,
+          // which would read as "this team has no one on this machine".
+          localMembers: existing?.localMembers ?? [],
           updatedAt: team.updatedAt,
         }
         const teams = existing
           ? s.teams.map(t => t.id === teamId ? item : t)
           : [...s.teams, item]
+        // Every field of a first-sighting row is a guess (the event carries a
+        // Team, not a list item), so pull the real one.
+        if (!existing) void refreshTeamsCoalesced(() => get().loadTeams())
         return {
           teams: sortTeams(teams),
           detail: s.detail && s.detail.team.id === teamId

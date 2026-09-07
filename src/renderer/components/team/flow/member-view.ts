@@ -9,6 +9,7 @@
 import { awaitsOurDecision, checksForMember } from '../../../../shared/apps/team-types'
 import type { RosterMember } from '../../../../shared/apps/team-types'
 import { useMemberPresence, useTeamStore, type MemberPresence } from '../../../stores/team.store'
+import { useAppsStore } from '../../../stores/apps.store'
 import { useTranslation } from '../../../i18n'
 
 export interface MemberView {
@@ -29,6 +30,11 @@ export interface MemberView {
   /** One-line status/role summary shown under the name. */
   summary: string
   /**
+   * What this digital human is in its own right, independent of any team. Empty
+   * for a member on a teammate's machine — its app record lives there, not here.
+   */
+  description: string
+  /**
    * How many periodic checks are standing over this member. Not an activity —
    * a standing arrangement someone made about it, which is exactly what a
    * person scanning the floor wants to spot at a glance.
@@ -45,6 +51,9 @@ export function useMemberView(
   const presence = useMemberPresence(teamId, member.appId)
   const checkCount = useTeamStore(
     s => checksForMember(s.detail?.checks ?? [], member.appId, focusedEpochId).length
+  )
+  const description = useAppsStore(
+    s => s.apps.find(a => a.id === member.appId)?.spec.description ?? ''
   )
 
   const isLead = member.isLead
@@ -73,12 +82,16 @@ export function useMemberView(
   // "Waiting on X" is the badge's sentence (both skins render it from
   // `waitsOnOwner`), so the summary must not say it a second time on the same
   // card — it falls back to the role, as it does at rest.
+  //
+  // At rest the card is the only place a reader learns who this member IS, so
+  // when no team role was written it says what the digital human is rather than
+  // going blank. Never ahead of the role: the role is what it does HERE.
   const summary =
     member.status === 'working'
       ? elsewhereLabel || member.currentTaskTitle || ''
       : member.status === 'error'
         ? member.currentTaskTitle || ''
-        : member.role || ''
+        : member.role || description
 
-  return { member, presence, isLead, isUnreachable, isWorking, isAlert, waitsOnOwner, summary, checkCount }
+  return { member, presence, isLead, isUnreachable, isWorking, isAlert, waitsOnOwner, summary, description, checkCount }
 }

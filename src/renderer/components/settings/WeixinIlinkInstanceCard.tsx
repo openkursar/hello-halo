@@ -12,7 +12,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import QRCode from 'qrcode'
 import {
   Loader2, ChevronDown, RefreshCw, Smartphone,
-  Trash2, MoreVertical, Bot,
+  Trash2, MoreVertical,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
@@ -20,15 +20,16 @@ import type {
   ImChannelInstanceConfig,
   ImChannelInstanceStatus,
 } from '../../../shared/types/im-channel'
+import { ChannelBackendSelect, ChannelBackendName } from './ChannelBackendSelect'
+import type {
+  ChannelBackendApp,
+  ChannelBackendTeam,
+  ChannelBackendValue,
+} from './ChannelBackendSelect'
 
 // ============================================
 // Types
 // ============================================
-
-export interface AutomationApp {
-  id: string
-  spec: { name: string }
-}
 
 /** Connection state for the WeChat iLink QR-code auth flow */
 type WeixinIlinkAuthState =
@@ -42,9 +43,9 @@ type WeixinIlinkAuthState =
 export interface WeixinIlinkInstanceCardProps {
   instance: ImChannelInstanceConfig
   status: ImChannelInstanceStatus | undefined
-  automationApps: AutomationApp[]
-  /** Teams selectable as a backend (a team = its lead digital human + members). */
-  teams: { id: string; name: string; leadAppId: string | null }[]
+  automationApps: ChannelBackendApp[]
+  /** Teams whose members can back this channel (see ChannelBackendSelect). */
+  teams: ChannelBackendTeam[]
   isExpanded: boolean
   onToggle: () => void
   onChange: (instance: ImChannelInstanceConfig) => void
@@ -204,26 +205,9 @@ export function WeixinIlinkInstanceCard({
     })
   }, [stopPolling, instance])
 
-  // Combined backend selector value: "app:<id>" or "team:<id>".
-  const targetValue = instance.teamId ? `team:${instance.teamId}` : instance.appId ? `app:${instance.appId}` : ''
-
-  const handleTargetChange = useCallback((value: string) => {
-    if (value.startsWith('team:')) {
-      const teamId = value.slice('team:'.length)
-      const team = teams.find(tm => tm.id === teamId)
-      onChange({ ...instance, teamId, appId: team?.leadAppId ?? '' })
-    } else {
-      const appId = value.startsWith('app:') ? value.slice('app:'.length) : value
-      onChange({ ...instance, teamId: undefined, appId })
-    }
-  }, [instance, onChange, teams])
-
-  // Resolve bound target name (a team, or a single digital human).
-  const boundTeam = instance.teamId ? teams.find(tm => tm.id === instance.teamId) : undefined
-  const boundApp = automationApps.find(a => a.id === instance.appId)
-  const displayName = boundTeam
-    ? t('Team: {{name}}', { name: boundTeam.name })
-    : boundApp?.spec.name || t('Not bound')
+  const handleTargetChange = useCallback((target: ChannelBackendValue) => {
+    onChange({ ...instance, ...target })
+  }, [instance, onChange])
 
   const statusDot = !isEnabled
     ? 'bg-muted-foreground/30'
@@ -248,7 +232,9 @@ export function WeixinIlinkInstanceCard({
         <div className="flex items-center gap-2.5 min-w-0">
           <div className={`w-2 h-2 rounded-full flex-shrink-0 ${statusDot}`} />
           <div className="text-left min-w-0">
-            <p className="text-sm font-medium truncate">{displayName}</p>
+            <p className="text-sm font-medium truncate">
+              <ChannelBackendName value={instance} automationApps={automationApps} teams={teams} />
+            </p>
             <p className="text-[11px] text-muted-foreground truncate">
               {statusText}
             </p>
@@ -378,46 +364,12 @@ export function WeixinIlinkInstanceCard({
             )}
           </div>
 
-          {/* Backend selector — a single digital human OR a team (team = its
-              lead + members, same binding surface). */}
-          <div className="space-y-1">
-            <label className="text-sm text-muted-foreground">
-              {t('Backend')} <span className="text-red-400">*</span>
-            </label>
-            <div className="relative">
-              <Bot className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-              <select
-                value={targetValue}
-                onChange={(e) => handleTargetChange(e.target.value)}
-                className="w-full bg-muted border border-border rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary appearance-none cursor-pointer"
-              >
-                <option value="">{t('Select a digital human or team')}</option>
-                {automationApps.length > 0 && (
-                  <optgroup label={t('Digital Humans')}>
-                    {automationApps.map(app => (
-                      <option key={app.id} value={`app:${app.id}`}>
-                        {app.spec.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {teams.length > 0 && (
-                  <optgroup label={t('Teams')}>
-                    {teams.map(tm => (
-                      <option key={tm.id} value={`team:${tm.id}`} disabled={!tm.leadAppId}>
-                        {tm.leadAppId ? tm.name : t('{{name}} (no lead yet)', { name: tm.name })}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {instance.teamId
-                ? t('All messages from this Bot are handled by this team (its lead replies and can delegate to members)')
-                : t('All messages from this Bot will be handled by this digital human')}
-            </p>
-          </div>
+          <ChannelBackendSelect
+            value={instance}
+            automationApps={automationApps}
+            teams={teams}
+            onChange={handleTargetChange}
+          />
         </div>
       )}
     </div>

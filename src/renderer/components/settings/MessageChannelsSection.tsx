@@ -15,13 +15,14 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Mail, MessageSquare, Bell, Webhook, Loader2,
-  CheckCircle, XCircle, ChevronDown, RefreshCw, Bot,
+  CheckCircle, XCircle, ChevronDown, RefreshCw,
   Plus, Trash2, MoreVertical, Smartphone, Info,
   QrCode, ExternalLink, UserCheck, Eye, EyeOff,
 } from 'lucide-react'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
 import { useAppsStore } from '../../stores/apps.store'
+import { useTeamStore } from '../../stores/team.store'
 import type { HaloConfig } from '../../types'
 import { resolveLocalizedText } from '../../../shared/types'
 import { NOTIFICATION_CHANNEL_META } from '../../../shared/types/notification-channels'
@@ -35,6 +36,12 @@ import type {
   ImChannelInstanceConfig,
   ImChannelInstanceStatus,
 } from '../../../shared/types/im-channel'
+import { ChannelBackendSelect, ChannelBackendName } from './ChannelBackendSelect'
+import type {
+  ChannelBackendApp,
+  ChannelBackendTeam,
+  ChannelBackendValue,
+} from './ChannelBackendSelect'
 import { WeixinIlinkInstanceCard } from './WeixinIlinkInstanceCard'
 import { WecomScanAuthDialog } from './WecomScanAuthDialog'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
@@ -395,9 +402,9 @@ function NameResolutionField({ value, onChange, status }: NameResolutionFieldPro
 interface InstanceCardProps {
   instance: ImChannelInstanceConfig
   status: ImChannelInstanceStatus | undefined
-  automationApps: { id: string; spec: { name: string } }[]
-  /** Teams selectable as a backend (a team = its lead digital human + members). */
-  teams: { id: string; name: string; leadAppId: string | null }[]
+  automationApps: ChannelBackendApp[]
+  /** Teams whose members can back this channel (see ChannelBackendSelect). */
+  teams: ChannelBackendTeam[]
   isExpanded: boolean
   onToggle: () => void
   onChange: (instance: ImChannelInstanceConfig) => void
@@ -431,13 +438,6 @@ function InstanceCard({
   const isEnabled = instance.enabled
   const cfg = instance.config as Record<string, unknown>
   const botId = (cfg.botId as string) || ''
-
-  // Resolve bound target name (a team, or a single digital human).
-  const boundTeam = instance.teamId ? teams.find(tm => tm.id === instance.teamId) : undefined
-  const boundApp = automationApps.find(a => a.id === instance.appId)
-  const displayName = boundTeam
-    ? t('Team: {{name}}', { name: boundTeam.name })
-    : boundApp?.spec.name || t('Not bound')
 
   // Status indicator. Standby (superseded by another device) is informational
   // rather than an error, so it gets its own colour.
@@ -509,22 +509,10 @@ function InstanceCard({
     onChange({ ...instance, enabled: !isEnabled })
   }
 
-  // Combined backend selector value: "app:<id>" or "team:<id>".
-  const targetValue = instance.teamId ? `team:${instance.teamId}` : instance.appId ? `app:${instance.appId}` : ''
-
-  const handleTargetChange = (value: string) => {
+  const handleTargetChange = (target: ChannelBackendValue) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     setDraft(null)
-    if (value.startsWith('team:')) {
-      const teamId = value.slice('team:'.length)
-      const team = teams.find(tm => tm.id === teamId)
-      // Bind appId to the lead so all existing routing works; teamId upgrades it
-      // to team mode. A team with no provisioned lead cannot back a channel.
-      onChange({ ...instance, teamId, appId: team?.leadAppId ?? '' })
-    } else {
-      const appId = value.startsWith('app:') ? value.slice('app:'.length) : value
-      onChange({ ...instance, teamId: undefined, appId })
-    }
+    onChange({ ...instance, ...target })
   }
 
   const handleStreamingChange = () => {
@@ -570,7 +558,9 @@ function InstanceCard({
         <div className="flex items-center gap-2.5 min-w-0">
           <div className={`w-2 h-2 rounded-full flex-shrink-0 ${statusDot}`} />
           <div className="text-left min-w-0">
-            <p className="text-sm font-medium truncate">{displayName}</p>
+            <p className="text-sm font-medium truncate">
+              <ChannelBackendName value={instance} automationApps={automationApps} teams={teams} />
+            </p>
             <p className="text-[11px] text-muted-foreground truncate">
               Bot ID: {truncateId(botId) || t('Not set')}
               {!isEnabled ? '' : isConnected ? '' : ` · ${statusText}`}
@@ -714,46 +704,12 @@ function InstanceCard({
             status={status?.identityResolution}
           />
 
-          {/* Backend selector — a single digital human OR a team (team = its
-              lead + members, same binding surface). */}
-          <div className="space-y-1">
-            <label className="text-sm text-muted-foreground">
-              {t('Backend')} <span className="text-red-400">*</span>
-            </label>
-            <div className="relative">
-              <Bot className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-              <select
-                value={targetValue}
-                onChange={(e) => handleTargetChange(e.target.value)}
-                className="w-full bg-muted border border-border rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary appearance-none cursor-pointer"
-              >
-                <option value="">{t('Select a digital human or team')}</option>
-                {automationApps.length > 0 && (
-                  <optgroup label={t('Digital Humans')}>
-                    {automationApps.map(app => (
-                      <option key={app.id} value={`app:${app.id}`}>
-                        {app.spec.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {teams.length > 0 && (
-                  <optgroup label={t('Teams')}>
-                    {teams.map(tm => (
-                      <option key={tm.id} value={`team:${tm.id}`} disabled={!tm.leadAppId}>
-                        {tm.leadAppId ? tm.name : t('{{name}} (no lead yet)', { name: tm.name })}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {instance.teamId
-                ? t('All messages from this Bot are handled by this team (its lead replies and can delegate to members)')
-                : t('All messages from this Bot will be handled by this digital human')}
-            </p>
-          </div>
+          <ChannelBackendSelect
+            value={instance}
+            automationApps={automationApps}
+            teams={teams}
+            onChange={handleTargetChange}
+          />
 
           {/* Reply scope */}
           <div className="space-y-1">
@@ -1233,25 +1189,20 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
 
   useEffect(() => { loadApps() }, [loadApps])
 
-  // Load teams for the backend selector (a team = its lead + members).
-  const [teams, setTeams] = useState<{ id: string; name: string; leadAppId: string | null }[]>([])
-  useEffect(() => {
-    api.teamList()
-      .then((res: { success?: boolean; data?: unknown }) => {
-        if (res.success && Array.isArray(res.data)) {
-          setTeams((res.data as Array<{ id: string; name: string; leadAppId?: string | null }>).map(tm => ({
-            id: tm.id, name: tm.name, leadAppId: tm.leadAppId ?? null,
-          })))
-        }
-      })
-      .catch(() => { /* teams stay empty — selector just shows digital humans */ })
-  }, [])
+  // Teams for the backend selector — a channel binds one member of a team, so
+  // the selector needs a LIVE roster. team.store is that: App.tsx loads it at
+  // startup and keeps it current from team:updated, and every roster edit goes
+  // through the store's own actions. A local fetch here would be a second copy
+  // that nothing refreshes, so a member added after this panel mounted could
+  // never be picked.
+  const teams = useTeamStore(s => s.teams)
 
   // Load product-level permission defaults (once)
   useEffect(() => {
     api.imChannelsPermissionDefaults()
-      .then((res: { success?: boolean; data?: PermissionDefaults | null }) => {
-        if (res.success && res.data) setPermissionDefaults(res.data)
+      .then((res) => {
+        // Untyped IPC payload — PermissionDefaults is the renderer's mirror of it.
+        if (res.success && res.data) setPermissionDefaults(res.data as PermissionDefaults)
       })
       .catch(() => { /* defaults stay null — no restrictions */ })
   }, [])

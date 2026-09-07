@@ -8,6 +8,10 @@
  *
  * A member someone else brought is readable here in full and editable nowhere:
  * it runs on their machine, so it is theirs to define.
+ *
+ * Above the duty sits what the digital human is in its own right, so the panel
+ * answers "who is this" before "what does it do here" — without it, a reader
+ * who never opens the Digital Humans screen only ever sees an assignment.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -19,6 +23,7 @@ import { CapabilityPolicyFields } from '../capability/CapabilityPolicyFields'
 import { SystemPromptEditor } from '../apps/SystemPromptEditor'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { useTeamStore } from '../../stores/team.store'
+import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
 import { describeRhythm } from './check-format'
@@ -38,6 +43,12 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
 
   const isMine = !isRemoteMember(member)
   const ownerName = member.ownerDisplayName || t('a teammate')
+  // Read live rather than copied onto the member row, so editing the digital
+  // human shows here immediately. Absent for a member on a teammate's machine —
+  // its app record lives there, and nothing replicates it.
+  const description = useAppsStore(
+    s => s.apps.find(a => a.id === member.appId)?.spec.description?.trim() ?? ''
+  )
   // Every check on this member in this office, not just the one you happened to
   // walk in from: the member's live panel is where a single conversation's are.
   const checks = checksForMember(detail.checks ?? [], member.appId)
@@ -80,6 +91,17 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-2xl space-y-5 p-3 sm:p-6">
+          {description && (
+            <div className="space-y-2">
+              <h3 className="text-sm font-medium text-foreground">
+                {t('The digital human itself')}
+              </h3>
+              <p className="whitespace-pre-wrap rounded-lg border border-border bg-secondary/40 px-3 py-2 text-sm leading-relaxed text-muted-foreground">
+                {description}
+              </p>
+            </div>
+          )}
+
           <div className="space-y-2">
             <h3 className="text-sm font-medium text-foreground">
               {t('Duty in this team')}

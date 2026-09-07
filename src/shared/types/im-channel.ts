@@ -110,19 +110,21 @@ export interface ImChannelInstanceConfig {
   /** Whether this instance is enabled */
   enabled: boolean
   /**
-   * Bound digital human (App) ID — required for routing.
-   * For a team-backed instance (`teamId` set), this holds the team's lead app id
-   * so all existing routing/session/permission/reply code works unchanged; the
-   * lead is resolved fresh from the team at dispatch time.
+   * The digital human (App) that serves this channel — required for routing.
+   * Without `teamId` it is a standalone digital human; with `teamId` it is the
+   * bound member of that team (its lead, or any other member).
    */
   appId: string
   /**
-   * Optional team binding. When set, this instance is backed by a digital team:
-   * inbound messages route to the team's lead with team coordination tools and a
-   * long-lived 'conversation' epoch (the lead may delegate to members and the
-   * reply flows back to this chat). When absent, the instance is backed by the
-   * single digital human `appId` (default). Mirrors "a team = a digital human":
-   * same binding surface, the team just has members behind its lead.
+   * Optional team binding. Together with `appId` it names ONE member of that
+   * team as this chat's front desk: inbound messages run as that member, with
+   * team coordination tools and a long-lived 'conversation' epoch, so it can
+   * pull in teammates and answer the person itself.
+   *
+   * The member must run on this machine — a federated member's app is not
+   * installed here, so it cannot be driven locally (enforced at dispatch).
+   * The binding names a member, not a role: promoting a different lead does not
+   * re-point an existing channel.
    */
   teamId?: string
   /** Provider-specific configuration (e.g., botId, secret, wsUrl for WeCom) */

@@ -216,7 +216,7 @@ export function WorkstationCard({ view, active }: { view: MemberView; active: bo
             />
           </div>
         )}
-        <span className="truncate text-xs text-muted-foreground">
+        <span className="truncate text-xs text-muted-foreground" title={summary || undefined}>
           {summary || (isLead ? t('Team Lead') : '\u00A0')}
         </span>
       </div>
