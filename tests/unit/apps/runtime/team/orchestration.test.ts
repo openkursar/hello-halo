@@ -89,7 +89,7 @@ function seedTeam(
  * A controllable mock session layer. Each sendAppChatMessage returns a Promise
  * the test resolves/rejects manually, so it can drive the four turn exits.
  */
-function makeSession() {
+function makeSession(options: { acceptMidTurn?: boolean } = {}) {
   const spaceByApp = new Map<string, string>([
     [LEAD_APP, SPACE],
     [RESEARCHER_APP, SPACE],
@@ -97,6 +97,8 @@ function makeSession() {
   ])
   const active = new Set<string>()
   const cleared: Array<{ appId: string; teamId: string }> = []
+  // What was handed to a turn already running, in the form the member reads it.
+  const injected: Array<{ sessionKey: string; message: string }> = []
   type Pending = {
     resolve: (finalMessage?: string | null) => void
     reject: (e: unknown) => void
@@ -124,12 +126,20 @@ function makeSession() {
       })
     }),
     isSessionActive: (key) => active.has(key),
+    // Off unless a test asks for it: without a live session there is nothing to
+    // hand a message to, which is also how a remote member answers — so the
+    // default keeps every other test on the mailbox path it was written for.
+    injectIntoSession: (sessionKey, message) => {
+      if (!options.acceptMidTurn || !active.has(sessionKey)) return false
+      injected.push({ sessionKey, message })
+      return true
+    },
     closeTeamSession: vi.fn(async (appId, teamId, _epochId) => {
       cleared.push({ appId, teamId })
     }),
     getMemberSpaceId: (appId) => spaceByApp.get(appId) ?? null,
   }
-  return { deps, pendings, cleared, active }
+  return { deps, pendings, cleared, active, injected }
 }
 
 // ============================================
@@ -165,6 +175,7 @@ describe('TeamOrchestration', () => {
       hooks: {
         wakeTarget: (p) => orchestration.wakeTarget(p),
         isBusy: (k) => orchestration.isBusy(k),
+        deliverMidTurn: (p) => orchestration.deliverMidTurn(p),
       },
     })
     const orchestration = createOrchestration({
@@ -378,7 +389,7 @@ describe('TeamOrchestration', () => {
           appId: LEAD_APP,
           teamId: TEAM_ID,
           epochId: epoch.id,
-          envelope: { id: 'e1', teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, toAppId: LEAD_APP, body: 'hi', wait: false, correlationId: 'c1', createdAt: Date.now() },
+          envelope: { id: 'e1', teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, toAppId: LEAD_APP, body: 'hi', correlationId: 'c1', createdAt: Date.now() },
           trigger: { teamId: TEAM_ID, epochId: epoch.id, correlationId: 'c1', fromAppId: null, wait: false, kind: 'run_start' },
         })
         pendings[0].resolve('replied; awaiting next message')
@@ -408,7 +419,7 @@ describe('TeamOrchestration', () => {
           appId: LEAD_APP,
           teamId: TEAM_ID,
           epochId: epoch.id,
-          envelope: { id: 'e1', teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, toAppId: LEAD_APP, body: 'hi', wait: false, correlationId: 'c1', createdAt: Date.now() },
+          envelope: { id: 'e1', teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, toAppId: LEAD_APP, body: 'hi', correlationId: 'c1', createdAt: Date.now() },
           trigger: { teamId: TEAM_ID, epochId: epoch.id, correlationId: 'c1', fromAppId: null, wait: false, kind: 'run_start' },
         })
         pendings[0].resolve('done')
@@ -416,7 +427,7 @@ describe('TeamOrchestration', () => {
         await vi.advanceTimersByTimeAsync(6_000)
 
         // Run epochs nudge the lead on quiescence → a second wake occurs.
-        expect(deps.sendAppChatMessage.mock.calls.length).toBeGreaterThanOrEqual(2)
+        expect((deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2)
       } finally {
         vi.useRealTimers()
       }
@@ -570,6 +581,184 @@ describe('TeamOrchestration', () => {
       await flush()
       await expect(sent).resolves.toMatchObject({ status: 'ok', message: '下周五' })
     })
+
+    it('states how long a message waited, once it has waited long enough to matter', async () => {
+      // A message drained from the mailbox was written against a situation that
+      // has since moved on. Read without its age it looks exactly like a fresh
+      // instruction, which is how a member ends up acting on an order its sender
+      // has already replaced.
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      build(deps)
+
+      const researcherSession = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id)
+      // Occupy the researcher with a turn nothing can be handed into, so the
+      // next message takes the mailbox.
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'first', wait: false })
+      await flush()
+
+      const realNow = Date.now
+      try {
+        await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'stale order', wait: false })
+        // The message sat in the mailbox for twenty minutes before its turn came.
+        Date.now = () => realNow() + 20 * 60_000
+        pendings[0].resolve('done')
+        await flush()
+        bus.drainMailbox(researcherSession)
+        await flush()
+      } finally {
+        Date.now = realNow
+      }
+
+      const drained = (deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => c[0].message as string)
+        .find((m) => m.includes('stale order'))
+      expect(drained).toBe('[Team message from lead — sent 20 minutes ago]\n\nstale order')
+    })
+  })
+
+  // ===========================================================================
+  // Mid-turn delivery — what the member actually reads
+  // ===========================================================================
+
+  describe('mid-turn delivery', () => {
+    it('hands a teammate message to the running turn, marked as having arrived mid-work', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings, injected } = makeSession({ acceptMidTurn: true })
+      build(deps)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'do T1', wait: false })
+      await flush()
+      expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
+
+      const second = await bus.send({
+        teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher',
+        message: 'stop, the plan changed', wait: false,
+      })
+
+      expect('messageId' in second && second.delivery).toBe('mid_turn')
+      // No second turn was started, and nothing was left queued.
+      expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
+      expect(bus.hasBufferedMessages(epoch.id)).toBe(false)
+
+      expect(injected).toHaveLength(1)
+      expect(injected[0].sessionKey).toBe(buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id))
+      // Who sent it, what they are to this team, and — the point of the whole
+      // path — that it landed beside work already in progress.
+      expect(injected[0].message).toBe(
+        '[Arrived while you were working — from lead (lead)]\n\nstop, the plan changed'
+      )
+
+      pendings[0].resolve('done')
+      await flush()
+    })
+
+    it('names a non-lead sender as a teammate', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings, injected } = makeSession({ acceptMidTurn: true })
+      build(deps)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'do T1', wait: false })
+      await flush()
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: TESTER_APP, to: 'researcher', message: 'my data is ready', wait: false })
+
+      expect(injected[0].message).toBe(
+        '[Arrived while you were working — from tester (teammate)]\n\nmy data is ready'
+      )
+      pendings[0].resolve('done')
+      await flush()
+    })
+
+    it('carries no board digest — that belongs at the start of a turn, not inside one', async () => {
+      // The digest answers "what changed since you last looked". Mid-turn it is
+      // a page of unrelated context dropped into live reasoning, and reading it
+      // here would advance the member's watermark past facts it may never see.
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings, injected } = makeSession({ acceptMidTurn: true })
+      const digest = vi.fn(() => '---\nBoard — recorded since you last looked:\n- lead shared "brief.md"')
+      build(deps, undefined, undefined, digest)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'do T1', wait: false })
+      await flush()
+      const digestCallsAfterWake = digest.mock.calls.length
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'also this', wait: false })
+
+      expect(injected[0].message).not.toContain('Board —')
+      // Not merely omitted from the text: never asked for, so no watermark moved.
+      expect(digest.mock.calls.length).toBe(digestCallsAfterWake)
+      pendings[0].resolve('done')
+      await flush()
+    })
+
+    it("keeps a person's words verbatim, exactly as typing into the same chat does", async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings, injected } = makeSession({ acceptMidTurn: true })
+      build(deps)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'do T1', wait: false })
+      await flush()
+
+      const sent = bus.send({
+        teamId: TEAM_ID, epochId: epoch.id, fromAppId: null, to: 'researcher',
+        message: 'hold on a second', wait: true,
+      })
+
+      expect(injected[0].message).toBe('hold on a second')
+      // Delivered, but it started no turn — so the receipt says exactly that
+      // rather than waiting for a completion that answers something else.
+      await expect(sent).resolves.toMatchObject({ status: 'mid_turn' })
+      pendings[0].resolve('done')
+      await flush()
+    })
+
+    it('falls back to the mailbox when there is no live session to hand it to', async () => {
+      // How a member owned by ANOTHER machine answers: its turn runs there, so
+      // nothing here can reach into it. The message must not be lost for it.
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings, injected } = makeSession({ acceptMidTurn: false })
+      build(deps)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'do T1', wait: false })
+      await flush()
+
+      const second = await bus.send({
+        teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'and this', wait: false,
+      })
+
+      expect(injected).toHaveLength(0)
+      expect('messageId' in second && second.delivery).toBe('queued')
+      expect(bus.hasBufferedMessages(epoch.id)).toBe(true)
+      pendings[0].resolve('done')
+      await flush()
+    })
+
+    it('the turn it joined still completes normally, against its own trigger', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession({ acceptMidTurn: true })
+      build(deps)
+      const completeTurn = spyCompleteTurn(bus)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'do T1', wait: false })
+      await flush()
+      const firstTrigger = pendings[0].teamContext
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, to: 'researcher', message: 'and this', wait: false })
+      pendings[0].resolve('done')
+      await flush()
+
+      // Exactly one completion, carrying the trigger of the turn that ran — the
+      // mid-turn message started nothing and completes nothing.
+      expect(completeTurn).toHaveBeenCalledTimes(1)
+      expect(completeTurn.mock.calls[0][0].trigger.correlationId).toBe(firstTrigger.correlationId)
+    })
   })
 
   describe('completion detection', () => {
@@ -664,7 +853,7 @@ describe('TeamOrchestration', () => {
           appId,
           teamId: TEAM_ID,
           epochId: epoch.id,
-          envelope: { id: corr, teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, toAppId: appId, body: 'go', wait: false, correlationId: corr, createdAt: Date.now() },
+          envelope: { id: corr, teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, toAppId: appId, body: 'go', correlationId: corr, createdAt: Date.now() },
           trigger: { teamId: TEAM_ID, epochId: epoch.id, correlationId: corr, fromAppId: LEAD_APP, wait: false, kind: 'message' },
         })
 
@@ -700,7 +889,7 @@ describe('TeamOrchestration', () => {
           appId: RESEARCHER_APP,
           teamId: TEAM_ID,
           epochId: epoch.id,
-          envelope: { id: 'c1', teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, toAppId: RESEARCHER_APP, body: 'go', wait: false, correlationId: 'c1', createdAt: Date.now() },
+          envelope: { id: 'c1', teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, toAppId: RESEARCHER_APP, body: 'go', correlationId: 'c1', createdAt: Date.now() },
           trigger: { teamId: TEAM_ID, epochId: epoch.id, correlationId: 'c1', fromAppId: LEAD_APP, wait: false, kind: 'message' },
         })
         await orch.wakeTarget({
@@ -708,7 +897,7 @@ describe('TeamOrchestration', () => {
           appId: TESTER_APP,
           teamId: TEAM_ID,
           epochId: epoch.id,
-          envelope: { id: 'c2', teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, toAppId: TESTER_APP, body: 'go', wait: false, correlationId: 'c2', createdAt: Date.now() },
+          envelope: { id: 'c2', teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP, toAppId: TESTER_APP, body: 'go', correlationId: 'c2', createdAt: Date.now() },
           trigger: { teamId: TEAM_ID, epochId: epoch.id, correlationId: 'c2', fromAppId: LEAD_APP, wait: false, kind: 'message' },
         })
 
@@ -825,6 +1014,61 @@ describe('TeamOrchestration', () => {
       const body = calls[calls.length - 1][0].message as string
       expect(body).toContain('You asked: "Which test account should I use?"')
       expect(body).toContain('use the staging account')
+    })
+
+    it('a turn ending with a seal pending starts nothing new from the mailbox', async () => {
+      // The bug this pins: `completeTurn`'s last act is draining the mailbox,
+      // and the caller learns three statements later that this epoch is about
+      // to be sealed. The drained envelope therefore started a turn that the
+      // seal — arriving a millisecond behind it — tore down while it was still
+      // building its session. What that produced was worse than either outcome
+      // on its own: a turn that reached no model (0 tokens), a message neither
+      // delivered nor cleanly dropped, and a sealed epoch woken back to life by
+      // its own doomed turn, so a finished run read as still running forever.
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      const orch = build(deps)
+
+      // The lead is mid-turn; a teammate's message queues behind it.
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: RESEARCHER_APP, to: 'lead', message: 'first', wait: false })
+      await flush()
+      const dispatchesBefore = (deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls.length
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: TESTER_APP, to: 'lead', message: 'queued behind it', wait: false })
+      expect(bus.hasBufferedMessages(epoch.id)).toBe(true)
+
+      // The lead calls team_complete during that turn, so the seal is deferred
+      // to its end — the exact ordering that produced the defect.
+      orch.requestSeal(TEAM_ID, epoch.id, 'done')
+      pendings[pendings.length - 1].resolve('wrapping up')
+      await flush()
+
+      // Nothing new was started on a session that is being torn down.
+      expect((deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls.length).toBe(dispatchesBefore)
+      // And the envelope was not left stranded either: the seal discards it,
+      // counted rather than silent (`resetEpoch`).
+      expect(bus.hasBufferedMessages(epoch.id)).toBe(false)
+      expect(store.getEpochById(epoch.id)?.endedAt).not.toBeNull()
+    })
+
+    it('a turn ending with NO seal pending still drains the mailbox', async () => {
+      // The guard must key on this epoch ending, not on "a turn ended" — or the
+      // fix would silently strand every queued message behind every turn.
+      seedTeam(store, { collabMode: 'free' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings } = makeSession()
+      build(deps)
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: RESEARCHER_APP, to: 'lead', message: 'first', wait: false })
+      await flush()
+      const dispatchesBefore = (deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls.length
+
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: TESTER_APP, to: 'lead', message: 'queued behind it', wait: false })
+      pendings[pendings.length - 1].resolve('done')
+      await flush()
+
+      expect((deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls.length).toBe(dispatchesBefore + 1)
     })
 
     it('resumeFromEscalation returns false when the epoch is gone (no solo fallback)', () => {
@@ -965,9 +1209,11 @@ describe('TeamOrchestration', () => {
       pendings[0].resolve('done')
       await flush()
 
-      // Turn 2: a periodic check — a different sender (none at all).
+      // Turn 2: a periodic check — a different sender (none at all). A one-shot
+      // check queues rather than skipping, which is what a check set for a
+      // specific moment needs; the recurring kind passes 'skip'.
       await orch.wakeForCheck({
-        teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, body: '[Periodic check] look',
+        teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, body: '[Periodic check] look', onBusy: 'buffer',
       })
       await flush()
 

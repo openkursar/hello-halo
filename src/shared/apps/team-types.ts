@@ -665,12 +665,18 @@ export interface TeamSendAsyncResult {
    * receipt is all the sender learns:
    *   - 'undelivered' the target's owner was offline/unreachable at send time.
    *                   There is no offline outbox, so it will NOT arrive later.
-   *   - 'queued'      the target is mid-turn; the message waits in its mailbox.
+   *   - 'queued'      the target is mid-turn and the message waits in its
+   *                   mailbox, to be read after that turn ends.
    *                   Only knowable for a locally-owned target — a remote one
    *                   queues on its OWNER, so it reads as a plain hand-over.
+   *   - 'mid_turn'    the target is mid-turn and the message went INTO that
+   *                   turn: they see it at their next step rather than after
+   *                   finishing. Nothing was interrupted, and no turn started
+   *                   for this message, so any answer still comes as their own
+   *                   `team_send`.
    * Absent → handed over to the target's session now.
    */
-  delivery?: 'undelivered' | 'queued'
+  delivery?: 'undelivered' | 'queued' | 'mid_turn'
 }
 /**
  * Receipt for a send that waited on the woken turn's ending. Not reachable from
@@ -683,12 +689,19 @@ export interface TeamSendSyncResult {
   /**
    * Delivery truth, so a non-delivery is never mistaken for a real (empty) reply:
    *   - 'ok'          the turn ran and reported back (message may still be empty).
+   *   - 'queued'      the target was mid-turn; the message is in its mailbox and
+   *                   will be delivered when that turn ends. Nothing failed, and
+   *                   no reply is coming on THIS call — the completion that would
+   *                   answer it belongs to a turn this message did not start.
+   *   - 'mid_turn'    the target was mid-turn and the message went into that
+   *                   turn, so they are reading it now. Like 'queued' it starts
+   *                   no turn of its own, hence no reply on THIS call.
    *   - 'timeout'     it was reachable but did not finish within the wait window.
    *   - 'undelivered' the wake never reached the owner (offline/unreachable) or no
    *                   completion signal ever came back — definitively NOT a reply.
    * This is the seam the durable feed outbox later feeds (delivered/pending/failed).
    */
-  status: 'ok' | 'timeout' | 'undelivered'
+  status: 'ok' | 'queued' | 'mid_turn' | 'timeout' | 'undelivered'
 }
 
 export interface TeamPostTaskInput {
@@ -768,6 +781,16 @@ export const AI_MEMBER_HARD_LIMIT = 5
 
 // ── Renderer aggregates (team.store projections) ──
 
+/**
+ * A team member whose digital human runs on THIS machine — the only members a
+ * node can drive directly (a remote member's app is not installed here).
+ */
+export interface TeamLocalMember {
+  appId: string
+  memberName: string
+  isLead: boolean
+}
+
 export interface TeamListItem {
   id: string
   name: string
@@ -781,6 +804,13 @@ export interface TeamListItem {
    * (leads are an internal coordination role, not standalone humans).
    */
   leadAppId: string | null
+  /**
+   * Members of this team that run on this machine, lead first. Lets a picker
+   * offer "team → member" targets (e.g. binding an IM channel to one teammate)
+   * without a detail fetch per team — the roster is already read here for
+   * `memberCount`.
+   */
+  localMembers: TeamLocalMember[]
   /**
    * Set when this office is hosted by another node — this reader joined it.
    * `hostNodeId != null` is the established "did I join this, or do I own
@@ -968,6 +998,18 @@ export function isRemoteMember(member: {
   ownerNodeId?: string
 }): boolean {
   return member.origin === 'remote' && member.ownerNodeId !== SELF_NODE_ID
+}
+
+/**
+ * Project a roster down to the members this machine can drive directly, lead
+ * first. Shared so every surface that offers a member as a target agrees on
+ * which ones are offerable and in what order.
+ */
+export function toLocalMembers(members: readonly TeamMember[]): TeamLocalMember[] {
+  return members
+    .filter((m) => !isRemoteMember(m))
+    .sort((a, b) => Number(b.isLead) - Number(a.isLead))
+    .map((m) => ({ appId: m.appId, memberName: m.memberName, isLead: m.isLead }))
 }
 
 /**

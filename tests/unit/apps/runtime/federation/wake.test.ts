@@ -62,7 +62,16 @@ import type {
 } from '../../../../../src/main/apps/runtime/federation'
 import type { OrchestrationSessionDeps } from '../../../../../src/main/apps/runtime/team'
 import { SELF_NODE_ID } from '../../../../../src/shared/apps/team-types'
-import type { Team, TeamMember, TeamEpoch, TeamTriggerContext } from '../../../../../src/main/apps/team/types'
+// `TeamTriggerContext` is coordination-runtime, not a persisted entity, so it
+// lives in the shared contract rather than apps/team's persistence surface.
+import type { TeamSendAsyncResult, TeamSendSyncResult, TeamTriggerContext } from '../../../../../src/shared/apps/team-types'
+import type { Team, TeamMember, TeamEpoch } from '../../../../../src/main/apps/team/types'
+
+/** Narrow a `send` result to the completion receipt a `wait: true` call returns. */
+function receipt(result: TeamSendAsyncResult | TeamSendSyncResult): TeamSendSyncResult {
+  if (!('status' in result)) throw new Error(`expected a completion receipt, got ${JSON.stringify(result)}`)
+  return result
+}
 
 const OFFICE = 'office-1'
 const NODE_A = 'node-a-authority'
@@ -178,6 +187,7 @@ describe('federation remote wake (position transparency)', () => {
     const local: OrchestrationSessionDeps = {
       sendAppChatMessage: vi.fn(async () => ({ finalMessage: 'LOCAL-should-not-run' })),
       isSessionActive: () => false,
+      injectIntoSession: () => false,
       closeTeamSession: async () => {},
       getMemberSpaceId: () => 'local-space',
     }
@@ -237,6 +247,7 @@ describe('federation remote wake (position transparency)', () => {
     const local: OrchestrationSessionDeps = {
       sendAppChatMessage: vi.fn(async () => ({ finalMessage: 'local-final' })),
       isSessionActive: () => false,
+      injectIntoSession: () => false,
       closeTeamSession: async () => {},
       getMemberSpaceId: () => 'local-space',
     }
@@ -264,6 +275,7 @@ describe('federation remote wake (position transparency)', () => {
       local: {
         sendAppChatMessage: async () => ({ finalMessage: null }),
         isSessionActive: () => false,
+        injectIntoSession: () => false,
         closeTeamSession: async () => {},
         getMemberSpaceId: () => 'local-space',
       },
@@ -298,6 +310,7 @@ describe('federation remote wake (position transparency)', () => {
       local: {
         sendAppChatMessage: async () => ({ finalMessage: null }),
         isSessionActive: () => false,
+        injectIntoSession: () => false,
         closeTeamSession: async () => {},
         getMemberSpaceId: () => 'local-space',
       },
@@ -328,6 +341,7 @@ describe('federation remote wake (position transparency)', () => {
       local: {
         sendAppChatMessage: async () => ({ finalMessage: null }),
         isSessionActive: () => false,
+        injectIntoSession: () => false,
         closeTeamSession: async () => {},
         getMemberSpaceId: () => 'local-space',
       },
@@ -353,6 +367,7 @@ describe('federation remote wake (position transparency)', () => {
         local: {
           sendAppChatMessage: async () => ({ finalMessage: null }),
           isSessionActive: () => false,
+          injectIntoSession: () => false,
           closeTeamSession: async () => {},
           getMemberSpaceId: () => 'local-space',
         },
@@ -456,6 +471,7 @@ describe('owner-side wake: spaceId is re-resolved locally (not the wire sentinel
       const local: OrchestrationSessionDeps = {
         sendAppChatMessage: vi.fn(async () => ({ finalMessage: 'LOCAL-should-not-run' })),
         isSessionActive: () => false,
+        injectIntoSession: () => false,
         closeTeamSession: async () => {},
         getMemberSpaceId: () => 'authority-local-space',
       }
@@ -558,7 +574,7 @@ describe('message-bus M-1: resolvePendingWaitsForMember', () => {
     const resolvedCount = bus.resolvePendingWaitsForMember(M1_MEMBER, { kind: 'timeout' })
     expect(resolvedCount).toBe(1)
 
-    const result = await pending
+    const result = receipt(await pending)
     expect(result.status).toBe('timeout')
     expect(result.from).toBe('member')
     // Names the teammate and steers the sender to reassign instead of waiting.

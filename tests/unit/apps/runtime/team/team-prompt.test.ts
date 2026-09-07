@@ -1,10 +1,10 @@
 /**
  * Unit tests for runtime/team/team-prompt — the IM front-desk bridge fragment.
  *
- * buildTeamImBridge is the Entry overlay used when a team LEAD serves an IM
+ * buildTeamImBridge is the Entry overlay used when a team member serves an IM
  * channel (a team-backed IM instance). It must override the base team Entry's
  * "delivered by the runtime, not a human" framing: the message is from a real
- * person and the lead replies straight back to them in-chat.
+ * person and that member replies straight back to them in-chat.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -51,7 +51,7 @@ describe('buildTeamImBridge', () => {
   const im = { channel: 'wecom-bot', displayName: 'Acme Sales Group', chatType: 'group' as const }
 
   it('frames the lead as the team front desk for the person', () => {
-    const out = buildTeamImBridge(im)
+    const out = buildTeamImBridge(im, true)
     expect(out).toContain('Front Desk')
     expect(out).toContain('wecom-bot')
     expect(out).toContain('Acme Sales Group')
@@ -60,8 +60,20 @@ describe('buildTeamImBridge', () => {
     expect(out).toContain('NOT by the team runtime')
   })
 
-  it('tells the lead its final message is the reply TO THE PERSON (no tool needed)', () => {
-    const out = buildTeamImBridge(im)
+  it('frames a bound teammate as reached directly, not as the team counter', () => {
+    const out = buildTeamImBridge(im, false)
+    // The person addressed THIS member; it must not present itself as the team's
+    // single point of contact, nor bounce everything to the lead.
+    expect(out).not.toContain('Front Desk')
+    expect(out).not.toContain('single point of contact')
+    expect(out).toContain('messaging YOU')
+    expect(out).toContain('NOT by the team runtime')
+    expect(out).toContain('wecom-bot')
+    expect(out).toContain('Acme Sales Group')
+  })
+
+  it.each([true, false])('tells the serving member its final message is the reply TO THE PERSON (isLead=%s)', (isLead) => {
+    const out = buildTeamImBridge(im, isLead)
     expect(out).toContain('final message')
     expect(out.toLowerCase()).toContain('do not call any tool to')
     // The exemption is scoped to this chat; it must not read as "your output
@@ -69,8 +81,8 @@ describe('buildTeamImBridge', () => {
     expect(out).toContain('reach no')
   })
 
-  it('warns that a specialist answer cannot land inside this turn (two messages, not one)', () => {
-    const out = buildTeamImBridge(im)
+  it.each([true, false])('warns that a teammate answer cannot land inside this turn (isLead=%s)', (isLead) => {
+    const out = buildTeamImBridge(im, isLead)
     expect(out).toContain('team_send')
     expect(out).toContain('cannot')
     expect(out).toContain('later as a new turn')
@@ -80,7 +92,7 @@ describe('buildTeamImBridge', () => {
   })
 
   it('reflects a direct chat type', () => {
-    const out = buildTeamImBridge({ channel: 'weixin-ilink-bot', displayName: 'Jane', chatType: 'direct' })
+    const out = buildTeamImBridge({ channel: 'weixin-ilink-bot', displayName: 'Jane', chatType: 'direct' }, true)
     expect(out).toContain('direct')
     expect(out).toContain('Jane')
   })

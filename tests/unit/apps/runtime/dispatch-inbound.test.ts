@@ -30,14 +30,16 @@ vi.mock('../../../../src/main/apps/manager', () => ({
 }))
 
 // ── app-chat: execution + real session-key format ──
-const sendAppChatMessageMock = vi.fn(async () => undefined)
-const clearImSessionMock = vi.fn(async () => undefined)
+// Typed by their real arity so a captured call can be read back (the assertions
+// below narrow `calls[0][0]`, which an untyped vi.fn() types as absent).
+const sendAppChatMessageMock = vi.fn(async (_request: Record<string, unknown>) => undefined)
+const clearImSessionMock = vi.fn(async (..._args: unknown[]) => undefined)
 // Mutable so the buffering test can flip a conversation "busy" without a
 // real generating session; defaults to false so every other test's message
 // takes the start-of-round path rather than being buffered.
 let conversationGenerating = false
 vi.mock('../../../../src/main/apps/runtime/app-chat', () => ({
-  sendAppChatMessage: (...a: unknown[]) => sendAppChatMessageMock(...a),
+  sendAppChatMessage: (request: Record<string, unknown>) => sendAppChatMessageMock(request),
   clearImSession: (...a: unknown[]) => clearImSessionMock(...a),
   isAppChatConversationGenerating: () => conversationGenerating,
   // Mirror the real deterministic joiner so we can assert derivation order.
@@ -100,11 +102,16 @@ vi.mock('../../../../src/main/services/space.service', () => ({
 vi.mock('../../../../src/main/foundation/product-config', () => ({
   getImChannelsPermissionDefaults: vi.fn(() => undefined),
 }))
+// ── Team coordination layer (team-backed instances) ──
+// Mutable so a test can stand up a team + roster; both absent by default, which
+// is the single-digital-human path every other test takes.
+let teamStore: Record<string, unknown> | undefined
+let teamRuntime: Record<string, unknown> | undefined
 vi.mock('../../../../src/main/apps/team', () => ({
-  getTeamStore: vi.fn(() => ({})),
+  getTeamStore: () => teamStore,
 }))
 vi.mock('../../../../src/main/apps/runtime/team', () => ({
-  getActiveTeamRuntime: vi.fn(() => undefined),
+  getActiveTeamRuntime: () => teamRuntime,
 }))
 
 import { dispatchInboundMessage, flushSupplementBuffer } from '../../../../src/main/apps/runtime/dispatch-inbound'
@@ -165,6 +172,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   instanceCfg = undefined
   conversationGenerating = false
+  teamStore = undefined
+  teamRuntime = undefined
   getAppMock.mockReturnValue(APP)
   getInstanceMock.mockReturnValue(undefined)
 })
@@ -294,6 +303,91 @@ describe('dispatchInboundMessage — session-key derivation', () => {
     const arg = sendAppChatMessageMock.mock.calls[0][0] as { appId: string; spaceId: string }
     expect(arg.appId).toBe('app-1')
     expect(arg.spaceId).toBe('space-1')
+  })
+})
+
+// ============================================
+// Team-backed binding (teamId + appId = one member)
+//
+// A team-backed instance binds ONE member of a team, which may be any member —
+// not necessarily the lead. The message runs as that member, in the team's
+// long-lived conversation epoch for this chat, with team context attached.
+// dispatch is also the trust boundary for the binding: config.json is
+// user-editable and a roster changes after binding.
+// ============================================
+
+const MEMBER_APP = { id: 'member-1', spaceId: 'space-1', specId: 'spec-1', spec: { name: 'Researcher' } }
+
+/** Stand up a team whose roster is exactly `members`, plus its runtime. */
+function withTeam(members: Array<Record<string, unknown>>, teamOverrides: Record<string, unknown> = {}) {
+  teamStore = {
+    getTeamById: (id: string) => ({ id, name: 'Weekly Brief', leadAppId: 'lead-1', ...teamOverrides }),
+    getMember: (_teamId: string, appId: string) => members.find(m => m.appId === appId) ?? null,
+  }
+  teamRuntime = {
+    ensureConversationEpoch: () => ({ id: 'epoch-1' }),
+  }
+}
+
+const LOCAL_MEMBER = { appId: 'member-1', memberName: 'researcher', isLead: false, origin: 'local', ownerNodeId: 'SELF' }
+
+describe('dispatchInboundMessage — team-backed binding', () => {
+  it('runs a bound NON-LEAD member in the team conversation epoch', async () => {
+    getAppMock.mockReturnValue(MEMBER_APP)
+    withTeam([LOCAL_MEMBER])
+    instanceCfg = { teamId: 'team-1' }
+
+    await dispatchInboundMessage(makeMsg(), makeReply(false), 'member-1', 'inst-1')
+
+    const arg = sendAppChatMessageMock.mock.calls[0][0] as {
+      appId: string
+      conversationId: string
+      teamContext?: { teamId: string; epochId: string; kind: string }
+    }
+    // The bound member serves the chat — the lead is not substituted in.
+    expect(arg.appId).toBe('member-1')
+    expect(arg.conversationId).toBe('app-chat:member-1:team:team-1:epoch-1')
+    expect(arg.teamContext).toMatchObject({ teamId: 'team-1', epochId: 'epoch-1', kind: 'human_message' })
+  })
+
+  it('drops the message when the bound app is no longer a member of that team', async () => {
+    getAppMock.mockReturnValue(MEMBER_APP)
+    withTeam([])
+    instanceCfg = { teamId: 'team-1' }
+
+    await dispatchInboundMessage(makeMsg(), makeReply(false), 'member-1', 'inst-1')
+
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('drops the message when the bound member runs on another machine', async () => {
+    // Its app is not installed here, so nothing local could run the turn.
+    getAppMock.mockReturnValue(MEMBER_APP)
+    withTeam([{ ...LOCAL_MEMBER, origin: 'remote', ownerNodeId: 'node-b' }])
+    instanceCfg = { teamId: 'team-1' }
+
+    await dispatchInboundMessage(makeMsg(), makeReply(false), 'member-1', 'inst-1')
+
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('drops the message when the team is gone', async () => {
+    getAppMock.mockReturnValue(MEMBER_APP)
+    withTeam([LOCAL_MEMBER])
+    ;(teamStore as { getTeamById: unknown }).getTeamById = () => null
+    instanceCfg = { teamId: 'team-1' }
+
+    await dispatchInboundMessage(makeMsg(), makeReply(false), 'member-1', 'inst-1')
+
+    expect(sendAppChatMessageMock).not.toHaveBeenCalled()
+  })
+
+  it('leaves a single-digital-human instance on the plain IM session key', async () => {
+    instanceCfg = { replyScope: 'all' }
+    await dispatchInboundMessage(makeMsg(), makeReply(false), 'app-1', 'inst-1')
+    const arg = sendAppChatMessageMock.mock.calls[0][0] as { conversationId: string; teamContext?: unknown }
+    expect(arg.conversationId).toBe('app-chat:app-1:wecom-bot:direct:chat-1')
+    expect(arg.teamContext).toBeUndefined()
   })
 })
 

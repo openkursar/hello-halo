@@ -203,6 +203,16 @@ export function makeLocationAwareSessionDeps(
       return local.isSessionActive(sessionKey)
     },
 
+    injectIntoSession(sessionKey, message) {
+      // No locality branch on purpose: a remote member's turn runs on its owner,
+      // where there is no live session under this key, so the local impl already
+      // answers false and the message queues as before. The remote half of this
+      // — reaching into a turn on ANOTHER machine — would need the wake protocol
+      // to carry a delivery that expects no completion, and is deliberately not
+      // attempted here. Mid-turn delivery is a locally-owned-member gain.
+      return local.injectIntoSession(sessionKey, message)
+    },
+
     closeTeamSession(appId, teamId, epochId) {
       if (isLocal(appId, teamId)) return local.closeTeamSession(appId, teamId, epochId)
       // The owner tears down its own session; nothing to close here.

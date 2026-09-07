@@ -48,6 +48,24 @@ export interface TeamDeliveryHooks {
   }): Promise<void>
   isBusy(sessionKey: string): boolean
   /**
+   * Hand the envelope to the turn the target is ALREADY running, instead of
+   * queueing it behind that turn. Synchronous, and false when it could not
+   * land — the gate then buffers exactly as before.
+   *
+   * The gate decides WHEN this is allowed (see `platform/turn-gate`); this hook
+   * only renders the envelope and hands it over. It starts no turn, so nothing
+   * completes for it: `completeTurn` will settle the turn the message joined,
+   * against that turn's own trigger, not this one.
+   */
+  deliverMidTurn?(params: {
+    sessionKey: string
+    appId: string
+    teamId: string
+    epochId: string
+    envelope: TeamEnvelope
+    trigger: TeamTriggerContext
+  }): boolean
+  /**
    * Immediate reachability of a member's OWNER at send time. False only for a
    * remote owner that is offline/unreachable; a locally owned member is always
    * reachable. Absent → treated as reachable (non-federated runtimes).
@@ -197,11 +215,16 @@ export interface MessageBus {
    * A woken team turn ended. Releases the session's slot, drains its mailbox, and
    * records the outcome when it is a failure. It delivers NOTHING: a teammate
    * hears the turn's last words only if the member chose to `team_send` them.
+   *
+   * `sealPending` says the caller is about to seal this epoch — a fact only it
+   * holds, since the epoch row still reads open — and suppresses the drain
+   * alone, so nothing is started on a session that is about to be torn down.
    */
   completeTurn(params: {
     sessionKey: string
     trigger: TeamTriggerContext
     outcome: TurnCompletion
+    sealPending?: boolean
   }): void
   assertCanContact(teamId: string, fromAppId: string, toAppId: string, collabMode: CollabMode): void
   resolveMemberAppId(teamId: string, memberName: string): string
@@ -226,6 +249,14 @@ export interface MessageBus {
   onBreach(listener: (event: CircuitBreachEvent) => void): () => void
   hasBufferedMessages(epochId: string): boolean
   /**
+   * Whether this team session can take a turn right now — a running turn OR a
+   * dispatch the gate has already reserved it for. The bus is the only component
+   * that knows the second half, so every surface that reports a member's state
+   * must ask here rather than probe the session layer: a member whose slot is
+   * held is not available, however idle its session looks.
+   */
+  isSessionOccupied(sessionKey: string): boolean
+  /**
    * Attempt one buffered delivery for a session that may have just gone idle.
    * `completeTurn` drains after every bus-driven turn, but a team session also
    * runs turns the bus never sees (a human 1:1 chat occupies the same session
@@ -241,6 +272,13 @@ export interface MessageBusDeps {
   circuitOverrides?: Partial<CircuitLimits>
   /** Ceiling on a completion receipt (`SendInput.wait`). Defaults to the run's max duration. */
   syncWaitTimeoutMs?: number
+  /**
+   * Ceiling on a session slot held with no turn running, after which the gate
+   * reclaims it (see `platform/turn-gate` §7). Must exceed a member turn's own
+   * timeout, since the slot is held for the whole turn including the wait for a
+   * concurrency slot. Omitted → no watchdog.
+   */
+  reservationTtlMs?: number
   /**
    * Append one act to the office record (the blackboard's activity stream).
    * Recorded here rather than in the tool layer because this is where every
@@ -308,8 +346,26 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
           trigger: job.trigger,
         }),
       isBusy: (sessionKey) => hooks.isBusy(sessionKey),
+      // Wired only when the session layer offers it, so a runtime built without
+      // it (and every test harness) keeps the pure queueing behavior.
+      ...(hooks.deliverMidTurn
+        ? {
+            deliverMidTurn: (sessionKey: string, job: EnvelopeJob): boolean =>
+              hooks.deliverMidTurn!({
+                sessionKey,
+                appId: job.envelope.toAppId,
+                teamId: job.envelope.teamId,
+                epochId: job.envelope.epochId,
+                envelope: job.envelope,
+                trigger: job.trigger,
+              }),
+          }
+        : {}),
     },
-    { describeJob: (job) => `messageId=${job.envelope.id}` }
+    {
+      describeJob: (job) => `messageId=${job.envelope.id}`,
+      ...(deps.reservationTtlMs !== undefined ? { reservationTtlMs: deps.reservationTtlMs } : {}),
+    }
   )
 
   function statsFor(epochId: string): EpochStats {
@@ -582,14 +638,24 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     if (!wait) {
       const disposition = await deliver(envelope, trigger)
       // Nothing is auto-delivered back, so this receipt is all the sender ever
-      // learns: distinguishing "queued behind their current turn" from "handed
-      // over now" lets a lead pick someone else instead of waiting.
-      return disposition === 'buffered'
-        ? { messageId: envelope.id, delivery: 'queued' }
-        : { messageId: envelope.id }
+      // learns, and the three outcomes call for three different next moves:
+      // wait for a turn that has not started ('queued'), expect an answer from
+      // work already under way ('mid_turn'), or nothing special.
+      if (disposition === 'buffered') return { messageId: envelope.id, delivery: 'queued' }
+      if (disposition === 'mid_turn') return { messageId: envelope.id, delivery: 'mid_turn' }
+      return { messageId: envelope.id }
     }
 
     return new Promise<TeamSendSyncResult>((resolve) => {
+      /** Answer the caller now and stop waiting on a completion. */
+      const settleNow = (result: TeamSendSyncResult): void => {
+        const pending = pendingWaits.get(correlationId)
+        if (!pending) return
+        clearTimeout(pending.timer)
+        pendingWaits.delete(correlationId)
+        pending.resolve(result)
+      }
+
       const timer = setTimeout(() => {
         if (pendingWaits.delete(correlationId)) {
           console.warn(`${LOG_TAG} completion receipt timed out: corr=${correlationId}`)
@@ -610,15 +676,33 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       })
 
       // Register the waiter before delivering so a synchronous completion races safely.
-      void deliver(envelope, trigger).catch((err) => {
-        const pending = pendingWaits.get(correlationId)
-        if (pending) {
-          clearTimeout(pending.timer)
-          pendingWaits.delete(correlationId)
+      void deliver(envelope, trigger).then(
+        (disposition) => {
+          if (disposition !== 'buffered' && disposition !== 'mid_turn') return
+          // Either way this message started no turn, so the completion that
+          // would answer this receipt belongs to a DIFFERENT one — waiting for
+          // it means holding the caller until the receipt ceiling (hours) with
+          // nothing to show: no error, no trace in the transcript, no change in
+          // the member's state. A caller that is told what happened can decide;
+          // one that is told nothing decides the session is dead and starts a
+          // second one alongside it. The two are still reported apart because
+          // they mean different waits: buffered is "after they finish", mid-turn
+          // is "they are reading it now".
+          console.log(
+            `${LOG_TAG} receipted send reached the target without starting a turn ` +
+              `(${disposition}): corr=${correlationId}`
+          )
+          settleNow({
+            from: input.to,
+            message: '',
+            status: disposition === 'mid_turn' ? 'mid_turn' : 'queued',
+          })
+        },
+        (err) => {
           console.error(`${LOG_TAG} wakeTarget failed for a receipted send:`, err)
-          pending.resolve({ from: input.to, message: '', status: 'timeout' })
+          settleNow({ from: input.to, message: '', status: 'timeout' })
         }
-      })
+      )
     })
   }
 
@@ -724,6 +808,18 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     sessionKey: string
     trigger: TeamTriggerContext
     outcome: TurnCompletion
+    /**
+     * The caller is about to seal this epoch. Only it can know that — the epoch
+     * row still reads open at this instant, because the seal is its very next
+     * act — so the fact has to travel, and its consequence is exactly one thing:
+     * nothing new is started from the mailbox.
+     *
+     * Deliberately NOT the same as the sealed-epoch guard below, which returns
+     * early and skips everything. A receipt someone is holding must still be
+     * settled here, or a seal turns their wait into the hours-long silence that
+     * guard was written to prevent elsewhere.
+     */
+    sealPending?: boolean
   }): void {
     const { trigger, outcome, sessionKey } = params
     // Released before the epoch guard below: a sealed epoch must not leave the
@@ -755,11 +851,25 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     // so a teammate hears back only through an explicit `team_send`.
     if (trigger.wait) resolvePendingWait(trigger.correlationId, outcome)
 
+    if (params.sealPending) {
+      // The mail stays where it is; `resetEpoch` drops it as part of the seal,
+      // counted rather than silent. Draining it here would hand it a turn born
+      // into the teardown that is one statement away.
+      console.log(
+        `${LOG_TAG} completeTurn: mailbox left for the seal to discard: epoch=${trigger.epochId}`
+      )
+      return
+    }
+
     turnGate.drain(sessionKey)
   }
 
   function drainMailbox(sessionKey: string): void {
     turnGate.drain(sessionKey)
+  }
+
+  function isSessionOccupied(sessionKey: string): boolean {
+    return turnGate.isOccupied(sessionKey)
   }
 
   function getEpochStats(epochId: string): EpochStats {
@@ -810,6 +920,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
     tripExternal: trip,
     onBreach,
     hasBufferedMessages,
+    isSessionOccupied,
     drainMailbox,
   }
 }

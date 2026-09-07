@@ -54,6 +54,9 @@ function makeSession(active: Set<string>): OrchestrationSessionDeps {
   return {
     sendAppChatMessage: vi.fn(async () => ({ finalMessage: null })),
     isSessionActive: (key) => active.has(key),
+    // Nothing here exercises mid-turn delivery; declining keeps every send on
+    // the wake/mailbox path these tests are about.
+    injectIntoSession: () => false,
     closeTeamSession: vi.fn(async () => {}),
     getMemberSpaceId: () => SPACE,
   }

@@ -341,7 +341,29 @@ Consequences that matter:
 **Generating state moved off `activeSessions`**. App chat no longer registers
 there; `isAppChatConversationGenerating` is the single predicate (queued round OR
 consumer mid-turn) and every caller — stop, clear, restart, supplement buffering
-— goes through it. Session invalidation for app chat now takes the consumer path
+— goes through it.
+
+**Reading `activeSessions` for an app chat is always wrong, and it fails
+silently.** `registerActiveSession` has no callers at all, so the map is empty
+and every `activeSessions.has(...)` answers a confident, permanent `false` —
+worse than an obvious break, because each caller reads a plausible answer and
+none can tell it is a constant. Two probes were left on it and both are now
+moved (`bootstrap/extended.ts`): the authority reconciler's owner-busy check,
+where a streaming member read idle and had its in-progress task reassigned out
+from under it on authority handover, and the session-feed's, where a turn's
+provisional trailing message was published to other nodes as final. Anything
+that reaches for that map again is to be read the same way until proven
+otherwise.
+
+**Which replacement depends on the question**, and the two are not
+interchangeable. `bus.isSessionOccupied` answers "can this session take work" —
+a streaming turn OR a slot reserved for one that has not started — and belongs
+to scheduling decisions. `isAppChatConversationGenerating` answers "is text
+being produced right now" and belongs to anything withholding provisional
+output; a slot reserved for a turn that has not begun has nothing provisional
+to withhold.
+
+Session invalidation for app chat now takes the consumer path
 (`pendingConsumerRebuilds`) instead of the legacy `pendingInvalidations` path,
 which is also what makes stop/team-agent handling in `control.ts` apply to
 digital humans for free.
@@ -548,6 +570,7 @@ src/main/apps/runtime/
   -- Interactive chat with an App (separate from automation runs):
   app-chat.ts                -- sendAppChatMessage() and chat session lifecycle
   app-chat-sink.ts           -- TurnSink for chat: run JSONL + round/autonomous delivery (§2.12a)
+  app-chat-live-turn.ts      -- The turn a chat is running RIGHT NOW: whether there is one (`isAppChatConversationGenerating` — the only truthful busy probe; app chat never writes the engine's legacy `activeSessions` map) and how to add a message to it. Its own leaf module because the team layer asks both synchronously, and app-chat.ts imports the team runtime accessor — a static edge back would close that cycle
   config-defaults.ts         -- Merge App config_schema defaults into userConfig
   dispatch-inbound.ts        -- Route IM inbound messages into app-chat
   im-permission-registry.ts  -- Per-conversation owner/guest context for SDK gating
@@ -570,6 +593,10 @@ src/main/apps/runtime/
     manager.ts               -- Generic channel lifecycle (provider-agnostic)
     im-prompt.ts             -- IM entry/constraint builders + ImSessionContext
     file-send-mcp.ts         -- send_file_to_chat MCP tool (pre-bound to session)
+    file-send-resolve.ts     -- binds that capability to one chat, behind the export
+                                gate. Shared: every dispatch path into a chat must
+                                resolve it identically or the session is rebuilt
+                                mid-turn (see runtime/team/DESIGN.md)
     identity-resolve.ts      -- Channel-agnostic opaque-chatId -> real-name resolution
                                 (opt-in via ImChannelInstance.identityCapability)
     wecom-identity-resolve.ts -- WeCom-specific identityCapability implementation

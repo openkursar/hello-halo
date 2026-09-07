@@ -343,6 +343,15 @@ export function getAppChatSink(params: {
   return sink
 }
 
+/**
+ * The sink of a conversation that already has one, without creating it. For a
+ * caller that is adding to a turn in flight rather than starting one, and so
+ * has none of the identity a new sink would need.
+ */
+export function peekAppChatSink(conversationId: string): AppChatSink | undefined {
+  return sinks.get(conversationId)
+}
+
 /** Whether a conversation has a message awaiting its answer. */
 export function hasActiveAppChatRound(conversationId: string): boolean {
   return sinks.get(conversationId)?.hasActiveRound() ?? false

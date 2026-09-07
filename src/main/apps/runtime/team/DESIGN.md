@@ -383,6 +383,7 @@ interface TeamDeliveryHooks {
     sessionKey, appId, teamId, epochId, envelope, trigger
   }): Promise<void>          // resolves when the woken turn STARTS being processed
   isBusy(sessionKey: string): boolean
+  deliverMidTurn?(params: { ...the same params }): boolean  // see below
 }
 ```
 
@@ -392,13 +393,31 @@ back asynchronously through `bus.completeTurn(...)` when the turn ends (any of
 the four §5.6 exits). This keeps every sender non-blocking: `send` hands over and
 returns, and whether an answer ever comes is up to the target's `team_send`.
 
+**`isBusy` must be answered by the layer that actually runs the turn, and for a
+team turn that is app chat's consumer model** (`isAppChatConversationGenerating`)
+— never the engine's legacy `activeSessions` map, which app chat does not write.
+Asking that map returned `false` for every team session that has ever run, and
+nothing failed loudly: the gate's reservation still queued mail correctly, so
+what disappeared was everything the probe exists FOR — mid-turn delivery refusing
+on "no turn is streaming", quiescence counting a streaming member as idle, and
+the slot watchdog willing to reclaim a session mid-stream (the one thing it
+promises never to do). A probe that is always false is worse than no probe: every
+caller reads a confident answer and none of them can tell it is a constant.
+
 `isBusy` lets the bus decide buffer-vs-deliver: if the target session is
 mid-turn — or a turn is already IN FLIGHT for it (the busy probe only turns
 true once the session layer registers the turn, so the bus reserves the key
 synchronously at dispatch to keep two racing deliveries from running two
-concurrent turns on one session) — the envelope is enqueued in its mailbox and
+concurrent turns on one session) — the envelope goes INTO that turn when
+`deliverMidTurn` can take it, and otherwise is enqueued in its mailbox and
 drained when the current turn completes (mirrors `dispatch-inbound`
 supplement-buffering).
+
+`deliverMidTurn` hands the envelope to the turn the member is already running
+(see "Reaching a member that is already working"). It starts no turn and
+completes nothing; the gate decides when it is allowed to be called at all
+(`platform/turn-gate` §8), and a false answer falls straight back to the
+mailbox.
 
 Mailbox liveness has three drains, because a team session also runs turns the
 bus never sees (a human 1:1 chat with a member uses the same session key):
@@ -411,6 +430,11 @@ bus never sees (a human 1:1 chat with a member uses the same session key):
    the target is still busy and stops once the mailbox is empty, so mail behind a
    turn that hangs for minutes is not held hostage to that turn ending.
 
+None of the three can free a slot: they all drain, and a drain refuses a session
+that still reads occupied. The slot itself is freed only by `completeTurn`, so a
+completion that never happens locks the session — see "A stuck slot must be
+recoverable, and must never read as idle" below.
+
 ## Bus public API
 
 `createMessageBus({ store, hooks, circuitOverrides? }) → MessageBus`
@@ -420,8 +444,9 @@ bus never sees (a human 1:1 chat with a member uses the same session key):
   (`fromAppId !== null`, see "A person is not a member") — bumps circuit
   counters, records the act and emits `team:message`. Then builds the
   `TeamEnvelope`, hands it to the gate, and resolves with `{ messageId }` plus a
-  `delivery` receipt: absent when handed over now, `'queued'` when the target was
-  mid-turn, `'undelivered'` when its owner was unreachable at send time. Since
+  `delivery` receipt: absent when handed over now, `'mid_turn'` when it went into
+  the turn the target was already running, `'queued'` when it is waiting behind
+  that turn, `'undelivered'` when its owner was unreachable at send time. Since
   nothing is ever delivered back, this receipt is everything the sender learns —
   which is why "queued" is worth saying: a lead that knows the target is busy can
   pick someone else. It is accurate for a locally-owned target; a remote one
@@ -433,6 +458,19 @@ bus never sees (a human 1:1 chat with a member uses the same session key):
   `teamService.sendToMember`, a PERSON's cross-machine 1:1 chat, whose UI must
   distinguish "sent" from "never arrived". Even then the receipt is a status; the
   person reads the member's actual reply in the transcript.
+
+  **A receipted send that only reaches the mailbox answers `'queued'`
+  immediately.** A receipt is settled by a COMPLETION, and a queued message has
+  not started the turn that will complete — so waiting for one meant waiting for
+  a turn this message did not cause, i.e. until the receipt ceiling, two hours
+  away. What the caller saw in the meantime was nothing at all: the HTTP request
+  hung, no act was recorded (a person's send files none), the words were not in
+  the transcript (an envelope is rendered at dispatch, not at enqueue), and the
+  member read as idle. That is a send which looks successful and is not, and it
+  is strictly more dangerous than one that fails loudly — it is what makes an
+  operator conclude the session is dead and open a second one beside it, which
+  is how one lead ended up dispatching twice into one workspace. The message is
+  still delivered when the current turn ends; the caller simply learns that now.
 - `deliverRuntimeWake({ envelope, trigger, onBusy }) → Promise<WakeDisposition>`
   A turn the RUNTIME asked for, not a member's `team_send`: the escalation
   resume, the quiescence nudge, a due periodic check. No delivery receipt, no
@@ -454,14 +492,36 @@ bus never sees (a human 1:1 chat with a member uses the same session key):
   `run` is invoked once the slot is free; its promise settles the caller's and
   releases the slot. A `resetEpoch` (or a mailbox overflow) rejects a still-queued
   one rather than leaving the remote caller on its hours-long backstop.
-- `completeTurn({ sessionKey, trigger, outcome })`
+- `completeTurn({ sessionKey, trigger, outcome, sealPending? })`
   Called by the session layer when a woken team turn ends. It **delivers
   nothing** (see "Output is not delivery"). It releases the session's slot,
   records the outcome if it is a failure worth recording (see the office record),
   resolves a completion receipt if a non-agent caller is holding one, and drains
   the mailbox for that `sessionKey`.
+
+  **`sealPending` is the caller saying "I am about to seal this epoch", and it
+  suppresses the drain and nothing else.** The epoch-sealed guard above cannot
+  cover this: it asks whether the epoch is sealed *now*, and a deferred seal
+  (the lead called `team_complete`, so the seal waits for its turn to end) fires
+  in the caller's very next statement. In between, the drain handed a queued
+  envelope a turn — which the seal then tore down while it was still building
+  its session. That produced neither of the two endings this design allows: not
+  delivered, and not dropped-and-counted, but a turn that reached no model at
+  all (zero tokens), leaving a message in the transcript that will never be
+  answered, a wasted session build, and — because starting a turn calls
+  `noteEpochTurn`, which wakes a hibernated epoch — a sealed run stamped with
+  its outcome yet reading as still running, forever.
+
+  It suppresses the drain ALONE, deliberately, rather than reusing the early
+  return: a receipt someone is holding must still be settled, or the seal turns
+  a person's cross-machine chat into an hours-long silence.
 - `drainMailbox(sessionKey)` — the session layer's liveness nudge (drain #2
   above). Idempotent; a busy or reserved session is a no-op.
+- `isSessionOccupied(sessionKey)` — can this session take a turn: a streaming
+  turn OR a reservation whose turn has not registered yet. The bus is the only
+  component that knows the second half, so this is what every status surface
+  asks. Deliberately NOT `hooks.isBusy`, which is the gate's own input and must
+  stay narrow enough that the gate does not consult itself.
 - `assertCanContact(teamId, fromAppId, toAppId, collabMode)` — topology check;
   `free` allows all, `structured` uses `store.isEdgeAllowed` **in either
   direction**. Topology governs who may OPEN a conversation, never who may answer
@@ -586,7 +646,10 @@ files here allowed to.
 - `orchestration.ts` — implements `TeamDeliveryHooks` (`wakeTarget` starts a
   team-channel turn via `sendAppChatMessage` and resolves once it STARTS; a
   detached chain maps the turn's ending to a `TurnCompletion` and calls
-  `bus.completeTurn`). Owns `startEpoch` (wake the lead once) and `sealEpoch`
+  `bus.completeTurn`; `deliverMidTurn` is its other half — for a member that is
+  already running there is nothing to wake, so the envelope is rendered as a
+  supplement and handed to that turn, see "Reaching a member that is already
+  working"). Owns `startEpoch` (wake the lead once) and `sealEpoch`
   (archive epoch, clear every member's team session, `bus.resetEpoch`, idle the
   team — tasks/findings retained for history). Subscribes `bus.onBreach` →
   escalate-to-user + seal. Provides `captureReport` (report sink), the
@@ -730,25 +793,79 @@ path (§3.5):
 
 ### Team as an IM backend
 
-An IM channel instance (`ImChannelInstanceConfig`) may set `teamId` (with
-`appId` = the team's lead) to be backed by a team instead of a single human.
-`dispatch-inbound.ts` resolves the lead fresh from the team, ensures the
-conversation epoch for this chat (`chatKey = ${instanceId}:${chatId}`), and calls
-`sendAppChatMessage` with BOTH `imSession` (reply path, file send) AND
-`teamContext` (team tools + Entry). `app-chat` composes the
-team Entry with `buildTeamImBridge` (front-desk framing: the message is from a
-real person; the lead's final message goes back to the chat). The lead runs as a
-trusted team peer — IM guest hardening is intentionally not applied (no
-permission context for the team session key). Provider-agnostic: any IM brand
-works, since the binding lives in the generic config + dispatch path.
+An IM channel instance (`ImChannelInstanceConfig`) names **one member of one
+team** as the chat's front desk: `teamId` plus `appId` = that member. The lead is
+not privileged here — any member can be bound, which is the point: a specialist
+gets its own bot, and the person reaches it without going through the counter.
+`dispatch-inbound.ts` ensures the conversation epoch for this chat (`chatKey =
+${instanceId}:${chatType}:${chatId}`) and calls `sendAppChatMessage` with BOTH
+`imSession` (reply path, file send) AND `teamContext` (team tools + Entry).
+`app-chat` composes the team Entry with `buildTeamImBridge`, whose framing splits
+on `selfIsLead`: the lead is the team's counter and routes work, a teammate was
+reached in its own right and answers its own remit first. Either way the message
+is from a real person and that member's final message goes back to the chat. The
+member runs as a trusted team peer — IM guest hardening is intentionally not
+applied (no permission context for the team session key). Provider-agnostic: any
+IM brand works, since the binding lives in the generic config + dispatch path.
+
+**The binding names a member, not a role.** Promoting a different lead does not
+re-point an existing channel. `dispatch-inbound.ts` is the trust boundary for it
+(config.json is user-editable and a roster changes after binding): a message is
+dropped unless the bound app is still a member of that team AND is locally owned
+(`isRemoteMember` false). A federated member's app is not installed on this
+machine, so nothing here could run it — the picker offers only `localMembers`
+(`TeamListItem`) for the same reason.
+
+The **reply** side has the same question and must answer it identically:
+`resolveImRoute` decides whether a later, woken turn pushes back to the chat. It
+reads the IM instance's own binding rather than the team's lead, so exactly one
+member fronts a chat, and a re-pointed binding cannot leak the previous member's
+woken reply into it.
+
+**Both routes into that chat must resolve it in FULL or not at all** — framing
+(`imSession`) *and* capability (`imFileSend`, via
+`im-channels/file-send-resolve`). This is not tidiness. The two routes share one
+session key, and an agent session is rebuilt whenever its tool set changes; a
+rebuild landing inside a turn's start-up settles that turn's round as failed
+(`session-consumer`'s `onConsumerStopped` drains the sink queue, and the sink
+outlives the session). Resolving the framing without the capability therefore
+did not merely disable a tool — every woken front-desk turn destroyed itself
+before it could push, the person in the chat waited forever, and the model still
+produced the answer on a session whose caller had already given up. Nothing
+about that is visible from the chat, so the invariant is pinned by a test rather
+than left to review.
+
+Underneath it sits a race that outlives this fix: ANY legitimate rebuild
+mid-start-up (a model change, an MCP toggle) can settle the starting turn the
+same way. Removing the needless rebuild removes this trigger, not the race.
+
+**A mid-turn delivery does not reach an IM front-desk turn today, and whether it
+should is open.** The mechanism is incidental rather than a decision: an IM turn
+is started by `dispatch-inbound` calling `sendAppChatMessage` directly, so the
+gate sees a session busy with a turn it did not dispatch and falls back to the
+mailbox (see `platform/turn-gate` §8 — the guard is aimed at a member's owner
+chatting privately, and this path merely looks the same from there).
+
+Both answers are defensible and the trade is real, so it is recorded rather than
+settled. Against entering: the turn's final message is what a real person reads,
+and an envelope arriving mid-way could redirect it. For entering: a teammate's
+answer reaching this member ALREADY ends up in that chat — it wakes a later turn
+whose reply is pushed there (next paragraph), so the choice is not whether the
+person hears teammate-derived content but whether they hear it inside the answer
+they are waiting for or as a second message afterwards. Nothing about the current
+behavior depends on having decided.
+
+What must not happen is deciding it by accident: routing IM inbound through the
+bus would flip this silently, since the only thing standing between the two
+today is which code path starts the turn.
 
 This is **the one place a final message IS a delivery**, and only because the IM
 reply handle is attached to this turn — it still reaches no teammate. The bridge
 says so explicitly, so the exemption cannot be read as "your output is visible
-after all". It also tells the lead that a specialist's answer cannot arrive
-inside this turn: a delegated question becomes two messages to the person (an
-acknowledgement now, the answer when the teammate's `team_send` wakes the lead
-again) rather than one long silence. That is a deliberate trade for the sender
+after all". It also tells the serving member that a teammate's answer cannot
+arrive inside this turn: a handed-over question becomes two messages to the
+person (an acknowledgement now, the answer when the teammate's `team_send` wakes
+it again) rather than one long silence. That is a deliberate trade for the sender
 knowing which listener it is talking to.
 
 ## Conversations & run outcomes (office-shared session model)
@@ -801,6 +918,8 @@ same history (mirrors the blackboard replication plane; no new protocol).
   for a run OR a conversation, and keeps it `waiting_user` after a run seal while
   a persisted escalation is unanswered (P0-5; `hasPendingEscalation` is the
   activity-store truth, the in-memory waiter set is only the live-window mirror).
+  "Serving" is `bus.isSessionOccupied`, not the session probe — see "A stuck slot
+  must be recoverable, and must never read as idle".
 
 The service (`apps/team`) exposes `listConversations` / `openConversation` /
 `renameConversation` / `archiveConversation` and folds `pendingEscalations` into
@@ -840,6 +959,90 @@ was added. The interactive terminal is why this rule exists — it sat outside t
 tables while the command tool was switchable, and a teammate could run commands
 on a machine whose owner believed they had withheld exactly that.
 
+## Reaching a member that is already working
+
+A message to a busy member used to wait for that member's turn to end. That
+sounds like a delay and is actually a permanent misalignment, because of what
+else happens at that instant:
+
+- 10:10 the lead dispatches 20 minutes of work.
+- 10:20 something changes and it sends a correction. The member is busy, so the
+  correction waits.
+- 10:30 the member finishes — having spent ten minutes on work the correction
+  would have stopped. The waiting message is delivered *now*, becoming the next
+  turn's input, and the turn-end report reaches the lead at the same moment.
+- The lead reacts to that report and sends again — into a member that has just
+  started on the previous message. From here the two never converge: the lead is
+  always talking about the member's last task, the member is always on the next.
+
+The one moment a member can take new instructions — finished, not yet started —
+is the same moment the queue fills, and the sender is woken a step too late to
+use it. No amount of prompt work reaches that; the opening has to exist first.
+
+**So a message goes into the turn that is running.** The engine takes it at the
+next tool-round boundary and the turn continues to a single result — the same
+mechanism that already backs a person typing while their agent works. Turn time
+is nearly all model time, and tool boundaries come every few seconds, so the
+worst case drops from "a whole turn" to "one model output".
+
+What this is NOT:
+
+- **Not an interrupt.** Nothing is cancelled and no turn is started. Whether to
+  change course is the member's judgment, and the Entry says so without saying
+  what to conclude ("Messages that arrive while you are working").
+- **Not a different kind of message.** The same `send`, the same act on the
+  office record, the same circuit charge. The branch is below all of that
+  (`turn-gate`), which is what keeps the budget — the only guard against members
+  interrupting each other without end — armed on exactly the path that can
+  interrupt.
+- **Not sender-specific.** A lead, a teammate and a person are all delivered the
+  same way. Who may act on what is already in the roster and the topology; the
+  envelope states who sent it and leaves the weighing to the reader.
+- **Not a completion.** The message starts no turn, so nothing completes for it:
+  the turn it joined completes against its own trigger. A receipted send is
+  answered immediately with `'mid_turn'` for the same reason `'queued'` exists —
+  the completion that would answer it belongs to a turn this message did not
+  start.
+
+**What the member reads** (`orchestration.renderMidTurnEnvelope`):
+
+```
+[Arrived while you were working — from 竞品调研 (teammate)]
+
+<body>
+```
+
+It differs from a turn-starting envelope in two ways, both deliberate. It says
+the message arrived mid-work, because the sender did not know what the member
+was doing and the member must not read it as the task it was woken for. And it
+carries no board digest: the digest answers "what changed since you last looked",
+which belongs at the start of a turn — mid-turn it is unrelated context dropped
+into live reasoning, and rendering it would advance the member's watermark past
+facts it may never see. A person's words stay verbatim, exactly as when they type
+into the same chat locally.
+
+**Where it does not apply**, and the fallback is always the mailbox:
+
+- A member owned by ANOTHER machine: its turn runs there, and reaching into it
+  would need the wake protocol to carry a delivery that expects no completion.
+  Deliberately not attempted; `injectIntoSession` finds no local session and the
+  message queues as before.
+- A turn this runtime did not start — the gate refuses, see `platform/turn-gate`
+  §8. Two paths land here for different reasons: a member's owner chatting in the
+  same session key (which the guard is FOR), and an IM front-desk turn started by
+  `dispatch-inbound` (which it merely catches — see "Team as an IM backend" for
+  why that one is unsettled rather than decided).
+- A member with mail already queued: order first.
+- A stretch of output with no tool call in it. The floor is one model output,
+  not zero.
+
+**The known cost.** A message handed to a running turn is context, not a queued
+item: if the model reads it and does nothing, nothing records that it was read.
+The office record still holds the send itself, so "was it sent" stays answerable
+— "was it acted on" was never answerable for any message and is not made worse
+here. Left as is deliberately, to be watched in practice rather than machinery
+built for it up front.
+
 ## One turn per session — the only lock in the design
 
 A team session key (`app-chat:{appId}:team:{teamId}:{epochId}`) runs **at most
@@ -878,6 +1081,34 @@ queue, two wakes for one session no longer collapse into a single turn, so each
 gets its own `turn-complete`. The batch-ack that once answered a whole
 conversation's wakes with the first outcome was removed — under a queue it hands
 wake #2 the outcome of turn #1 before turn #2 has even started.
+
+### A stuck slot must be recoverable, and must never read as idle
+
+The slot is taken at dispatch and handed back by exactly one call,
+`bus.completeTurn`. That call sits at the end of a detached promise chain in
+`wakeTarget`, behind bookkeeping that can throw — and a `void`-ed chain swallows
+whatever it throws. The result was a session locked for the life of the process,
+locked silently, and the three symptoms arrived together because they share one
+cause: new messages only queued, periodic checks skipped the member as "busy",
+and the board still showed it **idle**, because member status was projected from
+`session.isSessionActive` — a different signal that knows nothing about the slot.
+An operator reading that combination concludes the session is dead. It is the
+reasonable conclusion, and it is wrong, and acting on it starts a second lead.
+
+Three rules, and the third is the one that made the other two insufficient on
+their own:
+
+- **The completion is unconditional.** Everything around `bus.completeTurn` in
+  the turn-end handler is wrapped, and the chain carries a terminal `.catch`, so
+  no bookkeeping failure can keep the slot — or disappear unexplained.
+- **The gate reclaims a slot it has held past a TTL** with nothing running
+  (`platform/turn-gate` §7), so a completion lost some other way self-heals
+  instead of needing a restart. It never reclaims one while a turn is streaming;
+  that would start the second turn this lock exists to prevent.
+- **Status comes from the slot.** `getMemberStatus` / `getMemberBusy` and the
+  periodic-check gate all read `bus.isSessionOccupied`. A member whose slot is
+  held is not available, whatever its session layer says, and saying otherwise is
+  what turned a recoverable stall into a duplicated run.
 
 ## Concurrency safety — by construction
 

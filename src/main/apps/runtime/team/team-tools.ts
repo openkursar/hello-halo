@@ -216,6 +216,17 @@ function buildSendTool(ctx: TeamMcpContext) {
               `another teammate.`
           )
         }
+        if (result.delivery === 'mid_turn') {
+          // Worth telling apart from a plain hand-over: it says the teammate is
+          // mid-task, so an answer is not the next thing they will do — and from
+          // 'queued', which would have the sender wait for a turn to end that
+          // this message has already reached inside.
+          return textResult(
+            `Message delivered to "${input.to}" (id: ${result.messageId}) while they were working — they ` +
+              `see it at their next step, without being interrupted. They may be part-way through ` +
+              `something, so give them room to react; if they answer, it arrives later as a new turn.`
+          )
+        }
         return textResult(
           `Message delivered to "${input.to}" (id: ${result.messageId}). If they answer, it will arrive ` +
             `later as a new turn — carry on with other work.`

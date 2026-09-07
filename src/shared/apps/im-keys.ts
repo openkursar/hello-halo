@@ -214,38 +214,54 @@ export function isAppChatKey(conversationId: string): boolean {
 }
 
 /**
- * Allowed chatId charset for externally-supplied HTTP conversation keys.
+ * Allowed charset for the caller-controlled segments of an externally-supplied
+ * conversation key (an HTTP chatId, a team key's teamId/epochId).
  *
- * The chatId becomes part of the on-disk JSONL filename (via the runtime's
+ * These segments become part of the on-disk JSONL filename (via the runtime's
  * deriveRunId), so an unconstrained, caller-controlled value is a
  * path-traversal vector. Restricting to a filename-safe charset (no dots,
  * slashes, or separators) makes traversal impossible while comfortably
- * covering typical business user keys.
+ * covering typical business user keys and generated ids.
  */
-const HTTP_CHAT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
+const HTTP_KEY_SEGMENT_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
 
-/** Result of validating an externally-supplied HTTP conversationId. */
+/**
+ * Result of validating an externally-supplied HTTP conversationId.
+ *
+ * `team` is present only for a team-channel key. It carries the ids the caller
+ * asked for so the OWNERSHIP questions this module cannot answer — does this
+ * epoch belong to this team, is this app a member of it — can be answered by
+ * the main-process caller that holds the team store. A team key is not usable
+ * until they are.
+ */
 export type HttpConversationIdResult =
-  | { ok: true; conversationId: string }
+  | { ok: true; conversationId: string; team?: { teamId: string; epochId: string } }
   | { ok: false; error: string }
 
 /**
  * Validate and normalize a conversationId supplied by an external HTTP caller
- * on an app-chat /send request.
+ * on an app-chat request.
  *
  * Accepts:
  *   - empty / non-string      → the app's native default conversation
  *   - the native default key  → as-is (shared native chat)
  *   - a well-formed HTTP key  → "app-chat:{appId}:http:{direct|group}:{chatId}"
  *   - a native local key      → "app-chat:{appId}:local:direct:{sessionUuid}"
+ *   - a team-channel key      → "app-chat:{appId}:team:{teamId}:{epochId}"
  *
  * Rejects everything else — in particular IM-channel keys (an HTTP caller must
- * never be able to address or inject into an IM session) and chatIds outside
+ * never be able to address or inject into an IM session) and segments outside
  * the filename-safe charset. The 'local' channel is permitted so the remote
  * web client (an authenticated Halo UI that reaches the same endpoint over
  * HTTP) can drive the user's native multi-sessions; it is non-pushable and
- * carries no more capability than an 'http' session. This is the trust boundary
- * for caller-controlled conversation ids.
+ * carries no more capability than an 'http' session. The 'team' channel is
+ * permitted for the same reason — it is the ONLY way the remote client can
+ * reach a team-backed digital human, which the desktop client reaches over IPC
+ * — but it is the one form whose validity is not decidable from the string, so
+ * it is returned tagged rather than simply approved.
+ *
+ * This is the shape half of the trust boundary for caller-controlled
+ * conversation ids.
  */
 export function resolveHttpConversationId(
   appId: string,
@@ -258,20 +274,34 @@ export function resolveHttpConversationId(
     return { ok: true, conversationId: nativeDefault }
   }
 
+  const team = parseTeamSessionKey(raw)
+  if (team) {
+    if (team.appId !== appId) {
+      return { ok: false, error: 'Invalid conversationId: the key addresses a different app' }
+    }
+    if (!HTTP_KEY_SEGMENT_PATTERN.test(team.teamId) || !HTTP_KEY_SEGMENT_PATTERN.test(team.epochId)) {
+      return {
+        ok: false,
+        error: 'Invalid conversationId: teamId and epochId must match [A-Za-z0-9_-] and be 1-128 characters',
+      }
+    }
+    return { ok: true, conversationId: raw, team: { teamId: team.teamId, epochId: team.epochId } }
+  }
+
   const parsed = parseAppChatKey(raw)
   if (!parsed || parsed.appId !== appId) {
     return {
       ok: false,
-      error: `Invalid conversationId: expected "app-chat:${appId}:{http|local}:{direct|group}:{chatId}"`,
+      error: `Invalid conversationId: expected "app-chat:${appId}", "app-chat:${appId}:{http|local}:{direct|group}:{chatId}" or "app-chat:${appId}:team:{teamId}:{epochId}"`,
     }
   }
   if (parsed.channel !== HTTP_SESSION_CHANNEL && parsed.channel !== LOCAL_SESSION_CHANNEL) {
     return {
       ok: false,
-      error: 'Invalid conversationId: the HTTP API may only address the "http" or "local" channel',
+      error: 'Invalid conversationId: the HTTP API may only address the "http", "local" or "team" channel',
     }
   }
-  if (!HTTP_CHAT_ID_PATTERN.test(parsed.chatId)) {
+  if (!HTTP_KEY_SEGMENT_PATTERN.test(parsed.chatId)) {
     return {
       ok: false,
       error: 'Invalid conversationId: chatId must match [A-Za-z0-9_-] and be 1-128 characters',

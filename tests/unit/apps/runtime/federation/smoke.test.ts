@@ -59,6 +59,7 @@ import {
 import { createDatabaseManager } from '../../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../../src/main/platform/store/types'
 import { FederationStore } from '../../../../../src/main/apps/federation/store'
+import { DEFAULT_OFFICE_SCOPE } from '../../../../../src/main/apps/federation/types'
 import {
   MIGRATION_NAMESPACE as FED_NS,
   migrations as fedMigrations,
@@ -143,7 +144,7 @@ function makeNode(opts: {
 }): TestNode {
   const { federationStore, teamStore, runLocalTurn } = opts
   const verify = (token: string): OfficeCredentialLike | null =>
-    token === VALID_TOKEN ? { officeId: OFFICE } : null
+    token === VALID_TOKEN ? { officeId: OFFICE, scope: DEFAULT_OFFICE_SCOPE } : null
 
   const bReceived: FederationMessage[] = []
   let bridgeCut = false
@@ -288,6 +289,7 @@ function inertLocal(): OrchestrationSessionDeps {
   return {
     sendAppChatMessage: vi.fn(async () => ({ finalMessage: 'LOCAL-should-not-run' })),
     isSessionActive: () => false,
+    injectIntoSession: () => false,
     closeTeamSession: async () => {},
     getMemberSpaceId: () => 'local-space',
   }
@@ -510,6 +512,7 @@ describe('M1b multi-node smoke rig (end-to-end distributed office)', () => {
       joinedAt: clock,
       lastSeen: clock,
       status: 'online',
+      advertisedUrl: null,
     })
 
     let dropBeats = false
@@ -611,7 +614,7 @@ function makePresenceCoordinator(opts: {
     link,
     federationStore: opts.federationStore,
     teamStore: opts.teamStore,
-    verifyCredential: (t) => (t === VALID_TOKEN ? { officeId: OFFICE } : null),
+    verifyCredential: (t) => (t === VALID_TOKEN ? { officeId: OFFICE, scope: DEFAULT_OFFICE_SCOPE } : null),
     now: opts.now,
     presence: { suspectAfterMs: opts.suspectMs, confirmedOfflineMs: opts.confirmedMs },
     onMemberConfirmedOffline: opts.onMemberConfirmedOffline,

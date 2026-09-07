@@ -13,6 +13,7 @@ import {
   getAppChatConversationId,
   buildImSessionKey,
   buildLocalSessionKey,
+  buildTeamSessionKey,
   isImSessionKey,
   isLocalSessionKey,
   parseAppChatKey,
@@ -115,6 +116,42 @@ describe('resolveHttpConversationId (HTTP trust boundary)', () => {
     const key = buildLocalSessionKey('app1', 'a1b2c3d4')
     expect(key).toBe('app-chat:app1:local:direct:a1b2c3d4')
     expect(resolveHttpConversationId('app1', key)).toEqual({ ok: true, conversationId: key })
+  })
+
+  // A team key is the ONLY way a remote client reaches a team-backed digital
+  // human; the desktop client reaches the same session over IPC. Rejecting it
+  // here made every team session unreachable over remote access — send, status,
+  // history and stop alike — while the local path stayed green.
+  it('accepts a team key and tags it for the ownership check the caller must run', () => {
+    const key = buildTeamSessionKey('app1', 'team-7', 'epoch-9')
+    expect(key).toBe('app-chat:app1:team:team-7:epoch-9')
+    expect(resolveHttpConversationId('app1', key)).toEqual({
+      ok: true,
+      conversationId: key,
+      team: { teamId: 'team-7', epochId: 'epoch-9' },
+    })
+  })
+
+  it('rejects a team key addressing a different app', () => {
+    const res = resolveHttpConversationId('app1', buildTeamSessionKey('app2', 'team-7', 'epoch-9'))
+    expect(res.ok).toBe(false)
+  })
+
+  it('rejects team ids outside the filename-safe charset (they reach the transcript path)', () => {
+    expect(resolveHttpConversationId('app1', 'app-chat:app1:team:../etc:epoch-9').ok).toBe(false)
+    expect(resolveHttpConversationId('app1', 'app-chat:app1:team:team-7:../../etc').ok).toBe(false)
+    expect(resolveHttpConversationId('app1', 'app-chat:app1:team:a/b:epoch-9').ok).toBe(false)
+    expect(resolveHttpConversationId('app1', `app-chat:app1:team:team-7:${'x'.repeat(129)}`).ok).toBe(false)
+  })
+
+  it('still rejects IM keys now that a fourth channel is allowed', () => {
+    expect(resolveHttpConversationId('app1', 'app-chat:app1:wecom-bot:direct:user-1').ok).toBe(false)
+    expect(resolveHttpConversationId('app1', 'app-chat:app1:weixin-ilink-bot:group:g1').ok).toBe(false)
+  })
+
+  it('a non-team key carries no team tag', () => {
+    const res = resolveHttpConversationId('app1', 'app-chat:app1:http:direct:user-42')
+    expect(res.ok && res.team).toBeUndefined()
   })
 })
 

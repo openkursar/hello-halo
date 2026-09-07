@@ -50,7 +50,7 @@ import type {
   UpdateTeamMemberInput,
   TeamCheckView,
 } from '../../../shared/apps/team-types'
-import { isRemoteMember } from '../../../shared/apps/team-types'
+import { isRemoteMember, toLocalMembers } from '../../../shared/apps/team-types'
 
 const LOG_TAG = '[TeamService]'
 
@@ -240,6 +240,16 @@ export interface SendToMemberResult {
   ok: boolean
   finalMessage: string | null
   reason?: string
+  /**
+   * Present when the member was mid-turn, and which of the two that meant:
+   * `'queued'` — the message waits in its mailbox until that turn ends;
+   * `'mid_turn'` — it went into the running turn and is being read now.
+   * Both are a success and NEITHER is a reply: no turn starts from this call,
+   * so the caller must be able to tell them from an answer, or a message that
+   * has not been acted on yet looks exactly like one that arrived and was
+   * ignored.
+   */
+  delivery?: 'queued' | 'mid_turn'
 }
 
 // ── Factory ──
@@ -512,6 +522,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         hasWaitingUser: blockedOnUs || waitingCount > 0,
         waitingCount,
         leadAppId: team.leadAppId,
+        localMembers: toLocalMembers(members),
         hostNodeId: team.hostNodeId,
         updatedAt: team.updatedAt,
       }
@@ -1088,6 +1099,12 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     })
 
     if ('messageId' in result) return { ok: true, finalMessage: null }
+    // Delivered without starting a turn — waiting behind the member's current
+    // one, or read inside it. Reported rather than waited out: the completion
+    // that would answer this receipt belongs to a turn this message did not
+    // start, so holding the caller would buy nothing but an hours-long silence.
+    if (result.status === 'queued') return { ok: true, finalMessage: null, delivery: 'queued' }
+    if (result.status === 'mid_turn') return { ok: true, finalMessage: null, delivery: 'mid_turn' }
     if (result.status === 'timeout') return { ok: false, finalMessage: null, reason: 'TIMEOUT' }
     // The wake never reached the member (offline/unreachable): report failure, not a
     // silent empty success, so the operator UI can show "not delivered".

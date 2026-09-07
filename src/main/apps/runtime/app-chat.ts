@@ -70,6 +70,11 @@ import {
   disposeAppChatSink,
   type AppChatRoundHandle,
 } from './app-chat-sink'
+import { isAppChatConversationGenerating } from './app-chat-live-turn'
+// Re-exported, not defined here: the team runtime needs the same answer
+// synchronously and cannot import this module (app-chat imports the team
+// runtime accessor, so the edge back would close a cycle).
+export { isAppChatConversationGenerating }
 import { assembleAppChatPrompt } from './prompt/assembler'
 import { buildIdentityFragments } from './prompt/identity'
 import { buildDisabledCapabilitiesGuidance, buildUnconfiguredCapabilitiesGuidance } from './prompt/capabilities'
@@ -452,9 +457,9 @@ async function runAppChatTurn(
   })
   // Team turns take precedence over IM (trusted member, no guest restrictions).
   // When a team turn ALSO arrives over an IM channel (a team-backed IM instance),
-  // the lead keeps its team identity + tools and gains a front-desk bridge so it
-  // replies to the person in-chat. The lead runs as a trusted team peer, so IM
-  // guest hardening (buildImConstraints) is intentionally NOT applied.
+  // the bound member keeps its team identity + tools and gains a front-desk
+  // bridge so it replies to the person in-chat. It runs as a trusted team peer,
+  // so IM guest hardening (buildImConstraints) is intentionally NOT applied.
   if (teamContext) {
     // Every team turn (user/IM/teammate) stamps the epoch's activity, and wakes
     // it when hibernated so coordination resumes and member replies route back.
@@ -472,7 +477,7 @@ async function runAppChatTurn(
   let constraints: string[]
   if (teamPromptCtx) {
     entry = imSession
-      ? `${buildTeamEntry(teamPromptCtx)}\n\n${buildTeamImBridge(imSession)}`
+      ? `${buildTeamEntry(teamPromptCtx)}\n\n${buildTeamImBridge(imSession, teamPromptCtx.selfIsLead)}`
       : buildTeamEntry(teamPromptCtx)
     constraints = buildTeamConstraints(teamPromptCtx)
   } else if (imSession) {
@@ -1029,21 +1034,6 @@ export async function stopAppChatConversation(conversationId: string): Promise<v
  */
 export function isAppChatGenerating(appId: string): boolean {
   return collectAppConversationIds(appId).some(isAppChatConversationGenerating)
-}
-
-/**
- * Whether a single conversation is generating, for the HTTP status endpoint's
- * per-conversation polling. (isAppChatGenerating reports across all sessions.)
- *
- * Two windows count as generating, and both matter: a message dispatched but
- * not yet acknowledged by CC (round queued, no turn running), and a turn the
- * consumer is currently processing — including an autonomous one, which occupies
- * the session just as much as a solicited turn.
- */
-export function isAppChatConversationGenerating(conversationId: string): boolean {
-  if (hasActiveAppChatRound(conversationId)) return true
-  const consumer = getConsumerHandle(conversationId)
-  return !!(consumer?.isRunning && consumer.getActiveSessionState())
 }
 
 /**

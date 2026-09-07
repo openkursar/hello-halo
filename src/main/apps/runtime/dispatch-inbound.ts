@@ -17,11 +17,10 @@
  * - No direct dependency on any specific adapter
  */
 
-import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 import type { InboundMessage, ReplyHandle, ProgressEvent } from '../../../shared/types/inbound-message'
 import type { TeamTriggerContext } from '../../../shared/apps/team-types'
-import { buildTeamSessionKey } from '../../../shared/apps/team-types'
+import { buildTeamSessionKey, isRemoteMember } from '../../../shared/apps/team-types'
 import { buildTeamChatKey } from '../../../shared/apps/im-keys'
 import { getAppManager } from '../manager'
 import { getTeamStore } from '../team'
@@ -42,7 +41,6 @@ import { setImPermissionContext, clearImPermissionContext } from './im-permissio
 import { setImStreamHandle } from './im-stream-registry'
 import { analytics } from '../../services/analytics/analytics.service'
 import { AnalyticsEvents } from '../../services/analytics/types'
-import { FileExportGate } from './file-export-gate'
 import { truncateUtf16Safe } from './text-truncate'
 import { getSpace, getSpaceDir } from '../../services/space.service'
 import {
@@ -52,6 +50,7 @@ import {
   buildQuoteFromMessage,
 } from './pending-relays'
 import { resolveTranscriptPath } from './session-store'
+import { resolveImFileSend } from './im-channels/file-send-resolve'
 import { maybeClaimOwner } from './im-channels/owner-claim'
 import { resolveInboundIdentity } from './im-channels/identity-resolve'
 import { getImChannelsPermissionDefaults } from '../../foundation/product-config'
@@ -202,44 +201,6 @@ function shouldSendNoOwnerGuide(instanceId: string, chatId: string): boolean {
 // Helpers
 // ============================================
 
-/**
- * Look up the fileCapability for a channel instance and return a pre-bound
- * send function for the given conversation.
- *
- * The returned closure integrates `FileExportGate` — it validates the file
- * path against the space sandbox before delegating to the channel adapter.
- * This ensures all AI-initiated file sends pass through path validation.
- *
- * Returns undefined when:
- *   - The ImChannelManager is not initialized
- *   - The instance does not expose fileCapability (text-only channel)
- *   - The instance is no longer registered
- *
- * @param instanceId - IM channel instance ID
- * @param chatId - Target conversation ID (bound into the closure)
- * @param chatType - Conversation type (bound into the closure)
- * @param exportGate - FileExportGate for path validation
- */
-function resolveImFileSend(
-  instanceId: string,
-  chatId: string,
-  chatType: 'direct' | 'group',
-  exportGate: FileExportGate
-): ((filePath: string, filename?: string) => Promise<boolean>) | undefined {
-  const manager = getActiveImChannelManager()
-  if (!manager) return undefined
-  const instance = manager.getInstance(instanceId)
-  if (!instance?.fileCapability) return undefined
-  return (filePath: string, filename?: string) => {
-    const sanctioned = exportGate.sanction(filePath)
-    // Override displayName if caller provided an explicit filename
-    const file = filename
-      ? { ...sanctioned, displayName: filename }
-      : sanctioned
-    return instance.fileCapability!.sendFile(chatId, file, chatType)
-  }
-}
-
 // ============================================
 // Team backing (team-backed IM instance)
 // ============================================
@@ -247,8 +208,6 @@ function resolveImFileSend(
 /** Resolution of a team-backed IM instance for one inbound message. */
 interface TeamBacking {
   teamId: string
-  /** The team's lead app — the effective digital human serving this chat. */
-  leadAppId: string
   /** The long-lived 'conversation' epoch this chat runs in. */
   epochId: string
   /** Per-turn team context handed to app-chat (team tools + Entry + report routing). */
@@ -256,18 +215,21 @@ interface TeamBacking {
 }
 
 /**
- * Resolve a team-backed instance: fetch the team, its lead, and the long-lived
- * conversation epoch FOR THIS CHAT (one per chat, created on first message and
- * reused after — so each chat keeps its own context). The lead is resolved fresh
- * from the team so a lead change takes effect without rebinding.
+ * Resolve a team-backed instance: confirm the bound member still serves this
+ * team from this machine, then get the long-lived conversation epoch FOR THIS
+ * CHAT (one per chat, created on first message and reused after — so each chat
+ * keeps its own context).
  *
- * Returns null when the team coordination layer is unavailable or the team has
- * no provisioned lead — the caller then drops the message (a team with no lead
- * cannot serve a chat).
+ * The binding is a (team, member) pair, so this is also the trust boundary for
+ * it: config.json is user-editable and a roster changes after binding. Returns
+ * null — the caller drops the message — when the coordination layer is not
+ * ready, the team or the membership is gone, or the member runs on someone
+ * else's machine (its app is not installed here, so nothing local can run it).
  *
- * @param chatKey - Stable per-chat key (`${instanceId}:${chatId}`).
+ * @param memberAppId - The bound member, i.e. the instance config's appId.
+ * @param chatKey - Stable per-chat key (`${instanceId}:${chatType}:${chatId}`).
  */
-function resolveTeamBacking(teamId: string, chatKey: string): TeamBacking | null {
+function resolveTeamBacking(teamId: string, memberAppId: string, chatKey: string): TeamBacking | null {
   const store = getTeamStore()
   const runtime = getActiveTeamRuntime()
   if (!store || !runtime) {
@@ -279,14 +241,23 @@ function resolveTeamBacking(teamId: string, chatKey: string): TeamBacking | null
     console.warn(`${LOG_TAG} Team-backed instance points at a missing team: teamId=${teamId}`)
     return null
   }
-  if (!team.leadAppId) {
-    console.warn(`${LOG_TAG} Team "${team.name}" (${teamId}) has no lead provisioned; cannot serve IM`)
+  const member = memberAppId ? store.getMember(teamId, memberAppId) : null
+  if (!member) {
+    console.warn(
+      `${LOG_TAG} Bound member is not in team "${team.name}" (${teamId}): appId=${memberAppId}`
+    )
+    return null
+  }
+  if (isRemoteMember(member)) {
+    console.warn(
+      `${LOG_TAG} Bound member "${member.memberName}" runs on another machine ` +
+      `(owner=${member.ownerNodeId}); only its owner can serve IM with it: teamId=${teamId}`
+    )
     return null
   }
   const epoch = runtime.ensureConversationEpoch(teamId, chatKey)
   return {
     teamId,
-    leadAppId: team.leadAppId,
     epochId: epoch.id,
     teamContext: {
       teamId,
@@ -294,7 +265,7 @@ function resolveTeamBacking(teamId: string, chatKey: string): TeamBacking | null
       correlationId: randomUUID(),
       fromAppId: null,
       wait: false,
-      // A real person in a chat window, reaching the team's front desk.
+      // A real person in a chat window, reaching this member directly.
       kind: 'human_message',
     },
   }
@@ -586,32 +557,31 @@ export async function dispatchInboundMessage(
   const channelManager = getActiveImChannelManager()
   let instanceCfg = channelManager?.getInstanceConfig(instanceId)
 
-  // Team-backed instance: route to the team's lead with a long-lived conversation
-  // epoch + team tools. The lead is a real digital human, so everything below
-  // (session, registry, reply, file send) works unchanged on the resolved lead.
+  // Team-backed instance: `appId` is the bound member, and it serves this chat
+  // with a long-lived conversation epoch + team tools. The member is a real
+  // digital human, so everything below (session, registry, reply, file send)
+  // works on it unchanged.
   let teamBacking: TeamBacking | null = null
-  let effectiveAppId = appId
   if (instanceCfg?.teamId) {
     // One conversation epoch per chat: 1:1 → per person, group → per group
     // (matches how a single digital human keys IM sessions by chatId). The key
-    // carries instanceId + chatType so the runtime can push the lead's later
+    // carries instanceId + chatType so the runtime can push this member's later
     // (woken) replies back to this exact chat.
     const chatKey = buildTeamChatKey(instanceId, msg.chatType, msg.chatId)
-    teamBacking = resolveTeamBacking(instanceCfg.teamId, chatKey)
+    teamBacking = resolveTeamBacking(instanceCfg.teamId, appId, chatKey)
     if (!teamBacking) {
       console.log(
-        `${LOG_TAG} Team-backed instance cannot serve (no team/lead): ` +
-        `instanceId=${instanceId}, teamId=${instanceCfg.teamId}`
+        `${LOG_TAG} Team-backed instance cannot serve: ` +
+        `instanceId=${instanceId}, teamId=${instanceCfg.teamId}, appId=${appId}`
       )
       return
     }
-    effectiveAppId = teamBacking.leadAppId
   }
 
-  const app = manager.getApp(effectiveAppId)
+  const app = manager.getApp(appId)
   if (!app) {
     console.log(
-      `${LOG_TAG} No app found for appId="${effectiveAppId}": ` +
+      `${LOG_TAG} No app found for appId="${appId}": ` +
       `channel=${msg.channel}, chatId=${msg.chatId}, instanceId=${instanceId}`
     )
     return
@@ -657,8 +627,8 @@ export async function dispatchInboundMessage(
   // initialisation, replyScope is a reply policy. A 'group'-scoped instance
   // still needs its owner bound via DM — gating DMs first would make claiming
   // impossible while the group guide keeps pointing users at DMs.
-  // Team-backed turns run the lead as a trusted team peer (owner posture), so
-  // owner-claim / no-owner gating does not apply — mirrors the permission-context
+  // Team-backed turns run the bound member as a trusted team peer (owner
+  // posture), so owner-claim / no-owner gating does not apply — mirrors the permission-context
   // skip below. Without this guard, enterprise builds (permissionEnabled=true by
   // default) would block team-backed group chats until someone DMs to claim owner.
   const ownersUnset =
@@ -715,11 +685,11 @@ export async function dispatchInboundMessage(
     reply = { ...reply, streaming: undefined }
   }
 
-  // Build the session key. Team-backed chats resume the lead's long-lived
-  // conversation epoch (so context persists across messages and the lead has
-  // team tools); single-human chats use the per-chat IM session key.
+  // Build the session key. Team-backed chats resume the bound member's
+  // long-lived conversation epoch (so context persists across messages and the
+  // member has team tools); single-human chats use the per-chat IM session key.
   const conversationId = teamBacking
-    ? buildTeamSessionKey(teamBacking.leadAppId, teamBacking.teamId, teamBacking.epochId)
+    ? buildTeamSessionKey(app.id, teamBacking.teamId, teamBacking.epochId)
     : buildImSessionKey(app.id, msg.channel, msg.chatType, msg.chatId)
 
   // Normalize the body once at the single funnel every channel passes through.
@@ -887,8 +857,8 @@ export async function dispatchInboundMessage(
   //   permissionEnabled=false            → everyone is owner (no restrictions, personal use default)
   //   permissionEnabled=true, owners=[]  → everyone is guest, deny-all (no one has write access)
   //   permissionEnabled=true, owners=[…] → only listed IDs are owners; others are guests
-  // Team-backed turns run the lead as a trusted team peer (owner posture):
-  // IM guest hardening is NOT applied, so the permission context is left unset
+  // Team-backed turns run the bound member as a trusted team peer (owner
+  // posture): IM guest hardening is NOT applied, so the permission context is left unset
   // (app-chat treats a null context as unrestricted for this team session key).
   let isOwner = true
   // Stays false for team turns: it gates relay transcript exposure on the sender
@@ -966,14 +936,15 @@ export async function dispatchInboundMessage(
     }
   }
 
-  // FileExportGate roots = the space's working directory (matches the AI's
-  // cwd, where attachments and AI-produced files actually live) + tmpdir.
-  // See getSpaceDir() for why this is not the same as space.path.
-  const exportGate = new FileExportGate([getSpaceDir(app.spaceId!), tmpdir()])
-
-  // Resolve file-send capability for this instance (absent for text-only channels)
-  const chatTypeNorm: 'direct' | 'group' = msg.chatType
-  const imFileSend = resolveImFileSend(instanceId, msg.chatId, chatTypeNorm, exportGate)
+  // Resolve file-send capability for this chat (absent for text-only channels).
+  // A later runtime-woken turn of a team-backed chat must resolve this the same
+  // way — see resolveImFileSend for why a divergence is fatal, not cosmetic.
+  const imFileSend = resolveImFileSend({
+    instanceId,
+    chatId: msg.chatId,
+    chatType: msg.chatType,
+    spaceDir: getSpaceDir(app.spaceId!),
+  })
 
   // Build IM session context for system prompt injection.
   // Resolves display name with priority: customName > resolvedName > chatName > fromName > chatId.
@@ -1025,7 +996,7 @@ export async function dispatchInboundMessage(
       imFileSend,
       senderIdentity,
       imSession,
-      // Team-backed chat: hand the lead its team context (tools + Entry + the
+      // Team-backed chat: hand the member its team context (tools + Entry + the
       // long-lived conversation epoch). Absent for single-human chats.
       ...(teamBacking ? { teamContext: teamBacking.teamContext } : {}),
 

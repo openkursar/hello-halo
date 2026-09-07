@@ -38,7 +38,14 @@ import type {
   TurnCompletion,
 } from '../../../../../src/main/apps/runtime/team/message-bus'
 import { buildTeamSessionKey } from '../../../../../src/shared/apps/team-types'
+import type { TeamSendAsyncResult, TeamSendSyncResult } from '../../../../../src/shared/apps/team-types'
 import type { Team, TeamMember, TeamEpoch, TeamEdge } from '../../../../../src/main/apps/team/types'
+
+/** Narrow a `send` result to the completion receipt a `wait: true` call returns. */
+function receipt(result: TeamSendAsyncResult | TeamSendSyncResult): TeamSendSyncResult {
+  if (!('status' in result)) throw new Error(`expected a completion receipt, got ${JSON.stringify(result)}`)
+  return result
+}
 
 // ============================================
 // Fixtures
@@ -88,9 +95,20 @@ function seedTeam(store: TeamStore, collabMode: Team['collabMode']): void {
   }
 }
 
+interface MakeHooksOptions {
+  /**
+   * Offer mid-turn delivery, and mark a session busy as soon as its wake is
+   * accepted — i.e. model a turn that is really streaming under the gate's own
+   * reservation, the only state in which a message may join it. Off by default
+   * so every other test keeps driving `busy` by hand and keeps queueing.
+   */
+  midTurn?: boolean
+}
+
 /** A mock hooks implementation that records wakes and lets the test drive busyness. */
-function makeHooks() {
+function makeHooks(options: MakeHooksOptions = {}) {
   const wakes: Array<{ sessionKey: string; appId: string; envelope: any; trigger: any }> = []
+  const midTurnDeliveries: Array<{ sessionKey: string; appId: string; envelope: any; trigger: any }> = []
   const busy = new Set<string>()
   // Members whose owner is unreachable (empty by default → everything reachable, so
   // existing tests are unaffected by the wait=false reachability gate).
@@ -103,11 +121,25 @@ function makeHooks() {
         envelope: params.envelope,
         trigger: params.trigger,
       })
+      if (options.midTurn) busy.add(params.sessionKey)
     }),
     isBusy: (sessionKey: string) => busy.has(sessionKey),
     checkReachable: (appId: string) => !unreachable.has(appId),
+    ...(options.midTurn
+      ? {
+          deliverMidTurn: vi.fn((params) => {
+            midTurnDeliveries.push({
+              sessionKey: params.sessionKey,
+              appId: params.appId,
+              envelope: params.envelope,
+              trigger: params.trigger,
+            })
+            return true
+          }),
+        }
+      : {}),
   }
-  return { hooks, wakes, busy, unreachable }
+  return { hooks, wakes, midTurnDeliveries, busy, unreachable }
 }
 
 // ============================================
@@ -376,7 +408,7 @@ describe('MessageBus', () => {
         await Promise.resolve()
         await vi.advanceTimersByTimeAsync(1001)
 
-        const result = await pending
+        const result = receipt(await pending)
         expect(result.status).toBe('timeout')
         expect(result.from).toBe('lead')
       } finally {
@@ -393,7 +425,7 @@ describe('MessageBus', () => {
       await Promise.resolve()
       bus.completeTurn({ sessionKey: wakes[0].sessionKey, trigger: wakes[0].trigger, outcome: { kind: 'error', message: 'boom' } })
 
-      const result = await pending
+      const result = receipt(await pending)
       expect(result.status).toBe('ok')
       expect(result.message).toMatch(/failed/i)
     })
@@ -413,7 +445,7 @@ describe('MessageBus', () => {
         outcome: { kind: 'undelivered', reason: 'owner-unreachable' },
       })
 
-      const result = await pending
+      const result = receipt(await pending)
       expect(result.status).toBe('undelivered')
       expect(result.message).toMatch(/not delivered/i)
     })
@@ -437,6 +469,87 @@ describe('MessageBus', () => {
 
       const result = await pending
       expect(result).toEqual({ from: 'lead', message: 'all good', status: 'ok' })
+    })
+
+    it('answers status=queued at once when the target is mid-turn, instead of hanging', async () => {
+      // A receipt is answered by a COMPLETION, and a message that only reached
+      // the mailbox has not started the turn that will complete. Waiting for one
+      // anyway held the caller to the receipt ceiling (hours) with no error, no
+      // transcript row and no change in the member's state — a send that looks
+      // successful and is not, which is what makes an operator conclude the
+      // session is dead and start a second one beside it.
+      vi.useFakeTimers()
+      try {
+        seedTeam(store, 'free')
+        const { hooks, wakes, busy } = makeHooks()
+        busy.add(buildTeamSessionKey(LEAD_APP, TEAM_ID, EPOCH_ID))
+        const bus = createMessageBus({ store, hooks, syncWaitTimeoutMs: 60_000 })
+
+        const pending = bus.send({
+          teamId: TEAM_ID,
+          epochId: EPOCH_ID,
+          fromAppId: null,
+          to: 'lead',
+          message: 'one more instruction',
+          wait: true,
+        })
+
+        // No clock advanced: the answer must be immediate, not on a timer.
+        const result = await pending
+        expect(result).toEqual({ from: 'lead', message: '', status: 'queued' })
+        expect(wakes).toHaveLength(0)
+        expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(true)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('a queued message is still delivered when the turn it waited on ends', async () => {
+      seedTeam(store, 'free')
+      const { hooks, wakes, busy } = makeHooks()
+      const sessionKey = buildTeamSessionKey(LEAD_APP, TEAM_ID, EPOCH_ID)
+      busy.add(sessionKey)
+      const bus = createMessageBus({ store, hooks })
+
+      const queued = await bus.send({
+        teamId: TEAM_ID,
+        epochId: EPOCH_ID,
+        fromAppId: null,
+        to: 'lead',
+        message: 'one more instruction',
+        wait: true,
+      })
+      expect(queued).toMatchObject({ status: 'queued' })
+
+      busy.delete(sessionKey)
+      bus.drainMailbox(sessionKey)
+      await Promise.resolve()
+
+      expect(wakes).toHaveLength(1)
+      expect(wakes[0].envelope.body).toBe('one more instruction')
+    })
+  })
+
+  // ===========================================================================
+  // isSessionOccupied — the single status source
+  // ===========================================================================
+
+  describe('isSessionOccupied', () => {
+    it('reports a reserved session as occupied while the busy probe still reads idle', async () => {
+      // The window the reservation exists to cover. Anything projecting member
+      // status from the probe alone shows "idle" here — for a session that
+      // cannot take a turn — which is how a stuck lead looked available.
+      seedTeam(store, 'free')
+      const { hooks } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+      const sessionKey = buildTeamSessionKey(LEAD_APP, TEAM_ID, EPOCH_ID)
+
+      expect(bus.isSessionOccupied(sessionKey)).toBe(false)
+
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: TESTER_APP, to: 'lead', message: 'go' })
+
+      expect(hooks.isBusy(sessionKey)).toBe(false)
+      expect(bus.isSessionOccupied(sessionKey)).toBe(true)
     })
   })
 
@@ -463,6 +576,171 @@ describe('MessageBus', () => {
 
       // No new wake of the original sender (lead) was scheduled.
       expect(wakes.length).toBe(wakesBefore)
+    })
+  })
+
+  // ===========================================================================
+  // Mid-turn delivery — reaching a member that is already working
+  // ===========================================================================
+
+  describe('mid-turn delivery', () => {
+    it('delivers into the running turn instead of queueing, and says so in the receipt', async () => {
+      // The receipt is everything the sender learns, and the two busy outcomes
+      // call for different next moves: "waiting until they finish" versus "they
+      // are reading it now".
+      seedTeam(store, 'free')
+      const { hooks, wakes, midTurnDeliveries } = makeHooks({ midTurn: true })
+      const bus = createMessageBus({ store, hooks })
+
+      // First message starts the researcher's turn (and leaves it streaming).
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'do T1' })
+      expect(wakes).toHaveLength(1)
+
+      const second = await bus.send({
+        teamId: TEAM_ID,
+        epochId: EPOCH_ID,
+        fromAppId: LEAD_APP,
+        to: 'researcher',
+        message: 'stop, the plan changed',
+      })
+
+      expect('messageId' in second && second.delivery).toBe('mid_turn')
+      // No second turn, and nothing waiting for one.
+      expect(wakes).toHaveLength(1)
+      expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(false)
+      expect(midTurnDeliveries).toHaveLength(1)
+      expect(midTurnDeliveries[0].envelope.body).toBe('stop, the plan changed')
+    })
+
+    it('charges the circuit breaker for a mid-turn delivery like any other send', async () => {
+      // The budget is the only backstop against members interrupting each other
+      // without end, and interrupting is exactly what this path does. A route
+      // that skipped the charge would disarm the guard precisely where it is
+      // needed most.
+      seedTeam(store, 'free')
+      const { hooks } = makeHooks({ midTurn: true })
+      const bus = createMessageBus({ store, hooks })
+
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'do T1' })
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'and this' })
+
+      expect(bus.getEpochStats(EPOCH_ID).messageCount).toBe(2)
+    })
+
+    it('records the act, so a mid-turn message is on the office record like any other', async () => {
+      seedTeam(store, 'free')
+      const { hooks } = makeHooks({ midTurn: true })
+      const recorded: any[] = []
+      const bus = createMessageBus({ store, hooks, recordActivity: (input) => recorded.push(input) })
+
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'do T1' })
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'and this' })
+
+      const messages = recorded.filter((r) => r.kind === 'message')
+      expect(messages).toHaveLength(2)
+      expect(messages[1]).toMatchObject({ status: 'sent', body: 'and this' })
+    })
+
+    it('answers a receipted send at once with status=mid_turn, not by waiting for a turn it did not start', async () => {
+      vi.useFakeTimers()
+      try {
+        seedTeam(store, 'free')
+        const { hooks } = makeHooks({ midTurn: true })
+        const bus = createMessageBus({ store, hooks, syncWaitTimeoutMs: 60_000 })
+
+        await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: TESTER_APP, to: 'lead', message: 'start' })
+
+        // No clock advanced: the answer must be immediate.
+        const result = await bus.send({
+          teamId: TEAM_ID,
+          epochId: EPOCH_ID,
+          fromAppId: null,
+          to: 'lead',
+          message: 'one more instruction',
+          wait: true,
+        })
+
+        expect(result).toEqual({ from: 'lead', message: '', status: 'mid_turn' })
+        expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('does not free the slot: the turn it joined still completes on its own trigger', async () => {
+      seedTeam(store, 'free')
+      const { hooks, wakes, busy } = makeHooks({ midTurn: true })
+      const bus = createMessageBus({ store, hooks })
+      const sessionKey = buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, EPOCH_ID)
+
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'do T1' })
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: LEAD_APP, to: 'researcher', message: 'also this' })
+
+      expect(bus.isSessionOccupied(sessionKey)).toBe(true)
+
+      busy.delete(sessionKey)
+      bus.completeTurn({ sessionKey, trigger: wakes[0].trigger, outcome: { kind: 'result', content: 'done' } })
+
+      expect(bus.isSessionOccupied(sessionKey)).toBe(false)
+      // Nothing was left over to drain into a second turn.
+      expect(wakes).toHaveLength(1)
+    })
+  })
+
+  // ===========================================================================
+  // completeTurn while the caller is about to seal
+  // ===========================================================================
+
+  describe('completeTurn with sealPending', () => {
+    it('leaves the mailbox alone, so nothing starts a turn into a teardown', async () => {
+      seedTeam(store, 'free')
+      const { hooks, wakes, busy } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+      const sessionKey = buildTeamSessionKey(LEAD_APP, TEAM_ID, EPOCH_ID)
+      busy.add(sessionKey)
+
+      await bus.send({ teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: RESEARCHER_APP, to: 'lead', message: 'queued' })
+      expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(true)
+
+      busy.delete(sessionKey)
+      bus.completeTurn({
+        sessionKey,
+        trigger: { teamId: TEAM_ID, epochId: EPOCH_ID, correlationId: 'c-seal', fromAppId: null, wait: false },
+        outcome: { kind: 'result', content: 'wrapping up' },
+        sealPending: true,
+      })
+      await Promise.resolve()
+
+      expect(wakes).toHaveLength(0)
+      // Still queued, not lost: the seal's `resetEpoch` is what discards it, and
+      // it counts what it drops.
+      expect(bus.hasBufferedMessages(EPOCH_ID)).toBe(true)
+    })
+
+    it('still settles a receipt someone is holding', async () => {
+      // The narrow point of the flag. The sealed-epoch guard returns early and
+      // skips this too, which is survivable only because it fires when the
+      // epoch is ALREADY sealed and its waiters were resolved with it. Skipping
+      // it here would strand a person's cross-machine chat on the receipt
+      // ceiling — hours — with no error and nothing in the transcript.
+      seedTeam(store, 'free')
+      const { hooks, wakes } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+
+      const pending = bus.send({
+        teamId: TEAM_ID, epochId: EPOCH_ID, fromAppId: null, to: 'lead', message: 'are you there?', wait: true,
+      })
+      await Promise.resolve()
+
+      const wake = wakes[0]
+      bus.completeTurn({
+        sessionKey: wake.sessionKey,
+        trigger: wake.trigger,
+        outcome: { kind: 'result', content: 'yes, and we are done' },
+        sealPending: true,
+      })
+
+      await expect(pending).resolves.toEqual({ from: 'lead', message: 'yes, and we are done', status: 'ok' })
     })
   })
 
@@ -702,7 +980,10 @@ describe('MessageBus', () => {
         expect(wakes).toHaveLength(1)
         expect(wakes[0].envelope.body).toBe('held')
 
-        // Drained mailbox → no timer left running.
+        // Drained mailbox → no recheck left. The drained wake now holds the
+        // slot, so its reservation watchdog is the one timer still armed; the
+        // turn ending is what clears it.
+        bus.completeTurn({ sessionKey: LEAD_KEY, trigger: wakes[0].trigger, outcome: { kind: 'result', content: '' } })
         await vi.advanceTimersByTimeAsync(10_000)
         expect(vi.getTimerCount()).toBe(0)
       } finally {

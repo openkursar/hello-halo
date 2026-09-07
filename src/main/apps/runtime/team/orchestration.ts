@@ -65,6 +65,16 @@ export interface OrchestrationSessionDeps {
   }>
   isSessionActive(sessionKey: string): boolean
   /**
+   * Add `message` to the turn already running on this session, rather than
+   * starting one. False — never a throw — when there is no live session to add
+   * it to, which is also how a member owned by ANOTHER machine answers: its
+   * turn runs there, so nothing here can reach into it and the caller falls
+   * back to queueing. Must stay synchronous: the caller decides on the strength
+   * of "a turn is streaming right now", and an await between reading that and
+   * acting on it lets the turn end underneath.
+   */
+  injectIntoSession(sessionKey: string, message: string): boolean
+  /**
    * Tear down the live V2 process but preserve the JSONL transcript + saved
    * sessionId so the run stays a retrievable, resumable history record.
    */
@@ -83,7 +93,28 @@ export interface Orchestration {
     envelope: TeamEnvelope
     trigger: TeamTriggerContext
   }): Promise<void>
+  /**
+   * Put the envelope into the turn the member is already running — the other
+   * half of `wakeTarget`, for when there is nothing to wake. Starts no turn,
+   * reports no completion, and returns false when it could not land so the bus
+   * can fall back to the mailbox. The bus decides when to call it.
+   */
+  deliverMidTurn(params: {
+    sessionKey: string
+    appId: string
+    teamId: string
+    epochId: string
+    envelope: TeamEnvelope
+    trigger: TeamTriggerContext
+  }): boolean
+  /**
+   * The bus's own busy probe: is a turn streaming on this session right now.
+   * Deliberately narrow — it is the gate's input, so it must not consult the
+   * gate. Anything reporting availability wants `isSessionOccupied`.
+   */
   isBusy(sessionKey: string): boolean
+  /** Can this session take a turn — a streaming turn OR a held reservation. */
+  isSessionOccupied(sessionKey: string): boolean
 
   startEpoch(teamId: string, trigger?: TeamRunTrigger): Promise<TeamEpoch>
   /**
@@ -503,38 +534,102 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         }
       )
       .then((outcome) => {
-        capturedEscalations.delete(trigger.correlationId)
-        // The turn ended → clear the viewer-side pulse (working → idle/alert).
-        notifyMemberStatusChanged(teamId)
-        if (outcome.kind === 'escalation') {
-          markEscalationToUser(teamId, epochId, appId)
+        // `bus.completeTurn` is what hands the session's slot back, and this
+        // handler is detached — so anything throwing before it would strand that
+        // slot AND swallow the reason, leaving a session that only queues mail
+        // while every status surface reads idle. Hence: the steps around the
+        // completion are guarded, and the completion itself is unconditional.
+        // Whether THIS ending is the one that seals the epoch. Decided before
+        // the completion because `completeTurn` ends by draining this session's
+        // mailbox, and a drained envelope starts a turn — a turn that the seal,
+        // one statement later, tears down while it is still building its
+        // session. Read here rather than there because a deferred seal is
+        // session-layer state: at this instant the epoch row still says open.
+        //
+        // Inside the guarded block for the same reason as everything else
+        // preceding the completion: a throw must never cost the session's slot.
+        // Left unread it stays false, which is exactly the old behavior.
+        let sealing = false
+        try {
+          capturedEscalations.delete(trigger.correlationId)
+          // The turn ended → clear the viewer-side pulse (working → idle/alert).
+          notifyMemberStatusChanged(teamId)
+          if (outcome.kind === 'escalation') {
+            markEscalationToUser(teamId, epochId, appId)
+          }
+          if (outcome.kind === 'undelivered') {
+            // Nothing ran anywhere, on this machine or the owner's, so this is the
+            // only place the ending can be witnessed at all.
+            reportTurnEnded({
+              appId,
+              teamId,
+              epochId,
+              fate: { kind: 'never_ran', reason: outcome.reason },
+              correlationId: trigger.correlationId,
+            })
+          }
+          const pending = pendingSeals.get(epochId)
+          sealing = !!pending && store.getTeamById(pending.teamId)?.leadAppId === appId
+        } catch (err) {
+          console.error(`${LOG_TAG} turn-end bookkeeping failed (completing anyway):`, err)
         }
-        if (outcome.kind === 'undelivered') {
-          // Nothing ran anywhere, on this machine or the owner's, so this is the
-          // only place the ending can be witnessed at all.
-          reportTurnEnded({
-            appId,
-            teamId,
-            epochId,
-            fate: { kind: 'never_ran', reason: outcome.reason },
-            correlationId: trigger.correlationId,
-          })
-        }
-        bus.completeTurn({ sessionKey, trigger, outcome })
 
-        const seal = pendingSeals.get(epochId)
-        if (seal) {
-          const t = store.getTeamById(seal.teamId)
-          if (t && t.leadAppId === appId) {
+        bus.completeTurn({ sessionKey, trigger, outcome, ...(sealing ? { sealPending: true } : {}) })
+
+        try {
+          if (sealing) {
+            const seal = pendingSeals.get(epochId)!
             pendingSeals.delete(epochId)
             void sealEpochById(seal.teamId, epochId, 'completed', seal.summary).catch((err) =>
               console.error(`${LOG_TAG} deferred sealEpoch failed:`, err)
             )
+          } else if (!pendingSeals.has(epochId)) {
+            // A seal is pending but this is someone else's turn ending: neither
+            // seal nor sweep — the lead's own ending is what fires it.
+            scheduleQuiescenceCheck(teamId, epochId)
           }
-        } else {
-          scheduleQuiescenceCheck(teamId, epochId)
+        } catch (err) {
+          console.error(`${LOG_TAG} post-completion sweep failed:`, err)
         }
       })
+      .catch((err) => {
+        // A `void`-ed chain that rejected would otherwise vanish, and the slot it
+        // left behind would only be explained by the gate's watchdog, hours later.
+        console.error(`${LOG_TAG} turn-completion chain rejected: session=${sessionKey}`, err)
+      })
+  }
+
+  /**
+   * Hand an envelope to a member that is already mid-turn, instead of holding it
+   * until that turn ends.
+   *
+   * Why this exists: the moment a member can accept new instructions — just
+   * finished, not yet started on the next thing — is the moment the queued mail
+   * fills, and whoever wanted to redirect it is woken by that same ending, a
+   * step too late. So a lead that changes its mind at minute 10 of a 20-minute
+   * task could not reach the member until the wasted work was already done.
+   * Between tool calls there is an opening every few seconds; this uses it.
+   *
+   * It is NOT a wake, and none of `wakeTarget`'s bookkeeping applies: no turn
+   * starts, no status pulse (the member was already working), no completion
+   * belongs to this message. The turn it joined completes against its own
+   * trigger, as it always did.
+   */
+  function deliverMidTurn(params: {
+    sessionKey: string
+    appId: string
+    teamId: string
+    epochId: string
+    envelope: TeamEnvelope
+    trigger: TeamTriggerContext
+  }): boolean {
+    const { sessionKey, appId, teamId, envelope, trigger } = params
+    const delivered = session.injectIntoSession(sessionKey, renderMidTurnEnvelope(envelope, trigger))
+    console.log(
+      `${LOG_TAG} deliverMidTurn: team=${teamId} app=${appId} corr=${trigger.correlationId} ` +
+        `kind=${trigger.kind ?? 'n/a'} delivered=${delivered}`
+    )
+    return delivered
   }
 
   // ── Quiescence detection ────────────────────────────────────────────────────
@@ -704,7 +799,61 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     if (trigger.kind === 'human_message') return envelope.body
     const fromName = trigger.fromAppId ? memberName(envelope.teamId, trigger.fromAppId) : null
     if (!fromName) return withDigest(`[Team run signal]\n\n${envelope.body}`, envelope)
-    return withDigest(`[Team message from ${fromName}]\n\n${envelope.body}`, envelope)
+    return withDigest(`[Team message from ${fromName}${renderAge(envelope)}]\n\n${envelope.body}`, envelope)
+  }
+
+  /**
+   * How long this message has been waiting, stated only once it has waited long
+   * enough for the answer to matter.
+   *
+   * A message drained from the mailbox was written against the situation as its
+   * sender understood it — twenty minutes and one finished task ago. Without
+   * this the member reads the oldest instruction exactly like a fresh one, which
+   * is the failure this whole path exists to shorten: the reader is the only one
+   * who can judge whether an instruction has been overtaken, and it cannot judge
+   * what it is not told. Silent under a minute, because "sent 4 seconds ago" is
+   * noise, and relative rather than absolute because the question is never what
+   * time it was sent.
+   */
+  function renderAge(envelope: TeamEnvelope): string {
+    const minutes = Math.floor((Date.now() - envelope.createdAt) / 60_000)
+    if (minutes < 1) return ''
+    if (minutes < 60) return ` — sent ${minutes} minute${minutes === 1 ? '' : 's'} ago`
+    const hours = Math.floor(minutes / 60)
+    return ` — sent ${hours} hour${hours === 1 ? '' : 's'} ago`
+  }
+
+  /**
+   * The turn's SUPPLEMENT — an envelope handed to a turn that is already
+   * running, so it is read beside work in progress rather than as the reason for
+   * a turn.
+   *
+   * It differs from `renderEnvelope` in exactly two ways, and each is load-bearing:
+   *
+   * - It says the message arrived mid-work. The sender did not know what the
+   *   member was doing, so the member must not read this as the task it was
+   *   woken for, and must be able to weigh it against what is already under way.
+   *   How to weigh it is the member's judgment — the Entry says what the shape
+   *   of this thing is, and nothing here tells it what to conclude.
+   * - It carries no board digest. The digest answers "what changed since you
+   *   last looked", which belongs at the START of a turn; mid-turn it is a page
+   *   of unrelated context dropped into live reasoning, and reading it here
+   *   would advance the member's watermark past facts it may never see.
+   *
+   * A person's words stay verbatim, exactly as they do when they type into this
+   * same chat locally — a 1:1 message is not team traffic and must never wear
+   * teammate framing.
+   */
+  function renderMidTurnEnvelope(envelope: TeamEnvelope, trigger: TeamTriggerContext): string {
+    if (trigger.kind === 'human_message') return envelope.body
+    const fromName = trigger.fromAppId ? memberName(envelope.teamId, trigger.fromAppId) : null
+    if (!fromName) return `[Arrived while you were working]\n\n${envelope.body}`
+    const role = isLead(envelope.teamId, trigger.fromAppId!) ? 'lead' : 'teammate'
+    return `[Arrived while you were working — from ${fromName} (${role})]\n\n${envelope.body}`
+  }
+
+  function isLead(teamId: string, appId: string): boolean {
+    return store.getTeamById(teamId)?.leadAppId === appId
   }
 
   /**
@@ -952,8 +1101,11 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   function ensureConversationEpoch(teamId: string, chatKey: string, title?: string): TeamEpoch {
     const team = store.getTeamById(teamId)
     if (!team) throw new Error(`Team not found: ${teamId}`)
-    if (!team.leadAppId) throw new Error(`Team has no lead provisioned: ${teamId}`)
 
+    // Deliberately does not require a lead: a conversation epoch is a per-chat
+    // context, and WHICH member serves it is the caller's decision (an IM
+    // channel binds one member, which may be any of them).
+    //
     // One long-lived epoch PER CHAT, so each IM chat keeps its own context
     // (1:1 → per person; group → per group). Reuse the open one if present.
     const existing = store.getOpenConversationEpoch(teamId, chatKey)
@@ -1050,6 +1202,16 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     store.endEpoch(epochId, Date.now(), endReason, summary, outcome)
     publishEpoch(epochId)
 
+    // Before the teardown, not after: the mailbox's own recheck timer is armed
+    // and `resetEpoch` is the only thing that disarms it. Tearing down sessions
+    // is a loop of awaits over every member, so leaving the mailbox live across
+    // it opens a window — a few seconds is enough — in which that timer drains
+    // an envelope into an epoch whose `endedAt` is already written. The turn it
+    // starts then wakes the epoch back up (`noteEpochTurn`) and dies with the
+    // teardown, which is exactly the ending `completeTurn`'s `sealPending` was
+    // added to prevent, reached through a second door.
+    bus.resetEpoch(epochId)
+
     for (const member of store.listMembersByTeam(teamId)) {
       try {
         await session.closeTeamSession(member.appId, teamId, epochId)
@@ -1057,8 +1219,6 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         console.error(`${LOG_TAG} closeTeamSession failed for app=${member.appId}:`, err)
       }
     }
-
-    bus.resetEpoch(epochId)
 
     try {
       deps.onEpochArchived?.(teamId, epochId, endReason)
@@ -1226,6 +1386,20 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
   // ── Live member status ─────────────────────────────────────────────────────
 
+  /**
+   * What every status surface asks, and deliberately NOT `isBusy`.
+   *
+   * `isBusy` answers "is a turn streaming" — that is the gate's own input, and
+   * it must stay that narrow or the gate would consult itself. A member whose
+   * slot is reserved but whose turn has not registered yet is equally
+   * unavailable: messages to it queue, periodic checks skip it. Reporting it as
+   * idle is what let a stuck session look like a free one, which is how one lead
+   * ended up running in two places at once.
+   */
+  function isSessionOccupied(sessionKey: string): boolean {
+    return bus.isSessionOccupied(sessionKey)
+  }
+
   function getMemberStatus(appId: string): TeamMemberRuntimeStatus {
     const memberships = store.listMembersByAppId(appId)
     for (const m of memberships) {
@@ -1245,7 +1419,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       // (P0-2). Previously only the run epoch counted, so a member serving an
       // IM chat looked idle on the board.
       for (const epoch of store.listOpenEpochs(m.teamId)) {
-        if (session.isSessionActive(buildTeamSessionKey(appId, m.teamId, epoch.id))) {
+        if (isSessionOccupied(buildTeamSessionKey(appId, m.teamId, epoch.id))) {
           return 'working'
         }
       }
@@ -1257,7 +1431,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   function getMemberBusy(appId: string, teamId: string): RosterBusyEntry[] {
     const out: RosterBusyEntry[] = []
     for (const epoch of store.listOpenEpochs(teamId)) {
-      if (!session.isSessionActive(buildTeamSessionKey(appId, teamId, epoch.id))) continue
+      if (!isSessionOccupied(buildTeamSessionKey(appId, teamId, epoch.id))) continue
       out.push({
         epochId: epoch.id,
         kind: epoch.lifecycle,
@@ -1301,8 +1475,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
   return {
     wakeTarget,
+    deliverMidTurn,
     wakeForCheck,
     isBusy,
+    isSessionOccupied,
     startEpoch,
     ensureConversationEpoch,
     renameConversationEpoch,

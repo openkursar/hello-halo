@@ -31,46 +31,68 @@ import type {
   TeamDelegatedPolicy,
   TeamTriggerContext,
 } from '../../../../shared/apps/team-types'
-import { buildTeamSessionKey } from '../../../../shared/apps/team-types'
+import { buildTeamSessionKey, TEAM_DEFAULT_TURN_TIMEOUT_MS } from '../../../../shared/apps/team-types'
 import type { SchedulerService } from '../../../platform/scheduler'
 import { parseTeamSessionKey, parseTeamChatKey } from '../../../../shared/apps/im-keys'
 import type { ImSessionContext } from '../im-channels/im-prompt'
-import { activeSessions } from '../../../services/agent/session-manager'
+import { resolveImFileSend } from '../im-channels/file-send-resolve'
+import type { FileSendFn } from '../im-channels/file-send-mcp'
+import type { ImChannelInstance } from '../../../../shared/types/im-channel'
+import { isAppChatConversationGenerating, injectIntoAppChat } from '../app-chat-live-turn'
 import { getAppManager } from '../../manager'
+import { getSpaceDir } from '../../../services/space.service'
 
 const LOG_TAG = '[TeamRuntime]'
 
-/** Resolved IM push target for a team LEAD serving an IM conversation epoch. */
+/**
+ * Everything that makes a turn an IM-fronted turn: how to frame it, what it may
+ * do in that chat, and where its reply goes.
+ */
 interface ImRoute {
-  instance: { pushToChat(chatId: string, text: string, chatType: 'direct' | 'group'): Promise<boolean> }
+  instance: Pick<ImChannelInstance, 'pushToChat'>
   chatId: string
   chatType: 'direct' | 'group'
   imSession: ImSessionContext
+  /** Undefined for a text-only channel — the same answer dispatch-inbound gets. */
+  imFileSend: FileSendFn | undefined
 }
 
 /**
- * If `conversationId` is the LEAD's session in a team-backed IM conversation
- * epoch, resolve how to frame + push that turn's reply to the IM chat. Returns
- * null for member turns, non-conversation epochs, or when the IM instance is
- * gone — those turns stay internal (no IM side effects).
+ * If `conversationId` is the session of the member that FRONTS a team-backed IM
+ * chat, resolve how to frame + push that turn's reply to that chat. Returns null
+ * for every other member's turns, non-conversation epochs, or when the IM
+ * instance is gone — those turns stay internal (no IM side effects).
+ *
+ * The front desk is whoever the IM instance binds, so the instance config is the
+ * authority here — not the team's lead. Reading it also keeps a woken reply from
+ * escaping to a chat whose binding has since been re-pointed elsewhere.
+ *
+ * The route resolves the chat's file-send capability for the same reason it
+ * resolves the framing: this turn shares a session with the inbound turns of
+ * that chat, and a session is rebuilt whenever its tool set changes. Resolving
+ * one and not the other made every woken turn rebuild its session mid-start,
+ * which killed the turn instead of merely disabling a tool.
+ *
+ * @param spaceDir - The member's working directory, bounding what may be sent.
  */
 async function resolveImRoute(
   store: TeamStore,
   appId: string,
-  conversationId: string
+  conversationId: string,
+  spaceDir: string
 ): Promise<ImRoute | null> {
   const parsed = parseTeamSessionKey(conversationId)
   if (!parsed) return null
-  const team = store.getTeamById(parsed.teamId)
-  // Only the lead is the chat's front desk; members stay internal.
-  if (!team || team.leadAppId !== appId) return null
   const epoch = store.getEpochById(parsed.epochId)
   if (!epoch || epoch.lifecycle !== 'conversation' || !epoch.chatKey) return null
   const target = parseTeamChatKey(epoch.chatKey)
   if (!target) return null
 
   const { getActiveImChannelManager } = await import('../im-channels')
-  const instance = getActiveImChannelManager()?.getInstance(target.instanceId)
+  const channels = getActiveImChannelManager()
+  const cfg = channels?.getInstanceConfig(target.instanceId)
+  if (!cfg || cfg.teamId !== parsed.teamId || cfg.appId !== appId) return null
+  const instance = channels?.getInstance(target.instanceId)
   if (!instance) return null
 
   // Display name for the bridge framing: prefer the registered IM session name.
@@ -93,6 +115,12 @@ async function resolveImRoute(
       displayName,
       sessionId: `${target.instanceId}:${target.chatId}`,
     },
+    imFileSend: resolveImFileSend({
+      instanceId: target.instanceId,
+      chatId: target.chatId,
+      chatType: target.chatType,
+      spaceDir,
+    }),
   }
 }
 
@@ -313,10 +341,15 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
         return orchestration.wakeTarget(params)
       },
       isBusy: (sessionKey) => (orchestration ? orchestration.isBusy(sessionKey) : false),
+      deliverMidTurn: (params) => (orchestration ? orchestration.deliverMidTurn(params) : false),
       ...(deps.checkMemberReachable ? { checkReachable: deps.checkMemberReachable } : {}),
     },
     circuitOverrides: deps.circuitOverrides,
     syncWaitTimeoutMs: deps.syncWaitTimeoutMs,
+    // The slot is held for the WHOLE turn, including the wait for a concurrency
+    // slot — both of which the turn timeout already bounds. One timeout of grace
+    // on top keeps the reclaim clear of a turn that is legitimately finishing.
+    reservationTtlMs: (deps.turnTimeoutMs ?? TEAM_DEFAULT_TURN_TIMEOUT_MS) * 2,
   })
 
   // No forward shim needed here (unlike the bus's own `hooks.isBusy` above):
@@ -353,8 +386,11 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     store,
     scheduler: deps.scheduler ?? null,
     wake: (params) => orchestration!.wakeForCheck(params),
+    // The gate's answer, not the session probe: a round waking a member whose
+    // slot is already reserved is refused one layer down anyway, and counting it
+    // as "target was free" put a round in the log that never ran.
     isBusy: (teamId, epochId, appId) =>
-      orchestration!.isBusy(buildTeamSessionKey(appId, teamId, epochId)),
+      orchestration!.isSessionOccupied(buildTeamSessionKey(appId, teamId, epochId)),
     ...(deps.publishCheck ? { publish: deps.publishCheck } : {}),
     ...(deps.onChecksChanged ? { onChanged: deps.onChecksChanged } : {}),
     ...(deps.checkMemberReachable ? { isReachable: deps.checkMemberReachable } : {}),
@@ -434,38 +470,65 @@ export function createDefaultSessionDeps(store: TeamStore): OrchestrationSession
     async sendAppChatMessage(request) {
       const { sendAppChatMessage } = await import('../app-chat')
 
-      // For a team-backed IM conversation epoch, the LEAD is the chat's front
-      // desk: its orchestration-driven turns (e.g. a member's team_send reply
-      // waking it) must be framed for, and pushed back to, that IM chat — the
-      // user's direct turn already gets this in dispatch-inbound, but later
-      // woken turns would otherwise have no user-facing sink. Members' woken
-      // turns (not the lead) stay internal.
-      const imRoute = await resolveImRoute(store, request.appId, request.conversationId)
+      // For a team-backed IM conversation epoch, the bound member is the chat's
+      // front desk: its orchestration-driven turns (e.g. a teammate's team_send
+      // reply waking it) must be framed for, and pushed back to, that IM chat —
+      // the person's direct turn already gets this in dispatch-inbound, but later
+      // woken turns would otherwise have no user-facing sink. Every other
+      // member's woken turns stay internal.
+      const imRoute = await resolveImRoute(
+        store,
+        request.appId,
+        request.conversationId,
+        getSpaceDir(request.spaceId)
+      )
 
-      let finalMessage: string | null = null
+      // Held in a box, not a `let`: the assignment happens inside `onReply`, which
+      // TypeScript's flow analysis does not see, so a plain local reads as `null`
+      // below and silently types the IM push away.
+      const captured: { reply: string | null } = { reply: null }
       await sendAppChatMessage({
         appId: request.appId,
         spaceId: request.spaceId,
         message: request.message,
         conversationId: request.conversationId,
         teamContext: request.teamContext,
-        ...(imRoute ? { imSession: imRoute.imSession } : {}),
+        // Both halves of the IM route, or neither: the framing and the tool set
+        // must match what dispatch-inbound gives this same session.
+        ...(imRoute ? { imSession: imRoute.imSession, imFileSend: imRoute.imFileSend } : {}),
         onReply: (finalContent) => {
-          finalMessage = finalContent
+          captured.reply = finalContent
         },
       })
 
+      const finalMessage = captured.reply
       if (imRoute && finalMessage && finalMessage.trim()) {
         try {
           await imRoute.instance.pushToChat(imRoute.chatId, finalMessage, imRoute.chatType)
         } catch (err) {
-          console.error(`${LOG_TAG} failed to push lead reply to IM chat:`, err)
+          console.error(`${LOG_TAG} failed to push front-desk reply to IM chat:`, err)
         }
       }
       return { finalMessage }
     },
     isSessionActive(sessionKey) {
-      return activeSessions.has(sessionKey)
+      // A team turn runs through app-chat's consumer model, which never writes
+      // the legacy `activeSessions` map — asking that map answered `false` for
+      // every team session that has ever run. Nothing failed loudly: the gate's
+      // reservation still queued mail correctly, so the only visible effect was
+      // everything this probe is FOR quietly not happening (mid-turn delivery
+      // refused, quiescence counting a streaming member as idle, the slot
+      // watchdog willing to reclaim a session mid-stream).
+      //
+      // Same source as `isLeadGenerating`, which bootstrap already wires to the
+      // truthful probe — one answer to "is this session busy", not two.
+      return isAppChatConversationGenerating(sessionKey)
+    },
+    injectIntoSession(sessionKey, message) {
+      // Statically imported, unlike app-chat above: this must answer within the
+      // caller's synchronous window, and it is a leaf module (the live session
+      // plus the transcript sink) that closes no cycle with the team runtime.
+      return injectIntoAppChat(sessionKey, message)
     },
     async closeTeamSession(appId, teamId, epochId) {
       const { closeTeamSession } = await import('../app-chat')

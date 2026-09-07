@@ -29,7 +29,6 @@ import { powerMonitor } from 'electron'
 import { registerSecurityHandlers } from '../ipc/security'
 import { enableRemoteAccess, enableTunnel } from '../services/remote'
 import { getConfig, getFederationGatewayUrl, migrateCredentialEncryption, setCredentialFailureNotifier } from '../foundation/config.service'
-import { broadcastToAll } from '../http/websocket'
 import { isServerMode } from '../foundation/runtime-mode'
 import { registerBrowserHandlers } from '../ipc/browser'
 import { registerBrowserPolicyHandlers } from '../ipc/browser-policy'
@@ -53,7 +52,7 @@ import { setConversationInteropFactory } from '../services/agent/toolsets/broker
 import { markExtendedServicesReady } from './state'
 import { getMainWindow, sendToRenderer } from '../foundation/window.service'
 import { initializeHealthSystem, setSessionCleanupFn } from '../services/health'
-import { closeAllV2Sessions, activeSessions } from '../services/agent/session-manager'
+import { closeAllV2Sessions } from '../services/agent/session-manager'
 import { registerHealthHandlers } from '../ipc/health'
 import { initBackground, shutdownBackground, getBackgroundService, setDaemonStealthInjector } from '../platform/background'
 import { injectStealthScripts } from '../services/stealth'
@@ -295,8 +294,22 @@ async function initPlatformAndApps(): Promise<void> {
           if (node?.status === 'offline') return 'confirmed-offline'
           if (node?.status === 'suspect') return 'suspect'
         }
-        const ep = teamStore.getCurrentEpochForTeam(officeId)
-        if (ep && activeSessions.has(buildTeamSessionKey(appId, officeId, ep.id))) return 'busy'
+        // "Can this member take work right now" — the gate's own answer, and the
+        // only one that also covers a turn dispatched but not yet streaming.
+        // It replaces `activeSessions`, a map app chat never writes: that read
+        // returned a permanent `false`, which made `'busy'` unreachable for a
+        // locally-owned member and left `hold` dead. The reconciler downstream
+        // then took in-progress tasks off members that were actively working.
+        //
+        // Every OPEN epoch, not just the current run: `getCurrentEpochForTeam`
+        // filters to `lifecycle = 'run'`, so a member serving an IM or native
+        // conversation was never probed at all. Mirrors `getMemberStatus`.
+        const bus = getActiveTeamRuntime()?.bus
+        if (bus) {
+          for (const ep of teamStore.listOpenEpochs(officeId)) {
+            if (bus.isSessionOccupied(buildTeamSessionKey(appId, officeId, ep.id))) return 'busy'
+          }
+        }
         return 'idle'
       }
 
@@ -639,7 +652,15 @@ async function initPlatformAndApps(): Promise<void> {
           serializeTeamTranscript(teamId, appId, epochId),
         // A session with a live turn has a provisional trailing message the
         // publisher must withhold (session keys ARE conversation ids).
-        isSessionActive: (sessionKey) => activeSessions.has(sessionKey),
+        //
+        // The generating probe, not `activeSessions`: app chat never writes that
+        // map, so this answered a permanent `false` and every in-flight turn's
+        // unfinished trailing message was published to the other nodes as final,
+        // left to be corrected by a later revision. Deliberately NOT
+        // `isSessionOccupied` — the question here is "is text still being
+        // produced", not "can this session take work", and a slot reserved for a
+        // turn that has not started yet has nothing provisional to withhold.
+        isSessionActive: (sessionKey) => isAppChatConversationGenerating(sessionKey),
         // A member's local transcript replica grew → tell any open member panel
         // to silently reload (the read path serves the local copy instantly;
         // this signal is what keeps it live across nodes).

@@ -120,6 +120,27 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
     '  separate acts, and you usually owe both.',
     '- Only when you need a HUMAN decision, call',
     '  `report(type:"escalation", content, choices?)`.',
+    '',
+    '### Messages that arrive while you are working',
+    '',
+    // Two kinds of thing only belong here: how this channel WORKS (which the
+    // model cannot infer from the message itself), and failure modes already
+    // observed. Anything the model can work out from the roster — whose word
+    // carries more weight, whether to obey — is deliberately absent: stating it
+    // would freeze a judgment that depends on the situation.
+    '- A message can reach you between tool calls, marked "arrived while you were',
+    '  working". It is not part of the task you are doing and not the result of a',
+    '  tool you called. Whoever sent it did not know what you were doing, and it',
+    '  may already have been overtaken by what you have done since.',
+    '- If it does not change what you are doing, keep working and do not stop to',
+    '  comment on it.',
+    '- If it asks for something you have already done, say so instead of doing it',
+    '  again — repeating an action repeats its real effects.',
+    '- If you do change course, deal with the work already in progress: finish it,',
+    '  undo it, or say what state you left it in. Abandoning something half-done',
+    '  without a word is the one option that is not acceptable.',
+    '- Do not reply just to acknowledge. Reply when the sender is waiting on an',
+    '  answer, or when what you decided changes things for them.',
   ]
 
   return lines.filter((l) => l !== '').join('\n')
@@ -186,37 +207,58 @@ function renderRoster(ctx: TeamPromptContext): string[] {
 // ── IM front-desk bridge ──
 
 /**
- * Extra Entry fragment for a team LEAD serving an IM channel (a team-backed IM
- * instance). The base team Entry frames the turn as runtime-delivered; this
- * bridge overrides that for the IM case: the message is from a real person and
- * the lead's final message is delivered straight back to that person — the one
- * place a final message IS a delivery, because the IM reply handle is attached
- * to this turn.
+ * Extra Entry fragment for the team member that fronts an IM channel (a
+ * team-backed IM instance). The base team Entry frames the turn as
+ * runtime-delivered; this bridge overrides that for the IM case: the message is
+ * from a real person and this member's final message is delivered straight back
+ * to that person — the one place a final message IS a delivery, because the IM
+ * reply handle is attached to this turn.
  *
- * The lead stays the front desk. A teammate's answer can only arrive as a LATER
- * turn, so a question needing a specialist becomes two messages to the person —
- * an acknowledgement now, the answer when it lands.
+ * A teammate's answer can only arrive as a LATER turn, so a question that needs
+ * someone else becomes two messages to the person — an acknowledgement now, the
+ * answer when it lands.
+ *
+ * The bound member may be the lead or any teammate, and the two are addressed
+ * differently: a lead is the team's counter and routes work; a teammate is
+ * reachable in its own right and answers its own remit first. Both keep the
+ * delivery rules identical.
  */
-export function buildTeamImBridge(im: { channel: string; displayName: string; chatType: 'direct' | 'group' }): string {
+export function buildTeamImBridge(
+  im: { channel: string; displayName: string; chatType: 'direct' | 'group' },
+  isLead: boolean
+): string {
+  const opening = isLead
+    ? [
+        '## You Are the Team\u2019s Front Desk (IM)',
+        '',
+        `This turn was started by a real person messaging your team over ${im.channel} ` +
+          `(${im.chatType} chat, "${im.displayName}") — NOT by the team runtime.`,
+        'Your job: be the single point of contact. Understand what they need, pull in',
+        'the right specialist teammates via the team tools, gather their results, then',
+        'reply to the person yourself.',
+      ]
+    : [
+        '## A Person Is Messaging You Directly (IM)',
+        '',
+        `This turn was started by a real person messaging YOU over ${im.channel} ` +
+          `(${im.chatType} chat, "${im.displayName}") — NOT by the team runtime.`,
+        'They came to you, not to the team counter: handle what is yours to handle and',
+        'answer them yourself. You are still on the team, so bring in a teammate when',
+        'the work is genuinely theirs — but do not route everything through the lead.',
+      ]
   return [
-    '## You Are the Team\u2019s Front Desk (IM)',
-    '',
-    `This turn was started by a real person messaging your team over ${im.channel} ` +
-      `(${im.chatType} chat, "${im.displayName}") — NOT by the team runtime.`,
-    'Your job: be the single point of contact. Understand what they need, pull in',
-    'the right specialist teammates via the team tools, gather their results, then',
-    'reply to the person yourself.',
+    ...opening,
     '',
     '- Your final message in this turn is sent straight back to the person in this',
     '  chat. Answer them directly and conversationally — do NOT call any tool to',
     '  reply to THEM. (This is specific to this chat: your words still reach no',
     '  teammate, only this person.)',
-    '- To involve a specialist, `team_send(to, message)`. Their answer cannot',
+    '- To involve a teammate, `team_send(to, message)`. Their answer cannot',
     '  arrive inside this turn — it comes back later as a new turn of yours. So',
-    '  when you delegate, tell the person now that you are checking, then send',
-    '  them the answer when it lands. Two short messages, not one long silence.',
+    '  when you hand something over, tell the person now that you are checking, then',
+    '  send them the answer when it lands. Two short messages, not one long silence.',
     '- Never promise something you have not got. If you have not heard back yet,',
-    '  say you are still waiting — do not compose an answer on the specialist\u2019s',
+    '  say you are still waiting — do not compose an answer on a teammate\u2019s',
     '  behalf.',
     '- Keep internal team chatter out of your reply. The person sees only what you',
     '  write back — give them the answer, not the coordination.',
