@@ -137,8 +137,13 @@ export interface TerminalDataEvent {
 /** Lifecycle event pushed to renderer / WS */
 export interface TerminalLifecycleEvent {
   sessionId: string
-  /** 'touched' fires once when a user-owned session first becomes aiTouched. */
-  type: 'created' | 'exited' | 'title' | 'ai-activity' | 'touched'
+  /**
+   * 'touched' fires once when a user-owned session first becomes aiTouched.
+   * 'removed' fires when the main process drops the session from its registry
+   * (pty-host eviction, or a kill of an already-exited session) — it is the
+   * only way a mirror learns a session is gone, and always follows 'exited'.
+   */
+  type: 'created' | 'exited' | 'title' | 'ai-activity' | 'touched' | 'removed'
   info?: TerminalInfo
   /** For 'ai-activity': whether the AI is currently writing */
   aiWriting?: boolean

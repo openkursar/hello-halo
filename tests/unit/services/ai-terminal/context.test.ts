@@ -1,8 +1,10 @@
 /**
- * Tests for the terminal context's lifecycle policy around kill and worker
- * exit events. The renderer store reconciles exclusively on the 'exited'
- * lifecycle event (SSOT), so every termination path — user kill, instant shell
- * death racing create, worker crash — must emit exactly one.
+ * Tests for the terminal context's lifecycle policy around kill, worker exit
+ * and worker eviction. The renderer store reconciles exclusively on these
+ * events (SSOT), so every termination path — user kill, instant shell death
+ * racing create, worker crash — must emit exactly one 'exited', and every path
+ * that forgets a proxy must emit 'removed'. Nothing downstream can reconstruct
+ * the worker's retention, so an unannounced removal is invisible to the UI.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -67,6 +69,13 @@ const workerExit = (id: string): void => {
   hostMock.state.eventHandler?.({ type: 'exit', sessionId: id, exitCode: 0, info: makeInfo(id, 'exited') })
 }
 
+const workerEvict = (id: string): void => {
+  hostMock.state.eventHandler?.({ type: 'evicted', sessionId: id })
+}
+
+const types = (id: string): string[] =>
+  lifecycle.filter(e => e.sessionId === id).map(e => e.type)
+
 beforeEach(() => {
   vi.clearAllMocks()
   ctx = new TerminalContext('/tmp')
@@ -121,5 +130,51 @@ describe('TerminalContext kill / exit lifecycle', () => {
     expect(ctx.get('t1')).toBeUndefined()
     // Only the original exit emitted a lifecycle event.
     expect(lifecycle.filter(e => e.type === 'exited')).toHaveLength(1)
+  })
+})
+
+describe('TerminalContext removal announcements', () => {
+  it('announces the removal when the worker evicts an exited session', async () => {
+    await createSession('t1')
+    workerExit('t1')
+    // The worker kept it long enough for a viewer to open; then it aged out.
+    expect(types('t1')).toEqual(['created', 'exited'])
+
+    workerEvict('t1')
+    expect(types('t1')).toEqual(['created', 'exited', 'removed'])
+    expect(ctx.get('t1')).toBeUndefined()
+  })
+
+  it('announces the removal of a killed session after its exit', async () => {
+    await createSession('t1')
+    ctx.kill('t1')
+    workerExit('t1')
+    // Order matters: a mirror that saw 'removed' first would never learn the
+    // session had ended, and would show it as alive until the entry vanished.
+    expect(types('t1')).toEqual(['created', 'exited', 'removed'])
+  })
+
+  it('announces the removal when an already-exited session is killed', async () => {
+    await createSession('t1')
+    workerExit('t1')
+    ctx.kill('t1')
+    expect(types('t1')).toEqual(['created', 'exited', 'removed'])
+  })
+
+  it('stays silent while an exited session is still retained', async () => {
+    await createSession('t1')
+    workerExit('t1')
+    expect(types('t1')).not.toContain('removed')
+    expect(ctx.get('t1')?.info.state).toBe('exited')
+  })
+
+  it('leaves other sessions untouched when one is evicted', async () => {
+    await createSession('t1')
+    await createSession('t2')
+    workerExit('t1')
+    workerEvict('t1')
+
+    expect(ctx.get('t2')?.info.state).toBe('running')
+    expect(types('t2')).toEqual(['created'])
   })
 })

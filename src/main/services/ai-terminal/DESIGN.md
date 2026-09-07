@@ -263,6 +263,9 @@ buffer (`replay` RPC) so it can reproduce colors/cursor faithfully.
 - IPC/HTTP request ops: `ipc/terminal.ts` (+ `terminalRpc` contract) and
   `http/routes/terminal.routes.ts`. Events `terminal:data` / `terminal:lifecycle`
   are forwarded from the global event bus to the renderer and WS clients.
+  `terminal:lifecycle` carries `created` / `exited` / `title` / `ai-activity` /
+  `touched` / `removed` (§11.6) — one channel, so a new kind costs no transport
+  wiring.
 - Remote keyboard/resize use dedicated WS inbound messages
   (`terminal-input` / `terminal-resize` in `http/websocket.ts`) for low-latency
   takeover, with an HTTP fallback. Flow control adds `terminal-attach` /
@@ -292,6 +295,18 @@ buffer (`replay` RPC) so it can reproduce colors/cursor faithfully.
    Bash tool. The tool description constrains reading during credential entry.
 5. The pty-host worker is forked lazily on first terminal use — never during
    startup phases.
+6. **Every removal is announced; nothing downstream re-derives retention.** A
+   session leaves main's registry on worker eviction or a kill of an
+   already-exited session, and each path emits a `removed` lifecycle event
+   (`TerminalContext.dropSession`) after its `exited`. The worker's bound is
+   *not* reproducible upstream: `pruneExitedSessions(keepId)` exempts the
+   session that just exited, and orders the rest by `lastActivityAt`, which
+   `onExit` does not refresh — so a terminal that idled for hours before dying
+   is at once the one the worker keeps and the "oldest" one any copied rule
+   evicts first. A mirror bounding itself by that rule drops precisely the entry
+   the user is watching, and a viewer re-deriving liveness from the missing
+   entry re-opens its keyboard onto a dead pty (hence the latch in
+   `lib/terminal-liveness.ts`).
 
 ## 12) aiTouched & the tab-close policy
 

@@ -31,7 +31,11 @@ import {
 } from './host'
 import { emitTerminalData, emitTerminalLifecycle } from './events'
 import type { PtyHostEvent } from '../../../shared/protocol/pty-host.protocol'
-import type { CreateTerminalOptions, TerminalInfo } from '../../../shared/types/terminal'
+import type {
+  CreateTerminalOptions,
+  TerminalInfo,
+  TerminalLifecycleEvent
+} from '../../../shared/types/terminal'
 
 export class TerminalContext extends EventEmitter {
   private sessions = new Map<string, TerminalSessionProxy>()
@@ -92,8 +96,7 @@ export class TerminalContext extends EventEmitter {
     session.kill()
     if (session.info.state === 'exited') {
       // Already dead — this is a removal; no further worker exit event will come.
-      this.sessions.delete(id)
-      this.flow.drop(id)
+      this.dropSession(id)
     } else {
       // Keep the proxy: the renderer store reconciles on the 'exited' lifecycle
       // event (SSOT), which only the worker's exit event may emit. The proxy is
@@ -158,17 +161,29 @@ export class TerminalContext extends EventEmitter {
         this.emitLifecycle({ sessionId: event.sessionId, type: 'exited' as const, info: session.info })
         // A user-killed session is not retained for replay (the worker freed
         // its buffers on the kill notification), so drop the proxy now.
-        if (this.killed.delete(event.sessionId)) this.sessions.delete(event.sessionId)
+        if (this.killed.has(event.sessionId)) this.dropSession(event.sessionId)
         break
       }
       case 'evicted':
-        // The worker pruned an exited session's retained buffers; drop the
-        // proxy so list() stops reporting it (renderer removes it on refresh).
-        this.sessions.delete(event.sessionId)
-        this.killed.delete(event.sessionId)
-        this.flow.drop(event.sessionId)
+        // The worker pruned an exited session's retained buffers.
+        this.dropSession(event.sessionId)
         break
     }
+  }
+
+  /**
+   * Forget a session and say so. Downstream mirrors (renderer store, WS
+   * clients) learn of a removal only from this event: the worker's retention
+   * bound is not reproducible upstream — it exempts the session that just
+   * exited, and orders the rest by `lastActivityAt`, which an exit does not
+   * refresh. A mirror re-deriving the bound would evict a session the worker
+   * deliberately kept, most often the one the user is watching.
+   */
+  private dropSession(id: string): void {
+    this.sessions.delete(id)
+    this.killed.delete(id)
+    this.flow.drop(id)
+    this.emitLifecycle({ sessionId: id, type: 'removed' as const })
   }
 
   /**
@@ -191,12 +206,7 @@ export class TerminalContext extends EventEmitter {
     }
   }
 
-  private emitLifecycle(event: {
-    sessionId: string
-    type: 'created' | 'exited' | 'title' | 'ai-activity' | 'touched'
-    info?: TerminalInfo
-    aiWriting?: boolean
-  }): void {
+  private emitLifecycle(event: TerminalLifecycleEvent): void {
     this.emit('lifecycle', event)
     emitTerminalLifecycle(event)
   }

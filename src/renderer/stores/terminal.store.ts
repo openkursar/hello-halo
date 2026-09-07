@@ -6,36 +6,18 @@
  * events, driving the activity chip and viewer chrome. Live pty output
  * (`terminal:data`) is consumed directly by the TerminalViewer's xterm
  * instance, not buffered here.
+ *
+ * Removal is an event, never a guess: entries leave this map only on a
+ * `removed` lifecycle event. The main process's registry is the bound, and it
+ * is not reproducible here — see `TerminalContext.dropSession`.
  */
 
 import { create } from 'zustand'
 import { api } from '../api'
 import { canvasLifecycle } from '../services/canvas-lifecycle'
+import type { TerminalInfo, TerminalLifecycleEvent } from '../../shared/types/terminal'
 
-export interface TerminalInfo {
-  id: string
-  title: string
-  shell: string
-  cwd: string
-  cols: number
-  rows: number
-  owner: 'ai' | 'user'
-  /** True once the AI has operated this session via any terminal_* tool. */
-  aiTouched: boolean
-  state: 'running' | 'exited'
-  exitCode: number | null
-  lastActivityAt: number
-  createdAt: number
-  /** Owning space id — drives per-space scoping of the live-sessions tray. */
-  spaceId?: string
-}
-
-interface TerminalLifecycleEvent {
-  sessionId: string
-  type: 'created' | 'exited' | 'title' | 'ai-activity' | 'touched'
-  info?: TerminalInfo
-  aiWriting?: boolean
-}
+export type { TerminalInfo }
 
 interface TerminalState {
   /** sessionId -> info */
@@ -101,6 +83,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         // A user-opened session became AI-operated: refresh its info so the
         // close policy and tray membership see the new aiTouched flag.
         if (e.info) sessions.set(e.sessionId, e.info)
+        break
+      case 'removed':
+        // The main process forgot the session. Without this the map would keep
+        // an entry for every terminal the app has ever run.
+        sessions.delete(e.sessionId)
+        aiWriting.delete(e.sessionId)
         break
     }
 

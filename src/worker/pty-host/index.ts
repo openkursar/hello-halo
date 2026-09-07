@@ -30,6 +30,11 @@ const MAX_SESSIONS = 12
  * oldest. An exited pty holds no process, but its @xterm/headless screen buffer
  * (up to the scrollback cap) and replay buffer stay resident until disposed, so
  * unbounded retention leaks memory across a long-lived app run.
+ *
+ * Deliberately worker-private: this is a buffer-retention policy, not a
+ * contract. Consumers upstream learn which sessions survive from the 'evicted'
+ * event, never by re-deriving this bound — `keepId` and the `lastActivityAt`
+ * ordering below make the two answers differ.
  */
 const MAX_EXITED_RETAINED = 8
 

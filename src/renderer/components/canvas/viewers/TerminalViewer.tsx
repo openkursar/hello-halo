@@ -22,6 +22,7 @@ import { useTerminalStore } from '../../../stores/terminal.store'
 import { useTranslation } from '../../../i18n'
 import type { TabState } from '../../../services/canvas-lifecycle'
 import { buildTheme, getMinimumContrastRatio } from '../../../lib/terminal-theme'
+import { latchTerminalEnd, type TerminalEndState } from '../../../lib/terminal-liveness'
 
 interface TerminalViewerProps {
   tab: TabState
@@ -44,9 +45,20 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
   const sessionInfo = useTerminalStore(s => (sessionId ? s.sessions.get(sessionId) : undefined))
   // Session gone entirely (e.g. app restarted — ptys don't survive restarts)
   const [missing, setMissing] = useState(false)
+  const [ended, setEnded] = useState<TerminalEndState | null>(null)
 
-  const exited = sessionInfo?.state === 'exited'
-  const dead = exited || missing
+  // Only the active tab is rendered, so switching between two terminal tabs
+  // reuses this component instance — both flags belong to one session.
+  useEffect(() => {
+    setMissing(false)
+    setEnded(null)
+  }, [sessionId])
+
+  useEffect(() => {
+    setEnded(prev => latchTerminalEnd(prev, sessionInfo))
+  }, [sessionInfo])
+
+  const dead = ended !== null || missing
 
   // Gate keyboard input inside the (mount-scoped) effect via a ref.
   const deadRef = useRef(dead)
@@ -220,8 +232,8 @@ export function TerminalViewer({ tab }: TerminalViewerProps) {
           <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50" />
           {missing
             ? t('Session ended (output no longer available)')
-            : sessionInfo?.exitCode !== null && sessionInfo?.exitCode !== undefined
-              ? t('Session ended (exit {{code}})', { code: sessionInfo.exitCode })
+            : ended?.exitCode !== null && ended?.exitCode !== undefined
+              ? t('Session ended (exit {{code}})', { code: ended.exitCode })
               : t('Session ended')}
         </div>
       )}
