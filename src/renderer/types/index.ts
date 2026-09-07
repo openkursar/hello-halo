@@ -11,6 +11,10 @@ import {
 } from '../../shared/types/ai-sources';
 import { NotificationChannelsConfig }  from '../../shared/types/notification-channels';
 import type { KBSource } from '../../shared/types/tlon';
+// Re-exported below as well, but `export … from` creates no local binding, so the
+// declarations in this file that USE these names need their own import.
+import type { ApiProvider } from '../../shared/types/ai-sources';
+import type { FileChangesSummary } from '../../shared/file-changes';
 // Re-export them
 export { DEFAULT_MODEL, getCurrentModelName, hasAnyAISource };
 
@@ -301,8 +305,8 @@ export interface HaloConfig {
   notifications?: NotificationConfig;  // Notification preferences
   notificationChannels?: NotificationChannelsConfig;  // External notification channels
   /** @deprecated Migrated to imChannels.instances[] */
-  wecomBot?: import('../../../shared/types/notification-channels').WecomBotConfig;
-  imChannels?: import('../../../shared/types/notification-channels').ImChannelsConfig;  // IM channels (multi-instance)
+  wecomBot?: import('../../shared/types/notification-channels').WecomBotConfig;
+  imChannels?: import('../../shared/types/notification-channels').ImChannelsConfig;  // IM channels (multi-instance)
   agent?: AgentConfig;  // Agent behavior settings
   layout?: LayoutConfig;  // Global layout preferences (panel sizes and visibility)
   chat?: ChatConfig;  // Chat behavior preferences

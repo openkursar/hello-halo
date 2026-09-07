@@ -138,6 +138,11 @@ export const AVAILABLE_MODELS: ModelOption[] = [
     description: 'Frontier model with native 1M context, strongest coding and agentic performance'
   },
   {
+    id: 'claude-fable-5-1',
+    name: 'Claude Fable 5.1',
+    description: 'Frontier model with native 1M context, strongest coding and agentic performance'
+  },
+  {
     id: 'claude-opus-5',
     name: 'Claude Opus 5',
     description: 'Most capable model for complex agentic coding and enterprise work'

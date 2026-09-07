@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-08-31",
+  "updatedAt": "2026-09-07",
   "vision": {
     "allowlist": [
       "vision", "-vl", "pixtral", "paligemma", "cogvlm",
@@ -497,6 +497,22 @@
     },
     "claude-fable-5[1m]": {
       "displayName": "Claude Fable 5 (1M)",
+      "provider": "anthropic",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true
+    },
+    "claude-fable-5-1": {
+      "displayName": "Claude Fable 5.1",
+      "provider": "anthropic",
+      "contextWindow": 200000,
+      "maxOutputTokens": 128000,
+      "vision": true,
+      "thinking": true
+    },
+    "claude-fable-5-1[1m]": {
+      "displayName": "Claude Fable 5.1 (1M)",
       "provider": "anthropic",
       "contextWindow": 1000000,
       "maxOutputTokens": 128000,

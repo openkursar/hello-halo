@@ -69,6 +69,7 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     models: [
       { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
       { id: 'claude-fable-5', name: 'Claude Fable 5' },
+      { id: 'claude-fable-5-1', name: 'Claude Fable 5.1' },
       { id: 'claude-opus-5', name: 'Claude Opus 5' },
       { id: 'claude-opus-4-8', name: 'Claude Opus 4.8' },
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
@@ -546,6 +547,7 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     models: [
       { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' },
       { id: 'claude-fable-5', name: 'Claude Fable 5' },
+      { id: 'claude-fable-5-1', name: 'Claude Fable 5.1' },
       { id: 'claude-opus-5', name: 'Claude Opus 5' },
       { id: 'claude-opus-4-8', name: 'Claude Opus 4.8' },
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
