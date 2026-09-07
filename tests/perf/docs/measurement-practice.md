@@ -106,6 +106,46 @@ A purely mechanical check is blind to this class of failure, and worse, it emits
 clean report that makes the wrong conclusion *more* credible. Budget for the
 semantic pass; it is the one that finds things.
 
+### A slope is not a result until you have looked at the trajectory under it
+
+A 45-minute soak reported its working-set slope as **−0.075 MB/cycle** — memory
+going down, on the run that was meant to confirm a fix. Both of the round's
+convergence criteria were satisfied and the fix would have been declared good.
+
+The trajectory says otherwise. It is point-for-point identical to the unfixed arm
+for the first five eighths of the run, then drops 86 MB across two consecutive
+samples at minute 24, as the machine's 1-minute load average reaches 8.0. That is
+the operating system reclaiming pages under memory pressure. The slope up to that
+point is 0.105 MB/cycle, against 0.118 for the arm with no fix at all — the fix
+did nothing, and a single least-squares number over the whole run said it did
+something excellent (`results/soak-fixed/s9-soak.json`).
+
+**A regression line over a run that contains a step is a description of the step,
+not of the run.** Print the trajectory next to every slope, and print the load
+average next to the trajectory. This generalizes past memory: any metric the
+environment can move in one jump can produce a slope with the wrong sign.
+
+The corollary is that a *falling* memory curve is not automatically good news, and
+is the one direction nobody double-checks.
+
+### A per-action rate needs an arm that holds the clock and drops the action
+
+"0.09 MB per file open" and "0.09 MB per 1.9 seconds of being alive" are the same
+measurement until something separates them. Four soaks and nine probes reported
+per-cycle memory growth before anyone ran a cycle that opened nothing.
+
+When that arm was finally run — same build, same automation, same cycle duration,
+back to back — opening files gave **+0.077 MB/cycle** and doing nothing gave
+**−0.167 MB/cycle** (`results/mem-5-mixed-files/`, `results/mem-6-idle/`). The
+growth was real and it was the work, but nothing before that arm could have said
+so, and the idle arm's *decline* is a second thing no per-cycle figure would have
+revealed: the process gives memory back when left alone, so every per-cycle cost
+had been measured against a baseline that was itself moving.
+
+Applies to any metric attributed to an action inside a loop. Record wall-clock
+elapsed time alongside cycle count so both rates can be computed, and keep an arm
+that spends the time without doing the work.
+
 ### The synthetic tests all passed; the real corpus found the regression
 
 The round's worst regression was that correctness guards, tuned on clean synthetic

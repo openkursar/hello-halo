@@ -35,6 +35,62 @@ export class CdpMetricsCollector {
     await this.session.send('HeapProfiler.collectGarbage')
   }
 
+  /**
+   * Drop what the debugger itself is holding: console entries retain their
+   * arguments as remote objects, so anything the page logs stays reachable for
+   * as long as a client is attached. That memory is charged to the page and
+   * survives `collectGarbage`, and no user without devtools open ever pays it.
+   *
+   * Only meaningful as one arm of a comparison — a run that never calls this
+   * cannot tell the page's retention apart from the debugger's.
+   */
+  async releaseDebuggerRetention(): Promise<void> {
+    if (!this.session) throw new Error('CdpMetricsCollector.connect() must run first')
+    await this.session.send('Runtime.discardConsoleEntries')
+    await this.session.send('Runtime.releaseObjectGroup', { objectGroup: 'console' })
+  }
+
+  /**
+   * Make the renderer drop everything it is holding only for reuse, by raising
+   * the critical memory-pressure signal it already listens for — the same
+   * signal the operating system raised on its own during one soak, which
+   * returned 86 MB in two samples. Blink responds by emptying its resource
+   * cache (decoded images, fonts, stylesheets), and V8 by releasing its
+   * reserves.
+   *
+   * This is the question `collectGarbage` cannot answer. Almost none of the
+   * growth being chased is in the JS heap — 4 MB of it across a run whose
+   * working set grew 138 MB — and a JS collection does not touch the native
+   * caches where the rest of it may be sitting.
+   *
+   * Each step is reported rather than thrown, so a run whose purge partly
+   * failed cannot be read as a purge that freed nothing.
+   * `Memory.prepareForLeakDetection` would be the direct equivalent and is not
+   * usable here: it fails outright in this renderer.
+   */
+  async purgeRetainedCaches(): Promise<Record<string, string>> {
+    if (!this.session) throw new Error('CdpMetricsCollector.connect() must run first')
+    const session = this.session
+    const outcome: Record<string, string> = {}
+    const step = async (name: string, method: string, params?: object) => {
+      try {
+        await session.send(method as Parameters<CDPSession['send']>[0], params)
+        outcome[name] = 'ok'
+      } catch (err) {
+        outcome[name] = err instanceof Error ? err.message : String(err)
+      }
+    }
+    await step('v8', 'Memory.forciblyPurgeJavaScriptMemory')
+    await step('pressure', 'Memory.simulatePressureNotification', { level: 'critical' })
+    return outcome
+  }
+
+  /** Blink's own counters, which `Performance.getMetrics` does not expose. */
+  async domCounters(): Promise<Record<string, number>> {
+    if (!this.session) throw new Error('CdpMetricsCollector.connect() must run first')
+    return (await this.session.send('Memory.getDOMCounters')) as unknown as Record<string, number>
+  }
+
   /** `rate=1` is unthrottled; `rate=4` simulates a 4x-slower CPU. */
   async setCpuThrottlingRate(rate: number): Promise<void> {
     if (!this.session) throw new Error('CdpMetricsCollector.connect() must run first')

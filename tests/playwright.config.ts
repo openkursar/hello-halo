@@ -171,7 +171,7 @@ export default defineConfig({
       name: 'perf',
       testDir: './perf/specs',
       testMatch: '**/*.spec.ts',
-      testIgnore: '**/s9-*.spec.ts',
+      testIgnore: ['**/s9-*.spec.ts', '**/leak-*.spec.ts'],
       // Perf scenarios launch the app themselves, stream real API replies
       // (S2+), and some intentionally wait out a load timeout up to 90s
       // (S5 csv extreme) before a 60s idle-CPU sample — give real headroom
@@ -205,6 +205,18 @@ export default defineConfig({
       testDir: './perf/specs',
       testMatch: '**/s9-*.spec.ts',
       timeout: 4200000,
+      use: {
+        actionTimeout: 30000
+      }
+    },
+    {
+      // Investigation, not measurement: these produce evidence about where a
+      // leak comes from and have no threshold, so they are kept out of `perf`
+      // rather than adding minutes to every run that only needs numbers.
+      name: 'perf-leak',
+      testDir: './perf/specs',
+      testMatch: '**/leak-*.spec.ts',
+      timeout: 1500000,
       use: {
         actionTimeout: 30000
       }

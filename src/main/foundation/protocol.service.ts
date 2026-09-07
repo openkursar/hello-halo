@@ -4,10 +4,12 @@
  * Provides halo-file:// protocol to bypass cross-origin restrictions when loading
  * local files from localhost (dev mode) or app:// (production mode).
  *
- * Usage:
- * - Images: <img src="halo-file:///path/to/image.png">
- * - PDF: BrowserView.loadURL("halo-file:///path/to/doc.pdf")
- * - Other media: Same pattern for video, audio, etc.
+ * Consumed by <img> tags in the renderer — ImageViewer, MarkdownViewer's
+ * embedded images, and the store's entry icons:
+ * - <img src="halo-file:///path/to/image.png">
+ *
+ * A BrowserView is not subject to those restrictions and loads file:// itself,
+ * so nothing it renders (the PDF viewer) goes through here.
  *
  * Security: Only file:// URLs are allowed, no remote URLs pass through.
  */

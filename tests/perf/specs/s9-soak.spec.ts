@@ -11,14 +11,21 @@
  * cycles (a monotonic-growth leak signal) is for a human to read off the
  * result JSON, not a threshold this script invents.
  *
- * Duration is `S9_DURATION_MS`, default 10 minutes. What this scenario reports
- * is growth *per open/close cycle*, so a shorter run measures the same quantity
- * with a wider error bar rather than a different one — the recorded baselines
- * agree to within 8% (0.97 / 1.00 / 0.92 listeners per cycle) across three
- * 45-minute runs, and ~170 cycles is enough to separate that rate from zero.
- * What a short run cannot see is anything that only appears after sustained
- * use: fragmentation, cache eviction, a growth curve that bends. Set
- * S9_DURATION_MS=2700000 to reproduce the 45-minute baselines.
+ * Duration is `S9_DURATION_MS`, default 15 minutes; `S9_WARMUP_MS` (default 5)
+ * is how much of the front of the run the reported rates ignore.
+ *
+ * A short run used to be considered unable to reproduce a long one's rate, and
+ * that was true of how the rate was computed, not of the run: fitted over the
+ * whole run, the first 10 minutes of the three recorded 45-minute soaks give
+ * 0.161 / 0.151 / 0.150 MB per cycle against their full-run 0.117 / 0.104 /
+ * 0.101 — inflated by half. Dropping the first five minutes and fitting the
+ * rest of those same ten gives 0.118 / 0.106 / 0.106, and over fifteen minutes
+ * 0.118 / 0.105 / 0.101 — the full-run answer to within a percent. The startup
+ * transient was the whole difference. Listener rates behave the same way.
+ *
+ * So the cost of this scenario is 15 minutes, not 45. What no run of either
+ * length settles is anything that only appears after sustained use: allocator
+ * fragmentation, eviction under pressure, a growth curve that bends.
  *
  * This scenario is not in the `perf` project — run it with `--project=perf-soak`.
  */
@@ -58,7 +65,9 @@ const TYPICAL_FIXTURES = [
   'pdf-typical.pdf'
 ]
 
-const DURATION_MS = Number(process.env.S9_DURATION_MS || 10 * 60 * 1000)
+const DURATION_MS = Number(process.env.S9_DURATION_MS || 15 * 60 * 1000)
+/** Front of the run the reported rates ignore — see the note on duration above. */
+const WARMUP_MS = Number(process.env.S9_WARMUP_MS || 5 * 60 * 1000)
 
 /**
  * `S9_FORCE_GC=1` collects garbage before every sample, which separates a real
@@ -145,6 +154,13 @@ test('S9 soak', async () => {
     const samples: CycleSample[] = []
     const t0 = Date.now()
     let cycle = 0
+    /**
+     * Every failure inside the loop is caught so one bad cycle cannot end a
+     * 45-minute run. That is right, and it is also how a run can spend half its
+     * wall clock doing nothing and still write a result that reads as complete —
+     * which happened once, to a run disturbed by a rebuild at minute 22.
+     */
+    const failures = { cycle: 0, terminal: 0, sample: 0 }
 
     const recordSample = async (action: string, openMs: number | null = null) => {
       try {
@@ -179,6 +195,7 @@ test('S9 soak', async () => {
           loadAverage: os.loadavg() as [number, number, number]
         })
       } catch (err) {
+        failures.sample++
         console.warn(`[perf] S9 cycle ${cycle} (${action}) sample failed: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
@@ -206,6 +223,7 @@ test('S9 soak', async () => {
         await closeAllTabs()
         await recordSample(`file:${fixtureName}`, openMs)
       } catch (err) {
+        failures.cycle++
         console.warn(`[perf] S9 cycle ${cycle} file-open failed: ${err instanceof Error ? err.message : String(err)}`)
       }
 
@@ -229,11 +247,18 @@ test('S9 soak', async () => {
           const terminalBtn = window.getByTitle(/Open terminal|打开终端/).first()
           if (await terminalBtn.isVisible().catch(() => false)) {
             await terminalBtn.click()
-            await window.waitForSelector('.xterm', { timeout: 10000 }).catch(() => {})
+            // A locator, not `waitForSelector`. That returns an `ElementHandle`
+            // this loop never disposed, and an undisposed handle pins the
+            // terminal's DOM from outside the renderer — so every earlier soak
+            // counted DOM the product had already released. Measured at 2 CDP
+            // listeners and 11 nodes per terminal open; see
+            // docs/rounds/2026-09-locating-the-leak.md.
+            await window.locator('.xterm').first().waitFor({ state: 'attached', timeout: 10000 }).catch(() => {})
             await closeAllTabs()
             await recordSample('terminal')
           }
         } catch (err) {
+          failures.terminal++
           console.warn(`[perf] S9 cycle ${cycle} terminal failed: ${err instanceof Error ? err.message : String(err)}`)
         }
       }
@@ -250,6 +275,32 @@ test('S9 soak', async () => {
     }
 
     const quarter = Math.max(1, Math.floor(samples.length / 4))
+
+    /**
+     * Least squares against cycle number over the post-warmup samples. This is
+     * the number to compare between runs: first-quarter-against-last-quarter
+     * describes drift but scales with how long the run happened to be, and a
+     * fit including the startup transient overstates the rate by about half.
+     *
+     * `null` rather than a guess when the warmup leaves too little behind —
+     * a rate from two points is not a rate.
+     */
+    const steadySamples = samples.filter((s) => s.tMs >= WARMUP_MS)
+    const ratePerCycle = (pick: (s: CycleSample) => number | null): number | null => {
+      const pts = steadySamples
+        .map((s) => [s.cycle, pick(s)] as const)
+        .filter((p): p is readonly [number, number] => p[1] !== null)
+      if (pts.length < 10) return null
+      const meanX = pts.reduce((a, p) => a + p[0], 0) / pts.length
+      const meanY = pts.reduce((a, p) => a + p[1], 0) / pts.length
+      let num = 0
+      let den = 0
+      for (const [x, y] of pts) {
+        num += (x - meanX) * (y - meanY)
+        den += (x - meanX) ** 2
+      }
+      return den === 0 ? null : num / den
+    }
 
     /**
      * First-quarter against last-quarter is what makes this file readable: the
@@ -290,19 +341,47 @@ test('S9 soak', async () => {
       slowEventCount: series(samples.map((s) => s.slowEventCount)),
       slowEventMaxMs: series(samples.map((s) => s.slowEventMaxMs)),
       openMs: series(samples.map((s) => s.openMs)),
+      warmupMs: WARMUP_MS,
+      steadySamples: steadySamples.length,
+      ratePerCycle: {
+        nodes: ratePerCycle((s) => s.nodes),
+        listeners: ratePerCycle((s) => s.listeners),
+        heapMB: ratePerCycle((s) => s.heapMB),
+        mainWindowRssMB: ratePerCycle((s) => s.mainWindowRssMB),
+        totalRssMB: ratePerCycle((s) => s.totalRssMB)
+      },
       maxUnresponsiveCount: Math.max(0, ...samples.map((s) => s.unresponsiveCount)),
       maxCrashCount: Math.max(0, ...samples.map((s) => s.crashCount)),
       sampling: sampler.getSamplingStats()
     }
+
+    const durationMs = Date.now() - t0
+    /**
+     * How much of the run the samples actually span. A soak reports drift
+     * between its first and last quarter of *samples*, which says nothing about
+     * when those samples stopped arriving — so a loop that stalls halfway
+     * produces a shorter run described as a full one, and a shorter run of a
+     * leak looks like less of a leak. Reading the trailing edge against the
+     * clock is the only thing that distinguishes them.
+     */
+    const sampleCoverage = samples.length ? samples[samples.length - 1].tMs / durationMs : 0
+    const invalidReason =
+      sampleCoverage < 0.95
+        ? `samples stop at ${(((samples[samples.length - 1]?.tMs ?? 0) / 60000)).toFixed(1)}min of a ${(durationMs / 60000).toFixed(1)}min run`
+        : null
 
     const result = {
       scenario: 's9-soak',
       label,
       build: getBuildIdentity(),
       loadAverageAtStart: os.loadavg(),
-      durationMs: Date.now() - t0,
+      durationMs,
       configuredDurationMs: DURATION_MS,
       forcedGcBeforeSample: FORCE_GC,
+      sampleCoverage,
+      failures,
+      valid: invalidReason === null,
+      invalidReason,
       samples,
       summary
     }
@@ -322,6 +401,11 @@ test('S9 soak', async () => {
     drift('longtasks/cycle', summary.longtaskCount, 1)
     drift('slow events/cycle', summary.slowEventCount, 1)
     drift('open ms', summary.openMs)
+    const rate = summary.ratePerCycle
+    console.log(`[perf] S9 rate/cycle after ${WARMUP_MS / 60000}min warmup (${summary.steadySamples} samples): listeners=${rate.listeners?.toFixed(4) ?? 'n/a'} nodes=${rate.nodes?.toFixed(3) ?? 'n/a'} windowRssMB=${rate.mainWindowRssMB?.toFixed(4) ?? 'n/a'}`)
+    console.log(`[perf] S9 coverage: ${(sampleCoverage * 100).toFixed(0)}% of wall clock; failures cycle=${failures.cycle} terminal=${failures.terminal} sample=${failures.sample}`)
+    // After the result is on disk, so the evidence for the failure survives it.
+    if (invalidReason) throw new Error(`S9 soak did not measure its full duration — ${invalidReason}. Result written with valid:false.`)
   } finally {
     sampler.stop()
     await app.close().catch(() => {})

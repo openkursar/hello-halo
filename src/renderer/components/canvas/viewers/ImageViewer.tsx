@@ -9,11 +9,12 @@
  * - Window maximize for fullscreen viewing
  */
 
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useSyncExternalStore } from 'react'
 import { ZoomIn, ZoomOut, Maximize, ExternalLink, Download, RotateCw } from 'lucide-react'
 import { api } from '../../../api'
 import type { CanvasTab } from '../../../stores/canvas.store'
 import { useTranslation } from '../../../i18n'
+import { subscribeArtifactVersions, getArtifactVersion } from '../../../services/artifact-version'
 
 interface ImageViewerProps {
   tab: CanvasTab
@@ -42,11 +43,14 @@ export function ImageViewer({ tab }: ImageViewerProps) {
     return Math.max(0.05, Math.min((c.clientWidth - 48) / w, (c.clientHeight - 48) / h, 1))
   }, [])
 
-  // Cache-buster: bumps to defeat Chromium's <img> URL cache when the same path is
-  // rewritten in place (in-place overwrite keeps tab.path stable, so the URL would
-  // otherwise be identical and serve a stale image).
-  const [reloadToken, setReloadToken] = useState(() => Date.now())
-  const isFirstRender = useRef(true)
+  // Cache key: an in-place overwrite keeps tab.path stable, so without this the
+  // URL would be identical and serve a stale image. It counts rewrites rather
+  // than mounts — a per-mount value makes every open a cache miss and leaves a
+  // new entry behind, which is a memory leak proportional to how often the user
+  // opens images.
+  const reloadToken = useSyncExternalStore(subscribeArtifactVersions, () =>
+    tab.path ? getArtifactVersion(tab.path) : 0
+  )
 
   // Get image URL
   // Priority: halo-file:// (custom protocol, fast) > remote download > base64 fallback
@@ -61,31 +65,23 @@ export function ImageViewer({ tab }: ImageViewerProps) {
       ? `data:${tab.mimeType || 'image/png'};base64,${tab.content}`
       : ''
 
-  // Reset view when the viewer switches to another file; also force a fresh fetch so
-  // switching back to a file changed while it was hidden never shows a cached image.
+  // Reset the view when the viewer switches to another file.
   useEffect(() => {
     setScale(1)
     setPosition({ x: 0, y: 0 })
     setImageLoaded(false)
     setImageError(false)
     setIsFitted(true)
-    if (isFirstRender.current) {
-      isFirstRender.current = false
-    } else {
-      setReloadToken(t => t + 1)
-    }
   }, [tab.id])
 
-  // Live-refresh when the file currently shown is rewritten on disk.
+  // A rewrite swaps the image under a viewer that stays mounted. Clearing the
+  // error matters on its own: a rewrite that repairs a broken file would
+  // otherwise never be retried. Zoom and pan are deliberately left alone —
+  // it is still the same file, and the user aimed them at it.
   useEffect(() => {
-    if (!tab.path) return
-    return api.onArtifactChanged((data) => {
-      if (data.path === tab.path && (data.type === 'change' || data.type === 'add')) {
-        setImageError(false)
-        setReloadToken(t => t + 1)
-      }
-    })
-  }, [tab.path])
+    setImageLoaded(false)
+    setImageError(false)
+  }, [reloadToken])
 
   // Zoom functions — manual zoom exits fitted mode so resizes stop refitting.
   const zoomIn = () => { setIsFitted(false); setScale(s => Math.min(s * 1.25, 5)) }

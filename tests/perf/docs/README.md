@@ -36,13 +36,34 @@ The fixtures are generated, not committed; `manifest.json` is. Every fixture is
 verified against it by sha256 before use, and generation is deterministic — a
 fixture that fails verification means the generator changed, not the machine.
 
-### Three projects, and why
+### Four projects, and why
 
 | Project | npm script | Contents | Cost |
 |---|---|---|---|
 | `perf-release` | `perf:release-check` | The scenarios with a ceiling, plus the crash observation | ~14 min |
-| `perf` | `test:perf` | Everything except the soaks | ~20 min |
+| `perf` | `test:perf` | Everything except the soaks and the leak probe | ~20 min |
 | `perf-soak` | `test:perf:soak` | The two leak scenarios | 10 min each |
+| `perf-leak` | — (see below) | The leak probe: evidence, no `PerfResult`, no threshold | ~2 s/cycle |
+
+`perf-leak` has no npm script because it is never run the same way twice — it is
+an experiment, and its knobs are the experiment's arms:
+
+```bash
+PERF_LABEL=<arm> LEAK_CYCLES=200 LEAK_TERMINAL_EVERY=0 \
+  npx playwright test --config tests/playwright.config.ts --project=perf-leak
+```
+
+| Knob | Arm it creates |
+|---|---|
+| `LEAK_FIXTURES` | One viewer at a time, instead of a rate averaged over eight |
+| `LEAK_TERMINAL_EVERY` | `0` removes the terminal, separating it from opening files |
+| `LEAK_PIN_TERMINAL_HANDLE` | Reproduces the harness pin the soaks used to hold |
+| `LEAK_IDLE_MS` | Spends the cycle without doing the work — the control that turns "per cycle" into a claim about the work rather than about the clock |
+| `LEAK_RELEASE_CONSOLE` | Drops the debugger's own retention, separating it from the page's |
+| `LEAK_HEAP_SNAPSHOT` | Two snapshots for `analyze-heap.mjs`; hundreds of MB, opt-in |
+
+Read a result with `node tests/perf/analyze-heap.mjs <before> <after> [--retain=<Class>]`
+when the question is who is holding something, not how much of it there is.
 
 `perf:release-check` is what the release scripts call, and it is a sequence rather
 than a test run: generate/verify fixtures → record build identity → measure →
