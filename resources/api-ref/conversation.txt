@@ -1,0 +1,150 @@
+## conversation — chat threads between the user and the Halo assistant, held by a space
+covers: start a new turn of work, stop or cancel whatever is currently
+        running, see what is still running, list and read conversations and
+        the reasoning behind a message, rename, star and delete them, see
+        which toolsets a conversation has open. Chats with a digital human are
+        not here — see digital-human.
+not here:
+  chatting with a digital human -> digital-human
+  files produced during a conversation -> workspace
+  which model this conversation uses -> settings
+  inbound messages from IM platforms -> channels
+  sending a notification out to the user -> use the notify_channel tool
+
+(no endpoint) exporting a conversation to a file — There is no export endpoint. Read it with GET /api/spaces/$HALO_SPACE_ID/conversations/<conversationId> and write the file yourself.
+
+operations on this page:
+  GET    /api/agent/generating/<conversationId>                      Check whether Halo is still working on a reply in one conversation
+  POST   /api/agent/message                                          Start a new Halo turn in a conversation
+  GET    /api/agent/sessions                                         List conversations Halo is currently working on
+  POST   /api/agent/stop                                             Stop whatever Halo is currently doing in a conversation
+  POST   /api/agent/toolsets/list                                    List the on-demand toolsets available to a conversation
+  GET    /api/spaces/$HALO_SPACE_ID/conversations                    List conversations in a space
+  POST   /api/spaces/$HALO_SPACE_ID/conversations                    Create an empty conversation
+  GET    /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>   Read a conversation with its messages
+  PUT    /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>   Update a conversation title or metadata
+  DELETE /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>   Delete a conversation   !! destructive
+  GET    /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>/messages/<messageId>/thoughts Read the reasoning and tool calls behind one message
+  POST   /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>/star Star or unstar a conversation
+
+GET    /api/agent/generating/<conversationId>                      Check whether Halo is still working on a reply in one conversation
+     curl -s "$HALO_API_URL/api/agent/generating/<conversationId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:boolean}
+     # note: Pairs with POST /api/agent/stop — check this before deciding whether there is anything to stop
+
+POST   /api/agent/message                                          Start a new Halo turn in a conversation
+     curl -sX POST "$HALO_API_URL/api/agent/message" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"spaceId":"<spaceId — a uuid from GET /api/spaces>","conversationId":"<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>","message":"Summarise the activity log"}'
+     # body: {"spaceId": "<spaceId — a uuid from GET /api/spaces>", "conversationId": "<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>", "message": "Summarise the activity log"}
+     # out: {success:true}  // no data — the turn runs after the call returns
+     # note: This really starts Halo working, and the reply is produced after the response comes back. success:true means accepted, not answered.
+     # note: Poll GET /api/agent/generating/<conversationId> for progress — back off (2s, then double), do not tight-loop.
+     # note: Optional body fields: resumeSessionId, thinkingEnabled (boolean), knowledgeBaseId, images (base64 attachments).
+     # note: Create the conversation you target with POST /api/spaces/$HALO_SPACE_ID/conversations. Nothing tells you which id in GET /api/agent/sessions is your own, so picking one from there risks talking to yourself, and nothing stops the turn you start from messaging you back.
+     # note: A turn you start can stop to ask a question, and answering it is not open to you — the user answers it in the Halo app. Do not start one you are unwilling to leave pending.
+
+GET    /api/agent/sessions                                         List conversations Halo is currently working on
+     curl -s "$HALO_API_URL/api/agent/sessions" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:string[]}  // array of conversationId, each one currently generating a reply
+
+POST   /api/agent/stop                                             Stop whatever Halo is currently doing in a conversation
+     curl -sX POST "$HALO_API_URL/api/agent/stop" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"conversationId":"<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}'
+     # body: {"conversationId": "<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}
+     # out: {success:true}
+     # note: conversationId is optional — omit the field (or send {}) to stop everything Halo is doing
+
+POST   /api/agent/toolsets/list                                    List the on-demand toolsets available to a conversation
+     curl -sX POST "$HALO_API_URL/api/agent/toolsets/list" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"spaceId":"<spaceId — a uuid from GET /api/spaces>","conversationId":"<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}'
+     # body: {"spaceId": "<spaceId — a uuid from GET /api/spaces>", "conversationId": "<conversationId — a uuid from GET /api/spaces/$HALO_SPACE_ID/conversations>"}
+     # out: {success:true,data:[{id:string,displayName:string,summary:string,open:boolean}]}
+     # note: Read-only. Opening and closing are the user's to do — ask with the request_toolset tool, which highlights the switch for them.
+     # note: For your own session you need its conversationId; GET /api/agent/sessions lists the ones generating right now, which includes yours.
+
+GET    /api/spaces/$HALO_SPACE_ID/conversations                    List conversations in a space
+     curl -s "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/conversations" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":[{"id":"<uuid>","title":"…","starred":false}]}
+
+POST   /api/spaces/$HALO_SPACE_ID/conversations                    Create an empty conversation
+     curl -sX POST "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/conversations" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"title":"Weekly report"}'
+     # body: {"title":"Weekly report"}
+     # out: {"success":true,"data":{"id":"<uuid>","title":"Weekly report"}}
+     # note: Creates it empty. Make Halo reply in it with POST /api/agent/message — a conversation you made yourself is the safe target for that, since a turn you start there cannot interrupt one the user is having.
+
+GET    /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>   Read a conversation with its messages
+     curl -s "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/conversations/<conversationId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":{"id":"<uuid>","messages":[{"id":"<uuid>","role":"user","content":"…"}]}}
+     # note: Long conversations return a lot of text. Read one only when you need its content.
+     # note: Each message carries its own id — that is the messageId the /thoughts route takes, and the only place to get one.
+
+PUT    /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>   Update a conversation title or metadata
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX PUT "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/conversations/<conversationId>" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"title":"Renamed conversation"}'
+     # body: {"title":"Renamed conversation"}
+     # out: {"success":true,"data":{...updated conversation}}
+
+DELETE /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>   Delete a conversation
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     curl -sX DELETE "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/conversations/<conversationId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true}
+     # note: Removes the conversation file and its reasoning history from disk with no backup.
+     # note: Confirm with the user first — there is no undo.
+
+GET    /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>/messages/<messageId>/thoughts Read the reasoning and tool calls behind one message
+     curl -s "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/conversations/<conversationId>/messages/<messageId>/thoughts" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":[{"id":"…","type":"…","content":"…","timestamp":"…","toolName":"…","toolInput":{},"toolOutput":"…"}]}
+     # note: Wrong ids return an empty array, not a 404 — an empty result does not prove the message had no thoughts.
+     # note: toolInput and toolOutput are the raw arguments and results of that turn, so this gets long fast. Read it to diagnose what Halo actually did, not as a way to read a conversation.
+
+POST   /api/spaces/$HALO_SPACE_ID/conversations/<conversationId>/star Star or unstar a conversation
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/spaces/$HALO_SPACE_ID/conversations/<conversationId>/star" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"starred":true}'
+     # body: {"starred":true}
+     # out: {"success":true}
+
+Halo does all of these; you do not. Say so, and say where:
+  - Answer a pending question on the user's behalf — Halo stopped to ask precisely because it needed a person, so the user answers it in the conversation.
+  - Open or close a toolset. Reading which are open is fine; flipping one is the user's, and the request_toolset tool is how you ask them to.
+That list is complete for this area and the search has already been done for
+  you: do not grep the index for these, and do not guess a path — it will 403.
+For anything NOT on that list the normal rule still applies: grep the index
+  before you tell the user something is impossible.
+After saying where, tell the user which nearby parts you CAN do for them —
+  a hand-off reads very differently from a refusal.
+
+-----------------------------------------------------------------------
+$HALO_API_URL, $HALO_API_TOKEN and $HALO_SPACE_ID are already set in your Bash
+  environment. Copy commands as-is; never expand or print those variables.
+Replace only <angle-bracket> placeholders. Get real ids from a list call above.
+Read the response body and check "success". HTTP 200 alone does not mean it
+  worked - many failures return 200 with {"success":false}.
+Pipe long responses through `| head -c 4000` so you do not flood your context.
+A POST that timed out may still have taken effect. List before you retry.
+Waiting on something? Back off (2s, then double), give up after 5 tries and
+  tell the user it is still running.
+Large or binary files do not go through this API - use Read / Write / Bash.
+403 = the endpoint exists but is closed to me in this build. Tell the user to
+  do it in the Halo app. Do not tell them Halo cannot do it.
+404 with a "code" field = my path is wrong. 404 without one = the id is wrong.
+Only call paths listed on this page or in the index. Never write one from
+  memory. If this page has left your context, call halo_api_ref again.
+Full index of every endpoint: {{API_REF_INDEX_PATH}}/index.txt
+  grep -i "<keyword>" {{API_REF_INDEX_PATH}}/index.txt
+Not listed here does NOT mean not supported — that is a real, deliverable
+  answer, not a failed search. Grep the index before you say "Halo can't do that".

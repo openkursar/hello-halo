@@ -919,7 +919,7 @@ class AISourceManager {
         console.log('[AISourceManager] Token refreshed and saved')
       } else {
         console.error(`[AISourceManager] Token refresh failed:`, refreshResult.error)
-        return refreshResult
+        return { success: false, error: refreshResult.error }
       }
     }
 
@@ -1003,10 +1003,10 @@ class AISourceManager {
   async refreshSourceConfig(sourceId: string): Promise<ProviderResult<void>> {
     await this.ensureInitialized()
 
-    // Decrypted config is needed so providers can make authenticated API calls
-    const aiSources = this.getDecryptedAiSources()
-    const source = aiSources.sources.find(s => s.id === sourceId)
-
+    // Capability check first — decide "unsupported" without an unrelated token
+    // refresh. Uses the plain (non-decrypted) config since only provider type
+    // is needed here.
+    const source = this.getAiSourcesConfig().sources.find(s => s.id === sourceId)
     if (!source) {
       return { success: false, error: 'Source not found' }
     }
@@ -1017,8 +1017,29 @@ class AISourceManager {
       return { success: true }
     }
 
+    // Renew an expired OAuth token before the provider calls its server;
+    // providers never retry internally. Without this, a refresh scheduled at
+    // startup runs against whatever token was on disk — expired after the app
+    // was closed overnight — and the resulting 401 degrades the source to its
+    // hardcoded fallback catalog for the rest of the session.
+    const tokenResult = await this.ensureValidToken(sourceId)
+    if (!tokenResult.success) {
+      console.error(
+        `[AISourceManager] Refresh aborted for "${source.name}" (${source.provider}): token refresh failed:`,
+        tokenResult.error
+      )
+      return { success: false, error: tokenResult.error || 'Token refresh failed' }
+    }
+
+    // Re-read decrypted config AFTER refresh so a rotated token is carried in.
+    // Decrypted config is needed so providers can make authenticated API calls.
+    const refreshed = this.getDecryptedAiSources().sources.find(s => s.id === sourceId)
+    if (!refreshed) {
+      return { success: false, error: 'Source not found' }
+    }
+
     // Build legacy config format that all providers consume
-    const legacyConfig = this.buildLegacyOAuthConfig(source)
+    const legacyConfig = this.buildLegacyOAuthConfig(refreshed)
 
     console.log(`[AISourceManager] Refreshing source "${source.name}" (${source.provider})`)
 
@@ -1033,6 +1054,20 @@ class AISourceManager {
     const providerData = (result.data as Record<string, any>)[source.provider]
     if (!providerData) {
       return { success: true } // No updates from provider
+    }
+
+    // A provider that could not reach its catalog answers with a hardcoded
+    // fallback list rather than failing, so the source stays usable. That list
+    // is non-empty and carries no capability data, which makes it indistinguishable
+    // from a real catalog at the merge below — and writing it would replace
+    // previously-fetched context windows with client-side defaults until the next
+    // successful refresh. Keep what is on disk instead.
+    if (providerData.degraded) {
+      console.warn(
+        `[AISourceManager] Refresh degraded for "${source.name}" (${source.provider}): ` +
+          `provider served a fallback catalog, keeping stored models and capabilities`
+      )
+      return { success: true }
     }
 
     // Convert provider's string[] + modelNames to v2 ModelOption[]

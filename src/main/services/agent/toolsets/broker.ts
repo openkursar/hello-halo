@@ -20,6 +20,7 @@
 import { getConfig, saveConfig } from '../../../foundation/config.service'
 import { createWebSearchMcpServer } from '../../web-search'
 import { createHaloAppsMcpServer } from '../../app-bridge'
+import { createOfficialDocsSession } from '../../official-docs-mcp'
 import { emitAgentEvent } from '../events'
 import { getAvailableToolsets, getToolset } from './registry'
 import { getOpenToolsets, markOpen, markClosed } from './state'
@@ -100,10 +101,14 @@ export function buildMcpServerRecord(scope: ToolsetScope): Record<string, unknow
     if (instance) record[name] = instance
   }
 
-  // Always-on servers
+  // Always-on servers. Documentation is unconditional — it is how the agent
+  // answers "how do I do this in Halo" and how it hands back a task no tool
+  // can reach, neither of which depends on digital humans being enabled.
   add('web-search', () => createWebSearchMcpServer())
+  const { server: docsMcpServer, guideConsulted } = createOfficialDocsSession()
+  record['halo-docs'] = docsMcpServer
   if (getConfig().agent?.enableDigitalHumans !== false) {
-    add('halo-apps', () => createHaloAppsMcpServer(scope.spaceId))
+    add('halo-apps', () => createHaloAppsMcpServer(scope.spaceId, guideConsulted))
   }
   // Boolean-gated, always-on — a brand-new conversation already has
   // conversation_read with no per-conversation setup. enableConversationSend

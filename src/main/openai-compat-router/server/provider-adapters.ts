@@ -13,6 +13,7 @@
  */
 
 import type { AnthropicRequest } from '../types'
+import { inlineToolSchemaRefs } from '../utils/json-schema'
 
 // ============================================================================
 // Types
@@ -196,6 +197,11 @@ const deepSeekAdapter: ProviderAdapter = {
 /**
  * Moonshot (Kimi) adapter
  *
+ * Rejects tool schemas containing `$ref`, so local references are inlined for
+ * this upstream only. MCP servers commonly emit `$defs`, and inlining can
+ * multiply a schema several times over — every other upstream keeps the
+ * compact referenced form.
+ *
  * reasoning_content injection is handled at the converter layer.
  *
  * @see https://platform.moonshot.cn/docs
@@ -206,6 +212,13 @@ const moonshotAdapter: ProviderAdapter = {
 
   match(url: string): boolean {
     return url.includes('api.moonshot.cn') || url.includes('api.moonshot.ai')
+  },
+
+  transformRequest(body: Record<string, unknown>): void {
+    const rewritten = inlineToolSchemaRefs(body)
+    if (rewritten > 0) {
+      console.log(`[MoonshotAdapter] inlined $ref in ${rewritten} tool schema(s)`)
+    }
   }
 }
 

@@ -59,6 +59,13 @@ export interface AdapterQueryResult {
   items: RegistryEntry[]
   total?: number
   hasMore: boolean
+  /**
+   * Why this result is incomplete, when part of the source answered and part
+   * did not. `items` still carries what arrived, but `total` undercounts, so
+   * the caller must report the source as failed rather than let the number
+   * pass as the catalog.
+   */
+  partial?: string
 }
 
 /**
@@ -87,6 +94,18 @@ export interface RegistryAdapter {
   /**
    * Proxy mode: query the source API with pagination.
    * Only required when strategy = 'proxy'.
+   *
+   * Two obligations the type cannot state, both load-bearing for the category
+   * chips (`useStoreCategoryCounts` reads a chip's number off a `pageSize: 1`
+   * probe of that chip's own query):
+   *
+   * - **`params.category` must be honoured.** A source with no category of its
+   *   own still labels its entries with one, so ignoring the filter answers a
+   *   chip with the entire catalog under a name that does not describe it.
+   *   Serving nothing under a category is a valid answer — return empty.
+   * - **`total` describes the whole filtered catalog**, not the page returned
+   *   with it. A `total` that counts only what fits on the page renders as a
+   *   confident wrong number.
    */
   query?(source: RegistrySource, params: StoreQueryParams): Promise<AdapterQueryResult>
 

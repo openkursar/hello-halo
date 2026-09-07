@@ -39,7 +39,7 @@ export type McpAppsChangeHandler = (spaceId: string | null, change?: McpAppChang
 
 interface AppBridgeImpl {
   getAppManager: () => AppManagerService | null
-  createHaloAppsMcpServer: (spaceId: string) => unknown
+  createHaloAppsMcpServer: (spaceId: string, guideConsulted: () => boolean) => unknown
   onMcpAppsChange: (handler: McpAppsChangeHandler) => () => void
 }
 
@@ -67,9 +67,12 @@ export function getAppManager(): AppManagerService | null {
  * Build the in-process "Halo Apps" MCP server for a space, or null when
  * the Apps layer has not been wired. Returning null simply omits the
  * `halo-apps` MCP server from the session's tool set.
+ *
+ * `guideConsulted` comes from the same session's `halo-docs` server: the
+ * authoring guide is read there and gates spec creation here.
  */
-export function createHaloAppsMcpServer(spaceId: string): unknown {
-  return impl ? impl.createHaloAppsMcpServer(spaceId) : null
+export function createHaloAppsMcpServer(spaceId: string, guideConsulted: () => boolean): unknown {
+  return impl ? impl.createHaloAppsMcpServer(spaceId, guideConsulted) : null
 }
 
 /**

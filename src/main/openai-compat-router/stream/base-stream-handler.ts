@@ -11,9 +11,10 @@ import { Readable } from 'node:stream'
 import type { Response as ExpressResponse } from 'express'
 import { jsonrepair } from 'jsonrepair'
 import { SSEWriter } from './sse-writer'
-import type { AnthropicStopReason, StreamToolCallState } from '../types'
+import type { AnthropicStopReason, AnthropicWebSearchResult, StreamToolCallState } from '../types'
 import { safeJsonParse } from '../utils'
 import { estimateUsageTokens } from '../utils/usage-estimator'
+import { createEmptyUsage, type NormalizedUsage } from '../converters/response/usage'
 
 // ============================================================================
 // Stream State
@@ -29,11 +30,7 @@ export interface StreamState {
   hasTextBlock: boolean
   hasThinkingBlock: boolean
   reasoningClosed: boolean
-  usage: {
-    inputTokens: number
-    outputTokens: number
-    cacheReadTokens: number
-  }
+  usage: NormalizedUsage
   stopReason: AnthropicStopReason | null
   // Debug: accumulated content
   accumulatedText: string
@@ -51,11 +48,7 @@ export function createInitialState(model: string): StreamState {
     hasTextBlock: false,
     hasThinkingBlock: false,
     reasoningClosed: false,
-    usage: {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0
-    },
+    usage: createEmptyUsage(),
     stopReason: null,
     accumulatedText: '',
     accumulatedThinking: ''
@@ -117,7 +110,7 @@ export abstract class BaseStreamHandler {
     }
   }
 
-  protected updateUsage(usage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number }): void {
+  protected updateUsage(usage: Partial<NormalizedUsage>): void {
     if (usage.inputTokens !== undefined) {
       this.state.usage.inputTokens = usage.inputTokens
     }
@@ -126,6 +119,9 @@ export abstract class BaseStreamHandler {
     }
     if (usage.cacheReadTokens !== undefined) {
       this.state.usage.cacheReadTokens = usage.cacheReadTokens
+    }
+    if (usage.cacheCreationTokens !== undefined) {
+      this.state.usage.cacheCreationTokens = usage.cacheCreationTokens
     }
   }
 
@@ -221,11 +217,7 @@ export abstract class BaseStreamHandler {
     await this.applyUsageFallback()
 
     // Write message_delta
-    this.writer.writeMessageDelta(this.state.stopReason || 'end_turn', {
-      inputTokens: this.state.usage.inputTokens,
-      outputTokens: this.state.usage.outputTokens,
-      cacheReadTokens: this.state.usage.cacheReadTokens
-    })
+    this.writer.writeMessageDelta(this.state.stopReason || 'end_turn', this.state.usage)
 
     // Write message_stop
     this.writer.writeMessageStop()
@@ -253,14 +245,20 @@ export abstract class BaseStreamHandler {
    * Gated on `state.started`: a stream that never produced a message (e.g.
    * upstream error before any chunk) was likely never charged, so no tokens
    * are attributed to it.
+   *
+   * The input side keys off the whole prompt accounting, not `inputTokens`
+   * alone: a fully cache-hit prompt legitimately reports zero new input, and
+   * estimating over it would replace a truthful zero with a full-context guess.
    */
   private async applyUsageFallback(): Promise<void> {
     if (!this.state.started) return
     const usage = this.state.usage
-    if (usage.inputTokens > 0 && usage.outputTokens > 0) return
+    const hasPromptAccounting =
+      usage.inputTokens + usage.cacheReadTokens + usage.cacheCreationTokens > 0
+    if (hasPromptAccounting && usage.outputTokens > 0) return
 
     try {
-      const needInput = usage.inputTokens === 0 && !!this.estimateInputTokens
+      const needInput = !hasPromptAccounting && !!this.estimateInputTokens
       const needOutput = usage.outputTokens === 0
 
       if (needInput) {
@@ -511,7 +509,7 @@ export abstract class BaseStreamHandler {
 
   protected writeWebSearchResult(
     toolUseId: string,
-    results: Array<{ type: string; url?: string; title?: string }>
+    results: AnthropicWebSearchResult[]
   ): void {
     if (this.isFinished) return
 

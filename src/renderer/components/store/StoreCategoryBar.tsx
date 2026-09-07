@@ -49,7 +49,7 @@ export function StoreCategoryBar() {
   const setStoreCategory = useAppsPageStore(state => state.setStoreCategory)
   const loadStoreApps = useAppsPageStore(state => state.loadStoreApps)
   const categories = useStoreCategories(storeTypeFilter)
-  const counts = useStoreCategoryCounts(storeTypeFilter)
+  const counts = useStoreCategoryCounts(storeTypeFilter, categories)
 
   const handleCategoryClick = useCallback((categoryId: string | null) => {
     setStoreCategory(categoryId)
@@ -84,7 +84,7 @@ export function StoreCategoryBar() {
       <CategoryChip
         active={storeCategory === null}
         label={t('All')}
-        count={counts.ready ? counts.total : undefined}
+        count={counts.total}
         onClick={() => handleCategoryClick(null)}
       />
       {categories.map(cat => (
@@ -92,7 +92,7 @@ export function StoreCategoryBar() {
           key={cat.id}
           active={storeCategory === cat.id}
           label={categoryDisplay(cat, t)}
-          count={counts.ready ? (counts.byCategory[cat.id] ?? 0) : undefined}
+          count={counts.byCategory[cat.id]}
           onClick={() => handleCategoryClick(cat.id)}
         />
       ))}

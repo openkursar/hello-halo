@@ -33,10 +33,11 @@ import type {
   ProviderResult
 } from '../../../../shared/interfaces'
 import type {
+  AISourcesConfig,
   AISourceType,
   BackendRequestConfig,
-  LegacyAISourcesConfig,
-  CustomSourceConfig
+  CustomSourceConfig,
+  LegacyAISourcesConfig
 } from '../../../../shared/types'
 import { AVAILABLE_MODELS } from '../../../../shared/types'
 
@@ -62,8 +63,9 @@ export class CustomAISourceProvider implements AISourceProvider {
    *
    * @param config - Legacy format config (v1), not called for API Key providers
    */
-  isConfigured(config: LegacyAISourcesConfig): boolean {
-    return !!(config.custom?.apiKey)
+  isConfigured(config: AISourcesConfig): boolean {
+    const customConfig = (config as unknown as LegacyAISourcesConfig).custom as CustomSourceConfig | undefined
+    return !!(customConfig?.apiKey)
   }
 
   /**
@@ -71,8 +73,8 @@ export class CustomAISourceProvider implements AISourceProvider {
    *
    * @param config - Legacy format config (v1), not called for API Key providers
    */
-  getBackendConfig(config: LegacyAISourcesConfig): BackendRequestConfig | null {
-    const customConfig = config.custom
+  getBackendConfig(config: AISourcesConfig): BackendRequestConfig | null {
+    const customConfig = (config as unknown as LegacyAISourcesConfig).custom as CustomSourceConfig | undefined
     if (!customConfig?.apiKey) {
       return null
     }
@@ -109,8 +111,9 @@ export class CustomAISourceProvider implements AISourceProvider {
    *
    * @param config - Legacy format config (v1), not called for API Key providers
    */
-  getCurrentModel(config: LegacyAISourcesConfig): string | null {
-    return config.custom?.model || null
+  getCurrentModel(config: AISourcesConfig): string | null {
+    const customConfig = (config as unknown as LegacyAISourcesConfig).custom as CustomSourceConfig | undefined
+    return customConfig?.model || null
   }
 
   /**
@@ -118,8 +121,8 @@ export class CustomAISourceProvider implements AISourceProvider {
    *
    * @param config - Legacy format config (v1), not called for API Key providers
    */
-  async getAvailableModels(config: LegacyAISourcesConfig): Promise<string[]> {
-    const customConfig = config.custom
+  async getAvailableModels(config: AISourcesConfig): Promise<string[]> {
+    const customConfig = (config as unknown as LegacyAISourcesConfig).custom as CustomSourceConfig | undefined
     if (!customConfig) {
       return []
     }
@@ -137,7 +140,7 @@ export class CustomAISourceProvider implements AISourceProvider {
   /**
    * No refresh needed for custom API
    */
-  async refreshConfig(_config: LegacyAISourcesConfig): Promise<ProviderResult<Partial<LegacyAISourcesConfig>>> {
+  async refreshConfig(_config: AISourcesConfig): Promise<ProviderResult<Partial<AISourcesConfig>>> {
     // Custom API doesn't need refresh - configuration is static
     return { success: true, data: {} }
   }

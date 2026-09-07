@@ -14,3 +14,10 @@ export {
   convertResponse as convertResponsesResponseToAnthropic,
   mapStatusToStopReason
 } from './openai-responses-to-anthropic'
+
+export {
+  createEmptyUsage,
+  normalizeOpenAIUsage,
+  normalizeAnthropicUsage,
+  type NormalizedUsage
+} from './usage'

@@ -109,6 +109,12 @@ vi.mock('../../../../src/main/services/web-search', () => ({
 vi.mock('../../../../src/main/services/ocr', () => ({
   createOcrMcpServer: vi.fn().mockReturnValue({ name: 'ocr', _isMcpServer: true }),
 }))
+vi.mock('../../../../src/main/services/official-docs-mcp', () => ({
+  createOfficialDocsSession: vi.fn(() => ({
+    server: { name: 'halo-docs', _isMcpServer: true },
+    guideConsulted: () => false,
+  })),
+}))
 
 vi.mock('../../../../src/main/services/email-mcp', () => ({
   createEmailMcpServer: vi.fn().mockReturnValue(null),

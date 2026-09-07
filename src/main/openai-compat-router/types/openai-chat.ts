@@ -256,7 +256,17 @@ export interface OpenAIChatUsage {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
+  /** OpenAI standard cache-hit reporting. */
+  prompt_tokens_details?: {
+    cached_tokens?: number
+  }
+  /**
+   * Anthropic-named cache fields — not OpenAI spec, but gateways fronting
+   * Anthropic-protocol clients emit them inside an otherwise-OpenAI body.
+   * Resolved against the standard field in `converters/response/usage.ts`.
+   */
   cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
 }
 
 export interface OpenAIChatResponse {

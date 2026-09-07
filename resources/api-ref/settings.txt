@@ -1,0 +1,183 @@
+## settings — how this build is configured and what it can do
+covers: application version, sign-in and model providers this build offers,
+        model capability presets, switching model source and model, deleting a
+        model source, the security policy in force, agent engine capabilities
+        and availability, MCP server diagnostics
+not here:
+  per-space settings -> workspace
+  per-digital-human config -> digital-human
+  notification channel setup, IM accounts, bot binding -> channels
+  sending a notification -> use the notify_channel tool
+  stopping something Halo is doing -> conversation
+  installing or updating store items -> store
+  knowledge collection settings -> knowledge-base
+  where a space keeps its files -> workspace
+
+(no endpoint) updating Halo itself — Halo updates itself; there is no upgrade endpoint. /api/store/updates covers installed store items, not the app. Tell the user Halo updates on its own.
+
+operations on this page:
+  GET    /api/agent/engine-availability                              List which agent engines are installed and which one is active
+  GET    /api/agent/engine-capabilities                              Read what the running agent engine can do
+  POST   /api/agent/probe-mcp                                        Probe one installed MCP server for connectivity and tools
+  POST   /api/agent/test-mcp                                         Test every configured MCP server connection
+  POST   /api/ai-sources/set-model                                   Switch the model within the current source
+  PUT    /api/ai-sources/sources/<sourceId>                          Edit a configured model source
+  DELETE /api/ai-sources/sources/<sourceId>                          Delete a configured model source   !! destructive - narrower: POST /api/ai-sources/switch-source
+  POST   /api/ai-sources/switch-source                               Switch to a different configured model source
+  GET    /api/auth/providers                                         List the sign-in and model providers this build offers
+  GET    /api/config                                                 Read the global configuration
+  GET    /api/config/credential-failures                             List credential fields that failed to decrypt at rest
+  POST   /api/config/refresh-ai-sources                              Re-read every model source and return the refreshed config
+  GET    /api/model-capabilities/all                                 List what every known model supports (vision, tools, context)
+  GET    /api/model-capabilities/preset/<modelId>                    Read the shipped capability preset for one model
+  POST   /api/model-capabilities/resolve                             Resolve a model id to its effective capabilities
+  GET    /api/security/policy                                        Read the security policy this build runs under
+  GET    /api/system/version                                         Read the running Halo version
+
+GET    /api/agent/engine-availability                              List which agent engines are installed and which one is active
+     curl -s "$HALO_API_URL/api/agent/engine-availability" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{engines:[{engineId:"anthropic"|"halo"|"codex",available:boolean,version:string,fingerprint:string}],activeEngine,degradedFrom}}
+     # note: degradedFrom is non-null when Halo fell back off the engine the user picked — that is the thing worth telling them about.
+
+GET    /api/agent/engine-capabilities                              Read what the running agent engine can do
+     curl -s "$HALO_API_URL/api/agent/engine-capabilities" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,data:{engineId,displayName,streaming:{text,reasoning,toolInput,toolOutput},tools:{native,synthetic,shellHeuristics},todo:{states,hasActiveForm},subAgent:{...}}}
+     # note: Describes the conditions you run under — which streaming and tool features are native versus emulated. Always answers; falls back to the active engine defaults.
+
+POST   /api/agent/probe-mcp                                        Probe one installed MCP server for connectivity and tools
+     curl -sX POST "$HALO_API_URL/api/agent/probe-mcp" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"appId":"<appId — a uuid from GET /api/apps>"}'
+     # body: {"appId": "<appId — a uuid from GET /api/apps>"}
+     # out: {success:true,result:{status:"connected"|"failed"|"needs-auth",tools?:string[],serverInfo?:{name,version},latencyMs:number}}  // result, not data
+     # err: 400 if appId is missing.
+     # note: "App is not an MCP server" = that app exists but is not an MCP-type app; probe only applies to those.
+
+POST   /api/agent/test-mcp                                         Test every configured MCP server connection
+     curl -sX POST "$HALO_API_URL/api/agent/test-mcp" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {success:true,servers:[{name,status:"connected"|"failed"|"needs-auth"|"pending",tools?:string[],serverInfo?:{name,version},error?}]}  // servers, not data
+     # note: Starts a real query against every configured server, so it is slow and it costs tokens. Say so before running it.
+     # note: "Test already in progress" = another test is running; wait and retry.
+     # note: "No MCP servers configured" comes back with success:true and nothing to report.
+
+POST   /api/ai-sources/set-model                                   Switch the model within the current source
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/ai-sources/set-model" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"modelId":"deepseek-chat"}'
+     # body: {"modelId":"deepseek-chat"}
+     # out: {"success":true,"data":{"currentId":"<uuid>","currentModel":"deepseek-chat"}}
+     # note: Applies to what Halo runs next, including this assistant. Switch back the same way.
+
+PUT    /api/ai-sources/sources/<sourceId>                          Edit a configured model source
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX PUT "$HALO_API_URL/api/ai-sources/sources/<sourceId>" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"name":"Work account"}'
+     # body: {"name":"Work account"}
+     # out: {"success":true,"data":{...the full sources config, secret fields redacted}}
+     # note: Merges field by field, so send only what changes. Leave apiKey out and the stored one is untouched — renaming a source or pointing it at a different model never needs the key.
+     # note: Do not send apiKey through here. The route would take it, but a key typed into a conversation is a key the user cannot take back; changing one is Settings > AI Model.
+
+DELETE /api/ai-sources/sources/<sourceId>                          Delete a configured model source
+     !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
+     !! If the user meant something smaller, use POST /api/ai-sources/switch-source instead.
+     curl -sX DELETE "$HALO_API_URL/api/ai-sources/sources/<sourceId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":{...the remaining sources config, secret fields redacted}}
+     # note: The stored API key goes with it, and no endpoint here can put one back — only the user can, in Settings > AI Model. Confirm before deleting.
+
+POST   /api/ai-sources/switch-source                               Switch to a different configured model source
+     # note: reversible — can be undone or corrected afterward.
+     curl -sX POST "$HALO_API_URL/api/ai-sources/switch-source" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"sourceId":"<sourceId — a uuid from GET /api/config>"}'
+     # body: {"sourceId":"<sourceId — a uuid from GET /api/config>"}
+     # out: {"success":true,"data":{"currentId":"<uuid>","currentModel":"..."}}
+     # note: Picks among sources the user already configured. It cannot create one or change a key.
+     # note: Applies to what Halo runs next, including this assistant. Switch back the same way.
+     # note: "Source not found" = wrong sourceId; read the configured list from GET /api/config first.
+
+GET    /api/auth/providers                                         List the sign-in and model providers this build offers
+     curl -s "$HALO_API_URL/api/auth/providers" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":[{"type":"…","displayName":"…","enabled":true,"recommended":false,"platforms":["darwin"]}]}
+     # note: What this build could be configured with, not what the user has configured — read GET /api/config for that. On an enterprise build the preset field carries deployment-internal endpoints; do not repeat them back.
+
+GET    /api/config                                                 Read the global configuration
+     curl -s "$HALO_API_URL/api/config" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":{...}}  // secret fields come back as "***"
+     # note: Read-only here. The write side is not opened to the assistant.
+
+GET    /api/config/credential-failures                             List credential fields that failed to decrypt at rest
+     curl -s "$HALO_API_URL/api/config/credential-failures" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":[{"path":"...","label":"..."}]}
+     # note: Path and label only, never ciphertext. Non-empty means the user must re-enter that credential in the Halo app.
+
+POST   /api/config/refresh-ai-sources                              Re-read every model source and return the refreshed config
+     curl -sX POST "$HALO_API_URL/api/config/refresh-ai-sources" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":{...}}  // same masked shape as GET /api/config
+     # note: Use it when GET /api/config looks stale after the user changed a source in the app. It re-reads what is stored; it cannot add or fix a credential.
+
+GET    /api/model-capabilities/all                                 List what every known model supports (vision, tools, context)
+     curl -s "$HALO_API_URL/api/model-capabilities/all" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":{"<modelId>":{...capability flags}}}
+     # note: Read-only presets. It does not say which model is currently in use.
+
+GET    /api/model-capabilities/preset/<modelId>                    Read the shipped capability preset for one model
+     curl -s "$HALO_API_URL/api/model-capabilities/preset/<modelId>" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":{"displayName":"...","provider":"...","contextWindow":128000,"maxOutputTokens":8192,"vision":false,"thinking":false}}
+     # note: An unknown model returns data:null with success:true — not a 404.
+     # note: Percent-encode a modelId that contains slashes.
+
+POST   /api/model-capabilities/resolve                             Resolve a model id to its effective capabilities
+     curl -sX POST "$HALO_API_URL/api/model-capabilities/resolve" \
+          -H "Authorization: Bearer $HALO_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"modelId":"deepseek-chat"}'
+     # body: {"modelId":"deepseek-chat"}
+     # out: {"success":true,"data":{"displayName":"...","provider":"...","contextWindow":128000,"maxOutputTokens":8192,"vision":false,"thinking":false}}
+     # note: Applies the user's overrides on top of the shipped preset, which is what makes it differ from the preset endpoint. 400 when modelId is missing or not a string.
+
+GET    /api/security/policy                                        Read the security policy this build runs under
+     curl -s "$HALO_API_URL/api/security/policy" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":{"tunnelSafe":boolean,"browserAllowlistEditable":boolean}}
+     # note: Tells you which of two guarded behaviours this build permits before you attempt one. Cannot fail.
+
+GET    /api/system/version                                         Read the running Halo version
+     curl -s "$HALO_API_URL/api/system/version" -H "Authorization: Bearer $HALO_API_TOKEN"
+     # out: {"success":true,"data":"2.1.15"}
+
+Halo does all of these; you do not. Say so, and say where:
+  - Add a model source, change an API key, or test one — all need the key in plaintext, so the user does it in Settings > AI Model rather than sending a secret into this conversation.
+  - Change any other setting — appearance, permissions, system behaviour. They share one write endpoint that replaces whole branches of the configuration at once, so it stays closed rather than risk dropping settings nobody asked you to touch. Settings, in the Halo app.
+  - Change remote-access settings (port, token, tunnel) — the user does this in Settings > Remote Access, on the desktop app only; it is not in the remote web UI.
+That list is complete for this area and the search has already been done for
+  you: do not grep the index for these, and do not guess a path — it will 403.
+For anything NOT on that list the normal rule still applies: grep the index
+  before you tell the user something is impossible.
+After saying where, tell the user which nearby parts you CAN do for them —
+  a hand-off reads very differently from a refusal.
+
+-----------------------------------------------------------------------
+$HALO_API_URL, $HALO_API_TOKEN and $HALO_SPACE_ID are already set in your Bash
+  environment. Copy commands as-is; never expand or print those variables.
+Replace only <angle-bracket> placeholders. Get real ids from a list call above.
+Read the response body and check "success". HTTP 200 alone does not mean it
+  worked - many failures return 200 with {"success":false}.
+Pipe long responses through `| head -c 4000` so you do not flood your context.
+A POST that timed out may still have taken effect. List before you retry.
+Waiting on something? Back off (2s, then double), give up after 5 tries and
+  tell the user it is still running.
+Large or binary files do not go through this API - use Read / Write / Bash.
+403 = the endpoint exists but is closed to me in this build. Tell the user to
+  do it in the Halo app. Do not tell them Halo cannot do it.
+404 with a "code" field = my path is wrong. 404 without one = the id is wrong.
+Only call paths listed on this page or in the index. Never write one from
+  memory. If this page has left your context, call halo_api_ref again.
+Full index of every endpoint: {{API_REF_INDEX_PATH}}/index.txt
+  grep -i "<keyword>" {{API_REF_INDEX_PATH}}/index.txt
+Not listed here does NOT mean not supported — that is a real, deliverable
+  answer, not a failed search. Grep the index before you say "Halo can't do that".

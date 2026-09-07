@@ -247,6 +247,15 @@ uses `Promise.allSettled`:
 | some failed | return the successes, `console.warn` the failures |
 | all succeeded | merge |
 
+This applies within an adapter too, wherever one logical query fans out to
+several requests (SkillHub splits a Halo category across the SkillHub keys it
+covers). Items survive partial failure, but a count does not: an adapter that
+served only part of its fan-out returns `AdapterQueryResult.partial`, and
+`queryProxySources` reports that source as `status: 'error'` while still
+contributing its items. A partial result is also never written to the query
+cache — the cache row has no column for the reason, so reading it back would
+present an undercounted total as a complete one.
+
 ### 3.7 Known deferral: publish target resolution is not federated
 
 `publish/index.ts` still reads `registryOverrides['official'].publish`.
@@ -332,6 +341,34 @@ index moving.
 Identity values name a **capability**, never a provider. A third party running
 its own registry must be able to advertise account-level identity without
 uttering another company's internal system name.
+
+### 3.12 A category chip's number is that chip's own query
+
+`useStoreCategoryCounts` reads each chip's count from a `pageSize: 1` probe of
+the chip's own query, rather than tallying one fetched page: on a source larger
+than the page, a tally is a sample of that page, so a 139k-skill catalog renders
+as "Content 7" beside an accurate "All 139697".
+
+That puts two obligations on every proxy adapter (stated on `query` in
+`adapters/types.ts`, which is where a new adapter will read them):
+
+- **`params.category` must be honoured.** A source with no taxonomy of its own
+  still labels its entries with one Halo category, so ignoring the filter
+  answers a chip with the whole catalog under a name that does not describe it.
+  Serving nothing under a category is a valid answer — return empty.
+- **`total` describes the whole filtered catalog**, not the page returned with
+  it.
+
+The probes are bounded to a few in flight: a taxonomy is ~8 chips, each a
+federated query fanning out to every source serving the type, and the reply to
+a rate-limited probe is a source error the hook has to discard anyway.
+
+Neither the count nor the "All" number is rendered unless its query answered for
+the *whole* catalog — a store query succeeds with whatever sources replied, so a
+timed-out registry silently subtracts its share and would otherwise show a
+smaller number just as confidently. The real fix is a facet endpoint returning
+every category count in one call; the probes are what the current list API
+allows.
 
 | Wire (`identityBinding`) | Client (`StoreIdentityMode`) | Meaning |
 |---|---|---|

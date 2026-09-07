@@ -226,13 +226,13 @@ import type {
   RunStatus,
   TriggerType,
 } from '../../../../src/main/apps/runtime/types'
-import type { AppSpec } from '../../../../src/main/apps/spec/schema'
+import type { AppSpec, AutomationSpec } from '../../../../src/main/apps/spec/schema'
 
 // ============================================
 // Test Fixtures
 // ============================================
 
-function createTestSpec(overrides?: Partial<AppSpec>): AppSpec {
+function createTestSpec(overrides?: Partial<AppSpec>): AutomationSpec {
   return {
     spec_version: '1',
     name: 'test-automation',
@@ -248,7 +248,7 @@ function createTestSpec(overrides?: Partial<AppSpec>): AppSpec {
       },
     ],
     ...overrides,
-  } as AppSpec
+  } as AutomationSpec
 }
 
 function createTestAppId(): string {
@@ -1405,7 +1405,13 @@ describe('Prompt Builder', () => {
       firstSection: null,
       headers: [],
       fullContent: null,
+      archiveFiles: [],
+      archiveTotalCount: 0,
+      compactionArchiveCount: 0,
       memoryFilePath: '/tmp/test-memory.md',
+      memoryArchiveDir: '/tmp/memory/run',
+      lastModified: null,
+      rawContent: null,
     }
 
     it('should include trigger context', () => {
@@ -1473,7 +1479,13 @@ describe('Prompt Builder', () => {
       firstSection: null,
       headers: [],
       fullContent: null,
+      archiveFiles: [],
+      archiveTotalCount: 0,
+      compactionArchiveCount: 0,
       memoryFilePath: '/tmp/test-memory.md',
+      memoryArchiveDir: '/tmp/memory/run',
+      lastModified: null,
+      rawContent: null,
     }
 
     it('should point at the file and ask for creation when none exists', () => {
@@ -2341,6 +2353,101 @@ describe('AppRuntimeService', () => {
     })
   })
 
+  // The MCP trigger tool runs inside a user conversation: it must get an answer
+  // at run start, not at run end (a run routinely takes minutes).
+  describe('startManually (non-blocking trigger)', () => {
+    let testAppId: string
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      testAppId = randomUUID()
+    })
+
+    function seedApp(status = 'active') {
+      mockAppManager.getApp.mockReturnValue({
+        id: testAppId,
+        status,
+        spec: createTestSpec(),
+        userConfig: {},
+        userOverrides: {},
+        spaceId: 'space-001',
+      })
+    }
+
+    /** Hold the next run open so the test can observe the in-flight window. */
+    function stallNextRun(runId: string) {
+      let release!: () => void
+      vi.mocked(executeRun).mockImplementationOnce(async (opts: any) => {
+        opts.onRunStarted?.({ runId, sessionKey: `sk-${runId}`, startedAt: 111 })
+        await new Promise<void>((resolve) => { release = resolve })
+        return {
+          appId: opts.app.id,
+          runId,
+          sessionKey: `sk-${runId}`,
+          outcome: 'useful',
+          startedAt: 111,
+          finishedAt: 222,
+          durationMs: 111,
+        }
+      })
+      return () => {
+        release()
+        return new Promise((r) => setTimeout(r, 0))
+      }
+    }
+
+    it('resolves at run start while the run is still executing', async () => {
+      seedApp()
+      const finishRun = stallNextRun('run-async')
+      const service = createService()
+
+      const info = await service.startManually(testAppId)
+
+      expect(info).toEqual({
+        outcome: 'started',
+        runId: 'run-async',
+        sessionKey: 'sk-run-async',
+        startedAt: 111,
+      })
+      expect(service.getAppState(testAppId).status).toBe('running')
+
+      await finishRun()
+      expect(service.getAppState(testAppId).status).toBe('idle')
+    })
+
+    it('rejects a second trigger while the first run is still in flight', async () => {
+      seedApp()
+      const finishRun = stallNextRun('run-busy')
+      const service = createService()
+
+      await service.startManually(testAppId)
+      await expect(service.startManually(testAppId)).rejects.toThrow(ConcurrencyLimitError)
+      expect(executeRun).toHaveBeenCalledTimes(1)
+
+      await finishRun()
+    })
+
+    it('rejects a non-runnable app without starting anything', async () => {
+      seedApp('waiting_user')
+      const service = createService()
+
+      await expect(service.startManually(testAppId)).rejects.toThrow(AppNotRunnableError)
+      expect(executeRun).not.toHaveBeenCalled()
+    })
+
+    it('still resolves when the run ends without ever reporting a start', async () => {
+      seedApp()
+      const service = createService()
+
+      // The default executeRun mock never calls onRunStarted — the admission
+      // promise must fall back to the run's own result instead of hanging.
+      const info = await service.startManually(testAppId)
+
+      expect(info.outcome).toBe('started')
+      expect(info.runId).toBe('run-mock')
+    })
+  })
+
   describe('activateAll / deactivateAll', () => {
     it('should activate all active automation apps', async () => {
       const app1 = {
@@ -2477,6 +2584,7 @@ describe('Report Tool', () => {
   it('should create an MCP server with report_to_user tool', () => {
     const server = createReportToolServer(store, {
       appId: testAppId,
+      appName: 'Test App',
       runId: 'run-001',
       sessionKey: 'sess-001',
     })
@@ -2488,7 +2596,7 @@ describe('Report Tool', () => {
     let capturedEntryId = ''
     const server = createReportToolServer(
       store,
-      { appId: testAppId, runId: 'run-001', sessionKey: 'sess-001' },
+      { appId: testAppId, appName: 'Test App', runId: 'run-001', sessionKey: 'sess-001' },
       (entryId: string) => { capturedEntryId = entryId }
     )
 

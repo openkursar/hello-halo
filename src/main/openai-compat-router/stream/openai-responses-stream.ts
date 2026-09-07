@@ -11,7 +11,7 @@ import {
   type StreamHandlerOptions
 } from './base-stream-handler'
 import { safeJsonParse } from '../utils'
-import { normalizeOpenAIInputTokens } from '../utils/usage-normalizer'
+import { normalizeOpenAIUsage } from '../converters/response/usage'
 import type { AnthropicStopReason } from '../types'
 
 // Event types from OpenAI Responses API
@@ -31,6 +31,10 @@ type ResponsesEventType =
   | 'response.reasoning_summary_text.done'
   | 'response.reasoning_summary_part.added'
   | 'response.reasoning_summary_part.done'
+  // Non-spec spellings observed from OpenAI-compatible gateways
+  | 'response.done'
+  | 'response.error'
+  | 'done'
   | 'error'
 
 export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
@@ -102,18 +106,9 @@ export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
     }
 
     // Update usage from response
-    if (responseObj.usage) {
-      this.updateUsage({
-        inputTokens: normalizeOpenAIInputTokens({
-          promptTokens: responseObj.usage.input_tokens || responseObj.usage.prompt_tokens,
-          completionTokens: responseObj.usage.output_tokens || responseObj.usage.completion_tokens,
-          totalTokens: responseObj.usage.total_tokens,
-          cacheReadTokens: responseObj.usage.cache_read_input_tokens,
-          providerLabel: this.state.model
-        }),
-        outputTokens: responseObj.usage.output_tokens || responseObj.usage.completion_tokens,
-        cacheReadTokens: responseObj.usage.cache_read_input_tokens
-      })
+    const usage = normalizeOpenAIUsage(responseObj.usage)
+    if (usage) {
+      this.updateUsage(usage)
     }
 
     // Ensure message has started
@@ -288,18 +283,9 @@ export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
     this.setStopReason(stopReason)
 
     // Update final usage
-    if (response.usage) {
-      this.updateUsage({
-        inputTokens: normalizeOpenAIInputTokens({
-          promptTokens: response.usage.input_tokens || response.usage.prompt_tokens,
-          completionTokens: response.usage.output_tokens || response.usage.completion_tokens,
-          totalTokens: response.usage.total_tokens,
-          cacheReadTokens: response.usage.cache_read_input_tokens,
-          providerLabel: this.state.model
-        }),
-        outputTokens: response.usage.output_tokens || response.usage.completion_tokens,
-        cacheReadTokens: response.usage.cache_read_input_tokens
-      })
+    const usage = normalizeOpenAIUsage(response.usage)
+    if (usage) {
+      this.updateUsage(usage)
     }
 
     this.markFinished()

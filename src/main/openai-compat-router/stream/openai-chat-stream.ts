@@ -11,7 +11,7 @@ import {
   type StreamHandlerOptions
 } from './base-stream-handler'
 import { safeJsonParse } from '../utils'
-import { normalizeOpenAIInputTokens } from '../utils/usage-normalizer'
+import { normalizeOpenAIUsage } from '../converters/response/usage'
 import type { OpenAIChatChunk, OpenAIChatAnnotation, AnthropicStopReason } from '../types'
 
 export class OpenAIChatStreamHandler extends BaseStreamHandler {
@@ -90,18 +90,9 @@ export class OpenAIChatStreamHandler extends BaseStreamHandler {
     this.ensureMessageStarted()
 
     // Update usage if provided
-    if (chunk.usage) {
-      this.updateUsage({
-        inputTokens: normalizeOpenAIInputTokens({
-          promptTokens: chunk.usage.prompt_tokens,
-          completionTokens: chunk.usage.completion_tokens,
-          totalTokens: chunk.usage.total_tokens,
-          cacheReadTokens: chunk.usage.cache_read_input_tokens,
-          providerLabel: this.state.model
-        }),
-        outputTokens: chunk.usage.completion_tokens,
-        cacheReadTokens: chunk.usage.cache_read_input_tokens
-      })
+    const usage = normalizeOpenAIUsage(chunk.usage)
+    if (usage) {
+      this.updateUsage(usage)
     }
 
     // Process choice
@@ -211,7 +202,7 @@ export class OpenAIChatStreamHandler extends BaseStreamHandler {
     const toolUseId = `srvtoolu_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`
 
     const results = annotations.map((ann) => ({
-      type: 'web_search_result',
+      type: 'web_search_result' as const,
       title: ann.url_citation?.title,
       url: ann.url_citation?.url
     }))

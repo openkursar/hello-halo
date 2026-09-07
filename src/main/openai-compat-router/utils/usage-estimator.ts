@@ -154,7 +154,15 @@ export function fillResponseUsageFallback(
   }
   const usage = response.usage
 
-  const needInput = !usage.input_tokens
+  // Keyed off the whole prompt accounting, not input_tokens alone: a fully
+  // cache-hit prompt legitimately reports zero new input, and estimating over
+  // it would replace a truthful zero with a full-context guess.
+  const hasPromptAccounting =
+    (usage.input_tokens || 0) +
+      (usage.cache_read_input_tokens || 0) +
+      (usage.cache_creation_input_tokens || 0) >
+    0
+  const needInput = !hasPromptAccounting
   const needOutput = !usage.output_tokens
 
   if (needInput) {

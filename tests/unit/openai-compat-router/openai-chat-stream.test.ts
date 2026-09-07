@@ -207,23 +207,6 @@ describe('OpenAIChatStreamHandler empty-response repair', () => {
     expect(msgDelta?.data.usage.input_tokens).toBe(1000)
   })
 
-  it('leaves input_tokens unchanged when total_tokens does not confirm either the OpenAI-inclusive or the Anthropic-exclusive identity', async () => {
-    // A provider that sends cache_read_input_tokens but whose total_tokens
-    // matches neither expected identity — the safe default is to not touch
-    // prompt_tokens rather than guess which convention it meant.
-    const { res, chunks } = createMockRes()
-    const stream = chatSSE([
-      { id: 'c1', model: 'some-other-provider', choices: [{ index: 0, delta: { role: 'assistant', content: 'hi' }, finish_reason: null }] },
-      { id: 'c1', model: 'some-other-provider', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 131186, completion_tokens: 79, total_tokens: 999999, cache_read_input_tokens: 130304 } }
-    ])
-
-    await streamOpenAIChatToAnthropic(stream, res, 'some-other-provider')
-
-    const events = parseSSEEvents(chunks)
-    const msgDelta = events.find(e => e.event === 'message_delta')
-    expect(msgDelta?.data.usage.input_tokens).toBe(131186)
-  })
-
   it('does not inject placeholder when the response is tool calls', async () => {
     const { res, chunks } = createMockRes()
     const stream = chatSSE([
