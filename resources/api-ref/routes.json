@@ -647,6 +647,134 @@
     "group": "digital-human"
   },
   {
+    "method": "GET",
+    "path": "/api/teams"
+  },
+  {
+    "method": "POST",
+    "path": "/api/teams"
+  },
+  {
+    "method": "POST",
+    "path": "/api/teams/propose-members"
+  },
+  {
+    "method": "GET",
+    "path": "/api/teams/:teamId"
+  },
+  {
+    "method": "GET",
+    "path": "/api/teams/:teamId/detail"
+  },
+  {
+    "method": "GET",
+    "path": "/api/teams/:teamId/chat-messages"
+  },
+  {
+    "method": "POST",
+    "path": "/api/teams/:teamId/members/:appId/send"
+  },
+  {
+    "method": "GET",
+    "path": "/api/teams/:teamId/artifacts"
+  },
+  {
+    "method": "GET",
+    "path": "/api/teams/:teamId/conversations"
+  },
+  {
+    "method": "POST",
+    "path": "/api/teams/:teamId/conversations"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/teams/:teamId/conversations/:epochId"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/teams/:teamId/conversations/:epochId"
+  },
+  {
+    "method": "GET",
+    "path": "/api/teams/:teamId/epochs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/teams/:teamId/epochs/:epochId/board"
+  },
+  {
+    "method": "GET",
+    "path": "/api/teams/:teamId/epochs/:epochId/artifacts"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/teams/:teamId"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/teams/:teamId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/teams/:teamId/members"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/teams/:teamId/members/:appId"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/teams/:teamId/checks/:checkId"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/teams/:teamId/members/:appId"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/teams/:teamId/edges"
+  },
+  {
+    "method": "POST",
+    "path": "/api/teams/:teamId/run"
+  },
+  {
+    "method": "POST",
+    "path": "/api/teams/:teamId/pause"
+  },
+  {
+    "method": "GET",
+    "path": "/api/teams/:teamId/triggers"
+  },
+  {
+    "method": "POST",
+    "path": "/api/teams/:teamId/triggers"
+  },
+  {
+    "method": "POST",
+    "path": "/api/teams/:teamId/invite"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/teams/:teamId/invite/:jti"
+  },
+  {
+    "method": "POST",
+    "path": "/api/teams/:teamId/join"
+  },
+  {
+    "method": "POST",
+    "path": "/api/teams/:teamId/leave"
+  },
+  {
+    "method": "GET",
+    "path": "/api/teams/:teamId/federation/presence"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/teams/:teamId/triggers/:triggerId"
+  },
+  {
     "method": "POST",
     "path": "/api/store/query",
     "group": "store"
