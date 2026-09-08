@@ -39,9 +39,13 @@ const SubAgentToolRow = memo(function SubAgentToolRow({ thought }: { thought: Th
   const hasResult = !!thought.toolResult
   const isError = thought.toolResult?.isError
 
-  const friendlyContent = useMemo(
-    () => truncateText(getToolFriendlyFormat(thought.toolName || '', thought.toolInput), 60),
+  const fullContent = useMemo(
+    () => getToolFriendlyFormat(thought.toolName || '', thought.toolInput),
     [thought.toolName, thought.toolInput]
+  )
+  const friendlyContent = useMemo(
+    () => truncateText(fullContent, 60),
+    [fullContent]
   )
 
   const ToolIcon = getToolIcon(thought.toolName || '')
@@ -65,7 +69,7 @@ const SubAgentToolRow = memo(function SubAgentToolRow({ thought }: { thought: Th
         </span>
 
         {/* Friendly summary */}
-        <span className="text-xs text-muted-foreground/60 truncate min-w-0 flex-1">
+        <span className="text-xs text-muted-foreground/60 truncate min-w-0 flex-1" title={fullContent || undefined}>
           {friendlyContent}
         </span>
 
@@ -143,7 +147,16 @@ export function SubAgentTimeline({ thoughts, parentToolUseId, taskProgress, isTh
         )}
 
         {/* Status summary */}
-        <span className="flex-1 text-left truncate">
+        <span
+          className="flex-1 text-left truncate"
+          title={
+            isRunning && isThinking
+              ? taskProgress?.lastToolName
+                ? `${t('Running')} ${taskProgress.lastToolName}...`
+                : t('Running...')
+              : `${toolCount} ${t('tools used')}`
+          }
+        >
           {isRunning && isThinking ? (
             taskProgress?.lastToolName
               ? `${t('Running')} ${taskProgress.lastToolName}...`

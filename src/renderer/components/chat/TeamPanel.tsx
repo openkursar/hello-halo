@@ -151,12 +151,15 @@ const TeamAgentRow = memo(function TeamAgentRow({ agent }: { agent: DerivedTeamA
       <StatusDot status={agent.status} />
 
       {/* Name */}
-      <span className="font-medium text-foreground shrink-0 max-w-[100px] truncate">
+      <span className="font-medium text-foreground shrink-0 max-w-[100px] truncate" title={agent.name}>
         {agent.name}
       </span>
 
       {/* Summary */}
-      <span className="flex-1 text-muted-foreground truncate min-w-0 text-xs">
+      <span
+        className="flex-1 text-muted-foreground truncate min-w-0 text-xs"
+        title={[agent.description, agent.summary].filter(Boolean).join(' — ') || undefined}
+      >
         {agent.summary}
       </span>
 
@@ -251,10 +254,13 @@ export function TeamSnapshotPanel({ thoughts }: TeamSnapshotPanelProps) {
         {agents.map(agent => (
           <div key={agent.thoughtId} className="flex items-center gap-2 py-0.5 text-xs min-w-0">
             <StatusDot status={agent.status} />
-            <span className="font-medium text-foreground shrink-0 max-w-[100px] truncate">
+            <span className="font-medium text-foreground shrink-0 max-w-[100px] truncate" title={agent.name}>
               {agent.name}
             </span>
-            <span className="flex-1 text-muted-foreground/70 truncate min-w-0">
+            <span
+              className="flex-1 text-muted-foreground/70 truncate min-w-0"
+              title={[agent.description, agent.summary].filter(Boolean).join(' — ') || undefined}
+            >
               {agent.summary}
             </span>
             {agent.durationMs > 0 && (
