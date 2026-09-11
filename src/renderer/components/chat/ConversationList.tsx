@@ -18,6 +18,7 @@ import { TaskStatusDot } from '../pulse/TaskStatusDot'
 import { PulseSidebarSection } from '../pulse/PulseSidebarSection'
 import { AutomationBadge } from '../apps/AutomationBadge'
 import { EngineBadge } from './EngineBadge'
+import { useScrollableFade } from '../../hooks/useScrollableFade'
 import type { ConversationMeta } from '../../types'
 
 // Width constraints (in pixels)
@@ -68,6 +69,10 @@ export const ConversationList = memo(function ConversationList({
   const widthRef = useRef(width)
   const topSectionHeightRef = useRef(initialTopSectionHeight ?? DEFAULT_TOP_SECTION_HEIGHT)
   const [topSectionHeight, setTopSectionHeight] = useState(topSectionHeightRef.current)
+
+  // Bottom-edge fade hint on the pinned/running-tasks block: the thin scrollbar
+  // alone doesn't signal that more items are hidden below the dragged height.
+  const [topSectionScrollRef, topSectionCanScroll] = useScrollableFade<HTMLDivElement>()
 
   // Sync width when config arrives asynchronously
   useEffect(() => {
@@ -384,8 +389,11 @@ export const ConversationList = memo(function ConversationList({
         {/* Automation apps status badge — quick jump to AppsPage */}
         <AutomationBadge />
 
-        {/* Pinned section - fills remaining space and scrolls within the dragged height */}
-        <div className="flex-1 min-h-0 overflow-y-auto">
+        {/* Pinned section - scrolls within the dragged height; fade bottom edge when more items are hidden below */}
+        <div
+          ref={topSectionScrollRef}
+          className={`flex-1 min-h-0 overflow-y-auto ${topSectionCanScroll ? 'scroll-fade-down' : ''}`}
+        >
           {visible && <PulseSidebarSection />}
         </div>
 
