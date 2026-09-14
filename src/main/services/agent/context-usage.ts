@@ -7,10 +7,15 @@
  * only the normalized `assistant`/`result`/`message_delta` usage and our own
  * model-capability table — never an SDK-specific control method or field.
  *
- * The "current context size" equals the most recent real (non-synthetic)
- * assistant message's `input_tokens + cache_creation + cache_read`. This mirrors
- * claude-code `getCurrentUsage` + `analyzeContextUsage`: output_tokens is the
- * generated reply, not part of the prompt the model saw, so it is excluded.
+ * The "current context size" equals the most recent per-call frame's
+ * `input_tokens + cache_creation + cache_read`. This mirrors claude-code
+ * `getCurrentUsage` + `analyzeContextUsage`: output_tokens is the generated
+ * reply, not part of the prompt the model saw, so it is excluded.
+ *
+ * "Per-call" is load-bearing. The `result` frame reports the turn's CUMULATIVE
+ * usage (see DESIGN.md §2), which equals the current context only on a
+ * single-call turn and a multiple of it otherwise — so it is never a source
+ * for this number, however tempting a fallback it looks like.
  */
 
 import { modelCapabilitiesService } from '../model-capabilities.service'
@@ -43,7 +48,6 @@ interface RawAssistantMessage {
 /** Minimal shape of a normalized result frame this module reads. */
 interface RawResultMessage {
   total_cost_usd?: number
-  usage?: RawUsage
 }
 
 /** Minimal shape of a normalized `message_delta` stream event this module reads. */
@@ -124,6 +128,17 @@ export function computeContextUsed(usage: SingleCallUsage): number {
 }
 
 /**
+ * Does this usage carry the prompt side of a call, rather than only its output?
+ *
+ * Only such a frame may stand for the current context: an output-only frame
+ * would blank the gauge, and real Anthropic sends exactly one per call (its
+ * `message_delta` carries output_tokens alone).
+ */
+export function hasPromptAccounting(usage: SingleCallUsage): boolean {
+  return usage.inputTokens + usage.cacheCreationTokens + usage.cacheReadTokens > 0
+}
+
+/**
  * Fallback context-window resolution from a model name alone, mirroring
  * claude-code's `getContextWindowForModel` order:
  *   1. `[1m]` suffix → 1M (documented client-side opt-in)
@@ -145,32 +160,26 @@ export function resolveContextWindow(model: string): number {
 /**
  * Build the final TokenUsage for a turn.
  *
- * Primary source is `lastRealUsage` — the last real per-call usage captured from
- * the assistant frames (no cumulative aggregation, matches `/context`). Some
- * engines/turns (e.g. a short text-only reply) attach no usage to any assistant
- * frame; usage only reaches the `result` frame. In that case fall back to the
- * result frame's own usage so the indicator still shows a number. The fallback
- * only fires when no real per-call usage exists, so its turn-cumulative shape
- * equals the single call it represents and cannot double-count.
+ * `lastPerCallUsage` is the latest per-call frame that carried prompt
+ * accounting — the assistant frame on an upstream that reports at
+ * `message_start`, `message_delta` on one that reports only at stream end. A
+ * turn that produced neither shows no gauge at all: the only other number on
+ * hand is the `result` frame's cumulative total, which over-states the context
+ * by the turn's call count (see the module header).
  */
 export function buildTokenUsage(
   resultMsg: RawResultMessage,
-  lastRealUsage: SingleCallUsage | null,
+  lastPerCallUsage: SingleCallUsage | null,
   model: string,
   contextWindow?: number
 ): TokenUsage | null {
-  const usage = lastRealUsage ?? resultUsageFallback(resultMsg)
-  if (!usage) return null
+  if (!lastPerCallUsage) return null
   return {
-    ...usage,
+    ...lastPerCallUsage,
     totalCostUsd: resultMsg.total_cost_usd || 0,
     // Prefer the source-resolved window (same value that drives the CC
     // subprocess via CLAUDE_CODE_AUTO_COMPACT_WINDOW) so the displayed
     // window always matches actual compaction behavior.
     contextWindow: contextWindow ?? resolveContextWindow(model)
   }
-}
-
-function resultUsageFallback(resultMsg: RawResultMessage): SingleCallUsage | null {
-  return toSingleCallUsage(resultMsg.usage)
 }
