@@ -54,6 +54,7 @@ import { getSpace, getSpaceDir } from '../../services/space.service'
 import { openSessionWriter, type SessionWriter } from './session-store'
 import { prepareMemoryForTurn, finalizeMemoryAfterTurn, type CompactionCredentialsProvider } from './turn/memory-lifecycle'
 import { registerActiveRun, unregisterActiveRun } from './active-runs'
+import { describeSelfInstance, formatInstanceTag, listLiveInstances } from './live-instances'
 
 // ============================================
 // Types
@@ -193,6 +194,11 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
   const startedAt = Date.now()
 
   const runTag = runId.slice(0, 8)
+  const selfInstance = describeSelfInstance(app.id, {
+    runId,
+    triggerType: trigger.type,
+    startedAt,
+  })
   console.log(
     `[Runtime][${runTag}] ▶ Starting run: app=${app.id}, trigger=${trigger.type}, ` +
     `appName="${app.spec.name}", spaceId=${app.spaceId}` +
@@ -325,13 +331,16 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     // ── 3. Build initial message ───────────────────────────
     //    Build memory snapshot + pre-insert History heading.
-    const { snapshot: memorySnapshot, runTimestamp } = await prepareMemoryForTurn(memoryScope)
+    const selfTag = formatInstanceTag(selfInstance)
+    const { snapshot: memorySnapshot, runTimestamp } = await prepareMemoryForTurn(memoryScope, {
+      byLabel: selfTag,
+    })
     console.log(
       `[Runtime][${runTag}] Memory snapshot: exists=${memorySnapshot.exists}, ` +
       `lines=${memorySnapshot.totalLines}, size=${memorySnapshot.sizeBytes}B, ` +
       `headers=${memorySnapshot.headers.length}, archive=${memorySnapshot.archiveTotalCount}`
     )
-    console.log(`[Runtime][${runTag}] Pre-inserted History heading: ## ${runTimestamp}`)
+    console.log(`[Runtime][${runTag}] Pre-inserted History heading: ## ${runTimestamp}  [by: ${selfTag}]`)
 
     // Resuming runs (continue or escalation follow-up) send minimal messages
     // so the model can resume naturally from its restored session context.
@@ -345,6 +354,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
             userConfig: mergedConfig,
             appName: app.spec.name,
             memorySnapshot,
+            selfInstance,
+            liveInstances: listLiveInstances(app.id, selfInstance.id),
           })
 
     console.log(
@@ -542,6 +553,8 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       runId,
       appId: app.id,
       spaceId: app.spaceId!,
+      triggerType: trigger.type,
+      startedAt,
       session,
       writer: sessionWriter,
     })

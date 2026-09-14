@@ -51,7 +51,7 @@ type Options struct {
 
 func (o *Options) fillDefaults() {
 	if o.MaxFrameBytes == 0 {
-		o.MaxFrameBytes = 1 << 20
+		o.MaxFrameBytes = 8 << 20
 	}
 	if o.FrameRate == 0 {
 		o.FrameRate = 500
@@ -226,7 +226,14 @@ func (s *Session) readLoop() {
 		if err != nil {
 			if websocket.ErrReadLimit == err || isReadLimitClose(err) {
 				s.opts.Metrics.FramesRejectedTotal.Add(1)
-				s.CloseWithGwError(wire.CodeFrameTooLarge, "frame exceeds 1 MiB")
+				// This close is indistinguishable from a network drop at the
+				// client, and a durable outbox re-sends the same frame on
+				// reconnect — so without this line the room's host flaps forever
+				// with no recorded cause.
+				s.opts.Logger.Warn("frame over limit; closing session",
+					"identity", s.IdentityID(), "office", s.OfficeID(),
+					"remote", s.remote, "limit", s.opts.MaxFrameBytes)
+				s.CloseWithGwError(wire.CodeFrameTooLarge, "frame exceeds the configured limit")
 			}
 			return
 		}

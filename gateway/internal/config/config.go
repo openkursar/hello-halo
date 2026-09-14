@@ -38,6 +38,11 @@ type Limits struct {
 type Room struct {
 	HostRetention    time.Duration `yaml:"hostRetention"`
 	AdmissionTimeout time.Duration `yaml:"admissionTimeout"`
+	// Diagnostic only: office id to log every frame of, bodies included, or
+	// "*" for all offices. Empty (the default) disables it. Traced records carry
+	// members' message text, so this is switched on for one investigation and
+	// off again — never left running.
+	Trace string `yaml:"trace"`
 }
 
 type Directory struct {
@@ -62,7 +67,13 @@ func Defaults() Config {
 		Listen: ":3100",
 		Log:    Log{Level: "info", Format: "json"},
 		Limits: Limits{
-			MaxFrameBytes:    1 << 20,
+			// 8 MiB. The relay is a dumb pipe and the frames it carries are
+			// application data whose size it cannot influence; a limit tight enough
+			// to be hit in normal use turns into a reconnect loop, because the
+			// sender's outbox is durable and re-offers the same frame every time.
+			// Senders bound their own batches well below this — the ceiling is the
+			// backstop, not the budget.
+			MaxFrameBytes:    8 << 20,
 			ConnPerIPRate:    10,
 			ConnPerIPBurst:   20,
 			SessionFrameRate: 500,
@@ -130,6 +141,7 @@ func applyEnv(cfg *Config) {
 	applyFlag(&cfg.TLS.Key, os.Getenv("HALO_GW_TLS_KEY"))
 	applyFlag(&cfg.Log.Level, os.Getenv("HALO_GW_LOG_LEVEL"))
 	applyFlag(&cfg.Log.Format, os.Getenv("HALO_GW_LOG_FORMAT"))
+	applyFlag(&cfg.Room.Trace, os.Getenv("HALO_GW_TRACE"))
 }
 
 func applyFlag(dst *string, v string) {

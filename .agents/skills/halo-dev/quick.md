@@ -86,8 +86,9 @@
     - No API keys/tokens in source, docs, logs, or fixtures.
 
 12. **Production logging is required.**
-    - Log all process stages with timestamps and context information.
-    - Include error stack traces. Keep logging lightweight.
+    - See the `halo-logging` skill for the full standard: silent failures must
+      log (what/why), long-lived links must self-report state not just
+      events, distributed modules need a one-command diagnostics export.
 
 13. **Chat turn-level features must cover every chat entry point.**
     - Cross-cutting turn behavior (images/attachments, thinking, context injection, message assembly) must live in a shared module under `services/agent/` (the `message-utils.ts` / `image-attachments.ts` pattern); entry points only add thin wiring.

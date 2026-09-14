@@ -101,6 +101,16 @@ const ROSTER_REFRESH_COALESCE_MS = 750
  */
 const LIVENESS_REPROJECT_MS = 2500
 
+/** Cadence of the per-office link health line: readable across a day of logs. */
+const LINK_HEALTH_INTERVAL_MS = 60_000
+
+/**
+ * How long an advertised address stays marked unroutable. Long enough that a
+ * wrong address is not re-dialed every election sweep, short enough that a peer
+ * which was merely offline is reachable again without a restart.
+ */
+const UNREACHABLE_DIRECT_TTL_MS = 5 * 60_000
+
 /**
  * After an office's members all read idle, keep re-projecting for this many extra
  * ticks. The stuck-'working' failure is a TERMINAL-edge loss (the last member
@@ -505,6 +515,12 @@ export interface FederationManager {
    */
   redialToAuthority(officeId: string, authorityNodeId: NodeId): boolean
   /**
+   * Abandon a direct leg to `nodeId` that cannot connect, restoring the route the
+   * office joined over. Called when the dialed transport reports itself
+   * unreachable. Returns false when there was no such leg to abandon.
+   */
+  abandonDirectLeg(officeId: string, nodeId: NodeId, reason: string): boolean
+  /**
    * Re-drive a joined office's join-request to its current authority so a newly
    * elected authority enrolls this survivor (roster re-entry). Called after a
    * redial and on a dialed-leg reconnect. No-op for a host office.
@@ -574,6 +590,11 @@ interface JoinedOffice {
    */
   upstream: { send: WsSender }
   /**
+   * The leg this office JOINED over — the relay session, or the LAN host. Kept so
+   * an unreachable direct leg can be abandoned back to a route known to work.
+   */
+  joinUpstream: WsSender
+  /**
    * nodeId ↔ clientId for PEERS whose frames arrive on this node's own WS
    * server (peer-dialed sessions during/after a host loss; the re-formed star
    * when this node is elected authority). Replies ride the same socket back.
@@ -626,6 +647,10 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   // when the office re-points again or exits, so an abandoned dial never keeps
   // reconnecting to a peer we no longer target.
   const dialedPeers = new Map<string, () => void>()
+  // `${officeId}|${nodeId}` → the advertised address that proved unroutable from
+  // here, and when. Held so the leg is not re-dialed straight back at the same
+  // address; expires so a transient outage still recovers on its own.
+  const unreachableDirect = new Map<string, { address: string; at: number }>()
   // In-memory node address book per JOINED office, learned from the host's
   // roster projection — the fast lookup layer over the persisted office_nodes
   // rows (peer cards are persisted too, presence-untracked, so the book and the
@@ -844,6 +869,71 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     }
   }
 
+  /**
+   * One line per office, per minute: the transport, whether it is up, and how far
+   * each peer is behind on what this node addressed to it.
+   *
+   * A pair of members that cannot hear each other is otherwise indistinguishable
+   * from a quiet office — the roster is green, the board still updates (it is
+   * broadcast), and the sender's own record says "sent". This line separates the
+   * states that matter: channel never established, dead direct leg, transport
+   * down, peer not acknowledging.
+   */
+  /**
+   * Per peer: how far it has acknowledged this node's outbox, how far behind that
+   * leaves it, and how many wakes are unanswered. A peer stuck at 0 while the
+   * backlog grows is a channel that never came up.
+   */
+  function describeDelivery(officeId: string, ctrlFeed: CtrlFeed | undefined): string {
+    if (!ctrlFeed) return 'ctrl-feed unavailable'
+    const self = deps.getLocalNodeId()
+    const parts = deps.federationStore
+      .listNodesByOffice(officeId)
+      .filter((n) => n.nodeId !== self)
+      .map((n) => {
+        const d = ctrlFeed.peerDelivery(n.nodeId)
+        const behind = d.behind > 0 ? `(-${d.behind})` : ''
+        const wakes = d.pendingWakes > 0 ? `(wakes:${d.pendingWakes})` : ''
+        return `${n.displayName ?? n.nodeId}=${d.deliveredUpTo}${behind}${wakes}`
+      })
+    return parts.length > 0 ? parts.join(' ') : 'no peers'
+  }
+
+  function linkHealthTick(): void {
+    for (const [officeId, entry] of joined) {
+      try {
+        const link = entry.client.getHealth()
+        console.log(
+          `${LOG_TAG} health office=${officeId} role=joined via=${dialedPeers.has(officeId) ? 'direct-leg' : 'join-link'}` +
+            ` link=${link.url} ${link.connected ? 'up' : `down(${link.failedAttempts})`}` +
+            ` shed=${link.dropped.control}/${link.dropped.stream}/${link.dropped.artifact}` +
+            ` acked[${describeDelivery(officeId, entry.ctrlFeed)}]`
+        )
+      } catch (err) {
+        console.warn(
+          `${LOG_TAG} health line failed office=${officeId}: ${err instanceof Error ? err.message : String(err)}`
+        )
+      }
+    }
+    for (const [officeId, entry] of hosted) {
+      try {
+        const relay = entry.gateway ? (entry.gateway.isAttached() ? 'attached' : 'detached') : 'off'
+        console.log(
+          `${LOG_TAG} health office=${officeId} role=host relay=${relay}` +
+            ` lanClients=${entry.nodeToClient.size} relayed=${entry.nodeToGateway.size}` +
+            ` acked[${describeDelivery(officeId, entry.ctrlFeed)}]`
+        )
+      } catch (err) {
+        console.warn(
+          `${LOG_TAG} health line failed office=${officeId}: ${err instanceof Error ? err.message : String(err)}`
+        )
+      }
+    }
+  }
+
+  const healthTimer: ReturnType<typeof setInterval> = setInterval(linkHealthTick, LINK_HEALTH_INTERVAL_MS)
+  if (typeof healthTimer.unref === 'function') healthTimer.unref()
+
   const livenessTimer: ReturnType<typeof setInterval> = setInterval(
     livenessReprojectTick,
     LIVENESS_REPROJECT_MS
@@ -976,6 +1066,16 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       officeId,
       selfNodeId: deps.getLocalNodeId(),
       feedStore,
+      // The full office roster minus self — an offline or not-yet-connected
+      // member must still block retention pruning of what it has not acked yet
+      // (see FeedProducer.prune); computing the floor from only who is currently
+      // connected is what let a member joining mid-run land on an already-pruned
+      // gap it could never fill.
+      knownPeers: () =>
+        deps.federationStore
+          .listNodesByOffice(officeId)
+          .map((n) => n.nodeId)
+          .filter((id) => id !== deps.getLocalNodeId()),
       sendToPeer: (peer, frame) => link.send(peer, frame),
       onWake: ({ correlationId, request, from }) =>
         link.deliver(from, { kind: 'wake', officeId, correlationId, request, fromNode: from }),
@@ -1662,7 +1762,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   async function runOrForwardWakeOnHost(
     officeId: string,
     request: SerializedWakeRequest
-  ): Promise<{ finalMessage: string | null }> {
+  ): Promise<{ finalMessage: string | null; undelivered?: { reason: string } }> {
     const self = deps.getLocalNodeId()
     const owner = deps.teamStore.listMembersByTeam(officeId).find((m) => m.appId === request.appId)?.ownerNodeId
     // A host-owned member is stored SELF-relative (SELF sentinel), not under the
@@ -1675,7 +1775,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       return deps.runLocalTurn!(request)
     }
     console.log(`${LOG_TAG} relay wake app=${request.appId} → owner=${owner} office=${officeId} corr=${correlationId}`)
-    return await new Promise<{ finalMessage: string | null }>((resolve) => {
+    return await new Promise<{ finalMessage: string | null; undelivered?: { reason: string } }>((resolve) => {
       let done = false
       let timer: ReturnType<typeof setTimeout>
       const finish = (finalMessage: string | null) => {
@@ -1685,17 +1785,31 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         unregister()
         resolve({ finalMessage })
       }
-      const unregister = registerTurnComplete(correlationId, (outcome) =>
+      // Every ending here that means "no turn ran on the owner" travels as
+      // `undelivered`. Collapsed into an empty reply it reaches the original
+      // sender as an answer, and the failure leaves no trace on any machine.
+      const finishUndelivered = (reason: string) => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        unregister()
+        resolve({ finalMessage: null, undelivered: { reason } })
+      }
+      const unregister = registerTurnComplete(correlationId, (outcome) => {
+        if (outcome.kind === 'undelivered') {
+          finishUndelivered(outcome.reason)
+          return
+        }
         finish(outcome.kind === 'result' ? outcome.content : null)
-      )
+      })
       timer = setTimeout(() => {
         console.warn(`${LOG_TAG} relay wake timed out app=${request.appId} owner=${owner} corr=${correlationId}`)
-        finish(null)
+        finishUndelivered('relay-wake-timeout')
       }, RELAY_WAKE_TIMEOUT_MS)
       const sent = sendWakeToMember({ officeId, ownerNodeId: owner, request, correlationId })
       if (!sent) {
-        console.warn(`${LOG_TAG} relay wake unsent app=${request.appId} owner=${owner}; resolving empty`)
-        finish(null)
+        console.warn(`${LOG_TAG} relay wake unsent app=${request.appId} owner=${owner}; reporting undelivered`)
+        finishUndelivered('owner-unreachable')
       }
     })
   }
@@ -2087,6 +2201,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
         client,
         link,
         upstream: upstreamRef,
+        joinUpstream: (to, frame) => client.send(frame, to),
         peerClients,
         electionLegs,
         authority,
@@ -2240,6 +2355,9 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       if (node.nodeId === self) continue
       if (node.status === 'offline') continue // the dead authority / confirmed peers
       if (join.peerClients.has(node.nodeId) || join.electionLegs.has(node.nodeId)) continue
+      // An address already proven unroutable from here is not worth a socket that
+      // will only queue and shed; the relay carries this office meanwhile.
+      if (directAddressKnownBad(officeId, node.nodeId)) continue
       const dialed = peerDialer(officeId, node.nodeId)
       if (!dialed) continue
       const leg: DialedPeer = typeof dialed === 'function' ? { sender: dialed } : dialed
@@ -2261,6 +2379,13 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
   }
 
   function redialToAuthority(officeId: string, authorityNodeId: NodeId): boolean {
+    if (directAddressKnownBad(officeId, authorityNodeId)) {
+      console.warn(
+        `${LOG_TAG} redial refused: node=${authorityNodeId} already unreachable at its advertised ` +
+          `address office=${officeId}; staying on the joined route`
+      )
+      return false
+    }
     const dialed = peerDialer(officeId, authorityNodeId)
     if (!dialed) {
       console.warn(`${LOG_TAG} redial: no route to authority node=${authorityNodeId} office=${officeId}`)
@@ -2286,6 +2411,69 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     // of the dialed leg re-enrolls via the peer dialer's onReauth.
     reenrollWithAuthority(officeId)
     return true
+  }
+
+  /**
+   * Give up on a direct leg that cannot connect and put the office back on the
+   * route it joined over. Idempotent; a no-op once another path has taken over.
+   *
+   * A direct dial is an optimisation over a working relay, so one that never
+   * completes must not become the office's only outbound path. Left in place it
+   * queues every frame for that office behind an address that has gone stale (a
+   * peer whose machine changed IP) and sheds them on overflow, while the relay
+   * sits idle beside it.
+   */
+  function abandonDirectLeg(officeId: string, nodeId: NodeId, reason: string): boolean {
+    const join = joined.get(officeId)
+    if (!join) return false
+    const upstreamDispose = dialedPeers.get(officeId)
+    const electionLeg = join.electionLegs.get(nodeId)
+    if (!upstreamDispose && !electionLeg) return false
+
+    console.warn(
+      `${LOG_TAG} abandoning direct leg office=${officeId} node=${nodeId} reason=${reason}; ` +
+        `routing this office over the leg it joined on`
+    )
+    // Remember WHICH address failed, so the leg is not immediately re-opened at
+    // the same one, and so a peer that later advertises a different address is
+    // tried again. Forgetting to record this is not merely wasteful: the sweep
+    // that opens election legs re-dials any peer it has no leg for, so dropping
+    // the bookkeeping while the socket lives on produces a second client to the
+    // same dead address, then a third.
+    const address = getNodeAddress(officeId, nodeId)
+    if (address) unreachableDirect.set(`${officeId}|${nodeId}`, { address, at: Date.now() })
+
+    if (electionLeg) {
+      join.electionLegs.delete(nodeId)
+      electionLeg.dispose?.()
+    }
+    if (upstreamDispose) {
+      dialedPeers.delete(officeId)
+      // Restore BEFORE disposing: the office must never sit with no outbound leg.
+      join.upstream.send = join.joinUpstream
+      upstreamDispose()
+      // The authority has no record of this node on the restored route until the
+      // join-request is re-driven — the same reason redialToAuthority re-enrolls.
+      reenrollWithAuthority(officeId)
+    }
+    return true
+  }
+
+  /**
+   * Whether `nodeId`'s currently advertised address is one already proven
+   * unroutable from here, recently. Two escapes, because a permanent block would
+   * be its own outage: a peer that re-advertises a DIFFERENT address is dialed at
+   * once, and the memory expires so an address that was merely down comes back.
+   */
+  function directAddressKnownBad(officeId: string, nodeId: NodeId): boolean {
+    const key = `${officeId}|${nodeId}`
+    const failed = unreachableDirect.get(key)
+    if (!failed) return false
+    if (Date.now() - failed.at >= UNREACHABLE_DIRECT_TTL_MS) {
+      unreachableDirect.delete(key)
+      return false
+    }
+    return failed.address === getNodeAddress(officeId, nodeId)
   }
 
   /**
@@ -2732,6 +2920,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
 
   function stopAll(): void {
     clearInterval(livenessTimer)
+    clearInterval(healthTimer)
     livenessGraceTicks.clear()
     for (const officeId of [...hosted.keys(), ...joined.keys()]) {
       // Shutdown, not an exit: keep every re-join record for next-start recovery.
@@ -2770,6 +2959,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
     fetchArtifact,
     repointLink,
     redialToAuthority,
+    abandonDirectLeg,
     reenrollWithAuthority,
     getNodeAddress,
     deliverInbound,

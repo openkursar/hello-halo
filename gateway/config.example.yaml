@@ -24,7 +24,7 @@ log:
 
 # Protocol limits (spec §9 defaults).
 limits:
-  maxFrameBytes: 1048576   # 1 MiB frame cap; larger frames disconnect the peer
+  maxFrameBytes: 8388608   # 8 MiB frame cap; larger frames disconnect the peer
   connPerIPRate: 10        # new connections per second per client IP
   connPerIPBurst: 20
   sessionFrameRate: 500    # frames per second per authenticated session
@@ -32,6 +32,10 @@ limits:
 room:
   hostRetention: 5m        # keep a room alive waiting for its host to re-attach
   admissionTimeout: 60s    # pending members must be granted within this window
+  # Diagnostic only, empty = off. An office id logs every frame of that office
+  # WITH ITS BODY; "*" does the same for every office. Records carry members'
+  # message text — switch it on for one investigation, then off again.
+  trace: ""
 
 directory:
   ttl: 90s                 # announce entries expire unless refreshed

@@ -6,9 +6,60 @@
  * Path resolution and permission checks happen in the calling layer.
  */
 
-import { readFile, writeFile, appendFile, mkdir, readdir, rename, stat } from 'fs/promises'
+import { readFile, writeFile, appendFile, mkdir, readdir, rename, stat, link, copyFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join, dirname } from 'path'
+
+// ============================================================================
+// Write serialization
+// ============================================================================
+
+/**
+ * One memory file is shared by every execution of the same digital human —
+ * scheduled runs, chat threads, IM threads, team turns — all in this process.
+ * Several of the writes below are read-modify-write, so without serialization
+ * two overlapping executions interleave and the later write silently drops the
+ * earlier one. Tail of the pending chain per absolute path.
+ *
+ * Not covered: the agent's own Read/Edit/Write reach the file through its
+ * sandbox rather than this module, so they cannot be serialized from here.
+ */
+const writeQueues = new Map<string, Promise<void>>()
+
+async function withMemoryFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  const previous = writeQueues.get(filePath) ?? Promise.resolve()
+
+  let release: () => void = () => {}
+  const held = new Promise<void>(resolve => { release = resolve })
+  const queued = previous.then(() => held)
+  writeQueues.set(filePath, queued)
+
+  await previous
+
+  try {
+    return await fn()
+  } finally {
+    release()
+    // Only the last waiter clears the entry, so the map does not grow per file.
+    if (writeQueues.get(filePath) === queued) {
+      writeQueues.delete(filePath)
+    }
+  }
+}
+
+/**
+ * Write-then-rename, so a reader never observes a partially written file.
+ *
+ * The lock keeps two writers in this process off the same temp name; the pid
+ * keeps two Halo instances sharing a machine off it too.
+ */
+async function atomicWrite(filePath: string, content: string): Promise<void> {
+  await ensureDir(dirname(filePath))
+
+  const tmpPath = `${filePath}.${process.pid}.tmp`
+  await writeFile(tmpPath, content, 'utf-8')
+  await rename(tmpPath, filePath)
+}
 
 // ============================================================================
 // Read
@@ -153,13 +204,15 @@ export async function appendToMemoryFile(
   content: string,
   source: string
 ): Promise<void> {
-  await ensureDir(dirname(filePath))
+  await withMemoryFileLock(filePath, async () => {
+    await ensureDir(dirname(filePath))
 
-  const timestamp = new Date().toISOString()
-  const header = `\n<!-- ${timestamp} by ${source} -->\n`
-  const payload = header + content.trimEnd() + '\n'
+    const timestamp = new Date().toISOString()
+    const header = `\n<!-- ${timestamp} by ${source} -->\n`
+    const payload = header + content.trimEnd() + '\n'
 
-  await appendFile(filePath, payload, 'utf-8')
+    await appendFile(filePath, payload, 'utf-8')
+  })
 }
 
 /**
@@ -175,11 +228,81 @@ export async function replaceMemoryFile(
   filePath: string,
   content: string
 ): Promise<void> {
-  await ensureDir(dirname(filePath))
+  await withMemoryFileLock(filePath, () => atomicWrite(filePath, content))
+}
 
-  const tmpPath = filePath + '.tmp'
-  await writeFile(tmpPath, content, 'utf-8')
-  await rename(tmpPath, filePath)
+/**
+ * Open a `# History` entry for a turn that is about to start, so the agent has
+ * a heading to fill in rather than having to place one itself.
+ *
+ * The heading goes directly under the `# History` H1 (newest first), so this is
+ * a read-modify-write, not an append. The file is read inside the lock: a
+ * caller's earlier snapshot may already be stale by the time it gets here, and
+ * writing that back would undo whatever landed in between.
+ *
+ * @param filePath  - Absolute path to memory.md
+ * @param timestamp - Heading timestamp, `YYYY-MM-DD-HHmm`
+ * @param byLabel   - Rendered signature of the writing execution, appended as
+ *                    a trailing `[by: ...]` tag. Omitted when unattributed.
+ */
+export async function insertHistoryHeading(
+  filePath: string,
+  timestamp: string,
+  byLabel?: string
+): Promise<void> {
+  await withMemoryFileLock(filePath, async () => {
+    const heading = byLabel ? `## ${timestamp}  [by: ${byLabel}]` : `## ${timestamp}`
+
+    // A file that exists but holds nothing still needs the whole skeleton:
+    // appending only `# History` would leave a memory.md with no `# now`, which
+    // is the section every reader of this file expects to find.
+    const content = await readMemoryFile(filePath)
+    if (content === null || content.trim() === '') {
+      await atomicWrite(filePath, `# now\n\n## State\n\n# History\n\n${heading}\n`)
+      return
+    }
+
+    // Anchored to the heading line alone. Letting the match run past the line
+    // end moves the insertion point down by whatever blank lines follow, so
+    // every run leaves the gap under `# History` one line taller and the entries
+    // themselves unseparated.
+    const historyMatch = content.match(/^# History[^\S\r\n]*$/m)
+    if (historyMatch && historyMatch.index !== undefined) {
+      const insertPos = historyMatch.index + historyMatch[0].length
+      const rest = content.slice(insertPos).replace(/^\r?\n/, '')
+      await atomicWrite(filePath, `${content.slice(0, insertPos)}\n\n${heading}\n${rest}`)
+    } else {
+      await atomicWrite(filePath, content.trimEnd() + `\n\n# History\n\n${heading}\n`)
+    }
+  })
+}
+
+/**
+ * Move the current memory file into the archive and put `content` in its place,
+ * as one step.
+ *
+ * The summary that becomes `content` takes a minute or more to generate, and the
+ * file must stay readable for all of it: an execution starting meanwhile reads
+ * real memory rather than an empty slot, and its own writes land in the file
+ * that is about to be archived — so they are preserved there rather than lost.
+ * The trade is that such writes are in the archive but not in the summary, which
+ * is why generation reads the file and this call does not.
+ *
+ * @param filePath   - Path to the current memory.md
+ * @param archiveDir - Path to the memory/ archive directory
+ * @param content    - What memory.md holds afterwards
+ * @returns Path to the archived file
+ */
+export async function archiveAndReplaceMemoryFile(
+  filePath: string,
+  archiveDir: string,
+  content: string
+): Promise<string> {
+  return withMemoryFileLock(filePath, async () => {
+    const archivePath = await copyToArchive(filePath, archiveDir)
+    await atomicWrite(filePath, content)
+    return archivePath
+  })
 }
 
 // ============================================================================
@@ -219,22 +342,29 @@ export async function listMemoryFiles(dirPath: string): Promise<string[]> {
 // ============================================================================
 
 /**
- * Archive a memory file by moving it to the archive directory.
+ * Give the current memory file a second name under the archive, WITHOUT
+ * removing it from its own. Caller must hold the file's write lock.
  *
- * @param filePath   - Path to the current memory.md
- * @param archiveDir - Path to the memory/ archive directory
- * @returns Path to the archived file
+ * A move would be the obvious thing and is wrong here. The write lock orders
+ * this module's writers against each other; it does not reach readers, and
+ * `buildMemorySnapshot` reads lock-free at the start of every turn. Between an
+ * unlink and the replacing write there are several awaited syscalls — long
+ * enough, in practice, for most reads landing in that span to see no file at
+ * all. What a reader concludes from that is the damage: the trigger message
+ * tells it no memory exists and to Write one, and that Write does not come
+ * through this module and cannot be stopped. A path that is never absent
+ * cannot be misread that way.
+ *
+ * A hard link keeps both names on one inode, so the archive is the file rather
+ * than a copy of it and cannot be caught half-written. Filesystems that refuse
+ * links fall back to a copy.
  */
-export async function archiveMemoryFile(
-  filePath: string,
-  archiveDir: string
-): Promise<string> {
+async function copyToArchive(filePath: string, archiveDir: string): Promise<string> {
   await ensureDir(archiveDir)
 
   const now = new Date()
   const slug = formatTimestamp(now)
-  const archiveName = `${slug}.md`
-  const archivePath = join(archiveDir, archiveName)
+  const archivePath = join(archiveDir, `${slug}.md`)
 
   // Handle name collision (very unlikely -- same minute)
   let finalPath = archivePath
@@ -243,7 +373,11 @@ export async function archiveMemoryFile(
     finalPath = join(archiveDir, deduped)
   }
 
-  await rename(filePath, finalPath)
+  try {
+    await link(filePath, finalPath)
+  } catch {
+    await copyFile(filePath, finalPath)
+  }
   return finalPath
 }
 

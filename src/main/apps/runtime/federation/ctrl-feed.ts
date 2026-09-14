@@ -62,6 +62,14 @@ export interface CtrlFeedDeps {
   /** A turn-complete addressed to THIS node arrived (resolve the authority waiter). */
   onTurnComplete: (msg: { correlationId: string; outcome: TurnCompletion }) => void
   /**
+   * Every other member of this office, independent of connection state —
+   * forwarded to the feed service's retention pruning so an offline or
+   * not-yet-subscribed member is never treated as caught up (see
+   * `FeedProducer.prune`). Omitting it reproduces the pre-fix behavior (floor
+   * computed from live subscribers only); production wiring always supplies it.
+   */
+  knownPeers?: () => NodeId[]
+  /**
    * A published wake could not be delivered: the target never acked before the
    * give-up deadline. The authority resolves the sender's completion waiter as
    * `undelivered` from this, so "the message never arrived" is known in bounded
@@ -112,6 +120,11 @@ export interface CtrlFeed {
    * reaches its seq; below it the message is still `pending`.
    */
   deliveredUpTo(peer: NodeId): number
+  /**
+   * What `peer` still owes this node, for the office health line. A watermark
+   * stuck at 0 while `behind` grows is a channel that never came up.
+   */
+  peerDelivery(peer: NodeId): { deliveredUpTo: number; behind: number; pendingWakes: number }
   /** Resend to any subscribed peer still behind (called by the timer, or manually). */
   retransmitTick(): void
   /** Begin the retransmit-backstop timer. Idempotent. */
@@ -135,6 +148,10 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
     number,
     { target: NodeId; correlationId: string; deadlineAt: number }
   >()
+
+  // Highest seq authored on this node's own ctrl feed, so the health line can
+  // compute "how far behind" without a store query per peer.
+  let lastAuthoredSeq = 0
 
   /** A wake at `seq` to `target` has reached the target once the target's ack
    *  cursor over our feed covers it. */
@@ -184,16 +201,38 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
     selfNodeId,
     sendToPeer: deps.sendToPeer,
     apply: applyCtrl,
+    knownPeers: deps.knownPeers,
     onTick: sweepOutstanding,
     ...(deps.retransmitIntervalMs !== undefined ? { retransmitIntervalMs: deps.retransmitIntervalMs } : {}),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.genFid ? { genFid: deps.genFid } : {}),
   })
 
+  /**
+   * The addressee of an entry we are about to author must, by definition, be
+   * reachable from this feed — so register it here rather than waiting for a
+   * frame to arrive from it.
+   *
+   * Otherwise the two self-heals deadlock: the writer's heal is driven by INBOUND
+   * traffic from that peer, which never comes because the peer is idle waiting
+   * for the very message sitting in this outbox.
+   */
+  function ensureTargetSubscribed(target: NodeId): void {
+    if (target === selfNodeId) return
+    if (feed.ensurePeerSubscribed(CTRL_KIND, target)) {
+      console.warn(
+        `[CtrlFeed] addressee was not subscribed to our outbox; registered it office=${officeId} ` +
+          `target=${target} deliveredUpTo=${deliveredUpTo(target)}`
+      )
+    }
+  }
+
   function publishWake(target: NodeId, correlationId: string, request: SerializedWakeRequest): { seq: number } {
     const payload: CtrlWakePayload = { target, from: selfNodeId, correlationId, request }
     const entry = feed.appendLocal(CTRL_KIND, ENTRY_WAKE, payload)
     outstandingWakes.set(entry.seq, { target, correlationId, deadlineAt: now() + giveUpMs })
+    lastAuthoredSeq = Math.max(lastAuthoredSeq, entry.seq)
+    ensureTargetSubscribed(target)
     console.log(
       `[CtrlFeed] publish wake office=${officeId} seq=${entry.seq} target=${target} corr=${correlationId} deliveredUpTo=${deliveredUpTo(target)}`
     )
@@ -207,6 +246,8 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
   ): { seq: number } {
     const payload: CtrlTurnCompletePayload = { target, correlationId, outcome }
     const entry = feed.appendLocal(CTRL_KIND, ENTRY_TURN_COMPLETE, payload)
+    lastAuthoredSeq = Math.max(lastAuthoredSeq, entry.seq)
+    ensureTargetSubscribed(target)
     console.log(
       `[CtrlFeed] publish turn-complete office=${officeId} seq=${entry.seq} target=${target} corr=${correlationId} deliveredUpTo=${deliveredUpTo(target)}`
     )
@@ -231,6 +272,18 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
     return feedStore.getPeerCursor(officeId, ownFeedKey, peer)
   }
 
+  function peerDelivery(peer: NodeId): { deliveredUpTo: number; behind: number; pendingWakes: number } {
+    const acked = deliveredUpTo(peer)
+    // Counted against the peer's ack cursor, not against the sweep: a wake stays
+    // in `outstandingWakes` until the next tick retires it, and a health line that
+    // called a delivered wake "pending" for up to one tick would read as a fault.
+    let pendingWakes = 0
+    for (const [seq, o] of outstandingWakes) {
+      if (o.target === peer && !isDelivered(peer, seq)) pendingWakes += 1
+    }
+    return { deliveredUpTo: acked, behind: Math.max(0, lastAuthoredSeq - acked), pendingWakes }
+  }
+
   // Peers whose producer-side self-heal has already been logged (once per peer).
   const loggedEnsured = new Set<NodeId>()
 
@@ -252,6 +305,7 @@ export function createCtrlFeed(deps: CtrlFeedDeps): CtrlFeed {
     handleFrame: (from, frame) => feed.handleInbound(from, frame),
     dropPeer: (peer) => feed.dropPeer(peer),
     deliveredUpTo,
+    peerDelivery,
     retransmitTick: () => feed.retransmitTick(),
     start: () => feed.start(),
     stop: () => feed.stop(),

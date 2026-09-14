@@ -186,6 +186,13 @@ vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
 vi.mock('../../../../src/main/apps/runtime/active-runs', () => ({
   registerActiveRun: vi.fn(),
   unregisterActiveRun: vi.fn(),
+  listActiveRuns: vi.fn(() => []),
+}))
+
+vi.mock('../../../../src/main/apps/runtime/live-instances', () => ({
+  describeSelfInstance: vi.fn(() => ({ id: 'aaaabbbb', kind: 'run', origin: 'schedule', startedAt: 0 })),
+  listLiveInstances: vi.fn(() => []),
+  formatInstanceTag: vi.fn(() => 'schedule#aaaa'),
 }))
 
 // Keep prompt building cheap and side-effect-free.
@@ -302,11 +309,7 @@ function makeCompactionMemory() {
     read: vi.fn().mockResolvedValue(
       '# now\n\n## State | large memory\n\n# History\n\n## 2026-08-29-0900 | older entry\n',
     ),
-    compact: vi.fn().mockResolvedValue({
-      archived: 'memory/run/2026-08-30-1000-run.jsonl',
-      needsSummary: true,
-    }),
-    write: vi.fn().mockResolvedValue(undefined),
+    compact: vi.fn().mockResolvedValue('memory/2026-08-30-1000.md'),
   } as any
 }
 
@@ -530,14 +533,12 @@ describe('executeRun — compaction provider routing (#121)', () => {
     expect(arg.prompt).toContain('compacting the memory file')
 
     // LLM summary written as the new memory.md, not the system fallback.
-    expect(memory.write).toHaveBeenCalledWith(
+    expect(memory.compact).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({
-        mode: 'replace',
-        content: expect.not.stringContaining('Compacted by system'),
-      }),
+      'app',
+      expect.not.stringContaining('Compacted by system'),
     )
-    expect(memory.write.mock.calls[0][1].content).toContain('## State | compacted via one-shot query')
+    expect(memory.compact.mock.calls[0][2]).toContain('## State | compacted via one-shot query')
   })
 
   it('routes delegated sources through the agent SDK query with the routing header', async () => {
@@ -583,7 +584,7 @@ describe('executeRun — compaction provider routing (#121)', () => {
     // key near the subprocess.
     expect(arg.options.env.ANTHROPIC_CUSTOM_HEADERS).toBe('x-halo-backend: encoded-config')
     expect(arg.options.env.ANTHROPIC_API_KEY).toBeUndefined()
-    expect(memory.write.mock.calls[0][1].content).toContain('## State | compacted via one-shot query')
+    expect(memory.compact.mock.calls[0][2]).toContain('## State | compacted via one-shot query')
   })
 
   it('keeps API-key providers on the raw @anthropic-ai/sdk path', async () => {
@@ -602,7 +603,7 @@ describe('executeRun — compaction provider routing (#121)', () => {
 
     expect(agentSdkQuery).not.toHaveBeenCalled()
     expect(anthropicCreateMock).toHaveBeenCalledTimes(1)
-    expect(memory.write.mock.calls[0][1].content).toContain('## State | compacted via one-shot query')
+    expect(memory.compact.mock.calls[0][2]).toContain('## State | compacted via one-shot query')
   })
 
   it('falls back to the system summary when the agent SDK query yields nothing', async () => {
@@ -625,7 +626,7 @@ describe('executeRun — compaction provider routing (#121)', () => {
     })
 
     expect(agentSdkQuery).toHaveBeenCalledTimes(1)
-    expect(memory.write.mock.calls[0][1].content).toContain('Compacted by system')
+    expect(memory.compact.mock.calls[0][2]).toContain('Compacted by system')
   })
 
   it.each([
@@ -660,7 +661,7 @@ describe('executeRun — compaction provider routing (#121)', () => {
 
       expect(agentSdkQuery).not.toHaveBeenCalled()
       expect(anthropicCreateMock).toHaveBeenCalledTimes(1)
-      expect(memory.write.mock.calls[0][1].content).toContain('## State | compacted via one-shot query')
+      expect(memory.compact.mock.calls[0][2]).toContain('## State | compacted via one-shot query')
     },
   )
 })

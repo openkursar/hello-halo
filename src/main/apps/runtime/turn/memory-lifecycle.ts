@@ -6,6 +6,8 @@
 
 import type { MemoryService, MemoryCallerScope } from '../../../platform/memory'
 import { buildMemorySnapshot, type MemorySnapshot } from '../../../platform/memory/snapshot'
+import { insertHistoryHeading } from '../../../platform/memory/file-ops'
+import { getMemoryFilePath } from '../../../platform/memory/paths'
 import type { TriggerContext, AppRunResult } from '../types'
 import { truncateUtf16Safe } from '../text-truncate'
 import { query as agentSdkQuery } from '../../../services/agent/resolved-sdk'
@@ -18,6 +20,12 @@ import type { ResolvedModelCapabilities } from '../../../services/agent/types'
 export interface MemoryPrepareOptions {
   /** Disabled for team turns (many turns per epoch would flood History). Default: true. */
   preInsertHistory?: boolean
+  /**
+   * Rendered tag for the execution opening the entry, stamped on the heading so
+   * a later reader can tell whose entry it is. Omitted leaves the entry
+   * unattributed rather than attributing it to the wrong execution.
+   */
+  byLabel?: string
 }
 
 export interface PreparedMemory {
@@ -29,12 +37,17 @@ export async function prepareMemoryForTurn(
   scope: MemoryCallerScope,
   opts: MemoryPrepareOptions = {}
 ): Promise<PreparedMemory> {
-  const snapshot = await buildMemorySnapshot(scope)
   const runTimestamp = formatRunTimestamp(new Date())
 
+  // Insert first, then snapshot. The agent is told the system already opened a
+  // heading for this turn and to edit its summary into it; a snapshot taken
+  // beforehand is stale by exactly that line, leaving it looking for a heading
+  // the message it was given does not contain.
   if (opts.preInsertHistory !== false) {
-    await preInsertHistoryHeading(snapshot.memoryFilePath, runTimestamp, snapshot.rawContent)
+    await insertHistoryHeading(getMemoryFilePath(scope, 'app'), runTimestamp, opts.byLabel)
   }
+
+  const snapshot = await buildMemorySnapshot(scope)
 
   return { snapshot, runTimestamp }
 }
@@ -164,10 +177,13 @@ const COMPACTION_MAX_TOKENS = 16384
 const COMPACTION_MAX_RETRIES = 2
 
 /**
- * Best-effort: failures are logged, never re-thrown. Exported for team turns,
- * which take this step alone — they inject a snapshot and let memory grow, but
- * write no per-run summary, so compaction is the only thing keeping memory.md
- * from crossing its size ceiling unbounded.
+ * Best-effort: failures are logged, never re-thrown. A failure archives nothing
+ * and leaves memory.md as it was, so the file keeps growing and the next run
+ * tries again.
+ *
+ * Exported for team turns, which take this step alone — they inject a snapshot
+ * and let memory grow, but write no per-run summary, so compaction is the only
+ * thing keeping memory.md from crossing its size ceiling unbounded.
  */
 export async function checkAndCompactMemory(
   memory: MemoryService,
@@ -176,7 +192,24 @@ export async function checkAndCompactMemory(
   runTag: string,
   credsProvider: CompactionCredentialsProvider
 ): Promise<void> {
+  // Inside the try: path resolution throws on a scope with no appId, and every
+  // caller fires this detached, where a throw is an unhandled rejection rather
+  // than the logged failure this function promises.
+  let memoryFilePath: string | undefined
+
   try {
+    memoryFilePath = getMemoryFilePath(scope, 'app')
+
+    // The size check is not a claim on the file, and turns of one digital human
+    // end near each other routinely. Without this, two of them both read "too
+    // large", both spend a full LLM call on the same content, and the second
+    // archives the first's summary as though it were history.
+    if (compactionsInFlight.has(memoryFilePath)) {
+      memoryFilePath = undefined
+      return
+    }
+    compactionsInFlight.add(memoryFilePath)
+
     const needsCompaction = await memory.needsCompaction(scope, 'app')
     if (!needsCompaction) return
 
@@ -188,14 +221,10 @@ export async function checkAndCompactMemory(
       return
     }
 
-    const { archived, needsSummary } = await memory.compact(scope, 'app')
-    if (!needsSummary) {
-      console.log(`[Runtime][${runTag}] Compaction complete, no summary needed`)
-      return
-    }
-
-    console.log(`[Runtime][${runTag}] Memory archived to ${archived}, generating LLM summary...`)
-
+    // Generated before anything is moved, so memory.md stays available to every
+    // other execution for the minutes this takes. Entries they write meanwhile
+    // are not in this summary, but they are in the version it archives.
+    console.log(`[Runtime][${runTag}] Generating LLM summary...`)
     const summary = await generateCompactionSummary(
       currentContent,
       appName,
@@ -204,21 +233,26 @@ export async function checkAndCompactMemory(
       credsProvider
     )
 
-    await memory.write(scope, {
-      scope: 'app',
-      content: summary,
-      mode: 'replace'
-    })
+    const archived = await memory.compact(scope, 'app', summary)
+    if (!archived) {
+      console.log(`[Runtime][${runTag}] Memory file vanished before compaction, skipping`)
+      return
+    }
 
     console.log(
       `[Runtime][${runTag}] Memory compacted: ` +
       `old=${(currentContent.length / 1024).toFixed(1)}KB → ` +
-      `new=${(summary.length / 1024).toFixed(1)}KB`
+      `new=${(summary.length / 1024).toFixed(1)}KB, archived to ${archived}`
     )
   } catch (err) {
     console.error(`[Runtime][${runTag}] Memory compaction failed:`, err)
+  } finally {
+    if (memoryFilePath) compactionsInFlight.delete(memoryFilePath)
   }
 }
+
+/** Memory paths being compacted right now, by the executions in this process. */
+const compactionsInFlight = new Set<string>()
 
 /** Both `# now` and `# History` must exist or downstream functions produce corrupt state. */
 function isValidCompaction(content: string): boolean {
@@ -242,7 +276,7 @@ function buildCompactionPrompt(content: string, appName: string): string {
     `## Errors\n` +
     `(unresolved errors only — drop resolved ones)\n\n` +
     `# History\n\n` +
-    `## YYYY-MM-DD-HHmm | summary\n` +
+    `## YYYY-MM-DD-HHmm | summary  [by: origin#id]\n` +
     `(keep the most recent ~10 entries, drop older ones)\n` +
     '```\n\n' +
     `## Rules\n\n` +
@@ -251,7 +285,19 @@ function buildCompactionPrompt(content: string, appName: string): string {
     `- Aim for roughly 60–120 lines total\n` +
     `- Both \`# now\` and \`# History\` H1 headings are MANDATORY — never omit them\n` +
     `- Preserve the original entity names and data values exactly\n` +
-    `- Older History entries are already archived in memory/run/ files, safe to drop`
+    `- Older History entries are already archived in memory/run/ files, safe to drop\n` +
+    `- \`# now\` is the digital human's SHARED state, written by many concurrent\n` +
+    `  executions. Rewrite it in that voice: keep facts about the world, the\n` +
+    `  entities, the user, and the work; DELETE first-person process and role\n` +
+    `  claims — what someone was doing, what they were waiting on, which team\n` +
+    `  role they held, what they planned next. Delete them even if they look\n` +
+    `  current; they belonged to one execution that has long since ended.\n` +
+    `- Delete any line in \`# now\` that copies team state (task assignments,\n` +
+    `  task status, who is doing what, board findings). That state lives on the\n` +
+    `  team board and is scoped to one conversation — a copy here is stale.\n` +
+    `- \`# History\` headings may end with \`[by: origin#id]\`. Keep it verbatim on\n` +
+    `  every entry you retain. Never invent one for an entry that has none, and\n` +
+    `  never merge two entries that carry different tags into one.`
   )
 }
 
@@ -462,15 +508,15 @@ async function generateCompactionViaRawSdk(
     }
   }
 
-  if (lastOutput.trim().length > 0) {
-    console.warn(
-      `[Runtime][${runTag}] Compaction retries exhausted, ` +
-      `keeping last LLM output (${lastOutput.length} chars)`
-    )
-    return lastOutput
-  }
-
-  console.warn(`[Runtime][${runTag}] LLM returned no usable output, using fallback`)
+  // Anything reaching here failed isValidCompaction on every attempt, so it is
+  // missing `# now`, `# History`, or both. Shipping it would put the whole
+  // timeline under the "Working Memory (# now)" heading of the next injection,
+  // and the compaction after that would find no `# now` to carry forward and
+  // drop the state entirely. The extraction below is cruder but structurally
+  // sound, which is the property the rest of the system reads this file for.
+  console.warn(
+    `[Runtime][${runTag}] Compaction retries exhausted without valid structure, using fallback`
+  )
   return buildFallbackCompactionSummary(content)
 }
 
@@ -547,41 +593,4 @@ export function formatRunTimestamp(date: Date): string {
   const h = date.getHours().toString().padStart(2, '0')
   const min = date.getMinutes().toString().padStart(2, '0')
   return `${y}-${m}-${d}-${h}${min}`
-}
-
-async function preInsertHistoryHeading(
-  memoryFilePath: string,
-  timestamp: string,
-  preReadContent: string | null
-): Promise<void> {
-  const { writeFile, mkdir } = await import('fs/promises')
-  const { dirname } = await import('path')
-  const { existsSync } = await import('fs')
-
-  const dir = dirname(memoryFilePath)
-  if (!existsSync(dir)) {
-    await mkdir(dir, { recursive: true })
-  }
-
-  const heading = `## ${timestamp}`
-
-  if (preReadContent === null) {
-    const skeleton = `# now\n\n## State\n\n# History\n\n${heading}\n`
-    await writeFile(memoryFilePath, skeleton, 'utf-8')
-    return
-  }
-
-  const content = preReadContent
-
-  const historyMatch = content.match(/^# History\s*$/m)
-  if (historyMatch && historyMatch.index !== undefined) {
-    const insertPos = historyMatch.index + historyMatch[0].length
-    const before = content.slice(0, insertPos)
-    const after = content.slice(insertPos)
-    const newContent = before + `\n\n${heading}` + after
-    await writeFile(memoryFilePath, newContent, 'utf-8')
-  } else {
-    const appendContent = content.trimEnd() + `\n\n# History\n\n${heading}\n`
-    await writeFile(memoryFilePath, appendContent, 'utf-8')
-  }
 }

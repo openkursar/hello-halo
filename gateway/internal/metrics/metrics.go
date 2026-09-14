@@ -18,10 +18,12 @@ type Metrics struct {
 	FramesRejectedTotal  atomic.Int64
 	FramesForwardedTotal [3]atomic.Int64 // indexed by wire.Plane
 	FramesDroppedTotal   [3]atomic.Int64
-	AnnouncesTotal       atomic.Int64
-	AnnounceRejectsTotal atomic.Int64
-	EvictionsTotal       atomic.Int64
-	HostTakeoversTotal   atomic.Int64
+	// Host frames addressed to a node the room holds no session for.
+	FramesDroppedNoMemberTotal atomic.Int64
+	AnnouncesTotal             atomic.Int64
+	AnnounceRejectsTotal       atomic.Int64
+	EvictionsTotal             atomic.Int64
+	HostTakeoversTotal         atomic.Int64
 }
 
 func New() *Metrics { return &Metrics{} }
@@ -47,6 +49,7 @@ func (m *Metrics) WritePrometheus(w io.Writer) {
 	counter("halo_gw_announce_rejects_total", "Rejected directory announcements.", m.AnnounceRejectsTotal.Load())
 	counter("halo_gw_evictions_total", "Member sessions evicted by hosts.", m.EvictionsTotal.Load())
 	counter("halo_gw_host_takeovers_total", "Rooms taken over by a different host identity after the retention window.", m.HostTakeoversTotal.Load())
+	counter("halo_gw_frames_dropped_no_member_total", "Host frames addressed to a node with no session in the room.", m.FramesDroppedNoMemberTotal.Load())
 
 	fmt.Fprintf(w, "# HELP halo_gw_frames_forwarded_total Frames forwarded per plane.\n# TYPE halo_gw_frames_forwarded_total counter\n")
 	for i, name := range planeNames {

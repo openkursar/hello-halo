@@ -11,14 +11,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs'
-import { join } from 'path'
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs'
+import { dirname, join } from 'path'
 import { tmpdir } from 'os'
 import type { MemoryCallerScope, MemoryService } from '../../../../src/main/platform/memory'
 import type { TriggerContext } from '../../../../src/main/apps/runtime/types'
 
-// Control buildMemorySnapshot so prepareMemoryForTurn runs against a temp file
-// while preInsertHistoryHeading exercises the real fs writes.
+// The snapshot mock reports the same file the prepare step writes to, so a case
+// can seed content and then read back what the turn inserted.
 let snapshotFilePath = ''
 let snapshotRawContent: string | null = null
 
@@ -63,7 +63,7 @@ function makeMemory(overrides: Partial<MemoryService> = {}): MemoryService {
     saveSessionSummary: vi.fn(async () => {}),
     needsCompaction: vi.fn(async () => false),
     read: vi.fn(async () => ''),
-    compact: vi.fn(async () => ({ archived: 'archive.md', needsSummary: false })),
+    compact: vi.fn(async () => 'archive.md'),
     write: vi.fn(async () => {}),
     ...overrides,
   } as unknown as MemoryService
@@ -93,10 +93,16 @@ describe('formatRunTimestamp', () => {
 
 describe('prepareMemoryForTurn', () => {
   let dir = ''
+  let prepareScope: MemoryCallerScope
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'mem-lifecycle-'))
-    snapshotFilePath = join(dir, 'memory.md')
+    // prepareMemoryForTurn writes through the app's own memory path, so the
+    // temp dir has to be the space the scope points at for the insert to land
+    // in the file these assertions read.
+    snapshotFilePath = join(dir, '.halo', 'apps', 'app-1', 'memory.md')
+    mkdirSync(dirname(snapshotFilePath), { recursive: true })
+    prepareScope = { ...scope, spacePath: dir }
     snapshotRawContent = null
   })
 
@@ -108,7 +114,7 @@ describe('prepareMemoryForTurn', () => {
     snapshotRawContent = '# now\n\n## State\n\n# History\n'
     writeFileSync(snapshotFilePath, snapshotRawContent, 'utf-8')
 
-    const { snapshot, runTimestamp } = await prepareMemoryForTurn(scope)
+    const { snapshot, runTimestamp } = await prepareMemoryForTurn(prepareScope)
 
     expect(snapshot.memoryFilePath).toBe(snapshotFilePath)
     const written = readFileSync(snapshotFilePath, 'utf-8')
@@ -121,7 +127,7 @@ describe('prepareMemoryForTurn', () => {
     snapshotRawContent = '# now\n\n## State\n\n# History\n'
     writeFileSync(snapshotFilePath, snapshotRawContent, 'utf-8')
 
-    await prepareMemoryForTurn(scope, { preInsertHistory: false })
+    await prepareMemoryForTurn(prepareScope, { preInsertHistory: false })
 
     const written = readFileSync(snapshotFilePath, 'utf-8')
     expect(written).toBe(snapshotRawContent) // untouched
@@ -152,14 +158,24 @@ describe('finalizeMemoryAfterTurn', () => {
     expect(memory.compact).not.toHaveBeenCalled()
   })
 
-  it('compacts (archive) but skips LLM/write when compact reports no summary needed', async () => {
+  it('hands the summary to compact in one call, so memory.md is only ever swapped', async () => {
     const memory = makeMemory({
       needsCompaction: vi.fn(async () => true),
-      read: vi.fn(async () => '# now\n\n# History\n'),
-      compact: vi.fn(async () => ({ archived: 'a.md', needsSummary: false })),
+      read: vi.fn(async () => '# now\n\n## State | big\n\n# History\n'),
     })
     await finalizeMemoryAfterTurn(memory, scope, baseCtx(), creds)
+
     expect(memory.compact).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(memory.compact).mock.calls[0][2]).toContain('# now')
     expect(memory.write).not.toHaveBeenCalled()
+  })
+
+  it('leaves memory.md untouched when the file is empty', async () => {
+    const memory = makeMemory({
+      needsCompaction: vi.fn(async () => true),
+      read: vi.fn(async () => ''),
+    })
+    await finalizeMemoryAfterTurn(memory, scope, baseCtx(), creds)
+    expect(memory.compact).not.toHaveBeenCalled()
   })
 })

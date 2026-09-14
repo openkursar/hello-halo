@@ -69,6 +69,16 @@ export interface FeedEntriesFrame {
   upToSeq: number
   /** True when more entries remain beyond this batch (cursor continuation). */
   more: boolean
+  /**
+   * The author's current retention floor for this feed: entries at/below this
+   * seq have been permanently pruned and will never be (re)sent. Optional so an
+   * older peer's frame (no field) is read as 0 (nothing known to be pruned) —
+   * never as a false "everything before this is gone" signal. A consumer whose
+   * cursor sits below this floor knows the gap is not a transient loss (nack
+   * would never fill it) and can jump its cursor to the floor instead of
+   * nacking a range the author can never resend.
+   */
+  truncatedBeforeSeq?: number
 }
 
 /** Consumer → author: cumulative delivery confirmation up to ackedSeq. */

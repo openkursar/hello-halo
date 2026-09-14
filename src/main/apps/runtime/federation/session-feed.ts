@@ -64,6 +64,14 @@ const FINALIZE_PUBLISH_MS = 3000
 const REANNOUNCE_EVERY_TICKS = 6
 /** Transcript messages carried per feed entry batch (entries can be large: thoughts). */
 const SESSION_BATCH_MAX = 16
+/**
+ * Ceiling on ONE published transcript message. A turn with long tool calls yields
+ * a single message whose thought trace runs to megabytes; published whole it
+ * exceeds the relay's per-frame limit, and the durable outbox re-offers it on
+ * every reconnect. Nothing downstream can break that loop, so the bound belongs
+ * here, where the entry is created.
+ */
+const MAX_PUBLISHED_MESSAGE_BYTES = 256 * 1024
 /** Mirror rows read per serve batch. */
 const MIRROR_READ_LIMIT = 10_000
 
@@ -268,6 +276,47 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
     })
   }
 
+  // Sessions already reported as carrying an over-ceiling message, so the warning
+  // is written once per session rather than on every publish sweep.
+  const loggedTrimmed = new Set<string>()
+
+  /**
+   * A published copy of `msg` that fits the wire ceiling. The thought trace is the
+   * part that grows without bound, so it goes first; a viewer seeing less detail
+   * is a cost worth paying for a replica that arrives at all. `seq` and `role` are
+   * untouched — consumers upsert history by message seq, so a trimmed copy must
+   * still read as a revision of the same message.
+   */
+  function fitPublishedMessage(
+    sessionKey: string,
+    msg: SerializedHistoryMessage
+  ): SerializedHistoryMessage {
+    const size = JSON.stringify(msg).length
+    if (size <= MAX_PUBLISHED_MESSAGE_BYTES) return msg
+
+    if (!loggedTrimmed.has(sessionKey)) {
+      loggedTrimmed.add(sessionKey)
+      console.warn(
+        `${LOG_TAG} transcript message too large to replicate: session=${sessionKey} seq=${msg.seq} ` +
+          `bytes=${size} ceiling=${MAX_PUBLISHED_MESSAGE_BYTES}; publishing without its thought trace`
+      )
+    }
+
+    const withoutThoughts: SerializedHistoryMessage = { ...msg }
+    delete withoutThoughts.thoughts
+    delete withoutThoughts.thoughtsSummary
+    if (JSON.stringify(withoutThoughts).length <= MAX_PUBLISHED_MESSAGE_BYTES) return withoutThoughts
+
+    // Still over: the text itself is the bulk. Keep a readable head and say what
+    // was cut, so a replica reads as truncated rather than as a shorter answer.
+    const envelopeBytes = JSON.stringify({ ...withoutThoughts, content: '' }).length
+    const room = Math.max(0, MAX_PUBLISHED_MESSAGE_BYTES - envelopeBytes - 128)
+    return {
+      ...withoutThoughts,
+      content: `${withoutThoughts.content.slice(0, room)}\n\n[truncated for cross-machine replication: ${size} bytes]`,
+    }
+  }
+
   function publishOwnedTail(sessionKey: string): number {
     const parsed = parseTeamSessionKey(sessionKey)
     if (!parsed || parsed.teamId !== officeId) return 0
@@ -297,14 +346,18 @@ export function createSessionFeed(deps: SessionFeedDeps): SessionFeed {
     // history cache by that seq, so every replica converges on the final form.
     if (lastMsg && publishedSeq > 0) {
       const current = publishable.find((m) => m.seq === publishedSeq)
-      if (current && msgFingerprint(current) !== msgFingerprint(lastMsg)) {
-        durableLog.append(feedKey, ENTRY_MSG, current)
+      // Compare the forms that are actually PUBLISHED. Fingerprinting the on-disk
+      // message against a trimmed replica would differ forever, and this branch
+      // would append a revision on every sweep.
+      const currentPublished = current ? fitPublishedMessage(sessionKey, current) : undefined
+      if (currentPublished && msgFingerprint(currentPublished) !== msgFingerprint(lastMsg)) {
+        durableLog.append(feedKey, ENTRY_MSG, currentPublished)
         appended++
       }
     }
     for (const msg of publishable) {
       if (msg.seq <= publishedSeq) continue
-      durableLog.append(feedKey, ENTRY_MSG, msg)
+      durableLog.append(feedKey, ENTRY_MSG, fitPublishedMessage(sessionKey, msg))
       appended++
     }
     if (appended > 0) {

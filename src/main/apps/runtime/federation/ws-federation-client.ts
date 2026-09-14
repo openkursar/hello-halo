@@ -93,6 +93,30 @@ export interface WsFederationClientDeps {
    * gets a catch-up, instead of relying on bare heartbeats the host now drops.
    */
   onReauth?: () => void
+  /**
+   * Fired once when this link has failed to establish for `attempts` consecutive
+   * tries — the address is not merely flaky, it is wrong or unroutable from here.
+   * Advice, not a stop: retrying continues, and the consumer decides whether to
+   * route elsewhere. A leg that can never connect is not harmless — every frame
+   * addressed to it queues, overflows, and is shed where no layer above can see.
+   */
+  onUnreachable?: (attempts: number) => void
+}
+
+/** Consecutive failed connects after which a link is reported as unreachable. */
+const UNREACHABLE_AFTER_ATTEMPTS = 5
+
+/** Minimum gap between shed-frame warnings per plane, so a dead link cannot flood the log. */
+const DROP_LOG_INTERVAL_MS = 30_000
+
+/** What a link can report about itself, for the office-level health line. */
+export interface WsLinkHealth {
+  url: string
+  connected: boolean
+  /** Consecutive failed connect attempts; 0 once connected. */
+  failedAttempts: number
+  /** Frames shed by queue overflow since this client was created, by plane. */
+  dropped: Record<FramePlane, number>
 }
 
 /**
@@ -119,6 +143,12 @@ export class WsFederationClient {
     stream: [],
     artifact: [],
   }
+  // Frames shed by overflow, and when each plane last reported it. Counted rather
+  // than logged per frame: a link that cannot connect sheds one every couple of
+  // seconds, and a per-frame line buries the fact that thousands are gone.
+  private readonly dropped: Record<FramePlane, number> = { control: 0, stream: 0, artifact: 0 }
+  private readonly lastDropLogAt: Record<FramePlane, number> = { control: 0, stream: 0, artifact: 0 }
+  private unreachableReported = false
 
   constructor(private readonly deps: WsFederationClientDeps) {
     // Accept http(s) or ws(s); normalize to a ws(s) /ws endpoint.
@@ -146,9 +176,39 @@ export class WsFederationClient {
       // Overflow sheds within the SAME plane only — a full artifact queue never
       // evicts a queued control frame. Drop oldest of this plane.
       queue.shift()
-      console.warn(`${LOG_TAG} ${plane} queue full; dropped oldest ${plane} frame url=${this.wsUrl}`)
+      this.dropped[plane] += 1
+      this.reportDropped(plane)
     }
     queue.push({ frame, to: to ?? null })
+  }
+
+  /**
+   * Say that frames are being lost, at a bounded rate, and say WHY: a shed frame
+   * on a link that never connected is a dead address, not congestion, and the two
+   * call for opposite responses. The count is cumulative because the magnitude is
+   * the signal — a handful is a hiccup, thousands is a channel eating traffic.
+   */
+  private reportDropped(plane: FramePlane): void {
+    const now = Date.now()
+    if (now - this.lastDropLogAt[plane] < DROP_LOG_INTERVAL_MS) return
+    this.lastDropLogAt[plane] = now
+    const why = this.authed
+      ? 'link is authed but the queue is not draining'
+      : `link has never carried a frame since its last connect (failed attempts=${this.reconnectAttempt})`
+    console.warn(
+      `${LOG_TAG} ${plane} queue full; shedding frames url=${this.wsUrl} ` +
+        `droppedTotal=${this.dropped[plane]} — ${why}`
+    )
+  }
+
+  /** Connection state and cumulative losses, for the office-level health line. */
+  getHealth(): WsLinkHealth {
+    return {
+      url: this.wsUrl,
+      connected: this.authed && this.socket?.readyState === WebSocket.OPEN,
+      failedAttempts: this.authed ? 0 : this.reconnectAttempt,
+      dropped: { ...this.dropped },
+    }
   }
 
   /** Stop reconnecting and close the socket. Idempotent. */
@@ -268,6 +328,8 @@ export class WsFederationClient {
         this.authed = true
         this.hasAuthedEver = true
         this.reconnectAttempt = 0
+        // The address works again; a later outage must be able to announce itself.
+        this.unreachableReported = false
         this.setState('open')
         console.log(`${LOG_TAG} authenticated url=${this.wsUrl}${isReauth ? ' (reconnect)' : ''}`)
         this.flushOutbound()
@@ -317,6 +379,17 @@ export class WsFederationClient {
       BACKOFF_MAX_MS
     )
     console.log(`${LOG_TAG} reconnecting in ${delay}ms url=${this.wsUrl} attempt=${this.reconnectAttempt}`)
+    // Announced once, and only after enough tries to rule out a transient drop.
+    // Retrying continues regardless: the address may come back, and the consumer
+    // may have nowhere better to send. What must not continue is the SILENCE.
+    if (!this.unreachableReported && this.reconnectAttempt >= UNREACHABLE_AFTER_ATTEMPTS) {
+      this.unreachableReported = true
+      console.warn(
+        `${LOG_TAG} unreachable after ${this.reconnectAttempt} attempts url=${this.wsUrl}; ` +
+          `anything addressed here is queueing and will be shed`
+      )
+      this.deps.onUnreachable?.(this.reconnectAttempt)
+    }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       this.connect()

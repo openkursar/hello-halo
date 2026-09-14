@@ -16,7 +16,9 @@ import type { AutomationSpec } from '../spec'
 import type { MemorySnapshot } from '../../platform/memory/snapshot'
 import type { EscalationResponse } from './types'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
+import type { LiveInstance } from './live-instances'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
+import { describeInstanceKind, formatInstanceTag } from './live-instances'
 import { buildSystemPrompt, buildSystemPromptWithAIBrowser } from '../../services/agent/system-prompt'
 import { AI_BROWSER_SYSTEM_PROMPT } from '../../services/ai-browser'
 import { AI_TERMINAL_SYSTEM_PROMPT } from '../../services/ai-terminal'
@@ -350,6 +352,8 @@ export function buildInitialMessage(options: {
   userConfig?: Record<string, unknown>
   appName: string
   memorySnapshot: MemorySnapshot
+  selfInstance: LiveInstance
+  liveInstances: LiveInstance[]
 }): string {
   const parts: string[] = []
 
@@ -358,6 +362,7 @@ export function buildInitialMessage(options: {
 
   // ── Memory ─────────────────────────────────────────────────────────────
   parts.push(buildMemorySection(options.memorySnapshot))
+  parts.push(buildLiveInstancesSection(options.selfInstance, options.liveInstances))
 
   // ── User Configuration ─────────────────────────────────────────────────
   if (options.userConfig && Object.keys(options.userConfig).length > 0) {
@@ -405,6 +410,65 @@ export function buildEscalationResumeMessage(escalation: {
 // ============================================
 
 /**
+ * Sits immediately above the injected memory. One digital human, many
+ * concurrent executions, one first-person file: without this, a line another
+ * instance wrote about itself reads as a description of the reader.
+ */
+const MEMORY_AUTHORSHIP_FRAMING = `
+This is the shared working state of the digital human (the AI agent you are
+running as), written over time by many
+instances — including ones that are running right now. It is written in the
+first person, but "I" is the digital human, not you. A line here that claims
+a role, an assignment, or work in progress was written by whoever was doing
+it, and may be from another instance, another conversation, or another day.
+
+Do not act on such a line as if it described you. If it matters for what you
+are about to do, verify it at its live source first — the team board, the
+files, the user in front of you — and if it turns out to be stale, correct
+the line.
+`.trim()
+
+/**
+ * Who this execution is, and who else is executing at the same moment. Rendered
+ * directly below the memory block so the reader meets the roster in the same
+ * breath as the file it explains.
+ *
+ * Never persisted: it is true only at the moment the message was built.
+ */
+export function buildLiveInstancesSection(self: LiveInstance, others: LiveInstance[]): string {
+  const asOf = formatClockTime(Date.now())
+  const lines: string[] = [
+    `You are \`${formatInstanceTag(self)}\` — this ${describeInstanceKind(self)}. ` +
+    `Anything in memory not written by you was written by another instance.`,
+    '',
+  ]
+
+  if (others.length === 0) {
+    lines.push(`No other instance of this digital human is running right now (as of ${asOf}).`)
+    return lines.join('\n')
+  }
+
+  lines.push(`### Running right now (as of ${asOf})`)
+  lines.push('')
+  for (const other of others) {
+    const started = other.startedAt ? `, started ${formatClockTime(other.startedAt)}` : ''
+    lines.push(`- ${formatInstanceTag(other)} — ${describeInstanceKind(other)}${started}`)
+  }
+  lines.push('')
+  lines.push(
+    'This was true when this message was built and may already be out of date;\n' +
+    'one of them may have finished by now. It tells you whose work you might be\n' +
+    'reading in memory. It is not a queue, a lock, or a way to reach them.'
+  )
+  return lines.join('\n')
+}
+
+function formatClockTime(epochMs: number): string {
+  const d = new Date(epochMs)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+/**
  * Build the ## Memory section for the initial message.
  *
  * Three variants based on memory state:
@@ -422,6 +486,13 @@ export function buildMemorySection(snapshot: MemorySnapshot): string {
   lines.push('')
   lines.push('Your persistent memory from previous work. Read it to maintain continuity and avoid repeating work.')
   lines.push('')
+
+  // Only where there is content to misread: a digital human with no memory yet
+  // has no first-person line to mistake for its own.
+  if (snapshot.exists) {
+    lines.push(MEMORY_AUTHORSHIP_FRAMING)
+    lines.push('')
+  }
 
   if (!snapshot.exists) {
     // ── No memory file ─────────────────────────────────────────────────

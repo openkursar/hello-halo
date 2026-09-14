@@ -107,8 +107,14 @@ export interface FederationCoordinatorDeps {
   /**
    * Owner role: run a brought member's turn locally when a wake arrives. Set only
    * on the node that owns the member; a non-owner that receives a wake logs+drops.
+   *
+   * `undelivered` says no turn ran anywhere — the host forwarded this wake to a
+   * third node and it never arrived. It must stay distinguishable from a turn
+   * that ran and produced nothing, or the original sender is told it was answered.
    */
-  onWake?: (request: SerializedWakeRequest) => Promise<{ finalMessage: string | null }>
+  onWake?: (
+    request: SerializedWakeRequest
+  ) => Promise<{ finalMessage: string | null; undelivered?: { reason: string } }>
   /**
    * Authority role: a remote turn finished. Set only on the authority node so the
    * pending wait keyed by correlationId resolves; elsewhere logs+drops.
@@ -834,7 +840,14 @@ export function createFederationCoordinator(
     console.log(`${LOG_TAG} wake received office=${officeId} app=${msg.request.appId} corr=${corr}`)
     inFlightWakes.add(corr)
     void onWake(msg.request)
-      .then((res): TurnCompletion => ({ kind: 'result', content: res.finalMessage ?? '' }))
+      // A relayed wake that never reached its owner is not a turn that ran and
+      // said nothing: reporting it as a result told the original sender it had
+      // been answered, and the failure left no trace on any machine.
+      .then((res): TurnCompletion =>
+        res.undelivered
+          ? { kind: 'undelivered', reason: res.undelivered.reason }
+          : { kind: 'result', content: res.finalMessage ?? '' }
+      )
       .catch((err): TurnCompletion => ({
         kind: 'error',
         message: err instanceof Error ? err.message : String(err),

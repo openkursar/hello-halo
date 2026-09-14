@@ -16,7 +16,7 @@ func TestDefaults(t *testing.T) {
 	if cfg.Mode != ModeRelay || cfg.Listen != ":3100" {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
-	if cfg.Limits.MaxFrameBytes != 1<<20 || cfg.Limits.SessionFrameRate != 500 {
+	if cfg.Limits.MaxFrameBytes != 8<<20 || cfg.Limits.SessionFrameRate != 500 {
 		t.Fatalf("unexpected limit defaults: %+v", cfg.Limits)
 	}
 	if cfg.Room.HostRetention != 5*time.Minute || cfg.Room.AdmissionTimeout != 60*time.Second {

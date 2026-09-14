@@ -79,6 +79,18 @@ vi.mock('electron', () => {
   }
 })
 
+// Externalized packages load in Node, so the electron mock above cannot cover
+// their own `import { ... } from 'electron'` — this wrapper's ESM entry requests
+// BrowserWindow and friends, which the real CommonJS electron cannot provide.
+vi.mock('@electron-toolkit/utils', () => ({
+  is: {
+    dev: false,
+    macOS: process.platform === 'darwin',
+    windows: process.platform === 'win32',
+    linux: process.platform === 'linux'
+  }
+}))
+
 // Set up test data directory before each test
 beforeEach(() => {
   // Create fresh unique test directory for this test

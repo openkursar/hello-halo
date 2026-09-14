@@ -36,13 +36,16 @@ interface Harness {
   failApplyForSeq: (seq: number | null) => void
   /** Drop the next N consumer→producer feed-subscribe frames (simulate lost subscribe). */
   dropNextSubscribes: (n: number) => void
+  /** Every entries frame the producer put on the wire, in order. */
+  framesSent: FeedEntriesFrame[]
 }
 
-function makeHarness(batchMax = 64, pendingMax?: number): Harness {
+function makeHarness(batchMax = 64, pendingMax?: number, maxBatchBytes?: number): Harness {
   const feed: FeedEntry[] = []
   const peerCursors = new Map<string, number>()
   const localCursor = new Map<string, number>()
   const applied: FeedEntry[] = []
+  const framesSent: FeedEntriesFrame[] = []
   let dropPred: ((f: FeedEntriesFrame) => boolean) | null = null
   let dropSubscribes = 0
   let failSeq: number | null = null
@@ -52,11 +55,13 @@ function makeHarness(batchMax = 64, pendingMax?: number): Harness {
   const producer = createFeedProducer({
     officeId: OFFICE,
     batchMax,
+    ...(maxBatchBytes !== undefined ? { maxBatchBytes } : {}),
     read: (_feedKey, after, limit) => feed.filter((e) => e.seq > after).slice(0, limit),
     latestSeq: () => (feed.length ? feed[feed.length - 1].seq : 0),
     getPeerCursor: (feedKey, peer) => peerCursors.get(key(feedKey, peer)) ?? 0,
     setPeerCursor: (feedKey, peer, seq) => peerCursors.set(key(feedKey, peer), seq),
     send: (_peer, frame) => {
+      framesSent.push(frame)
       if (dropPred && dropPred(frame)) {
         dropPred = null // one-shot drop
         return
@@ -114,6 +119,7 @@ function makeHarness(batchMax = 64, pendingMax?: number): Harness {
     dropNextSubscribes: (n) => {
       dropSubscribes = n
     },
+    framesSent,
   }
 }
 
@@ -345,19 +351,225 @@ describe('feed sync — lost-subscribe self-heal', () => {
     expect(h.consumer.resubscribeStale()).toEqual([])
   })
 
-  it('resubscribeStale gives up after the attempt budget for a genuinely empty feed', () => {
+  it('resubscribeStale keeps re-driving forever, backing off rather than giving up', () => {
     const h = makeHarness()
-    // A subscribed feed the author has never written to yields no batch. The
-    // consumer must not re-ask forever — the budget bounds it.
-    h.dropNextSubscribes(1) // lose the initial subscribe so we enter the re-drive path
+    // A subscribe the author never registers yields no batch, ever. The old
+    // design spent a 6-attempt budget and then went quiet — which is what turned
+    // one lost frame into a channel that stayed dead for the life of the process.
+    h.dropNextSubscribes(500)
     h.consumer.subscribe(FEED)
-    let redriveTicks = 0
-    for (let i = 0; i < 20; i++) {
-      if (h.consumer.resubscribeStale().length === 0) break
-      redriveTicks += 1
+
+    let redrives = 0
+    for (let tick = 0; tick < 200; tick++) {
+      redrives += h.consumer.resubscribeStale().length
     }
-    // Bounded: RESUBSCRIBE_MAX_ATTEMPTS (6) re-drives, then it stops.
-    expect(redriveTicks).toBe(6)
+    // Still asking after far more ticks than the old budget allowed…
+    expect(redrives).toBeGreaterThan(6)
+    // …and at a rate that has backed off well below one per tick, so a feed that
+    // is simply silent is not polled.
+    expect(redrives).toBeLessThan(40)
+  })
+
+  it('reports how many attempts have gone unanswered, so a stuck channel is nameable', () => {
+    const h = makeHarness()
+    h.dropNextSubscribes(500)
+    h.consumer.subscribe(FEED)
+
+    const attempts: number[] = []
+    for (let tick = 0; tick < 10; tick++) {
+      for (const r of h.consumer.resubscribeStale()) attempts.push(r.attempts)
+    }
+    expect(attempts).toEqual([1, 2, 3, 4, 5, 6])
+  })
+
+  it('stops re-driving as soon as the author answers', () => {
+    const h = makeHarness()
+    h.appendAuthor({ n: 1 })
+    h.dropNextSubscribes(2)
+    h.consumer.subscribe(FEED)
+    expect(h.applied).toHaveLength(0)
+
+    h.consumer.resubscribeStale() // lost
+    h.consumer.resubscribeStale() // gets through → producer registers and pushes
+    expect(h.applied.map((e) => e.seq)).toEqual([1])
     expect(h.consumer.resubscribeStale()).toEqual([])
+  })
+})
+
+describe('feed sync — batches are bounded by bytes, not just by count', () => {
+  it('splits a batch that would exceed the wire ceiling', () => {
+    // Four entries of ~1 KB each with a 2.5 KB ceiling: the count bound (64)
+    // would have sent all four in one frame.
+    const h = makeHarness(64, undefined, 2560)
+    const body = 'x'.repeat(1000)
+    for (let i = 0; i < 4; i++) h.seedFeedOnly({ body })
+    h.consumer.subscribe(FEED)
+
+    // Several frames rather than one, each under the ceiling…
+    expect(h.framesSent.length).toBeGreaterThan(1)
+    for (const frame of h.framesSent) {
+      expect(JSON.stringify(frame.entries).length).toBeLessThanOrEqual(2560)
+    }
+    // …and nothing is lost: the stream is paced, not truncated.
+    expect(h.applied.map((e) => e.seq)).toEqual([1, 2, 3, 4])
+  })
+
+  it('still sends a single entry that is itself over the ceiling, rather than stalling the feed', () => {
+    const h = makeHarness(64, undefined, 512)
+    h.seedFeedOnly({ body: 'x'.repeat(4000) })
+    h.seedFeedOnly({ body: 'small' })
+    h.consumer.subscribe(FEED)
+
+    // The oversized head moves on its own, and the feed behind it drains.
+    for (let tick = 0; tick < 10; tick++) h.producer.retransmitTick()
+    expect(h.applied.map((e) => e.seq)).toEqual([1, 2])
+  })
+})
+
+describe('feed sync — retention floor respects known-but-offline peers', () => {
+  // Regression for the production incident: a member joined an office ~23
+  // minutes after another member had already caught up. The producer's prune
+  // computed its floor from only the CURRENTLY SUBSCRIBED peers, so the late
+  // joiner's un-acked prefix was deleted before it ever asked for it — a
+  // permanent, unfillable gap from the moment it subscribed.
+
+  function makeProducer(opts: {
+    feed: FeedEntry[]
+    peerCursors: Map<string, number>
+    knownPeers?: () => string[]
+  }): FeedProducer {
+    return createFeedProducer({
+      officeId: OFFICE,
+      read: (_feedKey, after, limit) => opts.feed.filter((e) => e.seq > after).slice(0, limit),
+      latestSeq: () => (opts.feed.length ? opts.feed[opts.feed.length - 1].seq : 0),
+      send: () => {},
+      getPeerCursor: (_feedKey, peer) => opts.peerCursors.get(peer) ?? 0,
+      setPeerCursor: (_feedKey, peer, seq) => opts.peerCursors.set(peer, seq),
+      ...(opts.knownPeers ? { knownPeers: opts.knownPeers } : {}),
+    })
+  }
+
+  it('BEFORE the fix (no knownPeers): prunes below a peer that has not subscribed yet', () => {
+    const feed: FeedEntry[] = []
+    for (let i = 1; i <= 4; i++) {
+      feed.push({ seq: i, hlc: String(i).padStart(16, '0'), fid: `f${i}`, type: 'msg', payload: { n: i }, ts: i })
+    }
+    const peerCursors = new Map<string, number>()
+    const producer = makeProducer({ feed, peerCursors }) // no knownPeers — old behavior
+    producer.onSubscribe('fast-peer', FEED, 0)
+    producer.onAck('fast-peer', FEED, 4) // fast-peer is fully caught up
+
+    const truncatedTo: number[] = []
+    producer.prune((_feedKey, floor) => truncatedTo.push(floor))
+    // Floor computed from the online set alone: fast-peer's watermark (4) —
+    // exactly the defect. A member that has not subscribed yet is invisible.
+    expect(truncatedTo).toEqual([4])
+  })
+
+  it('AFTER the fix: a known-but-unsubscribed peer blocks the prune until it catches up', () => {
+    const feed: FeedEntry[] = []
+    for (let i = 1; i <= 4; i++) {
+      feed.push({ seq: i, hlc: String(i).padStart(16, '0'), fid: `f${i}`, type: 'msg', payload: { n: i }, ts: i })
+    }
+    const peerCursors = new Map<string, number>()
+    const producer = makeProducer({
+      feed,
+      peerCursors,
+      knownPeers: () => ['fast-peer', 'late-peer'],
+    })
+    producer.onSubscribe('fast-peer', FEED, 0)
+    producer.onAck('fast-peer', FEED, 4) // fast-peer is fully caught up
+    // late-peer is a known office member but has never subscribed — its
+    // persisted cursor defaults to 0, so it must still gate the floor.
+
+    const truncatedTo: number[] = []
+    producer.prune((_feedKey, floor) => truncatedTo.push(floor))
+    expect(truncatedTo).toEqual([]) // nothing pruned: late-peer would lose 1..4
+
+    // Once late-peer actually subscribes and catches up, pruning proceeds.
+    producer.onSubscribe('late-peer', FEED, 0)
+    producer.onAck('late-peer', FEED, 4)
+    producer.prune((_feedKey, floor) => truncatedTo.push(floor))
+    expect(truncatedTo).toEqual([4])
+  })
+})
+
+describe('feed sync — self-heal past a permanently discarded prefix', () => {
+  // Regression for the production incident's permanent deadlock: once a
+  // consumer's needed prefix is pruned, no nack or retransmit can ever produce
+  // it again. Without knowing that, the consumer nacked the same dead range
+  // forever while the producer kept re-offering only its live tail — a
+  // 100%-reproducible, unrecoverable stall (restart/reinstall did not help,
+  // because the gap lives in already-deleted data, not in process state).
+
+  it('a fresh consumer skips a discarded prefix instead of nacking it forever', () => {
+    // The author's store already has 1..4 pruned (as prune() would leave it);
+    // only 5 and 6 remain, and truncatedBeforeSeq=4 records the floor.
+    const feed: FeedEntry[] = [5, 6].map((seq) => ({
+      seq, hlc: String(seq).padStart(16, '0'), fid: `f${seq}`, type: 'msg', payload: { n: seq }, ts: seq,
+    }))
+    const peerCursors = new Map<string, number>()
+    const localCursor = new Map<string, number>()
+    const applied: FeedEntry[] = []
+
+    const producer: FeedProducer = createFeedProducer({
+      officeId: OFFICE,
+      read: (_feedKey, after, limit) => feed.filter((e) => e.seq > after).slice(0, limit),
+      latestSeq: () => 6,
+      send: (_peer, frame) => consumer.onEntries(frame),
+      getPeerCursor: (_feedKey, peer) => peerCursors.get(peer) ?? 0,
+      setPeerCursor: (_feedKey, peer, seq) => peerCursors.set(peer, seq),
+      truncatedBeforeSeq: () => 4,
+    })
+    const consumer: FeedConsumer = createFeedConsumer({
+      officeId: OFFICE,
+      getLocalCursor: (feedKey) => localCursor.get(feedKey) ?? 0,
+      setLocalCursor: (feedKey, seq) => localCursor.set(feedKey, seq),
+      apply: (_feedKey, entry) => applied.push(entry),
+      send: (frame) => {
+        if (frame.kind === 'feed-subscribe') producer.onSubscribe(READER, frame.feedKey, frame.afterSeq)
+        else if (frame.kind === 'feed-ack') producer.onAck(READER, frame.feedKey, frame.ackedSeq)
+        else if (frame.kind === 'feed-nack') producer.onNack(READER, frame.feedKey, frame.missing)
+      },
+    })
+
+    consumer.subscribe(FEED) // declares afterSeq=0; 1..4 no longer exist anywhere
+    // No nack loop, no stall: the cursor jumps to the floor and 5/6 apply.
+    expect(applied.map((e) => e.seq)).toEqual([5, 6])
+    expect(localCursor.get(FEED)).toBe(6)
+  })
+
+  it('onNack tells the peer explicitly when the requested range no longer exists', () => {
+    const sent: FeedEntriesFrame[] = []
+    const feed: FeedEntry[] = [
+      { seq: 5, hlc: '5'.padStart(16, '0'), fid: 'f5', type: 'msg', payload: {}, ts: 5 },
+    ]
+    const producer = createFeedProducer({
+      officeId: OFFICE,
+      read: (_feedKey, after, limit) => feed.filter((e) => e.seq > after).slice(0, limit),
+      latestSeq: () => 5,
+      send: (_peer, frame) => sent.push(frame),
+      getPeerCursor: () => 0,
+      setPeerCursor: () => {},
+      truncatedBeforeSeq: () => 4,
+    })
+    producer.onNack(READER, FEED, [{ from: 1, to: 4 }])
+    expect(sent).toEqual([
+      { kind: 'feed-entries', officeId: OFFICE, feedKey: FEED, entries: [], upToSeq: 5, more: true, truncatedBeforeSeq: 4 },
+    ])
+  })
+
+  it('onNack stays silent for a range that is missing but not (yet) pruned', () => {
+    const sent: FeedEntriesFrame[] = []
+    const producer = createFeedProducer({
+      officeId: OFFICE,
+      read: () => [],
+      latestSeq: () => 0,
+      send: (_peer, frame) => sent.push(frame),
+      getPeerCursor: () => 0,
+      setPeerCursor: () => {},
+    })
+    producer.onNack(READER, FEED, [{ from: 1, to: 4 }])
+    expect(sent).toEqual([]) // nothing pruned yet — the old silent-wait behavior stands
   })
 })

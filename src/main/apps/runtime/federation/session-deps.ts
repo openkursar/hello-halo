@@ -159,9 +159,22 @@ export function makeLocationAwareSessionDeps(
           unregister()
           resolve({ finalMessage: null, undelivered: { reason } })
         }
-        const unregister = registerTurnComplete(correlationId, (outcome) =>
+        // A completion that says the wake never arrived is NOT a completion. The
+        // owner's node never ran a turn, so routing it through `finishCompleted`
+        // handed the sender an empty reply that reads as "they answered nothing" —
+        // the board then recorded the message as delivered and nothing anywhere
+        // reported the failure.
+        const unregister = registerTurnComplete(correlationId, (outcome) => {
+          if (outcome.kind === 'undelivered') {
+            console.warn(
+              `${LOG_TAG} wake reported undelivered app=${request.appId} owner=${owner} ` +
+                `corr=${correlationId} reason=${outcome.reason}`
+            )
+            finishUndelivered(outcome.reason)
+            return
+          }
           finishCompleted(finalMessageFor(outcome))
-        )
+        })
         // Long last-resort backstop: a turn may legitimately run up to the run's max
         // duration, so this must NOT be shortened to minutes (that would truncate a
         // live long turn into a false timeout). It only reclaims the pathological

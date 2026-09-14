@@ -17,6 +17,7 @@
  */
 
 import type { SessionWriter } from './session-store'
+import type { TriggerType } from './types'
 
 /** A live, injectable automation run. */
 export interface ActiveRunHandle {
@@ -26,6 +27,10 @@ export interface ActiveRunHandle {
   appId: string
   /** Space the app belongs to. */
   spaceId: string
+  /** What started the run. */
+  triggerType: TriggerType
+  /** Epoch ms the run began. */
+  startedAt: number
   /** The run's V2 SDK session. Only `send` is required for injection. */
   session: { send: (message: string) => void }
   /** JSONL writer for the run transcript (absent when no space path resolved). */
@@ -53,6 +58,11 @@ export function getActiveRun(runId: string): ActiveRunHandle | undefined {
 /** Whether a run is currently live + injectable. */
 export function isRunActive(runId: string): boolean {
   return activeRuns.has(runId)
+}
+
+/** Every live run of one app. */
+export function listActiveRuns(appId: string): ActiveRunHandle[] {
+  return Array.from(activeRuns.values()).filter((r) => r.appId === appId)
 }
 
 /**

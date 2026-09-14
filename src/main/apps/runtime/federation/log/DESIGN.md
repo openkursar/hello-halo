@@ -56,11 +56,23 @@ Persistence lives one tier down in `apps/federation` (`FeedStore` +
 - **Ordered apply**: the consumer applies strictly from `cursor+1`; a throwing
   `apply` defers the rest (the entry stays buffered and retries).
 - **Bounded retention**: on each tick the producer prunes every served feed below
-  the *lowest* delivery watermark across its live subscribers (`FeedProducer.prune`
-  → `DurableFeedLog.truncate`). It never trims below a subscriber's cursor, so a
-  lagging peer is never left with an unfillable gap; seq allocation is anchored to
-  the retention floor, so a fully-pruned feed never reuses seq 1. A fully-acked
+  the *lowest* delivery watermark across its live subscribers UNION every other
+  known peer (`FeedProducer.prune` → `DurableFeedLog.truncate`, floor folded in
+  from the injected `knownPeers`). Known-but-not-currently-subscribed peers must
+  count: a member that is merely offline, or has not subscribed yet, has an unset
+  (zero) cursor until it does, and computing the floor from only who happens to
+  be connected right now prunes data such a member still needs — permanently,
+  since a fully-pruned prefix cannot come back. Seq allocation is anchored to the
+  retention floor, so a fully-pruned feed never reuses seq 1. A fully-acked
   outbox shrinks — no unbounded `feed_log` growth.
+  Even with a correct floor, a peer CAN still land behind it — a long enough
+  disconnect, a restart against a stale local DB, or (before this fix shipped) a
+  gap already pruned under the old floor. Every `feed-entries` frame therefore
+  carries the current `truncatedBeforeSeq`; a consumer whose cursor sits below it
+  knows the gap is permanent (no nack or backstop will ever fill it) and jumps
+  its cursor to the floor instead of nacking a dead range forever — the
+  producer's `onNack`/`onSubscribe` paths answer the same way even with zero
+  entries to send, so a peer that finds nothing to catch up on still learns why.
 - **Subscription self-heal**: a subscription is not a one-shot handshake. If a
   consumer's `feed-subscribe` is lost while the transport stays up, the producer
   would never register it and would push/retransmit to no one (the feed's tail

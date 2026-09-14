@@ -86,7 +86,7 @@ RELEASE_NOTES.md
 # temp
 
 # Internal digital human skills (wekm)
-.claude/skills/wekm-*
+.agents/skills/wekm-*
 
 # Halo Agent SDK (managed in separate private repo)
 src/sdk/

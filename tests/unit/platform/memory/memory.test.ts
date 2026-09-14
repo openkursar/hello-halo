@@ -25,8 +25,9 @@ import {
   readMemoryTail,
   appendToMemoryFile,
   replaceMemoryFile,
+  insertHistoryHeading,
   listMemoryFiles,
-  archiveMemoryFile,
+  archiveAndReplaceMemoryFile,
   getFileSize
 } from '../../../../src/main/platform/memory/file-ops'
 import { generatePromptInstructions } from '../../../../src/main/platform/memory/prompt'
@@ -208,6 +209,152 @@ describe('File Operations', () => {
     })
   })
 
+  describe('insertHistoryHeading', () => {
+    const skeleton = '# now\n\n## State\n\n# History\n'
+
+    it('should create the file with a History entry when none exists', async () => {
+      const filePath = path.join(testDir, 'sub', 'memory.md')
+      await insertHistoryHeading(filePath, '2026-01-15-1430')
+
+      const content = fs.readFileSync(filePath, 'utf-8')
+      expect(content).toContain('# now')
+      expect(content).toContain('## 2026-01-15-1430')
+    })
+
+    it('should insert directly under the History heading, newest first', async () => {
+      const filePath = path.join(testDir, 'memory.md')
+      fs.writeFileSync(filePath, skeleton + '\n## 2026-01-15-1200 | older\n', 'utf-8')
+
+      await insertHistoryHeading(filePath, '2026-01-15-1430')
+
+      const content = fs.readFileSync(filePath, 'utf-8')
+      expect(content.indexOf('2026-01-15-1430')).toBeLessThan(content.indexOf('2026-01-15-1200'))
+    })
+
+    it('should give an empty file the full skeleton, not just a History section', async () => {
+      const filePath = path.join(testDir, 'memory.md')
+      fs.writeFileSync(filePath, '', 'utf-8')
+
+      await insertHistoryHeading(filePath, '2026-01-15-1430')
+
+      expect(fs.readFileSync(filePath, 'utf-8')).toContain('# now')
+    })
+
+    it('should keep entries one blank line apart however many are inserted', async () => {
+      const filePath = path.join(testDir, 'memory.md')
+      fs.writeFileSync(filePath, skeleton, 'utf-8')
+
+      await insertHistoryHeading(filePath, '2026-01-15-1430', 'run#one')
+      await insertHistoryHeading(filePath, '2026-01-15-1431', 'run#two')
+      await insertHistoryHeading(filePath, '2026-01-15-1432', 'run#three')
+
+      const content = fs.readFileSync(filePath, 'utf-8')
+      expect(content).not.toMatch(/\n{3,}/)
+      expect(content).toContain('# History\n\n## 2026-01-15-1432')
+    })
+
+    it('should append the signature tag when one is supplied', async () => {
+      const filePath = path.join(testDir, 'memory.md')
+      fs.writeFileSync(filePath, skeleton, 'utf-8')
+
+      await insertHistoryHeading(filePath, '2026-01-15-1430', 'chat#a1b2')
+
+      expect(fs.readFileSync(filePath, 'utf-8'))
+        .toContain('## 2026-01-15-1430  [by: chat#a1b2]')
+    })
+
+    it('should keep both headings when two executions insert concurrently', async () => {
+      const filePath = path.join(testDir, 'memory.md')
+      fs.writeFileSync(filePath, skeleton, 'utf-8')
+
+      await Promise.all([
+        insertHistoryHeading(filePath, '2026-01-15-1430', 'run#one'),
+        insertHistoryHeading(filePath, '2026-01-15-1431', 'chat#two'),
+      ])
+
+      const content = fs.readFileSync(filePath, 'utf-8')
+      expect(content).toContain('## 2026-01-15-1430  [by: run#one]')
+      expect(content).toContain('## 2026-01-15-1431  [by: chat#two]')
+    })
+
+    it('should not interleave with a concurrent full replace', async () => {
+      const filePath = path.join(testDir, 'memory.md')
+      fs.writeFileSync(filePath, skeleton, 'utf-8')
+
+      const replacement = '# now\n\n## State | compacted\n\n# History\n'
+      await Promise.all([
+        insertHistoryHeading(filePath, '2026-01-15-1430'),
+        replaceMemoryFile(filePath, replacement),
+      ])
+
+      // Whichever ran second is the file on disk, whole — never a half-applied mix.
+      const content = fs.readFileSync(filePath, 'utf-8')
+      if (content.includes('## 2026-01-15-1430')) {
+        // Insertion ran last, so it read the replacement rather than the skeleton.
+        expect(content).toContain('## State | compacted')
+      } else {
+        expect(content).toBe(replacement)
+      }
+    })
+  })
+
+  describe('archiveAndReplaceMemoryFile', () => {
+    const summary = '# now\n\n## State | compacted\n\n# History\n'
+
+    it('should move the old file to the archive and put the summary in its place', async () => {
+      const filePath = path.join(testDir, 'memory.md')
+      const archiveDir = path.join(testDir, 'archive')
+      fs.writeFileSync(filePath, '# now\n\n## State | long history\n\n# History\n', 'utf-8')
+
+      const archived = await archiveAndReplaceMemoryFile(filePath, archiveDir, summary)
+
+      expect(fs.readFileSync(archived, 'utf-8')).toContain('long history')
+      expect(fs.readFileSync(filePath, 'utf-8')).toBe(summary)
+    })
+
+    it('should never let a lock-free reader see memory.md missing', async () => {
+      const filePath = path.join(testDir, 'memory.md')
+      const archiveDir = path.join(testDir, 'archive')
+      fs.writeFileSync(filePath, '# now\n\n## State | long history\n\n# History\n', 'utf-8')
+
+      // Snapshot building reads without the lock at the start of every turn. A
+      // reader that finds no file is told to Write a new one, and that write
+      // cannot be intercepted — so the path must never be absent.
+      let missing = 0
+      let stop = false
+      const poller = (async () => {
+        while (!stop) {
+          if (await readMemoryFile(filePath) === null) missing++
+          await new Promise(resolve => setImmediate(resolve))
+        }
+      })()
+
+      await archiveAndReplaceMemoryFile(filePath, archiveDir, summary)
+      stop = true
+      await poller
+
+      expect(missing).toBe(0)
+    })
+
+    it('should never leave memory.md without its state while an insert races it', async () => {
+      const filePath = path.join(testDir, 'memory.md')
+      const archiveDir = path.join(testDir, 'archive')
+      fs.writeFileSync(filePath, '# now\n\n## State | long history\n\n# History\n', 'utf-8')
+
+      await Promise.all([
+        archiveAndReplaceMemoryFile(filePath, archiveDir, summary),
+        insertHistoryHeading(filePath, '2026-01-15-1430', 'run#one'),
+      ])
+
+      const content = fs.readFileSync(filePath, 'utf-8')
+      expect(content).toContain('# now')
+      expect(content).toContain('## State |')
+      // The insert either landed in the file that got archived, or on top of the
+      // summary — either way the summary is what memory.md holds now.
+      expect(content).toContain('## State | compacted')
+    })
+  })
+
   describe('listMemoryFiles', () => {
     it('should return empty array for non-existent directory', async () => {
       const result = await listMemoryFiles(path.join(testDir, 'nonexistent'))
@@ -228,20 +375,6 @@ describe('File Operations', () => {
         '2024-01-12-1200.md',
         '2024-01-10-0900.md'
       ])
-    })
-  })
-
-  describe('archiveMemoryFile', () => {
-    it('should move memory file to archive directory', async () => {
-      const filePath = path.join(testDir, 'memory.md')
-      const archiveDir = path.join(testDir, 'archive')
-      fs.writeFileSync(filePath, '# Memory Content', 'utf-8')
-
-      const archived = await archiveMemoryFile(filePath, archiveDir)
-
-      expect(fs.existsSync(filePath)).toBe(false) // Original removed
-      expect(fs.existsSync(archived)).toBe(true) // Archive exists
-      expect(fs.readFileSync(archived, 'utf-8')).toBe('# Memory Content')
     })
   })
 

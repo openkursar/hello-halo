@@ -17,7 +17,13 @@
 import type { FeedStore } from '../../../federation'
 import type { NodeId } from '../types'
 import { createDurableFeedLog, type DurableFeedLog } from './durable-log'
-import { createFeedProducer, createFeedConsumer, type FeedProducer, type FeedConsumer } from './sync-engine'
+import {
+  createFeedProducer,
+  createFeedConsumer,
+  RESUBSCRIBE_ALERT_AFTER,
+  type FeedProducer,
+  type FeedConsumer,
+} from './sync-engine'
 import {
   feedIdKey,
   parseFeedIdKey,
@@ -38,6 +44,15 @@ export interface FeedServiceDeps {
   /** Apply one in-order entry from a remote feed (domain handler; may throw to defer). */
   apply: (feedKey: string, entry: FeedEntry) => void
   /**
+   * Every peer entitled to eventually read this office's feeds (e.g. the office
+   * roster minus self), independent of connection state — forwarded to the
+   * producer's `prune` so a member who is offline or has not subscribed yet is
+   * never mistaken for "caught up" when computing the retention floor. Omit only
+   * when this service's feeds are never pruned (see session-feed's own producers,
+   * which do not use this service).
+   */
+  knownPeers?: () => NodeId[]
+  /**
    * Domain hook run on every tick (after retransmit + prune). The ctrl plane uses
    * it to sweep its give-up deadlines; kept generic so the substrate owns no
    * domain state. Runs on both the timer and a manual `retransmitTick()`.
@@ -47,6 +62,8 @@ export interface FeedServiceDeps {
   retransmitIntervalMs?: number
   /** Max entries per sync batch. */
   batchMax?: number
+  /** Max serialized bytes per sync batch; see the producer's own note. */
+  maxBatchBytes?: number
   /** Wall-clock / fid / drift injection (forwarded to the durable log). */
   now?: () => number
   genFid?: () => string
@@ -92,11 +109,14 @@ export function createFeedService(deps: FeedServiceDeps): FeedService {
   const producer: FeedProducer = createFeedProducer({
     officeId,
     batchMax: deps.batchMax,
+    maxBatchBytes: deps.maxBatchBytes,
     read: (feedKey, after, limit) => durableLog.read(feedKey, after, limit),
     latestSeq: (feedKey) => durableLog.latestSeq(feedKey),
     send: (peer, frame) => deps.sendToPeer(peer, frame),
     getPeerCursor: (feedKey, peer) => store.getPeerCursor(officeId, feedKey, peer),
     setPeerCursor: (feedKey, peer, seq) => store.setPeerCursor(officeId, feedKey, peer, seq, now()),
+    knownPeers: deps.knownPeers,
+    truncatedBeforeSeq: (feedKey) => store.getMeta(officeId, feedKey)?.truncatedBeforeSeq ?? 0,
   })
 
   const consumer: FeedConsumer = createFeedConsumer({
@@ -157,8 +177,19 @@ export function createFeedService(deps: FeedServiceDeps): FeedService {
   function retransmitTick(): void {
     producer.retransmitTick()
     // Consumer-side self-heal: re-drive any subscribe that has not yet yielded a
-    // batch (a lost subscribe the producer never registered). Bounded per feed.
-    for (const feedKey of consumer.resubscribeStale()) {
+    // batch (a lost subscribe the producer never registered).
+    for (const { feedKey, attempts } of consumer.resubscribeStale()) {
+      // Past the alert threshold this is no longer transient loss: this node has
+      // been asking for a stream for minutes and getting nothing back. Say so on a
+      // fixed period — a silent retry loop is what let one pair of members stay
+      // mute for hours with nothing operator-visible anywhere.
+      if (attempts >= RESUBSCRIBE_ALERT_AFTER && attempts % RESUBSCRIBE_ALERT_AFTER === 0) {
+        console.warn(
+          `[FeedService] subscription still unestablished after ${attempts} attempts ` +
+            `office=${officeId} feed=${feedKey}; nothing from this author can arrive until it is`
+        )
+        continue
+      }
       if (loggedResubscribe.has(feedKey)) continue
       loggedResubscribe.add(feedKey)
       console.log(`[FeedService] re-driving lost subscribe office=${officeId} feed=${feedKey}`)

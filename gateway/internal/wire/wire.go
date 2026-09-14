@@ -58,15 +58,19 @@ const (
 
 // Gateway error codes (gw:error { code, detail? }).
 const (
-	CodeHostConflict     = "HOST_CONFLICT"
-	CodeHostUnreachable  = "HOST_UNREACHABLE"
-	CodeNotAttached      = "NOT_ATTACHED"
-	CodeAdmissionTimeout = "ADMISSION_TIMEOUT"
-	CodeFrameTooLarge    = "FRAME_TOO_LARGE"
-	CodeRateLimited      = "RATE_LIMITED"
-	CodeBadSignature     = "BAD_SIGNATURE"
-	CodeClockSkew        = "CLOCK_SKEW"
-	CodeMalformed        = "MALFORMED"
+	CodeHostConflict    = "HOST_CONFLICT"
+	CodeHostUnreachable = "HOST_UNREACHABLE"
+	CodeNotAttached     = "NOT_ATTACHED"
+	// A host addressed a node the room has no session for. The host believes the
+	// relay is that node's return path, so without this it keeps writing into a
+	// hole and its durable outbox waits for an ack that can never come.
+	CodeMemberUnreachable = "MEMBER_UNREACHABLE"
+	CodeAdmissionTimeout  = "ADMISSION_TIMEOUT"
+	CodeFrameTooLarge     = "FRAME_TOO_LARGE"
+	CodeRateLimited       = "RATE_LIMITED"
+	CodeBadSignature      = "BAD_SIGNATURE"
+	CodeClockSkew         = "CLOCK_SKEW"
+	CodeMalformed         = "MALFORMED"
 	// A gw:host-attach carrying a term lower than (or equal to) the room's
 	// pinned term — a resurrected old host cannot reclaim an elected-over room.
 	CodeStaleTerm = "STALE_TERM"

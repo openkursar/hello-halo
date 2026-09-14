@@ -80,6 +80,7 @@ export function StoreDetail() {
   const checkUpdates = useAppsPageStore(state => state.checkUpdates)
   const setView = useAppStore(state => state.setView)
   const spaces = useSpaceStore(state => state.spaces)
+  const haloSpace = useSpaceStore(state => state.haloSpace)
   const currentSpace = useSpaceStore(state => state.currentSpace)
   const setCurrentSpace = useSpaceStore(state => state.setCurrentSpace)
   const refreshCurrentSpace = useSpaceStore(state => state.refreshCurrentSpace)
@@ -183,14 +184,20 @@ export function StoreDetail() {
 
   // "Use" an already-installed app: digital humans open in their dedicated tab;
   // skills run inside a space conversation, so we open the space they're
-  // installed in (global installs fall back to the current/first space).
+  // installed in — checking both dedicated spaces and the built-in default
+  // space (haloSpace, tracked separately from `spaces`) — falling back to the
+  // current/first/default space for global installs.
   const handleUse = useCallback(() => {
     if (!installedApp || !entry) return
     if (entry.type === 'skill') {
       const target =
-        (installedApp.spaceId ? spaces.find(s => s.id === installedApp.spaceId) : null) ??
+        (installedApp.spaceId
+          ? (spaces.find(s => s.id === installedApp.spaceId) ??
+             (installedApp.spaceId === haloSpace?.id ? haloSpace : null))
+          : null) ??
         currentSpace ??
         spaces[0] ??
+        haloSpace ??
         null
       if (target) {
         setCurrentSpace(target)
@@ -210,6 +217,7 @@ export function StoreDetail() {
     installedApp,
     entry,
     spaces,
+    haloSpace,
     currentSpace,
     setCurrentSpace,
     refreshCurrentSpace,

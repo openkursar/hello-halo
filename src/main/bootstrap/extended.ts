@@ -502,6 +502,16 @@ async function initPlatformAndApps(): Promise<void> {
             // elected authority re-enrolls this survivor (first-dial enrollment is
             // done by redialToAuthority; this covers a later drop+reconnect).
             onReauth: () => getFederationManager()?.reenrollWithAuthority(officeId),
+            // An advertised address is a snapshot from when the peer was last
+            // seen; a machine that changed network leaves this office pointed at
+            // an address that can never answer, swallowing its traffic while
+            // every other channel still looks healthy.
+            onUnreachable: (attempts) =>
+              getFederationManager()?.abandonDirectLeg(
+                officeId,
+                authorityNodeId,
+                `unreachable-after-${attempts}-attempts`
+              ),
           })
           return {
             sender: (to, frame) => client.send(frame, to),

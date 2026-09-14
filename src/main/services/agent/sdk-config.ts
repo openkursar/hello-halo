@@ -30,6 +30,8 @@ import {
   CONTEXT_WINDOW_HARD_MIN,
   CONTEXT_WINDOW_HARD_CAP,
 } from '../../../shared/constants/model-runtime-limits'
+import { getActiveEngine } from './resolved-sdk'
+import { getDeviceIdentity } from '../../foundation/device-identity'
 
 // ============================================
 // Configuration
@@ -928,6 +930,21 @@ export async function buildBaseSdkOptions(params: BaseSdkOptionsParams): Promise
   // Add MCP servers if provided
   if (mcpServers && Object.keys(mcpServers).length > 0) {
     sdkOptions.mcpServers = mcpServers
+  }
+
+  // CC-compatible client identity for halo engine (subscription gateway fingerprinting)
+  if (getActiveEngine() === 'halo') {
+    try {
+      const ccPkg = require('@anthropic-ai/claude-code/package.json')
+      const sdkPkg = require('@anthropic-ai/sdk/package.json')
+      sdkOptions.clientIdentity = {
+        ccVersion: ccPkg.version,
+        sdkPackageVersion: sdkPkg.version,
+        deviceId: getDeviceIdentity().deviceId,
+      }
+    } catch (err) {
+      console.warn('[SDK Config] Failed to build clientIdentity:', (err as Error).message)
+    }
   }
 
   return sdkOptions

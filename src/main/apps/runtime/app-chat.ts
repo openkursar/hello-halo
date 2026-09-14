@@ -96,6 +96,13 @@ import { resolveNotifyAvailability } from './notify-availability'
 import { FileExportGate } from './file-export-gate'
 import { truncateUtf16Safe } from './text-truncate'
 import { getImSessionRegistry } from './im-session-registry'
+import {
+  collectAppConversationIds,
+  describeSelfInstance,
+  listLiveInstances,
+  noteInstanceTurnEnded,
+  noteInstanceTurnStarted,
+} from './live-instances'
 import { createHaloAppsMcpServer } from '../conversation-mcp'
 import { createOfficialDocsSession } from '../../services/official-docs-mcp'
 import { createWebSearchMcpServer } from '../../services/web-search'
@@ -107,7 +114,7 @@ import { readSessionMessages, saveChatSessionId, loadChatSessionId, deleteChatSe
 import { getAppMemoryService, getActivityStore } from './index'
 import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
 import { prepareMemoryForTurn, checkAndCompactMemory } from './turn/memory-lifecycle'
-import { buildMemorySection } from './prompt'
+import { buildLiveInstancesSection, buildMemorySection } from './prompt'
 import { createReportToolServer, type ReportToolContext } from './report-tool'
 // Key builders live in shared/ so the renderer can import them without
 // depending on main-process modules.
@@ -808,10 +815,21 @@ async function runAppChatTurn(
     // what was actually said, not our preamble.
     const memoryPreamble = resumeSessionId ? '' : await buildSessionMemoryPreamble(memoryScope, appId)
 
+    // Who else is executing this same digital human right now. Unlike the memory
+    // block this goes on EVERY turn: it is true only at the moment it is built,
+    // and a session that ran for an hour on a first-turn snapshot would be
+    // reading a roster from an hour ago. It rides the user message rather than
+    // the system prompt precisely because it changes every turn — the system
+    // prompt is fingerprinted for session reuse (sdk-config.ts), so per-turn
+    // content there would rebuild the session on every message.
+    const selfInstance = describeSelfInstance(appId, { conversationId })
+    const livePreamble =
+      buildLiveInstancesSection(selfInstance, listLiveInstances(appId, selfInstance.id)) + '\n\n'
+
     // With the non-vision fallback active, image blocks are replaced by the
     // injected attachment-paths block.
     const messageContent = buildMessageContent(
-      memoryPreamble + (imageFallback?.contextBlock ?? '') + message,
+      memoryPreamble + livePreamble + (imageFallback?.contextBlock ?? '') + message,
       imageFallback ? undefined : images
     )
 
@@ -824,6 +842,10 @@ async function runAppChatTurn(
     // looks idle, and an unguarded rebuild in that window would destroy this
     // message.
     markTurnDispatched(conversationId)
+    // Stamps this conversation's start time so a concurrent instance can say
+    // when it began. The entry is an annotation on a derived list, so a path
+    // that skips it loses the time, never the entry (live-instances.ts).
+    noteInstanceTurnStarted(conversationId)
     try {
       if (typeof messageContent === 'string') {
         v2Session.send(messageContent)
@@ -886,6 +908,8 @@ async function runAppChatTurn(
 
     console.log(`[AppChat][${appId}] Active session cleaned up`)
 
+    noteInstanceTurnEnded(conversationId)
+
     // A TEAM-session turn ended — bus-driven, human 1:1, or IM alike.
     const endedTeamSession = parseTeamSessionKey(conversationId)
     if (endedTeamSession) {
@@ -942,12 +966,19 @@ async function runAppChatTurn(
     // ceiling — a file that only automation runs keep in check would still bloat
     // for a digital human that mostly works in chats and teams. Costs nothing
     // until the threshold is crossed. Detached: housekeeping, not part of the turn.
+    // The delegated fields belong here for the same reason they do on a run: a
+    // source carrying no key of its own is routed by header, and without them
+    // compaction takes the raw-SDK path with an empty key, fails, and quietly
+    // installs the heuristic summary as the digital human's memory.
     void checkAndCompactMemory(memory, memoryScope, app.spec.name, chatRunId, async () => ({
       anthropicApiKey: resolvedCreds.anthropicApiKey,
       anthropicBaseUrl: resolvedCreds.anthropicBaseUrl,
       sdkModel: resolvedCreds.sdkModel,
       provider: credentials.provider,
       oauthProvider: credentials.oauthProvider,
+      delegatedAuth: credentials.delegatedAuth,
+      delegatedRoutingHeader: resolvedCreds.delegatedRoutingHeader,
+      capabilities: resolvedCreds.capabilities,
     }))
 
     // Flush buffered IM supplements (deferred so busy lock is released first)
@@ -1013,24 +1044,6 @@ export async function stopAppChat(appId: string): Promise<void> {
     await stopConversation(convId)
   }
   console.log(`[AppChat][${appId}] Generation stopped (${toStop.length} session(s))`)
-}
-
-/**
- * Every conversation of this app that currently exists in memory: one that has
- * a message awaiting an answer, and one whose consumer is alive. Covers the
- * native default, native local, IM, and HTTP sessions; cross-app keys never
- * match the prefix.
- */
-function collectAppConversationIds(appId: string): string[] {
-  const prefix = getAppChatConversationId(appId)
-  const ids = new Set<string>()
-  for (const id of getConversationsWithActiveRound()) {
-    if (id === prefix || id.startsWith(prefix + ':')) ids.add(id)
-  }
-  for (const id of getRunningConsumerIds()) {
-    if (id === prefix || id.startsWith(prefix + ':')) ids.add(id)
-  }
-  return Array.from(ids)
 }
 
 /**

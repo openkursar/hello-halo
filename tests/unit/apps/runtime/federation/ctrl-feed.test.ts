@@ -297,3 +297,58 @@ describe('ctrl-feed — reliable control-plane delivery', () => {
     expect(h.wakesAtOwner.map((w) => w.correlationId)).toEqual(['corr-1', 'corr-2', 'corr-3', 'corr-4'])
   })
 })
+
+/**
+ * The pair-level deadlock: the reader's subscribe never registered, and the
+ * author's own heal is driven by inbound traffic from a peer that has nothing to
+ * say because it is waiting for this very message. Both sides idle, both sides
+ * silent, and every other channel healthy — which is why it survived in the field
+ * for hours while the roster and the shared board looked normal.
+ *
+ * The harness here deliberately does NOT pre-subscribe, unlike the suite above.
+ */
+describe('ctrl-feed — an addressee that never subscribed', () => {
+  let h: Harness
+
+  beforeEach(() => {
+    h = makeHarness()
+    // Only the reader→author direction is established. The author has no
+    // subscriber for its own outbox: exactly the state a lost subscribe leaves.
+    h.authFeed.subscribePeer(OWNER)
+  })
+
+  afterEach(() => h.closeAll())
+
+  it('registers the addressee at publish time, so the first wake still arrives', () => {
+    h.authFeed.publishWake(OWNER, 'corr-deadlock', makeRequest('app-a'))
+
+    expect(h.wakesAtOwner).toHaveLength(1)
+    expect(h.wakesAtOwner[0]).toMatchObject({ correlationId: 'corr-deadlock', from: AUTH })
+  })
+
+  it('the delivery watermark advances, so the wake is not swept up as undeliverable', () => {
+    const { seq } = h.authFeed.publishWake(OWNER, 'corr-ack', makeRequest())
+    expect(h.authFeed.deliveredUpTo(OWNER)).toBeGreaterThanOrEqual(seq)
+
+    h.advanceAuthClock(GIVE_UP_MS + 1)
+    h.authFeed.retransmitTick()
+    expect(h.undeliverablesAtAuth).toHaveLength(0)
+  })
+
+  it('reports the peer as fully acknowledged once it has caught up', () => {
+    h.authFeed.publishWake(OWNER, 'corr-1', makeRequest())
+    h.authFeed.publishTurnComplete(OWNER, 'corr-1', { kind: 'result', content: 'ok' })
+
+    expect(h.authFeed.peerDelivery(OWNER)).toMatchObject({ behind: 0, pendingWakes: 0 })
+  })
+
+  it('reports a peer that never answers as behind, with its wakes still outstanding', () => {
+    const GHOST = 'node-ghost'
+    h.authFeed.publishWake(GHOST, 'corr-ghost', makeRequest())
+
+    const delivery = h.authFeed.peerDelivery(GHOST)
+    expect(delivery.deliveredUpTo).toBe(0)
+    expect(delivery.behind).toBeGreaterThan(0)
+    expect(delivery.pendingWakes).toBe(1)
+  })
+})

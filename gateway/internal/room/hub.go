@@ -179,6 +179,15 @@ func (h *Hub) releasePin(officeID string, s *session.Session) {
 
 // OnFrame dispatches one post-auth envelope.
 func (h *Hub) OnFrame(s *session.Session, env *wire.Envelope) {
+	if h.cfg.traceEnabled(s.OfficeID()) {
+		var hdr wire.FederationHeader
+		_ = json.Unmarshal(env.Payload, &hdr)
+		to := ""
+		if env.To != nil {
+			to = *env.To
+		}
+		traceIn(h.log, &h.cfg, s.OfficeID(), s.IdentityID(), to, env.Type, hdr.Kind, env.Payload)
+	}
 	switch env.Type {
 	case wire.TypeFederation:
 		h.handleFederation(s, env)

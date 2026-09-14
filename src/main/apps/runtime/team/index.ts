@@ -205,6 +205,13 @@ export interface TeamRuntime {
   /** The team layers of a member's system prompt — stable per (team, member). */
   buildPromptContext(teamId: string, selfAppId: string): TeamPromptContext | null
   /**
+   * What this team is called. Separate from `buildPromptContext` because a name
+   * is not membership: that one answers null for an app that is not on the
+   * roster, which would leave a member removed mid-turn unable to say which
+   * team it is working in.
+   */
+  getTeamName(teamId: string): string | null
+  /**
    * Resume a team turn after the user answered a member's escalation. Returns
    * false when the team/epoch is gone (caller must NOT fall back to a solo run).
    */
@@ -461,6 +468,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     captureReport: (correlationId, outcome) => orchestration!.captureReport(correlationId, outcome),
     buildPromptContext: (teamId, selfAppId) =>
       orchestration!.buildPromptContext(teamId, selfAppId),
+    getTeamName: (teamId) => store.getTeamById(teamId)?.name ?? null,
     resumeFromEscalation: (params) => orchestration!.resumeFromEscalation(params),
   }
 }
@@ -468,6 +476,9 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
 export function createDefaultSessionDeps(store: TeamStore): OrchestrationSessionDeps {
   return {
     async sendAppChatMessage(request) {
+      // Deliberately dynamic, and load-bearing: app-chat imports this module
+      // statically, as does anything reaching it for team identity. Making this
+      // a static import closes that cycle.
       const { sendAppChatMessage } = await import('../app-chat')
 
       // For a team-backed IM conversation epoch, the bound member is the chat's

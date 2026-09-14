@@ -94,7 +94,7 @@ only if they ask.
 
 ## Before writing code
 
-Changes need explicit consent (see the repo's CLAUDE.md). Ask for it in product
+Changes need explicit consent (see the repo's AGENTS.md). Ask for it in product
 terms — what behavior disappears, what behavior stays — never as a diff summary.
 
 ## After a code change

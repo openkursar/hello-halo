@@ -86,7 +86,25 @@ It appears in the snapshot heading list, giving instant context.
 
 Chronological log of significant events, newest at the top.
 
-Each entry is a `##` heading with format: `## YYYY-MM-DD-HHmm | summary`
+Each entry is a `##` heading with format:
+`## YYYY-MM-DD-HHmm | summary  [by: origin#id]`
+
+The trailing `[by: ...]` names the execution that opened the entry. One digital
+human is executed many times over — a scheduled run, a chat with its owner, an
+IM thread, a turn inside a team — and several of those can be alive at once,
+all sharing this one first-person file. Without a signature, a line another
+execution wrote about itself reads to the next one as a description of itself,
+which is how an execution ends up believing it is mid-way through work that
+belongs to someone else.
+
+The tag is written by the system, never by the model, and only for the
+execution being opened. Entries predating this carry no tag and are **not**
+backfilled: who wrote them is not recoverable, and a guessed attribution is
+worse than none. Both the memory instructions and the compaction prompt say so,
+so neither the model nor the compactor invents one.
+
+The `[by: ...]` goes last so the timestamp and summary — the parts a person
+reads — come first, and so nothing that parses the heading has to change.
 
 - **Important events** get a `### sub-heading` + detailed content
 - **Routine events** are a single heading line
@@ -212,27 +230,26 @@ One MCP tool remains:
 Pre-run (system)
   │
   ├─ buildMemorySnapshot()                    ← Read memory.md + archive listing
-  ├─ Pre-insert ## YYYY-MM-DD-HHmm           ← Add timestamp heading to # History
-  └─ Inject into trigger message              ← AI sees # now + structure on start
+  ├─ insertHistoryHeading(ts, byLabel)        ← "## ts  [by: origin#id]" into # History
+  └─ Inject into trigger message              ← AI sees # now + structure + who else runs
   │
 AI Run
   │
   ├─ (# now is already in context)            ← No tool call needed
   ├─ Execute task...
   ├─ Edit # now: update State fields          ← Precise field-level updates
-  ├─ Edit # History: add summary to heading   ← "## 2026-01-15-1430 | result summary"
+  ├─ Edit # History: add summary to heading   ← summary goes BEFORE the [by: ...] tag
   │   └─ Optionally add ### details below
   └─ report_to_user                           ← Send results to user
   │
 Post-run (system)
   │
-  ├─ saveRunSessionSummary()                  ← Write to memory/run/YYYY-MM-DD-HHmm-run.md
+  ├─ saveRunSessionSummary()                  ← Write to memory/run/{ts}-{slug}.md
   └─ needsCompaction() check
        ├─ Under 100KB → skip
-       └─ Over 100KB → compact()
-            ├─ Archive to memory/YYYY-MM-DD-HHmm.md
-            ├─ LLM generates compact # now (preserves structure)
-            └─ LLM preserves recent # History entries, drops old ones
+       └─ Over 100KB → read → LLM summary → compact(summary)
+            ├─ Archive the file as it stands to memory/YYYY-MM-DD-HHmm.md
+            └─ Put the summary in its place, under one lock
 ```
 
 ### 5.3 Compaction behavior with new structure
@@ -240,8 +257,40 @@ Post-run (system)
 The compaction LLM prompt instructs:
 - Preserve `# now` structure (State, Entity, Patterns, Errors sections)
 - Distill `# now` fields to current essential values
+- Strip first-person process and role claims, and any copy of team-board state
+- Keep `[by: ...]` verbatim on retained entries; never invent one, never merge
+  entries carrying different tags
 - Keep only the last ~10 `# History` entries
 - Drop older History entries (they exist in `memory/run/` anyway)
+
+### 5.4 Concurrent executions and the file
+
+Every write this module makes is serialized per absolute path, and lands via
+write-to-temp-then-rename, so a reader never sees a torn file. Two properties
+follow, and both are deliberate:
+
+**The file is never absent**, and this is load-bearing in two places rather than
+one. Compaction generates its summary *before* anything moves, so the file is
+there for the minutes that takes; and the swap itself gives the archive a second
+name (a hard link, or a copy where links are refused) instead of moving the file
+out from under its own, so the path still holds during the swap. The accepted
+cost is that entries written during generation are in the archive but not in the
+summary — losing a line of History beats losing all of `# now`.
+
+Both halves are needed because of what a reader does with an absent file, not
+merely what it fails to read: `buildMemorySnapshot` reads without the lock at
+every turn start, and `exists: false` makes the trigger message say *"No memory
+file exists yet — create it with Write"* and suppresses the authorship framing.
+The agent's `Write` does not come through this module and cannot be stopped. So
+a reader landing in a gap is actively instructed to replace the digital human's
+memory with a blank one. A move-based swap left a gap of several awaited
+syscalls, which was wide enough to hit in practice.
+
+**The lock does not reach the model.** The agent edits `memory.md` with its own
+Read/Edit/Write inside its sandbox, which never enters this module. Nothing
+in-process can serialize that. It is why provenance and the injected liveness
+list exist at all: where the file cannot be locked, the readers are told enough
+not to misread it.
 
 ---
 
@@ -319,17 +368,28 @@ src/main/platform/memory/
   types.ts           -- MemoryService interface, scope types, constants
   paths.ts           -- Path resolution for all memory scopes
   permissions.ts     -- Permission matrix enforcement
-  file-ops.ts        -- Low-level file I/O (read, write, archive, list)
+  file-ops.ts        -- Low-level file I/O, per-path write lock, atomic writes,
+                        history-heading insertion, archive-and-replace
   snapshot.ts        -- MemorySnapshot builder + memory_status MCP tool
   prompt.ts          -- MEMORY_INSTRUCTIONS (system prompt fragment)
   index.ts           -- initMemory(), MemoryService implementation, exports
   tools.ts           -- Legacy MCP tools (memory_read/write/list) — kept for compatibility
 
 src/main/apps/runtime/
-  prompt.ts          -- buildAppSystemPrompt(), buildInitialMessage(), buildMemorySection()
+  prompt.ts          -- buildAppSystemPrompt(), buildInitialMessage(), buildMemorySection(),
+                        buildLiveInstancesSection()
   prompt-chat.ts     -- Chat mode prompt (references native file tools)
-  execute.ts         -- Run lifecycle: snapshot → pre-insert timestamp → run → session summary → compaction
+  live-instances.ts  -- Which execution this is, and which others are running.
+                        Derived from the run registry and the app-chat sinks;
+                        supplies the `[by: ...]` label this module writes.
+  execute.ts         -- Run lifecycle: snapshot → heading → run → session summary → compaction
+  turn/memory-lifecycle.ts
+                     -- Shared prepare/finalize + the compaction LLM call
 ```
+
+This module knows nothing about runs, chats or teams. The signature it writes
+arrives as an opaque, already-rendered `byLabel` string; who produced it, and
+what an execution even is, belong to `apps/runtime`.
 
 ---
 

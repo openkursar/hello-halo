@@ -1414,11 +1414,21 @@ describe('Prompt Builder', () => {
       rawContent: null,
     }
 
+    const selfInstance = {
+      id: 'aaaabbbb',
+      kind: 'run' as const,
+      origin: 'schedule',
+      startedAt: Date.now(),
+    }
+    const liveInstances: never[] = []
+
     it('should include trigger context', () => {
       const msg = buildInitialMessage({
         memorySnapshot,
         triggerContext: 'Scheduled run at 14:30',
         appName: 'Price Monitor',
+        selfInstance,
+        liveInstances,
       })
 
       expect(msg).toContain('Scheduled run at 14:30')
@@ -1430,6 +1440,8 @@ describe('Prompt Builder', () => {
         memorySnapshot,
         triggerContext: 'Manual trigger',
         appName: 'Price Monitor',
+        selfInstance,
+        liveInstances,
         userConfig: { productUrl: 'https://example.com', threshold: 100 },
       })
 
@@ -1443,6 +1455,8 @@ describe('Prompt Builder', () => {
         memorySnapshot,
         triggerContext: 'Manual trigger',
         appName: 'Price Monitor',
+        selfInstance,
+        liveInstances,
         userConfig: {},
       })
 
@@ -1454,6 +1468,8 @@ describe('Prompt Builder', () => {
         memorySnapshot,
         triggerContext: 'Manual trigger',
         appName: 'Price Monitor',
+        selfInstance,
+        liveInstances,
       })
 
       expect(msg).not.toContain('User Configuration')
@@ -1464,6 +1480,8 @@ describe('Prompt Builder', () => {
         memorySnapshot,
         triggerContext: 'Manual trigger',
         appName: 'My Automation',
+        selfInstance,
+        liveInstances,
       })
 
       expect(msg).toContain('"My Automation"')

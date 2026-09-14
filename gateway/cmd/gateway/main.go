@@ -43,6 +43,7 @@ func main() {
 	hub := room.NewHub(room.Config{
 		AdmissionTimeout: cfg.Room.AdmissionTimeout,
 		HostRetention:    cfg.Room.HostRetention,
+		Trace:            cfg.Room.Trace,
 	}, dir, log, m)
 
 	api := httpapi.New(httpapi.Options{

@@ -48,7 +48,7 @@ import {
   appendToMemoryFile,
   replaceMemoryFile,
   listMemoryFiles,
-  archiveMemoryFile,
+  archiveAndReplaceMemoryFile,
   getFileSize
 } from './file-ops'
 import { generatePromptInstructions } from './prompt'
@@ -143,31 +143,27 @@ function createMemoryService(): MemoryService {
     // ── compact ────────────────────────────────────────────────────────────
     async compact(
       caller: MemoryCallerScope,
-      scope: MemoryScopeType
-    ): Promise<{ archived: string; needsSummary: boolean }> {
+      scope: MemoryScopeType,
+      summary: string
+    ): Promise<string | null> {
       assertWritePermission(caller, scope, 'replace')
 
       const filePath = getMemoryFilePath(caller, scope)
       const archiveDir = getMemoryArchiveDir(caller, scope)
 
-      // Check if file exists and needs compaction
       const size = await getFileSize(filePath)
       if (size === 0) {
-        return { archived: '', needsSummary: false }
+        return null
       }
 
-      // Archive the current memory file
-      const archivedPath = await archiveMemoryFile(filePath, archiveDir)
+      const archivedPath = await archiveAndReplaceMemoryFile(filePath, archiveDir, summary)
 
       console.log(
         `[Memory] Compacted ${scope} memory: ` +
         `${(size / 1024).toFixed(1)}KB archived to ${archivedPath}`
       )
 
-      return {
-        archived: archivedPath,
-        needsSummary: true
-      }
+      return archivedPath
     },
 
     // ── saveSessionSummary ─────────────────────────────────────────────────

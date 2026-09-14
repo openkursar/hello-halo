@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -29,6 +30,7 @@ type gatewayOpts struct {
 	connRate  float64
 	connBurst int
 	dirOpts   directory.Options
+	logSink   io.Writer
 }
 
 func newGateway(t *testing.T, o gatewayOpts) (*httptest.Server, *metrics.Metrics) {
@@ -40,7 +42,11 @@ func newGateway(t *testing.T, o gatewayOpts) (*httptest.Server, *metrics.Metrics
 		o.connBurst = 1000
 	}
 	m := metrics.New()
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	var sink io.Writer = io.Discard
+	if o.logSink != nil {
+		sink = o.logSink
+	}
+	log := slog.New(slog.NewTextHandler(sink, nil))
 	dir := directory.New(o.dirOpts)
 	hub := room.NewHub(o.room, dir, log, m)
 	api := httpapi.New(httpapi.Options{
@@ -311,6 +317,73 @@ func TestJoinGrantAdmitsAndBroadcastSkipsPending(t *testing.T) {
 	}
 	if _, err := m2.TryRecv(200 * time.Millisecond); err == nil {
 		t.Fatal("pending member received a broadcast")
+	}
+}
+
+// Tracing has to record the frame BODY and both hops, or it cannot answer the
+// only question silence leaves open: was the frame ever offered, and where did
+// it go. Off by default, because that body is members' message text.
+func TestTraceRecordsBodyAndRoute(t *testing.T) {
+	var traced, untraced bytes.Buffer
+	for _, tc := range []struct {
+		name string
+		cfg  room.Config
+		sink *bytes.Buffer
+		want bool
+	}{
+		{"on", room.Config{Trace: office}, &traced, true},
+		{"off", room.Config{}, &untraced, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := newGateway(t, gatewayOpts{room: tc.cfg, logSink: tc.sink})
+			hostNode, memberNode := gwtest.NewNode(t, 1), gwtest.NewNode(t, 2)
+
+			host := gwtest.Dial(t, srv)
+			host.Auth(hostNode, office)
+			host.HostAttach(office)
+			member := gwtest.Dial(t, srv)
+			member.Auth(memberNode, office)
+
+			host.SendFederation(memberNode.ID, fedPayload(hostNode, "join-grant", nil))
+			member.Expect(wire.TypeFederation, 2*time.Second)
+			member.SendFederation("", fedPayload(memberNode, "heartbeat", map[string]any{"note": "canary-body"}))
+			host.Expect(wire.TypeFederation, 2*time.Second)
+
+			got := tc.sink.String()
+			for _, want := range []string{"canary-body", "host->member", "member->host"} {
+				if strings.Contains(got, want) != tc.want {
+					t.Fatalf("trace %s: contains(%q)=%v, want %v", tc.name, want, !tc.want, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// A host that addresses a node the room has no session for must be told, not
+// left believing the frame landed: its durable outbox otherwise waits forever
+// for an ack, and the loss is recorded nowhere.
+func TestHostFrameToAbsentMemberReportsBack(t *testing.T) {
+	srv, m := newGateway(t, gatewayOpts{})
+	hostNode, absentNode := gwtest.NewNode(t, 1), gwtest.NewNode(t, 2)
+
+	host := gwtest.Dial(t, srv)
+	host.Auth(hostNode, office)
+	host.HostAttach(office)
+
+	host.SendFederation(absentNode.ID, fedPayload(hostNode, "wake", nil))
+	expectGwError(t, host.Expect(wire.TypeGwError, 2*time.Second), wire.CodeMemberUnreachable)
+	if got := m.FramesDroppedNoMemberTotal.Load(); got != 1 {
+		t.Fatalf("expected 1 no-member drop, got %d", got)
+	}
+
+	// Retransmits of the same undeliverable target are counted but not re-reported,
+	// so a retrying outbox cannot bury the first occurrence.
+	host.SendFederation(absentNode.ID, fedPayload(hostNode, "wake", nil))
+	if env, err := host.TryRecv(300 * time.Millisecond); err == nil {
+		t.Fatalf("expected the repeat drop to be silent, got %q", env.Type)
+	}
+	if got := m.FramesDroppedNoMemberTotal.Load(); got != 2 {
+		t.Fatalf("expected 2 no-member drops, got %d", got)
 	}
 }
 

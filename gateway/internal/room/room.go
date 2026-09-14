@@ -3,6 +3,7 @@ package room
 import (
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -33,6 +34,9 @@ type Room struct {
 	disbanded    bool
 	// Per-identity election-relay budgets for the hostless window (v2-gw).
 	electionBudget map[string]*relayBudget
+	// Last time an undeliverable-target report was emitted per target, so a host
+	// whose durable outbox retransmits every few seconds cannot flood the log.
+	lastNoMemberReport map[string]time.Time
 
 	cfg     Config
 	log     *slog.Logger
@@ -49,7 +53,13 @@ type Config struct {
 	// votes, a bounded catch-up — so the ceiling is generous yet starves a
 	// misbehaving member before it can amplify through the broadcast.
 	ElectionRelayPerSec int
+	// Office id to trace in full (bodies included), or "*" for every office.
+	// Empty disables tracing — see trace.go for why this is not a normal mode.
+	Trace string
 }
+
+// Minimum gap between undeliverable-target reports for the same node.
+const noMemberReportInterval = 30 * time.Second
 
 // relayBudget is a fixed one-second window counter for the election relay.
 type relayBudget struct {
@@ -71,13 +81,14 @@ func (c *Config) fillDefaults() {
 
 func newRoom(officeID string, cfg Config, log *slog.Logger, m *metrics.Metrics, onEmpty func(string)) *Room {
 	return &Room{
-		officeID:       officeID,
-		members:        make(map[string]*member),
-		electionBudget: make(map[string]*relayBudget),
-		cfg:            cfg,
-		log:            log.With("office", officeID),
-		metrics:        m,
-		onEmpty:        onEmpty,
+		officeID:           officeID,
+		members:            make(map[string]*member),
+		electionBudget:     make(map[string]*relayBudget),
+		lastNoMemberReport: make(map[string]time.Time),
+		cfg:                cfg,
+		log:                log.With("office", officeID),
+		metrics:            m,
+		onEmpty:            onEmpty,
 	}
 }
 
@@ -100,6 +111,9 @@ func (r *Room) addMember(s *session.Session) {
 		r.expireAdmission(nodeID, s)
 	})
 	r.members[nodeID] = m
+	// The node is back; a later disappearance is a new fact and must report at once
+	// rather than fall inside the previous one's quiet window.
+	delete(r.lastNoMemberReport, nodeID)
 	r.mu.Unlock()
 	r.log.Debug("member pending", "node", nodeID)
 }
@@ -172,6 +186,7 @@ func (r *Room) attachHost(s *session.Session) bool {
 func (r *Room) routeFromMember(s *session.Session, hdr *wire.FederationHeader, env *wire.Envelope) {
 	r.mu.Lock()
 	host := r.host
+	hostIdentity := r.hostIdentity
 	r.mu.Unlock()
 	if host == nil {
 		if wire.IsElectionKind(hdr.Kind) {
@@ -190,9 +205,12 @@ func (r *Room) routeFromMember(s *session.Session, hdr *wire.FederationHeader, e
 		return
 	}
 	plane := wire.ClassifyPlane(hdr.Kind)
+	delivered := 0
 	if host.SendData(plane, data) {
 		r.metrics.FramesForwardedTotal[plane].Add(1)
+		delivered = 1
 	}
+	traceOut(r.log, &r.cfg, r.officeID, "member->host", hostIdentity, hdr.Kind, len(data), delivered)
 }
 
 // routeFromHost forwards a host frame: to == nodeId unicasts, to == nil
@@ -225,13 +243,35 @@ func (r *Room) routeFromHost(s *session.Session, hdr *wire.FederationHeader, env
 				delete(r.members, target)
 			}
 		}
+		var roster []string
+		report := false
+		if !ok {
+			report = r.shouldReportNoMemberLocked(target)
+			if report {
+				roster = r.rosterLocked()
+			}
+		}
 		r.mu.Unlock()
 		if !ok {
+			// The host addressed a node this room has no session for. Silence here
+			// is indistinguishable at the host from a delivered frame: its outbox
+			// keeps waiting for an ack, the office looks connected, and nothing
+			// anywhere records the loss.
+			r.metrics.FramesDroppedNoMemberTotal.Add(1)
+			if report {
+				r.log.Warn("host frame dropped: addressed node has no session in this room",
+					"target", target, "kind", hdr.Kind, "roomMembers", len(roster), "members", roster)
+				s.SendGwError(wire.CodeMemberUnreachable, target)
+			}
+			traceOut(r.log, &r.cfg, r.officeID, "host->member DROPPED", target, hdr.Kind, len(data), 0)
 			return
 		}
+		delivered := 0
 		if m.sess.SendData(plane, data) {
 			r.metrics.FramesForwardedTotal[plane].Add(1)
+			delivered = 1
 		}
+		traceOut(r.log, &r.cfg, r.officeID, "host->member", target, hdr.Kind, len(data), delivered)
 		if hdr.Kind == "join-reject" {
 			m.sess.CloseGraceful()
 		}
@@ -246,11 +286,44 @@ func (r *Room) routeFromHost(s *session.Session, hdr *wire.FederationHeader, env
 		}
 	}
 	r.mu.Unlock()
+	delivered := 0
 	for _, t := range targets {
 		if t.SendData(plane, data) {
 			r.metrics.FramesForwardedTotal[plane].Add(1)
+			delivered++
 		}
 	}
+	traceOut(r.log, &r.cfg, r.officeID, "host->broadcast", "*", hdr.Kind, len(data), delivered)
+}
+
+// shouldReportNoMemberLocked rate-limits the undeliverable-target report to one
+// per target per window. A host's durable outbox retransmits an unacked entry
+// every few seconds, so reporting every frame would bury the first occurrence —
+// which is the one that says when the node went missing. Caller holds r.mu.
+func (r *Room) shouldReportNoMemberLocked(target string) bool {
+	now := time.Now()
+	if last, seen := r.lastNoMemberReport[target]; seen && now.Sub(last) < noMemberReportInterval {
+		return false
+	}
+	r.lastNoMemberReport[target] = now
+	return true
+}
+
+// rosterLocked lists who the room actually holds, with admission state. Printed
+// alongside a missing target because the useful question is never "is it there"
+// but "then who IS there" — a key that almost matches, or a room that emptied.
+// Caller holds r.mu.
+func (r *Room) rosterLocked() []string {
+	roster := make([]string, 0, len(r.members))
+	for id, m := range r.members {
+		state := "pending"
+		if m.admitted {
+			state = "admitted"
+		}
+		roster = append(roster, id+":"+state)
+	}
+	sort.Strings(roster)
+	return roster
 }
 
 // relayElectionFrame broadcasts one election frame from an ADMITTED member to

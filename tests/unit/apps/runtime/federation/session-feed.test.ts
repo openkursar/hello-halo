@@ -208,6 +208,35 @@ describe('session-feed — multi-replica transcript replication', () => {
     expect(h.a.feed.publishOwnedTail(SESSION_KEY)).toBe(0)
   })
 
+  it('trims a transcript message too large to cross the wire, and stays converged', () => {
+    h = makeHarness()
+    // One turn whose thought trace runs to megabytes. Published whole it exceeds
+    // any relay's per-frame limit, and because the outbox is durable it is
+    // re-offered on every reconnect — the connection dies and re-dies forever.
+    const huge: SerializedHistoryMessage = {
+      seq: 1,
+      role: 'assistant',
+      content: 'the answer',
+      thoughts: [{ id: 't1', type: 'text', content: 'x'.repeat(600_000), timestamp: '2026-01-01T00:00:00Z' }],
+      ts: 1001,
+    } as SerializedHistoryMessage
+    h.a.transcripts.set(SESSION_KEY, [huge])
+    expect(h.a.feed.publishOwnedTail(SESSION_KEY)).toBe(1)
+
+    const replicated = cachedTranscript(h.b)
+    expect(replicated).toHaveLength(1)
+    // The message still arrives, identified by the same seq, and its text is
+    // intact — only the unbounded part is gone.
+    expect(replicated[0].seq).toBe(1)
+    expect(replicated[0].content).toBe('the answer')
+    expect(JSON.stringify(replicated[0]).length).toBeLessThan(300_000)
+
+    // And the trim is stable: re-publishing an unchanged transcript must not
+    // look like a revision, or every sweep would append another copy.
+    expect(h.a.feed.publishOwnedTail(SESSION_KEY)).toBe(0)
+    expect(h.a.feed.publishOwnedTail(SESSION_KEY)).toBe(0)
+  })
+
   it('self-heals a dropped entries frame on the retransmit backstop', () => {
     h = makeHarness()
     h.a.transcripts.set(SESSION_KEY, [msg(1)])
