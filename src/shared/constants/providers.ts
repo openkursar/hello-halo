@@ -561,6 +561,25 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     icon: 'brain',
     notes: 'Uses OAuth PKCE flow. Requires anthropic-beta: oauth-2025-04-20 header. Tool names must be prefixed with mcp_'
   },
+  {
+    id: 'openai-codex',
+    name: 'Codex',
+    authType: 'oauth',
+    apiUrl: 'https://chatgpt.com/backend-api/codex',
+    apiType: 'responses',
+    models: [
+      { id: 'gpt-6-astra', name: 'GPT-6-Astra' },
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' },
+      { id: 'gpt-5.6-terra', name: 'GPT-5.6-Terra' },
+      { id: 'gpt-5.6-luna', name: 'GPT-5.6-Luna' },
+      { id: 'gpt-5.5', name: 'GPT-5.5' }
+    ],
+    description: 'Login with ChatGPT account (Plus/Pro/Business subscription)',
+    website: 'https://chatgpt.com/',
+    region: 'global',
+    icon: 'terminal',
+    notes: 'Speaks the Codex Responses wire. Requests are reshaped by the openai-codex provider adapter.'
+  },
 ]
 
 // ============================================================================

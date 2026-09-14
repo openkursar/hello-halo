@@ -52,6 +52,7 @@ import { getCustomProvider } from './providers/custom.provider'
 import { getGitHubCopilotProvider } from './providers/github-copilot.provider'
 import { getClaudeProvider } from './providers/claude.provider'
 import { getZhipuCodingOAuthProvider } from './providers/zhipu-coding-oauth.provider'
+import { getOpenAICodexProvider } from './providers/openai-codex.provider'
 import { getCliDelegatedProvider } from './providers/cli-delegated.provider'
 import { loadAuthProvidersAsync } from './auth-loader'
 import { loadProductConfig } from '../../foundation/product-config'
@@ -96,6 +97,7 @@ class AISourceManager {
     this.registerProvider(getGitHubCopilotProvider())
     this.registerProvider(getClaudeProvider())
     this.registerProvider(getZhipuCodingOAuthProvider())
+    this.registerProvider(getOpenAICodexProvider())
     // Delegated auth depends on the CLI's credential store, whose layout is
     // only verified on macOS. Registering it elsewhere would surface a source
     // that cannot be logged into. See product.json `platforms`.
@@ -869,11 +871,13 @@ class AISourceManager {
       return { success: false, error: 'Source not found' }
     }
 
-    // Call provider logout if OAuth
+    // Call provider logout if OAuth. The config is passed so a provider that can
+    // revoke its credential upstream does so before the local copy is dropped.
     if (source.authType === 'oauth') {
       const provider = this.providers.get(source.provider)
       if (provider && this.isOAuthProvider(provider)) {
-        await provider.logout()
+        const decrypted = this.getDecryptedAiSources().sources.find(s => s.id === sourceId) || source
+        await provider.logout(this.buildLegacyOAuthConfig(decrypted))
       }
     }
 
@@ -1210,7 +1214,9 @@ class AISourceManager {
         loggedIn: true,
         user: source.user,
         model: effectiveModel,
-        availableModels: source.availableModels.map(m => m.id),
+        // Runtime-tolerant: a legacy or externally written source can omit the
+        // list, and a throw here would abort logout before the source is deleted.
+        availableModels: (source.availableModels || []).map(m => m.id),
         accessToken: source.accessToken,
         refreshToken: source.refreshToken,
         tokenExpires: source.tokenExpires

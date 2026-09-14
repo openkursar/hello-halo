@@ -25,7 +25,7 @@ import {
   streamAnthropicPassthrough,
   pipeAnthropicPassthrough
 } from '../stream'
-import { isNativeAnthropicHost, normalizeSystemPrompt, safeJsonParse, pickSessionAffinityHeaders, inlineToolSchemaRefs } from '../utils'
+import { isNativeAnthropicHost, normalizeSystemPrompt, safeJsonParse, pickSessionAffinityHeaders, pickSessionId, inlineToolSchemaRefs } from '../utils'
 import { proxyFetch } from '../../services/proxy-fetch'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { runInterceptors } from '../interceptors'
@@ -580,7 +580,7 @@ async function handleOpenAIConversion(
     }
 
     // Apply provider-specific transformations (e.g., Groq temperature fix, OpenRouter headers)
-    const adapterContext: AdapterContext = { originalRequest: requestToSend }
+    const adapterContext: AdapterContext = { originalRequest: requestToSend, sessionId: pickSessionId(sdkHeaders) }
     const adapter = applyProviderAdapter(
       backendUrl,
       openaiRequest as Record<string, unknown>,

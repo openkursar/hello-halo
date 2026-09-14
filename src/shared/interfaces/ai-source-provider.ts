@@ -86,9 +86,13 @@ export interface OAuthProvider {
   checkToken(): Promise<ProviderResult<{ valid: boolean; expiresIn?: number }>>
 
   /**
-   * Logout and clear tokens
+   * Logout and clear tokens.
+   *
+   * `config` is optional so existing providers are unaffected. It is supplied
+   * by the manager so a provider whose issuer supports revocation can revoke
+   * the refresh token upstream before the local copy is deleted.
    */
-  logout(): Promise<ProviderResult<void>>
+  logout(config?: AISourcesConfig): Promise<ProviderResult<void>>
 }
 
 /**
