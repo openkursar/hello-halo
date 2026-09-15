@@ -203,8 +203,8 @@ export function registerTeamIpc(): void {
   ipcMain.handle(TEAM_IPC.listConversations, async (_e, teamId: string) =>
     handle('team:list-conversations', (s) => s.listConversations(teamId))
   )
-  ipcMain.handle(TEAM_IPC.openConversation, async (_e, input: { teamId: string; title?: string }) =>
-    handle('team:open-conversation', (s) => s.openConversation(input.teamId, input.title))
+  ipcMain.handle(TEAM_IPC.openConversation, async (_e, input: { teamId: string; title?: string; memberAppId?: string }) =>
+    handle('team:open-conversation', (s) => s.openConversation(input.teamId, input.title, input.memberAppId))
   )
   ipcMain.handle(
     TEAM_IPC.renameConversation,

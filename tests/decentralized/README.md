@@ -57,6 +57,7 @@ The §2 render-layer subset lives with the other renderer tests:
 npm run build                        # once per code change (suites run the built app)
 
 npm run test:team                    # print the suite catalog + prerequisites
+npm run test:team -- workbench       # task conversation, collaboration, archive/resume and decisions
 npm run test:team -- single          # §1 single-machine fundamentals
 npm run test:team -- federation      # §3 federation, all 62 scenarios (writes RESULTS.md)
 npm run test:team -- upgrade         # §4 upgrade/migration
@@ -86,3 +87,19 @@ Per CHECKLIST-COVERAGE.md: packaged-build installs (keychain/Gatekeeper/firewall
 dialogs), true multi-machine networks (partition/latency/NAT), clock skew, and
 human visual judgment of the render layer. Those stay manual; record results in
 `local_docs/features/数字团队/产品/投产测试清单.md` directly.
+
+### Task workbench verification
+
+`npm run test:team -- workbench` creates one disposable node under the system
+temporary directory and drives real model turns through the public HTTP API.
+It verifies distinct task identities, creator grouping, per-member transcript
+isolation and provenance, directed coordination, archive/resume history, and two
+independent questions for one member across tasks. The node is stopped and its
+credential-bearing test data removed in `finally`. Supply the model through the
+existing test environment variables. Run it after renderer checks, not alongside
+another Electron suite. A missing model response fails the prerequisite; it is
+not counted as a passed collaboration check.
+
+For an endpoint that must bypass the host's system proxy, set
+`HALO_TEST_NO_PROXY=1`; only the disposable cluster Electron processes receive
+`--no-proxy-server`. This does not alter the user's application or OS settings.

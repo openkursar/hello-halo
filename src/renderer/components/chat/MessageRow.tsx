@@ -7,7 +7,7 @@
  * Shared across: MessageList (main chat), AppChatView, ImChatView, SessionDetailView.
  */
 
-import { memo } from 'react'
+import { memo, type ReactNode } from 'react'
 import { MessageItem } from './MessageItem'
 import { CollapsedThoughtProcess, LazyCollapsedThoughtProcess } from './CollapsedThoughtProcess'
 import { TeamSnapshotPanel } from './TeamPanel'
@@ -21,6 +21,7 @@ import {
 import type { Message, Thought } from '../../types'
 
 export interface MessageRowProps {
+  afterThoughts?: ReactNode
   /** The message to render */
   message: Message
 
@@ -52,6 +53,7 @@ export interface MessageRowProps {
 
 export const MessageRow = memo(function MessageRow({
   message,
+  afterThoughts,
   previousCost,
   defaultThoughtsExpanded = false,
   defaultThoughtsMaximized = false,
@@ -104,6 +106,7 @@ export const MessageRow = memo(function MessageRow({
             />
           )}
 
+          {afterThoughts && <div className="my-3 space-y-3">{afterThoughts}</div>}
           {/* Agent Team snapshot — shows completed team collaboration for this turn.
               Derived from thoughts — automatically persisted and available in history. */}
           {hasInlineThoughts && (

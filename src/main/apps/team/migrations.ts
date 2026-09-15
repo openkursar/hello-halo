@@ -312,5 +312,54 @@ export const migrations: Migration[] = [
       // question outlives a restart.
       db.exec(`ALTER TABLE team_members ADD COLUMN awaiting_decision INTEGER NOT NULL DEFAULT 0`)
     }
+  },
+  {
+    version: 14,
+    description: 'Persist task identity and business status independently of execution',
+    up(db) {
+      db.exec(`
+        CREATE TABLE team_work_items (
+          entry_app_id TEXT,
+          id TEXT PRIMARY KEY,
+          team_id TEXT NOT NULL,
+          title TEXT,
+          status TEXT NOT NULL CHECK(status IN ('open', 'completed')),
+          created_by TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX idx_work_items_team ON team_work_items(team_id);
+        ALTER TABLE team_epochs ADD COLUMN work_item_id TEXT;
+        CREATE INDEX idx_team_epochs_work_item ON team_epochs(work_item_id);
+        INSERT INTO team_work_items (entry_app_id, id, team_id, title, status, created_by, created_at, updated_at)
+          SELECT NULL, id, team_id, title,
+            CASE WHEN end_reason = 'completed' THEN 'completed' ELSE 'open' END,
+            NULL, started_at, COALESCE(last_activity_at, started_at)
+          FROM team_epochs;
+        UPDATE team_epochs SET work_item_id = id;
+      `)
+    }
+  },
+  {
+    version: 15,
+    description: 'Store business state directly on task contexts',
+    up(db) {
+      db.exec(`
+        ALTER TABLE team_epochs ADD COLUMN task_status TEXT CHECK(task_status IN ('open', 'completed'));
+        ALTER TABLE team_epochs ADD COLUMN task_title TEXT;
+        ALTER TABLE team_epochs ADD COLUMN task_created_by TEXT;
+        ALTER TABLE team_epochs ADD COLUMN task_entry_app_id TEXT;
+        ALTER TABLE team_epochs ADD COLUMN task_updated_at INTEGER;
+        UPDATE team_epochs SET
+          task_status = (SELECT status FROM team_work_items WHERE id = team_epochs.work_item_id),
+          task_title = (SELECT title FROM team_work_items WHERE id = team_epochs.work_item_id),
+          task_created_by = (SELECT created_by FROM team_work_items WHERE id = team_epochs.work_item_id),
+          task_entry_app_id = (SELECT entry_app_id FROM team_work_items WHERE id = team_epochs.work_item_id),
+          task_updated_at = (SELECT updated_at FROM team_work_items WHERE id = team_epochs.work_item_id);
+        DROP INDEX idx_team_epochs_work_item;
+        ALTER TABLE team_epochs DROP COLUMN work_item_id;
+        DROP TABLE team_work_items;
+      `)
+    }
   }
 ]

@@ -70,9 +70,10 @@ describe('conversation + outcome orchestration', () => {
   const epochMutations: TeamEpoch[] = []
   const profilePublishes: { teamId: string; appId: string }[] = []
 
-  function build(pending?: Set<string>): Orchestration {
+  function build(pending?: Set<string>, lifecycle?: { closeSession?: OrchestrationSessionDeps['closeTeamSession']; onTaskClosed?: (teamId: string, epochId: string) => void }): Orchestration {
     active = new Set<string>()
     const session = makeSession(active)
+    if (lifecycle?.closeSession) session.closeTeamSession = lifecycle.closeSession
     let orch: Orchestration
     bus = createMessageBus({
       store,
@@ -80,6 +81,7 @@ describe('conversation + outcome orchestration', () => {
     })
     orch = createOrchestration({
       store, bus, session,
+      onTaskClosed: lifecycle?.onTaskClosed,
       onEpochMutation: (e) => epochMutations.push(e),
       hasPendingEscalation: (appId) => pending?.has(appId) ?? false,
       onMemberProfileChanged: (teamId, appId) => profilePublishes.push({ teamId, appId }),
@@ -100,6 +102,84 @@ describe('conversation + outcome orchestration', () => {
   })
 
   afterEach(() => { dbManager.closeAll() })
+
+  it('replicated closure coalesces local teardown and closes decisions created while sessions stop without publishing', async () => {
+    let release!: () => void
+    const stopping = new Promise<void>(resolve => { release = resolve })
+    const pending = new Set<string>()
+    const closed = vi.fn(() => pending.clear())
+    const closeSession = vi.fn(async () => {
+      await stopping
+      pending.add(RESEARCHER_APP)
+    })
+    const orch = build(pending, { closeSession, onTaskClosed: closed })
+    const epoch = orch.ensureConversationEpoch(TEAM_ID, nativeConversationChatKey('replicated-close'))
+    store.updateWorkItem(epoch.id, { status: 'completed' })
+    store.endEpoch(epoch.id, Date.now(), 'completed', null)
+    epochMutations.length = 0
+    const first = orch.closeEpochResources(TEAM_ID, epoch.id)
+    const second = orch.closeEpochResources(TEAM_ID, epoch.id)
+    expect(first).toBe(second)
+    expect(orch.noteEpochTurn(TEAM_ID, epoch.id, true)).toBe(false)
+    release()
+    await first
+    expect(pending.size).toBe(0)
+    expect(closed).toHaveBeenCalledTimes(1)
+    expect(closeSession).toHaveBeenCalledTimes(store.listMembersByTeam(TEAM_ID).length)
+    expect(epochMutations).toHaveLength(0)
+    expect(orch.noteEpochTurn(TEAM_ID, epoch.id, true)).toBe(true)
+  })
+
+  it('resource teardown preserves unanswered decisions while business archival closes them afterwards', async () => {
+    const closed = vi.fn()
+    const orch = build(undefined, { onTaskClosed: closed })
+    const epoch = orch.ensureConversationEpoch(TEAM_ID, nativeConversationChatKey('decision-life'))
+    await orch.sealConversationEpoch(TEAM_ID, epoch.id, 'stopped')
+    expect(closed).not.toHaveBeenCalled()
+    store.updateWorkItem(epoch.id, { status: 'completed' })
+    await orch.sealConversationEpoch(TEAM_ID, epoch.id, 'completed')
+    expect(closed).toHaveBeenCalledWith(TEAM_ID, epoch.id)
+  })
+
+  it('normal open turns do not publish or broadcast task refreshes', () => {
+    const orch = build()
+    const epoch = orch.ensureConversationEpoch(TEAM_ID, nativeConversationChatKey('quiet'))
+    epochMutations.length = 0
+    broadcastToAll.mockClear()
+    sendToRenderer.mockClear()
+    for (let index = 0; index < 20; index++) expect(orch.noteEpochTurn(TEAM_ID, epoch.id)).toBe(true)
+    expect(epochMutations).toHaveLength(0)
+    expect(broadcastToAll).not.toHaveBeenCalled()
+    expect(sendToRenderer).not.toHaveBeenCalled()
+  })
+
+  it('clear creates a fresh context while resource pause can reuse its context', async () => {
+    const orch = build()
+    const key = nativeConversationChatKey('clear')
+    const epoch = orch.ensureConversationEpoch(TEAM_ID, key)
+    await orch.sealConversationEpoch(TEAM_ID, epoch.id, 'stopped')
+    expect(orch.ensureConversationEpoch(TEAM_ID, key).id).toBe(epoch.id)
+    await orch.sealConversationEpoch(TEAM_ID, epoch.id, 'cleared')
+    expect(orch.noteEpochTurn(TEAM_ID, epoch.id, true)).toBe(false)
+    const fresh = orch.ensureConversationEpoch(TEAM_ID, key)
+    expect(fresh.id).not.toBe(epoch.id)
+    expect(buildTeamSessionKey(LEAD_APP, TEAM_ID, fresh.id)).not.toBe(buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id))
+  })
+
+  it('only human turns reopen an explicitly completed task and publish once', async () => {
+    const orch = build()
+    const epoch = orch.ensureConversationEpoch(TEAM_ID, nativeConversationChatKey('archive'))
+    store.updateWorkItem(epoch.id, { status: 'completed' })
+    await orch.sealConversationEpoch(TEAM_ID, epoch.id, 'completed')
+    epochMutations.length = 0
+    expect(orch.noteEpochTurn(TEAM_ID, epoch.id)).toBe(false)
+    expect(store.getEpochById(epoch.id)!.workItem!.status).toBe('completed')
+    expect(orch.noteEpochTurn(TEAM_ID, epoch.id, true)).toBe(true)
+    expect(store.getEpochById(epoch.id)!.workItem!.status).toBe('open')
+    expect(epochMutations).toHaveLength(1)
+    orch.noteEpochTurn(TEAM_ID, epoch.id, true)
+    expect(epochMutations).toHaveLength(1)
+  })
 
   it('ensureConversationEpoch creates one per chat, reuses it, and publishes a mutation', () => {
     const orch = build()
@@ -335,7 +415,7 @@ describe('conversation + outcome orchestration', () => {
     store.updateMemberFields(TEAM_ID, RESEARCHER_APP, { awaitingDecision: true })
     profilePublishes.length = 0
 
-    orch.resumeFromEscalation({ teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'yes' })
+    await orch.resumeFromEscalation({ teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'yes' })
 
     expect(store.getMember(TEAM_ID, RESEARCHER_APP)?.awaitingDecision).toBe(false)
     expect(profilePublishes).toContainEqual({ teamId: TEAM_ID, appId: RESEARCHER_APP })

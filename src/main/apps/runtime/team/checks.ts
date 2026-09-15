@@ -126,7 +126,7 @@ export interface TeamChecks {
   viewForTeam(teamId: string): TeamCheckView[]
   viewForEpoch(teamId: string, epochId: string): TeamCheckView[]
   /** The thing this check belonged to ended — drop them all. */
-  clearEpoch(teamId: string, epochId: string): void
+  clearEpoch(teamId: string, epochId: string, options?: { replicate?: boolean }): void
   /** Apply a replicated row authored elsewhere (never re-published). */
   applyReplicated(check: TeamCheck): void
   /** Apply a replicated removal authored elsewhere (never re-published). */
@@ -283,11 +283,11 @@ export function createTeamChecks(deps: TeamChecksDeps): TeamChecks {
     publish('delete', check)
   }
 
-  function clearEpoch(teamId: string, epochId: string): void {
+  function clearEpoch(teamId: string, epochId: string, options?: { replicate?: boolean }): void {
     const removed = store.deleteChecksByEpoch(teamId, epochId)
     for (const check of removed) {
       disarmJob(check.id)
-      publish('delete', check)
+      if (options?.replicate !== false) publish('delete', check)
     }
     if (removed.length > 0) {
       console.log(`${LOG_TAG} cleared ${removed.length} check(s) with epoch=${epochId}`)
@@ -297,6 +297,13 @@ export function createTeamChecks(deps: TeamChecksDeps): TeamChecks {
   // ── Replicated writes (authored on another node) ──
 
   function applyReplicated(check: TeamCheck): void {
+    const epoch = store.getEpochById(check.epochId)
+    if (epoch?.endReason === 'cleared' || epoch?.workItem?.status === 'completed') {
+      store.deleteCheck(check.id)
+      disarmJob(check.id)
+      console.log(`${LOG_TAG} replicated check discarded: team=${check.teamId} epoch=${check.epochId} id=${check.id} reason=task closed`)
+      return
+    }
     const target = memberOf(check.teamId, check.targetAppId)
     // The owning machine has the final say: a check set against a member whose
     // owner does not accept them is withdrawn here, not merely ignored, so the

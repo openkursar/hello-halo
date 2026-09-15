@@ -255,7 +255,7 @@ function resolveTeamBacking(teamId: string, memberAppId: string, chatKey: string
     )
     return null
   }
-  const epoch = runtime.ensureConversationEpoch(teamId, chatKey)
+  const epoch = runtime.ensureConversationEpoch(teamId, chatKey, undefined, undefined, memberAppId)
   return {
     teamId,
     epochId: epoch.id,
@@ -703,6 +703,7 @@ export async function dispatchInboundMessage(
     const displayName = msg.chatName ?? msg.fromName ?? msg.chatId
     registry.register(app.id, msg.channel, msg.chatId, msg.chatType, instanceId, {
       displayName,
+      teamContext: teamBacking ? { teamId: teamBacking.teamId, epochId: teamBacking.teamContext.epochId } : undefined,
       lastSender: msg.fromName,
       lastMessage: truncateUtf16Safe(msg.body, 50),
     })
@@ -756,7 +757,7 @@ export async function dispatchInboundMessage(
         // starts a fresh one (the team's equivalent of clearing chat context).
         // Only this chat's epoch is affected — other chats keep their context.
         await getActiveTeamRuntime()?.sealConversationEpoch(
-          teamBacking.teamId, teamBacking.epochId, 'stopped', 'Cleared by user'
+          teamBacking.teamId, teamBacking.epochId, 'cleared', 'Cleared by user'
         )
       } else {
         await clearImSession(app.id, app.spaceId!, msg.channel, msg.chatType, msg.chatId)

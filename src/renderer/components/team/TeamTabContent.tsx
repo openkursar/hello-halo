@@ -7,23 +7,22 @@
  */
 
 import { useEffect, useState } from 'react'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, Loader2 } from 'lucide-react'
 import { useTeamStore } from '../../stores/team.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
-import { useIsMobile } from '../../hooks/useIsMobile'
+import { api } from '../../api'
 import { useTranslation } from '../../i18n'
 import { TeamList } from './TeamList'
 import { TeamView } from './TeamView'
-import { TeamEmptyState } from './TeamEmptyState'
 import { TeamCreateDialog } from './TeamCreateDialog'
 import { TeamJoinDialog } from './TeamJoinDialog'
 
 export function TeamTabContent() {
   const { t } = useTranslation()
-  const isMobile = useIsMobile()
 
-  const teams = useTeamStore(s => s.teams)
+  const error = useTeamStore(s => s.error)
+  const loading = useTeamStore(s => s.isLoadingDetail)
   const currentTeamId = useTeamStore(s => s.currentTeamId)
   const detail = useTeamStore(s => s.detail)
   const loadTeams = useTeamStore(s => s.loadTeams)
@@ -43,6 +42,18 @@ export function TeamTabContent() {
     void loadApps()
   }, [loadTeams, loadApps])
 
+  useEffect(() => api.onAppEscalationResolved(data => {
+    const event = data as { appId?: string; entryId?: string }
+    const state = useTeamStore.getState()
+    if (!event.appId || !state.detail?.pendingEscalations?.some(entry => entry.appId === event.appId && entry.entryId === event.entryId)) return
+    const team = useTeamStore.getState().currentTeamId
+    if (team) {
+      void useTeamStore.getState().loadDetail(team)
+      void useTeamStore.getState().loadConversations(team)
+    }
+    void useTeamStore.getState().loadTeams()
+  }), [])
+
   // One-click join: an invite staged by a halo:// deep link opens the join
   // dialog pre-filled the moment this tab is visible.
   useEffect(() => {
@@ -52,44 +63,18 @@ export function TeamTabContent() {
   const openCreate = () => setShowCreate(true)
   const openJoin = () => setShowJoin(true)
 
-  const rightPane = detail
-    ? <TeamView detail={detail} />
-    : <TeamEmptyState hasTeams={teams.length > 0} onNewTeam={openCreate} onJoinOffice={openJoin} />
 
   return (
     <>
-      {!isMobile ? (
-        <div className="flex flex-1 overflow-hidden">
-          <div className="flex w-60 flex-shrink-0 flex-col overflow-hidden border-r border-border">
-            <TeamList onNewTeam={openCreate} onJoinOffice={openJoin} />
-          </div>
-          <div className="flex flex-1 flex-col overflow-hidden">{rightPane}</div>
-        </div>
-      ) : (
-        <div className="flex flex-1 flex-col overflow-hidden">
-          {currentTeamId ? (
-            <>
-              <div className="flex flex-shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-                <button
-                  onClick={() => selectTeam(null)}
-                  className="flex items-center gap-1 text-sm text-primary"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                  {t('Teams')}
-                </button>
-              </div>
-              <div className="flex flex-1 flex-col overflow-hidden">{rightPane}</div>
-            </>
-          ) : teams.length === 0 ? (
-            // With no teams there is no list to show, and the only explanation
-            // of what a team is lives in the empty state — which on mobile has
-            // no right pane to appear in.
-            <TeamEmptyState hasTeams={false} onNewTeam={openCreate} onJoinOffice={openJoin} />
-          ) : (
-            <TeamList onNewTeam={openCreate} onJoinOffice={openJoin} />
-          )}
-        </div>
-      )}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {currentTeamId ? detail ? <TeamView key={detail.team.id} detail={detail} /> : <div className="flex flex-1 flex-col items-center justify-center gap-3 p-4">
+          {loading ? <Loader2 className="animate-spin text-muted-foreground" /> : <>
+            <p role="alert" className="text-sm text-destructive">{error || t('Could not open this team.')}</p>
+            <button onClick={() => void useTeamStore.getState().loadDetail(currentTeamId)} className="text-sm text-primary">{t('Retry')}</button>
+          </>}
+          <button onClick={() => selectTeam(null)} className="flex items-center gap-1 text-sm text-primary"><ChevronLeft size={16} />{t('Teams')}</button>
+        </div> : <TeamList onNewTeam={openCreate} onJoinOffice={openJoin} />}
+      </div>
 
       {showCreate && (
         <TeamCreateDialog

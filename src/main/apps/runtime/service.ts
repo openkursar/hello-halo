@@ -88,6 +88,7 @@ const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000
  * @returns Fully initialized AppRuntimeService
  */
 export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService {
+  const answeringTeamDecisions = new Set<string>()
   const { store, appManager, scheduler, eventRouter, memory, background } = deps
   const imSessionRegistry = deps.imSessionRegistry ?? null
 
@@ -546,7 +547,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       if (result.outcome === 'useful' && store.getRun(result.runId)?.status === 'waiting_user') {
         // The run resulted in an escalation - find the pending escalation entry
         const entries = store.getEntriesForApp(app.id, { type: 'escalation', limit: 1 })
-        const pendingEntry = entries.find(e => !e.userResponse)
+        const pendingEntry = entries.find(e => !e.userResponse && !e.content.resolution)
         if (pendingEntry) {
           // Close any orphan escalation entries from previous runs before
           // setting the new pendingEscalationId. This prevents stale entries
@@ -667,6 +668,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       const now = Date.now()
 
       for (const entry of pendingEscalations) {
+        // Team decisions outlive the execution and remain answerable after idle cleanup.
+        if (entry.content.teamContext) continue
         const app = appManager.getApp(entry.appId)
         if (!app) continue
 
@@ -681,7 +684,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         // entry's user_response_json is still NULL, so it appears in
         // getAllPendingEscalations(). If we timeout the orphan, the app
         // instantly errors out — which is the bug we're fixing.
-        if (app.pendingEscalationId && entry.id !== app.pendingEscalationId) {
+        if (!entry.content.teamContext && app.pendingEscalationId && entry.id !== app.pendingEscalationId) {
           store.closeOrphanEscalations(app.id, app.pendingEscalationId)
           console.log(
             `[Runtime] Closed orphan escalation: app=${app.id}, orphan=${entry.id}, ` +
@@ -1175,6 +1178,43 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         throw new EscalationNotFoundError(appId, entryId)
       }
 
+      const teamContext = entry.content.teamContext
+      if (teamContext) {
+        if (answeringTeamDecisions.has(entryId)) throw new Error('This decision is already being answered')
+        answeringTeamDecisions.add(entryId)
+        try {
+          const runtime = getActiveTeamRuntime()
+          const decision = [response.choice, response.text].filter(Boolean).join(' — ') || 'Proceed.'
+          const resumed = await runtime?.resumeFromEscalation({
+            teamId: teamContext.teamId, epochId: teamContext.epochId,
+            appId, taskId: teamContext.taskId, response: decision,
+            question: entry.content.question || entry.content.summary,
+          })
+          if (!resumed) throw new Error('The task is unavailable. Your decision remains pending.')
+          store.updateEntryResponse(entryId, response)
+          runtime!.reconcileAwaitingDecision(appId)
+          try {
+            runtime!.blackboard.postActivity({
+              id: `decision:${entryId}`, teamId: teamContext.teamId, epochId: teamContext.epochId,
+              kind: 'decision', actorAppId: appId, subject: entry.content.question || entry.content.summary,
+              body: decision, status: 'ok', refId: entryId,
+            })
+          } catch (error) {
+            console.error('[Runtime] Decision receipt could not be added to task history', { appId, entryId, teamId: teamContext.teamId, error })
+          }
+          const stillWaiting = store.getAllPendingEscalations().some(item => item.appId === appId)
+          const app = appManager.getApp(appId)
+          if (app?.status === 'waiting_user' && !stillWaiting) appManager.updateStatus(appId, 'active')
+          broadcastToAll('app:escalation:resolved', { appId, entryId, response, teamId: teamContext.teamId, epochId: teamContext.epochId })
+          sendToRenderer('app:escalation:resolved', { appId, entryId, response, teamId: teamContext.teamId, epochId: teamContext.epochId })
+          console.log(`[Runtime] Team decision accepted: app=${appId} entry=${entryId} team=${teamContext.teamId} epoch=${teamContext.epochId}`)
+        } catch (error) {
+          console.error('[Runtime] Team decision resume failed; leaving answer pending', { appId, entryId, error })
+          throw error
+        } finally { answeringTeamDecisions.delete(entryId) }
+        return
+      }
+
       // Record the user's response
       store.updateEntryResponse(entryId, response)
 
@@ -1195,35 +1235,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       // outside a team turn is answered here and nowhere else, so it has to
       // settle here too. A no-op for an app in no team.
       getActiveTeamRuntime()?.reconcileAwaitingDecision(appId)
-
-      // ── Team escalation: resume the TEAM turn, not a solo run ──────────────
-      // A team member's escalation was raised inside a team-channel turn. The
-      // user's answer must be delivered back into that team turn so coordination
-      // continues; a member must NEVER fall through to a solo automation run
-      // (that would run it outside the team and create a stray run record).
-      const teamContext = entry.content.teamContext
-      if (teamContext) {
-        const parts: string[] = []
-        if (response.choice) parts.push(response.choice)
-        if (response.text) parts.push(response.text)
-        const decision = parts.join(' — ') || 'Proceed.'
-        const teamRuntime = getActiveTeamRuntime()
-        const resumed = teamRuntime?.resumeFromEscalation({
-          teamId: teamContext.teamId,
-          epochId: teamContext.epochId,
-          appId,
-          taskId: teamContext.taskId,
-          response: decision,
-          question: entry.content.question || entry.content.summary,
-        })
-        if (!resumed) {
-          console.warn(
-            `[Runtime] Team escalation answered but team/epoch is gone; not resuming: ` +
-            `app=${appId}, team=${teamContext.teamId}, epoch=${teamContext.epochId}`
-          )
-        }
-        return
-      }
 
       // Resume the original run with the escalation context.
       // Unlike creating a new run, we reopen the existing run so the entire

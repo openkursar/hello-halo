@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, appendFileSync, readFileSync, writeFileSync } fr
 import { join } from 'path'
 import { jsonrepair } from 'jsonrepair'
 import { TRANSPARENT_TOOLS } from '../../services/agent/constants'
+import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import type { ImageAttachment, ImageMediaType } from '../../../shared/types/image-attachment'
 
 // ============================================
@@ -31,6 +32,7 @@ export interface StoredEvent {
   type: string
   /** Whether this is a synthetic trigger message (not from SDK stream) */
   _isTrigger?: boolean
+  _teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'>
   /** The SDK message payload */
   message?: {
     role?: string
@@ -73,6 +75,7 @@ interface ThoughtsSummaryRecord {
 interface MessageRecord {
   id: string
   role: 'user' | 'assistant'
+  metadata?: { teamTriggerKind?: string; correlationId?: string }
   content: string
   timestamp: string
   thoughts?: ThoughtRecord[]
@@ -93,7 +96,7 @@ export interface SessionWriter {
    * stored as base64 image blocks in the trigger content (same trade-off as
    * main-chat conversation JSON) so chat bubbles survive the JSONL reload.
    */
-  writeTrigger(content: string, images?: ImageAttachment[]): void
+  writeTrigger(content: string, images?: ImageAttachment[], teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'>): void
 }
 
 /** Get the directory for run session files */
@@ -134,7 +137,7 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
       appendLine({ _ts: new Date().toISOString(), ...event } as StoredEvent)
     },
 
-    writeTrigger(content, images): void {
+    writeTrigger(content, images, teamOrigin): void {
       const blocks: Array<Record<string, unknown>> = [{ type: 'text', text: content }]
       for (const img of images ?? []) {
         blocks.push({
@@ -147,6 +150,7 @@ export function openSessionWriter(spacePath: string, appId: string, runId: strin
         _ts: new Date().toISOString(),
         type: 'user',
         _isTrigger: true,
+        ...(teamOrigin ? { _teamOrigin: teamOrigin } : {}),
         message: { role: 'user', content: blocks },
       })
     },
@@ -302,6 +306,7 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
   // ── Text merge state (mirrors stream-processor.ts logic) ──
   // lastText holds the candidate final text for the current turn.
   // hadSubstantiveTool tracks whether a non-transparent tool appeared since lastText was set.
+  let teamMetadata: MessageRecord['metadata']
   let lastText = ''
   let lastTextTs = ''
   let hadSubstantiveTool = false
@@ -329,6 +334,7 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
     const record: MessageRecord = {
       id: `session-msg-${++msgIdx}`,
       role: 'assistant',
+      ...(teamMetadata ? { metadata: teamMetadata } : {}),
       content,
       timestamp: lastTextTs || lastThoughtTs || pendingResultTs || new Date().toISOString(),
     }
@@ -375,6 +381,7 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
         // Normal user message (trigger or escalation response).
         // Flush the current turn before showing the user message.
         flush()
+        teamMetadata = event._teamOrigin ? { teamTriggerKind: event._teamOrigin.kind ?? 'human_message', correlationId: event._teamOrigin.correlationId } : undefined
         const textContent = extractTextContent(content)
         // Image blocks become bubble attachments only for trigger records (our
         // own format) — SDK round-trip user events may carry image blocks that
@@ -384,6 +391,7 @@ export function convertEventsToMessages(events: StoredEvent[]): MessageRecord[] 
           messages.push({
             id: `session-msg-${++msgIdx}`,
             role: 'user',
+            ...(teamMetadata ? { metadata: teamMetadata } : {}),
             content: textContent,
             timestamp: ts,
             ...(images.length > 0 ? { images } : {}),

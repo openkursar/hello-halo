@@ -428,7 +428,7 @@ export function registerTeamRoutes(app: Express): void {
       const service = getServiceOrFail(res)
       if (!service) return
       const title = typeof req.body?.title === 'string' ? req.body.title : undefined
-      res.json({ success: true, data: service.openConversation(req.params.teamId, title) })
+      res.json({ success: true, data: service.openConversation(req.params.teamId, title, typeof req.body?.memberAppId === 'string' ? req.body.memberAppId : undefined) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

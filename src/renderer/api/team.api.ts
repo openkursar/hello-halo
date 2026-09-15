@@ -88,9 +88,9 @@ export const teamApi = {
   },
 
   /** Open a brand-new native team conversation ("New session"). */
-  teamOpenConversation: async (teamId: string, title?: string): Promise<ApiResponse> => {
-    if (isElectron()) return window.halo.teamOpenConversation({ teamId, title })
-    return httpRequest('POST', `/api/teams/${teamId}/conversations`, title ? { title } : {})
+  teamOpenConversation: async (teamId: string, title?: string, memberAppId?: string): Promise<ApiResponse> => {
+    if (isElectron()) return window.halo.teamOpenConversation({ teamId, title, memberAppId })
+    return httpRequest('POST', `/api/teams/${teamId}/conversations`, { title, memberAppId })
   },
 
   /** Rename a conversation (office-shared: replicated to every node). */

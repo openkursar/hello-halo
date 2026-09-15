@@ -18,6 +18,14 @@ export type OfficeSkin = 'default' | 'cartoon'
 export const DEFAULT_OFFICE_SKIN: OfficeSkin = 'cartoon'
 
 interface TeamViewPrefsState {
+  memberByTask: Record<string, Record<string, string>>
+  rememberTaskMember: (teamId: string, taskId: string, appId: string) => void
+  taskByTeam: Record<string, string | null>
+  setLastTask: (teamId: string, taskId: string | null) => void
+
+  groupsByTeam: Record<string, Record<string, boolean>>
+  setTaskGroup: (teamId: string, group: string, open: boolean) => void
+
   /** teamId → chosen skin. Absent means "use the default". */
   skinByTeam: Record<string, OfficeSkin>
   setOfficeSkin: (teamId: string, skin: OfficeSkin) => void
@@ -34,6 +42,14 @@ interface TeamViewPrefsState {
 export const useTeamViewPrefsStore = create<TeamViewPrefsState>()(
   persist(
     (set) => ({
+      memberByTask: {},
+      rememberTaskMember: (teamId, taskId, appId) => set(state => ({ memberByTask: { ...state.memberByTask, [teamId]: { ...state.memberByTask[teamId], [taskId]: appId } } })),
+      taskByTeam: {},
+      setLastTask: (teamId, taskId) => set(state => ({ taskByTeam: { ...state.taskByTeam, [teamId]: taskId } })),
+      groupsByTeam: {},
+      setTaskGroup: (teamId, group, open) => set(state => ({ groupsByTeam: {
+        ...state.groupsByTeam, [teamId]: { ...state.groupsByTeam[teamId], [group]: open },
+      } })),
       skinByTeam: {},
       setOfficeSkin: (teamId, skin) =>
         set((state) => ({ skinByTeam: { ...state.skinByTeam, [teamId]: skin } })),
@@ -48,6 +64,9 @@ export const useTeamViewPrefsStore = create<TeamViewPrefsState>()(
     {
       name: 'halo-team-view-prefs',
       partialize: (state) => ({
+        memberByTask: state.memberByTask,
+        taskByTeam: state.taskByTeam,
+        groupsByTeam: state.groupsByTeam,
         skinByTeam: state.skinByTeam,
         defaultMemberByTeam: state.defaultMemberByTeam,
       }),

@@ -449,7 +449,7 @@ describe('TeamStore', () => {
       const epoch = makeEpoch()
       store.insertEpoch(epoch)
       // An epoch no turn has entered yet is exactly as recent as its start.
-      expect(store.getEpochById(epoch.id)).toEqual({ ...epoch, lastActivityAt: epoch.startedAt })
+      expect(store.getEpochById(epoch.id)).toMatchObject({ ...epoch, lastActivityAt: epoch.startedAt })
 
       store.endEpoch(epoch.id, 9999, 'completed', 'All tasks done')
       const ended = store.getEpochById(epoch.id)!
@@ -494,4 +494,69 @@ describe('TeamStore', () => {
       expect(store.listEpochsByTeam('team-1').map(e => e.id)).toEqual(['e2', 'e1'])
     })
   })
+  describe('business task lifetime', () => {
+    it('keeps task identity, title and owner when execution is sealed and resumed', () => {
+      store.insertTeam(makeTeam())
+      store.insertEpoch(makeEpoch())
+      store.updateWorkItem('epoch-1', { title: 'Ship the report', createdBy: 'owner-a', entryAppId: 'app-1' })
+      store.endEpoch('epoch-1', Date.now(), 'completed', null)
+      expect(store.getEpochById('epoch-1')!.workItem).toMatchObject({ id: 'epoch-1', title: 'Ship the report', status: 'open', createdBy: 'owner-a', entryAppId: 'app-1' })
+      store.updateWorkItem('epoch-1', { status: 'completed' })
+      store.reopenEpoch('epoch-1')
+      expect(store.getEpochById('epoch-1')!.workItem!.status).toBe('completed')
+      store.updateWorkItem('epoch-1', { status: 'open' })
+      expect(store.getEpochById('epoch-1')!.workItem!.status).toBe('open')
+    })
+
+    it('does not let an older or legacy replica erase task metadata', () => {
+      store.insertTeam(makeTeam())
+      store.insertEpoch(makeEpoch())
+      const old = store.getEpochById('epoch-1')!
+      store.updateWorkItem(old.id, { title: 'New title', status: 'completed', createdBy: 'owner-a' })
+      store.upsertEpoch(old)
+      expect(store.getEpochById(old.id)!.workItem).toMatchObject({ title: 'New title', status: 'completed', createdBy: 'owner-a' })
+      const { workItem, ...legacy } = old
+      store.upsertEpoch(legacy)
+      expect(store.getEpochById(old.id)!.workItem!.title).toBe('New title')
+    })
+
+    it('cannot revive cleared context with a delayed replica but accepts explicit completed-task resume', () => {
+      store.insertTeam(makeTeam())
+      store.insertEpoch(makeEpoch())
+      const original = store.getEpochById('epoch-1')!
+      store.endEpoch(original.id, 200, 'cleared', 'reset')
+      store.upsertEpoch(original)
+      expect(store.getEpochById(original.id)!.endReason).toBe('cleared')
+      store.insertEpoch(makeEpoch({ id: 'resume' }))
+      store.updateWorkItem('resume', { status: 'completed' })
+      store.endEpoch('resume', 300, 'completed', null)
+      const completed = store.getEpochById('resume')!
+      store.upsertEpoch({ ...completed, endedAt: null, endReason: null,
+        workItem: { ...completed.workItem!, status: 'open', updatedAt: completed.workItem!.updatedAt + 1 } })
+      expect(store.getEpochById('resume')).toMatchObject({ endedAt: null, workItem: { status: 'open' } })
+    })
+
+    it('ignores foreign task metadata without aborting replica application', () => {
+      store.insertTeam(makeTeam())
+      store.insertTeam(makeTeam({ id: 'team-2', name: 'Another team' }))
+      store.insertEpoch(makeEpoch())
+      const workItem = store.getEpochById('epoch-1')!.workItem!
+      expect(() => store.insertEpoch(makeEpoch({ id: 'foreign', teamId: 'team-2', workItem: { ...workItem, teamId: 'team-2' } }))).not.toThrow()
+      expect(store.getEpochById('foreign')!.workItem).toMatchObject({ id: 'foreign', teamId: 'team-2', status: 'open' })
+      expect(store.getEpochById('epoch-1')!.workItem).toEqual(workItem)
+    })
+
+    it('migrates sealed history without guessing the current owner', () => {
+      const manager = createDatabaseManager(':memory:')
+      try {
+        const db = manager.getAppDatabase()
+        manager.runMigrations(db, MIGRATION_NAMESPACE, migrations.filter(migration => migration.version < 14))
+        db.prepare(`INSERT INTO team_epochs (id, team_id, started_at, ended_at, end_reason, lifecycle, title) VALUES (?, ?, ?, ?, ?, ?, ?)`).run('legacy', 'team-1', 100, 200, 'completed', 'conversation', 'Historical task')
+        manager.runMigrations(db, MIGRATION_NAMESPACE, migrations)
+        const migrated = new TeamStore(db).getEpochById('legacy')!
+        expect(migrated.workItem).toMatchObject({ id: 'legacy', title: 'Historical task', status: 'completed', createdBy: null, createdAt: 100 })
+      } finally { manager.closeAll() }
+    })
+  })
+
 })

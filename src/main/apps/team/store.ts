@@ -15,6 +15,8 @@
  */
 
 import type Database from 'better-sqlite3'
+import { workItemFromRow, applyWorkItem, updateWorkItem } from './work-items'
+import type { TeamWorkItem } from '../../../shared/apps/team-types'
 import type {
   Team,
   TeamMember,
@@ -1035,6 +1037,10 @@ export class TeamStore implements ITeamStore {
     this.db.prepare(`DELETE FROM blackboard_findings WHERE id = ?`).run(findingId)
   }
 
+  listFindingsByTeam(teamId: string): BlackboardFinding[] {
+    return (this.db.prepare('SELECT * FROM blackboard_findings WHERE team_id = ?').all(teamId) as BlackboardFindingRow[]).map(rowToFinding)
+  }
+
   listFindingsByEpoch(teamId: string, epochId: string): BlackboardFinding[] {
     return (this.stmtListFindingsByEpoch.all(teamId, epochId) as BlackboardFindingRow[]).map(rowToFinding)
   }
@@ -1067,6 +1073,25 @@ export class TeamStore implements ITeamStore {
     return (this.stmtListActivityByEpoch.all(teamId, epochId) as TeamActivityRow[]).map(rowToActivity)
   }
 
+  listRecentActivityByEpoch(teamId: string, epochId: string, limit: number): TeamActivity[] {
+    const rows = this.db.prepare(`SELECT * FROM team_activity WHERE team_id = ? AND epoch_id = ?
+      ORDER BY created_at DESC, id DESC LIMIT ?`).all(teamId, epochId, limit) as TeamActivityRow[]
+    return rows.reverse().map(rowToActivity)
+  }
+
+  getConversationStats(teamId: string, ownAppIds: string[]): { involved: Set<string>; outputCounts: Map<string, number> } {
+    const own = JSON.stringify(ownAppIds)
+    const involved = ownAppIds.length ? this.db.prepare(`SELECT DISTINCT epoch_id FROM team_activity
+      WHERE team_id = ? AND (actor_app_id IN (SELECT value FROM json_each(?)) OR target_app_id IN (SELECT value FROM json_each(?)))
+      UNION SELECT DISTINCT epoch_id FROM blackboard_tasks WHERE team_id = ?
+      AND (created_by_app_id IN (SELECT value FROM json_each(?)) OR assignee_app_id IN (SELECT value FROM json_each(?)))`).all(teamId, own, own, teamId, own, own) as { epoch_id: string }[] : []
+    const counts = this.db.prepare(`SELECT epoch_id, COUNT(*) AS count FROM (
+      SELECT epoch_id, ref FROM blackboard_findings WHERE team_id = ? AND ref IS NOT NULL AND ref != ''
+      UNION SELECT epoch_id, result_ref AS ref FROM blackboard_tasks WHERE team_id = ? AND result_ref IS NOT NULL AND result_ref != ''
+    ) GROUP BY epoch_id`).all(teamId, teamId) as { epoch_id: string; count: number }[]
+    return { involved: new Set(involved.map(row => row.epoch_id)), outputCounts: new Map(counts.map(row => [row.epoch_id, row.count])) }
+  }
+
   listActivityByTeam(teamId: string): TeamActivity[] {
     return (this.stmtListActivityByTeam.all(teamId) as TeamActivityRow[]).map(rowToActivity)
   }
@@ -1077,7 +1102,19 @@ export class TeamStore implements ITeamStore {
 
   // ── team_epochs ─────────────────────────────────
 
+  private hydrateEpoch(row: TeamEpochRow): TeamEpoch {
+    return { ...rowToEpoch(row), workItem: workItemFromRow(row) }
+  }
+
+  updateWorkItem(epochId: string, patch: Partial<Pick<TeamWorkItem, 'title' | 'status' | 'createdBy' | 'entryAppId'>>): void {
+    updateWorkItem(this.db, epochId, patch)
+  }
+
   insertEpoch(epoch: TeamEpoch, triggerType: TeamRunTriggerType = 'manual'): void {
+    this.db.transaction(() => this.insertEpochRecord(epoch, triggerType))()
+  }
+
+  private insertEpochRecord(epoch: TeamEpoch, triggerType: TeamRunTriggerType): void {
     this.stmtInsertEpoch.run({
       id: epoch.id,
       team_id: epoch.teamId,
@@ -1092,6 +1129,7 @@ export class TeamStore implements ITeamStore {
       outcome: epoch.outcome ?? null,
       last_activity_at: epoch.lastActivityAt ?? epoch.startedAt,
     })
+    applyWorkItem(this.db, epoch)
   }
 
   /** Stamp a turn entering this epoch, so a list of work can sort by recency. */
@@ -1101,7 +1139,7 @@ export class TeamStore implements ITeamStore {
 
   getEpochById(epochId: string): TeamEpoch | null {
     const row = this.stmtGetEpochById.get(epochId) as TeamEpochRow | undefined
-    return row ? rowToEpoch(row) : null
+    return row ? this.hydrateEpoch(row) : null
   }
 
   /** Seal an epoch: stamp its end time, reason, archival summary, and outcome. */
@@ -1124,6 +1162,7 @@ export class TeamStore implements ITeamStore {
   /** Rename a conversation epoch (null clears the title back to a derived label). */
   renameEpoch(epochId: string, title: string | null): void {
     this.stmtRenameEpoch.run({ id: epochId, title })
+    updateWorkItem(this.db, epochId, { title })
   }
 
   /**
@@ -1132,9 +1171,18 @@ export class TeamStore implements ITeamStore {
    * converges (single writer = the office authority; later write wins).
    */
   upsertEpoch(epoch: TeamEpoch, triggerType?: TeamRunTriggerType): void {
+    this.db.transaction(() => this.upsertEpochRecord(epoch, triggerType))()
+  }
+
+  private upsertEpochRecord(epoch: TeamEpoch, triggerType?: TeamRunTriggerType): void {
     const existing = this.stmtGetEpochById.get(epoch.id) as TeamEpochRow | undefined
     if (!existing) {
       this.insertEpoch(epoch, triggerType ?? epoch.triggerType ?? 'manual')
+      return
+    }
+    // Clearing is an irreversible context boundary, unlike completing a task.
+    if (existing.end_reason === 'cleared' && epoch.endReason !== 'cleared') {
+      console.warn('[TeamStore] Ignored stale epoch write after clear', { teamId: epoch.teamId, epochId: epoch.id })
       return
     }
     this.db
@@ -1160,6 +1208,7 @@ export class TeamStore implements ITeamStore {
         // that erased by an authority row that predates it.
         last_activity_at: epoch.lastActivityAt ?? epoch.startedAt,
       })
+    applyWorkItem(this.db, epoch)
   }
 
   /** Reopen a sealed epoch (reversible-seal wake): clear ended_at/end_reason, keep summary. */
@@ -1167,30 +1216,50 @@ export class TeamStore implements ITeamStore {
     this.stmtReopenEpoch.run(epochId)
   }
 
+  getEpochSummaryStats(teamId: string): Map<string, { taskCount: number; doneCount: number; lastActivityAt: number }> {
+    const rows = this.db.prepare(`SELECT epoch_id, SUM(task_count) AS taskCount,
+      SUM(done_count) AS doneCount, MAX(last_activity_at) AS lastActivityAt FROM (
+      SELECT epoch_id, COUNT(*) AS task_count, SUM(status = 'done') AS done_count,
+        MAX(updated_at) AS last_activity_at FROM blackboard_tasks WHERE team_id = ? GROUP BY epoch_id
+      UNION ALL SELECT epoch_id, 0, 0, MAX(created_at) FROM blackboard_findings WHERE team_id = ? GROUP BY epoch_id
+    ) GROUP BY epoch_id`).all(teamId, teamId) as { epoch_id: string; taskCount: number; doneCount: number; lastActivityAt: number }[]
+    return new Map(rows.map(row => [row.epoch_id, row]))
+  }
+
+  getLatestEpochForTeam(teamId: string): TeamEpoch | null {
+    const row = this.db.prepare('SELECT * FROM team_epochs WHERE team_id = ? ORDER BY started_at DESC, id DESC LIMIT 1').get(teamId) as TeamEpochRow | undefined
+    return row ? this.hydrateEpoch(row) : null
+  }
+
   listEpochsByTeam(teamId: string): TeamEpoch[] {
-    return (this.stmtListEpochsByTeam.all(teamId) as TeamEpochRow[]).map(rowToEpoch)
+    return (this.stmtListEpochsByTeam.all(teamId) as TeamEpochRow[]).map(row => this.hydrateEpoch(row))
   }
 
   /** The team's open (not-yet-sealed) epoch, or null when idle. */
   getCurrentEpochForTeam(teamId: string): TeamEpoch | null {
     const row = this.stmtGetCurrentEpochForTeam.get(teamId) as TeamEpochRow | undefined
-    return row ? rowToEpoch(row) : null
+    return row ? this.hydrateEpoch(row) : null
   }
 
   /** The open 'conversation' epoch for a (team, chat), or null. */
+  getLatestConversationEpoch(teamId: string, chatKey: string): TeamEpoch | null {
+    const row = this.db.prepare(`SELECT * FROM team_epochs WHERE team_id = ? AND chat_key = ? AND lifecycle = 'conversation' ORDER BY started_at DESC, id DESC LIMIT 1`).get(teamId, chatKey) as TeamEpochRow | undefined
+    return row ? this.hydrateEpoch(row) : null
+  }
+
   getOpenConversationEpoch(teamId: string, chatKey: string): TeamEpoch | null {
     const row = this.stmtGetOpenConversationEpoch.get(teamId, chatKey) as TeamEpochRow | undefined
-    return row ? rowToEpoch(row) : null
+    return row ? this.hydrateEpoch(row) : null
   }
 
   /** All open 'conversation' epochs of a team, newest first. */
   listOpenConversationEpochs(teamId: string): TeamEpoch[] {
-    return (this.stmtListOpenConversationEpochs.all(teamId) as TeamEpochRow[]).map(rowToEpoch)
+    return (this.stmtListOpenConversationEpochs.all(teamId) as TeamEpochRow[]).map(row => this.hydrateEpoch(row))
   }
 
   /** All open epochs (run + conversation) of a team, newest first. */
   listOpenEpochs(teamId: string): TeamEpoch[] {
-    return (this.stmtListOpenEpochs.all(teamId) as TeamEpochRow[]).map(rowToEpoch)
+    return (this.stmtListOpenEpochs.all(teamId) as TeamEpochRow[]).map(row => this.hydrateEpoch(row))
   }
 
   // ── team_checks ─────────────────────────────────

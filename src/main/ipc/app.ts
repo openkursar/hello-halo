@@ -667,7 +667,8 @@ export function registerAppHandlers(): void {
       try {
         const space = getSpace(input.spaceId)
         if (!space?.path) {
-          return { success: true, data: [] }
+          console.warn('[AppIPC] IM history unavailable: missing space', { appId: input.appId, spaceId: input.spaceId })
+          return { success: false, error: 'The conversation storage is unavailable.' }
         }
         const messages = loadImChatMessages(space.path, input.appId, input.channel, input.chatType, input.chatId)
         return { success: true, data: messages }

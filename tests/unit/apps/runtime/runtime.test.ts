@@ -415,6 +415,23 @@ describe('ActivityStore', () => {
     setupAppRecord(testAppId)
   })
 
+  it('closes only the archived task decisions without inventing a user response', () => {
+    for (const epochId of ['task-a', 'task-b']) store.insertEntry(createTestEntry({
+      id: epochId, appId: testAppId, type: 'escalation',
+      content: { summary: 'Confirm', teamContext: { teamId: 'team', epochId } },
+    }))
+    expect(store.hasPendingEscalation(testAppId, 'team', 'task-a')).toBe(true)
+    const closed = store.closeTaskEscalations('team', 'task-a')
+    expect(closed).toHaveLength(1)
+    expect(closed[0].userResponse).toBeUndefined()
+    expect(closed[0].content.resolution?.reason).toBe('task_closed')
+    expect(store.getPendingEscalation(testAppId, 'task-a')).toBeNull()
+    expect(store.hasPendingEscalation(testAppId, 'team', 'task-a')).toBe(false)
+    expect(store.getAllPendingEscalations().map(entry => entry.id)).toEqual(['task-b'])
+    expect(store.closeTaskEscalations('team', 'task-a')).toHaveLength(0)
+    expect(store.getEntriesForApp(testAppId, { type: 'escalation', teamId: 'team', epochId: 'task-a' }).map(entry => entry.id)).toEqual(['task-a'])
+  })
+
   // ── Run Operations ──────────────────────────
 
   describe('Run Operations', () => {
@@ -952,6 +969,20 @@ describe('ActivityStore', () => {
   // ── Orphan Escalation Cleanup ──────────────────
 
   describe('closeOrphanEscalations', () => {
+    it('keeps independent team questions when another question is answered or solo cleanup runs', () => {
+      const runId = createTestRunId()
+      store.insertRun({ runId, appId: testAppId, sessionKey: 'team-session', status: 'running', triggerType: 'manual', startedAt: 1000 })
+      for (const epochId of ['task-a', 'task-b']) {
+        store.insertEntry({ id: epochId, appId: testAppId, runId, type: 'escalation', ts: 1000,
+          content: { summary: epochId, question: epochId, teamContext: { teamId: 'team', epochId } } })
+      }
+      expect(store.closeOrphanEscalations(testAppId, 'task-b')).toBe(0)
+      store.updateEntryResponse('task-b', { ts: 2000, text: 'Approved B' })
+      expect(store.closeOrphanEscalations(testAppId)).toBe(0)
+      expect(store.getEntry('task-a')!.userResponse).toBeFalsy()
+      expect(store.getEntry('task-b')!.userResponse!.text).toBe('Approved B')
+    })
+
     it('should close orphan entries while keeping the active entry open', () => {
       const activeEntryId = randomUUID()
       const orphanEntryId = randomUUID()

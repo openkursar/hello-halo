@@ -118,21 +118,16 @@ The coupling is inverted through `TeamDeliveryHooks` (see "Integration seam").
   trains the reader to skip the block, taking the real facts with it. If stalled
   work needs surfacing, it belongs to something whose job is judgment (a lead's
   sweep, a periodic check) — not to the delta.
-- `turn-report.ts` — the lead is told, once, whenever a member's turn ends.
-  Everything else here is pull or opt-in, so a member that finishes without
-  calling `team_send` left the lead with nothing to react to AND no turn in which
-  to notice — see "Output is not delivery" below for why that is not a prompt
-  problem. What travels is the FACT of an ending and never a word the member
-  said, which is what keeps it clear of the rule that killed auto-delivery.
-  Three constraints shape it, and each cost more than it looks. It never
-  concludes: "ended with no error" is stated as exactly that, because a model
-  that quit early ends the same way as one that is done, and a reassuring word is
-  the one output that stops the lead looking. It claims a member filed NOTHING
-  only when it watched the whole turn — that combination is the strongest
-  evidence of an early quit, which is precisely why it must never be guessed. And
-  it counts acts as they are FILED rather than reading them back afterwards: on a
-  joined office a member's writes travel to the authority and return replicated,
-  so the store can still be empty at the moment its own turn ends.
+- `turn-report.ts` — reports endings of explicit collaboration turns to the lead.
+  Human conversations (including unspecified origins) produce no report. Every
+  collaboration ending is reported regardless of who requested the work or whom
+  the member messaged. Explicit messages do not replace lifecycle notifications.
+  The report carries the observed fate, filed acts, a request excerpt (200 codepoints) and final reply
+  excerpt (500 codepoints), never a full-session retrieval link or a completion
+  claim. Errors remain visible; a manual stop must not be automatically restarted
+  or reassigned. Reports coalesce while the lead is busy. Its next ending, even a
+  human conversation ending, releases existing collaboration notices. Completed
+  tasks are checked both before flush and before buffered/in-flight-gated delivery.
 - `checks.ts` — periodic checks: one member's standing instruction for another
   ("from now on, every half hour, look at this"). Two rules shape it: the alarm
   is armed only on the machine that OWNS the target (so the setter can shut their
@@ -218,27 +213,27 @@ mailbox, which produced exactly what a wrong guess produces:
 - and the target received two things per exchange — the message the model chose
   to send, plus the one the system added.
 
-So the rule is the one Claude Code's own team tooling states: *your plain output
-is not visible to other agents — to communicate you must call the tool*. The
-cost is that a model which forgets to call `team_send` leaves its colleague
-waiting.
+Explicit communication uses `team_send`. Sending a message or result to any
+teammate does not suppress the independent ending notice to the lead. This holds
+for work requested by the lead and for work requested by another member.
 
-**The rule governs CONTENT, and only content.** It was over-applied once, and
-the cost was the whole feature going quiet: with no forwarding at all, a member
-that forgot to call the tool — or crashed, or was stopped by hand — produced no
-signal of any kind, so the lead took no further turn and no code looked. That is
-not the same problem. Which listener a closing line was meant for is
-unanswerable; **who stopped** is not a sentence anyone uttered, it is something
-the system watched happen. `turn-report.ts` sends that and nothing else. The
-digest's failed attempt is the constraint it had to clear (see `board-digest.ts`:
-an inference from absence fires forever and trains the reader to skip the block)
-and it clears it — every line is a fate that was observed, and a turn that was
-not watched produces no claim about it.
+For explicit collaboration, the runtime may send bounded request/reply excerpts
+with the observed fate. A lifecycle notice reaches the lead even when the
+collaboration topology gives the lead no communication edge to the member;
+coordination status is independent of permission to receive message content.
+Excerpts and content-bearing act/error descriptions require both the executing
+member and the original requester to be contactable by the lead. Structured
+teams with an unknown requester therefore send status only. The check runs when
+the notice is delivered, including after a busy-lead coalescing delay.
 
-**What is still open.** Only the lead is told: a member that messages a PEER and
-gets no answer learns nothing, exactly as before. And the content gap is
-untouched by design — knowing that someone stopped is not knowing what they
-found, and the only way to hear that is still their own `team_send`.
+This deliberately accepts a bounded duplicate of an explicitly sent result for
+coordination context; it does not convert a final reply into another team message
+or suppress any member-ending notice. The report explicitly says that excerpts
+are not addressed to the lead and do not prove the requester received a reply.
+They are neither instructions nor a claim that the task is complete. Human
+conversations do not participate, and absent trigger origin defaults to human.
+Only manual stops prohibit automatic restart or reassignment. No full
+conversation-reading capability is introduced.
 
 Two reporters, one notice, because no single point sees every ending. The
 session layer reports every turn that actually RAN — the one place a person's
@@ -515,6 +510,14 @@ recoverable, and must never read as idle" below.
   It suppresses the drain ALONE, deliberately, rather than reusing the early
   return: a receipt someone is holding must still be settled, or the seal turns
   a person's cross-machine chat into an hours-long silence.
+- `noteMemberTurnEnded` also handles a lead completing through direct app chat,
+  which has no bus-owned completion promise. It schedules an end-of-tick fallback:
+  an explicitly tracked bus-owned turn consumes its own pending seal only after
+  its result promise settles, preserving `sealPending` even if session cleanup
+  spans multiple ticks. A direct turn's fallback seals before its deferred
+  mailbox drain. Both paths use the same task-completion and epoch-archive
+  operation. Closed-task wakes discard remaining queued deliveries instead of
+  borrowing `sealPending` when no seal will follow.
 - `drainMailbox(sessionKey)` — the session layer's liveness nudge (drain #2
   above). Idempotent; a busy or reserved session is a no-op.
 - `isSessionOccupied(sessionKey)` — can this session take a turn: a streaming
@@ -704,7 +707,7 @@ order the person works through them. Three consequences the code must keep:
   can absorb or supersede an old one instead of piling on.
 - `resumeFromEscalation` **quotes the question** it answers. Without it, an
   answer to the older of two open questions binds to the newer one.
-- The user-facing queue is worked oldest-first (`components/team/EscalationPanel`).
+- The user-facing decision queue is worked oldest-first (`components/team/workbench/useTaskDecisions`).
   The app record's single `pendingEscalationId` is only ever the newest and
   cannot express a queue; the activity store (`getAllPendingEscalations`) is the
   truth for "what is still open".
@@ -786,7 +789,8 @@ path (§3.5):
   — and a concurrent scheduled run — coexist without collision. They are never
   auto-sealed on quiescence (going quiet after a reply is the normal "awaiting
   next message" state); a single chat is sealed by `sealConversationEpoch` on
-  `/clear`, and all end on dissolve. The mode is persisted on
+  `/clear` with terminal reason `cleared` (the next inbound message opens a new
+  context), and all end on dissolve. The mode is persisted on
   `team_epochs.lifecycle` (`'run' | 'conversation'`, v3) and the chat scope on
   `team_epochs.chat_key` (v4); `getCurrentEpochForTeam` is filtered to run epochs
   so open conversation epochs never shadow it.
@@ -1124,3 +1128,36 @@ mailboxes are per-session arrays consumed serially (one actor = one
 single-threaded turn). Pending completion receipts are keyed by `correlationId`.
 Overlapping writes from different actors target disjoint keys, so there is no
 clobber.
+
+
+## Workbench task lifetime and decisions
+
+Business task metadata lives on its existing epoch row in apps/team and travels
+inside the epoch replication envelope. There is one epoch per task, not a separate
+one-to-many execution identity. Resource sealing (`stopped`) preserves business
+status and allows the existing context to resume. Explicit archival completes
+the task; only a subsequent human request may reopen it. A background turn cannot
+reopen a completed task. IM `/clear` uses terminal `cleared` sealing, so the next
+inbound message receives a new epoch and session context. Native task creation
+always allocates a unique chat key, even when a member is selected.
+
+An already-open epoch does not publish another epoch record or broadcast a team
+update merely because a turn starts. Replication follows lifecycle or business
+state changes; reads do not create work.
+
+`resumeFromEscalation` returns an asynchronous admission result. The caller must
+await it before resolving the persisted question. The member waiting indicator
+is recomputed from remaining persisted questions rather than cleared wholesale.
+Team questions are excluded from the solo automation orphan-cleanup rule, which
+cannot represent several concurrent task questions. Decision receipts are
+append-only coordination activities, visible after refresh and restart.
+
+### Replicated task closure
+
+Explicit business completion and IM context clearing close pending decisions after
+local sessions have stopped, including decisions emitted during teardown. Both
+local archival and an applied authority/replica epoch use the same coalesced local
+resource cleanup. Replica cleanup resets the mailbox and closes local sessions
+without publishing another epoch; the original lifecycle write remains the sole
+replicated transition. Human resume waits until local teardown has finished.
+Resource-only seals retain unanswered decisions.

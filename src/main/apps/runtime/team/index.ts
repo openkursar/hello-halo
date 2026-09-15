@@ -11,7 +11,7 @@ import { createTeamChecks } from './checks'
 import { createBoardDigest } from './board-digest'
 import { createBoardArchive } from './board-archive'
 import { createTurnReport } from './turn-report'
-import type { MemberTurnFate } from './turn-report'
+import type { NoteTurnEndedInput } from './turn-report'
 import type { TeamChecks } from './checks'
 import type { BoardDigest } from './board-digest'
 import type { BoardArchive } from './board-archive'
@@ -171,14 +171,7 @@ export interface TeamRuntime {
    * one point every team turn converges on, so it covers the paths the team
    * orchestration never sees (a person's chat, a relayed turn, an IM-backed one).
    */
-  noteMemberTurnEnded(params: {
-    appId: string
-    teamId: string
-    epochId: string
-    fate: MemberTurnFate
-    correlationId?: string
-    triggerKind?: TeamTriggerContext['kind']
-  }): void
+  noteMemberTurnEnded(params: NoteTurnEndedInput): void
   /**
    * Re-derive whether a member owned by this machine still owes its own person
    * an answer, and share the result with the office. Only the owner can see the
@@ -190,13 +183,15 @@ export interface TeamRuntime {
   reconcileAwaitingDecision(appId: string): void
   startEpoch(teamId: string, trigger?: TeamRunTrigger): Promise<TeamEpoch>
   /** Get/create a per-chat long-lived 'conversation' epoch (message-driven entries, e.g. IM). */
-  ensureConversationEpoch(teamId: string, chatKey: string, title?: string): TeamEpoch
+  ensureConversationEpoch(teamId: string, chatKey: string, title?: string, createdBy?: string, entryAppId?: string): TeamEpoch
   /** Rename a conversation epoch (captured + replicated office-wide). */
   renameConversationEpoch(teamId: string, epochId: string, title: string | null): void
   /** Auto-name an untitled native conversation from the person's first message. */
   maybeAutoNameConversation(teamId: string, epochId: string, fromHuman: boolean, message: string): void
   /** A turn is entering this epoch: stamp its activity, and wake it if hibernated. */
-  noteEpochTurn(teamId: string, epochId: string): void
+  noteEpochTurn(teamId: string, epochId: string, fromHuman?: boolean): boolean
+  /** Tear down a replicated closed task locally without publishing another epoch. */
+  applyClosedTask(teamId: string, epochId: string): Promise<void>
   sealEpoch(teamId: string, endReason: EpochEndReason, summary?: string | null): Promise<void>
   /** Seal a single conversation epoch (e.g. an IM chat cleared by the user). */
   sealConversationEpoch(teamId: string, epochId: string, endReason?: EpochEndReason, summary?: string | null): Promise<void>
@@ -223,7 +218,7 @@ export interface TeamRuntime {
     response: string
     /** Several may be open at once; without it an answer binds to the wrong one. */
     question?: string
-  }): boolean
+  }): Promise<boolean>
 }
 
 export interface CreateTeamRuntimeDeps {
@@ -287,11 +282,13 @@ export interface CreateTeamRuntimeDeps {
    * and run history converge office-wide (P0-1). Absent → no replication.
    */
   onEpochMutation?: (epoch: TeamEpoch) => void
+  /** Resolve pending decisions after the task's local sessions have stopped. */
+  onTaskClosed?: (teamId: string, epochId: string) => void
   /**
    * Persisted unanswered-escalation check (activity store), so waiting_user
    * survives a run seal and a restart (P0-5). Absent → in-memory only.
    */
-  hasPendingEscalation?: (appId: string, teamId: string) => boolean
+  hasPendingEscalation?: (appId: string, teamId: string, epochId?: string) => boolean
   /** Human name for an IM chatKey (IM session registry). Absent → raw chat id. */
   describeChatKey?: (teamId: string, chatKey: string) => string | null
   /**
@@ -375,6 +372,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     onMemberProfileChanged: deps.onMemberProfileChanged,
     onEpochMutation: deps.onEpochMutation,
     hasPendingEscalation: deps.hasPendingEscalation,
+    onTaskClosed: deps.onTaskClosed,
     describeChatKey: deps.describeChatKey,
     renderDigest: (teamId, epochId, viewerAppId) => digest.render({ teamId, epochId, viewerAppId }),
     noteTurnEnded: (input) => turnReport.noteTurnEnded(input),
@@ -451,19 +449,33 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     getMemberBusy: (appId, teamId) => orchestration!.getMemberBusy(appId, teamId),
     noteMemberStatusChanged: (teamId) => orchestration!.noteMemberStatusChanged(teamId),
     noteMemberTurnStarted: (params) => turnReport.noteTurnStarted(params),
-    noteMemberTurnEnded: (params) => turnReport.noteTurnEnded(params),
+    noteMemberTurnEnded: (params) => {
+      orchestration!.noteMemberTurnEnded(params)
+      turnReport.noteTurnEnded(params)
+    },
     reconcileAwaitingDecision: (appId) => orchestration!.reconcileAwaitingDecision(appId),
     startEpoch: (teamId, trigger) => orchestration!.startEpoch(teamId, trigger),
-    ensureConversationEpoch: (teamId, chatKey, title) =>
-      orchestration!.ensureConversationEpoch(teamId, chatKey, title),
+    ensureConversationEpoch: (teamId, chatKey, title, createdBy, entryAppId) =>
+      orchestration!.ensureConversationEpoch(teamId, chatKey, title, createdBy, entryAppId),
     renameConversationEpoch: (teamId, epochId, title) =>
       orchestration!.renameConversationEpoch(teamId, epochId, title),
     maybeAutoNameConversation: (teamId, epochId, fromHuman, message) =>
       orchestration!.maybeAutoNameConversation(teamId, epochId, fromHuman, message),
-    noteEpochTurn: (teamId, epochId) => orchestration!.noteEpochTurn(teamId, epochId),
+    noteEpochTurn: (teamId, epochId, fromHuman) => orchestration!.noteEpochTurn(teamId, epochId, fromHuman),
+    applyClosedTask: async (teamId, epochId) => {
+      const epoch = store.getEpochById(epochId)
+      if (epoch?.teamId !== teamId || (epoch.endReason !== 'cleared' && epoch.workItem?.status !== 'completed')) return
+      checks?.clearEpoch(teamId, epochId, { replicate: false })
+      await orchestration!.closeEpochResources(teamId, epochId)
+      digest.clearEpoch(epochId)
+      archive.clearEpoch(epochId)
+      turnReport.clearEpoch(epochId)
+    },
     sealEpoch: (teamId, reason, summary) => orchestration!.sealEpoch(teamId, reason, summary),
-    sealConversationEpoch: (teamId, epochId, reason, summary) =>
-      orchestration!.sealConversationEpoch(teamId, epochId, reason, summary),
+    sealConversationEpoch: async (teamId, epochId, reason, summary) => {
+      if (reason === 'completed' || reason === 'cleared') deps.onTaskClosed?.(teamId, epochId)
+      await orchestration!.sealConversationEpoch(teamId, epochId, reason, summary)
+    },
     requestSeal: (teamId, epochId, summary) => orchestration!.requestSeal(teamId, epochId, summary),
     captureReport: (correlationId, outcome) => orchestration!.captureReport(correlationId, outcome),
     buildPromptContext: (teamId, selfAppId) =>
@@ -581,5 +593,5 @@ export type { BoardDigest } from './board-digest'
 export { createBoardArchive } from './board-archive'
 export type { BoardArchive } from './board-archive'
 export { createTurnReport } from './turn-report'
-export type { TurnReport, MemberTurnFate } from './turn-report'
+export type { TurnReport, MemberTurnFate, NoteTurnEndedInput } from './turn-report'
 export { renderBoardMarkdown } from './board-render'

@@ -1,8 +1,11 @@
+let conversationGeneration = 0
+
 /** Renderer state for the Digital Team feature. */
 
 import { useMemo } from 'react'
 import { create } from 'zustand'
 import { api } from '../api'
+import { useTeamViewPrefsStore } from './team-view-prefs.store'
 import { useNotificationStore } from './notification.store'
 import i18n from '../i18n'
 import type {
@@ -105,6 +108,7 @@ interface TeamState {
 
   // ── Conversations (office-shared sessions) ─
   conversations: TeamConversation[]
+  conversationsError: string | null
   isLoadingConversations: boolean
   /** Selected conversation in the Conversation tab (null = none open yet). */
   selectedConversationId: string | null
@@ -250,6 +254,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   epochs: [],
   isLoadingEpochs: false,
   conversations: [],
+  conversationsError: null,
   isLoadingConversations: false,
   selectedConversationId: null,
 
@@ -286,7 +291,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       activeFlows: [],
       epochs: [],
       conversations: [],
-      selectedConversationId: null,
+      selectedConversationId: teamId ? useTeamViewPrefsStore.getState().taskByTeam[teamId] ?? null : null,
     })
     if (teamId) {
       void get().loadDetail(teamId)
@@ -312,7 +317,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
           const known = new Set(prevMembers.map(m => m.appId))
           notifyMembersJoined(detail.team.name, detail.members.filter(m => isRemoteMember(m) && !known.has(m.appId)))
         }
-        set({ detail })
+        set({ detail: { ...detail, activities: [...(detail.activities ?? [])].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id)).slice(0, 500) } })
       } else if (!res.success) {
         set({ error: (res.error as string) || i18n.t('Couldn\u2019t open this team. Please try again.') })
       }
@@ -343,6 +348,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     try {
       const res = await api.teamEpochBoard(teamId, epochId)
       if (res.success && res.data) return res.data as EpochBoard
+      console.warn('[TeamStore] Task history rejected', { teamId, epochId, error: res.error })
       return null
     } catch (err) {
       console.error('[TeamStore] loadEpochBoard error:', err)
@@ -353,27 +359,24 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   // ── Conversations ────────────────────────
 
   loadConversations: async (teamId) => {
-    set({ isLoadingConversations: true })
+    const generation = ++conversationGeneration
+    set({ isLoadingConversations: true, conversationsError: null })
     try {
       const res = await api.teamListConversations(teamId)
-      if (get().currentTeamId !== teamId) return
+      if (get().currentTeamId !== teamId || generation !== conversationGeneration) return
       if (res.success && Array.isArray(res.data)) {
         const conversations = res.data as TeamConversation[]
-        // Keep the current selection if it still exists; else fall back to the
-        // first writable conversation (never auto-select a read-only IM chat).
-        const sel = get().selectedConversationId
-        const stillThere = sel && conversations.some(c => c.epochId === sel)
-        set({
-          conversations,
-          selectedConversationId: stillThere
-            ? sel
-            : conversations.find(c => !c.readonly)?.epochId ?? conversations[0]?.epochId ?? null,
-        })
+        const selected = get().selectedConversationId
+        set({ conversations, ...(selected && !conversations.some(item => item.epochId === selected) ? { selectedConversationId: null } : {}) })
+      } else {
+        console.warn('[TeamStore] Task list rejected', { teamId, error: res.error })
+        set({ conversationsError: i18n.t('Could not load tasks. Please try again.') })
       }
     } catch (err) {
       console.error('[TeamStore] loadConversations error:', err)
+      if (get().currentTeamId === teamId && generation === conversationGeneration) set({ conversationsError: i18n.t('Could not load tasks. Please try again.') })
     } finally {
-      if (get().currentTeamId === teamId) set({ isLoadingConversations: false })
+      if (get().currentTeamId === teamId && generation === conversationGeneration) set({ isLoadingConversations: false })
     }
   },
 
@@ -383,7 +386,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       if (res.success && res.data) {
         const epochId = (res.data as { epochId: string }).epochId
         await get().loadConversations(teamId)
-        set({ selectedConversationId: epochId })
+        get().selectConversation(epochId)
         return epochId
       }
       notifyError(i18n.t('Couldn\u2019t start a new session'), (res.error as string) || undefined)
@@ -395,10 +398,6 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   },
 
   renameConversation: async (teamId, epochId, title) => {
-    // Optimistic: reflect the new label immediately, then confirm with the server.
-    set(s => ({
-      conversations: s.conversations.map(c => c.epochId === epochId ? { ...c, label: title ?? c.label } : c),
-    }))
     try {
       const res = await api.teamRenameConversation(teamId, epochId, title)
       if (res.success) {
@@ -416,15 +415,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     try {
       const res = await api.teamArchiveConversation(teamId, epochId)
       if (res.success) {
-        set(s => {
-          const conversations = s.conversations.filter(c => c.epochId !== epochId)
-          return {
-            conversations,
-            selectedConversationId: s.selectedConversationId === epochId
-              ? conversations.find(c => !c.readonly)?.epochId ?? null
-              : s.selectedConversationId,
-          }
-        })
+        await get().loadConversations(teamId)
         void get().loadEpochs(teamId)
         return true
       }
@@ -435,7 +426,11 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     }
   },
 
-  selectConversation: (epochId) => set({ selectedConversationId: epochId }),
+  selectConversation: (epochId) => {
+    const teamId = get().currentTeamId
+    if (teamId) useTeamViewPrefsStore.getState().setLastTask(teamId, epochId)
+    set({ selectedConversationId: epochId })
+  },
 
   // ── Create ───────────────────────────────
 
@@ -788,7 +783,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
         // is dropped rather than duplicating the feed.
         const activities = detail.activities ?? []
         if (activities.some(a => a.id === activity.id)) return {}
-        return { detail: { ...detail, activities: [activity, ...activities] } }
+        return { detail: { ...detail, activities: [activity, ...activities].slice(0, 500) } }
       }
       if (task) {
         const exists = detail.tasks.some(tk => tk.id === task.id)

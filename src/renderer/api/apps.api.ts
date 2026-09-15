@@ -93,13 +93,16 @@ export const appsApi = {
     return httpRequest('GET', `/api/apps/${appId}/state`)
   },
 
-  appGetActivity: async (appId: string, options?: { limit?: number; offset?: number; type?: string; since?: number }): Promise<ApiResponse> => {
+  appGetActivity: async (appId: string, options?: { limit?: number; offset?: number; type?: string; since?: number; teamId?: string; epochId?: string }): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.appGetActivity({ appId, options })
     }
     const params = new URLSearchParams()
     if (options?.limit) params.set('limit', String(options.limit))
     if (options?.offset) params.set('offset', String(options.offset))
+    if (options?.type) params.set('type', options.type)
+    if (options?.teamId) params.set('teamId', options.teamId)
+    if (options?.epochId) params.set('epochId', options.epochId)
     if (options?.since) params.set('before', String(options.since))
     const qs = params.toString()
     return httpRequest('GET', `/api/apps/${appId}/activity${qs ? '?' + qs : ''}`)
@@ -380,6 +383,9 @@ export const appsApi = {
 
   onAppActivityEntry: (callback: (data: unknown) => void) =>
     onEvent('app:activity_entry:new', callback),
+
+  onAppEscalationResolved: (callback: (data: unknown) => void) =>
+    onEvent('app:escalation:resolved', callback),
 
   onAppEscalation: (callback: (data: unknown) => void) =>
     onEvent('app:escalation:new', callback),

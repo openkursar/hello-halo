@@ -393,16 +393,12 @@ export const useAppsStore = create<AppsState>((set, get) => ({
           )
           return {
             activityEntries: { ...state.activityEntries, [appId]: updated },
-            // Clear waiting_user status optimistically
-            apps: state.apps.map(a =>
-              a.id === appId
-                ? { ...a, status: 'active' as AppStatus, pendingEscalationId: undefined }
-                : a
-            ),
+
           }
         })
         return true
       }
+      console.warn('[AppsStore] Escalation answer rejected', { appId, escalationId, error: res.error })
       return false
     } catch (err) {
       console.error('[AppsStore] respondToEscalation error:', err)

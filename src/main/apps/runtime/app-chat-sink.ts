@@ -26,6 +26,7 @@
  * so its completion belongs in the conversation.
  */
 
+import type { TeamTriggerContext } from '../../../shared/apps/team-types'
 import type { StreamResult } from '../../services/agent/stream-processor'
 import type { TurnSink } from '../../services/agent/turn-sink'
 import type { ImageAttachment } from '../../services/agent/types'
@@ -132,8 +133,8 @@ class AppChatSink implements TurnSink {
   }
 
   /** Persist a user message to the transcript ahead of the turn it triggers. */
-  writeUserMessage(text: string, images?: ImageAttachment[]): void {
-    this.getWriter()?.writeTrigger(text, images)
+  writeUserMessage(text: string, images?: ImageAttachment[], teamOrigin?: Pick<TeamTriggerContext, 'kind' | 'correlationId'>): void {
+    this.getWriter()?.writeTrigger(text, images, teamOrigin)
   }
 
   // ── TurnSink ───────────────────────────────────────────

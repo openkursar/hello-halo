@@ -469,6 +469,7 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
       'app:list_changed': 'onAppListChanged',
       'app:activity_entry:new': 'onAppActivityEntry',
       'app:escalation:new': 'onAppEscalation',
+      'app:escalation:resolved': 'onAppEscalationResolved',
       'app:navigate': 'onAppNavigate',
       'app:im-session-updated': 'onImSessionUpdated',
       'im-channels:instance-updated': 'onImChannelInstanceUpdated',

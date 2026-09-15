@@ -167,9 +167,9 @@ function busErrorResult(err: unknown) {
 function buildSendTool(ctx: TeamMcpContext) {
   return tool(
     TEAM_TOOL_NAMES.send,
-    'Send a message to a teammate. This is the ONLY way to reach one — your own ' +
-      'output is not shown to teammates, so anything you do not send here, they ' +
-      'never see.\n\n' +
+    'Send a message directly to a teammate. Use this to answer the requester; ' +
+      'the separate turn-end notification to the lead is not a substitute for ' +
+      'sending your result to the teammate who needs it.\n\n' +
       "The message becomes the input of the teammate's next turn. This call " +
       'returns as soon as the message is handed over; if they answer, it arrives ' +
       'later as a new turn of yours — so do not sit and wait for it.\n\n' +

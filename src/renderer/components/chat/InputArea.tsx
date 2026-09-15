@@ -106,7 +106,7 @@ type MentionCandidate =
   | { kind: 'artifact'; key: string; text: string; artifact: Artifact }
 
 interface InputAreaProps {
-  onSend: (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => void
+  onSend: (content: string, images?: ImageAttachment[], thinkingEnabled?: boolean) => void | Promise<void | boolean>
   /** Called when user submits a message while generation is in progress (mid-turn inject) */
   onInject?: (content: string) => void
   /** Stop the current generation. Omit for inject-only inputs that cannot stop the
@@ -116,6 +116,8 @@ interface InputAreaProps {
   isGenerating: boolean
   placeholder?: string
   isCompact?: boolean
+  toolbarSlot?: React.ReactNode
+  draftKey?: string
   /** Available slash commands for the "/" quick-input autocomplete */
   slashCommands?: SlashCommandItem[]
   /** Artifacts available for @ mention suggestions */
@@ -141,6 +143,12 @@ interface InputAreaProps {
   hideKnowledgeControls?: boolean
 }
 
+// Draft attachments stay in memory; image data must not fill browser storage.
+interface InputDraft { content: string; images: ImageAttachment[] }
+const inputDrafts = new Map<string, InputDraft>()
+// A failed send can settle after its original input has been replaced.
+const draftRecoverySubscribers = new Map<string, Set<(draft: InputDraft) => void>>()
+
 // Image constraints
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024  // 20MB max per image (before compression)
 const MAX_IMAGES = 10  // Max images per message
@@ -151,7 +159,7 @@ interface ImageError {
   message: string
 }
 
-export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, slashCommands = [], mentionArtifacts = [], mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false }: InputAreaProps) {
+export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder, isCompact = false, toolbarSlot, draftKey, slashCommands = [], mentionArtifacts = [], mentionConversations = [], hideToolsetControls = false, hideKnowledgeControls = false }: InputAreaProps) {
   const { t } = useTranslation()
   const sendKeyMode = useAppStore(state => state.config?.chat?.sendKeyMode ?? 'enter')
 
@@ -167,9 +175,33 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
     if (!source) return true
     return resolveModelVision(source, source.model)
   }, [aiSources])
-  const [content, setContent] = useState('')
+  const currentDraftKey = useRef(draftKey)
+  currentDraftKey.current = draftKey
+  const [content, setContent] = useState(() => draftKey ? inputDrafts.get(draftKey)?.content ?? '' : '')
   const [isFocused, setIsFocused] = useState(false)
-  const [images, setImages] = useState<ImageAttachment[]>([])
+  const [images, setImages] = useState<ImageAttachment[]>(() => draftKey ? inputDrafts.get(draftKey)?.images ?? [] : [])
+  useEffect(() => {
+    if (!draftKey) return
+    const restore = (draft: InputDraft) => {
+      setContent(current => current || draft.content)
+      setImages(current => current.length ? current : draft.images)
+    }
+    const listeners = draftRecoverySubscribers.get(draftKey) ?? new Set<(draft: InputDraft) => void>()
+    listeners.add(restore)
+    draftRecoverySubscribers.set(draftKey, listeners)
+    const saved = inputDrafts.get(draftKey)
+    if (saved) restore(saved)
+    return () => {
+      listeners.delete(restore)
+      if (!listeners.size) draftRecoverySubscribers.delete(draftKey)
+    }
+  }, [draftKey])
+  useEffect(() => {
+    if (draftKey) {
+      if (content || images.length) inputDrafts.set(draftKey, { content, images })
+      else inputDrafts.delete(draftKey)
+    }
+  }, [draftKey, content, images])
   const [isDragOver, setIsDragOver] = useState(false)
   const [isProcessingImages, setIsProcessingImages] = useState(false)
   const [imageError, setImageError] = useState<ImageError | null>(null)
@@ -573,7 +605,27 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
 
     const hasContent = textToSend || images.length > 0
     if (hasContent) {
-      onSend(textToSend, images.length > 0 ? images : undefined, thinkingEnabled)
+      const sentImages = images
+      const result = onSend(textToSend, sentImages.length > 0 ? sentImages : undefined, thinkingEnabled)
+      if (draftKey) inputDrafts.delete(draftKey)
+      if (draftKey && result instanceof Promise) {
+        const restoreDraft = () => {
+          const recoveryKey = currentDraftKey.current ?? draftKey
+          const saved = inputDrafts.get(recoveryKey)
+          const restored = {
+            content: saved?.content || textToSend,
+            images: saved?.images.length ? saved.images : sentImages,
+          }
+          inputDrafts.set(recoveryKey, restored)
+          draftRecoverySubscribers.get(recoveryKey)?.forEach(listener => listener(restored))
+        }
+        void result.then(accepted => {
+          if (accepted === false) restoreDraft()
+        }).catch(error => {
+          console.warn('[InputArea] Send failed', { draftKey, error })
+          restoreDraft()
+        })
+      }
 
       if (!isOnboardingSendStep) {
         setContent('')
@@ -910,6 +962,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
             onStop={onStop}
             sendKeyMode={sendKeyMode}
             visionEnabled={visionEnabled}
+            toolbarSlot={toolbarSlot}
             hideToolsetControls={hideToolsetControls}
             hideKnowledgeControls={hideKnowledgeControls}
           />
@@ -926,6 +979,7 @@ export function InputArea({ onSend, onInject, onStop, isGenerating, placeholder,
  * Layout: [+attachment] ──────────────────── [⚛ thinking] [send]
  */
 interface InputToolbarProps {
+  toolbarSlot?: React.ReactNode
   isGenerating: boolean
   isOnboarding: boolean
   isProcessingImages: boolean
@@ -950,6 +1004,7 @@ interface InputToolbarProps {
 }
 
 function InputToolbar({
+  toolbarSlot,
   isGenerating,
   isOnboarding,
   isProcessingImages,
@@ -1067,6 +1122,7 @@ function InputToolbar({
 
         {/* Knowledge base loader */}
         {!isGenerating && !isOnboarding && !hideKnowledgeControls && <KnowledgeBaseButton />}
+        {toolbarSlot && <div className="shrink-0">{toolbarSlot}</div>}
       </div>
 
       {/* Right section: Stop (when generating) + Send — fixed, never scrolls */}

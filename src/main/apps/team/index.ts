@@ -103,6 +103,8 @@ interface InitTeamServiceDeps {
   onOfficeDissolved?: TeamServiceDeps['onOfficeDissolved']
   getPendingEscalations?: TeamServiceDeps['getPendingEscalations']
   describeChatKey?: TeamServiceDeps['describeChatKey']
+  getViewerIdentity?: TeamServiceDeps['getViewerIdentity']
+  getConversationMember?: TeamServiceDeps['getConversationMember']
 }
 
 export function initTeamService(deps: InitTeamServiceDeps): TeamService {
@@ -124,6 +126,8 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
     onOfficeDissolved: deps.onOfficeDissolved,
     getPendingEscalations: deps.getPendingEscalations,
     describeChatKey: deps.describeChatKey,
+    getViewerIdentity: deps.getViewerIdentity,
+    getConversationMember: deps.getConversationMember,
   })
   serviceInstance = service
 

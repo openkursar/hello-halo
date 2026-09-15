@@ -393,6 +393,7 @@ async function initPlatformAndApps(): Promise<void> {
             // node's session list. team:updated makes open detail views refresh.
             const epoch = record.payload as unknown as TeamEpoch
             teamStore.upsertEpoch(epoch)
+            applyClosedTaskLocally(record.teamId, epoch.id)
             const team = teamStore.getTeamById(record.teamId)
             const payload = team ? { teamId: record.teamId, team } : { teamId: record.teamId }
             broadcastToAll(TEAM_EVENTS.updated, payload)
@@ -685,6 +686,10 @@ async function initPlatformAndApps(): Promise<void> {
         // the open detail re-fetches and the replicated row appears live, instead
         // of staying silent until a manual refresh.
         onReplicaApplied: (info) => {
+          if (info.op === 'epoch_upsert' && info.taskId) {
+            const epoch = teamStore.getEpochById(info.taskId)
+            if (epoch?.endReason === 'cleared' || epoch?.workItem?.status === 'completed') applyClosedTaskLocally(info.officeId, info.taskId)
+          }
           const team = teamStore.getTeamById(info.officeId)
           const payload = team ? { teamId: info.officeId, team } : { teamId: info.officeId }
           broadcastToAll(TEAM_EVENTS.updated, payload)
@@ -866,6 +871,7 @@ async function initPlatformAndApps(): Promise<void> {
         return {
           appId: e.appId,
           entryId: e.id,
+          entry: e,
           question: e.content.question || e.content.summary || '',
           ...(tc?.teamId ? { teamId: tc.teamId } : {}),
           ...(tc?.epochId ? { epochId: tc.epochId } : {}),
@@ -873,10 +879,31 @@ async function initPlatformAndApps(): Promise<void> {
         }
       })
     }
-    const hasPendingEscalationFor = (appId: string, teamId: string): boolean =>
-      readPendingEscalations().some(
-        (e) => e.appId === appId && (e.teamId ? e.teamId === teamId : true)
-      )
+    function applyClosedTaskLocally(teamId: string, epochId: string): void {
+      const epoch = teamStore?.getEpochById(epochId)
+      if (epoch?.teamId !== teamId || (epoch.endReason !== 'cleared' && epoch.workItem?.status !== 'completed')) return
+      closeTaskDecisions(teamId, epochId)
+      void getActiveTeamRuntime()?.applyClosedTask(teamId, epochId).catch(error => {
+        console.error('[Team] Replicated task teardown failed', { teamId, epochId, error })
+      })
+    }
+
+    function closeTaskDecisions(teamId: string, epochId: string): void {
+      const activityStore = getActivityStore()
+      const closed = activityStore?.closeTaskEscalations(teamId, epochId) ?? []
+      for (const entry of closed) {
+        getActiveTeamRuntime()?.reconcileAwaitingDecision(entry.appId)
+        if (appManager.getApp(entry.appId)?.status === 'waiting_user' && !activityStore!.getAllPendingEscalations().some(item => item.appId === entry.appId)) {
+          appManager.updateStatus(entry.appId, 'active')
+        }
+        broadcastToAll('app:activity_entry:new', { appId: entry.appId, entry })
+        sendToRenderer('app:activity_entry:new', { appId: entry.appId, entry })
+      }
+      if (closed.length) console.log('[Team] Closed pending decisions with task', { teamId, epochId, count: closed.length })
+    }
+
+    const hasPendingEscalationFor = (appId: string, teamId: string, epochId?: string): boolean =>
+      getActivityStore()?.hasPendingEscalation(appId, teamId, epochId) ?? false
 
     setActiveTeamRuntime(
       createTeamRuntime({
@@ -893,6 +920,7 @@ async function initPlatformAndApps(): Promise<void> {
         // waiting_user survives a run seal + restart (P0-5): the persisted
         // activity entry is the truth, not just the in-memory waiter set.
         hasPendingEscalation: hasPendingEscalationFor,
+        onTaskClosed: closeTaskDecisions,
         describeChatKey: describeTeamChatKey,
         // Periodic checks ring on the machine that owns the target member.
         scheduler,
@@ -970,6 +998,13 @@ async function initPlatformAndApps(): Promise<void> {
     )
     initTeamService({
       store: teamStore,
+      getViewerIdentity: () => getLocalIdentity().id,
+      getConversationMember: (teamId, chatKey) => {
+        const parsed = parseTeamChatKey(chatKey)
+        if (!parsed) return undefined
+        const binding = getActiveImChannelManager()?.getInstanceConfig(parsed.instanceId)
+        return binding?.teamId === teamId ? binding.appId : undefined
+      },
       appManager,
       getRuntime: () => getActiveTeamRuntime(),
       getTriggerSync: () => teamTriggerScheduler,

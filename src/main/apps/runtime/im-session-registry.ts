@@ -95,7 +95,7 @@ export class ImSessionRegistry {
     chatId: string,
     chatType: 'direct' | 'group',
     instanceId: string,
-    opts?: { displayName?: string; lastSender?: string; lastMessage?: string }
+    opts?: { displayName?: string; lastSender?: string; lastMessage?: string; teamContext?: ImSessionRecord['teamContext'] }
   ): void {
     const key = this.buildKey(appId, channel, chatId)
     const existing = this.sessions.get(key)
@@ -104,15 +104,17 @@ export class ImSessionRegistry {
       // displayName is intentionally NOT updated — stable after first registration
       existing.lastActiveAt = Date.now()
       existing.instanceId = instanceId // Always update to latest instance
+      const archiveChanged = existing.teamContext?.epochId !== opts?.teamContext?.epochId || existing.teamContext?.teamId !== opts?.teamContext?.teamId
+      existing.teamContext = opts?.teamContext
       if (opts?.lastSender !== undefined) existing.lastSender = opts.lastSender
       if (opts?.lastMessage !== undefined) existing.lastMessage = truncateUtf16Safe(opts.lastMessage, 50)
-      // Activity-only update → throttled persist (high-frequency, low-value).
-      this.requestPersist(false)
+      this.requestPersist(archiveChanged)
     } else {
       const source = classifySessionSource(channel)
       this.sessions.set(key, {
         appId,
         channel,
+        teamContext: opts?.teamContext,
         source,
         instanceId,
         chatId,

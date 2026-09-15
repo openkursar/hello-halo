@@ -58,6 +58,8 @@ const LOG_TAG = '[TeamService]'
 
 export interface TeamServiceDeps {
   store: TeamStore
+  getViewerIdentity?: () => string
+  getConversationMember?: (teamId: string, chatKey: string) => string | undefined
   appManager: AppManagerService
   getRuntime: () => TeamRuntime | null
   spaces: TeamSpaceDeps
@@ -113,6 +115,7 @@ export interface TeamServiceDeps {
 
 /** One unanswered escalation as read from the activity store (bootstrap-injected). */
 export interface PendingEscalationRecord {
+  entry?: import('../../../shared/apps/app-types').ActivityEntry
   appId: string
   entryId: string
   question: string
@@ -217,7 +220,7 @@ export interface TeamService {
    * independent context whose input target is the team lead (front-desk mode).
    * Returns the epoch id the renderer chats against.
    */
-  openConversation(teamId: string, title?: string): { epochId: string }
+  openConversation(teamId: string, title?: string, memberAppId?: string): { epochId: string }
   /** Rename a conversation (office-shared: replicated to every node). */
   renameConversation(teamId: string, epochId: string, title: string | null): void
   /** Archive (seal) a single conversation — it moves to the History archived list. */
@@ -583,13 +586,13 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         }),
         tasks: store.listTasksByEpoch(teamId, epochId),
         findings: store.listFindingsByEpoch(teamId, epochId),
-        activities: store.listActivityByEpoch(teamId, epochId),
+        activities: store.listRecentActivityByEpoch(teamId, epochId, 500),
         pendingEscalations,
         checks,
       }
     }
 
-    const epoch = store.getCurrentEpochForTeam(teamId) ?? store.listEpochsByTeam(teamId)[0] ?? null
+    const epoch = store.getCurrentEpochForTeam(teamId) ?? store.getLatestEpochForTeam(teamId)
     const runtime = getRuntime()
 
     if (epoch && runtime) {
@@ -602,10 +605,8 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         roster: board.roster,
         tasks: board.tasks,
         findings: board.findings,
-        // Read from the store rather than taken off the agent-facing snapshot:
-        // that one drops message bodies and keeps only a recent tail, which is
-        // right for a turn's context and wrong for a person opening the feed.
-        activities: store.listActivityByEpoch(teamId, epoch.id),
+        // The live projection is bounded; explicit task history reads the full board.
+        activities: store.listRecentActivityByEpoch(teamId, epoch.id, 500),
         pendingEscalations,
         checks,
       }
@@ -926,7 +927,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     requireTeam(teamId)
     const epoch = epochId
       ? store.getEpochById(epochId)
-      : store.getCurrentEpochForTeam(teamId) ?? store.listEpochsByTeam(teamId)[0] ?? null
+      : store.getCurrentEpochForTeam(teamId) ?? store.getLatestEpochForTeam(teamId)
     if (!epoch) return []
 
     // task → assignee, finding → author; de-duplicated per member by path.
@@ -972,36 +973,25 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   function listEpochs(teamId: string): TeamEpochSummary[] {
     requireTeam(teamId)
-    return store.listEpochsByTeam(teamId).map((e) => {
-      const tasks = store.listTasksByEpoch(teamId, e.id)
-      const findings = store.listFindingsByEpoch(teamId, e.id)
-      // Deliverables = distinct produced files (task resultRefs + finding refs).
-      const artifactRefs = new Set<string>()
-      for (const tk of tasks) if (tk.resultRef) artifactRefs.add(tk.resultRef)
-      for (const f of findings) if (f.ref) artifactRefs.add(f.ref)
+    const members = store.listMembersByTeam(teamId)
+    const stats = store.getEpochSummaryStats(teamId)
+    const { outputCounts } = store.getConversationStats(teamId, [])
+    return store.listEpochsByTeam(teamId).map(e => {
+      const counts = stats.get(e.id)
       return {
         id: e.id,
         startedAt: e.startedAt,
-        // Board writes are activity too, and they carry a timestamp of their own
-        // — folding them in keeps an epoch whose last move was a task update
-        // ahead of one that only got a turn stamp earlier.
-        lastActivityAt: Math.max(
-          e.lastActivityAt ?? e.startedAt,
-          ...tasks.map((tk) => tk.updatedAt),
-          ...findings.map((f) => f.createdAt)
-        ),
+        lastActivityAt: Math.max(e.lastActivityAt ?? e.startedAt, counts?.lastActivityAt ?? 0),
         endedAt: e.endedAt,
         endReason: e.endReason,
         summary: e.summary,
-        taskCount: tasks.length,
-        doneCount: tasks.filter((tk) => tk.status === 'done').length,
+        taskCount: counts?.taskCount ?? 0,
+        doneCount: counts?.doneCount ?? 0,
         lifecycle: e.lifecycle,
-        label: e.lifecycle === 'conversation'
-          ? deriveConversationLabel(store, e, deps.describeChatKey)
-          : null,
+        label: e.lifecycle === 'conversation' ? deriveConversationLabel(store, e, deps.describeChatKey, members) : null,
         outcome: e.outcome ?? null,
         triggerType: e.triggerType ?? 'manual',
-        artifactCount: artifactRefs.size,
+        artifactCount: outputCounts.get(e.id) ?? 0,
       }
     })
   }
@@ -1082,7 +1072,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     // reply" after a run ended. Note the turn first (wakes a hibernated epoch); a
     // remote member's completion refluxes to this authority node, where the
     // seal check is enforced.
-    rt.noteEpochTurn(params.teamId, epochId)
+    if (rt.noteEpochTurn(params.teamId, epochId, true) === false) {
+      return { ok: false, finalMessage: null, reason: 'UNDELIVERED' }
+    }
 
     // A person typed this in the member's chat, so the send carries no sender
     // app. The bus delivers it (that is how a remote member is reached) and
@@ -1130,6 +1122,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         appId: e.appId,
         memberName: nameByApp.get(e.appId)!,
         entryId: e.entryId,
+        entry: e.entry,
         question: e.question,
         ...(e.epochId ? { epochId: e.epochId } : {}),
         ...(e.taskId ? { taskId: e.taskId } : {}),
@@ -1145,7 +1138,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   function listConversations(teamId: string): TeamConversation[] {
     const team = requireTeam(teamId)
-    const openEpochs = store.listOpenConversationEpochs(teamId)
+    const openEpochs = store.listEpochsByTeam(teamId)
     if (openEpochs.length === 0) return []
 
     const members = store.listMembersByTeam(teamId)
@@ -1168,17 +1161,26 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         .filter((id): id is string => !!id)
     )
 
+    const ownIds = new Set(members.filter(m => !isRemoteMember(m)).map(m => m.appId))
+    const { involved, outputCounts } = store.getConversationStats(teamId, [...ownIds])
     return openEpochs.map((epoch) => {
       const chatKey = epoch.chatKey ?? ''
-      const kind = conversationKindOf(chatKey)
-      const memberAppId = parseMemberChatKey(chatKey) ?? undefined
+      const kind = epoch.lifecycle === 'run' ? 'run' : conversationKindOf(chatKey)
+      const memberAppId = parseMemberChatKey(chatKey) ?? epoch.workItem?.entryAppId ?? deps.getConversationMember?.(teamId, chatKey) ?? (kind === 'run' ? team.leadAppId : undefined) ?? undefined
       return {
         epochId: epoch.id,
         teamId,
         kind,
-        label: deriveConversationLabel(store, epoch, deps.describeChatKey),
+        workItemId: epoch.workItem?.id ?? epoch.id,
+        completed: epoch.workItem?.status === 'completed',
+        createdByMe: !!epoch.workItem?.createdBy && epoch.workItem.createdBy === deps.getViewerIdentity?.(),
+        involvedMe: involved.has(epoch.id),
+        triggerType: epoch.triggerType,
+        summary: epoch.summary,
+        artifactCount: outputCounts.get(epoch.id) ?? 0,
+        label: epoch.workItem?.title || (kind === 'run' ? team.name : deriveConversationLabel(store, epoch, deps.describeChatKey, members)),
         // IM chats are answered in the IM app; native + member chats are writable here.
-        readonly: kind === 'im',
+        readonly: kind === 'im' || kind === 'run',
         ...(memberAppId ? { memberAppId } : {}),
         ...(kind === 'im' ? { channel: 'im' } : {}),
         startedAt: epoch.startedAt,
@@ -1189,12 +1191,18 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     })
   }
 
-  function openConversation(teamId: string, title?: string): { epochId: string } {
+  function openConversation(teamId: string, title?: string, memberAppId?: string): { epochId: string } {
     requireTeam(teamId)
     const rt = requireRuntime()
     // A fresh, independent native session. The uuid makes each "New session" its
     // own context (never collapses into a prior one). The lead is the front desk.
-    const epoch = rt.ensureConversationEpoch(teamId, nativeConversationChatKey(randomUUID()), title)
+    if (memberAppId) {
+      const member = store.getMember(teamId, memberAppId)
+      if (!member || isRemoteMember(member) || !appManager.getApp(memberAppId)) {
+        throw new Error('Only your own installed digital humans can be contacted directly')
+      }
+    }
+    const epoch = rt.ensureConversationEpoch(teamId, nativeConversationChatKey(randomUUID()), title, deps.getViewerIdentity?.(), memberAppId)
     console.log(`${LOG_TAG} openConversation: team=${teamId} epoch=${epoch.id}`)
     return { epochId: epoch.id }
   }
@@ -1206,7 +1214,10 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
 
   async function archiveConversation(teamId: string, epochId: string): Promise<void> {
     requireTeam(teamId)
-    await requireRuntime().sealConversationEpoch(teamId, epochId, 'stopped')
+    const epoch = store.getEpochById(epochId)
+    if (!epoch || epoch.teamId !== teamId) throw new Error('Task not found in this team')
+    store.updateWorkItem(epochId, { status: 'completed' })
+    await requireRuntime().sealConversationEpoch(teamId, epochId, 'completed')
     console.log(`${LOG_TAG} archiveConversation: team=${teamId} epoch=${epochId}`)
   }
 
@@ -1270,7 +1281,7 @@ export async function proposeMembersViaSdk(goal: string, owningSpaceId: string):
     const workDir = helpers.getWorkingDir(owningSpaceId)
     const electronPath = helpers.getHeadlessElectronPath()
 
-    const options = sdkConfig.buildBaseSdkOptions({
+    const options = await sdkConfig.buildBaseSdkOptions({
       credentials: resolvedCreds,
       workDir,
       electronPath,

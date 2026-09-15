@@ -19,6 +19,10 @@ import path from 'node:path'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 const SUITES = {
+  workbench: {
+    file: 'checklist-workbench.mjs',
+    blurb: 'Task workbench live model verification (conversation isolation, collaboration, archive/resume, independent decisions)',
+  },
   single: {
     file: 'checklist-single-machine.mjs',
     blurb: '§1 single-machine team fundamentals (create/run/dispatch/escalation/history)',

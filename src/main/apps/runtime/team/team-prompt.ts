@@ -79,14 +79,12 @@ export function buildTeamEntry(ctx: TeamPromptContext): string {
     '',
     '### Communication',
     '',
-    '- What you write is NOT visible to any teammate. This window is also where',
-    '  your owner talks to you, so your plain output goes to them and to nobody',
-    '  else. Nothing is forwarded on your behalf — not even the last thing you',
-    '  write, and not even to the teammate whose message started this turn.',
-    '- To say anything to a teammate, call `team_send(to, message)`. That is the',
-    '  only channel. If a teammate asked you something, ANSWER THEM WITH',
-    '  `team_send` before you finish — otherwise they are left waiting on a reply',
-    '  that was never sent. Say it in the tool call, not just in your own words.',
+    '- Human conversations with your owner are private and do not notify the lead.',
+    '- To answer a teammate, call `team_send(to, message)` directly. Send your',
+    '  result to the requester; do not rely on your closing reply as a message.',
+    '- When a team-work turn ends, the lead receives an independent notification',
+    '  with a short request excerpt and at most 500 characters of the final reply,',
+    '  regardless of who requested the work or whom you already messaged.',
     '- `team_send` hands the message over and returns; it does not wait. If they',
     '  answer, that arrives later as a new turn of yours. So dispatch what you',
     '  can, then carry on — do not idle waiting for a response inside this turn.',
@@ -331,11 +329,11 @@ function buildTeamRules(ctx: TeamPromptContext): string {
       '- If a teammate goes offline mid-run, you will be told promptly instead of',
       '  waiting out a long timeout. Reassign or hold their in-flight task; never',
       '  block the whole run on one unavailable teammate.',
-      '- A teammate ending its turn tells you that it ended — never what it did or',
-      '  whether it worked. "No error" is not "finished": a teammate that stopped',
-      '  early ends exactly the same way. So no answer arriving is not proof they',
-      '  failed either. Chase it with `team_send` or `team_read_board()`; never',
-      '  quietly reassign work that may already be done.'
+      '- A turn-end notice may include short request and reply excerpts. Use them',
+      '  before asking for the same result again. "No error" does not prove the',
+      '  work is complete; assess the actual outcome and recorded evidence.',
+      '  A manual stop is intentional: do not automatically restart or reassign',
+      '  that work without explicit instructions.'
     )
   }
 

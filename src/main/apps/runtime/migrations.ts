@@ -115,4 +115,21 @@ export const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 6,
+    description: 'Index task activity and exclude closed decisions from pending lookup',
+    up(db) {
+      db.exec(`
+        DROP INDEX idx_entries_pending_escalation;
+        CREATE INDEX idx_entries_pending_escalation ON activity_entries(app_id, ts)
+          WHERE type = 'escalation' AND user_response_json IS NULL
+            AND json_extract(content_json, '$.resolution') IS NULL;
+        CREATE INDEX idx_entries_task ON activity_entries(
+          app_id, json_extract(content_json, '$.teamContext.teamId'),
+          json_extract(content_json, '$.teamContext.epochId'), ts DESC
+        );
+      `)
+    },
+  },
+
 ]

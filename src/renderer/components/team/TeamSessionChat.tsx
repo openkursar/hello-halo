@@ -1,3 +1,4 @@
+import { invalidateTeamSessionHistory, loadTeamSessionHistory, matchesTeamHistory, retainTeamSessionHistory } from './session-history'
 /**
  * TeamSessionChat — the ONE team session surface, shared by the member panel and
  * the Conversation tab (spec §6.2: "must share one set of session components,
@@ -15,14 +16,14 @@ import { api } from '../../api'
 import { useChatStore } from '../../stores/chat.store'
 import { useSmartScroll } from '../../hooks/useSmartScroll'
 import { MessageRow } from '../chat/MessageRow'
+import { CompactNotice } from '../chat/CompactNotice'
 import { StreamingSection } from '../chat/StreamingSection'
 import { useBrowserToolCalls } from '../chat/useBrowserToolCalls'
 import { InterruptedBubble } from '../chat/InterruptedBubble'
-import { CompactNotice } from '../chat/CompactNotice'
 import { InputArea } from '../chat/InputArea'
 import { useRemoteSubscription } from '../../hooks/useRemoteSubscription'
 import { useTranslation } from '../../i18n'
-import type { Message, ImageAttachment } from '../../types'
+import type { Message, Thought, ImageAttachment } from '../../types'
 import { shouldShowRelayedTranscript } from '../../../shared/apps/team-types'
 import { buildTeamSessionKey } from '../../../shared/apps/im-keys'
 
@@ -47,6 +48,7 @@ export interface TeamSessionChatProps {
   readonly?: boolean
   placeholder?: string
   emptyTitle?: string
+  emptyContent?: React.ReactNode
   emptyHint?: string
   /** Rendered above the messages (offline banner, IM notice, etc). */
   topSlot?: React.ReactNode
@@ -58,14 +60,19 @@ export interface TeamSessionChatProps {
    * (parity with the space chat) and no empty epoch is created until they speak.
    * Returns null on failure (the send is then surfaced as an error).
    */
-  ensureEpochId?: () => Promise<string | null>
+  ensureEpochId?: (firstMessage: string) => Promise<string | null>
+  toolbarSlot?: React.ReactNode
+  renderAfterStreaming?: (thoughts: Thought[]) => React.ReactNode
+  renderMessages?: (messages: Message[], liveThoughts: Thought[]) => React.ReactNode
+  isBackgroundTurn?: (messages: Message[]) => boolean
+  draftKey?: string
 }
 
 type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
 
 export function TeamSessionChat({
   appId, spaceId, teamId, epochId, isRemote, ownerName, reachability = 'online',
-  readonly = false, placeholder, emptyTitle, emptyHint, topSlot, aboveInput, ensureEpochId,
+  readonly = false, placeholder, emptyTitle, emptyHint, emptyContent, topSlot, aboveInput, ensureEpochId, toolbarSlot, renderMessages, renderAfterStreaming, isBackgroundTurn, draftKey,
 }: TeamSessionChatProps) {
   const { t } = useTranslation()
   const conversationId = buildTeamSessionKey(appId, teamId, epochId ?? 'none')
@@ -89,18 +96,26 @@ export function TeamSessionChat({
   const resetSession = useChatStore(s => s.resetSession)
   const answerQuestion = useChatStore(s => s.answerQuestion)
   const {
-    isGenerating, streamingContent, isStreaming, thoughts, isThinking,
-    pendingQuestion, error, errorType, compactInfo, textBlockVersion,
+    isGenerating, streamingContent, isStreaming, thoughts, isThinking, compactInfo,
+    pendingQuestion, error, errorType, textBlockVersion,
   } = session
 
+  const backgroundTurn = isBackgroundTurn?.(messages) ?? false
   const { scrollToBottom, handleScroll } = useSmartScroll({
     containerRef: scrollRef,
-    deps: [streamingContent, thoughts.length, isStreaming, isThinking, pendingQuestion, messages],
+    deps: [backgroundTurn ? '' : streamingContent, backgroundTurn ? 0 : thoughts.length, !backgroundTurn && isStreaming, !backgroundTurn && isThinking, pendingQuestion, backgroundTurn ? null : messages],
     behavior: 'auto',
   })
 
   const streamingBrowserToolCalls = useBrowserToolCalls(thoughts)
 
+  const inputIdentity = useRef({ appId, epochId, key: draftKey ?? conversationId })
+  if (inputIdentity.current.appId !== appId || inputIdentity.current.epochId !== epochId) {
+    const committedDraft = inputIdentity.current.appId === appId && inputIdentity.current.epochId === null && epochId !== null
+    inputIdentity.current = { appId, epochId, key: committedDraft ? inputIdentity.current.key : draftKey ?? conversationId }
+  }
+
+  const historyGeneration = useRef(0)
   const seqCursorRef = useRef(0)
   // A draft conversation (epochId null) becomes real on first send. That one
   // transition must NOT show a loading spinner or wipe the just-sent optimistic
@@ -119,16 +134,21 @@ export function TeamSessionChat({
     setDeliveredNoReply(null)
   }, [appId, epochId])
 
+  useEffect(() => retainTeamSessionHistory(appId, spaceId, teamId, epochId ?? ''), [appId, spaceId, teamId, epochId])
+
   const loadMessages = useCallback(async (silent = false) => {
+    if (silent) invalidateTeamSessionHistory(appId, spaceId, teamId, epochId ?? '')
+    const generation = historyGeneration.current
     const draftCommit = draftCommitRef.current
     if (!silent && !draftCommit) setLoadState('loading')
     try {
       const cursor = seqCursorRef.current
       const incremental = silent && cursor > 0
-      const res = await api.teamChatMessages(
+      const res = await loadTeamSessionHistory(
         appId, spaceId, teamId, epochId ?? '',
         incremental && cursor > 1 ? cursor - 1 : undefined
       )
+      if (generation !== historyGeneration.current) return
       if (res.success && res.data) {
         setIsStale(res.stale === true)
         const batch = (res.data as Message[]) ?? []
@@ -171,16 +191,22 @@ export function TeamSessionChat({
           draftCommitRef.current = false
           setLoadState(batch.length > 0 ? 'loaded' : 'empty')
         }
-      } else if (!silent) {
-        setLoadState('error')
+      } else {
+        console.warn('[TeamSessionChat] History rejected', { teamId, appId, epochId, error: res.error })
+        if (!silent) setLoadState('error')
       }
     } catch (err) {
       console.error('[TeamSessionChat] load error:', err)
+      if (generation !== historyGeneration.current) return
       if (!silent) setLoadState('error')
     }
   }, [appId, spaceId, teamId, epochId])
 
-  useEffect(() => { void loadMessages() }, [loadMessages])
+  useEffect(() => {
+    historyGeneration.current++
+    void loadMessages()
+    return () => { historyGeneration.current++ }
+  }, [loadMessages])
 
   const prevGen = useRef(isGenerating)
   useEffect(() => {
@@ -199,8 +225,8 @@ export function TeamSessionChat({
 
   useEffect(() => {
     return api.onTeamMemberHistory((data) => {
-      const d = data as { teamId?: string; appId?: string }
-      if (d?.teamId === teamId && d?.appId === appId) void loadMessages(true)
+      const d = data as { teamId?: string; epochId?: string; appId?: string }
+      if (epochId && matchesTeamHistory(d, teamId, epochId, appId)) void loadMessages(true)
     })
   }, [teamId, appId, loadMessages])
 
@@ -216,13 +242,16 @@ export function TeamSessionChat({
     // for the whole turn (session key + teamContext). No pre-click gate.
     let eid = epochId
     if (!eid && ensureEpochId) {
-      eid = await ensureEpochId()
+      eid = await ensureEpochId(content)
       if (!eid) {
         useChatStore.getState().setSessionError(conversationId, t('Couldn\u2019t start the conversation. Please try again.'))
-        return
+        return false
       }
     }
-    if (!eid) return // nothing to send into and no way to create one
+    if (!eid) {
+      console.warn('[TeamSessionChat] Send rejected: missing task', { teamId, appId })
+      return false
+    }
     const convId = buildTeamSessionKey(appId, teamId, eid)
 
     resetSession(convId)
@@ -294,14 +323,17 @@ export function TeamSessionChat({
         const reason = isRemote ? remoteReason() : String(res.error || t('Failed to send message'))
         useChatStore.getState().setSessionError(convId, reason)
         markSendFailed(userMsg.id, reason)
+        return false
       }
       requestAnimationFrame(() => scrollToBottom('auto'))
+      return true
     } catch (err) {
       const reason = isRemote
         ? t('Couldn\u2019t reach {{owner}} just now — your message was not delivered. Try again when they\u2019re back online.', { owner: ownerName || t('this teammate') })
         : String((err as Error).message || t('Failed to send message'))
       useChatStore.getState().setSessionError(convId, reason)
       markSendFailed(userMsg.id, reason)
+      return false
     }
   }, [appId, spaceId, teamId, conversationId, epochId, ensureEpochId, isRemote, ownerName, resetSession, scrollToBottom, markSendFailed, t])
 
@@ -327,8 +359,21 @@ export function TeamSessionChat({
     thoughtCount: thoughts.length,
   })
 
+  const streamingSection = <StreamingSection
+    streamingContent={streamingContent}
+    isStreaming={isStreaming}
+    thoughts={thoughts}
+    isThinking={isThinking}
+    textBlockVersion={textBlockVersion}
+    browserToolCalls={streamingBrowserToolCalls}
+    showBrowserViewButton={false}
+    pendingQuestion={pendingQuestion}
+    onAnswerQuestion={handleAnswerQuestion}
+  />
+
   return (
     <>
+      {loadState === 'loading' && topSlot && <div className="shrink-0 overflow-y-auto px-4 py-3">{topSlot}</div>}
       {loadState === 'loading' ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -339,10 +384,12 @@ export function TeamSessionChat({
           <div className="mx-auto max-w-3xl px-4 py-5">
             {topSlot}
 
-            {loadState === 'empty' && !hasStreaming && !showRelayedTranscript && (
-              <div className="flex flex-col items-center justify-center gap-1 py-16 text-center">
+            {loadState === 'empty' && !epochId && !hasStreaming && !showRelayedTranscript && (
+              <div className="py-10 sm:py-16">
+                {emptyContent ?? <div className="flex flex-col items-center justify-center gap-1 text-center">
                 <p className="text-sm text-muted-foreground">{emptyTitle ?? t('No work yet in this team.')}</p>
                 {emptyHint && <p className="text-xs text-muted-foreground/60">{emptyHint}</p>}
+                </div>}
               </div>
             )}
 
@@ -359,32 +406,23 @@ export function TeamSessionChat({
             )}
 
             {isStale && messages.length > 0 && (
-              <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
-                <p className="text-xs text-amber-600 dark:text-amber-500">
+              <div className="mb-3 rounded-lg border border-halo-warning/30 bg-halo-warning/5 px-3 py-2">
+                <p className="text-xs text-halo-warning">
                   {t('Offline — showing saved messages, which may not be up to date.')}
                 </p>
               </div>
             )}
 
-            {messages.map(message => (
+            {(loadState !== 'error' || messages.length > 0) && (renderMessages ? renderMessages(messages, hasStreaming ? thoughts : []) : messages.map(message => (
               <MessageRow key={message.id} message={message} hideBrowserViewButton />
-            ))}
+            )))}
 
-            {(hasStreaming || showRelayedTranscript) && (
-              <StreamingSection
-                streamingContent={streamingContent}
-                isStreaming={isStreaming}
-                thoughts={thoughts}
-                isThinking={isThinking}
-                textBlockVersion={textBlockVersion}
-                browserToolCalls={streamingBrowserToolCalls}
-                showBrowserViewButton={false}
-                pendingQuestion={pendingQuestion}
-                onAnswerQuestion={handleAnswerQuestion}
-              />
-            )}
+            {(hasStreaming || showRelayedTranscript || pendingQuestion) && <div className="mt-4">{(isBackgroundTurn?.(messages)
+              ? pendingQuestion && <StreamingSection streamingContent="" isStreaming={false} thoughts={[]} isThinking={false} textBlockVersion={0} showBrowserViewButton={false} pendingQuestion={pendingQuestion} onAnswerQuestion={handleAnswerQuestion} />
+              : streamingSection)}</div>}
+            {hasStreaming && renderAfterStreaming?.(thoughts)}
 
-            {showRelayedTranscript && (
+            {showRelayedTranscript && !isBackgroundTurn?.(messages) && (
               <p className="pb-4 pt-1 text-center text-xs text-muted-foreground/60">
                 {t('This is what they did just now.')}
               </p>
@@ -408,18 +446,19 @@ export function TeamSessionChat({
             */}
             {deliveredNoReply && !isGenerating && !error && (
               <div className="flex justify-start pb-4">
-                <div className="w-[85%] rounded-2xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+                <div className="w-[85%] rounded-2xl border border-halo-warning/30 bg-halo-warning/5 px-4 py-3">
                   <p className="text-sm text-foreground">{deliveredNoReply}</p>
                 </div>
               </div>
             )}
 
+            {!backgroundTurn && compactInfo && <CompactNotice trigger={compactInfo.trigger} preTokens={compactInfo.preTokens} />}
             {!isGenerating && error && errorType === 'interrupted' && (
               <div className="pb-4"><InterruptedBubble error={error} /></div>
             )}
             {!isGenerating && error && errorType !== 'interrupted' && isRemote && (
               <div className="flex justify-start pb-4">
-                <div className="w-[85%] rounded-2xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+                <div className="w-[85%] rounded-2xl border border-halo-warning/30 bg-halo-warning/5 px-4 py-3">
                   <p className="text-sm text-foreground">{error}</p>
                 </div>
               </div>
@@ -435,9 +474,6 @@ export function TeamSessionChat({
                 </div>
               </div>
             )}
-            {compactInfo && (
-              <div className="pb-4"><CompactNotice trigger={compactInfo.trigger} preTokens={compactInfo.preTokens} /></div>
-            )}
           </div>
         </div>
       )}
@@ -445,7 +481,7 @@ export function TeamSessionChat({
       {/* Input region — hidden for read-only surfaces and offline owners. */}
       {readonly ? null : reachability === 'offline' ? (
         <div className="shrink-0 border-t border-border p-3">
-          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+          <div className="rounded-xl border border-halo-warning/30 bg-halo-warning/5 px-4 py-3">
             <p className="text-sm font-medium text-foreground">
               {t('{{name}} is offline right now.', { name: ownerName || t('This teammate') })}
             </p>
@@ -457,12 +493,17 @@ export function TeamSessionChat({
       ) : (
         <div className="shrink-0 p-3">
           {reachability === 'away' && (
-            <p className="mb-2 px-1 text-xs text-amber-600 dark:text-amber-500">
+            <p className="mb-2 px-1 text-xs text-halo-warning">
               {t('{{owner}} seems to have stepped away — replies may take a moment.', { owner: ownerName || t('This teammate') })}
             </p>
           )}
           {aboveInput}
           <InputArea
+            key={inputIdentity.current.key}
+            draftKey={draftKey}
+            toolbarSlot={toolbarSlot}
+            hideToolsetControls
+            hideKnowledgeControls
             onSend={handleSend}
             onStop={handleStop}
             isGenerating={isGenerating}

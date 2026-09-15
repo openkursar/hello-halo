@@ -12,7 +12,7 @@ export type CollabMode = 'structured' | 'free'
 export type EscalationRouting = 'user' | 'lead'
 export type TeamStatus = 'idle' | 'running' | 'waiting_user' | 'error'
 export type TaskStatus = 'pending' | 'in_progress' | 'done' | 'rejected' | 'blocked'
-export type EpochEndReason = 'completed' | 'stopped' | 'timeout' | 'error'
+export type EpochEndReason = 'completed' | 'stopped' | 'timeout' | 'error' | 'cleared'
 
 /**
  * Execution mode of an epoch:
@@ -189,6 +189,7 @@ export type TeamActivityKind =
   | 'check_set'
   | 'check_stop'
   | 'run_end'
+  | 'decision'
 
 /**
  * The state an act recorded — one notion, read against the act's kind:
@@ -248,7 +249,21 @@ export function toActivitySubject(text: string, max = TEAM_ACTIVITY_SUBJECT_MAX)
   return collapsed.length > max ? `${collapsed.slice(0, max - 1)}…` : collapsed
 }
 
+export interface TeamWorkItem {
+  entryAppId?: string | null
+  id: string
+  teamId: string
+  title: string | null
+  status: 'open' | 'completed'
+  createdBy: string | null
+  createdAt: number
+  updatedAt: number
+}
+
 export interface TeamEpoch {
+  /** Business metadata projected from this epoch; its id equals the epoch id. */
+  workItem?: TeamWorkItem
+
   id: string
   teamId: string
   startedAt: number
@@ -351,7 +366,7 @@ export interface TeamCheckView {
  *   'im'     — an inbound IM chat handled by the team (read-only in Halo).
  *   'member' — a 1:1 side-thread with a specific teammate (member direct chat).
  */
-export type TeamConversationKind = 'native' | 'im' | 'member'
+export type TeamConversationKind = 'native' | 'im' | 'member' | 'run'
 
 /**
  * A renderer-facing projection of one open conversation epoch. Labels are
@@ -360,6 +375,14 @@ export type TeamConversationKind = 'native' | 'im' | 'member'
  * sees the same conversations because the epochs replicate.
  */
 export interface TeamConversation {
+  workItemId?: string
+  completed?: boolean
+  createdByMe?: boolean
+  involvedMe?: boolean
+  triggerType?: TeamRunTriggerType
+  summary?: string | null
+  artifactCount?: number
+
   epochId: string
   teamId: string
   kind: TeamConversationKind
@@ -389,6 +412,7 @@ export interface RosterBusyEntry {
 
 /** A decision waiting on the user, aggregated per team (survives run seal). */
 export interface TeamPendingEscalation {
+  entry?: import('./app-types').ActivityEntry
   appId: string
   memberName: string
   entryId: string
@@ -657,6 +681,7 @@ export interface JoinedOfficeSnapshot {
 export interface TeamSendInput {
   to: string
   message: string
+  purpose?: 'update' | 'result'
 }
 export interface TeamSendAsyncResult {
   messageId: string

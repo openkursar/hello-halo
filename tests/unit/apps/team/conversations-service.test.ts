@@ -114,6 +114,25 @@ describe('TeamService — conversations + pending escalations', () => {
 
   afterEach(() => { dbManager.closeAll() })
 
+  it('new tasks addressed to the same member have independent contexts and titles', () => {
+    const svc = build()
+    const first = svc.openConversation(TEAM_ID, 'First request', MEMBER_APP)
+    const second = svc.openConversation(TEAM_ID, 'Second request', MEMBER_APP)
+    expect(first.epochId).not.toBe(second.epochId)
+    expect(store.getEpochById(first.epochId)!.title).toBe('First request')
+    expect(store.getEpochById(second.epochId)!.title).toBe('Second request')
+  })
+
+  it('conversation summaries do not materialize activity bodies or repeat member reads', () => {
+    const svc = build()
+    for (let index = 0; index < 200; index++) svc.openConversation(TEAM_ID, `Task ${index}`)
+    const activities = vi.spyOn(store, 'listActivityByTeam')
+    const members = vi.spyOn(store, 'listMembersByTeam')
+    expect(svc.listConversations(TEAM_ID)).toHaveLength(200)
+    expect(activities).not.toHaveBeenCalled()
+    expect(members).toHaveBeenCalledTimes(1)
+  })
+
   it('openConversation mints a native session, listConversations projects it', () => {
     const svc = build()
     const { epochId } = svc.openConversation(TEAM_ID, 'Weekly plan')
@@ -187,11 +206,11 @@ describe('TeamService — conversations + pending escalations', () => {
     expect(svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)?.label).toBe('B')
   })
 
-  it('archiveConversation removes it from the open list', async () => {
+  it('archiveConversation retains a completed task in the list', async () => {
     const svc = build()
     const { epochId } = svc.openConversation(TEAM_ID)
     await svc.archiveConversation(TEAM_ID, epochId)
-    expect(svc.listConversations(TEAM_ID)).toHaveLength(0)
+    expect(svc.listConversations(TEAM_ID)).toEqual([expect.objectContaining({ epochId, completed: true })])
   })
 
   it('getTeamDetail carries the team\u2019s pending escalations; other teams\u2019 are excluded', () => {

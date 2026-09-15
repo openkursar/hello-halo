@@ -81,6 +81,8 @@ export function AppsPage() {
   // Team lead apps are an internal coordination role, not standalone digital
   // humans — hide them from the digital-humans list (they are managed inside
   // the team view). Derived from the loaded team list (kept fresh via events).
+  const selectedTeamId = useTeamStore(s => s.currentTeamId)
+  const inTeamWorkbench = currentTab === 'team' && selectedTeamId !== null
   const teams = useTeamStore(s => s.teams)
   const leadAppIds = useMemo(() => leadAppIdSet(teams), [teams])
 
@@ -264,11 +266,11 @@ export function AppsPage() {
       <Header
         left={
           <button
-            onClick={() => setView(currentSpace ? 'space' : (previousView || 'home'))}
+            onClick={() => inTeamWorkbench ? useTeamStore.getState().selectTeam(null) : setView(currentSpace ? 'space' : (previousView || 'home'))}
             className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             <ChevronLeft className="w-4 h-4" />
-            {currentSpace?.name ?? t('Back')}
+            {inTeamWorkbench ? t('Teams') : currentSpace?.name ?? t('Back')}
           </button>
         }
         right={
@@ -283,7 +285,7 @@ export function AppsPage() {
       />
 
       {/* Tab bar — kept provider-agnostic via TabButton sub-component */}
-      <div className="flex items-center gap-1 px-3 sm:px-4 py-2 border-b border-border flex-shrink-0 overflow-x-auto">
+      {!inTeamWorkbench && <div className="flex items-center gap-1 px-3 sm:px-4 py-2 border-b border-border flex-shrink-0 overflow-x-auto">
         <TabButton
           active={currentTab === 'my-digital-humans'}
           label={t('My Digital Humans')}
@@ -310,7 +312,7 @@ export function AppsPage() {
           label={t('Marketplace')}
           onClick={() => setCurrentTab('store')}
         />
-      </div>
+      </div>}
 
       {/* Content area */}
       {currentTab === 'store' ? (

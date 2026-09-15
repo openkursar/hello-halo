@@ -180,6 +180,7 @@ describe('TeamOrchestration', () => {
     })
     const orchestration = createOrchestration({
       store, bus, session, turnTimeoutMs, maxConcurrentTurns,
+      hasPendingEscalation: () => false,
       ...(renderDigest ? { renderDigest } : {}),
     })
     return orchestration
@@ -188,6 +189,53 @@ describe('TeamOrchestration', () => {
   // ===========================================================================
   // Epoch lifecycle
   // ===========================================================================
+
+  it('reuses a sealed conversation task when the same reception or direct channel returns', () => {
+    seedTeam(store)
+    const { deps } = makeSession()
+    const orch = build(deps)
+    const first = orch.ensureConversationEpoch(TEAM_ID, 'direct:researcher', 'Long-lived task')
+    store.endEpoch(first.id, Date.now(), 'stopped', null)
+    const returned = orch.ensureConversationEpoch(TEAM_ID, 'direct:researcher')
+    expect(returned.id).toBe(first.id)
+    expect(returned.workItem!.title).toBe('Long-lived task')
+    expect(store.listEpochsByTeam(TEAM_ID)).toHaveLength(1)
+  })
+
+  it.each(['sealed', 'completed'] as const)('drops a buffered ending notice after its task is %s without preventing human resume', async state => {
+    seedTeam(store)
+    const { deps, active, pendings } = makeSession()
+    const orch = build(deps)
+    const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:buffered-report')
+    const sessionKey = buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id)
+    active.add(sessionKey)
+    await bus.deliverRuntimeWake({
+      envelope: { id: 'ending-notice', teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP,
+        toAppId: LEAD_APP, body: 'Researcher stopped', correlationId: 'ending-correlation', createdAt: Date.now() },
+      trigger: { teamId: TEAM_ID, epochId: epoch.id, fromAppId: null, correlationId: 'ending-correlation', wait: false, kind: 'member_stopped' },
+      onBusy: 'buffer',
+    })
+    expect(pendings).toHaveLength(0)
+    if (state === 'sealed') store.endEpoch(epoch.id, Date.now(), 'completed', null)
+    else store.updateWorkItem(epoch.id, { status: 'completed' })
+    active.delete(sessionKey)
+    bus.drainMailbox(sessionKey)
+    await flush()
+    expect(pendings).toHaveLength(0)
+    if (state === 'sealed') expect(store.getEpochById(epoch.id)?.endedAt).not.toBeNull()
+    else expect(store.getEpochById(epoch.id)?.workItem?.status).toBe('completed')
+    orch.noteEpochTurn(TEAM_ID, epoch.id)
+    await bus.deliverRuntimeWake({
+      envelope: { id: 'human-resume', teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP,
+        toAppId: LEAD_APP, body: 'Continue please', correlationId: 'human-correlation', createdAt: Date.now() },
+      trigger: { teamId: TEAM_ID, epochId: epoch.id, fromAppId: null, correlationId: 'human-correlation', wait: false, kind: 'human_message' },
+      onBusy: 'buffer',
+    })
+    await flush()
+    expect(pendings).toHaveLength(1)
+    pendings[0].resolve('Continued')
+    await flush()
+  })
 
   describe('startEpoch', () => {
     it('creates an epoch row, sets team running + current_epoch, and wakes the lead once', async () => {
@@ -280,6 +328,119 @@ describe('TeamOrchestration', () => {
   // ===========================================================================
 
   describe('requestSeal (team_complete)', () => {
+    it('completes a direct lead conversation without touching another task', async () => {
+      seedTeam(store)
+      const { deps, cleared } = makeSession()
+      const orch = build(deps)
+      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:direct')
+      const other = orch.ensureConversationEpoch(TEAM_ID, 'native:other')
+      orch.requestSeal(TEAM_ID, epoch.id, 'direct work complete')
+      orch.noteMemberTurnEnded({ teamId: TEAM_ID, epochId: epoch.id, appId: LEAD_APP })
+      expect(cleared).toHaveLength(0)
+      await new Promise<void>(resolve => setImmediate(resolve))
+      await flush()
+      expect(store.getEpochById(epoch.id)?.workItem?.status).toBe('completed')
+      expect(store.getEpochById(epoch.id)?.endReason).toBe('completed')
+      expect(store.getEpochById(other.id)?.endedAt).toBeNull()
+      expect(store.getEpochById(other.id)?.workItem?.status).toBe('open')
+      expect(cleared).toHaveLength(3)
+    })
+
+    it('does not consume the lead completion when a different member ends', async () => {
+      seedTeam(store)
+      const { deps, cleared } = makeSession()
+      const orch = build(deps)
+      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:direct')
+      orch.requestSeal(TEAM_ID, epoch.id, 'all done')
+      orch.noteMemberTurnEnded({ teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP })
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(store.getEpochById(epoch.id)?.workItem?.status).toBe('open')
+      expect(cleared).toHaveLength(0)
+    })
+
+    it('lets the bus completion consume its seal before the direct fallback', async () => {
+      seedTeam(store)
+      const { deps, pendings, cleared } = makeSession()
+      const orch = build(deps)
+      const epoch = await orch.startEpoch(TEAM_ID)
+      const leadPending = pendings.find(p => p.conversationId === buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id))!
+      const completeTurn = vi.spyOn(bus, 'completeTurn')
+      orch.requestSeal(TEAM_ID, epoch.id, 'bus work complete')
+      orch.noteMemberTurnEnded({ teamId: TEAM_ID, epochId: epoch.id, appId: LEAD_APP })
+      leadPending.resolve('done')
+      await new Promise<void>(resolve => setImmediate(resolve))
+      await flush()
+      expect(completeTurn).toHaveBeenCalledWith(expect.objectContaining({ sealPending: true }))
+      expect(cleared).toHaveLength(3)
+      expect(store.getEpochById(epoch.id)?.workItem?.status).toBe('completed')
+    })
+
+    it('waits for a deferred bus session result before sealing and discarding multiple queued messages', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const { deps, pendings, cleared } = makeSession()
+      const orch = build(deps)
+      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:deferred')
+      const receipt = bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: RESEARCHER_APP, to: 'lead', message: 'start', wait: true })
+      await flush()
+      const sessionKey = buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id)
+      for (const message of ['queued one', 'queued two']) {
+        await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: TESTER_APP, to: 'lead', message, wait: false })
+      }
+      orch.requestSeal(TEAM_ID, epoch.id, 'done')
+      orch.noteMemberTurnEnded({ teamId: TEAM_ID, epochId: epoch.id, appId: LEAD_APP })
+      // A session may notify its observer before asynchronous finalization resolves its caller.
+      await new Promise<void>(resolve => setImmediate(resolve))
+      await flush()
+      expect(store.getEpochById(epoch.id)?.endedAt).toBeNull()
+      expect(cleared).toHaveLength(0)
+      expect(bus.isSessionOccupied(sessionKey)).toBe(true)
+      pendings[0].resolve('final result')
+      await expect(receipt).resolves.toMatchObject({ message: 'final result', status: 'ok' })
+      await flush()
+      expect(pendings).toHaveLength(1)
+      expect(bus.hasBufferedMessages(epoch.id)).toBe(false)
+      expect(store.getEpochById(epoch.id)?.endReason).toBe('completed')
+    })
+
+    it('discards every queued wake for an explicitly completed task', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const { deps, active, pendings } = makeSession()
+      const orch = build(deps)
+      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:closed')
+      const sessionKey = buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id)
+      active.add(sessionKey)
+      for (const message of ['queued one', 'queued two', 'queued three']) {
+        await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: TESTER_APP, to: 'lead', message, wait: false })
+      }
+      store.updateWorkItem(epoch.id, { status: 'completed' })
+      active.delete(sessionKey)
+      bus.drainMailbox(sessionKey)
+      await flush()
+      expect(pendings).toHaveLength(0)
+      expect(bus.hasBufferedMessages(epoch.id)).toBe(false)
+      expect(bus.isSessionOccupied(sessionKey)).toBe(false)
+      expect(store.getEpochById(epoch.id)?.workItem?.status).toBe('completed')
+    })
+
+    it('seals a direct conversation before its queued mailbox can start another turn', async () => {
+      seedTeam(store)
+      const { deps, active, pendings } = makeSession()
+      const orch = build(deps)
+      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'native:direct')
+      const sessionKey = buildTeamSessionKey(LEAD_APP, TEAM_ID, epoch.id)
+      active.add(sessionKey)
+      await bus.send({ teamId: TEAM_ID, epochId: epoch.id, fromAppId: RESEARCHER_APP, to: 'lead', message: 'queued report', wait: false })
+      orch.requestSeal(TEAM_ID, epoch.id, 'done')
+      orch.noteMemberTurnEnded({ teamId: TEAM_ID, epochId: epoch.id, appId: LEAD_APP })
+      active.delete(sessionKey)
+      setImmediate(() => bus.drainMailbox(sessionKey))
+      await new Promise<void>(resolve => setImmediate(resolve))
+      await flush()
+      expect(pendings).toHaveLength(0)
+      expect(store.getEpochById(epoch.id)?.endedAt).not.toBeNull()
+      expect(bus.hasBufferedMessages(epoch.id)).toBe(false)
+    })
+
     it('defers the seal until the lead turn ends, then seals as completed', async () => {
       seedTeam(store, { collabMode: 'free' })
       const { deps, pendings, cleared } = makeSession()
@@ -873,6 +1034,24 @@ describe('TeamOrchestration', () => {
       expect(pendings.some((p) => p.conversationId === buildTeamSessionKey(TESTER_APP, TEAM_ID, epoch.id))).toBe(true)
     })
 
+    it('rechecks task closure after waiting for a global concurrency slot', async () => {
+      seedTeam(store, { collabMode: 'free' })
+      const { deps, pendings } = makeSession()
+      const orch = build(deps, undefined, 1)
+      const first = orch.ensureConversationEpoch(TEAM_ID, 'native:holding-slot')
+      const second = orch.ensureConversationEpoch(TEAM_ID, 'native:waiting-slot')
+      await bus.send({ teamId: TEAM_ID, epochId: first.id, fromAppId: LEAD_APP, to: 'researcher', message: 'work', wait: false })
+      await bus.send({ teamId: TEAM_ID, epochId: second.id, fromAppId: LEAD_APP, to: 'tester', message: 'work', wait: false })
+      await flush()
+      expect(pendings).toHaveLength(1)
+      store.updateWorkItem(second.id, { status: 'completed' })
+      pendings[0].resolve('done')
+      await flush()
+      expect(pendings).toHaveLength(1)
+      expect(bus.isSessionOccupied(buildTeamSessionKey(TESTER_APP, TEAM_ID, second.id))).toBe(false)
+      expect(store.getEpochById(second.id)?.workItem?.status).toBe('completed')
+    })
+
     it('a turn that times out while still queued never reaches the session layer', async () => {
       vi.useFakeTimers()
       try {
@@ -974,7 +1153,7 @@ describe('TeamOrchestration', () => {
       expect(store.getTeamById(TEAM_ID)!.status).toBe('waiting_user')
 
       const before = pendings.length
-      const ok = orch.resumeFromEscalation({ teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'skip it' })
+      const ok = await orch.resumeFromEscalation({ teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'skip it' })
       expect(ok).toBe(true)
       await flush()
 
@@ -1071,11 +1250,11 @@ describe('TeamOrchestration', () => {
       expect((deps.sendAppChatMessage as ReturnType<typeof vi.fn>).mock.calls.length).toBe(dispatchesBefore + 1)
     })
 
-    it('resumeFromEscalation returns false when the epoch is gone (no solo fallback)', () => {
+    it('resumeFromEscalation returns false when the epoch is gone (no solo fallback)', async () => {
       seedTeam(store, { escalationRouting: 'user' })
       const { deps } = makeSession()
       const orch = build(deps)
-      const ok = orch.resumeFromEscalation({ teamId: TEAM_ID, epochId: 'missing', appId: RESEARCHER_APP, response: 'x' })
+      const ok = await orch.resumeFromEscalation({ teamId: TEAM_ID, epochId: 'missing', appId: RESEARCHER_APP, response: 'x' })
       expect(ok).toBe(false)
     })
   })
@@ -1253,7 +1432,7 @@ describe('TeamOrchestration', () => {
       const researcherKey = await startResearcherTurn(epoch.id)
       expect(deps.sendAppChatMessage).toHaveBeenCalledTimes(1)
 
-      const ok = orch.resumeFromEscalation({
+      const ok = await orch.resumeFromEscalation({
         teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'go ahead',
       })
       await flush()

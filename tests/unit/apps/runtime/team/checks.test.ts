@@ -254,6 +254,20 @@ describe('team periodic checks', () => {
     expect(h.jobs.size).toBe(0)
   })
 
+  it('replicated task closure disarms checks without echoing deletes and refuses late check replay', () => {
+    const h = makeHarness(store)
+    const check = h.checks.schedule(baseInput())
+    h.published.length = 0
+    store.updateWorkItem(EPOCH, { status: 'completed' })
+    h.checks.clearEpoch(TEAM, EPOCH, { replicate: false })
+    expect(h.jobs.size).toBe(0)
+    expect(h.published).toHaveLength(0)
+    h.checks.applyReplicated(check)
+    expect(h.jobs.size).toBe(0)
+    expect(store.getCheckById(check.id)).toBeNull()
+    expect(h.published).toHaveLength(0)
+  })
+
   it('drops a check whose work already ended when its alarm rings', async () => {
     const h = makeHarness(store)
     const check = h.checks.schedule(baseInput())

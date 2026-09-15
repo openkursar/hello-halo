@@ -13,6 +13,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Loader2, AlertCircle, Radio, Eraser, Square, ArrowRightToLine } from 'lucide-react'
 import { api } from '../../api'
 import { useChatStore } from '../../stores/chat.store'
+import { useTeamStore } from '../../stores/team.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useEngineCapabilities } from '../../stores/engine.store'
 import { MessageList } from '../chat/MessageList'
@@ -48,6 +49,7 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
   // Persisted messages
   const [messages, setMessages] = useState<Message[]>([])
   const [loadState, setLoadState] = useState<LoadState>('loading')
+  const [retry, setRetry] = useState(0)
 
   // Streaming state from chat store
   const chatSession = useChatStore(s => s.getSession(conversationId))
@@ -74,6 +76,7 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
   useEffect(() => {
     let cancelled = false
     async function load() {
+      if (session.teamContext) { setLoadState('loaded'); return }
       setLoadState('loading')
       try {
         const res = await api.appImChatMessages(appId, spaceId, session.channel, session.chatType, session.chatId)
@@ -83,7 +86,8 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
           setMessages(msgs)
           setLoadState(msgs.length > 0 ? 'loaded' : 'empty')
         } else {
-          setLoadState('empty')
+          console.warn('[ImChatView] History rejected', { appId, spaceId, error: res.error })
+          setLoadState('error')
         }
       } catch (err) {
         if (cancelled) return
@@ -93,7 +97,7 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
     }
     load()
     return () => { cancelled = true }
-  }, [appId, spaceId, session.channel, session.chatType, session.chatId, clearKey])
+  }, [appId, spaceId, session.channel, session.chatType, session.chatId, clearKey, retry])
 
   // Reload messages when generation starts (to show the incoming user IM message before
   // thinking begins) and when generation completes (to show the assistant response).
@@ -219,6 +223,18 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
   const chatTypeLabel = session.chatType === 'group' ? t('Group') : t('Direct')
   const hasStreamingContent = isGenerating && (streamingContent || thoughts.length > 0 || isThinking)
 
+  if (session.teamContext) {
+    const destination = session.teamContext
+    return <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+      <p className="text-sm">{t('This conversation is handled by the team.')}</p>
+      <button className="rounded-xl bg-primary px-4 py-2 text-sm text-primary-foreground" onClick={() => {
+        useTeamStore.getState().selectTeam(destination.teamId)
+        useTeamStore.getState().selectConversation(destination.epochId)
+        useAppsPageStore.getState().setCurrentTab('team')
+      }}>{t('Open team task')}</button>
+    </div>
+  }
+
   // Loading state
   if (loadState === 'loading') {
     return (
@@ -242,7 +258,7 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-2 text-muted-foreground">
             <AlertCircle className="w-5 h-5 text-destructive" />
-            <p className="text-sm">{t('Failed to load chat')}</p>
+            <p className="text-sm">{t('Failed to load chat')}</p><button onClick={() => setRetry(value => value + 1)} className="min-h-9 text-xs text-primary">{t('Retry')}</button>
           </div>
         </div>
       </div>

@@ -331,6 +331,7 @@ export interface TeamStore {
   insertFinding(finding: BlackboardFinding): void
   /** Remove one finding by id (no-op if absent). Same reconcile/rollback use. */
   deleteFinding(findingId: string): void
+  listFindingsByTeam(teamId: string): BlackboardFinding[]
   listFindingsByEpoch(teamId: string, epochId: string): BlackboardFinding[]
 
   // ── team_activity ─────────────────────────────
@@ -343,7 +344,9 @@ export interface TeamStore {
   /** Remove one act by id (no-op if absent). Rollback of a rejected shadow write. */
   deleteActivity(activityId: string): void
   listActivityByEpoch(teamId: string, epochId: string): TeamActivity[]
+  listRecentActivityByEpoch(teamId: string, epochId: string, limit: number): TeamActivity[]
   /** Every act of a team, across epochs — the replication snapshot's source. */
+  getConversationStats(teamId: string, ownAppIds: string[]): { involved: Set<string>; outputCounts: Map<string, number> }
   listActivityByTeam(teamId: string): TeamActivity[]
   /**
    * How many acts an epoch holds, without loading them. Lets a bounded reader
@@ -353,6 +356,7 @@ export interface TeamStore {
   countActivityByEpoch(teamId: string, epochId: string): number
 
   // ── team_epochs ───────────────────────────────
+  updateWorkItem(epochId: string, patch: Partial<Pick<import('../../../shared/apps/team-types').TeamWorkItem, 'title' | 'status' | 'createdBy' | 'entryAppId'>>): void
   insertEpoch(epoch: TeamEpoch, triggerType?: TeamRunTriggerType): void
   getEpochById(epochId: string): TeamEpoch | null
   endEpoch(
@@ -374,10 +378,13 @@ export interface TeamStore {
    * authority as single writer; later writes win field-by-field on re-apply.
    */
   upsertEpoch(epoch: TeamEpoch, triggerType?: TeamRunTriggerType): void
+  getEpochSummaryStats(teamId: string): Map<string, { taskCount: number; doneCount: number; lastActivityAt: number }>
+  getLatestEpochForTeam(teamId: string): TeamEpoch | null
   listEpochsByTeam(teamId: string): TeamEpoch[]
   getCurrentEpochForTeam(teamId: string): TeamEpoch | null
   /** The open (not sealed) 'conversation' epoch for a (team, chat), or null. */
   getOpenConversationEpoch(teamId: string, chatKey: string): TeamEpoch | null
+  getLatestConversationEpoch(teamId: string, chatKey: string): TeamEpoch | null
   /** All open 'conversation' epochs of a team, newest first. */
   listOpenConversationEpochs(teamId: string): TeamEpoch[]
   /** All open epochs (run + conversation) of a team, newest first. */

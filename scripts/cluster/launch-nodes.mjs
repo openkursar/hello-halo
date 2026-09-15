@@ -321,7 +321,8 @@ function spawnNode(appEntry, nodeDir, logFile) {
   // Strip ELECTRON_RUN_AS_NODE so Electron boots as a full app, not plain Node.
   const { ELECTRON_RUN_AS_NODE: _ignored, ...cleanEnv } = process.env
   const out = fs.openSync(logFile, 'a')
-  const child = spawn(electronBinary, [appEntry], {
+  const electronArgs = process.env.HALO_TEST_NO_PROXY === '1' ? ['--no-proxy-server', appEntry] : [appEntry]
+  const child = spawn(electronBinary, electronArgs, {
     cwd: PROJECT_ROOT,
     detached: true,
     stdio: ['ignore', out, out],

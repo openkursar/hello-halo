@@ -153,11 +153,20 @@ describe('E-1 — teamService.sendToMember (host-operator dispatch)', () => {
     const res = await ctx.service.sendToMember({ teamId, appId: WORKER, epochId, message: 'still there?' })
 
     expect(res).toEqual({ ok: true, finalMessage: 'done' })
-    expect(ctx.runtime.noteEpochTurn).toHaveBeenCalledWith(teamId, epochId)
+    expect(ctx.runtime.noteEpochTurn).toHaveBeenCalledWith(teamId, epochId, true)
     // Ordering: reactivate fires before the bus send (so completeTurn sees it open).
     const noteOrder = ctx.runtime.noteEpochTurn.mock.invocationCallOrder[0]
     const sendOrder = ctx.runtime.bus.send.mock.invocationCallOrder[0]
     expect(noteOrder).toBeLessThan(sendOrder)
+  })
+
+  it('does not send into a cleared or unavailable task', async () => {
+    const ctx = build(() => ({ from: 'worker', message: 'unexpected', status: 'ok' }))
+    dbManager = ctx.dbManager
+    const { teamId, epochId } = seedTeam(ctx.store)
+    ctx.runtime.noteEpochTurn.mockReturnValue(false)
+    expect(await ctx.service.sendToMember({ teamId, appId: WORKER, epochId, message: 'go' })).toEqual({ ok: false, finalMessage: null, reason: 'UNDELIVERED' })
+    expect(ctx.sends).toHaveLength(0)
   })
 
   it('delivered async (queued, no sync answer) → ok:true with finalMessage null', async () => {

@@ -7,19 +7,19 @@
 
 ## 1. Module Role
 
-Pure data/persistence layer for the Digital Team feature. Peer of `apps/manager`.
+Persistence and lifecycle service for the Digital Team feature. Peer of `apps/manager`.
 
-Owns the nine team tables and their migrations. Consumed by the future
-`apps/team` service (lifecycle: create/dissolve/manage, lead provisioning, AI
-auto-build, epoch start/seal) and by the `runtime/team` coordination kernel
-(Message Bus + Blackboard facade).
+Owns team persistence and migrations. The `service.ts` facade handles creation,
+membership, lead provisioning and task projections; execution is delegated to
+the injected `runtime/team` contract. The coordination kernel consumes the store
+through its exported contract.
 
-Does NOT: run teams, route messages, enforce collaboration topology, call
-agents, or own any IPC. The store enforces only SQLite constraints; all business
-rules live above it.
+The store does not execute agents, route messages or own transport handlers.
+Business rules live in the service; live coordination belongs to `runtime/team`.
 
-Dependency direction: `apps/team` depends downward on `platform/store` only. It
-never imports `apps/runtime` or `services/*` business logic.
+Persistence depends on `platform/store`. The service receives manager and runtime
+behavior through injected contracts; provisioning and artifact services are
+lower-tier dependencies. Runtime execution must not move into transport.
 
 `lead.ts` (`buildLeadSystemPrompt` + `provisionLeadSpec`) also lives here: the
 lead app spec is side-effect-free provisioning data the service installs, so it
@@ -31,7 +31,7 @@ an upward runtime dependency). Live turn mechanics remain in
 
 ## 2. Table Ownership
 
-All nine tables live in the shared app-level database (`halo.db`), versioned
+All team tables live in the shared app-level database (`halo.db`), versioned
 under the isolated migration namespace `app_team`.
 
 | Table | Grain | Lifetime |
@@ -42,7 +42,7 @@ under the isolated migration namespace `app_team`.
 | `blackboard_tasks` | one row per task | per-epoch; retained after seal for history |
 | `blackboard_findings` | append-only | per-epoch; retained after seal for history |
 | `team_activity` | append-only | per-epoch; retained after seal (it IS the history) |
-| `team_epochs` | one row per run OR conversation | per-epoch; retained for history |
+| `team_epochs` | one row per run OR conversation, including business task metadata | retained for history; resource teardown does not imply business completion |
 | `team_triggers` | one row per trigger | long-lived definition |
 | `team_checks` | one row per periodic check | per-epoch; deleted when its epoch ends |
 
@@ -89,7 +89,7 @@ taken before the owner's latest edit reached the authority must not undo it.
   §8.2. It marks members whose app was auto-created for this team (AI sourcing)
   so the service can clean up orphans on dissolve. Manual members are never
   auto-deleted.
-- All other columns, indexes, and unique constraints match §8.2 exactly.
+- Business task metadata is stored on `team_epochs`; see the task lifetime contract below.
 
 ---
 
@@ -160,3 +160,40 @@ singleton (SQLite connections are owned by platform/store).
 
 Bootstrap wiring (a later task) calls `initTeamStore({ db })` after `initStore()`
 in `bootstrap/extended.ts`, alongside `initAppManager({ db })`.
+
+
+## Task persistence and lifetime
+
+A workbench task currently has exactly one epoch. Its title, creator, entry member,
+completion status and update timestamp live on `team_epochs`. `TeamWorkItem` is a
+projection of those columns, with `id === epoch.id`; it is not an independent
+identity and does not imply a one-to-many execution model. Reusing the existing
+context after a resource pause needs no additional identity or satellite table.
+
+Migration 14 introduced a satellite table during development. Migration 15 moves
+that data onto the owning epoch and removes the table. Existing history and known
+creators are preserved; unknown creators remain unknown. New native tasks record
+the bootstrap-injected stable viewer identity. The service owns viewer relationship
+projection; renderer preferences cannot grant ownership or access.
+
+The optional `workItem` snapshot travels inside the existing epoch replication
+envelope. Creation and replica apply are transactional. A missing snapshot does
+not erase newer business metadata; timestamp guards reject stale updates.
+Malformed business metadata cannot abort application of an otherwise valid epoch
+replication record.
+
+Resource sealing (`stopped`) preserves the task and can resume its existing
+context. Explicit archival completes the task and ends its execution. Only a
+human request may reopen a completed task; a background wake cannot unarchive it.
+IM `/clear` uses a distinct terminal `cleared` reason: the next inbound message
+creates a fresh epoch and model context. Looking up a task never wakes it.
+Creating a native task always creates a unique chat key, including when an entry
+member is specified; member selection is not a task identity.
+
+The conversation list includes historical and current native tasks, reception and
+automatic runs. Direct member channels remain addressable but are excluded from
+the task list. Reception entries carry their serving member. List projections
+use relationship and output metadata rather than materializing activity bodies.
+
+Rendering, navigation and audience rules are owned by
+[`components/team/workbench/DESIGN.md`](../../../renderer/components/team/workbench/DESIGN.md).

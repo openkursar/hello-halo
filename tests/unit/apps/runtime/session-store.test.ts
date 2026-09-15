@@ -927,3 +927,16 @@ describe('convertEventsToMessages', () => {
     })
   })
 })
+
+describe('team transcript origin', () => {
+  it('retains dispatch identity on input and response, then resets it for a human turn', () => {
+    const messages = convertEventsToMessages([
+      { type: 'user', _ts: '2026-09-14T00:00:00Z', _isTrigger: true, _teamOrigin: { kind: 'message', correlationId: 'dispatch-1' }, message: { content: 'Delegated work' } },
+      { type: 'assistant', _ts: '2026-09-14T00:00:01Z', message: { content: [{ type: 'text', text: 'Internal result' }] } },
+      { type: 'user', _ts: '2026-09-14T00:00:02Z', _isTrigger: true, _teamOrigin: { kind: 'human_message', correlationId: 'human-1' }, message: { content: 'My question' } },
+      { type: 'assistant', _ts: '2026-09-14T00:00:03Z', message: { content: [{ type: 'text', text: 'Your answer' }] } },
+    ])
+    expect(messages.map(message => message.metadata?.teamTriggerKind)).toEqual(['message', 'message', 'human_message', 'human_message'])
+    expect(messages[0].metadata?.correlationId).toBe('dispatch-1')
+  })
+})

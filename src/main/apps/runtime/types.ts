@@ -120,6 +120,7 @@ export type ActivityEntryType =
 
 /** Content of an activity entry */
 export interface ActivityEntryContent {
+  resolution?: { reason: 'task_closed'; ts: number }
   /** Human-readable summary (required, written by AI) */
   summary: string
   /** Run status indicator */
@@ -198,6 +199,8 @@ export interface AutomationAppState {
 
 /** Options for querying activity entries */
 export interface ActivityQueryOptions {
+  teamId?: string
+  epochId?: string
   limit?: number
   offset?: number
   type?: ActivityEntryType

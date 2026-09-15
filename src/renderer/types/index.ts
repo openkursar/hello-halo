@@ -534,6 +534,7 @@ export interface Message {
   images?: ImageAttachment[];  // Attached images
   tokenUsage?: TokenUsage;  // Token usage for this assistant message
   metadata?: {
+    teamTriggerKind?: string;
     fileChanges?: FileChangesSummary;  // Lightweight file changes for immediate display
     // Provenance of a `source: 'cross-conversation'` message. Mirrors the flat
     // shape the delivery path persists — the title is a snapshot taken at

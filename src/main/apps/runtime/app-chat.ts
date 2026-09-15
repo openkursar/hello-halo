@@ -484,11 +484,11 @@ async function runAppChatTurn(
   if (teamContext) {
     // Every team turn (user/IM/teammate) stamps the epoch's activity, and wakes
     // it when hibernated so coordination resumes and member replies route back.
-    getActiveTeamRuntime()?.noteEpochTurn(teamContext.teamId, teamContext.epochId)
+    const fromHuman = !teamContext.kind || teamContext.kind === 'human_message'
+    if (getActiveTeamRuntime()?.noteEpochTurn(teamContext.teamId, teamContext.epochId, fromHuman) === false) throw new Error('This task is closed; a human must resume it.')
     // Auto-name a native "New session" from the person's first message (parity
     // with the space chat). A teammate-driven turn's input is a relayed
     // envelope, never the user's words.
-    const fromHuman = !teamContext.kind || teamContext.kind === 'human_message'
     getActiveTeamRuntime()?.maybeAutoNameConversation(teamContext.teamId, teamContext.epochId, fromHuman, message)
   }
   const teamPromptCtx = teamContext
@@ -740,6 +740,7 @@ async function runAppChatTurn(
   // Carried to the finally below, which is where a team turn's ending is
   // reported: the block runs for every exit, but only the catch knows which one.
   let turnFailure: string | null = null
+  let finalReply: string | undefined
   try {
     const t0 = Date.now()
 
@@ -804,7 +805,7 @@ async function runAppChatTurn(
     // ── 7. Persist the user message for reload recovery ──
     // Original images are persisted regardless of the vision fallback — they
     // feed the chat bubble display, not the model.
-    sink.writeUserMessage(message, images)
+    sink.writeUserMessage(message, images, teamContext ? { kind: teamContext.kind ?? 'human_message', correlationId: teamContext.correlationId } : undefined)
 
     // ── 8. Dispatch and wait for this message's turn ────
     // Every session opens with the digital human's memory, the same way an
@@ -836,7 +837,10 @@ async function runAppChatTurn(
     // Claim the next turn for this message. Enqueued immediately before send so
     // the window in which an autonomous turn could start first — and therefore
     // claim this round — is as narrow as the SDK allows.
-    round = sink.beginRound({ onProgress, onReply, onMessageAccepted })
+    round = sink.beginRound({
+      onProgress, onMessageAccepted,
+      onReply: content => { finalReply = content; onReply?.(content) },
+    })
 
     // Mark the dispatch BEFORE send: from here until system:init the consumer
     // looks idle, and an unguarded rebuild in that window would destroy this
@@ -944,7 +948,12 @@ async function runAppChatTurn(
               : { kind: 'error', message: turnFailure }
             : { kind: 'ended' },
           ...(teamContext?.correlationId ? { correlationId: teamContext.correlationId } : {}),
-          ...(teamContext?.kind ? { triggerKind: teamContext.kind } : {}),
+          triggerKind: teamContext?.kind ?? 'human_message',
+          ...(teamContext?.kind && teamContext.kind !== 'human_message' ? {
+            requestSummary: message.replace(/^\[[^\]\n]+\]\s*/, ''),
+            requestFromAppId: teamContext.fromAppId,
+            finalReply,
+          } : {}),
         })
       } catch (err) {
         console.error(`[AppChat][${appId}] turn-end report failed:`, err)

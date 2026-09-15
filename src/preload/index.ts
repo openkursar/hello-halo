@@ -518,7 +518,7 @@ export interface HaloAPI {
   appResume: (appId: string) => Promise<IpcResponse>
   appTrigger: (appId: string) => Promise<IpcResponse>
   appGetState: (appId: string) => Promise<IpcResponse>
-  appGetActivity: (input: { appId: string; options?: { limit?: number; offset?: number; type?: string; since?: number } }) => Promise<IpcResponse>
+  appGetActivity: (input: { appId: string; options?: { limit?: number; offset?: number; type?: string; since?: number; teamId?: string; epochId?: string } }) => Promise<IpcResponse>
   appGetSession: (input: { appId: string; runId: string }) => Promise<IpcResponse>
   appRespondEscalation: (input: { appId: string; escalationId: string; response: { ts: number; choice?: string; text?: string } }) => Promise<IpcResponse>
   appContinueRun: (input: { appId: string; runId: string }) => Promise<IpcResponse>
@@ -554,7 +554,7 @@ export interface HaloAPI {
   appChatRestart: (appId: string) => Promise<IpcResponse<{ sessionsClosed: number }>>
   appImChatMessages: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
   appImChatClear: (input: { appId: string; spaceId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
-  appImChatStop: (input: { appId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse>
+  appImChatStop: (input: { appId: string; channel: string; chatType: 'direct' | 'group'; chatId: string }) => Promise<IpcResponse<{ stopped: boolean }>>
 
   // Native multi-session lifecycle. Listing/renaming reuse imSessionsList /
   // imSessionsSetCustomName (local sessions surface there with source==='local').
@@ -566,6 +566,7 @@ export interface HaloAPI {
   onAppStatusChanged: (callback: (data: unknown) => void) => () => void
   onAppListChanged: (callback: (data: unknown) => void) => () => void
   onAppActivityEntry: (callback: (data: unknown) => void) => () => void
+  onAppEscalationResolved: (callback: (data: unknown) => void) => () => void
   onAppEscalation: (callback: (data: unknown) => void) => () => void
   onAppNavigate: (callback: (data: unknown) => void) => () => void
   onImSessionUpdated: (callback: (data: unknown) => void) => () => void
@@ -625,7 +626,7 @@ export interface HaloAPI {
   teamSendToMember: (input: { teamId: string; appId: string; epochId: string; message: string; images?: ImageAttachment[]; thinkingEnabled?: boolean }) => Promise<IpcResponse>
   /** Conversations (office-shared session objects). */
   teamListConversations: (teamId: string) => Promise<IpcResponse>
-  teamOpenConversation: (input: { teamId: string; title?: string }) => Promise<IpcResponse>
+  teamOpenConversation: (input: { teamId: string; title?: string; memberAppId?: string }) => Promise<IpcResponse>
   teamRenameConversation: (input: { teamId: string; epochId: string; title: string | null }) => Promise<IpcResponse>
   teamArchiveConversation: (input: { teamId: string; epochId: string }) => Promise<IpcResponse>
   /** One-shot pull of an invite link that arrived via halo:// before the renderer was up. */
@@ -948,6 +949,7 @@ const api: HaloAPI = {
   onAppListChanged: (callback) => createEventListener('app:list_changed', callback),
   onAppActivityEntry: (callback) => createEventListener('app:activity_entry:new', callback),
   onAppEscalation: (callback) => createEventListener('app:escalation:new', callback),
+  onAppEscalationResolved: (callback) => createEventListener('app:escalation:resolved', callback),
   onAppNavigate: (callback) => createEventListener('app:navigate', callback),
   onImSessionUpdated: (callback) => createEventListener('app:im-session-updated', callback),
   onImChannelInstanceUpdated: (callback) => createEventListener('im-channels:instance-updated', callback),

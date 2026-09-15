@@ -441,6 +441,11 @@ export function registerAppsRoutes(app: Express): void {
       const options: ActivityQueryOptions = {}
       if (req.query.limit) options.limit = Number(req.query.limit)
       if (req.query.before) options.since = Number(req.query.before)
+      if (req.query.offset) options.offset = Number(req.query.offset)
+      const entryTypes = ['run_complete', 'run_skipped', 'run_error', 'milestone', 'escalation', 'output']
+      if (typeof req.query.type === 'string' && entryTypes.includes(req.query.type)) options.type = req.query.type as ActivityQueryOptions['type']
+      if (typeof req.query.teamId === 'string') options.teamId = req.query.teamId
+      if (typeof req.query.epochId === 'string') options.epochId = req.query.epochId
       const entries = runtime.getActivityEntries(appId, options)
       res.json({ success: true, data: entries })
     } catch (error) {
@@ -1023,12 +1028,14 @@ export function registerAppsRoutes(app: Express): void {
       }
       const space = getSpace(appData.spaceId ?? spaceId)
       if (!space?.path) {
-        res.json({ success: true, data: [] })
+        console.warn('[AppsHTTP] IM history space unavailable', { appId, spaceId: appData.spaceId ?? spaceId })
+        res.status(404).json({ success: false, error: 'Conversation workspace is unavailable' })
         return
       }
       const messages = loadImChatMessages(space.path, appId, channel, chatType, chatId)
       res.json({ success: true, data: messages })
     } catch (error) {
+      console.error('[AppsHTTP] IM history failed', { appId: req.params.appId, error })
       res.json({ success: false, error: (error as Error).message })
     }
   })

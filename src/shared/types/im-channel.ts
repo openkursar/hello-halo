@@ -538,6 +538,8 @@ export interface ImChannelInstanceStatus {
  * detail page (AppNotifyChannelsSection).
  */
 export interface ImSessionRecord {
+  /** Archive address; independent of the external delivery channel. */
+  teamContext?: { teamId: string; epochId: string }
   /** Associated digital human (App) ID */
   appId: string
   /** Channel type identifier: 'wecom-bot' | 'feishu-bot' | 'dingtalk-bot' | 'http' | ... */

@@ -17,10 +17,18 @@ import {
   unsubscribeFromConversation,
 } from '../api/transport'
 
+const observers = new Map<string, number>()
+
 export function useRemoteSubscription(conversationId: string): void {
   useEffect(() => {
     if (isElectron()) return
-    subscribeToConversation(conversationId)
-    return () => { unsubscribeFromConversation(conversationId) }
+    const count = observers.get(conversationId) ?? 0
+    observers.set(conversationId, count + 1)
+    if (count === 0) subscribeToConversation(conversationId)
+    return () => {
+      const remaining = (observers.get(conversationId) ?? 1) - 1
+      if (remaining > 0) observers.set(conversationId, remaining)
+      else { observers.delete(conversationId); unsubscribeFromConversation(conversationId) }
+    }
   }, [conversationId])
 }

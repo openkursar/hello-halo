@@ -1,17 +1,3 @@
-/**
- * Unit tests for the turn-end report.
- *
- * This is the only path that reaches a lead when nobody chose to speak, so what
- * is pinned here is mostly what it must NOT do: never claim a member finished
- * its work, never claim it filed nothing unless the whole turn was watched,
- * never wake the lead about the lead, never carry a word a member said, and —
- * the busy-gating tests at the bottom — never cut one busy stretch into several
- * independently-woken notices.
- *
- * Only the store and the bus are faked — the module imports neither Electron nor
- * the session layer.
- */
-
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 import {
@@ -20,6 +6,8 @@ import {
   FLUSH_WINDOW_MS,
   LEAD_BUSY_RECHECK_MS,
   FACTS_PER_NOTICE,
+  FINAL_REPLY_LIMIT,
+  REQUEST_SUMMARY_LIMIT,
 } from '../../../../../src/main/apps/runtime/team/turn-report'
 import type { TurnReport } from '../../../../../src/main/apps/runtime/team/turn-report'
 import type { MessageBus } from '../../../../../src/main/apps/runtime/team/message-bus'
@@ -42,7 +30,7 @@ interface FakeMember {
 
 function makeStore(members: FakeMember[], opts?: { sealed?: boolean }) {
   return {
-    getTeamById: vi.fn(() => ({ id: TEAM, leadAppId: LEAD })),
+    getTeamById: vi.fn(() => ({ id: TEAM, leadAppId: LEAD, collabMode: 'free' })),
     getEpochById: vi.fn(() => ({ id: EPOCH, endedAt: opts?.sealed ? Date.now() : null })),
     getMember: vi.fn((_teamId: string, appId: string) => members.find((m) => m.appId === appId) ?? null),
     getTaskById: vi.fn(() => ({ title: 'draft outline' })),
@@ -86,6 +74,10 @@ function makeReport(
   })
 }
 
+function endCollaboration(report: TurnReport, input: Parameters<TurnReport['noteTurnEnded']>[0]): void {
+  report.noteTurnEnded({ triggerKind: 'message', ...input })
+}
+
 /** Run a whole turn for a member, with the acts it filed in between. */
 function runTurn(
   report: TurnReport,
@@ -105,7 +97,7 @@ function runTurn(
       subject: 'x',
     })
   }
-  report.noteTurnEnded(end ?? { appId, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+  endCollaboration(report, end ?? { appId, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
 }
 
 /** The one line about a member, isolated from the notice's standing footer. */
@@ -130,6 +122,100 @@ describe('turn-end report', () => {
 
   beforeEach(() => {
     ;({ bus, wakes, tripExternal } = makeBus())
+  })
+
+  it.each(['ended', 'error', 'stopped', 'timeout'] as const)('unknown-source %s endings never wake the lead or reveal excerpts', async kind => {
+    const report = makeReport(LOCAL_TEAM, bus)
+    report.noteTurnStarted({ appId: 'app-writer', teamId: TEAM, epochId: EPOCH })
+    report.noteTurnEnded({ appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: kind === 'error' ? { kind, message: 'private failure' } : { kind }, requestSummary: 'private request', finalReply: 'private answer' })
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    await Promise.resolve()
+    expect(wakes).toHaveLength(0)
+  })
+
+  it.each([
+    { memberAllowed: false, requesterAllowed: true, requester: 'app-editor', visible: false },
+    { memberAllowed: true, requesterAllowed: false, requester: 'app-editor', visible: false },
+    { memberAllowed: true, requesterAllowed: true, requester: undefined, visible: false },
+    { memberAllowed: true, requesterAllowed: true, requester: 'app-editor', visible: true },
+    { memberAllowed: true, requesterAllowed: false, requester: LEAD, visible: true },
+  ])('keeps lifecycle notices while restricting excerpts: %j', async scenario => {
+    const store = makeStore(LOCAL_TEAM)
+    vi.mocked(store.getTeamById).mockReturnValue({ id: TEAM, leadAppId: LEAD, collabMode: 'structured' } as any)
+    store.isEdgeAllowed = vi.fn((_team, from, to) => from === LEAD && (
+      to === 'app-writer' ? scenario.memberAllowed : to === 'app-editor' && scenario.requesterAllowed
+    ))
+    const report = createTurnReport({ store, bus, isLeadGenerating: () => false })
+    runTurn(report, 'app-writer', [{ kind: 'task_update', refId: 'private-task' }], {
+      appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'error', message: 'private failure' },
+      requestSummary: 'private request', finalReply: 'private answer', requestFromAppId: scenario.requester,
+    })
+    await vi.waitFor(() => expect(wakes).toHaveLength(1))
+    expect(wakes[0].body).toContain('writer — stopped with an error')
+    for (const text of ['private request', 'private answer', 'private failure', 'draft outline']) {
+      expect(wakes[0].body.includes(text)).toBe(scenario.visible)
+    }
+  })
+
+  it('rechecks topology when a busy lead receives queued facts', async () => {
+    const store = makeStore(LOCAL_TEAM)
+    vi.mocked(store.getTeamById).mockReturnValue({ id: TEAM, leadAppId: LEAD, collabMode: 'structured' } as any)
+    store.isEdgeAllowed = vi.fn(() => true)
+    const report = createTurnReport({ store, bus, isLeadGenerating: () => true })
+    runTurn(report, 'app-writer', [], {
+      appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' },
+      requestFromAppId: LEAD, requestSummary: 'private request', finalReply: 'private answer',
+    })
+    expect(wakes).toHaveLength(0)
+    vi.mocked(store.isEdgeAllowed).mockReturnValue(false)
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    await vi.waitFor(() => expect(wakes).toHaveLength(1))
+    expect(wakes[0].body).toContain('writer — stopped')
+    expect(wakes[0].body).not.toContain('private')
+  })
+
+  it('an acknowledgement does not suppress the bounded request and final reply fallback', async () => {
+    const report = makeReport(LOCAL_TEAM, bus)
+    runTurn(report, 'app-writer', [{ kind: 'message', targetAppId: LEAD }], {
+      appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' },
+      requestSummary: 'Review the proposal. '.repeat(100), finalReply: '🙂'.repeat(700),
+    })
+    await vi.waitFor(() => expect(wakes).toHaveLength(1))
+    const requestLine = wakes[0].body.split('\n').find(line => line.startsWith('  Request excerpt: '))!
+    const replyLine = wakes[0].body.split('\n').find(line => line.startsWith('  Final reply excerpt'))!
+    expect(Array.from(JSON.parse(requestLine.slice(requestLine.indexOf(': ') + 2)))).toHaveLength(REQUEST_SUMMARY_LIMIT)
+    expect(Array.from(JSON.parse(replyLine.slice(replyLine.indexOf(': ') + 2)))).toHaveLength(FINAL_REPLY_LIMIT)
+    expect(wakes[0].body).toContain('not a completion claim')
+    expect(wakes[0].body).toContain('A manual stop must not be automatically restarted or reassigned')
+  })
+
+  it.each([LEAD, 'app-editor'])('notifies the lead after a member sends its result to %s', async targetAppId => {
+    const report = makeReport(LOCAL_TEAM, bus)
+    runTurn(report, 'app-writer', [{ kind: 'message', targetAppId }], {
+      appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' },
+      requestSummary: 'Review the proposal', finalReply: 'Review finished and result sent.',
+    })
+    await vi.waitFor(() => expect(wakes).toHaveLength(1))
+    expect(wakes[0].body).toContain('Review finished and result sent.')
+    expect(wakes[0].body).not.toContain('No explicit result delivery')
+  })
+
+  it.each(['sealed', 'completed'])('pending notices are discarded if the task becomes %s before delivery', async state => {
+    const store = makeStore(LOCAL_TEAM)
+    let closed = false
+    vi.mocked(store.getEpochById).mockImplementation(() => ({ id: EPOCH, endedAt: closed && state === 'sealed' ? Date.now() : null, workItem: { status: closed && state === 'completed' ? 'completed' : 'open' } }) as any)
+    const report = createTurnReport({ store, bus, isLeadGenerating: () => true })
+    runTurn(report, 'app-writer', [])
+    expect(wakes).toHaveLength(0)
+    closed = true
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    await Promise.resolve()
+    expect(wakes).toHaveLength(0)
+    closed = false
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    await Promise.resolve()
+    expect(wakes).toHaveLength(0)
+    report.clearEpoch(EPOCH)
   })
 
   it('wakes the lead when a member stops, and says what it filed', async () => {
@@ -167,7 +253,7 @@ describe('turn-end report', () => {
   it('an unwatched turn makes no claim about what was filed', async () => {
     const report = makeReport(LOCAL_TEAM, bus)
     // No noteTurnStarted: the process did not see this turn begin.
-    report.noteTurnEnded({ appId: 'app-editor', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    endCollaboration(report, { appId: 'app-editor', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
     await vi.waitFor(() => expect(wakes).toHaveLength(1))
 
     expect(lineFor(wakes[0].body, 'editor')).toBe('- editor — stopped with no error reported.')
@@ -188,7 +274,7 @@ describe('turn-end report', () => {
 
   it('a wake that never became a turn says so, and claims nothing about the member', async () => {
     const report = makeReport(LOCAL_TEAM, bus)
-    report.noteTurnEnded({
+    endCollaboration(report, {
       appId: 'app-writer',
       teamId: TEAM,
       epochId: EPOCH,
@@ -232,7 +318,7 @@ describe('turn-end report', () => {
     // exact trigger that surfaces anything sitting in the pending queue —
     // still produces nothing. If this ending had been queued (just held
     // back), this would have released it.
-    report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
     await new Promise((r) => setTimeout(r, 0))
     expect(wakes).toHaveLength(0)
   })
@@ -258,7 +344,7 @@ describe('turn-end report', () => {
     expect(wakes).toHaveLength(1)
 
     // Its turn ends → the ones that piled up go out together.
-    report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
     await vi.waitFor(() => expect(wakes).toHaveLength(2))
     expect(wakes[1].body).toContain('editor')
     expect(wakes[1].body).toContain('writer')
@@ -284,7 +370,7 @@ describe('turn-end report', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(wakes).toHaveLength(1)
 
-    report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
     await vi.waitFor(() => expect(wakes).toHaveLength(2))
     expect(wakes[1].body).toContain('editor')
   })
@@ -298,12 +384,12 @@ describe('turn-end report', () => {
 
     // Its owner witnessed this and reports it there; a second notice here would
     // announce the same ending twice.
-    report.noteTurnEnded({ appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    endCollaboration(report, { appId: 'app-writer', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
     await new Promise((r) => setTimeout(r, 0))
     expect(wakes).toHaveLength(0)
 
     // Nothing ran anywhere, so the waiting side is the only witness there is.
-    report.noteTurnEnded({
+    endCollaboration(report, {
       appId: 'app-writer',
       teamId: TEAM,
       epochId: EPOCH,
@@ -320,8 +406,8 @@ describe('turn-end report', () => {
       epochId: EPOCH,
       correlationId: 'corr-1',
     }
-    report.noteTurnEnded({ ...ending, fate: { kind: 'timeout' } })
-    report.noteTurnEnded({ ...ending, fate: { kind: 'error', message: 'aborted' } })
+    endCollaboration(report, { ...ending, fate: { kind: 'timeout' } })
+    endCollaboration(report, { ...ending, fate: { kind: 'error', message: 'aborted' } })
     await vi.waitFor(() => expect(wakes).toHaveLength(1))
 
     expect(wakes[0].body).toContain('cut off for running past the turn time limit')
@@ -340,7 +426,7 @@ describe('turn-end report', () => {
     const report = makeReport(LOCAL_TEAM, bus)
     runTurn(report, 'app-writer', [{ kind: 'message', targetAppId: LEAD }])
     await vi.waitFor(() => expect(wakes).toHaveLength(1))
-    report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
 
     // A second turn that does nothing must not inherit the first turn's
     // message — the real delay matters here (not just event ordering): both
@@ -352,7 +438,7 @@ describe('turn-end report', () => {
     // coalescing window — the lead's own turn ending already does exactly
     // this in production (see "endings that arrive while the lead is still
     // reading merge into one later notice").
-    report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
     await vi.waitFor(() => expect(wakes).toHaveLength(2))
     expect(lineFor(wakes[1].body, 'writer')).toContain('filed nothing during that turn')
   })
@@ -371,7 +457,7 @@ describe('turn-end report', () => {
       // next iteration starts — only the final state needs waiting for.
       for (let i = 0; i < REPORT_WAKE_CAP; i++) {
         runTurn(report, 'app-writer', [])
-        report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+        endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
       }
       await vi.waitFor(() => expect(wakes).toHaveLength(REPORT_WAKE_CAP))
       expect(tripExternal).not.toHaveBeenCalled()
@@ -382,7 +468,7 @@ describe('turn-end report', () => {
       // bump + tripExternal call) runs — waiting on wakes alone would race
       // ahead of that continuation.
       runTurn(report, 'app-writer', [])
-      report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+      endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
       await vi.waitFor(() => expect(tripExternal).toHaveBeenCalled())
       expect(tripExternal).toHaveBeenCalledWith(TEAM, EPOCH, 'turnReportFlood')
     }
@@ -439,7 +525,7 @@ describe('turn-end report — time-window coalescing', () => {
     await vi.advanceTimersByTimeAsync(1) // still well inside the window
     expect(wakes).toHaveLength(1)
 
-    report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
     await vi.advanceTimersByTimeAsync(0)
     expect(wakes).toHaveLength(2)
     expect(wakes[1].body).toContain('editor')
@@ -539,7 +625,7 @@ describe('turn-end report — busy-lead gating', () => {
     // The lead frees up and its own turn ends — everything that piled up
     // during the whole busy stretch goes out as exactly ONE notice.
     busy = false
-    report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, triggerKind: 'human_message', fate: { kind: 'ended' } })
     await vi.advanceTimersByTimeAsync(0)
     expect(wakes).toHaveLength(1)
     expect(wakes[0].body).toContain('writer')
@@ -572,7 +658,7 @@ describe('turn-end report — busy-lead gating', () => {
 
     // The lead's own turn ends — that flushes the pending "editor" ending.
     busy = false
-    report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
     await vi.advanceTimersByTimeAsync(0)
     expect(wakes).toHaveLength(2)
     expect(wakes[1].body).toContain('editor')
@@ -621,7 +707,7 @@ describe('turn-end report — busy-lead gating', () => {
 
     // The lead's own turn ends moments later, in the same busy stretch.
     busy = false
-    report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
     await vi.advanceTimersByTimeAsync(0)
 
     expect(wakes).toHaveLength(1)
@@ -640,7 +726,7 @@ describe('turn-end report — busy-lead gating', () => {
     expect(wakes).toHaveLength(0)
 
     busy = false
-    report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
     await vi.advanceTimersByTimeAsync(0)
 
     expect(wakes).toHaveLength(1)
@@ -673,7 +759,7 @@ describe('turn-end report — delivery-failure accounting', () => {
           // the wire", without needing to race real timers to prove it.
           busy = true
           for (let i = 0; i < FACTS_PER_NOTICE; i++) {
-            report.noteTurnEnded({ appId: 'app-editor', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+            endCollaboration(report, { appId: 'app-editor', teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
           }
           busy = false
           throw new Error('network blip')
@@ -693,7 +779,7 @@ describe('turn-end report — delivery-failure accounting', () => {
     await new Promise((r) => setTimeout(r, 0)) // let flush()'s catch block finish running
 
     // Force the retry via the lead's own ending, same as every other test here.
-    report.noteTurnEnded({ appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
+    endCollaboration(report, { appId: LEAD, teamId: TEAM, epochId: EPOCH, fate: { kind: 'ended' } })
     await vi.waitFor(() => expect(wakes).toHaveLength(1))
 
     expect(wakes[0].body).toContain('1 earlier ending piled up')

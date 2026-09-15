@@ -9,7 +9,7 @@
  * (e.g. "New session") stay in the renderer where t() lives.
  */
 
-import type { TeamConversationKind, TeamEpoch } from '../../../shared/apps/team-types'
+import type { TeamConversationKind, TeamEpoch, TeamMember } from '../../../shared/apps/team-types'
 import { parseMemberChatKey, isNativeConversationChatKey, parseTeamChatKey } from '../../../shared/apps/im-keys'
 import type { TeamStore } from './types'
 
@@ -46,7 +46,8 @@ export function conversationKindOf(chatKey: string): TeamConversationKind {
 export function deriveConversationLabel(
   store: TeamStore,
   epoch: TeamEpoch,
-  describeChatKey?: (teamId: string, chatKey: string) => string | null
+  describeChatKey?: (teamId: string, chatKey: string) => string | null,
+  members?: TeamMember[]
 ): string {
   if (epoch.title && epoch.title.trim()) return epoch.title.trim()
   const chatKey = epoch.chatKey ?? ''
@@ -54,7 +55,7 @@ export function deriveConversationLabel(
 
   const memberAppId = parseMemberChatKey(chatKey)
   if (memberAppId) {
-    const member = store.listMembersByTeam(epoch.teamId).find((m) => m.appId === memberAppId)
+    const member = (members ?? store.listMembersByTeam(epoch.teamId)).find((m) => m.appId === memberAppId)
     return member?.memberName ?? ''
   }
 

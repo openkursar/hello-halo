@@ -107,9 +107,6 @@ export class ActivityStore {
   private readonly stmtUpdateRunComplete: Database.Statement
   private readonly stmtInsertEntry: Database.Statement
   private readonly stmtGetEntry: Database.Statement
-  private readonly stmtGetEntriesForApp: Database.Statement
-  private readonly stmtGetEntriesForAppWithType: Database.Statement
-  private readonly stmtGetEntriesForAppSince: Database.Statement
   private readonly stmtUpdateEntryResponse: Database.Statement
   private readonly stmtGetPendingEscalation: Database.Statement
   private readonly stmtGetAllPendingEscalations: Database.Statement
@@ -170,30 +167,18 @@ export class ActivityStore {
       SELECT * FROM activity_entries WHERE id = ?
     `)
 
-    this.stmtGetEntriesForApp = db.prepare(`
-      SELECT * FROM activity_entries WHERE app_id = ? ORDER BY ts DESC LIMIT ? OFFSET ?
-    `)
-
-    this.stmtGetEntriesForAppWithType = db.prepare(`
-      SELECT * FROM activity_entries WHERE app_id = ? AND type = ? ORDER BY ts DESC LIMIT ? OFFSET ?
-    `)
-
-    this.stmtGetEntriesForAppSince = db.prepare(`
-      SELECT * FROM activity_entries WHERE app_id = ? AND ts < ? ORDER BY ts DESC LIMIT ? OFFSET ?
-    `)
-
     this.stmtUpdateEntryResponse = db.prepare(`
       UPDATE activity_entries SET user_response_json = ? WHERE id = ?
     `)
 
     this.stmtGetPendingEscalation = db.prepare(`
       SELECT * FROM activity_entries
-      WHERE app_id = ? AND id = ? AND type = 'escalation' AND user_response_json IS NULL
+      WHERE app_id = ? AND id = ? AND type = 'escalation' AND user_response_json IS NULL AND json_extract(content_json, '$.resolution') IS NULL
     `)
 
     this.stmtGetAllPendingEscalations = db.prepare(`
       SELECT * FROM activity_entries
-      WHERE type = 'escalation' AND user_response_json IS NULL
+      WHERE type = 'escalation' AND user_response_json IS NULL AND json_extract(content_json, '$.resolution') IS NULL
       ORDER BY ts ASC
     `)
 
@@ -203,7 +188,8 @@ export class ActivityStore {
     this.stmtCloseOrphanEscalations = db.prepare(`
       UPDATE activity_entries
       SET user_response_json = ?
-      WHERE app_id = ? AND type = 'escalation' AND user_response_json IS NULL AND id != ?
+      WHERE app_id = ? AND type = 'escalation' AND user_response_json IS NULL AND json_extract(content_json, '$.resolution') IS NULL
+        AND json_extract(content_json, '$.teamContext.epochId') IS NULL AND id != ?
     `)
 
     // Close ALL pending escalation entries for an app (used when leaving waiting_user
@@ -211,7 +197,8 @@ export class ActivityStore {
     this.stmtCloseOrphanEscalationsAll = db.prepare(`
       UPDATE activity_entries
       SET user_response_json = ?
-      WHERE app_id = ? AND type = 'escalation' AND user_response_json IS NULL
+      WHERE app_id = ? AND type = 'escalation' AND user_response_json IS NULL AND json_extract(content_json, '$.resolution') IS NULL
+        AND json_extract(content_json, '$.teamContext.epochId') IS NULL
     `)
 
     this.stmtGetEntriesForRun = db.prepare(`
@@ -343,18 +330,15 @@ export class ActivityStore {
 
   /** Get entries for an App with optional filtering */
   getEntriesForApp(appId: string, options?: ActivityQueryOptions): ActivityEntry[] {
-    const limit = options?.limit ?? 50
-    const offset = options?.offset ?? 0
-
-    let rows: EntryRow[]
-
-    if (options?.type) {
-      rows = this.stmtGetEntriesForAppWithType.all(appId, options.type, limit, offset) as EntryRow[]
-    } else if (options?.since) {
-      rows = this.stmtGetEntriesForAppSince.all(appId, options.since, limit, offset) as EntryRow[]
-    } else {
-      rows = this.stmtGetEntriesForApp.all(appId, limit, offset) as EntryRow[]
-    }
+    const limit = Math.min(500, Math.max(1, Math.floor(options?.limit || 50)))
+    const offset = Math.max(0, Math.floor(options?.offset || 0))
+    const predicates = ['app_id = ?']
+    const values: (string | number)[] = [appId]
+    if (options?.type) { predicates.push('type = ?'); values.push(options.type) }
+    if (options?.since) { predicates.push('ts < ?'); values.push(options.since) }
+    if (options?.teamId) { predicates.push("json_extract(content_json, '$.teamContext.teamId') = ?"); values.push(options.teamId) }
+    if (options?.epochId) { predicates.push("json_extract(content_json, '$.teamContext.epochId') = ?"); values.push(options.epochId) }
+    const rows = this.db.prepare(`SELECT * FROM activity_entries WHERE ${predicates.join(' AND ')} ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`).all(...values, limit, offset) as EntryRow[]
 
     return rows.map(rowToEntry)
   }
@@ -379,6 +363,27 @@ export class ActivityStore {
   /** Get all pending (unanswered) escalation entries across all apps, oldest first */
   getAllPendingEscalations(): ActivityEntry[] {
     const rows = this.stmtGetAllPendingEscalations.all() as EntryRow[]
+    return rows.map(rowToEntry)
+  }
+
+  hasPendingEscalation(appId: string, teamId: string, epochId?: string): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM activity_entries
+      WHERE app_id = ? AND type = 'escalation' AND user_response_json IS NULL
+        AND json_extract(content_json, '$.resolution') IS NULL
+        AND json_extract(content_json, '$.teamContext.teamId') = ?
+        ${epochId ? "AND json_extract(content_json, '$.teamContext.epochId') = ?" : ''}
+      LIMIT 1`).get(...(epochId ? [appId, teamId, epochId] : [appId, teamId]))
+  }
+
+  closeTaskEscalations(teamId: string, epochId: string): ActivityEntry[] {
+    const resolution = JSON.stringify({ reason: 'task_closed', ts: Date.now() })
+    const rows = this.db.prepare(`UPDATE activity_entries
+      SET content_json = json_set(content_json, '$.resolution', json(?))
+      WHERE type = 'escalation' AND user_response_json IS NULL
+        AND json_extract(content_json, '$.resolution') IS NULL
+        AND json_extract(content_json, '$.teamContext.teamId') = ?
+        AND json_extract(content_json, '$.teamContext.epochId') = ?
+      RETURNING *`).all(resolution, teamId, epochId) as EntryRow[]
     return rows.map(rowToEntry)
   }
 
