@@ -52,7 +52,7 @@ import { getCustomProvider } from './providers/custom.provider'
 import { getGitHubCopilotProvider } from './providers/github-copilot.provider'
 import { getClaudeProvider } from './providers/claude.provider'
 import { getZhipuCodingOAuthProvider } from './providers/zhipu-coding-oauth.provider'
-import { getOpenAICodexProvider } from './providers/openai-codex.provider'
+import { getChatGPTProvider } from './providers/chatgpt.provider'
 import { getCliDelegatedProvider } from './providers/cli-delegated.provider'
 import { loadAuthProvidersAsync } from './auth-loader'
 import { loadProductConfig } from '../../foundation/product-config'
@@ -97,7 +97,7 @@ class AISourceManager {
     this.registerProvider(getGitHubCopilotProvider())
     this.registerProvider(getClaudeProvider())
     this.registerProvider(getZhipuCodingOAuthProvider())
-    this.registerProvider(getOpenAICodexProvider())
+    this.registerProvider(getChatGPTProvider())
     // Delegated auth depends on the CLI's credential store, whose layout is
     // only verified on macOS. Registering it elsewhere would surface a source
     // that cannot be logged into. See product.json `platforms`.

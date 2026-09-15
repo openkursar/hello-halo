@@ -1,5 +1,5 @@
 /**
- * OpenAI Codex (ChatGPT subscription) provider.
+ * ChatGPT subscription provider.
  *
  * The backend fingerprints the client, so the header set and the request target
  * are asserted literally rather than by shape — a renamed header or a stray
@@ -28,9 +28,9 @@ vi.mock('../../../../src/main/services/proxy-fetch', () => ({
   proxyFetch: (...args: unknown[]) => proxyFetch(...args)
 }))
 
-import { getOpenAICodexProvider } from '../../../../src/main/services/ai-sources/providers/openai-codex.provider'
+import { getChatGPTProvider } from '../../../../src/main/services/ai-sources/providers/chatgpt.provider'
+import { CHATGPT_PROVIDER_ID } from '../../../../src/shared/constants'
 import {
-  CODEX_PROVIDER_ID,
   CODEX_CLI_VERSION,
   CODEX_ADAPTER_ID,
   CODEX_SUBSCRIPTION_MODELS,
@@ -45,8 +45,8 @@ function escapeRegExp(value: string): string {
 
 function configWith(overrides: Record<string, unknown> = {}): AISourcesConfig {
   return {
-    current: CODEX_PROVIDER_ID,
-    [CODEX_PROVIDER_ID]: {
+    current: CHATGPT_PROVIDER_ID,
+    [CHATGPT_PROVIDER_ID]: {
       loggedIn: true,
       model: 'gpt-5.5',
       availableModels: CODEX_SUBSCRIPTION_MODELS.map((model) => model.slug),
@@ -63,7 +63,7 @@ function configWith(overrides: Record<string, unknown> = {}): AISourcesConfig {
 // so it is provided here at a value whose padding is worth asserting.
 const originalSystemVersion = process.getSystemVersion
 
-describe('OpenAICodexProvider', () => {
+describe('ChatGPTProvider', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     process.getSystemVersion = () => '15.1'
@@ -74,16 +74,16 @@ describe('OpenAICodexProvider', () => {
   })
 
   it('reports the provider id the product.json entry uses', () => {
-    expect(getOpenAICodexProvider().type).toBe(CODEX_PROVIDER_ID)
+    expect(getChatGPTProvider().type).toBe(CHATGPT_PROVIDER_ID)
   })
 
   it('returns no backend config when not logged in', () => {
-    expect(getOpenAICodexProvider().getBackendConfig(configWith({ loggedIn: false }))).toBeNull()
-    expect(getOpenAICodexProvider().getBackendConfig(configWith({ accessToken: undefined }))).toBeNull()
+    expect(getChatGPTProvider().getBackendConfig(configWith({ loggedIn: false }))).toBeNull()
+    expect(getChatGPTProvider().getBackendConfig(configWith({ accessToken: undefined }))).toBeNull()
   })
 
   it('targets the Codex Responses endpoint with the subscription headers', () => {
-    const config = getOpenAICodexProvider().getBackendConfig(configWith())
+    const config = getChatGPTProvider().getBackendConfig(configWith())
     expect(config).not.toBeNull()
 
     expect(config!.url).toBe('https://chatgpt.com/backend-api/codex/responses')
@@ -111,7 +111,7 @@ describe('OpenAICodexProvider', () => {
    * and a three-component version.
    */
   it('builds the user agent in the shape the CLI asserts', () => {
-    const headers = getOpenAICodexProvider().getBackendConfig(configWith())!.headers!
+    const headers = getChatGPTProvider().getBackendConfig(configWith())!.headers!
     const userAgent = headers['User-Agent']!
 
     const arch = process.arch === 'x64' ? 'x86_64' : process.arch
@@ -132,23 +132,23 @@ describe('OpenAICodexProvider', () => {
   })
 
   it('omits the account header rather than sending it empty', () => {
-    const config = getOpenAICodexProvider().getBackendConfig(configWith({ user: undefined }))
+    const config = getChatGPTProvider().getBackendConfig(configWith({ user: undefined }))
     expect(config!.headers!['ChatGPT-Account-ID']).toBeUndefined()
   })
 
   it('falls back to the catalog default model', () => {
-    const config = getOpenAICodexProvider().getBackendConfig(configWith({ model: '' }))
+    const config = getChatGPTProvider().getBackendConfig(configWith({ model: '' }))
     expect(config!.model).toBe(CODEX_DEFAULT_MODEL)
   })
 
   it('offers the bundled CLI model catalog', async () => {
-    await expect(getOpenAICodexProvider().getAvailableModels(configWith())).resolves.toEqual(
+    await expect(getChatGPTProvider().getAvailableModels(configWith())).resolves.toEqual(
       CODEX_SUBSCRIPTION_MODELS.map((model) => model.slug)
     )
   })
 
   it('asks for a refresh inside the five-minute window before expiry', () => {
-    const provider = getOpenAICodexProvider()
+    const provider = getChatGPTProvider()
 
     const fresh = provider.checkTokenWithConfig(configWith({ tokenExpires: Date.now() + 60 * 60 * 1000 }))
     expect(fresh.valid).toBe(true)
@@ -166,19 +166,19 @@ describe('OpenAICodexProvider', () => {
   it('treats an unreadable expiry as needing a refresh', () => {
     // Same direction as the Claude provider: a refresh is cheap, an expired
     // token mid-conversation is not.
-    const status = getOpenAICodexProvider().checkTokenWithConfig(configWith({ tokenExpires: 0 }))
+    const status = getChatGPTProvider().checkTokenWithConfig(configWith({ tokenExpires: 0 }))
     expect(status.valid).toBe(true)
     expect(status.needsRefresh).toBe(true)
   })
 
   it('reports invalid when there is no access token', () => {
-    const status = getOpenAICodexProvider().checkTokenWithConfig(configWith({ accessToken: undefined }))
+    const status = getChatGPTProvider().checkTokenWithConfig(configWith({ accessToken: undefined }))
     expect(status.valid).toBe(false)
     expect(status.needsRefresh).toBe(false)
   })
 
   it('refuses to refresh without a refresh token', async () => {
-    const result = await getOpenAICodexProvider().refreshTokenWithConfig(configWith({ refreshToken: '' }))
+    const result = await getChatGPTProvider().refreshTokenWithConfig(configWith({ refreshToken: '' }))
     expect(result.success).toBe(false)
   })
 
@@ -190,7 +190,7 @@ describe('OpenAICodexProvider', () => {
     it('revokes the refresh token upstream', async () => {
       proxyFetch.mockResolvedValueOnce({ ok: true, status: 200 } as unknown as Response)
 
-      await getOpenAICodexProvider().logout(configWith())
+      await getChatGPTProvider().logout(configWith())
 
       const [url, init] = proxyFetch.mock.calls[0] as [string, { body: string }]
       expect(url).toBe('https://auth.openai.com/oauth/revoke')
@@ -202,14 +202,14 @@ describe('OpenAICodexProvider', () => {
     })
 
     it('succeeds without revoking when no config is supplied', async () => {
-      const result = await getOpenAICodexProvider().logout()
+      const result = await getChatGPTProvider().logout()
       expect(result.success).toBe(true)
       expect(proxyFetch).not.toHaveBeenCalled()
     })
 
     it('still succeeds when the revoke call fails', async () => {
       proxyFetch.mockRejectedValueOnce(new Error('network down'))
-      await expect(getOpenAICodexProvider().logout(configWith())).resolves.toEqual({ success: true })
+      await expect(getChatGPTProvider().logout(configWith())).resolves.toEqual({ success: true })
     })
   })
 
@@ -228,7 +228,7 @@ describe('OpenAICodexProvider', () => {
     }
 
     function modelsOf(result: { data?: unknown }): { availableModels: string[]; modelNames: Record<string, string> } {
-      const payload = (result.data as Record<string, { availableModels: string[]; modelNames: Record<string, string> }>)[CODEX_PROVIDER_ID]
+      const payload = (result.data as Record<string, { availableModels: string[]; modelNames: Record<string, string> }>)[CHATGPT_PROVIDER_ID]
       return { availableModels: payload.availableModels, modelNames: payload.modelNames }
     }
 
@@ -241,7 +241,7 @@ describe('OpenAICodexProvider', () => {
         ])
       )
 
-      await getOpenAICodexProvider().refreshConfig(configWith())
+      await getChatGPTProvider().refreshConfig(configWith())
 
       // Silence in the catalog is assent: the wire field only states a false.
       expect(getCodexModelCapability('model-plain')).toEqual({ reasoningSummary: true, responsesLite: false })
@@ -269,9 +269,9 @@ describe('OpenAICodexProvider', () => {
         ])
       )
 
-      const payload = ((await getOpenAICodexProvider().refreshConfig(configWith())).data as Record<string, {
+      const payload = ((await getChatGPTProvider().refreshConfig(configWith())).data as Record<string, {
         modelOverrides: Record<string, unknown>
-      }>)[CODEX_PROVIDER_ID]
+      }>)[CHATGPT_PROVIDER_ID]
 
       expect(payload.modelOverrides).toEqual({
         sees: { vision: true, contextWindow: 272000 },
@@ -290,7 +290,7 @@ describe('OpenAICodexProvider', () => {
         ])
       )
 
-      const result = await getOpenAICodexProvider().refreshConfig(configWith())
+      const result = await getChatGPTProvider().refreshConfig(configWith())
       const { availableModels, modelNames } = modelsOf(result)
 
       // The overlay entry joins the shipped ones and both sets order by
@@ -313,7 +313,7 @@ describe('OpenAICodexProvider', () => {
         catalogResponse([{ slug: 'gpt-5.5', display_name: 'GPT-5.5', visibility: 'hide', priority: 12 }])
       )
 
-      const { availableModels } = modelsOf(await getOpenAICodexProvider().refreshConfig(configWith()))
+      const { availableModels } = modelsOf(await getChatGPTProvider().refreshConfig(configWith()))
 
       expect(availableModels).toEqual(['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])
     })
@@ -321,7 +321,7 @@ describe('OpenAICodexProvider', () => {
     it('queries the catalog endpoint with the CLI version and identity headers', async () => {
       proxyFetch.mockResolvedValueOnce(catalogResponse([{ slug: 'model-first', visibility: 'list', priority: 0 }]))
 
-      await getOpenAICodexProvider().refreshConfig(configWith())
+      await getChatGPTProvider().refreshConfig(configWith())
 
       const [url, init] = proxyFetch.mock.calls[0] as [string, { headers: Record<string, string> }]
       expect(url).toBe(`https://chatgpt.com/backend-api/codex/models?client_version=${CODEX_CLI_VERSION}`)
@@ -339,10 +339,10 @@ describe('OpenAICodexProvider', () => {
     it('degrades instead of clearing the list when the catalog cannot be read', async () => {
       proxyFetch.mockResolvedValueOnce({ ok: false, status: 503, text: async () => 'unavailable' } as unknown as Response)
 
-      const result = await getOpenAICodexProvider().refreshConfig(configWith())
+      const result = await getChatGPTProvider().refreshConfig(configWith())
 
       expect(result.success).toBe(true)
-      const payload = (result.data as Record<string, { degraded?: boolean; availableModels?: string[] }>)[CODEX_PROVIDER_ID]
+      const payload = (result.data as Record<string, { degraded?: boolean; availableModels?: string[] }>)[CHATGPT_PROVIDER_ID]
       expect(payload.degraded).toBe(true)
       expect(payload.availableModels).toBeUndefined()
     })
@@ -350,12 +350,12 @@ describe('OpenAICodexProvider', () => {
     it('degrades when the catalog comes back empty', async () => {
       proxyFetch.mockResolvedValueOnce(catalogResponse([]))
 
-      const payload = ((await getOpenAICodexProvider().refreshConfig(configWith())).data as Record<string, { degraded?: boolean }>)[CODEX_PROVIDER_ID]
+      const payload = ((await getChatGPTProvider().refreshConfig(configWith())).data as Record<string, { degraded?: boolean }>)[CHATGPT_PROVIDER_ID]
       expect(payload.degraded).toBe(true)
     })
 
     it('refuses to fetch without a token', async () => {
-      const result = await getOpenAICodexProvider().refreshConfig(configWith({ accessToken: undefined }))
+      const result = await getChatGPTProvider().refreshConfig(configWith({ accessToken: undefined }))
       expect(result.success).toBe(false)
       expect(proxyFetch).not.toHaveBeenCalled()
     })

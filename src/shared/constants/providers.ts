@@ -50,6 +50,19 @@ export interface BuiltinProvider {
 }
 
 // ============================================================================
+// Provider Identity
+// ============================================================================
+
+/**
+ * Provider id of the ChatGPT subscription source (the Codex backend).
+ *
+ * It is the key the manager registers the provider under and the value persisted
+ * as `AISource.provider`, so `authProviders[].type` in product.json must match it
+ * exactly.
+ */
+export const CHATGPT_PROVIDER_ID = 'chatgpt'
+
+// ============================================================================
 // Built-in Providers List
 // ============================================================================
 
@@ -562,8 +575,8 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     notes: 'Uses OAuth PKCE flow. Requires anthropic-beta: oauth-2025-04-20 header. Tool names must be prefixed with mcp_'
   },
   {
-    id: 'openai-codex',
-    name: 'Codex',
+    id: CHATGPT_PROVIDER_ID,
+    name: 'ChatGPT',
     authType: 'oauth',
     apiUrl: 'https://chatgpt.com/backend-api/codex',
     apiType: 'responses',
@@ -578,7 +591,7 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     website: 'https://chatgpt.com/',
     region: 'global',
     icon: 'terminal',
-    notes: 'Speaks the Codex Responses wire. Requests are reshaped by the openai-codex provider adapter.'
+    notes: 'Speaks the Codex Responses wire. Requests are reshaped by the Codex request adapter.'
   },
 ]
 

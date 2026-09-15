@@ -1,10 +1,4 @@
 /**
- * Provider id of the Codex subscription source, and the `AISource.provider`
- * value persisted on it.
- */
-export const CODEX_PROVIDER_ID = 'openai-codex'
-
-/**
  * Id of the request-shaping adapter the Codex backend requires. Shared so the
  * provider (which selects it) and the adapter registry (which implements it)
  * agree without either importing the other.
@@ -38,7 +32,7 @@ export interface CodexSubscriptionModel {
  * Offline default for the Codex (ChatGPT subscription) model catalog.
  *
  * The account's real list comes from the backend and is fetched by the provider
- * (`openai-codex.provider.ts` `refreshConfig`), which is what the CLI does too —
+ * (`chatgpt.provider.ts` `refreshConfig`), which is what the CLI does too —
  * the plan, not the client, decides which models exist. The backend response is
  * an overlay rather than a full catalog, so the provider merges it over this
  * list by slug and keeps the shipped entry wherever the backend stays silent.

@@ -1,5 +1,5 @@
 /**
- * OpenAI Codex (ChatGPT subscription) OAuth Provider
+ * ChatGPT Subscription OAuth Provider
  *
  * Signs the user in with their ChatGPT account and routes inference through the
  * Codex backend, so a paid plan can be used without an API key.
@@ -45,8 +45,8 @@ import type {
   OAuthCompleteResult,
   AISourceUserInfo
 } from '../../../../shared/types'
+import { CHATGPT_PROVIDER_ID } from '../../../../shared/constants'
 import {
-  CODEX_PROVIDER_ID,
   CODEX_ADAPTER_ID,
   CODEX_CLI_VERSION,
   CODEX_SUBSCRIPTION_MODELS,
@@ -409,12 +409,12 @@ function mergeCatalog(remote: CatalogModel[]): CatalogModel[] {
  * on `degraded` before reading anything else, so this carries nothing else.
  */
 function degradedCatalog(): Partial<AISourcesConfig> {
-  return { [CODEX_PROVIDER_ID]: { degraded: true } } as unknown as Partial<AISourcesConfig>
+  return { [CHATGPT_PROVIDER_ID]: { degraded: true } } as unknown as Partial<AISourcesConfig>
 }
 
-class OpenAICodexProvider implements OAuthAISourceProvider {
-  readonly type: AISourceType = CODEX_PROVIDER_ID
-  readonly displayName = 'Codex'
+class ChatGPTProvider implements OAuthAISourceProvider {
+  readonly type: AISourceType = CHATGPT_PROVIDER_ID
+  readonly displayName = 'ChatGPT'
 
   /**
    * Read this provider's slice from the legacy v1 config the manager builds via
@@ -422,7 +422,7 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
    * v2 AISourcesConfig type, which has no index signature.
    */
   private conf(config: AISourcesConfig): OAuthSourceConfig | undefined {
-    return (config as unknown as Record<string, OAuthSourceConfig | undefined>)[CODEX_PROVIDER_ID]
+    return (config as unknown as Record<string, OAuthSourceConfig | undefined>)[CHATGPT_PROVIDER_ID]
   }
 
   // ── Configuration ──────────────────────────────────────────────────────────
@@ -492,9 +492,9 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
     try {
       const catalog = await this.fetchCatalog(accessToken, accountId)
       if (catalog.length > 0) return toModelOptions(mergeCatalog(catalog))
-      console.warn('[OpenAICodex] Catalog came back empty, using the shipped list')
+      console.warn('[ChatGPT] Catalog came back empty, using the shipped list')
     } catch (error) {
-      console.warn('[OpenAICodex] Catalog fetch failed, using the shipped list:', error)
+      console.warn('[ChatGPT] Catalog fetch failed, using the shipped list:', error)
     }
     return toModelOptions(mergeCatalog([]))
   }
@@ -529,7 +529,7 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
     // answered by what the backend sent, and once it is merged into the shipped
     // list there is no way to tell which entries came from where.
     console.log(
-      '[OpenAICodex] Catalog overlay:',
+      '[ChatGPT] Catalog overlay:',
       raw.map((m) => `${m.slug}:${m.visibility ?? 'unspecified'}`).join(', ') || '(none)'
     )
 
@@ -573,16 +573,16 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
     try {
       const catalog = await this.fetchCatalog(c.accessToken, c.user?.uid || '')
       if (catalog.length === 0) {
-        console.warn('[OpenAICodex] Catalog came back empty, keeping stored models')
+        console.warn('[ChatGPT] Catalog came back empty, keeping stored models')
         return { success: true, data: degradedCatalog() }
       }
 
       return {
         success: true,
-        data: { [CODEX_PROVIDER_ID]: { ...c, ...toModelOptions(mergeCatalog(catalog)) } } as unknown as Partial<AISourcesConfig>
+        data: { [CHATGPT_PROVIDER_ID]: { ...c, ...toModelOptions(mergeCatalog(catalog)) } } as unknown as Partial<AISourcesConfig>
       }
     } catch (error) {
-      console.warn('[OpenAICodex] Catalog fetch failed, keeping stored models:', error)
+      console.warn('[ChatGPT] Catalog fetch failed, keeping stored models:', error)
       return { success: true, data: degradedCatalog() }
     }
   }
@@ -649,17 +649,17 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
         createdAt: Date.now()
       }
 
-      console.log('[OpenAICodex] Login started, loopback callback on', redirectUri)
+      console.log('[ChatGPT] Login started, loopback callback on', redirectUri)
 
       // Failure is non-fatal: the flow still completes if the user opens the
       // authorize URL in any other browser, since the callback is a local socket.
       open(loginUrl).catch((err) => {
-        console.warn('[OpenAICodex] Failed to open system browser:', err)
+        console.warn('[ChatGPT] Failed to open system browser:', err)
       })
 
       return { success: true, data: { loginUrl, state } }
     } catch (error) {
-      console.error('[OpenAICodex] Start login error:', error)
+      console.error('[ChatGPT] Start login error:', error)
       this.cleanupPending()
       return {
         success: false,
@@ -679,10 +679,10 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
     }
 
     try {
-      console.log('[OpenAICodex] Waiting for browser authorization...')
+      console.log('[ChatGPT] Waiting for browser authorization...')
       const code = await this.awaitAuthorizationCode(pending)
 
-      console.log('[OpenAICodex] Exchanging authorization code for tokens')
+      console.log('[ChatGPT] Exchanging authorization code for tokens')
       const tokens = await this.exchangeCode(code, pending)
 
       const accountId = readAccountId(tokens.idToken, tokens.accessToken)
@@ -719,10 +719,10 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
         _defaultModel: CODEX_DEFAULT_MODEL
       }
 
-      console.log('[OpenAICodex] Login successful')
+      console.log('[ChatGPT] Login successful')
       return { success: true, data: result }
     } catch (error) {
-      console.error('[OpenAICodex] Complete login error:', error)
+      console.error('[ChatGPT] Complete login error:', error)
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to complete login'
@@ -781,7 +781,7 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
     }
 
     try {
-      console.log('[OpenAICodex] Refreshing OAuth token')
+      console.log('[ChatGPT] Refreshing OAuth token')
 
       const response = await proxyFetch(TOKEN_URL, {
         method: 'POST',
@@ -795,7 +795,7 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '')
-        console.error('[OpenAICodex] Token refresh failed:', response.status, errorText)
+        console.error('[ChatGPT] Token refresh failed:', response.status, errorText)
         return { success: false, error: `Token refresh failed: ${response.status}` }
       }
 
@@ -808,7 +808,7 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
         return { success: false, error: 'Token refresh returned no access token' }
       }
 
-      console.log('[OpenAICodex] Token refreshed')
+      console.log('[ChatGPT] Token refreshed')
 
       return {
         success: true,
@@ -819,7 +819,7 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
         }
       }
     } catch (error) {
-      console.error('[OpenAICodex] Token refresh error:', error)
+      console.error('[ChatGPT] Token refresh error:', error)
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to refresh token'
@@ -850,7 +850,7 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
           })
         })
       } catch (error) {
-        console.warn('[OpenAICodex] Token revoke failed (continuing):', error)
+        console.warn('[ChatGPT] Token revoke failed (continuing):', error)
       }
     }
 
@@ -882,7 +882,7 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
         return port
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error
-        console.warn(`[OpenAICodex] Callback port ${port} in use, trying the fallback`)
+        console.warn(`[ChatGPT] Callback port ${port} in use, trying the fallback`)
       }
     }
     throw new Error(`Failed to bind ${CALLBACK_HOST}:${DEFAULT_CALLBACK_PORT} or ${FALLBACK_CALLBACK_PORT}`)
@@ -967,7 +967,7 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '')
-      console.error('[OpenAICodex] Token exchange failed:', response.status, errorText)
+      console.error('[ChatGPT] Token exchange failed:', response.status, errorText)
       throw new Error(`Token exchange failed: ${response.status}`)
     }
 
@@ -1004,13 +1004,13 @@ class OpenAICodexProvider implements OAuthAISourceProvider {
 // Singleton export
 // ============================================================================
 
-let providerInstance: OpenAICodexProvider | null = null
+let providerInstance: ChatGPTProvider | null = null
 
-export function getOpenAICodexProvider(): OpenAICodexProvider {
+export function getChatGPTProvider(): ChatGPTProvider {
   if (!providerInstance) {
-    providerInstance = new OpenAICodexProvider()
+    providerInstance = new ChatGPTProvider()
   }
   return providerInstance
 }
 
-export { OpenAICodexProvider }
+export { ChatGPTProvider }
