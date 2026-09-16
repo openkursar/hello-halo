@@ -35,6 +35,7 @@ import { formatModelFetchError } from '../../utils/model-fetch-error'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { api } from '../../api'
 import { ModelConfigPanel } from './ModelConfigPanel'
+import { resolveModelSelection } from './model-selection'
 import type { ModelCapabilityOverride } from '../../../shared/types/model-capabilities'
 import { usePresetModels } from '../../hooks/usePresetModels'
 import { ProviderCatalogDropdown } from '../ai-config/ProviderCatalogDropdown'
@@ -90,7 +91,11 @@ export function ProviderSelector({
   const [selectedModel, setSelectedModel] = useState(
     editingSource?.model || presetProvider?.preset?.fallbackModels?.[0]?.id || ''
   )
-  const [customModelInput, setCustomModelInput] = useState('')
+  const [customModelDraft, setCustomModelDraft] = useState('')
+  const [committedCustomModelId, setCommittedCustomModelId] = useState('')
+  // Separate from validationResult: that slot belongs to the connection test,
+  // and the two messages would otherwise overwrite each other.
+  const [customModelError, setCustomModelError] = useState<string | null>(null)
   const [showCustomModel, setShowCustomModel] = useState(false)
   const [sourceName, setSourceName] = useState(
     editingSource?.name ||
@@ -145,6 +150,71 @@ export function ProviderSelector({
     ? presetModelsHook.models
     : fetchedModels
 
+  const trimmedCustomModelId = customModelDraft.trim()
+  const { configured: effectiveModelId, submitted: finalModelId } = resolveModelSelection({
+    useCustomModel: showCustomModel,
+    customModelDraft,
+    committedCustomModelId,
+    selectedModel
+  })
+  const catalogModel = effectiveModelList.find(m => m.id === effectiveModelId)
+  const catalogCapability = catalogModel?.capabilities
+  const catalogSupportsVision = catalogModel?.supportsVision
+
+  const commitCustomModelId = () => {
+    if (!trimmedCustomModelId) {
+      setCustomModelError(t('Please enter a model ID'))
+      return
+    }
+    setCommittedCustomModelId(trimmedCustomModelId)
+    setCustomModelError(null)
+  }
+
+  const handleCustomModelToggle = (checked: boolean) => {
+    setShowCustomModel(checked)
+    setCustomModelError(null)
+    setValidationResult(null)
+  }
+
+  // Rendered identically by the preset and the generic panel; kept in one place
+  // so the commit rule cannot drift between them.
+  const renderCustomModelInput = () => (
+    <div className="space-y-1.5">
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input
+          type="text"
+          value={customModelDraft}
+          onChange={(e) => {
+            setCustomModelDraft(e.target.value)
+            setCustomModelError(null)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitCustomModelId()
+          }}
+          placeholder={t('Enter model ID')}
+          className="min-w-0 flex-1 px-3 py-2 bg-input border border-border rounded-lg
+                   text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+        />
+        <button
+          type="button"
+          onClick={commitCustomModelId}
+          disabled={!trimmedCustomModelId || trimmedCustomModelId === committedCustomModelId}
+          className="px-3 py-2 bg-secondary text-foreground rounded-lg hover:bg-secondary/80
+                   disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+        >
+          {t('Apply')}
+        </button>
+      </div>
+      {customModelError ? (
+        <p className="text-xs text-red-500">{customModelError}</p>
+      ) : !effectiveModelId && trimmedCustomModelId ? (
+        <p className="text-xs text-muted-foreground">
+          {t('Apply the model ID to configure its capabilities.')}
+        </p>
+      ) : null}
+    </div>
+  )
+
   // Per-model capability overrides for this source
   const [modelOverrides, setModelOverrides] = useState<Record<string, ModelCapabilityOverride>>(
     editingSource?.modelOverrides ?? {}
@@ -184,7 +254,9 @@ export function ProviderSelector({
     setValidationResult(null)
     setFetchedModels([])
     setShowCustomModel(false)
-    setCustomModelInput('')
+    setCustomModelDraft('')
+    setCommittedCustomModelId('')
+    setCustomModelError(null)
   }
 
   // Handle delete model from list
@@ -256,7 +328,7 @@ export function ProviderSelector({
       return
     }
 
-    const finalModel = showCustomModel && customModelInput ? customModelInput : selectedModel
+    const finalModel = finalModelId
 
     if (!finalModel) {
       setValidationResult({ valid: false, message: t('Please select a model') })
@@ -334,7 +406,11 @@ export function ProviderSelector({
       return
     }
 
-    const finalModel = showCustomModel && customModelInput ? customModelInput : selectedModel
+    const finalModel = finalModelId
+    if (!finalModel) {
+      setValidationResult({ valid: false, message: t('Please select a model') })
+      return
+    }
 
     setIsValidating(true)
     setValidationResult(null)
@@ -421,7 +497,7 @@ export function ProviderSelector({
           {/* API Key (editable — key rotation in EDIT, initial key in ADD) */}
           <div>
             <label className="block text-sm font-medium text-muted-foreground mb-1">
-              API Key
+              {t('API Key')}
             </label>
             <div className="relative">
               <input
@@ -502,7 +578,7 @@ export function ProviderSelector({
                 type="checkbox"
                 id="presetCustomModel"
                 checked={showCustomModel}
-                onChange={(e) => setShowCustomModel(e.target.checked)}
+                onChange={(e) => handleCustomModelToggle(e.target.checked)}
                 className="rounded border-border"
               />
               <label htmlFor="presetCustomModel" className="text-sm text-muted-foreground">
@@ -511,14 +587,7 @@ export function ProviderSelector({
             </div>
 
             {showCustomModel ? (
-              <input
-                type="text"
-                value={customModelInput}
-                onChange={(e) => setCustomModelInput(e.target.value)}
-                placeholder={t('Enter model ID')}
-                className="w-full px-3 py-2 bg-input border border-border rounded-lg
-                         text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-              />
+              renderCustomModelInput()
             ) : presetModels.length > 0 ? (
               <div className="relative">
                 <select
@@ -552,11 +621,13 @@ export function ProviderSelector({
           </div>
 
           {/* Model Configuration — context window, output tokens, vision, thinking */}
-          {selectedModel && (
+          {effectiveModelId && (
             <ModelConfigPanel
-              modelId={selectedModel}
+              modelId={effectiveModelId}
               overrides={modelOverrides}
               onChange={setModelOverrides}
+              catalogCapability={catalogCapability}
+              catalogSupportsVision={catalogSupportsVision}
             />
           )}
 
@@ -643,7 +714,7 @@ export function ProviderSelector({
           {/* API Key */}
           <div>
             <label className="block text-sm font-medium text-muted-foreground mb-1">
-              API Key
+              {t('API Key')}
             </label>
             <div className="relative">
               <input
@@ -708,7 +779,7 @@ export function ProviderSelector({
                 type="checkbox"
                 id="customModel"
                 checked={showCustomModel}
-                onChange={(e) => setShowCustomModel(e.target.checked)}
+                onChange={(e) => handleCustomModelToggle(e.target.checked)}
                 className="rounded border-border"
               />
               <label htmlFor="customModel" className="text-sm text-muted-foreground">
@@ -717,14 +788,7 @@ export function ProviderSelector({
             </div>
 
             {showCustomModel ? (
-              <input
-                type="text"
-                value={customModelInput}
-                onChange={(e) => setCustomModelInput(e.target.value)}
-                placeholder={t('Enter model ID')}
-                className="w-full px-3 py-2 bg-input border border-border rounded-lg
-                         text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-              />
+              renderCustomModelInput()
             ) : (
               <div className="relative">
                 <button
@@ -809,11 +873,13 @@ export function ProviderSelector({
           </div>
 
           {/* Model Configuration — context window, output tokens, vision, thinking */}
-          {selectedModel && (
+          {effectiveModelId && (
             <ModelConfigPanel
-              modelId={selectedModel}
+              modelId={effectiveModelId}
               overrides={modelOverrides}
               onChange={setModelOverrides}
+              catalogCapability={catalogCapability}
+              catalogSupportsVision={catalogSupportsVision}
             />
           )}
 

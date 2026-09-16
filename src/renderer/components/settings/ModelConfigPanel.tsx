@@ -3,14 +3,18 @@
  *
  * Displays and edits per-model capability overrides stored in AISource.modelOverrides.
  *
- * Effective value priority: user override > JSON preset > built-in defaults.
+ * Effective values are resolved authoritatively by
+ * `modelCapabilitiesService.resolve()` on the backend (`base` below), so this
+ * component never guesses a fallback of its own and what it shows is what the
+ * running Claude Code subprocess gets. See shared/types/model-capabilities.ts
+ * for the priority chain.
  *
  * Visual tab  — form fields showing effective (merged) values.
- * JSON tab    — raw JSON of effective values; parsed on blur.
+ * JSON tab    — raw JSON of the stored override only, so opening the tab and
+ *               clicking away cannot freeze resolved values into an override.
  *
- * The component loads the preset for the current modelId on mount and whenever
- * modelId changes. All edits write into overrides[modelId]. "Reset to preset"
- * deletes overrides[modelId].
+ * Edits write into overrides[modelId], reduced to fields that actually differ
+ * from `base`. "Reset to preset" deletes overrides[modelId].
  */
 
 import { useState, useEffect, useRef } from 'react'
@@ -18,39 +22,24 @@ import { ChevronDown, ChevronRight, RotateCcw, Info, AlertTriangle, Loader2 } fr
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import type {
+  CatalogModelCapability,
   ModelCapability,
   ModelCapabilityOverride,
   ResolvedModelCapability
 } from '../../../shared/types/model-capabilities'
 import {
+  normalizeModelCapabilityOverride,
+  validateModelCapabilityOverride
+} from '../../../shared/model-capability-overrides'
+import {
   MAX_OUTPUT_TOKENS_HARD_MIN,
   RECOMMENDED_MIN_MAX_OUTPUT_TOKENS,
 } from '../../../shared/constants/model-runtime-limits'
 import {
-  DEFAULT_REASONING_EFFORT,
   REASONING_EFFORT_LEVELS,
   isReasoningEffortLevel,
   type ReasoningEffortLevel,
 } from '../../../shared/constants/reasoning-effort'
-
-/** Fields the JSON tab accepts; anything else is reported back. */
-const EDITABLE_CAPABILITY_KEYS: ReadonlyArray<keyof ModelCapabilityOverride> = [
-  'contextWindow',
-  'maxOutputTokens',
-  'vision',
-  'thinking',
-  'reasoningEffort'
-]
-
-// ── Default values used when no preset exists ──────────────────────────────
-const DEFAULT_CAPABILITY: ModelCapability = {
-  displayName: '',
-  provider: '',
-  contextWindow: 128_000,
-  maxOutputTokens: 16_384,
-  vision: false,
-  thinking: false
-}
 
 interface ModelConfigPanelProps {
   /** Currently selected model ID */
@@ -59,20 +48,32 @@ interface ModelConfigPanelProps {
   overrides: Record<string, ModelCapabilityOverride>
   /** Called whenever overrides should change */
   onChange: (overrides: Record<string, ModelCapabilityOverride>) => void
+  catalogCapability?: CatalogModelCapability
+  /** `ModelOption.supportsVision` for this model, when the source states one. */
+  catalogSupportsVision?: boolean
 }
 
 type ActiveTab = 'visual' | 'json'
 
-export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPanelProps) {
+export function ModelConfigPanel({
+  modelId,
+  overrides,
+  onChange,
+  catalogCapability,
+  catalogSupportsVision
+}: ModelConfigPanelProps) {
   const { t } = useTranslation()
 
-  // ── Collapse state (auto-expand when no preset found) ──────────────────
+  // ── Collapse state (auto-expand when neither preset nor catalog data exists) ──
   const [isOpen, setIsOpen] = useState(false)
   const [autoExpandedForModel, setAutoExpandedForModel] = useState<string>('')
 
-  // ── Preset data ────────────────────────────────────────────────────────
+  // ── Preset data (badge only) + resolved base (authoritative effective values) ──
   const [preset, setPreset] = useState<ModelCapability | null>(null)
-  const [loadingPreset, setLoadingPreset] = useState(false)
+  const [base, setBase] = useState<ModelCapability | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
 
   // ── Tab state ──────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<ActiveTab>('visual')
@@ -84,16 +85,20 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
   const jsonLoadedForModel = useRef<string>('')
 
   // ── Compute effective values ───────────────────────────────────────────
-  // Priority: override > preset > defaults
-  const userOverride = overrides[modelId] ?? {}
-  const base: ModelCapability = preset ?? DEFAULT_CAPABILITY
-  const effective: ResolvedModelCapability = { ...base, ...userOverride }
+  // Priority: override > base (backend-resolved: catalog > preset > default)
+  const overrideValidation = validateModelCapabilityOverride(overrides[modelId])
+  const userOverride = overrideValidation.valid ? overrideValidation.value : {}
+  const effective: ResolvedModelCapability | null = base ? { ...base, ...userOverride } : null
   const hasOverride = Object.keys(userOverride).length > 0
+  const catalogContextWindow = catalogCapability?.contextWindow
+  const catalogMaxOutputTokens = catalogCapability?.maxOutputTokens
+  const hasCatalogData = catalogContextWindow !== undefined || catalogMaxOutputTokens !== undefined
+  const canEnableExtendedContext = (effective?.contextWindow ?? 0) > 200_000
 
   // ── Reasoning effort presentation ──────────────────────────────────────
-  const effortSelectValue = effective.reasoningEffort ?? ''
+  const effortSelectValue = effective?.reasoningEffort ?? ''
   /** A provider-specific level typed in the JSON tab, kept selectable here. */
-  const isCustomEffort = !!effective.reasoningEffort
+  const isCustomEffort = !!effective?.reasoningEffort
     && !isReasoningEffortLevel(effective.reasoningEffort)
   const effortLabels: Record<ReasoningEffortLevel, string> = {
     off: t('Off'),
@@ -105,60 +110,64 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
     max: t('Max')
   }
 
-  // ── Load preset when modelId changes ──────────────────────────────────
   useEffect(() => {
     if (!modelId) return
 
     let cancelled = false
-    setLoadingPreset(true)
+    setLoading(true)
     setPreset(null)
+    setBase(null)
+    setLoadError(null)
     setJsonError(null)
     setJsonWarning(null)
 
-    api.modelCapabilitiesGetPreset(modelId)
-      .then(res => {
+    Promise.all([
+      api.modelCapabilitiesGetPreset(modelId),
+      api.modelCapabilitiesResolve(modelId, undefined, catalogCapability, catalogSupportsVision)
+    ])
+      .then(([presetResponse, baseResponse]) => {
         if (cancelled) return
-        setPreset((res.data as ModelCapability | null) ?? null)
+        if (!presetResponse.success || !baseResponse.success || !baseResponse.data) {
+          throw new Error(presetResponse.error || baseResponse.error || 'Capability data unavailable')
+        }
+        setPreset((presetResponse.data as ModelCapability | null) ?? null)
+        setBase(baseResponse.data as ModelCapability)
       })
-      .catch(err => {
+      .catch(error => {
         if (cancelled) return
-        console.warn('[ModelConfigPanel] Failed to load preset:', err)
-        setPreset(null)
+        console.error('[ModelConfigPanel] Failed to load model capabilities:', error)
+        setLoadError(t('Failed to load model capabilities'))
       })
       .finally(() => {
-        if (!cancelled) setLoadingPreset(false)
+        if (!cancelled) setLoading(false)
       })
 
     return () => { cancelled = true }
-  }, [modelId])
+    // Keyed on the catalog's primitive fields rather than the object: a caller
+    // passing an inline `catalogCapability={{ ... }}` would otherwise give this
+    // effect a new identity on every parent render, turning it into
+    // fetch → setState → new object → fetch.
+  }, [modelId, catalogContextWindow, catalogMaxOutputTokens, catalogSupportsVision, loadAttempt, t])
 
-  // ── Auto-expand when no preset matched (so user sees fallback values) ───
+  // ── Auto-expand when there is no preset AND no catalog data (so the user
+  // sees the fallback values that most need double-checking) ──────────────
   useEffect(() => {
-    if (loadingPreset || !modelId) return
-    if (preset === null && autoExpandedForModel !== modelId) {
+    if (loading || !modelId) return
+    if (preset === null && !hasCatalogData && autoExpandedForModel !== modelId) {
       setIsOpen(true)
       setAutoExpandedForModel(modelId)
     }
-  }, [loadingPreset, preset, modelId, autoExpandedForModel])
+  }, [loading, preset, hasCatalogData, modelId, autoExpandedForModel])
 
-  // ── Sync JSON editor when switching to the JSON tab or when modelId changes ──
   useEffect(() => {
-    if (activeTab !== 'json') return
+    if (activeTab !== 'json' || !effective) return
     if (jsonLoadedForModel.current === modelId) return
 
-    const entry = {
-      contextWindow: effective.contextWindow,
-      maxOutputTokens: effective.maxOutputTokens,
-      vision: effective.vision,
-      thinking: effective.thinking,
-      // Spelled out even when unset, so the field is discoverable here.
-      reasoningEffort: effective.reasoningEffort ?? DEFAULT_REASONING_EFFORT
-    }
-    setJsonText(JSON.stringify(entry, null, 2))
+    setJsonText(JSON.stringify(userOverride, null, 2))
     setJsonError(null)
     setJsonWarning(null)
     jsonLoadedForModel.current = modelId
-  }, [activeTab, modelId, effective])
+  }, [activeTab, modelId, effective, userOverride])
 
   // ── Handle tab switching ───────────────────────────────────────────────
   const handleTabChange = (tab: ActiveTab) => {
@@ -172,15 +181,21 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
     field: K,
     value: ModelCapabilityOverride[K]
   ) => {
-    const next: ModelCapabilityOverride = { ...userOverride, [field]: value }
-    onChange({ ...overrides, [modelId]: next })
-    // Reset JSON "loaded" marker so it re-syncs on next tab switch
+    if (!base) return
+    const nextOverride = normalizeModelCapabilityOverride(
+      { ...userOverride, [field]: value },
+      base
+    )
+    const nextOverrides = { ...overrides }
+    if (Object.keys(nextOverride).length > 0) nextOverrides[modelId] = nextOverride
+    else delete nextOverrides[modelId]
+    onChange(nextOverrides)
     jsonLoadedForModel.current = ''
   }
 
   const handleNumberField = (field: 'contextWindow' | 'maxOutputTokens', raw: string) => {
-    const n = parseInt(raw, 10)
-    if (!Number.isFinite(n) || n < 0) return
+    const n = Number(raw)
+    if (!Number.isSafeInteger(n) || n <= 0) return
     updateField(field, n)
   }
 
@@ -193,46 +208,44 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
       updateField('reasoningEffort', value)
       return
     }
-    // Empty = "use Halo's default": drop the key rather than store a level.
     const { reasoningEffort: _cleared, ...rest } = userOverride
-    const next = { ...overrides }
-    if (Object.keys(rest).length > 0) next[modelId] = rest
-    else delete next[modelId]
-    onChange(next)
+    const nextOverrides = { ...overrides }
+    if (Object.keys(rest).length > 0) nextOverrides[modelId] = rest
+    else delete nextOverrides[modelId]
+    onChange(nextOverrides)
     jsonLoadedForModel.current = ''
   }
 
-  // ── JSON editor helpers ────────────────────────────────────────────────
   const handleJsonBlur = () => {
-    let parsed: Record<string, unknown>
+    if (!base) return
+
+    let parsed: unknown
     try {
-      parsed = JSON.parse(jsonText) as Record<string, unknown>
+      parsed = JSON.parse(jsonText)
     } catch {
       setJsonError(t('Invalid JSON — changes not saved'))
       return
     }
 
-    const next: ModelCapabilityOverride = {}
-    if (typeof parsed.contextWindow === 'number') next.contextWindow = parsed.contextWindow
-    if (typeof parsed.maxOutputTokens === 'number') next.maxOutputTokens = parsed.maxOutputTokens
-    if (typeof parsed.vision === 'boolean') next.vision = parsed.vision
-    if (typeof parsed.thinking === 'boolean') next.thinking = parsed.thinking
-    if (typeof parsed.reasoningEffort === 'string' && parsed.reasoningEffort) {
-      next.reasoningEffort = parsed.reasoningEffort
+    const validation = validateModelCapabilityOverride(parsed)
+    if (!validation.valid) {
+      setJsonError(t('Invalid model capability values — changes not saved'))
+      return
     }
 
-    // The recognized fields above are saved either way; an unknown key is
-    // reported so a mistyped one does not look accepted.
-    const ignored = Object.keys(parsed).filter(
-      (key) => !(EDITABLE_CAPABILITY_KEYS as readonly string[]).includes(key)
-    )
+    const nextOverride = normalizeModelCapabilityOverride(validation.value, base)
+    const nextOverrides = { ...overrides }
+    if (Object.keys(nextOverride).length > 0) nextOverrides[modelId] = nextOverride
+    else delete nextOverrides[modelId]
+
     setJsonError(null)
     setJsonWarning(
-      ignored.length > 0
-        ? t('Unsupported field(s) ignored: {{fields}}', { fields: ignored.join(', ') })
+      validation.ignoredKeys.length > 0
+        ? t('Unsupported field(s) ignored: {{fields}}', { fields: validation.ignoredKeys.join(', ') })
         : null
     )
-    onChange({ ...overrides, [modelId]: next })
+    setJsonText(JSON.stringify(nextOverride, null, 2))
+    onChange(nextOverrides)
   }
 
   // ── Reset override ─────────────────────────────────────────────────────
@@ -245,9 +258,9 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
     jsonLoadedForModel.current = ''
   }
 
-  // ── Preset info badge ──────────────────────────────────────────────────
+  // ── Preset / catalog info badge ─────────────────────────────────────────
   const renderPresetInfo = () => {
-    if (loadingPreset) {
+    if (loading) {
       return (
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Loader2 className="w-3 h-3 animate-spin" />
@@ -255,6 +268,8 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
         </div>
       )
     }
+
+    if (loadError) return null
 
     if (preset) {
       return (
@@ -267,6 +282,15 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
               <span> · {preset.provider}</span>
             )}
           </span>
+        </div>
+      )
+    }
+
+    if (hasCatalogData) {
+      return (
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Info className="w-3 h-3 shrink-0" />
+          <span>{t('Detected from the provider\u2019s model catalog')}</span>
         </div>
       )
     }
@@ -298,165 +322,210 @@ export function ModelConfigPanel({ modelId, overrides, onChange }: ModelConfigPa
       {/* Collapsible body */}
       {isOpen && (
         <div className="p-3 space-y-3 border-t border-border bg-background">
-          {/* Tab bar */}
-          <div className="flex items-center justify-end gap-1">
-            <button
-              onClick={() => handleTabChange('visual')}
-              className={`px-3 py-1 text-xs rounded-md font-medium transition-colors
-                ${activeTab === 'visual'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
-                }`}
-            >
-              {t('Visual')}
-            </button>
-            <button
-              onClick={() => handleTabChange('json')}
-              className={`px-3 py-1 text-xs rounded-md font-medium transition-colors
-                ${activeTab === 'json'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
-                }`}
-            >
-              JSON
-            </button>
-          </div>
+          {loading ? (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground py-2">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              {t('Loading model capabilities...')}
+            </div>
+          ) : loadError || !effective ? (
+            <div className="flex flex-col items-start gap-2 py-2 text-xs text-destructive">
+              <span>{loadError || t('Failed to load model capabilities')}</span>
+              <button
+                type="button"
+                onClick={() => setLoadAttempt(attempt => attempt + 1)}
+                className="text-primary hover:underline"
+              >
+                {t('Retry')}
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Tab bar */}
+              <div className="flex items-center justify-end gap-1">
+                <button
+                  onClick={() => handleTabChange('visual')}
+                  className={`px-3 py-1 text-xs rounded-md font-medium transition-colors
+                    ${activeTab === 'visual'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                    }`}
+                >
+                  {t('Visual')}
+                </button>
+                <button
+                  onClick={() => handleTabChange('json')}
+                  className={`px-3 py-1 text-xs rounded-md font-medium transition-colors
+                    ${activeTab === 'json'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                    }`}
+                >
+                  {t('JSON')}
+                </button>
+              </div>
 
-          {/* ── Visual tab ── */}
-          {activeTab === 'visual' && (
-            <div className="space-y-3">
-              {/* Context Window + Max Output: stacked on mobile, 2-col on sm */}
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {/* Context Window */}
-                <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1">
-                    {t('Context Window')}
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={effective.contextWindow}
-                      onChange={e => handleNumberField('contextWindow', e.target.value)}
-                      className="flex-1 min-w-0 px-2.5 py-1.5 text-sm bg-input border border-border
-                                 rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    />
-                    <span className="text-xs text-muted-foreground shrink-0">{t('tokens')}</span>
-                  </div>
-                </div>
+              {/* ── Visual tab ── */}
+              {activeTab === 'visual' && (
+                <div className="space-y-3">
+                  {/* Context Window + Max Output: stacked on mobile, 2-col on sm */}
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {/* Context Window */}
+                    <div>
+                      <label className="block text-xs font-medium text-muted-foreground mb-1">
+                        {t('Context Window')}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          value={effective.contextWindow}
+                          onChange={e => handleNumberField('contextWindow', e.target.value)}
+                          className="flex-1 min-w-0 px-2.5 py-1.5 text-sm bg-input border border-border
+                                     rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        />
+                        <span className="text-xs text-muted-foreground shrink-0">{t('tokens')}</span>
+                      </div>
+                    </div>
 
-                {/* Max Output Tokens */}
-                <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1">
-                    {t('Max Output Tokens')}
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min={MAX_OUTPUT_TOKENS_HARD_MIN}
-                      value={effective.maxOutputTokens}
-                      onChange={e => handleNumberField('maxOutputTokens', e.target.value)}
-                      className="flex-1 min-w-0 px-2.5 py-1.5 text-sm bg-input border border-border
-                                 rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    />
-                    <span className="text-xs text-muted-foreground shrink-0">{t('tokens')}</span>
+                    {/* Max Output Tokens */}
+                    <div>
+                      <label className="block text-xs font-medium text-muted-foreground mb-1">
+                        {t('Max Output Tokens')}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={MAX_OUTPUT_TOKENS_HARD_MIN}
+                          value={effective.maxOutputTokens}
+                          onChange={e => handleNumberField('maxOutputTokens', e.target.value)}
+                          className="flex-1 min-w-0 px-2.5 py-1.5 text-sm bg-input border border-border
+                                     rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        />
+                        <span className="text-xs text-muted-foreground shrink-0">{t('tokens')}</span>
+                      </div>
+                      {/* Quality warning — passed through to the SDK as-is, but the
+                          compact-summary call may truncate. Mirrors the WARN in
+                          sdk-config.resolveSdkRuntimeLimits. */}
+                      {effective.maxOutputTokens > 0
+                        && effective.maxOutputTokens < RECOMMENDED_MIN_MAX_OUTPUT_TOKENS && (
+                          <div className="flex items-start gap-1.5 mt-1 text-xs text-amber-600 dark:text-amber-500">
+                            <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
+                            <span>
+                              {t('Values below 20,000 may cause Claude Code\u2019s auto-compact summary to truncate (summary p99.99 ≈ 17,387 tokens).')}
+                            </span>
+                          </div>
+                        )}
+                    </div>
                   </div>
-                  {/* Quality warning — passed through to the SDK as-is, but the
-                      compact-summary call may truncate. Mirrors the WARN in
-                      sdk-config.resolveSdkRuntimeLimits. */}
-                  {effective.maxOutputTokens > 0
-                    && effective.maxOutputTokens < RECOMMENDED_MIN_MAX_OUTPUT_TOKENS && (
+
+                  {/* Feature toggles: side-by-side */}
+                  <div className="flex flex-wrap gap-x-6 gap-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={effective.vision}
+                        onChange={e => handleBoolField('vision', e.target.checked)}
+                        className="w-4 h-4 rounded border-border accent-primary cursor-pointer"
+                      />
+                      <span className="text-sm text-foreground">{t('Vision')}</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={effective.thinking}
+                        onChange={e => handleBoolField('thinking', e.target.checked)}
+                        className="w-4 h-4 rounded border-border accent-primary cursor-pointer"
+                      />
+                      <span className="text-sm text-foreground">{t('Thinking')}</span>
+                    </label>
+                  </div>
+
+                  {canEnableExtendedContext && !/\[1m\]$/i.test(modelId) && (
+                    <div>
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={userOverride.extendedContext === true}
+                          onChange={e => updateField('extendedContext', e.target.checked)}
+                          className="w-4 h-4 rounded border-border accent-primary cursor-pointer"
+                        />
+                        <span className="text-sm text-foreground">{t('Enable context above 200K')}</span>
+                      </label>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {t('May require provider access and may change pricing. Only enable it when your plan supports this context window.')}
+                      </p>
+                      {userOverride.extendedContext !== true && (
+                        <div className="flex items-start gap-1.5 mt-1 text-xs text-amber-600 dark:text-amber-500">
+                          <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
+                          <span>
+                            {t('Until this is enabled, the context window above is capped at 200,000 tokens.')}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Reasoning effort */}
+                  <div>
+                    <label className="block text-xs font-medium text-muted-foreground mb-1">
+                      {t('Reasoning Effort')}
+                    </label>
+                    <select
+                      value={effortSelectValue}
+                      onChange={e => handleReasoningEffortField(e.target.value)}
+                      className="w-full sm:w-56 px-2.5 py-1.5 text-sm bg-input border border-border
+                                 rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    >
+                      <option value="">{t('Default')}</option>
+                      {REASONING_EFFORT_LEVELS.map(level => (
+                        <option key={level} value={level}>{effortLabels[level]}</option>
+                      ))}
+                      {isCustomEffort && (
+                        <option value={effective.reasoningEffort}>{effective.reasoningEffort}</option>
+                      )}
+                    </select>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {t('How hard this model thinks while Deep Thinking is on.')}
+                    </p>
+                    {isCustomEffort && (
                       <div className="flex items-start gap-1.5 mt-1 text-xs text-amber-600 dark:text-amber-500">
                         <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
                         <span>
-                          {t('Values below 20,000 may cause Claude Code\u2019s auto-compact summary to truncate (summary p99.99 ≈ 17,387 tokens).')}
+                          {t('Sent to the provider as-is — Halo cannot check whether this model accepts it.')}
                         </span>
                       </div>
                     )}
-                </div>
-              </div>
-
-              {/* Feature toggles: side-by-side */}
-              <div className="flex flex-wrap gap-x-6 gap-y-2">
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={effective.vision}
-                    onChange={e => handleBoolField('vision', e.target.checked)}
-                    className="w-4 h-4 rounded border-border accent-primary cursor-pointer"
-                  />
-                  <span className="text-sm text-foreground">{t('Vision')}</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={effective.thinking}
-                    onChange={e => handleBoolField('thinking', e.target.checked)}
-                    className="w-4 h-4 rounded border-border accent-primary cursor-pointer"
-                  />
-                  <span className="text-sm text-foreground">{t('Thinking')}</span>
-                </label>
-              </div>
-
-              {/* Reasoning effort */}
-              <div>
-                <label className="block text-xs font-medium text-muted-foreground mb-1">
-                  {t('Reasoning Effort')}
-                </label>
-                <select
-                  value={effortSelectValue}
-                  onChange={e => handleReasoningEffortField(e.target.value)}
-                  className="w-full sm:w-56 px-2.5 py-1.5 text-sm bg-input border border-border
-                             rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-                >
-                  <option value="">{t('Default')}</option>
-                  {REASONING_EFFORT_LEVELS.map(level => (
-                    <option key={level} value={level}>{effortLabels[level]}</option>
-                  ))}
-                  {isCustomEffort && (
-                    <option value={effective.reasoningEffort}>{effective.reasoningEffort}</option>
-                  )}
-                </select>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {t('How hard this model thinks while Deep Thinking is on.')}
-                </p>
-                {isCustomEffort && (
-                  <div className="flex items-start gap-1.5 mt-1 text-xs text-amber-600 dark:text-amber-500">
-                    <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
-                    <span>
-                      {t('Sent to the provider as-is — Halo cannot check whether this model accepts it.')}
-                    </span>
                   </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* ── JSON tab ── */}
-          {activeTab === 'json' && (
-            <div className="space-y-1.5">
-              <textarea
-                value={jsonText}
-                onChange={e => setJsonText(e.target.value)}
-                onBlur={handleJsonBlur}
-                rows={7}
-                spellCheck={false}
-                className="w-full px-3 py-2 text-xs font-mono bg-input border border-border
-                           rounded-lg text-foreground resize-none
-                           focus:outline-none focus:ring-2 focus:ring-primary/30"
-              />
-              {jsonError && (
-                <p className="text-xs text-red-500">{jsonError}</p>
-              )}
-              {jsonWarning && (
-                <div className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-500">
-                  <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
-                  <span>{jsonWarning}</span>
                 </div>
               )}
-              <p className="text-xs text-muted-foreground">
-                {t('Edit JSON then click outside to apply. Unrecognized fields are ignored.')}
-              </p>
-            </div>
+
+              {/* ── JSON tab ── */}
+              {activeTab === 'json' && (
+                <div className="space-y-1.5">
+                  <textarea
+                    value={jsonText}
+                    onChange={e => setJsonText(e.target.value)}
+                    onBlur={handleJsonBlur}
+                    rows={7}
+                    spellCheck={false}
+                    className="w-full px-3 py-2 text-xs font-mono bg-input border border-border
+                               rounded-lg text-foreground resize-none
+                               focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                  {jsonError && (
+                    <p className="text-xs text-red-500">{jsonError}</p>
+                  )}
+                  {jsonWarning && (
+                    <div className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-500">
+                      <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
+                      <span>{jsonWarning}</span>
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    {t('Edit JSON then click outside to apply. Unrecognized fields are ignored.')}
+                  </p>
+                </div>
+              )}
+            </>
           )}
 
           {/* Footer: preset info + reset */}

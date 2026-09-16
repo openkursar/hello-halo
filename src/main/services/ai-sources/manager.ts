@@ -715,8 +715,9 @@ class AISourceManager {
     const tokenData = data._tokenData
     const availableModels: string[] = data._availableModels || []
     const modelNames: Record<string, string> = data._modelNames || {}
+    const modelCapabilities: Record<string, ModelOption['capabilities']> = data._modelCapabilities || {}
+    const modelVision: Record<string, boolean> = data._modelVision || {}
     const defaultModel = data._defaultModel || ''
-    const modelOverrides = data._modelOverrides as AISource['modelOverrides']
 
     const builtin = getBuiltinProvider(providerType)
     const now = new Date().toISOString()
@@ -724,7 +725,9 @@ class AISourceManager {
     // Convert to ModelOption format
     const models: ModelOption[] = availableModels.map(id => ({
       id,
-      name: modelNames[id] || id
+      name: modelNames[id] || id,
+      ...(modelCapabilities[id] ? { capabilities: modelCapabilities[id] } : {}),
+      ...(typeof modelVision[id] === 'boolean' ? { supportsVision: modelVision[id] } : {})
     }))
 
     if (models.length === 0 && defaultModel) {
@@ -760,7 +763,6 @@ class AISourceManager {
             user: { name: '', uid: acct.id },
             model: keepModel,
             availableModels: models.length > 0 ? models : s.availableModels,
-            modelOverrides: modelOverrides ?? s.modelOverrides,
             updatedAt: now
           } : s)
           if (!firstId) firstId = existing.id
@@ -778,7 +780,6 @@ class AISourceManager {
             user: { name: '', uid: acct.id },
             model: defaultModel,
             availableModels: models,
-            modelOverrides,
             createdAt: now,
             updatedAt: now
           })
@@ -815,7 +816,6 @@ class AISourceManager {
             },
             model: defaultModel || s.model,
             availableModels: models.length > 0 ? models : s.availableModels,
-            modelOverrides: modelOverrides ?? s.modelOverrides,
             updatedAt: now
           }
         }
@@ -840,7 +840,6 @@ class AISourceManager {
         },
         model: defaultModel,
         availableModels: models,
-        modelOverrides,
         createdAt: now,
         updatedAt: now
       }

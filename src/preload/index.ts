@@ -4,6 +4,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron'
 import type { RpcContract, RpcClient } from '../shared/rpc/define'
+import type { CatalogModelCapability, ModelCapabilityOverride } from '../shared/types/model-capabilities'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
 import { onboardingRpc } from '../shared/rpc/contracts/onboarding.contract'
 import { securityRpc } from '../shared/rpc/contracts/security.contract'
@@ -601,8 +602,8 @@ export interface HaloAPI {
   onStoreUpgradeAvailable: (callback: (data: { appId: string; currentVersion: string; latestVersion: string; strategy: 'auto' | 'notify' | 'manual'; severity: 'patch' | 'minor' | 'major' }) => void) => () => void
 
   // Model Capabilities
-  /** Resolve the final capability for a model (preset merged with user overrides) */
-  modelCapabilitiesResolve: (modelId: string, overrides?: Record<string, Record<string, unknown>>) => Promise<IpcResponse>
+  /** Resolve the final capability for a model (preset + catalog data merged with user overrides) */
+  modelCapabilitiesResolve: (modelId: string, overrides?: Record<string, ModelCapabilityOverride>, catalogCapability?: CatalogModelCapability, catalogSupportsVision?: boolean) => Promise<IpcResponse>
   /** Get the raw preset for a model (no overrides applied), or null if not in preset */
   modelCapabilitiesGetPreset: (modelId: string) => Promise<IpcResponse>
   /** Get all preset model capabilities as a flat map */

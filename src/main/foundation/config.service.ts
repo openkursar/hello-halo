@@ -1096,9 +1096,23 @@ function serializeModelOverridesForSignature(
   return ids
     .map(id => {
       const v = overrides[id] || {}
-      return `${id}:${v.maxOutputTokens ?? ''}:${v.contextWindow ?? ''}:${v.reasoningEffort ?? ''}`
+      return `${id}:${v.maxOutputTokens ?? ''}:${v.contextWindow ?? ''}:${v.reasoningEffort ?? ''}:${v.extendedContext ?? ''}`
     })
     .join(';')
+}
+
+// The provider-declared capability for the currently selected model
+// (ModelOption.capabilities, set from a live "Fetch Models" catalog read)
+// feeds into modelCapabilitiesService.resolve() the same way modelOverrides
+// does — see its `catalogCapability` parameter. Re-fetching a refreshed
+// context/output limit for the active model must therefore also trigger a
+// session rebuild, or the running CC subprocess keeps the stale env var.
+function serializeCatalogCapabilityForSignature(
+  source: Pick<AISource, 'model' | 'availableModels'>
+): string {
+  const capability = source.availableModels?.find(m => m.id === source.model)?.capabilities
+  if (!capability) return ''
+  return `${capability.contextWindow ?? ''}:${capability.maxOutputTokens ?? ''}`
 }
 
 function getAiSourcesSignature(aiSources?: AISourcesConfig): string {
@@ -1112,6 +1126,7 @@ function getAiSourcesSignature(aiSources?: AISourcesConfig): string {
     // modelOverrides are baked into CC subprocess env at startup — include in
     // signature so panel edits trigger session rebuild instead of staying stale.
     const overridesSig = serializeModelOverridesForSignature(currentSource.modelOverrides)
+    const catalogSig = serializeCatalogCapabilityForSignature(currentSource)
 
     if (currentSource.authType === 'api-key') {
       return [
@@ -1120,7 +1135,8 @@ function getAiSourcesSignature(aiSources?: AISourcesConfig): string {
         currentSource.apiUrl || '',
         currentSource.apiKey || '',
         currentSource.model || '',
-        overridesSig
+        overridesSig,
+        catalogSig
       ].join('|')
     }
 
@@ -1132,7 +1148,8 @@ function getAiSourcesSignature(aiSources?: AISourcesConfig): string {
       currentSource.refreshToken || '',
       currentSource.tokenExpires || '',
       currentSource.model || '',
-      overridesSig
+      overridesSig,
+      catalogSig
     ].join('|')
   }
 

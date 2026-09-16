@@ -270,13 +270,20 @@ describe('ChatGPTProvider', () => {
       )
 
       const payload = ((await getChatGPTProvider().refreshConfig(configWith())).data as Record<string, {
-        modelOverrides: Record<string, unknown>
+        modelCapabilities: Record<string, unknown>
+        modelVision: Record<string, unknown>
+        modelOverrides?: Record<string, unknown>
       }>)[CHATGPT_PROVIDER_ID]
 
-      expect(payload.modelOverrides).toEqual({
-        sees: { vision: true, contextWindow: 272000 },
-        blind: { vision: false }
-      })
+      expect(payload.modelCapabilities).toEqual({ sees: { contextWindow: 272000 } })
+      // The backend states modalities explicitly, so a negative is a real
+      // statement here — unlike a generic gateway's optional modality list.
+      expect(payload.modelVision).toEqual({ sees: true, blind: false })
+
+      // What the catalog observed must not land in modelOverrides: that map is
+      // the user's own edits, and writing to it would both mark every model as
+      // user-customised and make "Reset to preset" unable to clear it.
+      expect(payload.modelOverrides).toBeUndefined()
     })
 
     it('merges the overlay onto the shipped list instead of replacing it', async () => {

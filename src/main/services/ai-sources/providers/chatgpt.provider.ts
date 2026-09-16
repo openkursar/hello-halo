@@ -339,37 +339,39 @@ interface CatalogModel {
 /**
  * Catalog entries rendered as the picker expects them.
  *
- * `contextWindow` matters beyond the gauge: it is the value that drives
- * auto-compaction. Halo's model table has no entry for these slugs, so without
- * it the family pattern's window applies instead of the model's own.
+ * `context_window` is load-bearing, not decoration: it drives auto-compaction,
+ * and Halo's preset table has no entry for these slugs — `gpt-5.6-sol` and
+ * friends fall onto the `gpt-5` family pattern, whose window is not theirs.
+ * These values ride on `ModelOption`, which outranks a family pattern in
+ * `modelCapabilitiesService.resolve`, and are replaced on every catalog
+ * refresh so they track the backend instead of freezing at first write.
  *
- * These are written to `modelOverrides` and replaced on every catalog refresh,
- * so the backend's values stay current rather than freezing at first write.
+ * They deliberately do not go into `modelOverrides`: that map is the user's
+ * own edits. Writing there would mark every model as user-customised, offer
+ * "Reset to preset" for values the user never set, and pin them above every
+ * future refresh.
  */
 function toModelOptions(models: CatalogModel[]): {
   availableModels: string[]
   modelNames: Record<string, string>
-  modelOverrides: Record<string, { vision?: boolean; contextWindow?: number }>
+  modelCapabilities: Record<string, { contextWindow?: number }>
+  modelVision: Record<string, boolean>
 } {
-  const modelOverrides: Record<string, { vision?: boolean; contextWindow?: number }> = {}
+  const modelCapabilities: Record<string, { contextWindow?: number }> = {}
+  const modelVision: Record<string, boolean> = {}
   for (const model of models) {
-    const override: { vision?: boolean; contextWindow?: number } = {}
-    // Absent modalities mean the backend did not state them; leaving the field
-    // out keeps Halo's name-based inference in charge there.
     if (model.input_modalities) {
-      override.vision = model.input_modalities.includes('image')
+      modelVision[model.slug] = model.input_modalities.includes('image')
     }
     if (typeof model.context_window === 'number' && model.context_window > 0) {
-      override.contextWindow = model.context_window
-    }
-    if (Object.keys(override).length > 0) {
-      modelOverrides[model.slug] = override
+      modelCapabilities[model.slug] = { contextWindow: model.context_window }
     }
   }
   return {
-    availableModels: models.map((m) => m.slug),
-    modelNames: Object.fromEntries(models.map((m) => [m.slug, m.display_name || m.slug])),
-    modelOverrides
+    availableModels: models.map((model) => model.slug),
+    modelNames: Object.fromEntries(models.map((model) => [model.slug, model.display_name || model.slug])),
+    modelCapabilities,
+    modelVision
   }
 }
 
@@ -702,7 +704,8 @@ class ChatGPTProvider implements OAuthAISourceProvider {
         _tokenData: { accessToken: string; refreshToken: string; expiresAt: number; uid: string }
         _availableModels: string[]
         _modelNames: Record<string, string>
-        _modelOverrides?: Record<string, { vision?: boolean; contextWindow?: number }>
+        _modelCapabilities?: Record<string, { contextWindow?: number }>
+        _modelVision?: Record<string, boolean>
         _defaultModel: string
       } = {
         success: true,
@@ -715,7 +718,8 @@ class ChatGPTProvider implements OAuthAISourceProvider {
         },
         _availableModels: models.availableModels,
         _modelNames: models.modelNames,
-        _modelOverrides: models.modelOverrides,
+        _modelCapabilities: models.modelCapabilities,
+        _modelVision: models.modelVision,
         _defaultModel: CODEX_DEFAULT_MODEL
       }
 
