@@ -226,6 +226,14 @@ body {
   scrollbar-color: hsl(var(--muted-foreground) / 0.2) transparent;
 }
 
+/* Scroll edge fade hint for overflow containers whose scrollbar is too subtle
+ * to signal "more content below". Applied as a mask on the whole scroll area,
+ * so the underlying list stays fully rendered while the bottom edge fades. */
+.scroll-fade-down {
+  mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+}
+
 /* Disable text selection on UI elements */
 .no-select {
   user-select: none;

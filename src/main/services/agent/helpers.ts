@@ -16,6 +16,8 @@ import type { McpSpec } from '../../apps/spec/schema'
 import type { InstalledApp } from '../../../shared/apps/app-types'
 import { resolveModelId, type BackendRequestConfig, type AISource } from '../../../shared/types/ai-sources'
 import { modelCapabilitiesService } from '../model-capabilities.service'
+import { sanitizeCatalogModelCapability } from '../../../shared/model-catalog'
+import { validateModelCapabilityOverride } from '../../../shared/model-capability-overrides'
 import { isMcpCommandBlocked } from '../security-policy'
 import type { ApiCredentials, ResolvedModelCapabilities } from './types'
 import { assertDelegatedAuthReady } from './cli-auth'
@@ -191,11 +193,29 @@ function resolveCapabilitiesFromSource(
   modelId: string
 ): ResolvedModelCapabilities {
   const overrides = source?.modelOverrides
-  const resolved = modelCapabilitiesService.resolve(modelId, overrides)
+  const catalogModel = source?.availableModels?.find(model => model.id === modelId)
+  const catalogCapability = sanitizeCatalogModelCapability(catalogModel?.capabilities)
+  const resolved = modelCapabilitiesService.resolve(
+    modelId,
+    overrides,
+    catalogCapability,
+    catalogModel?.supportsVision
+  )
+  // Same validator resolve() applies, so a malformed override cannot be
+  // honoured here while being discarded there.
+  const overrideValidation = validateModelCapabilityOverride(overrides?.[modelId])
+  const userOverride = overrideValidation.valid ? overrideValidation.value : undefined
   return {
     maxOutputTokens: resolved.maxOutputTokens,
     contextWindow: resolved.contextWindow,
     reasoningEffort: resolved.reasoningEffort,
+    extendedContext: resolved.extendedContext === true,
+    // Whether the number above came from somewhere that actually knows this
+    // model. When nothing does, the caller leaves CLAUDE_CODE_MAX_OUTPUT_TOKENS
+    // unset so CC applies its own default rather than Halo's guess.
+    maxOutputTokensConfigured: userOverride?.maxOutputTokens !== undefined
+      || modelCapabilitiesService.getPreset(modelId) !== null
+      || catalogCapability?.maxOutputTokens !== undefined,
   }
 }
 

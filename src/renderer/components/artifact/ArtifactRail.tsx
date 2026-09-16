@@ -13,7 +13,7 @@ import { createPortal } from 'react-dom'
 import { ArtifactCard, type ArtifactContextMenuState } from './ArtifactCard'
 import { ArtifactTree } from './ArtifactTree'
 import { api } from '../../api'
-import type { Artifact, ArtifactViewMode, ArtifactChangeEvent } from '../../types'
+import type { Artifact, ArtifactViewMode } from '../../types'
 import { useIsGenerating } from '../../stores/chat.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useOnboardingStore } from '../../stores/onboarding.store'
@@ -218,7 +218,6 @@ export function ArtifactRail({
 
   // Handle expand/collapse toggle
   const handleToggleExpanded = useCallback(() => {
-    console.log('[ArtifactRail] 🔴 Click! isExpanded:', isExpanded, 'time:', Date.now())
     const newExpanded = !isExpanded
 
     // UI-first optimization: When Canvas is open, directly update DOM
@@ -226,7 +225,6 @@ export function ArtifactRail({
     if (isCanvasOpen && railRef.current) {
       const targetWidth = newExpanded ? width : COLLAPSED_WIDTH
       railRef.current.style.width = `${targetWidth}px`
-      console.log('[ArtifactRail] 🚀 Direct DOM update:', targetWidth, 'time:', Date.now())
     }
 
     // Then update React state (will re-render but width is already correct)
@@ -236,11 +234,6 @@ export function ArtifactRail({
       setInternalExpanded(newExpanded)
     }
   }, [isExpanded, isControlled, onExpandedChange, isCanvasOpen, width])
-
-  // Debug: log when isExpanded changes
-  useEffect(() => {
-    console.log('[ArtifactRail] 🟢 isExpanded changed to:', isExpanded, 'time:', Date.now())
-  }, [isExpanded])
 
   // Check if we're in onboarding view-artifact step
   const isOnboardingViewStep = isOnboarding && currentStep === 'view-artifact'
@@ -345,7 +338,7 @@ export function ArtifactRail({
     })
 
     // Subscribe to change events
-    const cleanup = api.onArtifactChanged((event: ArtifactChangeEvent) => {
+    const cleanup = api.onArtifactChanged((event) => {
       if (event.spaceId !== spaceId) return
 
       console.log('[ArtifactRail] Artifact changed:', event.type, event.relativePath)

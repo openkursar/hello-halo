@@ -50,17 +50,52 @@ export interface BuiltinProvider {
 }
 
 // ============================================================================
+// Provider Identity
+// ============================================================================
+
+/**
+ * Provider id of the ChatGPT subscription source (the Codex backend).
+ *
+ * It is the key the manager registers the provider under and the value persisted
+ * as `AISource.provider`, so `authProviders[].type` in product.json must match it
+ * exactly.
+ */
+export const CHATGPT_PROVIDER_ID = 'chatgpt'
+
+// ============================================================================
 // Built-in Providers List
 // ============================================================================
 
 /**
  * All built-in providers
- * Organized by: Protocol entries first (Claude/OpenAI Compatible), then presets by region
+ * Organized by: Protocol entries first (OpenAI Compatible/Claude), then presets by region
+ *
+ * OpenAI-compatible leads because most third-party gateways speak that wire
+ * format; picking Anthropic for one is a silent misconfiguration (its URL skips
+ * normalization and the SDK appends /v1/messages).
  */
 export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
   // ============================================================================
   // Protocol Entries (Top 2 - Always visible, support custom URL)
   // ============================================================================
+  {
+    id: 'openai',
+    name: 'OpenAI API',
+    authType: 'api-key',
+    apiUrl: 'https://api.openai.com/v1',
+    modelsUrl: 'https://api.openai.com/v1/models',
+    models: [
+      { id: 'gpt-4o', name: 'GPT-4o' },
+      { id: 'gpt-4o-mini', name: 'GPT-4o Mini' },
+      { id: 'o1', name: 'o1' },
+      { id: 'o1-mini', name: 'o1-mini' }
+    ],
+    description: 'Official and all compatible providers',
+    website: 'https://platform.openai.com/',
+    region: 'global',
+    recommended: true,
+    icon: 'bot'
+  },
   {
     id: 'anthropic',
     name: 'Claude (Anthropic) API',
@@ -80,24 +115,6 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     region: 'global',
     recommended: true,
     icon: 'brain'
-  },
-  {
-    id: 'openai',
-    name: 'OpenAI API',
-    authType: 'api-key',
-    apiUrl: 'https://api.openai.com/v1',
-    modelsUrl: 'https://api.openai.com/v1/models',
-    models: [
-      { id: 'gpt-4o', name: 'GPT-4o' },
-      { id: 'gpt-4o-mini', name: 'GPT-4o Mini' },
-      { id: 'o1', name: 'o1' },
-      { id: 'o1-mini', name: 'o1-mini' }
-    ],
-    description: 'Official and all compatible providers',
-    website: 'https://platform.openai.com/',
-    region: 'global',
-    recommended: true,
-    icon: 'bot'
   },
 
   // ============================================================================
@@ -558,6 +575,25 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     region: 'global',
     icon: 'brain',
     notes: 'Uses OAuth PKCE flow. Requires anthropic-beta: oauth-2025-04-20 header. Tool names must be prefixed with mcp_'
+  },
+  {
+    id: CHATGPT_PROVIDER_ID,
+    name: 'ChatGPT',
+    authType: 'oauth',
+    apiUrl: 'https://chatgpt.com/backend-api/codex',
+    apiType: 'responses',
+    models: [
+      { id: 'gpt-6-astra', name: 'GPT-6-Astra' },
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' },
+      { id: 'gpt-5.6-terra', name: 'GPT-5.6-Terra' },
+      { id: 'gpt-5.6-luna', name: 'GPT-5.6-Luna' },
+      { id: 'gpt-5.5', name: 'GPT-5.5' }
+    ],
+    description: 'Login with ChatGPT account (Plus/Pro/Business subscription)',
+    website: 'https://chatgpt.com/',
+    region: 'global',
+    icon: 'terminal',
+    notes: 'Speaks the Codex Responses wire. Requests are reshaped by the Codex request adapter.'
   },
 ]
 

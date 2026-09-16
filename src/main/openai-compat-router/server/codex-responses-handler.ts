@@ -19,7 +19,7 @@ import { proxyFetch } from '../../services/proxy-fetch'
 import { getEndpointUrlError, isValidEndpointUrl } from './api-type'
 import { applyProviderAdapter, type AdapterContext } from './provider-adapters'
 import { deferInputTokensEstimate, fillResponseUsageFallback } from '../utils/usage-estimator'
-import { pickSessionAffinityHeaders } from '../utils'
+import { pickSessionAffinityHeaders, pickSessionId } from '../utils'
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -742,8 +742,8 @@ export async function handleResponsesRequest(
     ...(customHeaders || {}),
     ...pickSessionAffinityHeaders(sdkHeaders),
   }
-  const adapterContext: AdapterContext = { originalRequest: requestToSend }
-  applyProviderAdapter(backendUrl, openaiRequest as Record<string, unknown>, requestHeaders, adapterId, adapterContext)
+  const adapterContext: AdapterContext = { originalRequest: requestToSend, sessionId: pickSessionId(sdkHeaders) }
+  applyProviderAdapter(backendUrl, openaiRequest as unknown as Record<string, unknown>, requestHeaders, adapterId, adapterContext)
 
   console.log(`[CodexResponsesHandler] Proxy ${apiType} -> ${backendUrl} stream=${codexRequest.stream === true}`)
 

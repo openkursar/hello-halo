@@ -184,18 +184,17 @@ export function SpacePage() {
     }
   }, [currentSpace?.id])
 
-  // BrowserView visibility: hide when leaving SpacePage, show when returning
+  // Showing a native BrowserView requires the canvas container's bounds, so it
+  // belongs to BrowserViewer, which owns that ref and remounts with the canvas.
+  // SpacePage owns only the teardown: leaving the page or switching space must
+  // not leave a native view floating over whatever renders next.
   useEffect(() => {
     if (!currentSpace) return
-
-    if (isCanvasOpen) {
-      canvasLifecycle.showActiveBrowserView()
-    }
 
     return () => {
       canvasLifecycle.hideAllBrowserViews()
     }
-  }, [currentSpace?.id, isCanvasOpen])
+  }, [currentSpace?.id])
 
   // Initialize space when entering
   useEffect(() => {

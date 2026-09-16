@@ -136,10 +136,13 @@ POST   /api/model-capabilities/resolve                             Resolve a mod
      curl -sX POST "$HALO_API_URL/api/model-capabilities/resolve" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
           -H "Content-Type: application/json" \
-          -d '{"modelId":"deepseek-chat"}'
-     # body: {"modelId":"deepseek-chat"}
+          -d '{"modelId":"deepseek-chat","overrides":{"deepseek-chat":{"contextWindow":128000}},"catalogCapability":{"contextWindow":128000,"maxOutputTokens":8192},"catalogSupportsVision":true}'
+     # body: {"modelId":"deepseek-chat","overrides":{"deepseek-chat":{"contextWindow":128000}},"catalogCapability":{"contextWindow":128000,"maxOutputTokens":8192},"catalogSupportsVision":true}
      # out: {"success":true,"data":{"displayName":"...","provider":"...","contextWindow":128000,"maxOutputTokens":8192,"vision":false,"thinking":false}}
-     # note: Applies the user's overrides on top of the shipped preset, which is what makes it differ from the preset endpoint. 400 when modelId is missing or not a string.
+     # note: All optional inputs are validated. Catalog data accepts only positive integer contextWindow and maxOutputTokens values within Halo runtime limits; catalogSupportsVision must be a boolean.
+     # note: Priority, highest first: user override, then a [1m] model-id suffix (contextWindow only), then an exact preset entry, then catalog data, then a model-family pattern entry, then built-in defaults. A pattern entry is only a family guess and ranks below the provider catalog; an exact entry is curated and ranks above it.
+     # note: A context above 200K does not opt the SDK into extended context unless the user explicitly enables extendedContext or the model id ends in [1m].
+     # note: Returns 400 for a missing modelId or malformed capability data.
 
 GET    /api/security/policy                                        Read the security policy this build runs under
      curl -s "$HALO_API_URL/api/security/policy" -H "Authorization: Bearer $HALO_API_TOKEN"

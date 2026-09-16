@@ -6,11 +6,9 @@ import type { Express, Request, Response } from 'express'
 import {
   getAISourceManager,
   modelCapabilitiesService,
-  resolve,
 } from './_shared'
-import type {
-  ModelCapabilityOverride,
-} from './_shared'
+import { isCatalogModelCapability } from '../../../shared/model-catalog'
+import { validateModelCapabilityOverrides } from '../../../shared/model-capability-overrides'
 
 export function registerAiSourcesRoutes(app: Express): void {
   // ===== AI Sources CRUD Routes (atomic operations) =====
@@ -78,17 +76,35 @@ export function registerAiSourcesRoutes(app: Express): void {
   // POST /api/model-capabilities/resolve — resolve final capability (preset + user overrides)
   app.post('/api/model-capabilities/resolve', (req: Request, res: Response) => {
     try {
-      const { modelId, overrides } = req.body as {
-        modelId?: string
-        overrides?: Record<string, Record<string, unknown>>
+      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+        res.status(400).json({ success: false, error: 'Invalid request body' })
+        return
       }
-      if (!modelId || typeof modelId !== 'string') {
+      const { modelId, overrides, catalogCapability, catalogSupportsVision } = req.body as Record<string, unknown>
+      if (typeof modelId !== 'string' || !modelId.trim() || modelId !== modelId.trim() || modelId.length > 512) {
         res.status(400).json({ success: false, error: 'Missing required field: modelId' })
+        return
+      }
+      if (overrides !== undefined && !validateModelCapabilityOverrides(overrides)) {
+        res.status(400).json({ success: false, error: 'Invalid model capability overrides' })
+        return
+      }
+      if (catalogCapability !== undefined && !isCatalogModelCapability(catalogCapability)) {
+        res.status(400).json({ success: false, error: 'Invalid catalog capability' })
+        return
+      }
+      if (catalogSupportsVision !== undefined && typeof catalogSupportsVision !== 'boolean') {
+        res.status(400).json({ success: false, error: 'Invalid catalog vision flag' })
         return
       }
       res.json({
         success: true,
-        data: modelCapabilitiesService.resolve(modelId, overrides as Record<string, ModelCapabilityOverride> | undefined)
+        data: modelCapabilitiesService.resolve(
+          modelId.trim(),
+          overrides,
+          catalogCapability,
+          catalogSupportsVision
+        )
       })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })

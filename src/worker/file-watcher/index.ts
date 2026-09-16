@@ -70,8 +70,6 @@ async function handleMessage(msg: MainToWorkerMessage): Promise<void> {
 
       case 'scan-dir': {
         if (msg.mode === 'tree') {
-          // Tree scanning: lightweight rules (no .gitignore) so gitignored
-          // files remain visible, matching VS Code file explorer behavior.
           const ig = loadTreeIgnoreRules()
           const nodes = await scanDirectoryTreeShallow(
             msg.dirPath, msg.rootPath, msg.depth, ig

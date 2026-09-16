@@ -108,7 +108,7 @@ net.setDefaultAutoSelectFamily(false)
 // Executed after page load to avoid blocking startup
 // Note: fix-path is ESM-only, loaded dynamically to support both CJS and ESM builds
 
-import { app, BrowserWindow, Menu, crashReporter } from 'electron'
+import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, Menu, crashReporter } from 'electron'
 import open from 'open'
 
 // GPU compatibility: Disable hardware acceleration on Windows to prevent blank window issues
@@ -662,6 +662,17 @@ async function shutdownServicesWithTimeout(timeoutMs: number): Promise<void> {
       }, timeoutMs)
     })
   ])
+}
+
+// macOS installs an update through Electron's native updater (Squirrel), which
+// emits 'before-quit-for-update' *instead of* 'before-quit' and only swaps the
+// bundle once every window has actually closed. Without this flag the
+// close-to-tray handler hides the window instead of closing it, so the swap
+// never runs and the update silently never installs.
+if (process.platform === 'darwin') {
+  nativeAutoUpdater.on('before-quit-for-update', () => {
+    isAppQuitting = true
+  })
 }
 
 app.on('before-quit', () => {

@@ -236,6 +236,10 @@ export class OpenAIResponsesStreamHandler extends BaseStreamHandler {
       const blockIndex = this.toolIndexToBlock.get(outputIndex)
 
       if (blockIndex !== undefined) {
+        // Backends that never stream argument deltas deliver the whole call here.
+        if (typeof item.arguments === 'string') {
+          this.writeToolInputIfMissing(outputIndex, item.arguments)
+        }
         this.writer.writeBlockStop(blockIndex)
         this.state.currentBlockIndex = -1
       }

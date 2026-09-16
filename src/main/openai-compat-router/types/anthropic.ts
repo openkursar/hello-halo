@@ -111,6 +111,7 @@ export interface AnthropicToolInputSchema {
   type: 'object'
   properties: Record<string, AnthropicJSONSchemaProperty>
   required?: string[]
+  additionalProperties?: boolean
 }
 
 export interface AnthropicJSONSchemaProperty {

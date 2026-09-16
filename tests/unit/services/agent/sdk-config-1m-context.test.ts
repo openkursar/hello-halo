@@ -3,6 +3,11 @@
  * id encoded into the API key stays clean. Without the suffix, CC clamps
  * unknown-model windows to its 200K default and the user's configured
  * contextWindow is silently truncated.
+ *
+ * The suffix is gated on the user's explicit `extendedContext` opt-in, not on
+ * the window alone: on anthropic-family sources it adds a long-context beta
+ * header that changes pricing tier, so a number arriving from a third-party
+ * catalog must not be able to open it on its own.
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -17,34 +22,71 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 }))
 
 import { applyCC1mContextUnlock } from '../../../../src/main/services/agent/sdk-config'
+import type { ResolvedModelCapabilities } from '../../../../src/main/services/agent/types'
+
+// `maxOutputTokensConfigured` is required on the contract but plays no part in
+// the unlock decision. Pinned here so each case states only the window and the
+// opt-in it is actually about.
+const caps = (
+  values: Omit<ResolvedModelCapabilities, 'maxOutputTokensConfigured'>
+): ResolvedModelCapabilities => ({ maxOutputTokensConfigured: true, ...values })
 
 describe('applyCC1mContextUnlock', () => {
-  it('appends [1m] when contextWindow exceeds CC default (200K)', () => {
+  it('appends [1m] when the user opted in and contextWindow exceeds CC default (200K)', () => {
     expect(
-      applyCC1mContextUnlock('deepseek-v4-flash', {
+      applyCC1mContextUnlock('deepseek-v4-flash', caps({
         maxOutputTokens: 64_000,
         contextWindow: 500_000,
-      })
+        extendedContext: true,
+      }))
     ).toBe('deepseek-v4-flash[1m]')
+  })
+
+  it('does not append for a large window the user never opted into', () => {
+    // The window can come straight from a provider catalog. Opening the beta
+    // branch off that alone would let remote data change pricing tier.
+    expect(
+      applyCC1mContextUnlock('deepseek-v4-flash', caps({
+        maxOutputTokens: 64_000,
+        contextWindow: 500_000,
+      }))
+    ).toBe('deepseek-v4-flash')
+    expect(
+      applyCC1mContextUnlock('deepseek-v4-flash', caps({
+        maxOutputTokens: 64_000,
+        contextWindow: 500_000,
+        extendedContext: false,
+      }))
+    ).toBe('deepseek-v4-flash')
+  })
+
+  it('does not append when the user opted in but the window does not need it', () => {
+    expect(
+      applyCC1mContextUnlock('claude-sonnet-4', caps({
+        maxOutputTokens: 64_000,
+        contextWindow: 200_000,
+        extendedContext: true,
+      }))
+    ).toBe('claude-sonnet-4')
   })
 
   it('does not append when contextWindow equals CC default (200K)', () => {
     // Exactly 200K is the CC default — appending would be a no-op for
     // intrinsic but still expand the unaudited [1m] surface unnecessarily.
     expect(
-      applyCC1mContextUnlock('claude-sonnet-4', {
+      applyCC1mContextUnlock('claude-sonnet-4', caps({
         maxOutputTokens: 64_000,
         contextWindow: 200_000,
-      })
+      }))
     ).toBe('claude-sonnet-4')
   })
 
   it('does not append when contextWindow is below CC default', () => {
     expect(
-      applyCC1mContextUnlock('local-llama-3', {
+      applyCC1mContextUnlock('local-llama-3', caps({
         maxOutputTokens: 4_096,
         contextWindow: 32_768,
-      })
+      }))
     ).toBe('local-llama-3')
   })
 
@@ -52,19 +94,19 @@ describe('applyCC1mContextUnlock', () => {
     // Legacy workflow: user typed `[1m]` directly into their model id for
     // Anthropic direct 1M beta. Don't double-append.
     expect(
-      applyCC1mContextUnlock('claude-sonnet-4[1m]', {
+      applyCC1mContextUnlock('claude-sonnet-4[1m]', caps({
         maxOutputTokens: 64_000,
         contextWindow: 1_000_000,
-      })
+      }))
     ).toBe('claude-sonnet-4[1m]')
   })
 
   it('is idempotent for case variants like [1M]', () => {
     expect(
-      applyCC1mContextUnlock('claude-sonnet-4[1M]', {
+      applyCC1mContextUnlock('claude-sonnet-4[1M]', caps({
         maxOutputTokens: 64_000,
         contextWindow: 1_000_000,
-      })
+      }))
     ).toBe('claude-sonnet-4[1M]')
   })
 
@@ -76,25 +118,25 @@ describe('applyCC1mContextUnlock', () => {
 
   it('does not append when contextWindow is NaN or non-finite', () => {
     expect(
-      applyCC1mContextUnlock('deepseek-v4-flash', {
+      applyCC1mContextUnlock('deepseek-v4-flash', caps({
         maxOutputTokens: 64_000,
         contextWindow: Number.NaN,
-      })
+      }))
     ).toBe('deepseek-v4-flash')
     expect(
-      applyCC1mContextUnlock('deepseek-v4-flash', {
+      applyCC1mContextUnlock('deepseek-v4-flash', caps({
         maxOutputTokens: 64_000,
         contextWindow: Number.POSITIVE_INFINITY,
-      })
+      }))
     ).toBe('deepseek-v4-flash')
   })
 
   it('returns empty input unchanged (defensive against missing model id)', () => {
     expect(
-      applyCC1mContextUnlock('', {
+      applyCC1mContextUnlock('', caps({
         maxOutputTokens: 64_000,
         contextWindow: 500_000,
-      })
+      }))
     ).toBe('')
   })
 
@@ -102,10 +144,11 @@ describe('applyCC1mContextUnlock', () => {
     // The boundary is strict `>`, not `>=`, so the first value above the
     // default trips the unlock. Documents the exact contract.
     expect(
-      applyCC1mContextUnlock('custom-large', {
+      applyCC1mContextUnlock('custom-large', caps({
         maxOutputTokens: 64_000,
         contextWindow: 200_001,
-      })
+        extendedContext: true,
+      }))
     ).toBe('custom-large[1m]')
   })
 
@@ -113,10 +156,10 @@ describe('applyCC1mContextUnlock', () => {
     // Real-world preset from model-capabilities.json; CC's default already
     // covers it, so no [1m] decoration.
     expect(
-      applyCC1mContextUnlock('deepseek-chat', {
+      applyCC1mContextUnlock('deepseek-chat', caps({
         maxOutputTokens: 64_000,
         contextWindow: 131_072,
-      })
+      }))
     ).toBe('deepseek-chat')
   })
 
@@ -124,10 +167,11 @@ describe('applyCC1mContextUnlock', () => {
     // User configures a third-party 1M context model. Without the unlock,
     // CC would clamp to 200K and the user's 1M setting would be invisible.
     expect(
-      applyCC1mContextUnlock('zai-org/GLM-4.7-1M', {
+      applyCC1mContextUnlock('zai-org/GLM-4.7-1M', caps({
         maxOutputTokens: 64_000,
         contextWindow: 1_000_000,
-      })
+        extendedContext: true,
+      }))
     ).toBe('zai-org/GLM-4.7-1M[1m]')
   })
 })

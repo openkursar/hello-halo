@@ -507,6 +507,23 @@ export abstract class BaseStreamHandler {
     }
   }
 
+  /**
+   * Emit a tool call's full argument JSON when no `…arguments.delta` ever
+   * arrived for it.
+   *
+   * Some Responses backends deliver function-call arguments only on the
+   * completed item and never as deltas — the official Codex backend does exactly
+   * this, and the Codex CLI's own client reads the finished item while
+   * discarding `response.function_call_arguments.delta`. The Anthropic wire has
+   * no "here is the whole input" event, so without this the block closes with
+   * empty input and the SDK receives a tool call with no arguments.
+   */
+  protected writeToolInputIfMissing(toolIndex: number, completeJson: string): void {
+    const state = this.toolCallMap.get(toolIndex)
+    if (!state || state.arguments) return
+    this.writeToolInputDelta(toolIndex, completeJson)
+  }
+
   protected writeWebSearchResult(
     toolUseId: string,
     results: AnthropicWebSearchResult[]

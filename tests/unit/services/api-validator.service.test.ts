@@ -199,4 +199,44 @@ describe('fetchModelsFromApi error details', () => {
       ]
     })
   })
+
+  it('attaches provider-declared capabilities when the catalog states them', async () => {
+    // OpenRouter-shaped fixture, matching the field set that caused the
+    // reported bug for "~z-ai/glm-flash-latest".
+    proxyFetchMock.mockResolvedValue(new Response(JSON.stringify({
+      data: [
+        {
+          id: '~z-ai/glm-flash-latest',
+          name: 'Z.ai: GLM Flash Latest',
+          context_length: 1310720,
+          architecture: { input_modalities: ['text', 'image', 'video'] },
+          top_provider: { max_completion_tokens: 131072 }
+        },
+        { id: 'model-no-capabilities' }
+      ]
+    }), { status: 200 }))
+
+    const result = await fetchModelsFromApi({
+      apiKey: 'sk-test-placeholder',
+      apiUrl: 'https://example.com/v1'
+    })
+
+    // Sorted independently of the service's own (locale-dependent) sort, so
+    // this assertion does not depend on where "~" collates relative to "m".
+    const byId = Object.fromEntries(result.models.map(m => [m.id, m]))
+    expect(Object.keys(byId).sort()).toHaveLength(2)
+    expect(byId['model-no-capabilities']).toEqual({
+      id: 'model-no-capabilities',
+      name: 'model-no-capabilities'
+    })
+    // The provider's display name is kept rather than echoing the id: both
+    // fetch paths run through the same mapper now, the picker renders the id
+    // underneath whenever it differs, and search matches either field.
+    expect(byId['~z-ai/glm-flash-latest']).toEqual({
+      id: '~z-ai/glm-flash-latest',
+      name: 'Z.ai: GLM Flash Latest',
+      supportsVision: true,
+      capabilities: { contextWindow: 1310720, maxOutputTokens: 131072 }
+    })
+  })
 })

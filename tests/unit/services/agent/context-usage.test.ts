@@ -10,6 +10,9 @@
  *     output_tokens (matches analyzeContextUsage's totalFromAPI).
  *   - Context window mirrors getContextWindowForModel: [1m] → 1M, known table
  *     entry → its window, unknown → 200K default.
+ *   - The gauge is a per-call figure. The `result` frame carries the turn's
+ *     cumulative usage, so a turn that never produced a per-call frame reports
+ *     no gauge at all instead of the turn total.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -18,6 +21,7 @@ import {
   extractRealAssistantUsage,
   extractStreamDeltaUsage,
   computeContextUsed,
+  hasPromptAccounting,
   resolveContextWindow,
   buildTokenUsage
 } from '../../../../src/main/services/agent/context-usage'
@@ -107,6 +111,38 @@ describe('computeContextUsed', () => {
   })
 })
 
+describe('hasPromptAccounting', () => {
+  it('accepts any frame carrying the prompt side of a call', () => {
+    expect(
+      hasPromptAccounting({
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 202_761,
+        cacheCreationTokens: 0
+      })
+    ).toBe(true)
+    expect(
+      hasPromptAccounting({
+        inputTokens: 2,
+        outputTokens: 164,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0
+      })
+    ).toBe(true)
+  })
+
+  it('rejects an output-only delta — the shape real Anthropic sends', () => {
+    expect(
+      hasPromptAccounting({
+        inputTokens: 0,
+        outputTokens: 42,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0
+      })
+    ).toBe(false)
+  })
+})
+
 describe('extractStreamDeltaUsage', () => {
   it('reads the counts a provider only reports on message_delta', () => {
     expect(
@@ -164,24 +200,19 @@ describe('buildTokenUsage', () => {
     expect(computeContextUsed(result!)).toBe(51_350)
   })
 
-  it('falls back to the result frame usage when no per-call usage was captured', () => {
-    const result = buildTokenUsage(
-      { total_cost_usd: 0.5, usage: { input_tokens: 22_700, output_tokens: 50, cache_read_input_tokens: 0 } },
-      null,
-      'totally-unknown-model-xyz'
-    )
-    expect(result).toEqual({
-      inputTokens: 22_700,
-      outputTokens: 50,
-      cacheReadTokens: 0,
-      cacheCreationTokens: 0,
-      totalCostUsd: 0.5,
-      contextWindow: 200_000
-    })
-  })
-
-  it('returns null when neither per-call nor result usage exists', () => {
+  /**
+   * The `result` frame's usage is the turn's cumulative total — a multiple of
+   * the context on any multi-call turn. Reporting it as the context size is the
+   * defect this pins shut: no per-call frame means no gauge, not a turn total.
+   * The call sites pass a `result` frame shaped like the SDK's, whose extra
+   * fields must not be picked up.
+   */
+  it('reports no gauge when the turn produced no per-call frame', () => {
+    const resultMsg = {
+      total_cost_usd: 0.5,
+      usage: { input_tokens: 22_700, output_tokens: 50, cache_read_input_tokens: 0 }
+    }
+    expect(buildTokenUsage(resultMsg, null, 'totally-unknown-model-xyz')).toBeNull()
     expect(buildTokenUsage({ total_cost_usd: 1 }, null, 'claude')).toBeNull()
-    expect(buildTokenUsage({ total_cost_usd: 1, usage: { input_tokens: 0, output_tokens: 0 } }, null, 'claude')).toBeNull()
   })
 })

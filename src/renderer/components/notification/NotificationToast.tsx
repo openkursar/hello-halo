@@ -5,7 +5,8 @@
  * Visual style matches the original UpdateNotification component
  * (zinc-800 background, rounded-lg, slide-in animation).
  *
- * Each toast auto-dismisses after its `duration` (0 = sticky).
+ * Each toast auto-dismisses after its `duration` (0 = sticky). A toast marked
+ * `dismissible: false` drops the close button and outlives its own action.
  * Toasts are ordered oldest-first (newest at the bottom of the stack).
  *
  * Mount once in App.tsx — it reads from useNotificationStore.
@@ -57,6 +58,7 @@ const variantStyles: Record<ToastVariant, VariantStyle> = {
 function Toast({ toast }: { toast: ToastItem }) {
   const dismiss = useNotificationStore((s) => s.dismiss)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const dismissible = toast.dismissible !== false
 
   const handleDismiss = useCallback(() => {
     dismiss(toast.id)
@@ -64,13 +66,13 @@ function Toast({ toast }: { toast: ToastItem }) {
 
   // Auto-dismiss
   useEffect(() => {
-    if (toast.duration > 0) {
+    if (dismissible && toast.duration > 0) {
       timerRef.current = setTimeout(handleDismiss, toast.duration)
     }
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current)
     }
-  }, [toast.duration, handleDismiss])
+  }, [dismissible, toast.duration, handleDismiss])
 
   const style = variantStyles[toast.variant]
   // Server-authored copy is structured and usually longer, so it earns the
@@ -106,7 +108,7 @@ function Toast({ toast }: { toast: ToastItem }) {
               <div className="flex items-center gap-2 mt-3">
                 {toast.action && (
                   <button
-                    onClick={() => { toast.action!.onClick(); handleDismiss() }}
+                    onClick={() => { toast.action!.onClick(); if (dismissible) handleDismiss() }}
                     className={`flex items-center gap-1.5 px-3 py-1.5 ${
                       toast.variant === 'error'
                         ? 'bg-red-600 hover:bg-red-500'
@@ -133,12 +135,14 @@ function Toast({ toast }: { toast: ToastItem }) {
           </div>
 
           {/* Close button */}
-          <button
-            onClick={handleDismiss}
-            className="flex-shrink-0 text-zinc-500 hover:text-zinc-300 transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {dismissible && (
+            <button
+              onClick={handleDismiss}
+              className="flex-shrink-0 text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
     </div>

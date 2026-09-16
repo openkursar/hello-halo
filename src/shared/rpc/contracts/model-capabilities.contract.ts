@@ -7,11 +7,20 @@
  */
 
 import { rpcMethod } from '../define'
-import type { ModelCapability, ModelCapabilityOverride } from '../../types/model-capabilities'
+import type {
+  CatalogModelCapability,
+  ModelCapability,
+  ModelCapabilityOverride
+} from '../../types/model-capabilities'
 
 export const modelCapabilitiesRpc = {
   modelCapabilitiesResolve: rpcMethod<
-    [modelId: string, overrides?: Record<string, ModelCapabilityOverride>],
+    [
+      modelId: string,
+      overrides?: Record<string, ModelCapabilityOverride>,
+      catalogCapability?: CatalogModelCapability,
+      catalogSupportsVision?: boolean
+    ],
     ModelCapability
   >('model-capabilities:resolve'),
 

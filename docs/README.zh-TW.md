@@ -22,7 +22,7 @@
 <!-- TODO: 替換為 30 秒 GIF：使用者輸入一句話 -> Agent 自動寫程式碼 -> 檔案出現在 Artifact Rail -> 預覽結果 -->
 <div align="center">
 
-![Space Home](./assets/space_home.jpg)
+![AI Digital Human Store](./assets/shop_dh.png)
 
 </div>
 
@@ -38,6 +38,9 @@ Halo 是一個基於前沿 Agent 能力建構的 AI 工作站，採用可插拔�
 | **100% 本地運行，零雲端依賴** — 資料不出本機，滿足企業合規稽核要求 |
 | **AI 數位人** — 7x24 自主運行的 AI 員工，處理監控、報表、日常操作 |
 | **AI 瀏覽器** — 內嵌瀏覽器由 AI 直接控制，可自動化任何 Web 系統 |
+| **知識庫** — 丟進常用檔案，AI 回答問題、幹活時自動參考 |
+| **AI 終端機** — 內建終端機，AI 能直接操作，SSH、堡壘機、驅動任意 CLI 工具 |
+| **AI 操作 Halo 本身** — 自然語言操作數百項功能，按需載入不佔用上下文 |
 | **企業微信 / 微信原生控制** — 在企業 IM 中管理 AI Agent，零培訓成本 |
 | **遠端存取** — 手機 / H5 / 微信 / Android 隨時控制，管理者行動端審閱進度 |
 | **下載即用** — 零設定、無需後端，IT 幾分鐘完成部署 |
@@ -48,7 +51,11 @@ Halo 是一個基於前沿 Agent 能力建構的 AI 工作站，採用可插拔�
 
 ## AI 數位人 — 你的自主 AI 勞動力
 
-傳統 RPA 按固定腳本執行，遇到變化就崩。Halo 的做法不同：**AI 負責判斷決策，Halo Browser Action 負責精準執行。** 結果就是——能理解上下文、能適應變化、能精準操作的自動化。
+給它一個目標和執行頻率，AI 數位人就會像員工一樣自主推進——不是執行固定腳本的機器人，而是有記憶、能判斷、會操作的數位員工。
+
+**有手有腳：** 數位人和對話模式共享完全相同的 Agent 能力——AI 瀏覽器操作網頁、AI 終端機操作系統和 CLI 工具、企業微信/微信收發訊息，甚至能操作 Halo 自己調整設定。不是只會點瀏覽器的單一工具人。
+
+**長期記憶：** 每次運行不是從零開始，數位人記得上次處理到哪、遇到過什麼、判斷出過什麼結論——持續累積，而不是重複勞動。
 
 ### 自主運行的 Agent，7x24 不停歇
 
@@ -73,8 +80,6 @@ Halo 是一個基於前沿 Agent 能力建構的 AI 工作站，採用可插拔�
 
 > 把它想成 cron + RPA + AI Agent 的合體——只不過你用自然語言描述需求就行。
 
-AI 數位人擁有與對話模式完全相同的 Agent 能力——同樣的 Claude 引擎、MCP 工具鏈和 AI 瀏覽器——只是它們按計畫自動觸發，不需要你坐在電腦前。
-
 **微信 / 企業微信就是你的控制面板。** AI 數位人支援透過個人微信 / 企業微信進行雙向對話控制——不只是接收通知，你可以直接在企業 IM 中給數位人下指令、查進度、要報告。
 
 ![AI Digital Human](./assets/ai-digital-human.png)
@@ -85,56 +90,43 @@ AI 數位人擁有與對話模式完全相同的 Agent 能力——同樣的 Cla
 
 ### Halo Browser Action — AI 決策，腳本執行
 
-這是 Halo 和那些「AI 瀏覽器 Agent 到處亂點」的根本區別。
+傳統 RPA 按固定腳本執行，遇到變化就崩；Halo 反過來：**AI 負責判斷決策，Browser Action 負責精準執行。**
 
-Browser Action 是一種特殊的 Skill：一段可複用的 `.js` 腳本，在瀏覽器裡完成某個平台上的一個具體操作。Halo Browser Action 採用 RPA 級別的可靠性策略：**為每個平台的常用操作預先編寫可複用腳本**。AI 只負責決定*做什麼*和*什麼時候做*——腳本已經知道*怎麼做*。
+Browser Action 是一種特殊的 Skill：針對某個平台的一個具體操作，預先寫好的可複用 `.js` 腳本。AI 只負責判斷*做什麼、什麼時候做*，腳本負責*怎麼做*——這是 Halo 和那些「到處亂點」的 AI 瀏覽器 Agent 的根本區別。
 
-腳本透過 Halo 的 `browser_run` 直接在真實瀏覽器中運行，完全存取頁面 DOM、Cookie 和內部 API，就像在 Chrome DevTools 控制台操作一樣。公開網站和企業內網系統都適用。
+腳本直接在真實瀏覽器中運行，能存取頁面 DOM、Cookie 和內部 API，公開網站和企業內網系統都適用。
 
-**範例：讀取 B 站通知**
-
-```js
-// .claude/skills/bili-get-messages/index.js
-async (params) => {
-  const resp = await fetch('https://api.bilibili.com/x/msgfeed/reply?platform=web', {
-    credentials: 'include'  // 自動攜帶 Cookie，無需額外認證
-  }).then(r => r.json())
-
-  return {
-    success: true,
-    notifications: resp.data.items.map(item => ({
-      user: item.user.nickname,
-      comment: item.item.source_content,
-      video_title: item.item.title
-    }))
-  }
-}
-```
-
-AI 呼叫方式：`browser_run({ file: ".claude/skills/bili-get-messages/index.js" })`
-
-**範例：企業工作流 — 小紅書內容營運數位人：**
-1. AI 判斷：該檢查今天貼文的新評論了
-2. 呼叫 `xhs-get-comments` Action → 腳本透過平台 API 取得評論列表
-3. AI 判斷：這 5 則評論需要回覆，起草個人化回覆
-4. 呼叫 `xhs-reply-comment` Action → 腳本逐條提交回覆
-
-**範例：企業內部 — DevOps 監控數位人：**
-1. AI 判斷：到了每小時基礎設施檢查時間
-2. 呼叫 `check-grafana-alerts` Action → 腳本透過內部 API 讀取告警儀表板
-3. AI 判斷：2 個告警是嚴重級別，撰寫事故摘要
-4. 呼叫 `create-jira-ticket` Action → 腳本建立 P1 工單並附完整上下文
-5. 呼叫 `notify-oncall` Action → 推送告警到企業微信值班群
-
-**AI 決策，Action 執行。穩定、可複用、可稽核。**
-
-已有現成 Browser Action 覆蓋小紅書、B站、知乎、Twitter / X、微信等平台。企業團隊可以為內部系統編寫私有 Action。社群也可以貢獻和分享。
+已有現成 Browser Action 覆蓋小紅書、B站、知乎、Twitter / X、微信等平台，企業團隊可以為內部系統編寫私有 Action，社群也可以貢獻和分享。**AI 決策，Action 執行。穩定、可複用、可稽核。**
 
 想自己打造一個？完整教學——打造一個定時巡檢登入態內部系統的 **OA 審批助手**——詳見文件：[**打造 Browser Action 數位人 →**](https://hello-halo.cc/docs/digital-humans/guide-02-build.html)
 
 ### 遠端存取 — 隨時隨地管理你的 AI 團隊
 
 開啟遠端存取後，手機 / H5 / 微信 / Android 客戶端都能控制桌面上的 Halo。開會時、通勤中、在路上——隨時查看數位人產出、審批決策、下達新指令，無需坐在工位上。
+
+---
+
+## 知識庫
+
+把常用辦公檔案丟進去，AI 回答問題、幹活時會自動參考。
+
+支援 PDF、PPT、Markdown 等常見辦公檔案，還支援圖片 OCR 辨識。新建知識庫、綁定到某個空間後，直接問 AI「我的知識庫裡有什麼」就能用。
+
+---
+
+## AI 終端機
+
+Halo 內建終端機，AI 能直接操作它——SSH、堡壘機、ping+token 登入，或者驅動 Claude Code / Codex 等任意原生 CLI 工具。
+
+終端機持久存在、可視化：用完了自己關掉，或者隨時點開人工接管，人機交替操作互不衝突。
+
+---
+
+## AI 操作 Halo 本身
+
+設定、對話管理、企業微信 Bot 設定等數百項操作，直接用自然語言讓 AI 幫你做，不用翻選單。
+
+這些操作預設不佔用上下文——問到哪個功能才按需載入，幾百項能力也不會拖慢對話。
 
 ---
 
@@ -188,7 +180,7 @@ npm run dev
 
 打開 AI 數位人商店，選一個，填幾個設定欄位，就自動開始運行。無需寫程式碼，無需寫提示詞。
 
-![AI Store](./assets/shop.png)
+![Digital Human Install](./assets/app_detail_install.png)
 
 </td>
 <td width="50%" valign="top">
@@ -210,6 +202,10 @@ npm run dev
 ![Chat Intro](./assets/chat_intro.jpg)
 
 ![Chat Todo](./assets/chat_todo.jpg)
+
+*技能商店：內容生成、開發工具、資料分析等場景一鍵安裝*
+
+![Skill Store](./assets/shop_skill.png)
 
 *遠端存取：隨時隨地控制 Halo*
 
@@ -233,20 +229,7 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 ## 架構
 
-```
-┌──────────────────────────────────────────────────┐
-│                   Halo Desktop                    │
-│                                                   │
-│   React UI  <─IPC─>  Main Process  <──>  Claude  │
-│  (Renderer)          ┌───────────┐       Code SDK │
-│                      │ Digital   │      (Agent    │
-│                      │ Humans    │       Loop)    │
-│                      │ Scheduler │                │
-│                      └───────────┘                │
-│                           │                       │
-│                     ~/.halo/ (local)              │
-└──────────────────────────────────────────────────┘
-```
+可插拔引擎：同一套產品體驗，底層可自由切換 Claude Code、Codex 等不同 Agent 引擎。
 
 ---
 
@@ -254,10 +237,12 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 - **100% 本地** — 資料不出本機，滿足企業合規稽核要求
 - **無需後端** — 純桌面客戶端，零伺服端基礎設施即可部署到每台工位
-- **Agent 循環** — 工具執行，不只是文字生成
+- **Agent 循環** — 不只是對話生成文字，AI 真正執行工具操作完成任務
 - **空間系統** — 隔離的工作區，專案互不干擾
 - **技能系統** — 安裝技能包擴展 Agent 能力
 - **AI 瀏覽器** — 內嵌 CDP 瀏覽器，AI 直接控制網頁
+- **數位人能力管理** — 可視化管理每個數位人的 MCP 和 Skill 權限
+- **介面縮放** — 50%-150% 自由縮放，適配不同螢幕和簡報場景
 - **多模型支援** — Anthropic、OpenAI、DeepSeek 及任何 OpenAI 相容 API（可對接企業自建 LLM 閘道）
 - **明暗主題** — 跟隨系統偏好
 - **多語言** — 中文、英文、西班牙語等
@@ -268,7 +253,7 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 ## 路線圖
 
-- [x] Claude Code SDK Agent 循環
+- [x] Agent 循環 — 工具執行而非僅生成文字
 - [x] 空間與對話管理
 - [x] Artifact 預覽（程式碼、HTML、圖片、Markdown）
 - [x] 遠端存取

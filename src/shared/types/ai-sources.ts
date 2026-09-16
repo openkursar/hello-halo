@@ -16,7 +16,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
-import type { ModelCapabilityOverride } from './model-capabilities'
+import type { CatalogModelCapability, ModelCapabilityOverride } from './model-capabilities'
 import type { ReasoningEffortSetting } from '../constants/reasoning-effort'
 
 // ============================================================================
@@ -119,8 +119,10 @@ export interface ModelOption {
   id: string
   name: string
   description?: string
-  /** Whether this model supports vision (image) input. undefined = infer from model ID */
+  /** Whether the catalog explicitly declares image input support. */
   supportsVision?: boolean
+  /** Numeric limits reported by the provider's model catalog. */
+  capabilities?: CatalogModelCapability
 }
 
 /**

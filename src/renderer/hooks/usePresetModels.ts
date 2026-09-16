@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ModelOption } from '../types'
 import { useTranslation } from '../i18n'
+import { parseCatalogModelOption } from '../../shared/model-catalog'
 
 interface UsePresetModelsParams {
   /** Gateway base URL. Required when `enabled` is true. */
@@ -180,7 +181,7 @@ export function usePresetModels(params: UsePresetModelsParams): UsePresetModelsR
         return
       }
 
-      const data = await response.json()
+      const data = await response.json() as { data?: unknown } | null
       if (!isCurrent()) return
 
       if (!data || !Array.isArray(data.data)) {
@@ -189,13 +190,8 @@ export function usePresetModels(params: UsePresetModelsParams): UsePresetModelsR
       }
 
       const fetched: ModelOption[] = data.data
-        .map((m: unknown): ModelOption | null => {
-          if (!m || typeof m !== 'object') return null
-          const obj = m as { id?: unknown, name?: unknown }
-          if (typeof obj.id !== 'string') return null
-          return { id: obj.id, name: typeof obj.name === 'string' ? obj.name : obj.id }
-        })
-        .filter((m: ModelOption | null): m is ModelOption => m !== null)
+        .map(parseCatalogModelOption)
+        .filter((model): model is ModelOption => model !== undefined)
 
       if (fetched.length === 0) {
         useFallback(t('This API Key is not authorized for any models. Showing offline model list.'))

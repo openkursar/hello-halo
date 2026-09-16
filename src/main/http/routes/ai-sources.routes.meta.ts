@@ -58,9 +58,14 @@ export const MODULE: RouteModuleMeta = {
       expose: 'ai',
       group: 'settings',
       summary: 'Resolve a model id to its effective capabilities',
-      body: '{"modelId":"deepseek-chat"}',
+      body: '{"modelId":"deepseek-chat","overrides":{"deepseek-chat":{"contextWindow":128000}},"catalogCapability":{"contextWindow":128000,"maxOutputTokens":8192},"catalogSupportsVision":true}',
       returns: '{"success":true,"data":{"displayName":"...","provider":"...","contextWindow":128000,"maxOutputTokens":8192,"vision":false,"thinking":false}}',
-      notes: 'Applies the user\'s overrides on top of the shipped preset, which is what makes it differ from the preset endpoint. 400 when modelId is missing or not a string.',
+      notes: [
+        'All optional inputs are validated. Catalog data accepts only positive integer contextWindow and maxOutputTokens values within Halo runtime limits; catalogSupportsVision must be a boolean.',
+        'Priority, highest first: user override, then a [1m] model-id suffix (contextWindow only), then an exact preset entry, then catalog data, then a model-family pattern entry, then built-in defaults. A pattern entry is only a family guess and ranks below the provider catalog; an exact entry is curated and ranks above it.',
+        'A context above 200K does not opt the SDK into extended context unless the user explicitly enables extendedContext or the model id ends in [1m].',
+        'Returns 400 for a missing modelId or malformed capability data.',
+      ].join('\n'),
     },
 
     'GET /api/model-capabilities/preset/:modelId': {

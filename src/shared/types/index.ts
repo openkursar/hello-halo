@@ -72,6 +72,9 @@ export * from './notification'
 // Announcement feed contract (remote JSON -> main)
 export * from './announcement'
 
+// Updater status contract (main -> renderer)
+export * from './updater'
+
 // Inbound message types (IM channel adapter boundary types)
 export * from './inbound-message'
 

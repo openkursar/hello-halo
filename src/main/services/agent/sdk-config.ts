@@ -141,7 +141,8 @@ export function applyCC1mContextUnlock(
 ): string {
   if (!sdkModel) return sdkModel
   if (/\[1m\]$/i.test(sdkModel)) return sdkModel
-  if (!capabilities || !Number.isFinite(capabilities.contextWindow)) return sdkModel
+  if (!capabilities || capabilities.extendedContext !== true) return sdkModel
+  if (!Number.isFinite(capabilities.contextWindow)) return sdkModel
   if (capabilities.contextWindow <= CC_INTRINSIC_DEFAULT_CONTEXT) return sdkModel
   return `${sdkModel}[1m]`
 }
@@ -164,7 +165,11 @@ export function resolveSdkRuntimeLimits(
   // floor we log a WARN so users who intentionally go low see why
   // auto-compact later fails — but we no longer silently rewrite their value
   // (the UI shows the same warning so the choice is explicit).
-  if (Number.isFinite(capabilities.maxOutputTokens) && capabilities.maxOutputTokens > 0) {
+  if (
+    capabilities.maxOutputTokensConfigured
+    && Number.isFinite(capabilities.maxOutputTokens)
+    && capabilities.maxOutputTokens > 0
+  ) {
     const value = clampInt(
       capabilities.maxOutputTokens,
       MAX_OUTPUT_TOKENS_HARD_MIN,

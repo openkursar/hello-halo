@@ -430,7 +430,7 @@ describe('SkillHubAdapter', () => {
       tags: ['code', 'review'],
     }
 
-    it('fetches file manifest then downloads SKILL.md from COS', async () => {
+    it('fetches file manifest then downloads SKILL.md through the file redirect endpoint', async () => {
       fetchMock
         .mockResolvedValueOnce(jsonResponse(MOCK_FILES_RESPONSE))
         .mockResolvedValueOnce(textResponse(MOCK_SKILL_MD))
@@ -443,10 +443,29 @@ describe('SkillHubAdapter', () => {
       const manifestUrl = String(fetchMock.mock.calls[0][0])
       expect(manifestUrl).toContain('api.skillhub.cn/api/v1/skills/code-review/files')
 
-      // Second call: SKILL.md from COS
-      const cosUrl = String(fetchMock.mock.calls[1][0])
-      expect(cosUrl).toContain('code-review/v1.2.0/files/SKILL.md')
-      expect(cosUrl).toContain('skillhub-1388575217.cos.accelerate.myqcloud.com')
+      // Second call: SKILL.md via the API's own redirect, not a hand-built CDN URL —
+      // SkillHub's storage layout (flat/org/numeric-id prefixed) is not Halo's to assume.
+      const fileUrl = new URL(String(fetchMock.mock.calls[1][0]))
+      expect(fileUrl.origin + fileUrl.pathname).toBe('https://api.skillhub.cn/api/v1/skills/code-review/file')
+      expect(fileUrl.searchParams.get('path')).toBe('SKILL.md')
+      expect(fileUrl.searchParams.get('version')).toBe('v1.2.0')
+    })
+
+    it('keeps a nested manifest path intact through the query string', async () => {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse({
+          count: 2,
+          version: 'v1.2.0',
+          files: [{ path: 'SKILL.md' }, { path: 'scripts/review.py' }],
+        }))
+        .mockImplementation(() => Promise.resolve(textResponse(MOCK_SKILL_MD)))
+
+      await adapter.fetchSpec(MOCK_SOURCE, MOCK_ENTRY)
+
+      const requested = fetchMock.mock.calls
+        .slice(1)
+        .map(call => new URL(String(call[0])).searchParams.get('path'))
+      expect(requested).toContain('scripts/review.py')
     })
 
     it('returns a valid SkillSpec with SKILL.md content', async () => {

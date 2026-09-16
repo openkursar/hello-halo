@@ -5,10 +5,16 @@
  *
  *   0. TREE_HIDDEN_DIRS          tree only
  *   1. ALWAYS_IGNORE_DIRS        watching only (also enforced natively — CPP_LEVEL_IGNORE_DIRS)
- *   2. BASELINE_IGNORE_PATTERNS  both
+ *   2. BASELINE_IGNORE_PATTERNS  watching + flat scan only
  *   3. .gitignore                watching only — additive, project-specific
  *
  * Within each consumer the rule sets stack, they are not either/or.
+ *
+ * The tree uses layer 0 alone. Layers 1-3 exist to bound cost (fs events,
+ * recursive scans), a cost a lazy one-level tree does not pay — and a name
+ * like `build` or `dist` is often real content the user needs to open. That
+ * distinction is VS Code's: `search.exclude` carries the build directories,
+ * `files.exclude` carries only VCS metadata.
  *
  * Duplicate rules are harmless (the `ignore` library deduplicates).
  * Sources: github/gitignore templates, each language's official .gitignore.
@@ -79,11 +85,10 @@ export const CPP_LEVEL_IGNORE_DIRS = [
 ]
 
 // ─── Layer 2: JS baseline ────────────────────────────────────────────────────
-// Always applied regardless of whether .gitignore exists.
-// These are directories that are never user-authored content — dependency
-// caches, build artifacts, IDE indexes. A project's .gitignore may or may
-// not list them (e.g. .idea is often in global gitignore, not project-level),
-// so we always exclude them as a safety net.
+// Applied regardless of whether .gitignore exists, because a project's
+// .gitignore may not list them (e.g. .idea often lives in the global gitignore).
+// A name here means "not worth watching or recursively scanning" — not "holds no
+// user-authored content". Never apply this layer to tree visibility.
 
 export const BASELINE_IGNORE_PATTERNS = [
   // ── JavaScript / TypeScript ──

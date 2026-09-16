@@ -7,14 +7,19 @@
  * API overview:
  *   List:    GET /api/skills?page=N&pageSize=1..100&keyword=...&category=...
  *   Detail:  GET /api/v1/skills/{slug}/files  → file list + version
- *   Content: GET https://skillhub-1388575217.cos.accelerate.myqcloud.com/skills/{slug}/{version}/files/SKILL.md
+ *   Content: GET /api/v1/skills/{slug}/file?path=...&version=...  → 302 to the CDN
  *
  * The list endpoint ignores unknown query parameters silently but rejects an
  * unknown `category` with HTTP 400, so every parameter name and category key
  * below is the server's own vocabulary, never Halo's.
  *
+ * File content is fetched through the `/file` redirect endpoint rather than a
+ * hand-built CDN URL. SkillHub's storage layout is an implementation detail —
+ * observed as a flat `/skills/{slug}/...` path for older skills, and
+ * `/skills/{numericId}/{slug}/...` or `/orgs/{orgId}/{slug}/...` for newer
+ * ones — and only this endpoint is guaranteed to resolve it.
+ *
  * Proxy strategy: 100k+ skills — queries forwarded on demand, results not cached in SQLite.
- * Only SKILL.md is downloaded at install time (JS hooks are OpenClaw-specific and ignored).
  */
 
 import { fetchWithTimeout } from './halo.adapter'
@@ -67,12 +72,14 @@ interface SkillHubFilesResponse {
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const API_BASE = 'https://api.skillhub.cn'
-const COS_BASE = 'https://skillhub-1388575217.cos.accelerate.myqcloud.com'
 const MAX_PAGE_SIZE = 100
+const USER_AGENT = 'Halo-Store/1.0'
 const DEFAULT_HEADERS = {
   'Accept': 'application/json',
-  'User-Agent': 'Halo-Store/1.0',
+  'User-Agent': USER_AGENT,
 }
+/** File bodies are markdown/scripts, so the JSON Accept of the API calls is wrong here. */
+const FILE_HEADERS = { 'User-Agent': USER_AGENT }
 
 // ── Category vocabulary ────────────────────────────────────────────────────
 
@@ -191,7 +198,7 @@ async function fetchPage(
 
 /** Resolve the current version + file list for a skill via the files manifest. */
 async function fetchFilesManifest(slug: string): Promise<SkillHubFilesResponse> {
-  const filesUrl = `${API_BASE}/api/v1/skills/${slug}/files`
+  const filesUrl = `${API_BASE}/api/v1/skills/${encodeURIComponent(slug)}/files`
   const filesRes = await fetchWithTimeout(filesUrl, { headers: DEFAULT_HEADERS })
   if (!filesRes.ok) {
     throw new Error(`SkillHub files API error HTTP ${filesRes.status} for "${slug}"`)
@@ -204,9 +211,9 @@ async function fetchFilesManifest(slug: string): Promise<SkillHubFilesResponse> 
 }
 
 async function downloadFile(slug: string, version: string, path: string): Promise<string> {
-  const res = await fetchWithTimeout(`${COS_BASE}/skills/${slug}/${version}/files/${path}`, {
-    headers: { 'User-Agent': 'Halo-Store/1.0' },
-  })
+  const qs = new URLSearchParams({ path, version })
+  const url = `${API_BASE}/api/v1/skills/${encodeURIComponent(slug)}/file?${qs}`
+  const res = await fetchWithTimeout(url, { headers: FILE_HEADERS })
   if (!res.ok) {
     throw new Error(`SkillHub: failed to download "${path}" of "${slug}" v${version}: HTTP ${res.status}`)
   }

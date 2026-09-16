@@ -12,6 +12,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import type { MockInstance } from 'vitest'
 
 // Newly reachable via ai-sources/manager.ts or mcp-manager.ts pulling in
 // analytics.service.ts (which statically imports providers/baidu.ts's
@@ -25,7 +26,7 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 import { resolveSdkRuntimeLimits } from '../../../../src/main/services/agent/sdk-config'
 
 describe('resolveSdkRuntimeLimits', () => {
-  let warnSpy: ReturnType<typeof vi.spyOn>
+  let warnSpy: MockInstance<Parameters<typeof console.warn>, void>
 
   beforeEach(() => {
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -41,7 +42,7 @@ describe('resolveSdkRuntimeLimits', () => {
 
   it('passes through values inside the safe range', () => {
     expect(
-      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 200_000 })
+      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 200_000, maxOutputTokensConfigured: true })
     ).toEqual({ maxOutputTokens: 64_000, autoCompactWindow: 200_000 })
     expect(warnSpy).not.toHaveBeenCalled()
   })
@@ -50,14 +51,14 @@ describe('resolveSdkRuntimeLimits', () => {
     // 8192 stays as 8192. The user explicitly chose this; the UI surfaces the
     // same warning so the consequence is visible.
     expect(
-      resolveSdkRuntimeLimits({ maxOutputTokens: 8_192, contextWindow: 200_000 })
+      resolveSdkRuntimeLimits({ maxOutputTokens: 8_192, contextWindow: 200_000, maxOutputTokensConfigured: true })
     ).toEqual({ maxOutputTokens: 8_192, autoCompactWindow: 200_000 })
     expect(warnSpy).toHaveBeenCalledTimes(1)
     expect(warnSpy.mock.calls[0][0]).toContain('below recommended')
   })
 
   it('does NOT warn for values at or above the recommended floor', () => {
-    resolveSdkRuntimeLimits({ maxOutputTokens: 20_000, contextWindow: 200_000 })
+    resolveSdkRuntimeLimits({ maxOutputTokens: 20_000, contextWindow: 200_000, maxOutputTokensConfigured: true })
     expect(warnSpy).not.toHaveBeenCalled()
   })
 
@@ -65,55 +66,80 @@ describe('resolveSdkRuntimeLimits', () => {
     // A 32K window would make autoCompactThreshold negative once the
     // 20K summary reserve + 13K compact buffer is subtracted.
     expect(
-      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 32_768 })
+      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 32_768, maxOutputTokensConfigured: true })
     ).toMatchObject({ autoCompactWindow: 40_000 })
   })
 
   it('caps maxOutputTokens at MAX_OUTPUT_TOKENS_HARD_CAP (1M)', () => {
     expect(
-      resolveSdkRuntimeLimits({ maxOutputTokens: 5_000_000, contextWindow: 200_000 })
+      resolveSdkRuntimeLimits({ maxOutputTokens: 5_000_000, contextWindow: 200_000, maxOutputTokensConfigured: true })
     ).toMatchObject({ maxOutputTokens: 1_000_000 })
   })
 
   it('caps contextWindow at CONTEXT_WINDOW_HARD_CAP (2M)', () => {
     expect(
-      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 10_000_000 })
+      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 10_000_000, maxOutputTokensConfigured: true })
     ).toMatchObject({ autoCompactWindow: 2_000_000 })
   })
 
   it('rounds fractional inputs to integers', () => {
     expect(
-      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000.7, contextWindow: 200_000.3 })
+      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000.7, contextWindow: 200_000.3, maxOutputTokensConfigured: true })
     ).toEqual({ maxOutputTokens: 64_001, autoCompactWindow: 200_000 })
   })
 
   it('omits maxOutputTokens when the value is not a positive finite number', () => {
     expect(
-      resolveSdkRuntimeLimits({ maxOutputTokens: 0, contextWindow: 200_000 })
+      resolveSdkRuntimeLimits({ maxOutputTokens: 0, contextWindow: 200_000, maxOutputTokensConfigured: true })
     ).toEqual({ autoCompactWindow: 200_000 })
     expect(
-      resolveSdkRuntimeLimits({ maxOutputTokens: Number.NaN, contextWindow: 200_000 })
+      resolveSdkRuntimeLimits({ maxOutputTokens: Number.NaN, contextWindow: 200_000, maxOutputTokensConfigured: true })
     ).toEqual({ autoCompactWindow: 200_000 })
   })
 
   it('omits autoCompactWindow when the value is not a positive finite number', () => {
     expect(
-      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 0 })
+      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 0, maxOutputTokensConfigured: true })
     ).toEqual({ maxOutputTokens: 64_000 })
     expect(
-      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: Number.NaN })
+      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: Number.NaN, maxOutputTokensConfigured: true })
     ).toEqual({ maxOutputTokens: 64_000 })
   })
 
   it('matches Claude Sonnet 4.6 preset (200K context, 64K output)', () => {
     expect(
-      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 200_000 })
+      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 200_000, maxOutputTokensConfigured: true })
     ).toEqual({ maxOutputTokens: 64_000, autoCompactWindow: 200_000 })
   })
 
   it('matches DeepSeek-Chat preset (131K context) without forcing a too-low cap on output', () => {
     expect(
-      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 131_072 })
+      resolveSdkRuntimeLimits({ maxOutputTokens: 64_000, contextWindow: 131_072, maxOutputTokensConfigured: true })
     ).toEqual({ maxOutputTokens: 64_000, autoCompactWindow: 131_072 })
+  })
+
+  // No preset, no catalog entry, no user value: the number is only Halo's
+  // blanket fallback. Injecting it would put a guess on the wire for the one
+  // model population nothing knows anything about, so CC's own default is left
+  // in place. autoCompactWindow still goes out — CC takes the min of it and its
+  // own detection, so it can only ever shrink.
+  it('omits maxOutputTokens when the value is only the blanket fallback', () => {
+    expect(
+      resolveSdkRuntimeLimits({
+        maxOutputTokens: 64_000,
+        contextWindow: 200_000,
+        maxOutputTokensConfigured: false
+      })
+    ).toEqual({ autoCompactWindow: 200_000 })
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not warn about a low fallback the user never chose', () => {
+    resolveSdkRuntimeLimits({
+      maxOutputTokens: 8_192,
+      contextWindow: 200_000,
+      maxOutputTokensConfigured: false
+    })
+    expect(warnSpy).not.toHaveBeenCalled()
   })
 })

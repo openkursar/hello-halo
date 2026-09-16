@@ -144,6 +144,24 @@ describe('updater.service', () => {
       ])
     })
 
+    it('falls back to the download page when applying a downloaded update fails', async () => {
+      const module = await initUpdater()
+
+      emit('update-available', { version: '9.9.9', releaseNotes: '- notes' })
+      emit('update-downloaded', { version: '9.9.9', releaseNotes: '- notes' })
+      module.quitAndInstall()
+      send.mockClear()
+      emit('error', new Error('Could not get code signature for running application'))
+
+      expect(statuses()).toEqual([
+        expect.objectContaining({
+          status: 'manual-download',
+          version: '9.9.9',
+          downloadUrl: UPDATE_URL
+        })
+      ])
+    })
+
     it('does not reuse a resolved update for a later unrelated failure', async () => {
       await initUpdater()
 
@@ -153,6 +171,45 @@ describe('updater.service', () => {
       emit('error', new Error('later network blip'))
 
       expect(statuses()).toEqual([expect.objectContaining({ status: 'error' })])
+    })
+  })
+
+  describe('mandatory releases', () => {
+    it('carries the feed flag to the install prompt', async () => {
+      await initUpdater()
+
+      emit('update-available', { version: '9.9.9', mandatory: true })
+      emit('update-downloaded', { version: '9.9.9', mandatory: true })
+
+      expect(statuses().at(-1)).toMatchObject({ status: 'downloaded', mandatory: true })
+    })
+
+    it('keeps the flag on the manual-download fallback', async () => {
+      await initUpdater()
+
+      emit('update-available', { version: '9.9.9', mandatory: true })
+      send.mockClear()
+      emit('error', new Error('staging failed'))
+
+      expect(statuses()).toEqual([
+        expect.objectContaining({ status: 'manual-download', mandatory: true })
+      ])
+    })
+
+    it('treats anything but a literal true as deferrable', async () => {
+      await initUpdater()
+
+      emit('update-downloaded', { version: '9.9.9', mandatory: 'true' })
+
+      expect(statuses().at(-1)).toMatchObject({ status: 'downloaded', mandatory: false })
+    })
+
+    it('leaves an unmarked release deferrable', async () => {
+      await initUpdater()
+
+      emit('update-downloaded', { version: '9.9.9' })
+
+      expect(statuses().at(-1)).toMatchObject({ status: 'downloaded', mandatory: false })
     })
   })
 

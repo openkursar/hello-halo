@@ -290,10 +290,15 @@ class BrowserViewManager {
         partition: 'persist:browser',
         // Enable smooth scrolling and other web features
         scrollBounce: true,
-        // Keep rendering when the view is hidden or docked off-screen. AI
-        // automation drives views that are not visible; without this the
-        // compositor throttles and Page.captureScreenshot hangs (esp. Windows).
-        backgroundThrottling: false,
+        // Only views on the permanently hidden host window may disable
+        // throttling: their compositor would otherwise stall and hang
+        // Page.captureScreenshot (esp. Windows). Never disable it for
+        // main-window views. Electron then suppresses the widget's hidden
+        // state, so the removeBrowserView/addBrowserView round trip behind
+        // every canvas tab switch evicts the frame without ever re-embedding
+        // it — the view keeps routing input and running JS but paints nothing
+        // but its background color, permanently.
+        backgroundThrottling: !isOffscreen,
       },
     })
     console.log(`[BrowserView] BrowserView instance created`)
@@ -881,12 +886,41 @@ class BrowserViewManager {
     const state = this.states.get(viewId)
     if (!view) return
 
+    // Store the renderer-space bounds, not the converted ones — a later
+    // restore re-enters here and must not scale an already-scaled rect.
     this.lastBounds.set(viewId, bounds)
 
     if (state?.blockedByPolicy) {
       view.setBounds({ x: -10000, y: -10000, width: 0, height: 0 })
     } else {
-      view.setBounds(bounds)
+      view.setBounds(this.toWindowBounds(viewId, bounds))
+    }
+  }
+
+  /**
+   * Convert renderer CSS pixels to main-window DIPs.
+   *
+   * The renderer measures the canvas container with getBoundingClientRect(),
+   * which reports CSS pixels inside the page's zoomed coordinate space, while
+   * setBounds() positions the view in unzoomed window DIPs. The two only
+   * coincide while appearance.displayScale is 1 — at any other scale the view
+   * lands short of its container (up and to the left) and is sized off by the
+   * same factor.
+   */
+  private toWindowBounds(viewId: string, bounds: BrowserViewBounds): BrowserViewBounds {
+    // Offscreen views live on the hidden host window, which is never zoomed,
+    // and their bounds are set in DIPs already.
+    if (this.offscreenViewIds.has(viewId)) return bounds
+    if (!this.mainWindow || this.mainWindow.isDestroyed()) return bounds
+
+    const zoom = this.mainWindow.webContents.getZoomFactor()
+    if (zoom === 1) return bounds
+
+    return {
+      x: Math.round(bounds.x * zoom),
+      y: Math.round(bounds.y * zoom),
+      width: Math.round(bounds.width * zoom),
+      height: Math.round(bounds.height * zoom),
     }
   }
 

@@ -16,13 +16,38 @@
 import { modelCapabilitiesService } from '../services/model-capabilities.service'
 import { modelCapabilitiesRpc } from '../../shared/rpc/contracts/model-capabilities.contract'
 import { registerRpcHandlers } from './rpc'
+import { isCatalogModelCapability } from '../../shared/model-catalog'
+import { validateModelCapabilityOverrides } from '../../shared/model-capability-overrides'
 
 export function registerModelCapabilitiesHandlers(): void {
   registerRpcHandlers(
     modelCapabilitiesRpc,
     {
-      modelCapabilitiesResolve: (modelId, overrides) =>
-        modelCapabilitiesService.resolve(modelId, overrides),
+      modelCapabilitiesResolve: (modelId, overrides, catalogCapability, catalogSupportsVision) => {
+        if (
+          typeof modelId !== 'string'
+          || !modelId.trim()
+          || modelId !== modelId.trim()
+          || modelId.length > 512
+        ) {
+          throw new Error('A model ID is required')
+        }
+        if (overrides !== undefined && !validateModelCapabilityOverrides(overrides)) {
+          throw new Error('Invalid model capability overrides')
+        }
+        if (catalogCapability !== undefined && !isCatalogModelCapability(catalogCapability)) {
+          throw new Error('Invalid catalog capability')
+        }
+        if (catalogSupportsVision !== undefined && typeof catalogSupportsVision !== 'boolean') {
+          throw new Error('Invalid catalog vision flag')
+        }
+        return modelCapabilitiesService.resolve(
+          modelId.trim(),
+          overrides,
+          catalogCapability,
+          catalogSupportsVision
+        )
+      },
       modelCapabilitiesGetPreset: (modelId) =>
         modelCapabilitiesService.getPreset(modelId),
       modelCapabilitiesAll: () =>

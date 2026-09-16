@@ -22,7 +22,7 @@
 <!-- TODO: 替换为 30 秒 GIF：用户输入一句话 -> Agent 自动写代码 -> 文件出现在 Artifact Rail -> 预览结果 -->
 <div align="center">
 
-![Space Home](./assets/space_home.jpg)
+![AI Digital Human Store](./assets/shop_dh.png)
 
 </div>
 
@@ -38,6 +38,9 @@ Halo 是一个基于前沿 Agent 能力构建的 AI 工作站，采用可插拔�
 | **100% 本地运行，零云端依赖** — 数据不出本机，满足企业合规审计要求 |
 | **AI 数字人** — 7x24 自主运行的 AI 员工，处理监控、报表、日常操作 |
 | **AI 浏览器** — 内嵌浏览器由 AI 直接控制，可自动化任何 Web 系统 |
+| **知识库** — 丢进常用文件，AI 回答问题、干活时自动参考 |
+| **AI 终端** — 内置终端，AI 能直接操作，SSH、堡垒机、驱动任意 CLI 工具 |
+| **AI 操作 Halo 本身** — 自然语言操作数百项功能，按需加载不占上下文 |
 | **企业微信 / 微信原生控制** — 在企业 IM 中管理 AI Agent，零培训成本 |
 | **远程访问** — 手机 / H5 / 微信 / Android 随时控制，管理者移动端审阅进度 |
 | **下载即用** — 零配置、无需后端，IT 几分钟完成部署 |
@@ -48,7 +51,11 @@ Halo 是一个基于前沿 Agent 能力构建的 AI 工作站，采用可插拔�
 
 ## AI 数字人 — 你的自主 AI 劳动力
 
-传统 RPA 按固定脚本执行，遇到变化就崩。Halo 的做法不同：**AI 负责判断决策，Halo Browser Action 负责精准执行。** 结果就是——能理解上下文、能适应变化、能精准操作的自动化。
+给它一个目标和执行频率，AI 数字人就会像员工一样自主推进——不是执行固定脚本的机器人，而是有记忆、能判断、会操作的数字员工。
+
+**有手有脚：** 数字人和对话模式共享完全相同的 Agent 能力——AI 浏览器操作网页、AI 终端操作系统和 CLI 工具、企业微信/微信收发消息，甚至能操作 Halo 自己调整配置。不是只会点浏览器的单一工具人。
+
+**长期记忆：** 每次运行不是从零开始，数字人记得上次处理到哪、遇到过什么、判断出过什么结论——持续积累，而不是重复劳动。
 
 ### 自主运行的 Agent，7x24 不停歇
 
@@ -73,8 +80,6 @@ Halo 是一个基于前沿 Agent 能力构建的 AI 工作站，采用可插拔�
 
 > 把它想成 cron + RPA + AI Agent 的合体——只不过你用自然语言描述需求就行。
 
-AI 数字人拥有与对话模式完全相同的 Agent 能力——同样的 Claude 引擎、MCP 工具链和 AI 浏览器——只是它们按计划自动触发，不需要你坐在电脑前。
-
 **微信 / 企业微信就是你的控制面板。** AI 数字人支持通过个人微信 / 企业微信进行双向对话控制——不只是接收通知，你可以直接在企业 IM 中给数字人下指令、查进度、要报告。
 
 ![AI Digital Human](./assets/ai-digital-human.png)
@@ -85,56 +90,43 @@ AI 数字人拥有与对话模式完全相同的 Agent 能力——同样的 Cla
 
 ### Halo Browser Action — AI 决策，脚本执行
 
-这是 Halo 和那些"AI 浏览器 Agent 到处乱点"的根本区别。
+传统 RPA 按固定脚本执行，遇到变化就崩；Halo 反过来：**AI 负责判断决策，Browser Action 负责精准执行。**
 
-Browser Action 是一种特殊的 Skill：一段可复用的 `.js` 脚本，在浏览器里完成某个平台上的一个具体操作。Halo Browser Action 采用 RPA 级别的可靠性策略：**为每个平台的常用操作预先编写可复用脚本**。AI 只负责决定*做什么*和*什么时候做*——脚本已经知道*怎么做*。
+Browser Action 是一种特殊的 Skill：针对某个平台的一个具体操作，预先写好的可复用 `.js` 脚本。AI 只负责判断*做什么、什么时候做*，脚本负责*怎么做*——这是 Halo 和那些"到处乱点"的 AI 浏览器 Agent 的根本区别。
 
-脚本通过 Halo 的 `browser_run` 直接在真实浏览器中运行，完全访问页面 DOM、Cookie 和内部 API，就像在 Chrome DevTools 控制台操作一样。公开网站和企业内网系统都适用。
+脚本直接在真实浏览器中运行，能访问页面 DOM、Cookie 和内部 API，公开网站和企业内网系统都适用。
 
-**示例：读取 B 站通知**
-
-```js
-// .claude/skills/bili-get-messages/index.js
-async (params) => {
-  const resp = await fetch('https://api.bilibili.com/x/msgfeed/reply?platform=web', {
-    credentials: 'include'  // 自动携带 Cookie，无需额外认证
-  }).then(r => r.json())
-
-  return {
-    success: true,
-    notifications: resp.data.items.map(item => ({
-      user: item.user.nickname,
-      comment: item.item.source_content,
-      video_title: item.item.title
-    }))
-  }
-}
-```
-
-AI 调用方式：`browser_run({ file: ".claude/skills/bili-get-messages/index.js" })`
-
-**示例：企业工作流 — 小红书内容运营数字人：**
-1. AI 判断：该检查今天帖子的新评论了
-2. 调用 `xhs-get-comments` Action → 脚本通过平台 API 获取评论列表
-3. AI 判断：这 5 条评论需要回复，起草个性化回复
-4. 调用 `xhs-reply-comment` Action → 脚本逐条提交回复
-
-**示例：企业内部 — DevOps 监控数字人：**
-1. AI 判断：到了每小时基础设施检查时间
-2. 调用 `check-grafana-alerts` Action → 脚本通过内部 API 读取告警仪表盘
-3. AI 判断：2 个告警是严重级别，撰写事故摘要
-4. 调用 `create-jira-ticket` Action → 脚本创建 P1 工单并附完整上下文
-5. 调用 `notify-oncall` Action → 推送告警到企业微信值班群
-
-**AI 决策，Action 执行。稳定、可复用、可审计。**
-
-已有现成 Browser Action 覆盖小红书、B站、知乎、Twitter / X、微信等平台。企业团队可以为内部系统编写私有 Action。社区也可以贡献和分享。
+已有现成 Browser Action 覆盖小红书、B站、知乎、Twitter / X、微信等平台，企业团队可以为内部系统编写私有 Action，社区也可以贡献和分享。**AI 决策，Action 执行。稳定、可复用、可审计。**
 
 想自己搭一个？完整教程——构建一个定时巡检登录态内部系统的 **OA 审批助手**——见文档：[**构建 Browser Action 数字人 →**](https://hello-halo.cc/docs/digital-humans/guide-02-build.html)
 
 ### 远程访问 — 随时随地管理你的 AI 团队
 
 开启远程访问后，手机 / H5 / 微信 / Android 客户端都能控制桌面上的 Halo。开会时、通勤中、在路上——随时查看数字人产出、审批决策、下达新指令，无需坐在工位上。
+
+---
+
+## 知识库
+
+把常用办公文件丢进去，AI 回答问题、干活时会自动参考。
+
+支持 PDF、PPT、Markdown 等常见办公文件，还支持图片 OCR 识别。新建知识库、绑定到某个空间后，直接问 AI"我的知识库里有什么"就能用。
+
+---
+
+## AI 终端
+
+Halo 内置终端，AI 能直接操作它——SSH、堡垒机、ping+token 登录，或者驱动 Claude Code / Codex 等任意原生 CLI 工具。
+
+终端持久存在、可视化：用完了自己关掉，或者随时点开人工接管，人机交替操作互不冲突。
+
+---
+
+## AI 操作 Halo 本身
+
+设置、会话管理、企业微信 Bot 配置等数百项操作，直接用自然语言让 AI 帮你做，不用翻菜单。
+
+这些操作默认不占用上下文——问到哪个功能才按需加载，几百项能力也不会拖慢对话。
 
 ---
 
@@ -188,7 +180,7 @@ npm run dev
 
 打开 AI 数字人商店，选一个，填几个配置字段，就自动开始运行。无需写代码，无需写提示词。
 
-![AI Store](./assets/shop.png)
+![Digital Human Install](./assets/app_detail_install.png)
 
 </td>
 <td width="50%" valign="top">
@@ -210,6 +202,10 @@ npm run dev
 ![Chat Intro](./assets/chat_intro.jpg)
 
 ![Chat Todo](./assets/chat_todo.jpg)
+
+*技能商店：内容生成、开发工具、数据分析等场景一键安装*
+
+![Skill Store](./assets/shop_skill.png)
 
 *远程访问：随时随地控制 Halo*
 
@@ -233,20 +229,7 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 ## 架构
 
-```
-┌──────────────────────────────────────────────────┐
-│                   Halo Desktop                    │
-│                                                   │
-│   React UI  <─IPC─>  Main Process  <──>  Claude  │
-│  (Renderer)          ┌───────────┐       Code SDK │
-│                      │ Digital   │      (Agent    │
-│                      │ Humans    │       Loop)    │
-│                      │ Scheduler │                │
-│                      └───────────┘                │
-│                           │                       │
-│                     ~/.halo/ (local)              │
-└──────────────────────────────────────────────────┘
-```
+可插拔引擎：同一套产品体验，底层可自由切换 Claude Code、Codex 等不同 Agent 引擎。
 
 ---
 
@@ -254,10 +237,12 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 - **100% 本地** — 数据不出本机，满足企业合规审计要求
 - **无需后端** — 纯桌面客户端，零服务端基础设施即可部署到每台工位
-- **Agent 循环** — 工具执行，不只是文本生成
+- **Agent 循环** — 不止对话生成文本，AI 真正执行工具操作完成任务
 - **空间系统** — 隔离的工作区，项目互不干扰
 - **技能系统** — 安装技能包扩展 Agent 能力
 - **AI 浏览器** — 内嵌 CDP 浏览器，AI 直接控制网页
+- **数字人能力管理** — 可视化管理每个数字人的 MCP 和 Skill 权限
+- **界面缩放** — 50%-150% 自由缩放，适配不同屏幕和演示场景
 - **多模型支持** — Anthropic、OpenAI、DeepSeek 及任何 OpenAI 兼容 API（可对接企业自建 LLM 网关）
 - **明暗主题** — 跟随系统偏好
 - **多语言** — 中文、英文、西班牙语等
@@ -268,7 +253,7 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 ## 路线图
 
-- [x] Claude Code SDK Agent 循环
+- [x] Agent 循环 — 工具执行而非仅生成文本
 - [x] 空间与会话管理
 - [x] Artifact 预览（代码、HTML、图片、Markdown）
 - [x] 远程访问
