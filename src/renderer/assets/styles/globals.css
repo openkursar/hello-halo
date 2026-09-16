@@ -192,6 +192,12 @@ body {
   background: transparent;
 }
 
+/* Where both scrollbars meet. Left unstyled it falls back to the UA's opaque
+   square, which reads as a stray light dot on any dark surface. */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 ::-webkit-scrollbar-thumb {
   background: hsl(var(--muted));
   border-radius: 4px;
