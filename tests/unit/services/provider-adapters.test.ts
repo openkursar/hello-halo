@@ -56,8 +56,11 @@ describe('moonshotAdapter', () => {
     })
   })
 
-  it('has no transformRequest (reasoning_content handled at converter layer)', () => {
-    expect(moonshotAdapter.transformRequest).toBeUndefined()
+  it('leaves a body without tools alone', () => {
+    const body: Record<string, unknown> = { model: 'kimi-k2', messages: [] }
+    moonshotAdapter.transformRequest!(body)
+
+    expect(body).toEqual({ model: 'kimi-k2', messages: [] })
   })
 })
 

@@ -25,6 +25,8 @@ import {
   modelFetchFailureFromError,
   modelFetchFailureFromResponse
 } from '../../shared/model-fetch-error'
+import { parseCatalogModelOption } from '../../shared/model-catalog'
+import type { CatalogModelCapability } from '../../shared/types/model-capabilities'
 import { getHeadlessElectronPath } from './agent/helpers'
 
 // Re-export normalizeApiUrl for external use (moved to router module)
@@ -35,8 +37,15 @@ export interface FetchModelsParams {
   apiUrl: string
 }
 
+export interface FetchedModel {
+  id: string
+  name: string
+  supportsVision?: boolean
+  capabilities?: CatalogModelCapability
+}
+
 export interface FetchModelsResult {
-  models: Array<{ id: string; name: string }>
+  models: FetchedModel[]
 }
 
 /**
@@ -97,10 +106,10 @@ export async function fetchModelsFromApi(params: FetchModelsParams): Promise<Fet
       throw new Error('Invalid API response format')
     }
 
-    const models = data.data
-      .filter((m: any) => typeof m.id === 'string')
-      .map((m: any) => ({ id: m.id, name: m.id }))
-      .sort((a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id))
+    const models: FetchedModel[] = data.data
+      .map(parseCatalogModelOption)
+      .filter((model): model is FetchedModel => model !== undefined)
+      .sort((a, b) => a.id.localeCompare(b.id))
 
     if (models.length === 0) {
       throw new Error('No models found')

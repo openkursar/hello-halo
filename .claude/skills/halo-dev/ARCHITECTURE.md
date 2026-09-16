@@ -24,6 +24,7 @@ Apps Layer (src/main/apps)
                       + dispatch-inbound (IM → app-chat/prompt-chat)
                       + registers services/app-bridge at init (see §2)
   - conversation-mcp: in-process MCP server for app management tools
+                      (documentation reading is NOT here — see services/official-docs-mcp)
 
 Services Layer (src/main/services)
   - domain services: agent, ai-browser, ai-sources, space, conversation,
@@ -88,9 +89,17 @@ src/
 │   │                                  #   protocol, logging/, product-config
 │   ├── controllers/                   # Business logic shared by IPC & HTTP
 │   ├── http/                          # Remote Access: Express + WebSocket
-│   │   └── routes/                    #   Per-domain route modules (*.routes.ts) +
-│   │                                  #   _shared.ts (imports/helpers barrel) +
-│   │                                  #   index.ts (thin aggregator). NO business logic.
+│   │   ├── routes/                    #   Per-domain route modules (*.routes.ts) +
+│   │   │                              #   _shared.ts (imports/helpers barrel) +
+│   │   │                              #   index.ts (thin aggregator). NO business logic.
+│   │   │                              #   *.routes.meta.ts declare each route's AI exposure
+│   │   │                              #   (ai/wrapped/internal); _meta-types.ts + _meta-groups.ts
+│   │   │                              #   are their contract. Build-time input only — never
+│   │   │                              #   imported by a handler.
+│   │   └── self-api/                  #   Second, loopback-only Express listener the agent
+│   │                                  #   drives with curl. Same registerApiRoutes handlers
+│   │                                  #   behind its own token, allow-list and response
+│   │                                  #   redaction. See services/api-ref.
 │   ├── ipc/                           # IPC handlers (one module per domain)
 │   │   └── rpc.ts                     #   registerRpcHandlers() — typed-RPC registrar
 │   ├── apps/                          # Apps Layer (spec, manager, runtime, conversation-mcp)
@@ -105,6 +114,11 @@ src/
 │       ├── ai-terminal/              # AI Terminal (pty + xterm headless + MCP tools). See ai-terminal/DESIGN.md
 │       ├── ai-sources/                # Multi-provider auth + providers/
 │       ├── analytics/                 # Usage analytics
+│       ├── api-ref/                   # `halo_api_ref` toolset — the manual for Halo's own
+│       │                              #   HTTP API, generated at build time into
+│       │                              #   resources/api-ref/ by scripts/gen-api-ref.mjs.
+│       │                              #   Reads generated files only: the coupling to the
+│       │                              #   transport layer is build-time, never runtime.
 │       ├── email-mcp/                 # Email-as-MCP tool server
 │       ├── git-bash/                   # Windows bash env for Claude Code CLI (detection + installer + mock fallback)
 │       ├── health/                    # Diagnostics & recovery
@@ -115,6 +129,8 @@ src/
 │       ├── notify-channels/           # Outbound notification channels (Email/WeCom/DingTalk/Feishu/Webhook)
 │       ├── ocr/                       # On-device OCR (tesseract.js engine + ocr_image MCP server);
 │       │                              #   shared by tlon ingest, chat toolset, digital-human runtime
+│       ├── official-docs-mcp/         # `read_halo_doc` — Halo's own documentation as a tool.
+│       │                              #   Always-on at all three chat entry points; see §17.2
 │       ├── perf/                      # Performance monitoring
 │       ├── remote/                     # Remote Access: HTTP-server + Cloudflare tunnel coordination (service + tunnel + issuer-client)
 │       ├── stealth/                   # Anti-detection evasions
@@ -622,6 +638,55 @@ Notes:
 Desktop mode: renderer -> preload -> IPC -> main.
 Remote mode: renderer -> HTTP/WS -> main.
 
+### 17.1 Self-API (the agent operating Halo)
+
+A third consumer of the same routes: the agent itself, over a loopback-only
+listener (`src/main/http/self-api/`) reached with curl.
+
+- **Capability switch**: the `halo-api-ref` toolset ("Operate Halo"). One switch
+  drives all three halves — the `halo_api_ref` manual tool, the `HALO_API_*`
+  credentials (`selfApiAccess` in `sdk-config.ts`), and the usage guide appended
+  to the prompt. Never wire one without the others: a session told to use a tool
+  it lacks is the failure this design exists to prevent.
+- **Digital humans**: same capability as an app permission (`halo-api-ref`),
+  **default OFF** — unlike every other built-in capability. Never granted to IM
+  guests.
+- **What a session may call** is `resources/api-ref/scope.json`, generated from
+  the `expose` field in `*.routes.meta.ts`. That allow-list is the only bound —
+  space is not one. The listener once refused any request naming a space other
+  than the session's own and injected its own when none was named; both were
+  removed. For reads the refusal stopped nothing a read could not already do,
+  the agent holding Bash; it did also stop cross-space *writes*, which are now
+  permitted deliberately, so a route taking a `spaceId` acts on the one it is
+  given and its manual entry has to say so. The injection silently narrowed
+  list responses, leaving the agent to under-report against the window the
+  user was looking at.
+- **Adding a route** means adding its meta entry too — `npm run test:api-ref`
+  fails the build when the generated tree and the routes have drifted.
+- **A capability group is described in one file and furnished in another.**
+  `title`/`covers` live in `services/api-ref/groups.ts` because the tool offers
+  them beside its `group` enum, where the choice is actually made; the
+  redirects, withheld lists and no-endpoint notes live in
+  `routes/_meta-groups.ts` because only a rendered page uses them. The
+  generator merges the two and fails the build if they disagree. Neither half
+  may be phrased relative to the reader — the same guide is injected into
+  digital-human runs, where "your own conversations" means the opposite thing.
+
+### 17.2 Self-knowledge (the agent reading Halo's docs)
+
+`read_halo_doc` (`services/official-docs-mcp`) is mounted unconditionally at
+all three chat entry points — `toolsets/broker.ts`, `apps/runtime/app-chat.ts`,
+`apps/runtime/execute.ts`. It used to be a tool inside `apps/conversation-mcp`,
+which is mounted only where digital-human management is, so a scheduled run —
+the one context with no person to ask what a screen looks like — was the one
+context without the documentation. Do not re-couple it to a feature switch.
+
+`create_automation_app`'s authoring gate still has to observe reads that now
+happen in the other server, so a session takes `{ server, guideConsulted }`
+from `createOfficialDocsSession()` and hands the callback to
+`createHaloAppsMcpServer`. Session-scoped by closure, never process-wide: one
+conversation consulting the guide must not unlock spec authoring in another.
+
 ## 18) Logging
 
 **Production logging requirements:**
@@ -656,7 +721,7 @@ See `quick.md §4` for the current list. Keep the two documents in sync when clo
 
 When touching a module, read its design doc first:
 - `src/main/services/agent/DESIGN.md` — Agent engine (largest subsystem, read this before any agent-related change)
-- `src/main/services/agent/toolsets/DESIGN.md` — Toolset Broker (on-demand in-process MCP loading; how tool capabilities enter a session)
+- `src/main/services/agent/toolsets/DESIGN.md` — Toolset Broker (on-demand in-process MCP loading; how tool capabilities enter a session, including the self-API switch — see §17.1)
 - `src/main/services/ai-terminal/DESIGN.md` — AI Terminal (pty + xterm headless, MCP tools, xterm.js viewer)
 - `src/main/apps/spec/DESIGN.md`
 - `src/main/apps/manager/DESIGN.md`

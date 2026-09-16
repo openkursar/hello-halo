@@ -97,6 +97,13 @@ export default defineConfig({
       }
     },
     {
+      name: 'browser-view-frame',
+      testMatch: '**/browser-view-frame.spec.ts',
+      use: {
+        actionTimeout: 10000
+      }
+    },
+    {
       name: 'settings',
       testMatch: '**/settings.spec.ts',
       use: {

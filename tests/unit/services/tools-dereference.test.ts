@@ -1,30 +1,27 @@
 /**
- * Unit Tests for tool schema $ref/$defs dereferencing.
+ * Unit Tests for tool schema $ref/$defs inlining.
  *
  * Background: some MCP servers return tool inputSchemas that use JSON Schema
- * $ref/$defs (or legacy `definitions`). Strict OpenAI-compatible endpoints
- * (e.g. Kimi / Moonshot) reject schemas containing $ref. The converter must
- * inline these references before forwarding the request.
+ * $ref/$defs (or legacy `definitions`). Kimi / Moonshot reject schemas
+ * containing $ref, so their adapter inlines the references before the request
+ * goes out. Every other upstream receives the referenced form untouched —
+ * inlining re-emits a definition once per use site, which multiplies large MCP
+ * schemas.
  *
  * See issue #97.
  */
 
 import { describe, it, expect } from 'vitest'
-import {
-  toOpenAIParameters,
-  anthropicToolToOpenAIChatTool,
-  anthropicToolToResponsesTool,
-} from '../../../src/main/openai-compat-router/converters/tools'
+import { inlineSchemaRefs } from '../../../src/main/openai-compat-router/utils/json-schema'
+import { anthropicToolToOpenAIChatTool } from '../../../src/main/openai-compat-router/converters/tools'
+import { applyProviderAdapter } from '../../../src/main/openai-compat-router/server/provider-adapters'
 import type { AnthropicTool } from '../../../src/main/openai-compat-router/types'
 
-// Helper — cast a plain object as AnthropicTool['input_schema'] for tests.
-// Schemas in production come from external MCP servers, so they often have
-// shapes that exceed the static type's narrow surface (e.g. $defs at root).
-const schema = (s: Record<string, unknown>) => s as unknown as AnthropicTool['input_schema']
+const schema = (s: Record<string, unknown>) => s
 
-describe('toOpenAIParameters — fast-path (no $defs)', () => {
+describe('inlineSchemaRefs — schemas without definitions', () => {
   it('preserves type/properties/required for a plain schema', () => {
-    const result = toOpenAIParameters(schema({
+    const result = inlineSchemaRefs(schema({
       type: 'object',
       properties: { name: { type: 'string' } },
       required: ['name'],
@@ -37,7 +34,7 @@ describe('toOpenAIParameters — fast-path (no $defs)', () => {
   })
 
   it('omits `required` when the input has none', () => {
-    const result = toOpenAIParameters(schema({
+    const result = inlineSchemaRefs(schema({
       type: 'object',
       properties: { name: { type: 'string' } },
     }))
@@ -47,16 +44,11 @@ describe('toOpenAIParameters — fast-path (no $defs)', () => {
     })
     expect(result).not.toHaveProperty('required')
   })
-
-  it('returns an empty object schema for null/undefined input', () => {
-    expect(toOpenAIParameters(undefined as unknown as AnthropicTool['input_schema']))
-      .toEqual({ type: 'object', properties: {} })
-  })
 })
 
-describe('toOpenAIParameters — $defs dereferencing', () => {
+describe('inlineSchemaRefs — $defs dereferencing', () => {
   it('inlines a single $ref and strips $defs from the output', () => {
-    const result = toOpenAIParameters(schema({
+    const result = inlineSchemaRefs(schema({
       type: 'object',
       properties: {
         record: { $ref: '#/$defs/Record' },
@@ -86,7 +78,7 @@ describe('toOpenAIParameters — $defs dereferencing', () => {
   })
 
   it('inlines $ref inside an array `items` schema', () => {
-    const result = toOpenAIParameters(schema({
+    const result = inlineSchemaRefs(schema({
       type: 'object',
       properties: {
         records: {
@@ -106,7 +98,7 @@ describe('toOpenAIParameters — $defs dereferencing', () => {
   })
 
   it('resolves nested $refs (def referencing another def)', () => {
-    const result = toOpenAIParameters(schema({
+    const result = inlineSchemaRefs(schema({
       type: 'object',
       properties: {
         outer: { $ref: '#/$defs/Outer' },
@@ -129,7 +121,7 @@ describe('toOpenAIParameters — $defs dereferencing', () => {
   })
 
   it('resolves the same $ref reused at multiple sites', () => {
-    const result = toOpenAIParameters(schema({
+    const result = inlineSchemaRefs(schema({
       type: 'object',
       properties: {
         a: { $ref: '#/$defs/Item' },
@@ -147,9 +139,9 @@ describe('toOpenAIParameters — $defs dereferencing', () => {
   })
 })
 
-describe('toOpenAIParameters — legacy `definitions` keyword', () => {
+describe('inlineSchemaRefs — legacy `definitions` keyword', () => {
   it('inlines #/definitions/<Name> refs (Draft 4-7 style)', () => {
-    const result = toOpenAIParameters(schema({
+    const result = inlineSchemaRefs(schema({
       type: 'object',
       properties: {
         item: { $ref: '#/definitions/Item' },
@@ -167,10 +159,10 @@ describe('toOpenAIParameters — legacy `definitions` keyword', () => {
   })
 })
 
-describe('toOpenAIParameters — cycle protection', () => {
+describe('inlineSchemaRefs — cycle protection', () => {
   it('does not infinite-loop on a self-referencing schema', () => {
     // Tree node: { value, children: TreeNode[] } — a real-world cycle.
-    const result = toOpenAIParameters(schema({
+    const result = inlineSchemaRefs(schema({
       type: 'object',
       properties: {
         root: { $ref: '#/$defs/Node' },
@@ -204,7 +196,7 @@ describe('toOpenAIParameters — cycle protection', () => {
   })
 
   it('does not infinite-loop on a mutual A→B→A cycle', () => {
-    const result = toOpenAIParameters(schema({
+    const result = inlineSchemaRefs(schema({
       type: 'object',
       properties: { a: { $ref: '#/$defs/A' } },
       $defs: {
@@ -217,9 +209,9 @@ describe('toOpenAIParameters — cycle protection', () => {
   })
 })
 
-describe('toOpenAIParameters — unresolvable refs', () => {
+describe('inlineSchemaRefs — unresolvable refs', () => {
   it('leaves external refs intact (URL ref, no $defs to resolve)', () => {
-    const result = toOpenAIParameters(schema({
+    const result = inlineSchemaRefs(schema({
       type: 'object',
       properties: {
         ext: { $ref: 'https://example.com/schema.json' },
@@ -236,7 +228,7 @@ describe('toOpenAIParameters — unresolvable refs', () => {
   })
 
   it('leaves a ref intact when the target name is missing from $defs', () => {
-    const result = toOpenAIParameters(schema({
+    const result = inlineSchemaRefs(schema({
       type: 'object',
       properties: {
         x: { $ref: '#/$defs/Missing' },
@@ -251,8 +243,8 @@ describe('toOpenAIParameters — unresolvable refs', () => {
   })
 })
 
-describe('anthropicToolToOpenAIChatTool / anthropicToolToResponsesTool integration', () => {
-  it('produces a $ref-free Chat tool when input has $defs', () => {
+describe('Moonshot request path', () => {
+  it('reaches Moonshot $ref-free when the MCP schema uses $defs', () => {
     const tool: AnthropicTool = {
       name: 'smartsheet_add_records',
       description: 'Add records to a sheet',
@@ -266,35 +258,16 @@ describe('anthropicToolToOpenAIChatTool / anthropicToolToResponsesTool integrati
       }) as AnthropicTool['input_schema'],
     }
 
-    const chatTool = anthropicToolToOpenAIChatTool(tool)
-    expect(chatTool.type).toBe('function')
-    expect(chatTool.function.name).toBe('smartsheet_add_records')
-    expect(JSON.stringify(chatTool.function.parameters)).not.toContain('$ref')
-    expect(JSON.stringify(chatTool.function.parameters)).not.toContain('$defs')
+    const body = { tools: [anthropicToolToOpenAIChatTool(tool)] }
+    applyProviderAdapter('https://api.moonshot.cn/v1/chat/completions', body, {})
 
-    const responsesTool = anthropicToolToResponsesTool(tool)
-    expect(responsesTool.type).toBe('function')
-    expect(responsesTool.name).toBe('smartsheet_add_records')
-    expect(JSON.stringify(responsesTool.parameters)).not.toContain('$ref')
-    expect(JSON.stringify(responsesTool.parameters)).not.toContain('$defs')
-  })
-
-  it('keeps the existing fast-path shape for tools without $defs', () => {
-    const tool: AnthropicTool = {
-      name: 'simple_tool',
-      description: 'Plain tool',
-      input_schema: {
-        type: 'object',
-        properties: { msg: { type: 'string' } },
-        required: ['msg'],
-      },
-    }
-
-    const chatTool = anthropicToolToOpenAIChatTool(tool)
-    expect(chatTool.function.parameters).toEqual({
+    const parameters = JSON.stringify(body.tools[0].function.parameters)
+    expect(parameters).not.toContain('$ref')
+    expect(parameters).not.toContain('$defs')
+    expect(body.tools[0].function.parameters).toEqual({
       type: 'object',
-      properties: { msg: { type: 'string' } },
-      required: ['msg'],
+      properties: { records: { type: 'object', properties: { id: { type: 'string' } } } },
+      required: ['records'],
     })
   })
 })

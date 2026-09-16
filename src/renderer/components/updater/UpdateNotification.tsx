@@ -14,6 +14,10 @@
  * The prompt is sticky — the user either applies the update or defers it for the
  * day. Deferral is remembered per version so the hourly re-check does not
  * re-open a prompt the user already answered.
+ *
+ * A release the feed marks `mandatory` removes both ways out: no defer button,
+ * no close button, and an existing deferral for that version stops counting —
+ * a release can be flagged after users have already postponed it.
  */
 
 import { useEffect, useRef } from 'react'
@@ -83,26 +87,35 @@ export function UpdateNotification() {
   useEffect(() => {
     const unsubscribe = api.onUpdaterStatus((data) => {
       const version = data.version
-      if (!version || isSnoozed(version)) return
+      const mandatory = data.mandatory === true
+      if (!version || (!mandatory && isSnoozed(version))) return
 
       const title = t('New version Halo {{version}} available', { version })
-      const deferAction = {
-        label: t("Don't remind me today"),
-        onClick: () => snooze(version),
-      }
+      const deferAction = mandatory
+        ? undefined
+        : {
+          label: t("Don't remind me today"),
+          onClick: () => snooze(version),
+        }
       const notes = formatReleaseNotes(data.releaseNotes)
+      // Without this line the prompt just looks broken: no close, no "later",
+      // and nothing saying why.
+      const requiredNote = mandatory ? t('This update is required and cannot be postponed') : null
+      const withRequiredNote = (text: string): string =>
+        requiredNote ? `${text}\n\n${requiredNote}` : text
 
       if (data.status === 'downloaded') {
         const isInstaller = data.installMode === 'installer'
         show({
           id: UPDATE_TOAST_ID,
           title,
-          body: notes || (isInstaller
+          body: withRequiredNote(notes || (isInstaller
             ? t('Halo will close and the installer will guide you through it')
-            : t('Applies in a few seconds, then Halo reopens')),
+            : t('Applies in a few seconds, then Halo reopens'))),
           bodyFormat: notes ? 'markdown' : 'text',
           variant: 'success',
           duration: 0,
+          dismissible: !mandatory,
           action: {
             label: isInstaller ? t('Install now') : t('Restart now'),
             onClick: () => { api.installUpdate() },
@@ -117,9 +130,10 @@ export function UpdateNotification() {
         show({
           id: UPDATE_TOAST_ID,
           title,
-          body: t('Could not update automatically — you can download this version manually'),
+          body: withRequiredNote(t('Could not update automatically — you can download this version manually')),
           variant: 'warning',
           duration: 0,
+          dismissible: !mandatory,
           action: {
             label: t('Go to download'),
             onClick: () => {

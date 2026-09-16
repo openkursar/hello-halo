@@ -14,6 +14,7 @@ import type {
 import { responsesFunctionCallToAnthropicToolUse } from '../content-blocks'
 import { generateMessageId, generateToolUseId } from '../../utils'
 import { createAnthropicErrorResponse } from './openai-chat-to-anthropic'
+import { createEmptyUsage, normalizeOpenAIUsage } from './usage'
 
 // ============================================================================
 // Stop Reason Mapping
@@ -271,6 +272,8 @@ export function convertOpenAIResponsesToAnthropic(
   // Ensure content is not empty
   const finalContent = content.length > 0 ? content : [{ type: 'text' as const, text: '' }]
 
+  const usage = normalizeOpenAIUsage(resp.usage) ?? createEmptyUsage()
+
   return {
     id: resp.id || generateMessageId(),
     type: 'message',
@@ -280,8 +283,10 @@ export function convertOpenAIResponsesToAnthropic(
     stop_reason: stopReason,
     stop_sequence: null,
     usage: {
-      input_tokens: resp.usage?.input_tokens || resp.usage?.prompt_tokens || 0,
-      output_tokens: resp.usage?.output_tokens || resp.usage?.completion_tokens || 0
+      input_tokens: usage.inputTokens,
+      output_tokens: usage.outputTokens,
+      cache_read_input_tokens: usage.cacheReadTokens,
+      cache_creation_input_tokens: usage.cacheCreationTokens
     }
   }
 }

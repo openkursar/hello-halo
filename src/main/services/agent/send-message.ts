@@ -20,6 +20,8 @@ import { getConfig } from '../../foundation/config.service'
 import { addMessage } from '../conversation.service'
 import { buildCreationTimeServers, openToolset } from './toolsets/broker'
 import { buildToolsetSection } from './toolsets/capability-index'
+import { getOpenToolsets } from './toolsets/state'
+import { HALO_API_TOOLSET_ID } from '../api-ref'
 // The toolset broker (above) supplies AI Browser / web-search / apps as
 // on-demand toolsets; only the knowledge-base helpers are still called directly.
 import { getKBChatContext } from '../tlon'
@@ -180,7 +182,11 @@ export async function sendMessage(
       : resolveConversationKnowledgeBases(conversation)
 
     // Build base SDK options
-    const sdkOptions = buildBaseSdkOptions({
+    const sdkOptions = await buildBaseSdkOptions({
+      // Same switch that loads the halo_api_ref tool: a session without the
+      // manual has no way to discover the API, so the credentials would only
+      // widen what an injected instruction can reach.
+      selfApiAccess: getOpenToolsets(spaceId, conversationId).has(HALO_API_TOOLSET_ID),
       credentials: resolvedCredentials,
       workDir,
       electronPath,

@@ -14,6 +14,7 @@ import { SSEWriter } from './sse-writer'
 import type { AnthropicStopReason, StreamToolCallState } from '../types'
 import { safeJsonParse } from '../utils'
 import { estimateUsageTokens } from '../utils/usage-estimator'
+import { createEmptyUsage, type NormalizedUsage } from '../converters/response/usage'
 
 // ============================================================================
 // Stream State
@@ -29,11 +30,7 @@ export interface StreamState {
   hasTextBlock: boolean
   hasThinkingBlock: boolean
   reasoningClosed: boolean
-  usage: {
-    inputTokens: number
-    outputTokens: number
-    cacheReadTokens: number
-  }
+  usage: NormalizedUsage
   stopReason: AnthropicStopReason | null
   // Debug: accumulated content
   accumulatedText: string
@@ -51,11 +48,7 @@ export function createInitialState(model: string): StreamState {
     hasTextBlock: false,
     hasThinkingBlock: false,
     reasoningClosed: false,
-    usage: {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0
-    },
+    usage: createEmptyUsage(),
     stopReason: null,
     accumulatedText: '',
     accumulatedThinking: ''
@@ -117,7 +110,7 @@ export abstract class BaseStreamHandler {
     }
   }
 
-  protected updateUsage(usage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number }): void {
+  protected updateUsage(usage: Partial<NormalizedUsage>): void {
     if (usage.inputTokens !== undefined) {
       this.state.usage.inputTokens = usage.inputTokens
     }
@@ -126,6 +119,9 @@ export abstract class BaseStreamHandler {
     }
     if (usage.cacheReadTokens !== undefined) {
       this.state.usage.cacheReadTokens = usage.cacheReadTokens
+    }
+    if (usage.cacheCreationTokens !== undefined) {
+      this.state.usage.cacheCreationTokens = usage.cacheCreationTokens
     }
   }
 
@@ -221,11 +217,7 @@ export abstract class BaseStreamHandler {
     await this.applyUsageFallback()
 
     // Write message_delta
-    this.writer.writeMessageDelta(this.state.stopReason || 'end_turn', {
-      inputTokens: this.state.usage.inputTokens,
-      outputTokens: this.state.usage.outputTokens,
-      cacheReadTokens: this.state.usage.cacheReadTokens
-    })
+    this.writer.writeMessageDelta(this.state.stopReason || 'end_turn', this.state.usage)
 
     // Write message_stop
     this.writer.writeMessageStop()
@@ -253,14 +245,20 @@ export abstract class BaseStreamHandler {
    * Gated on `state.started`: a stream that never produced a message (e.g.
    * upstream error before any chunk) was likely never charged, so no tokens
    * are attributed to it.
+   *
+   * The input side keys off the whole prompt accounting, not `inputTokens`
+   * alone: a fully cache-hit prompt legitimately reports zero new input, and
+   * estimating over it would replace a truthful zero with a full-context guess.
    */
   private async applyUsageFallback(): Promise<void> {
     if (!this.state.started) return
     const usage = this.state.usage
-    if (usage.inputTokens > 0 && usage.outputTokens > 0) return
+    const hasPromptAccounting =
+      usage.inputTokens + usage.cacheReadTokens + usage.cacheCreationTokens > 0
+    if (hasPromptAccounting && usage.outputTokens > 0) return
 
     try {
-      const needInput = usage.inputTokens === 0 && !!this.estimateInputTokens
+      const needInput = !hasPromptAccounting && !!this.estimateInputTokens
       const needOutput = usage.outputTokens === 0
 
       if (needInput) {
@@ -507,6 +505,23 @@ export abstract class BaseStreamHandler {
         }
       }
     }
+  }
+
+  /**
+   * Emit a tool call's full argument JSON when no `…arguments.delta` ever
+   * arrived for it.
+   *
+   * Some Responses backends deliver function-call arguments only on the
+   * completed item and never as deltas — the official Codex backend does exactly
+   * this, and the Codex CLI's own client reads the finished item while
+   * discarding `response.function_call_arguments.delta`. The Anthropic wire has
+   * no "here is the whole input" event, so without this the block closes with
+   * empty input and the SDK receives a tool call with no arguments.
+   */
+  protected writeToolInputIfMissing(toolIndex: number, completeJson: string): void {
+    const state = this.toolCallMap.get(toolIndex)
+    if (!state || state.arguments) return
+    this.writeToolInputDelta(toolIndex, completeJson)
   }
 
   protected writeWebSearchResult(

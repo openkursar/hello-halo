@@ -470,6 +470,7 @@ class CanvasLifecycle {
     // Check if file is already open
     for (const [tabId, tab] of this.tabs) {
       if (tab.path === path) {
+        this.setOpen(true)
         await this.switchTab(tabId)
         return tabId
       }
@@ -626,6 +627,7 @@ class CanvasLifecycle {
     if (url !== 'about:blank') {
       for (const [tabId, tab] of this.tabs) {
         if (tab.type === 'browser' && tab.url === url) {
+          this.setOpen(true)
           await this.switchTab(tabId)
           return tabId
         }
@@ -677,6 +679,7 @@ class CanvasLifecycle {
     // Check if this view is already attached
     for (const [tabId, tab] of this.tabs) {
       if (tab.browserViewId === viewId) {
+        this.setOpen(true)
         await this.switchTab(tabId)
         return tabId
       }
@@ -900,21 +903,18 @@ class CanvasLifecycle {
     // 2. Update activeTabId
     this.activeTabId = tabId
 
-    // 3. For browser/pdf tabs, show/create BrowserView
+    // 3. Create a BrowserView for browser/pdf tabs that lack one. Showing is
+    // deliberately left out: this runs before notifyActiveTabChange(), so
+    // containerBoundsGetter still resolves against the outgoing tab's DOM.
+    // BrowserViewer positions the view after React commits the new active tab.
     const needsBrowserView = tab.type === 'browser' || tab.type === 'pdf'
-    if (needsBrowserView) {
-      if (tab.browserViewId) {
-        // Existing view - just show it
-        console.log(`[CanvasLifecycle] Showing existing BrowserView: ${tab.browserViewId}`)
-        await this.showBrowserView(tab.browserViewId)
-      } else {
-        // Need to create new view - don't await, let it load in background
-        // UI switches immediately, loading state updates via IPC events
-        console.log(`[CanvasLifecycle] Creating new BrowserView for tab: ${tabId}`)
-        this.createBrowserView(tabId, tab.url || 'about:blank').catch(err => {
-          console.error(`[CanvasLifecycle] Failed to create BrowserView for tab ${tabId}:`, err)
-        })
-      }
+    if (needsBrowserView && !tab.browserViewId) {
+      // Don't await - let it load in background, UI switches immediately,
+      // loading state updates via IPC events
+      console.log(`[CanvasLifecycle] Creating new BrowserView for tab: ${tabId}`)
+      this.createBrowserView(tabId, tab.url || 'about:blank').catch(err => {
+        console.error(`[CanvasLifecycle] Failed to create BrowserView for tab ${tabId}:`, err)
+      })
     }
 
     // 4. Notify React
@@ -1105,7 +1105,6 @@ class CanvasLifecycle {
    * expensive addBrowserView calls during animation
    */
   async updateActiveBounds(): Promise<void> {
-    console.log('[CanvasLifecycle] 🔵 updateActiveBounds called, time:', Date.now())
     if (!this.activeTabId) return
 
     const tab = this.tabs.get(this.activeTabId)
@@ -1116,12 +1115,11 @@ class CanvasLifecycle {
   }
 
   /**
-   * Ensure active BrowserView is shown (called when BrowserViewer mounts)
-   * This handles the case where BrowserView was created before the container
-   * was ready, and showBrowserView() returned early due to missing bounds.
+   * Show and position the active BrowserView. The only entry point that does so:
+   * BrowserViewer calls it once mounted, which is the earliest moment the
+   * container it is positioned against exists.
    */
   async ensureActiveBrowserViewShown(): Promise<void> {
-    console.log('[CanvasLifecycle] 🟢 ensureActiveBrowserViewShown called, time:', Date.now())
     if (!this.activeTabId) return
 
     const tab = this.tabs.get(this.activeTabId)
@@ -1140,7 +1138,6 @@ class CanvasLifecycle {
     if (!this.containerBoundsGetter) return
 
     const bounds = this.containerBoundsGetter()
-    console.log('[CanvasLifecycle] 🔵 resizeBrowserView bounds:', bounds, 'time:', Date.now())
     if (!bounds || bounds.width <= 0 || bounds.height <= 0) return
 
     await api.resizeBrowserView(viewId, {
@@ -1174,19 +1171,6 @@ class CanvasLifecycle {
       if (hasBrowserView) {
         await this.hideBrowserView(tab.browserViewId!)
       }
-    }
-  }
-
-  /**
-   * Show active BrowserView (called when canvas is shown)
-   */
-  async showActiveBrowserView(): Promise<void> {
-    if (!this.activeTabId) return
-
-    const tab = this.tabs.get(this.activeTabId)
-    const hasBrowserView = (tab?.type === 'browser' || tab?.type === 'pdf') && tab.browserViewId
-    if (hasBrowserView) {
-      await this.showBrowserView(tab.browserViewId!)
     }
   }
 
@@ -1292,10 +1276,9 @@ class CanvasLifecycle {
     this.isOpen = open
     this.isTransitioning = true
 
-    // Handle BrowserView visibility
-    if (open) {
-      this.showActiveBrowserView()
-    } else {
+    // Only hiding belongs here. Showing needs the canvas container's bounds, and
+    // the container is BrowserViewer's — it mounts with the canvas, after this.
+    if (!open) {
       this.hideActiveBrowserView()
     }
 

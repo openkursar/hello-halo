@@ -26,6 +26,7 @@ import type {
   ActivationState,
   AutomationAppState,
   AppRunResult,
+  AppRunStartInfo,
   TriggerContext,
   EscalationResponse,
   ActivityQueryOptions,
@@ -350,11 +351,76 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     broadcastToAll('app:activity_entry:new', { appId: entry.appId, entry: entry as unknown as Record<string, unknown> })
   }
 
+  // ── Helper: Admit a manual run ──────────────────────
+  /**
+   * Run every check a manual trigger must pass and build its trigger context.
+   *
+   * Shared by the blocking (`triggerManually`) and non-blocking
+   * (`startManually`) entries so both reject an unrunnable or already-busy app
+   * identically, before any execution starts.
+   *
+   * @throws AppNotFoundError | AppNotRunnableError | ConcurrencyLimitError
+   */
+  function admitManualRun(appId: string): { app: InstalledApp; trigger: TriggerContext } {
+    const app = appManager.getApp(appId)
+    if (!app) {
+      throw new AppNotFoundError(appId)
+    }
+
+    if (app.status === 'error') {
+      // Manual trigger from error state is treated as user-initiated retry.
+      // Resume resets status to 'active' and re-activates the scheduler,
+      // which is the same path as pause → resume in the UI.
+      console.log(`[Runtime] app:trigger recovering from error state: ${appId}`)
+      appManager.resume(appId)
+    } else if (app.status === 'paused') {
+      // Manual trigger from paused state: auto-resume so the user can
+      // run on demand without a separate resume step.  The scheduler
+      // is re-activated, and the trigger continues below.
+      console.log(`[Runtime] app:trigger auto-resuming paused app: ${appId}`)
+      appManager.resume(appId)
+    } else if (app.status !== 'active') {
+      // waiting_user and any other non-active states are not runnable.
+      throw new AppNotRunnableError(appId, app.status)
+    }
+
+    // Per-app dedup: reject if this specific app is already running or queued.
+    // Each app should have at most one active execution at a time to avoid
+    // redundant work (e.g. a monitoring app running 50 identical checks).
+    const appIsRunning = Array.from(runningAbortControllers.keys()).some(k => k.startsWith(`${appId}:`))
+    const appIsQueued = (pendingTriggers.get(appId) ?? 0) > 0
+    if (appIsRunning || appIsQueued) {
+      throw new ConcurrencyLimitError(DEFAULT_MAX_CONCURRENT, appId)
+    }
+
+    const trigger = buildManualTriggerContext(app)
+
+    // ── Inject IM conversation history into trigger ─────
+    // Use getAllSessions (not the deprecated getProactiveSessions which
+    // filters by the removed `proactive` flag and always returns empty).
+    const imSessions = imSessionRegistry?.getAllSessions(appId)
+    if (imSessions && imSessions.length > 0) {
+      const imContext = buildImContextForTrigger(app, imSessions)
+      if (imContext) {
+        trigger.description += '\n\n' + imContext
+      }
+    }
+
+    return { app, trigger }
+  }
+
   // ── Helper: Execute with concurrency control ────────
   async function executeWithConcurrency(
     app: InstalledApp,
     trigger: TriggerContext,
-    continueOptions?: { existingRunId?: string; existingSessionKey?: string }
+    options?: {
+      existingRunId?: string
+      existingSessionKey?: string
+      /** Fired when no global slot was free and the run entered the queue. */
+      onQueued?: () => void
+      /** Fired once the run row exists and execution is underway. */
+      onStarted?: (info: { runId: string; sessionKey: string; startedAt: number }) => void
+    }
   ): Promise<AppRunResult> {
     // Try to acquire a slot immediately without blocking.
     // If no slot is available, transition to 'queued' state and block.
@@ -365,6 +431,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       pendingTriggers.set(app.id, (pendingTriggers.get(app.id) ?? 0) + 1)
       broadcastAppStatus(app.id)
       console.log(`[Runtime] app:queued (waiting for global slot): ${app.id}`)
+      options?.onQueued?.()
 
       try {
         await semaphore.acquire()
@@ -397,8 +464,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         memory,
         abortSignal: abortController.signal,
         emitEntry: emitActivityEntry,
-        existingRunId: continueOptions?.existingRunId,
-        existingSessionKey: continueOptions?.existingSessionKey,
+        existingRunId: options?.existingRunId,
+        existingSessionKey: options?.existingSessionKey,
         // Fire the `onRunStarted` lifecycle event at the *real* start of the
         // run (after DB row insertion, before AI session build). This keeps
         // the started/finished event pair semantically meaningful for
@@ -411,6 +478,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
             triggerType: trigger.type,
             startedAt,
           })
+          options?.onStarted?.({ runId, sessionKey, startedAt })
         },
       })
 
@@ -1015,55 +1083,53 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     // ── Execution ───────────────────────────────────
 
     async triggerManually(appId: string): Promise<AppRunResult> {
-      const app = appManager.getApp(appId)
-      if (!app) {
-        throw new AppNotFoundError(appId)
-      }
-
-      if (app.status === 'error') {
-        // Manual trigger from error state is treated as user-initiated retry.
-        // Resume resets status to 'active' and re-activates the scheduler,
-        // which is the same path as pause → resume in the UI.
-        console.log(`[Runtime] app:trigger recovering from error state: ${appId}`)
-        appManager.resume(appId)
-      } else if (app.status === 'paused') {
-        // Manual trigger from paused state: auto-resume so the user can
-        // run on demand without a separate resume step.  The scheduler
-        // is re-activated, and the trigger continues below.
-        console.log(`[Runtime] app:trigger auto-resuming paused app: ${appId}`)
-        appManager.resume(appId)
-      } else if (app.status !== 'active') {
-        // waiting_user and any other non-active states are not runnable.
-        throw new AppNotRunnableError(appId, app.status)
-      }
-
-      // Per-app dedup: reject if this specific app is already running or queued.
-      // Each app should have at most one active execution at a time to avoid
-      // redundant work (e.g. a monitoring app running 50 identical checks).
-      const appIsRunning = Array.from(runningAbortControllers.keys()).some(k => k.startsWith(`${appId}:`))
-      const appIsQueued = (pendingTriggers.get(appId) ?? 0) > 0
-      if (appIsRunning || appIsQueued) {
-        throw new ConcurrencyLimitError(DEFAULT_MAX_CONCURRENT, appId)
-      }
-
-      const trigger = buildManualTriggerContext(app)
-
-      // ── Inject IM conversation history into trigger ─────
-      // Use getAllSessions (not the deprecated getProactiveSessions which
-      // filters by the removed `proactive` flag and always returns empty).
-      const imSessions = imSessionRegistry?.getAllSessions(appId)
-      if (imSessions && imSessions.length > 0) {
-        const imContext = buildImContextForTrigger(app, imSessions)
-        if (imContext) {
-          trigger.description += '\n\n' + imContext
-        }
-      }
+      const { app, trigger } = admitManualRun(appId)
 
       const result = await executeWithConcurrency(app, trigger)
 
       // IM forwarding is now AI-driven via notify_bot tool (no more system auto-push)
 
       return result
+    },
+
+    async startManually(appId: string): Promise<AppRunStartInfo> {
+      const { app, trigger } = admitManualRun(appId)
+
+      let settled = false
+      let resolveAdmission!: (info: AppRunStartInfo) => void
+      let rejectAdmission!: (err: unknown) => void
+      const admission = new Promise<AppRunStartInfo>((resolve, reject) => {
+        resolveAdmission = resolve
+        rejectAdmission = reject
+      })
+      const settleOnce = (settleFn: () => void): void => {
+        if (settled) return
+        settled = true
+        settleFn()
+      }
+
+      executeWithConcurrency(app, trigger, {
+        onQueued: () => settleOnce(() => resolveAdmission({ outcome: 'queued' })),
+        onStarted: (info) => settleOnce(() => resolveAdmission({ outcome: 'started', ...info })),
+      }).then(
+        // Fallback settle: `onStarted` fires from inside executeRun, so a run
+        // that fails before inserting its row never fires it. Without this the
+        // caller would wait forever for an admission that can no longer come.
+        (result) => settleOnce(() => resolveAdmission({
+          outcome: 'started',
+          runId: result.runId,
+          sessionKey: result.sessionKey,
+          startedAt: result.startedAt,
+        })),
+        (err) => {
+          // Once admitted, nobody is awaiting this run — the log is the only
+          // report of a background failure.
+          console.error(`[Runtime] Background manual run failed: app=${appId}:`, err)
+          settleOnce(() => rejectAdmission(err))
+        }
+      )
+
+      return admission
     },
 
     // ── State Queries ───────────────────────────────
@@ -1323,6 +1389,10 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     getActivityEntries(appId: string, options?: ActivityQueryOptions): ActivityEntry[] {
       return store.getEntriesForApp(appId, options)
+    },
+
+    getEntriesForRun(runId: string): ActivityEntry[] {
+      return store.getEntriesForRun(runId)
     },
 
     getRun(runId: string): AutomationRun | null {

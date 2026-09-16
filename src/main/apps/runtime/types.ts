@@ -70,6 +70,19 @@ export interface AppRunResult {
   finalText?: string
 }
 
+/**
+ * Admission result of a non-blocking trigger: the run was accepted, not completed.
+ *
+ * `queued` carries no runId because the run row is only created once a global
+ * concurrency slot is granted.
+ */
+export interface AppRunStartInfo {
+  outcome: 'started' | 'queued'
+  runId?: string
+  sessionKey?: string
+  startedAt?: number
+}
+
 // ============================================
 // Automation Run (DB record)
 // ============================================
@@ -307,10 +320,23 @@ export interface AppRuntimeService {
   // ── Execution ───────────────────────────────
 
   /**
-   * Manually trigger an App execution.
+   * Manually trigger an App execution and wait for the whole run to finish.
    * Respects concurrency limits.
+   *
+   * A run routinely takes minutes; callers that must stay responsive should use
+   * `startManually` instead.
    */
   triggerManually(appId: string): Promise<AppRunResult>
+
+  /**
+   * Manually trigger an App execution, resolving as soon as the run is admitted
+   * rather than when it finishes. The run continues in the background; its
+   * result is observed through `getAppState` / the activity entries.
+   *
+   * Admission checks (app runnable, per-app dedup) still reject before the run
+   * starts, so a caller learns about those the same way `triggerManually` does.
+   */
+  startManually(appId: string): Promise<AppRunStartInfo>
 
   // ── State Queries ───────────────────────────
 
@@ -359,6 +385,9 @@ export interface AppRuntimeService {
 
   /** Get activity entries for an App */
   getActivityEntries(appId: string, options?: ActivityQueryOptions): ActivityEntry[]
+
+  /** Get the activity entries a single run produced, newest first */
+  getEntriesForRun(runId: string): ActivityEntry[]
 
   /** Get a specific run record */
   getRun(runId: string): AutomationRun | null

@@ -83,3 +83,7 @@ src/sdk/
 
 # Local git worktrees created for isolated work
 .claude/worktrees/
+
+# Local multi-node cluster runtime: per-node .halo data dirs, logs, and the
+# node manifest, which holds plaintext access tokens.
+/.cluster/

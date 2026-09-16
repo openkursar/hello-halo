@@ -128,7 +128,6 @@ export function useLayoutPreferences(
 
   // Set rail expanded state (user action)
   const setRailExpanded = useCallback((expanded: boolean) => {
-    console.log('[useLayoutPreferences] 🟡 setRailExpanded called:', expanded, 'time:', Date.now())
     // Mark as user override
     setUserRailOverride(expanded)
 

@@ -37,7 +37,8 @@ import { createConversationSink } from './conversation-sink'
 import { hasActiveTeamTasks } from './subagent-handler'
 import { setSessionInvalidator, buildCreationTimeServers } from './toolsets/broker'
 import { buildToolsetSection } from './toolsets/capability-index'
-import { dropConversationState } from './toolsets/state'
+import { dropConversationState, getOpenToolsets } from './toolsets/state'
+import { HALO_API_TOOLSET_ID } from '../api-ref'
 import { resolveConversationKnowledgeBases, resolveConversationKnowledgeBaseIds } from './knowledge-context'
 import { buildKnowledgeSection } from './system-prompt'
 import type { KBReference } from '../../../shared/types/tlon'
@@ -984,7 +985,11 @@ export async function ensureSessionWarm(
   const resolveKnowledgeBases = (): KBReference[] => resolveConversationKnowledgeBases(conversation)
 
   // Build SDK options using shared configuration
-  const sdkOptions = buildBaseSdkOptions({
+  const sdkOptions = await buildBaseSdkOptions({
+    // Must match send-message.ts: a warmed session is reused for the first
+    // turn, so deriving this differently there would hand that turn a process
+    // whose credentials disagree with its tools.
+    selfApiAccess: getOpenToolsets(spaceId, conversationId).has(HALO_API_TOOLSET_ID),
     credentials: resolvedCredentials,
     workDir,
     electronPath,

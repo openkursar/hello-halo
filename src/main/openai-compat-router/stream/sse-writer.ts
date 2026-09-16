@@ -15,6 +15,7 @@ import type {
   AnthropicMessageStopEvent,
   AnthropicStopReason
 } from '../types'
+import type { NormalizedUsage } from '../converters/response/usage'
 
 export interface SSEWriterOptions {
   debug?: boolean
@@ -205,7 +206,7 @@ export class SSEWriter {
    */
   writeMessageDelta(
     stopReason: AnthropicStopReason,
-    usage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number }
+    usage: Partial<NormalizedUsage>
   ): boolean {
     const event: AnthropicMessageDeltaEvent = {
       type: 'message_delta',
@@ -222,6 +223,9 @@ export class SSEWriter {
     }
     if (usage.cacheReadTokens !== undefined) {
       eventData.usage.cache_read_input_tokens = usage.cacheReadTokens
+    }
+    if (usage.cacheCreationTokens !== undefined) {
+      eventData.usage.cache_creation_input_tokens = usage.cacheCreationTokens
     }
 
     return this.writeEvent('message_delta', event)

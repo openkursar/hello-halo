@@ -86,8 +86,10 @@ import { FileExportGate } from './file-export-gate'
 import { truncateUtf16Safe } from './text-truncate'
 import { getImSessionRegistry } from './im-session-registry'
 import { createHaloAppsMcpServer } from '../conversation-mcp'
+import { createOfficialDocsSession } from '../../services/official-docs-mcp'
 import { createWebSearchMcpServer } from '../../services/web-search'
 import { createOcrMcpServer } from '../../services/ocr'
+import { createApiRefMcpServer, HALO_API_TOOLSET_ID } from '../../services/api-ref'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { getSpace, getSpaceDir } from '../../services/space.service'
 import { readSessionMessages, loadChatSessionId, deleteChatSessionId, copySessionJsonl } from './session-store'
@@ -478,6 +480,17 @@ export async function sendAppChatMessage(
   // and SDK options (guest tool restrictions). null for native Halo chat.
   const permCtx = getImPermissionContext(conversationId)
 
+  // Default OFF, unlike the other built-in capabilities: this one operates
+  // Halo's own configuration and data, which is not a sensible default for a
+  // digital human the user installed to do something else.
+  //
+  // Never for guests. `buildGuestMcpServers` already withholds the server (it
+  // is in neither guest map, and unknown ids are not injected), so the
+  // credentials and the usage guide have to be withheld here too — otherwise
+  // an outside sender gets a prompt describing a tool the session does not have.
+  const usesHaloApi =
+    resolvePermission(app, HALO_API_TOOLSET_ID, false) && permCtx?.isOwner !== false
+
   // Three-layer prompt assembly. The assembler is channel-agnostic;
   // this call site is the only place that knows whether the entry is
   // IM (group/direct) or native UI. See src/main/apps/runtime/prompt/
@@ -489,6 +502,7 @@ export async function sendAppChatMessage(
     userConfig: mergedConfig,
     usesAIBrowser,
     usesTerminal,
+    usesHaloApi,
     workDir,
     modelInfo: resolvedCreds.displayModel,
     disabledCapabilities: buildDisabledCapabilitiesGuidance(app) ?? undefined,
@@ -564,17 +578,22 @@ export async function sendAppChatMessage(
   // KEY constraint and the model retries in a loop (see issue #200). Chat replies
   // reach the user directly as text, so the Activity Thread is not needed here.
   // Built-in server ids below are mirrored in shared/apps/builtin-mcp.ts — keep in sync.
+  // Documentation is unconditional: the digital-humans switch decides whether
+  // apps can be managed here, not whether Halo can describe itself.
+  const { server: docsMcpServer, guideConsulted } = createOfficialDocsSession()
   const mcpServers: Record<string, any> = {
     ...(dbMcpServers ?? {}),
     'halo-memory': memoryMcpServer,
     'halo-notify': notifyMcpServer,
-    ...(digitalHumansEnabled ? { 'halo-apps': createHaloAppsMcpServer(spaceId) } : {}),
+    'halo-docs': docsMcpServer,
+    ...(digitalHumansEnabled ? { 'halo-apps': createHaloAppsMcpServer(spaceId, guideConsulted) } : {}),
     'web-search': createWebSearchMcpServer(),
     'ocr': createOcrMcpServer(),
     ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
     ...(usesTerminal
       ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId, workDir }) }
       : {}),
+    ...(usesHaloApi ? { 'halo-api-ref': createApiRefMcpServer() } : {}),
     ...(usesEmail && config.notificationChannels?.email?.enabled
       ? { 'halo-email': createEmailMcpServer(config.notificationChannels.email) }
       : {}),
@@ -587,7 +606,8 @@ export async function sendAppChatMessage(
   )
 
   // ── 5. Build SDK options ─────────────────────────────
-  const sdkOptions = buildBaseSdkOptions({
+  const sdkOptions = await buildBaseSdkOptions({
+    selfApiAccess: usesHaloApi,
     credentials: resolvedCreds,
     workDir,
     electronPath,

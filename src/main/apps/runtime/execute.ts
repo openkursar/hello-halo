@@ -47,6 +47,8 @@ import { createAIBrowserMcpServer, createScopedBrowserContext } from '../../serv
 import { createTerminalMcpServer, getGlobalTerminalContext, isTerminalAvailable } from '../../services/ai-terminal'
 import { createWebSearchMcpServer } from '../../services/web-search'
 import { createOcrMcpServer } from '../../services/ocr'
+import { createApiRefMcpServer, HALO_API_TOOLSET_ID } from '../../services/api-ref'
+import { createOfficialDocsSession } from '../../services/official-docs-mcp'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { getConfig, resolveClaudeConfigDir } from '../../foundation/config.service'
 import { getSpace, getSpaceDir } from '../../services/space.service'
@@ -264,6 +266,12 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     const usesTerminal = resolvePermission(app, 'ai-terminal') && isTerminalAvailable()
     const usesEmail = resolvePermission(app, 'email') // gated on channel config below
     const usesImPush = resolvePermission(app, 'im-push') // AI-driven IM push
+    // Default OFF, unlike every other built-in capability. This one operates
+    // Halo's own configuration and data rather than the outside world, and it
+    // costs a tool schema plus a usage guide on every scheduled run — not a
+    // sensible default for an automation that never needs it. A spec can still
+    // declare it, and the user can grant it in Capabilities.
+    const usesHaloApi = resolvePermission(app, HALO_API_TOOLSET_ID, false)
 
     // ── Merge config_schema defaults into userConfig ─────
     //    Ensures defaults are available even if the user never opened the config panel.
@@ -297,6 +305,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       userConfig: mergedConfig,
       usesAIBrowser,
       usesTerminal,
+      usesHaloApi,
       workDir,
       modelInfo: resolvedCreds.displayModel,
       autoSyncSessions,
@@ -431,7 +440,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       app.spaceId!
     )
 
-    const sdkOptions = buildBaseSdkOptions({
+    // A run has no person to ask what a screen looks like, so the one context
+    // that most needs Halo's own documentation was the one that shipped
+    // without it. The authoring gate the session half carries is unused here:
+    // spec creation is not a tool a run holds.
+    const { server: docsMcpServer } = createOfficialDocsSession()
+
+    const sdkOptions = await buildBaseSdkOptions({
+      selfApiAccess: usesHaloApi,
       credentials: resolvedCreds,
       workDir,
       electronPath,
@@ -446,12 +462,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         'halo-memory': memoryMcpServer,     // built-in: persistent memory
         'halo-report': reportMcpServer,     // built-in: completion signal
         'halo-notify': notifyMcpServer,     // built-in: user notification
+        'halo-docs': docsMcpServer,         // built-in: Halo's own documentation
         'web-search': createWebSearchMcpServer(), // built-in: web search
         'ocr': createOcrMcpServer(),              // built-in: on-device image OCR
         ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
         ...(usesTerminal
           ? { 'ai-terminal': createTerminalMcpServer(getGlobalTerminalContext(workDir), { spaceId: app.spaceId!, workDir }) }
           : {}),
+        ...(usesHaloApi ? { 'halo-api-ref': createApiRefMcpServer() } : {}),
         ...(usesEmail && config.notificationChannels?.email?.enabled
           ? { 'halo-email': createEmailMcpServer(config.notificationChannels.email) }
           : {}),

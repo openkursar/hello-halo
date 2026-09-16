@@ -67,6 +67,7 @@ import type { AppRuntimeService } from './types'
 export type {
   AppRuntimeService,
   AppRunResult,
+  AppRunStartInfo,
   AutomationAppState,
   AutomationRun,
   ActivityEntry,

@@ -25,7 +25,7 @@ import {
   streamAnthropicPassthrough,
   pipeAnthropicPassthrough
 } from '../stream'
-import { isNativeAnthropicHost, normalizeSystemPrompt, safeJsonParse, pickSessionAffinityHeaders } from '../utils'
+import { isNativeAnthropicHost, normalizeSystemPrompt, safeJsonParse, pickSessionAffinityHeaders, pickSessionId, inlineToolSchemaRefs } from '../utils'
 import { proxyFetch } from '../../services/proxy-fetch'
 import { getApiTypeFromUrl, isValidEndpointUrl, getEndpointUrlError, shouldForceStream } from './api-type'
 import { runInterceptors } from '../interceptors'
@@ -567,6 +567,11 @@ async function handleOpenAIConversion(
 
     const toolCount = (openaiRequest as any).tools?.length ?? 0
     console.log(`[RequestHandler] wire=${apiType} tools=${toolCount}`)
+    if (debug && toolCount > 0) {
+      // Tool schemas are resent every turn and usually dominate input tokens;
+      // the stringify is the reason this stays behind the debug flag.
+      console.log(`[RequestHandler] tools_payload_chars=${JSON.stringify((openaiRequest as any).tools).length}`)
+    }
     console.log(`[RequestHandler] POST ${backendUrl} (stream=${wantStream ?? false})`)
 
     const requestHeaders: Record<string, string> = {
@@ -575,7 +580,7 @@ async function handleOpenAIConversion(
     }
 
     // Apply provider-specific transformations (e.g., Groq temperature fix, OpenRouter headers)
-    const adapterContext: AdapterContext = { originalRequest: requestToSend }
+    const adapterContext: AdapterContext = { originalRequest: requestToSend, sessionId: pickSessionId(sdkHeaders) }
     const adapter = applyProviderAdapter(
       backendUrl,
       openaiRequest as Record<string, unknown>,
@@ -603,8 +608,30 @@ async function handleOpenAIConversion(
       const errorLower = errorText?.toLowerCase() || ''
       const requiresStream = errorLower.includes('stream must be set to true') ||
                              (errorLower.includes('non-stream') && errorLower.includes('not supported'))
+      // Tool schemas go out with `$ref` intact. Upstreams known to reject it
+      // are handled by their provider adapter; this catches a strict backend
+      // reached through a gateway URL no adapter matches.
+      const rejectsSchemaRefs = errorLower.includes('$ref') || errorLower.includes('$defs')
 
-      if (requiresStream && !wantStream) {
+      if (rejectsSchemaRefs) {
+        const rewritten = inlineToolSchemaRefs(openaiRequest as Record<string, unknown>)
+        if (rewritten > 0) {
+          console.warn(`[RequestHandler] Upstream rejected $ref, retrying with ${rewritten} tool schema(s) inlined — consider a provider adapter for ${backendUrl}`)
+
+          const oaiRetryStartTs = Date.now()
+          upstreamResp = await fetchUpstream(backendUrl, apiKey, openaiRequest, timeoutMs, clientAbort.signal, requestHeaders)
+          console.log(`[RequestHandler] upstream_ok wire=openai api_type=${apiType} retry=inline_schema_refs status=${upstreamResp.status} duration_ms=${Date.now() - oaiRetryStartTs} url=${backendUrl}`)
+
+          if (!upstreamResp.ok) {
+            const retryErrorText = await upstreamResp.text().catch(() => '')
+            const { type: retryErrorType, message: retryErrorMessage } = getUpstreamError(upstreamResp.status, retryErrorText)
+            console.error(`[RequestHandler] Provider error ${upstreamResp.status}: ${retryErrorText.slice(0, 200)}`)
+            return sendError(res, retryErrorType, retryErrorMessage)
+          }
+        } else {
+          return sendError(res, errorType, errorMessage)
+        }
+      } else if (requiresStream && !wantStream) {
         console.warn('[RequestHandler] Upstream requires stream=true, retrying...')
 
         // Retry with stream enabled

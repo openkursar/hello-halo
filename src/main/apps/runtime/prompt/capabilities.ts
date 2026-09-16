@@ -29,6 +29,12 @@ interface ToggleableCapability {
  * The user-toggleable built-in capabilities, in Capabilities-panel order.
  * Always-on capabilities (web search, memory, OCR) are intentionally excluded —
  * they can never be "disabled", so guiding the user to enable them is nonsense.
+ *
+ * 'halo-api-ref' (Operate Halo) is excluded for the opposite reason: it is off
+ * unless granted, so it is absent for nearly every app. Listing it would make
+ * this fragment render on every run — the always-on prompt cost the automation
+ * path exists to avoid — to advertise a capability the user never asked for.
+ * The Capabilities panel is where it is discovered.
  */
 const TOGGLEABLE_CAPABILITIES: ToggleableCapability[] = [
   { permission: 'ai-browser', label: 'AI Browser', grants: 'browsing the web, filling forms, scraping pages, and browser automation' },

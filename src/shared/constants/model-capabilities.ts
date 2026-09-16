@@ -78,11 +78,29 @@ const sortedPatterns: ReadonlyArray<{ prefix: string; cap: ModelCapability }> =
  * capability service always walk the same preset data.
  */
 export function findModelPresetCapability(modelId: string): ModelCapability | null {
+  return findModelPresetMatch(modelId)?.capability ?? null
+}
+
+/**
+ * How the preset was reached, for callers that rank it against other sources.
+ *
+ * An `exact` entry names one model deliberately. A `pattern` entry is only a
+ * family default — Codex slugs like `gpt-5.6-sol` have no entry of their own
+ * and land on `gpt-5`, whose window is not theirs. A provider's live catalog
+ * is the better answer than a family default, and the worse answer than a
+ * deliberate per-model statement.
+ */
+export interface ModelPresetMatch {
+  kind: 'exact' | 'pattern'
+  capability: ModelCapability
+}
+
+export function findModelPresetMatch(modelId: string): ModelPresetMatch | null {
   const normalized = normalizeModelId(modelId)
   const exact = normalisedModels.get(normalized)
-  if (exact) return exact
+  if (exact) return { kind: 'exact', capability: exact }
   const pattern = sortedPatterns.find(p => normalized.startsWith(p.prefix))
-  return pattern ? pattern.cap : null
+  return pattern ? { kind: 'pattern', capability: pattern.cap } : null
 }
 
 /**

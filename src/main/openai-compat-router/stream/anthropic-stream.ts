@@ -14,6 +14,7 @@ import { Readable } from 'node:stream'
 import type { Response as ExpressResponse } from 'express'
 import { BaseStreamHandler, type StreamHandlerOptions } from './base-stream-handler'
 import { safeJsonParse } from '../utils'
+import { normalizeAnthropicUsage } from '../converters/response/usage'
 import type {
   AnthropicStreamEvent,
   AnthropicStopReason
@@ -66,19 +67,17 @@ export class AnthropicStreamHandler extends BaseStreamHandler {
 
   private processEvent(event: AnthropicStreamEvent): void {
     switch (event.type) {
-      case 'message_start':
+      case 'message_start': {
         if (event.message?.model) {
           this.updateModel(event.message.model)
         }
-        if (event.message?.usage) {
-          this.updateUsage({
-            inputTokens: event.message.usage.input_tokens,
-            outputTokens: event.message.usage.output_tokens,
-            cacheReadTokens: (event.message.usage as any).cache_read_input_tokens
-          })
+        const startUsage = normalizeAnthropicUsage(event.message?.usage)
+        if (startUsage) {
+          this.updateUsage(startUsage)
         }
         this.ensureMessageStarted()
         break
+      }
 
       case 'content_block_start':
         this.handleBlockStart(event)

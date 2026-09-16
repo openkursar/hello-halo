@@ -116,6 +116,30 @@ sensitive diff (rerun with confirmation after review).
    it next to the artifacts and copy it into the variant repo as
    `last-release-record.json` (the next build's baseline).
 
+## Marking a release mandatory
+
+A release users must not defer carries `mandatory: true` in its channel yml
+(`latest-mac.yml`, `latest.yml`, `latest-linux.yml`). electron-updater parses
+the yml and hands it to the client untouched, so the field costs no protocol
+work and no client release — and it can be appended to a yml that is *already
+published*, which makes an existing release mandatory retroactively.
+
+```bash
+# after the artifacts are built, before they are uploaded
+printf 'mandatory: true\n' >> dist/latest-mac.yml
+```
+
+The client then shows the update prompt with no "remind me later" and no close
+button, and ignores a deferral the user may already have recorded for that
+version. Downloading and installing are unchanged.
+
+Only a literal `true` counts. `"true"`, `1` or a misspelled key leave the
+release deferrable — a malformed feed must never be able to trap users behind a
+prompt they cannot close.
+
+Self-hosted (`generic`) feeds generate their yml server-side; there the field
+belongs in that generator, not in this repo.
+
 ## Telemetry / analytics configuration
 
 Telemetry and analytics identifiers ship inside the package and are readable

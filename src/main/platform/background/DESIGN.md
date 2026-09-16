@@ -54,6 +54,12 @@ Implementation in `index.ts`:
   (`process.platform !== 'linux'`).
 - `window-all-closed` calls `shutdownServicesWithTimeout().finally(app.quit)`
   on non-macOS. On macOS the quit sequence continues from `before-quit`.
+- The interception is released by `isAppQuitting`, which every path that must
+  really close the window has to set. `app.on('before-quit')` covers
+  user-initiated quits; a macOS update install fires Electron's native
+  `autoUpdater` event `before-quit-for-update` *instead of* `before-quit`, and
+  Squirrel only swaps the bundle after the window closes — so that event sets
+  the flag too. Any future quit-like path must do the same or it hangs here.
 
 **`shouldKeepAlive()` role**: No longer gates process survival. Used solely to
 show a confirmation dialog when the user clicks "Quit Halo" from the tray menu

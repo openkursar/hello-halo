@@ -10,6 +10,7 @@ import type {
   ApiResponse,
 } from './_shared'
 import type { ModelOption } from '../../shared/types'
+import type { CatalogModelCapability, ModelCapabilityOverride } from '../../shared/types/model-capabilities'
 
 /** Result payload of `validateApi` (connection test). */
 export interface ValidateApiResult {
@@ -167,16 +168,23 @@ export const configApi = {
 
   /**
    * Resolve the effective capability for a model.
-   * Merges preset data with the supplied user overrides.
+   * Merges preset data and provider catalog data with the supplied user overrides.
    */
   modelCapabilitiesResolve: async (
     modelId: string,
-    overrides?: Record<string, Record<string, unknown>>
+    overrides?: Record<string, ModelCapabilityOverride>,
+    catalogCapability?: CatalogModelCapability,
+    catalogSupportsVision?: boolean
   ): Promise<ApiResponse> => {
     if (isElectron()) {
-      return window.halo.modelCapabilitiesResolve(modelId, overrides)
+      return window.halo.modelCapabilitiesResolve(modelId, overrides, catalogCapability, catalogSupportsVision)
     }
-    return httpRequest('POST', '/api/model-capabilities/resolve', { modelId, overrides })
+    return httpRequest('POST', '/api/model-capabilities/resolve', {
+      modelId,
+      overrides,
+      catalogCapability,
+      catalogSupportsVision
+    })
   },
 
   /**

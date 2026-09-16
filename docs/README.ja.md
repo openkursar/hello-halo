@@ -22,7 +22,7 @@
 <!-- TODO: Replace with a 30-second GIF showing: user types a sentence -> Agent automatically writes code -> files appear in Artifact Rail -> preview the result -->
 <div align="center">
 
-![Space Home](./assets/space_home.jpg)
+![AI Digital Human Store](./assets/shop_dh.png)
 
 </div>
 
@@ -38,6 +38,9 @@ Haloは最先端のAgentを搭載したAIワークステーションで、プラ
 | **100%ローカル、クラウド依存ゼロ** — データはマシンから出ることなく、エンタープライズコンプライアンス要件を満たします |
 | **AIデジタルヒューマン** — 7x24で自律的に稼働するAIワーカー、モニタリング、レポート、定型業務を処理 |
 | **AI Browser** — AIが直接制御する組み込みブラウザ、あらゆるWebベースシステムを自動化 |
+| **ナレッジベース** — ファイルを入れておくだけで、AIが回答や作業の際に自動的に参照 |
+| **AI Terminal** — AIが直接操作できる組み込みターミナル、SSH、踏み台サーバー、あらゆるCLIツールに対応 |
+| **AIがHalo自身を操作** — 数百の機能を自然言語で駆動、オンデマンドで読み込むためアイドル時のコンテキストコストはゼロ |
 | **WeCom / WeChatネイティブコントロール** — エンタープライズIMからAIエージェントを管理、トレーニングコストゼロ |
 | **リモートアクセス** — スマートフォン / H5 / WeChat / Androidから制御、マネージャーは外出先で進捗確認 |
 | **ダウンロードしてすぐ使える** — 設定不要、バックエンド不要、ITは数分でデプロイ |
@@ -48,7 +51,11 @@ Haloは最先端のAgentを搭載したAIワークステーションで、プラ
 
 ## AIデジタルヒューマン — あなたの自律型AIワークフォース
 
-従来のRPAは固定スクリプトに従い、何かが変わると壊れます。Haloは異なるアプローチを取ります：**AIが判断し、Halo Browser Actionsが操作を実行。**その結果、コンテキストを理解し、変化に適応し、精密に実行する自動化が実現します。
+目標とスケジュールを与えれば、AIデジタルヒューマンは従業員のように働きます — 固定スクリプトを実行するボットではなく、記憶と判断力と手を持つデジタルな同僚です。
+
+**フル装備：**デジタルヒューマンは会話モードとまったく同じAgent機能を持っています — Webを操作するAI Browser、OSやCLIツールを操作するAI Terminal、メッセージングのWeCom/WeChat、さらには設定を変更するためのHalo自身の操作まで。単なるブラウザ専用ボットではありません。
+
+**長期記憶：**実行のたびにゼロから始まるわけではありません — デジタルヒューマンはどこまで進めたか、何を見たか、何を結論づけたかを覚えており、同じ作業を繰り返すのではなく、時間とともに積み重なっていきます。
 
 ### 7x24稼働する自律エージェント
 
@@ -73,8 +80,6 @@ AIデジタルヒューマンを作成し、タスクと実行頻度を設定す
 
 > cron + RPA + AI Agentを一つにしたものと考えてください — ただし、やりたいことを自然言語で説明するだけです。
 
-AIデジタルヒューマンは会話モードとまったく同じAgent機能を持っています — 同じClaudeエンジン、MCPツールチェーン、AI Browser — スケジュールに従って自動的にトリガーされるだけで、コンピューターの前にいる必要はありません。
-
 **WeChat / WeComがあなたのコントロールパネルです。**AIデジタルヒューマンは個人WeChat / WeCom（企業WeChat）を通じた双方向の会話制御をサポートしています — 通知を受け取るだけでなく、指示を出し、進捗を確認し、レポートを直接エンタープライズIMで要求できます。
 
 ![AI Digital Human](./assets/ai-digital-human.png)
@@ -85,56 +90,43 @@ AIデジタルヒューマンは会話モードとまったく同じAgent機能�
 
 ### Halo Browser Action — AIが判断し、スクリプトが実行
 
-これが、やみくもにクリックする「AIブラウザエージェント」とHaloを差別化するポイントです。
+従来のRPAは固定スクリプトに従い、何かが変わると壊れます。Haloはそれを逆転させます：**AIが判断し、Browser Actionが正確に実行。**
 
-Browser Action は特殊な Skill です：ブラウザ内で特定プラットフォームの 1 つの操作を実行する、再利用可能な `.js` スクリプトです。Halo Browser Action はRPAのアプローチで信頼性を確保します：**各プラットフォームの一般的な操作用に再利用可能なスクリプトを事前に作成**。AIは*何を*するか、*いつ*するかだけを判断し — スクリプトはすでに*どのように*するかを知っています。
+Browser Action は特殊な Skill です：特定プラットフォームでの1つの具体的な操作のための、再利用可能な `.js` スクリプトです。AIは*何を*するか、*いつ*するかだけを判断し — スクリプトはすでに*どのように*するかを知っています。これが、やみくもにクリックする「AIブラウザエージェント」とHaloを差別化するポイントです。
 
-スクリプトはHaloの`browser_run`を通じて実際のブラウザで直接実行されます — ページのDOM、Cookie、内部APIへのフルアクセスがあり、Chrome DevToolsコンソールと同じです。パブリックプラットフォームでもプライベートなエンタープライズシステムでも動作します。
+スクリプトは実際のブラウザで直接実行されます — ページのDOM、Cookie、内部APIへのフルアクセスがあります。パブリックプラットフォームでもプライベートなエンタープライズシステムでも動作します。
 
-**例：Bilibiliの通知を読む**
-
-```js
-// .claude/skills/bili-get-messages/index.js
-async (params) => {
-  const resp = await fetch('https://api.bilibili.com/x/msgfeed/reply?platform=web', {
-    credentials: 'include'  // cookies automatically included, no extra auth
-  }).then(r => r.json())
-
-  return {
-    success: true,
-    notifications: resp.data.items.map(item => ({
-      user: item.user.nickname,
-      comment: item.item.source_content,
-      video_title: item.item.title
-    }))
-  }
-}
-```
-
-AIはこのように呼び出します：`browser_run({ file: ".claude/skills/bili-get-messages/index.js" })`
-
-**例：エンタープライズワークフロー — Xiaohongshuコンテンツ運用デジタルヒューマン：**
-1. AIが判断：今日の投稿の新しいコメントを確認する時間
-2. `xhs-get-comments` Actionを呼び出し → スクリプトがプラットフォームAPIでコメントリストを取得
-3. AIが評価：この5つのコメントに返信が必要、パーソナライズされた返信を作成
-4. `xhs-reply-comment` Actionを呼び出し → スクリプトが各返信を送信
-
-**例：エンタープライズ内部 — DevOps監視デジタルヒューマン：**
-1. AIが判断：1時間ごとのインフラチェックの時間
-2. `check-grafana-alerts` Actionを呼び出し → スクリプトが内部APIでアラートダッシュボードを読み取り
-3. AIが評価：2つのアラートが重大、インシデントサマリーを作成
-4. `create-jira-ticket` Actionを呼び出し → スクリプトが完全なコンテキスト付きP1チケットを作成
-5. `notify-oncall` Actionを呼び出し → WeCom当番グループにアラートをプッシュ
-
-**AIが判断。Actionsが実行。安定、再現可能、監査可能。**
-
-Xiaohongshu、Bilibili、Zhihu、Twitter / X、WeChat用のすぐに使えるBrowser Actionsが利用可能です。エンタープライズチームは内部システム用のプライベートActionsを作成できます。コミュニティは独自のものを貢献・共有できます。
+Xiaohongshu、Bilibili、Zhihu、Twitter / X、WeChat用のすぐに使えるBrowser Actionsが利用可能です。エンタープライズチームは内部システム用のプライベートActionsを作成できます。コミュニティは独自のものを貢献・共有できます。**AIが判断。Actionsが実行。安定、再現可能、監査可能。**
 
 自分で作りたい？ ログインが必要な社内システムを定期的に巡回する **OA 承認アシスタント** を作る完全ガイドがドキュメントにあります：[**Browser Action デジタルヒューマンを作る →**](https://hello-halo.cc/docs/digital-humans/guide-02-build.html)
 
 ### リモートアクセス — どこからでもAIフリートを管理
 
 リモートアクセスを有効にすると、スマートフォン / H5 / WeChat / Androidクライアントからデスクトップ上のHaloを制御できます。会議中、通勤中、外出先で — デジタルヒューマンの出力を確認し、判断を承認し、デスクにいなくても新しい指示を出せます。
+
+---
+
+## ナレッジベース
+
+日常的に使うファイルを入れておくだけで、AIが質問に答えたり作業を進めたりする際に自動的に参照します。
+
+PDF、PPT、Markdownなどの一般的なオフィスファイルに加え、画像OCRにも対応しています。ナレッジベースを作成してSpaceに紐づければ、あとはAIに「ナレッジベースに何が入っている？」と聞くだけで使えます。
+
+---
+
+## AI Terminal
+
+HaloにはAIが直接操作できる組み込みターミナルがあります — SSH、踏み台サーバー、ping+トークン認証のログイン、あるいはClaude Code / Codexのようなネイティブ CLI ツールの操作にも対応。
+
+ターミナルは常時表示され、状態も保持されます：作業が終わったら自分で閉じることも、いつでも開いて手動で操作を引き継ぐこともできます — 人間とAIは競合せずに制御をやり取りできます。
+
+---
+
+## AIがHalo自身を操作
+
+設定変更、セッション管理、WeComボットの設定など、数百に及ぶ操作を自然言語で直接実行できます。メニューを掘り下げる必要はありません。
+
+これらの操作はデフォルトでコストがゼロです：尋ねたものだけがオンデマンドで読み込まれるため、数百の機能があっても会話が重くなることはありません。
 
 ---
 
@@ -188,7 +180,7 @@ npm run dev
 
 AIデジタルヒューマンストアを開き、一つ選び、いくつかの設定項目を入力すれば、自動的に稼働を開始します。コーディング不要、プロンプトを書く必要もありません。
 
-![AI Store](./assets/shop.png)
+![Digital Human Install](./assets/app_detail_install.png)
 
 </td>
 <td width="50%" valign="top">
@@ -210,6 +202,10 @@ Halo Browser Actions（`.js`スクリプト）を作成して、AIデジタル�
 ![Chat Intro](./assets/chat_intro.jpg)
 
 ![Chat Todo](./assets/chat_todo.jpg)
+
+*Skillストア：コンテンツ生成、開発ツール、データ分析などをワンクリックでインストール*
+
+![Skill Store](./assets/shop_skill.png)
 
 *リモートアクセス：どこからでもHaloを制御*
 
@@ -233,20 +229,7 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 ## アーキテクチャ
 
-```
-┌──────────────────────────────────────────────────┐
-│                   Halo Desktop                    │
-│                                                   │
-│   React UI  <─IPC─>  Main Process  <──>  Claude  │
-│  (Renderer)          ┌───────────┐       Code SDK │
-│                      │ Digital   │      (Agent    │
-│                      │ Humans    │       Loop)    │
-│                      │ Scheduler │                │
-│                      └───────────┘                │
-│                           │                       │
-│                     ~/.halo/ (local)              │
-└──────────────────────────────────────────────────┘
-```
+プラグイン可能なエンジン：同じプロダクト体験を、Claude Code、Codexなど、内部で差し替え可能な各種Agentエンジン上で実現します。
 
 ---
 
@@ -254,10 +237,12 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 - **100%ローカル** — データはマシンから出ることなく、エンタープライズコンプライアンス要件を満たします
 - **バックエンド不要** — 純粋なデスクトップクライアント、サーバーインフラなしで各ワークステーションにデプロイ
-- **Agent Loop** — テキスト生成だけでなく、ツール実行
+- **Agent Loop** — テキストを生成するだけでなく、AIが実際にツールを実行して物事を完了させる
 - **Spaceシステム** — 隔離されたワークスペース、プロジェクト同士が干渉しない
 - **Skills** — SkillパックをインストールしてAgent機能を拡張
 - **AI Browser** — 組み込みCDPブラウザ、AIがWebページを直接制御
+- **デジタルヒューマン権限管理** — 各デジタルヒューマンのMCPおよびSkill権限をビジュアルに管理
+- **ウィンドウズーム** — 50%〜150%で自由に調整、どんな画面やプレゼンにも対応
 - **マルチモデル対応** — Anthropic、OpenAI、DeepSeek、およびすべてのOpenAI互換API（エンタープライズLLMゲートウェイに接続）
 - **ダーク/ライトテーマ** — システム設定に追従
 - **多言語対応** — 中国語、英語、スペイン語など
@@ -268,7 +253,7 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 ## ロードマップ
 
-- [x] Claude Code SDK Agent Loop
+- [x] Agent Loop — テキスト生成だけでなく、ツール実行
 - [x] Spaceと会話の管理
 - [x] Artifactプレビュー（コード、HTML、画像、Markdown）
 - [x] リモートアクセス

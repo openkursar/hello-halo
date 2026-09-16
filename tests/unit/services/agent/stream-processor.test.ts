@@ -33,9 +33,13 @@ vi.mock('../../../../src/main/services/agent/mcp-probe', () => ({
   probeUnhealthyServers,
 }))
 vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
+// stream-processor reads this to gate its verbose console.debug calls. The real
+// module resolves the app config path at import time, which needs Electron.
+vi.mock('../../../../src/main/foundation/logging', () => ({ isDeveloperMode: () => false }))
 
 import { processStream } from '../../../../src/main/services/agent/stream-processor'
-import type { SessionState, Thought } from '../../../../src/main/services/agent/types'
+import { computeContextUsed } from '../../../../src/main/services/agent/context-usage'
+import type { SessionState, Thought, TokenUsage } from '../../../../src/main/services/agent/types'
 
 // ============================================
 // Helpers
@@ -111,6 +115,54 @@ function resultCarrying(result: string): Record<string, unknown> {
     duration_ms: 100,
     session_id: 'sess-1',
     message: { role: 'result', result },
+  }
+}
+
+/** Terminal result whose `usage` is the turn's CUMULATIVE figure (DESIGN.md §2). */
+function resultWithTurnUsage(result: string, usage: Record<string, number>): Record<string, unknown> {
+  return {
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    result,
+    duration_ms: 100,
+    session_id: 'sess-1',
+    total_cost_usd: 0.42,
+    usage,
+  }
+}
+
+/**
+ * The aggregate assistant envelope as the SDK builds it from `message_start`.
+ * Router-backed providers leave that placeholder at zero, so `usage` defaults
+ * to the zero shape — pass one to model an upstream that reports there instead.
+ */
+function assistantText(id: string, text: string, usage?: Record<string, number>): Record<string, unknown> {
+  return {
+    type: 'assistant',
+    message: {
+      id,
+      role: 'assistant',
+      content: [{ type: 'text', text }],
+      usage: usage ?? { input_tokens: 0, output_tokens: 0 },
+    },
+  }
+}
+
+function messageStart(id: string): Record<string, unknown> {
+  return {
+    type: 'stream_event',
+    event: {
+      type: 'message_start',
+      message: { id, role: 'assistant', content: [], usage: { input_tokens: 0, output_tokens: 0 } },
+    },
+  }
+}
+
+function messageDelta(usage: Record<string, number>): Record<string, unknown> {
+  return {
+    type: 'stream_event',
+    event: { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage },
   }
 }
 
@@ -324,36 +376,6 @@ describe('processStream llm.invocation token attribution', () => {
     vi.clearAllMocks()
   })
 
-  function messageStart(id: string): Record<string, unknown> {
-    return {
-      type: 'stream_event',
-      event: {
-        type: 'message_start',
-        message: { id, role: 'assistant', content: [], usage: { input_tokens: 0, output_tokens: 0 } },
-      },
-    }
-  }
-
-  function messageDelta(usage: Record<string, number>): Record<string, unknown> {
-    return {
-      type: 'stream_event',
-      event: { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage },
-    }
-  }
-
-  /** Aggregate envelope as the SDK builds it from message_start — usage all zero. */
-  function assistantText(id: string, text: string, usage?: Record<string, number>): Record<string, unknown> {
-    return {
-      type: 'assistant',
-      message: {
-        id,
-        role: 'assistant',
-        content: [{ type: 'text', text }],
-        usage: usage ?? { input_tokens: 0, output_tokens: 0 },
-      },
-    }
-  }
-
   function invocations(): Record<string, unknown>[] {
     return track.mock.calls
       .filter(([event]: unknown[]) => event === 'llm.invocation')
@@ -468,5 +490,101 @@ describe('processStream llm.invocation token attribution', () => {
     const [invocation] = invocations()
     expect(invocation).toMatchObject({ status: 'error' })
     expect(invocation).not.toHaveProperty('inputTokens')
+  })
+})
+
+/**
+ * The context gauge is a per-call figure, and the frames that carry it differ
+ * per upstream: an upstream reporting at `message_start` fills the assistant
+ * envelope, while one reporting only at stream end leaves that envelope at zero
+ * and puts the counts on `message_delta`. The `result` frame carries the turn's
+ * cumulative usage in either case, so a multi-call turn read through `result`
+ * over-states the context by its call count.
+ */
+describe('processStream context gauge', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  /** Run a turn and return the StreamResult handed to the sink. */
+  async function runTurn(messages: unknown[]): Promise<{ tokenUsage: TokenUsage | null }> {
+    const onComplete = vi.fn()
+    await processStream(
+      baseParams({
+        v2Session: fakeSession(messages),
+        callbacks: { onComplete },
+        contextWindow: 272_000,
+      })
+    )
+    return onComplete.mock.calls[0][0] as { tokenUsage: TokenUsage | null }
+  }
+
+  it("shows the last call's prompt on a multi-call turn, not the turn total", async () => {
+    const { tokenUsage } = await runTurn([
+      systemInit(),
+      messageStart('msg_1'),
+      assistantText('msg_1', 'First.'),
+      messageDelta({ input_tokens: 50_000, output_tokens: 10, cache_read_input_tokens: 3_000 }),
+      messageStart('msg_2'),
+      assistantText('msg_2', 'Second.'),
+      messageDelta({ input_tokens: 60_000, output_tokens: 20, cache_read_input_tokens: 3_000 }),
+      resultWithTurnUsage('Second.', {
+        input_tokens: 113_000,
+        output_tokens: 30,
+        cache_read_input_tokens: 6_000,
+      }),
+    ])
+
+    expect(tokenUsage).toMatchObject({
+      inputTokens: 60_000,
+      cacheReadTokens: 3_000,
+      cacheCreationTokens: 0,
+      totalCostUsd: 0.42,
+      contextWindow: 272_000,
+    })
+    // The second call's prompt. The result frame's turn total would render as
+    // 119_000 — the shape that made a one-question turn look like a full window.
+    expect(computeContextUsed(tokenUsage!)).toBe(63_000)
+  })
+
+  it('keeps a prompt-bearing delta when a later envelope reports output only', async () => {
+    const { tokenUsage } = await runTurn([
+      systemInit(),
+      messageStart('msg_1'),
+      messageDelta({ input_tokens: 12_000, output_tokens: 40 }),
+      assistantText('msg_1', 'Answer.', { input_tokens: 0, output_tokens: 40 }),
+      resultWithTurnUsage('Answer.', { input_tokens: 12_000, output_tokens: 40 }),
+    ])
+
+    expect(tokenUsage?.inputTokens).toBe(12_000)
+  })
+
+  it('reads the assistant envelope when that is where the upstream reports', async () => {
+    const { tokenUsage } = await runTurn([
+      systemInit(),
+      messageStart('msg_1'),
+      assistantText('msg_1', 'Answer.', {
+        input_tokens: 7,
+        output_tokens: 3,
+        cache_read_input_tokens: 51_000,
+      }),
+      // Real Anthropic sends output_tokens alone here.
+      messageDelta({ output_tokens: 3 }),
+      resultWithTurnUsage('Answer.', { input_tokens: 7, output_tokens: 3, cache_read_input_tokens: 51_000 }),
+    ])
+
+    expect(computeContextUsed(tokenUsage!)).toBe(51_007)
+  })
+
+  it('reports no gauge when no per-call frame carried prompt accounting', async () => {
+    const { tokenUsage } = await runTurn([
+      systemInit(),
+      messageStart('msg_1'),
+      assistantText('msg_1', 'Answer.'),
+      messageDelta({ output_tokens: 12 }),
+      resultWithTurnUsage('Answer.', { input_tokens: 90_000, output_tokens: 12 }),
+    ])
+
+    expect(tokenUsage).toBeNull()
   })
 })

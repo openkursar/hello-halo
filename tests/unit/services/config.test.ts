@@ -278,6 +278,55 @@ describe('Config Service', () => {
       saveConfig({ isFirstLaunch: false })
       expect(getCredentialsGeneration()).toBe(before)
     })
+
+    it('increments generation when the active model\'s catalog capability changes', () => {
+      // Simulates a "Fetch Models" refresh that updates the provider-declared
+      // capability for the currently selected model without touching model id
+      // or modelOverrides — modelCapabilitiesService.resolve() picks this up
+      // via its catalogCapability parameter, so the running CC subprocess env
+      // must be rebuilt too, or it keeps the stale contextWindow/maxOutputTokens.
+      saveConfig({
+        aiSources: makeApiKeySource({
+          availableModels: [{
+            id: 'deepseek-v4-flash',
+            name: 'DeepSeek v4 Flash',
+            capabilities: { contextWindow: 200_000, maxOutputTokens: 64_000 }
+          }]
+        })
+      } as any)
+      const before = getCredentialsGeneration()
+      saveConfig({
+        aiSources: makeApiKeySource({
+          availableModels: [{
+            id: 'deepseek-v4-flash',
+            name: 'DeepSeek v4 Flash',
+            capabilities: { contextWindow: 1_310_720, maxOutputTokens: 131_072 }
+          }]
+        })
+      } as any)
+      expect(getCredentialsGeneration()).toBe(before + 1)
+    })
+
+    it('does NOT increment when a non-active model\'s capability changes', () => {
+      saveConfig({
+        aiSources: makeApiKeySource({
+          availableModels: [
+            { id: 'deepseek-v4-flash', name: 'DeepSeek v4 Flash' },
+            { id: 'other-model', name: 'Other', capabilities: { contextWindow: 100_000 } }
+          ]
+        })
+      } as any)
+      const before = getCredentialsGeneration()
+      saveConfig({
+        aiSources: makeApiKeySource({
+          availableModels: [
+            { id: 'deepseek-v4-flash', name: 'DeepSeek v4 Flash' },
+            { id: 'other-model', name: 'Other', capabilities: { contextWindow: 999_000 } }
+          ]
+        })
+      } as any)
+      expect(getCredentialsGeneration()).toBe(before)
+    })
   })
 })
 

@@ -22,7 +22,7 @@ Lokal bereitstellen. Alles automatisieren, rund um die Uhr. KI-Digitalmenschen a
 <!-- TODO: Replace with a 30-second GIF showing: user types a sentence -> Agent automatically writes code -> files appear in Artifact Rail -> preview the result -->
 <div align="center">
 
-![Space Home](./assets/space_home.jpg)
+![KI-Digitalmensch-Store](./assets/shop_dh.png)
 
 </div>
 
@@ -38,6 +38,9 @@ Halo ist eine KI-Arbeitsstation, angetrieben von einem hochmodernen Agent mit ei
 | **100% Lokal, Null Cloud-Abhängigkeit** — Daten verlassen niemals deinen Rechner, erfüllt Unternehmens-Compliance-Anforderungen |
 | **KI-Digitalmenschen** — KI-Arbeiter, die autonom 7x24 laufen und Monitoring, Berichte und Routineoperationen übernehmen |
 | **AI Browser** — Eingebetteter Browser, direkt von der KI gesteuert, automatisiert jedes webbasierte System |
+| **Wissensdatenbank** — Lege deine Dateien ab, die KI zieht sie automatisch heran, wenn sie antwortet oder arbeitet |
+| **AI Terminal** — Eingebautes Terminal, das die KI direkt bedienen kann, SSH, Bastion Hosts, jedes CLI-Tool |
+| **KI Bedient Halo Selbst** — Hunderte Funktionen, gesteuert durch natürliche Sprache, bedarfsgerecht geladen ohne Kontextkosten im Leerlauf |
 | **Native WeCom / WeChat Steuerung** — Verwalte KI-Agenten über den Unternehmens-IM, ohne Schulungsaufwand |
 | **Fernzugriff** — Steuerung vom Handy / H5 / WeChat / Android, Manager überprüfen den Fortschritt unterwegs |
 | **Herunterladen und Loslegen** — Keine Konfiguration, kein Backend erforderlich, IT-Bereitstellung in Minuten |
@@ -48,7 +51,11 @@ Halo ist eine KI-Arbeitsstation, angetrieben von einem hochmodernen Agent mit ei
 
 ## KI-Digitalmenschen — Deine Autonome KI-Belegschaft
 
-Traditionelles RPA folgt starren Skripten und bricht zusammen, wenn sich etwas ändert. Halo geht einen anderen Weg: **Die KI trifft die Entscheidungen, Halo Browser Actions führen die Operationen aus.** Das Ergebnis ist Automatisierung, die den Kontext versteht, sich an Änderungen anpasst und präzise ausführt.
+Gib ihm ein Ziel und einen Zeitplan, und ein KI-Digitalmensch läuft wie ein Mitarbeiter — kein Bot, der ein starres Skript abarbeitet, sondern ein digitaler Kollege mit Gedächtnis, Urteilsvermögen und Händen.
+
+**Voll ausgestattet:** Digitalmenschen teilen exakt die gleichen Agent-Fähigkeiten wie der Konversationsmodus — AI Browser fürs Web, AI Terminal für Betriebssystem und CLI-Tools, WeCom/WeChat für Nachrichten, sogar die Bedienung von Halo selbst, um Einstellungen zu ändern. Kein Ein-Trick-Browser-Bot.
+
+**Langzeitgedächtnis:** Kein Durchlauf startet bei null — ein Digitalmensch erinnert sich, wo er aufgehört hat, was er gesehen und was er geschlussfolgert hat — er baut im Laufe der Zeit darauf auf, statt dieselbe Arbeit zu wiederholen.
 
 ### Autonome Agenten im 7x24-Betrieb
 
@@ -73,8 +80,6 @@ Installiere mit einem Klick aus dem **KI-Digitalmensch-Store**, stelle einen **p
 
 > Stell es dir vor wie cron + RPA + AI Agent in einem — nur dass du einfach beschreibst, was du willst, in natürlicher Sprache.
 
-KI-Digitalmenschen haben genau die gleichen Agent-Fähigkeiten wie der Konversationsmodus — den gleichen Claude-Engine, die MCP-Toolchain und den AI Browser — sie werden nur automatisch nach Zeitplan ausgelöst, ohne dass du am Computer sein musst.
-
 **WeChat / WeCom ist deine Steuerzentrale.** KI-Digitalmenschen unterstützen bidirektionale Konversationssteuerung über persönliches WeChat / WeCom (Enterprise WeChat) — nicht nur Benachrichtigungen empfangen, du kannst Anweisungen geben, den Fortschritt prüfen und Berichte direkt im Unternehmens-IM anfordern.
 
 ![AI Digital Human](./assets/ai-digital-human.png)
@@ -85,56 +90,43 @@ KI-Digitalmenschen haben genau die gleichen Agent-Fähigkeiten wie der Konversat
 
 ### Halo Browser Action — KI Entscheidet, Skripte Führen Aus
 
-Das unterscheidet Halo von "KI-Browser-Agenten", die ziellos herumklicken.
+Traditionelles RPA folgt einem starren Skript und bricht zusammen, sobald sich etwas ändert; Halo dreht das um: **Die KI trifft die Entscheidung, Browser Action führt sie präzise aus.**
 
-Eine Browser Action ist eine spezielle Art von Skill: ein wiederverwendbares `.js`-Skript, das eine konkrete Operation auf einer Plattform ausführt. Halo Browser Action nutzt den RPA-Ansatz für Zuverlässigkeit: **Vorgefertigte wiederverwendbare Skripte für gängige Operationen auf jeder Plattform**. Die KI entscheidet nur *was* zu tun ist und *wann* — das Skript weiß bereits *wie*.
+Eine Browser Action ist eine spezielle Art von Skill: ein wiederverwendbares `.js`-Skript für eine konkrete Operation auf einer Plattform. Die KI entscheidet nur *was* zu tun ist und *wann* — das Skript weiß bereits *wie*. Das unterscheidet Halo von "KI-Browser-Agenten", die ziellos herumklicken.
 
-Skripte laufen direkt in einem echten Browser über Halos `browser_run` — mit vollem Zugriff auf das Seiten-DOM, Cookies und interne APIs, genau wie die Chrome DevTools Console. Das funktioniert sowohl für öffentliche Plattformen als auch für private Unternehmenssysteme.
+Skripte laufen direkt in einem echten Browser, mit vollem Zugriff auf das Seiten-DOM, Cookies und interne APIs. Das funktioniert sowohl für öffentliche Plattformen als auch für private Unternehmenssysteme.
 
-**Beispiel: Bilibili-Benachrichtigungen lesen**
-
-```js
-// .claude/skills/bili-get-messages/index.js
-async (params) => {
-  const resp = await fetch('https://api.bilibili.com/x/msgfeed/reply?platform=web', {
-    credentials: 'include'  // cookies automatically included, no extra auth
-  }).then(r => r.json())
-
-  return {
-    success: true,
-    notifications: resp.data.items.map(item => ({
-      user: item.user.nickname,
-      comment: item.item.source_content,
-      video_title: item.item.title
-    }))
-  }
-}
-```
-
-Die KI ruft es auf mit: `browser_run({ file: ".claude/skills/bili-get-messages/index.js" })`
-
-**Beispiel: Unternehmens-Workflow — ein Xiaohongshu Content-Operations-Digitalmensch:**
-1. Die KI entscheidet: Zeit, neue Kommentare zu den heutigen Beiträgen zu prüfen
-2. Ruft den `xhs-get-comments` Action auf → Skript holt die Kommentarliste über die Plattform-API
-3. Die KI bewertet: Diese 5 Kommentare brauchen Antworten, verfasst personalisierte Antworten
-4. Ruft den `xhs-reply-comment` Action auf → Skript sendet jede Antwort
-
-**Beispiel: Unternehmensintern — ein DevOps-Monitoring-Digitalmensch:**
-1. Die KI entscheidet: Zeit für den stündlichen Infrastruktur-Check
-2. Ruft den `check-grafana-alerts` Action auf → Skript liest das Alert-Dashboard über die interne API
-3. Die KI bewertet: 2 Alerts sind kritisch, erstellt eine Incident-Zusammenfassung
-4. Ruft den `create-jira-ticket` Action auf → Skript erstellt ein P1-Ticket mit vollständigem Kontext
-5. Ruft den `notify-oncall` Action auf → Sendet Alert an die WeCom-Bereitschaftsgruppe
-
-**Die KI entscheidet. Actions führen aus. Stabil, wiederholbar, auditierbar.**
-
-Fertige Browser Actions sind verfügbar für Xiaohongshu, Bilibili, Zhihu, Twitter / X, WeChat und mehr. Unternehmensteams können private Actions für interne Systeme schreiben. Die Community kann eigene beitragen und teilen.
+Fertige Browser Actions sind verfügbar für Xiaohongshu, Bilibili, Zhihu, Twitter / X, WeChat und mehr. Unternehmensteams können private Actions für interne Systeme schreiben, und die Community kann eigene beitragen und teilen. **Die KI entscheidet. Actions führen aus. Stabil, wiederholbar, auditierbar.**
 
 Selbst einen bauen? Eine vollständige Anleitung — ein **OA-Genehmigungsassistent**, der ein anmeldepflichtiges internes System nach Zeitplan überwacht — findest du in den Docs: [**Einen Browser-Action-Digitalmenschen bauen →**](https://hello-halo.cc/docs/digital-humans/guide-02-build.html)
 
 ### Fernzugriff — Verwalte Deine KI-Flotte Von Überall
 
 Sobald der Fernzugriff aktiviert ist, kann dein Handy / H5 / WeChat / Android-Client Halo auf deinem Desktop steuern. Während Meetings, auf dem Weg zur Arbeit oder unterwegs — prüfe die Ergebnisse der Digitalmenschen, genehmige Entscheidungen und erteile neue Anweisungen, ohne an deinem Schreibtisch zu sein.
+
+---
+
+## Wissensdatenbank
+
+Lege deine alltäglichen Dateien ab, und die KI zieht sie automatisch heran, wenn sie Fragen beantwortet oder Arbeit erledigt.
+
+Unterstützt PDF, PPT, Markdown und andere gängige Office-Dateien sowie Bild-OCR. Erstelle eine Wissensdatenbank, binde sie an einen Space, und frag die KI einfach "was steht in meiner Wissensdatenbank", um sie zu nutzen.
+
+---
+
+## AI Terminal
+
+Halo hat ein eingebautes Terminal, das die KI direkt bedienen kann — SSH, Bastion Hosts, Ping+Token-Anmeldungen oder die Steuerung nativer CLI-Tools wie Claude Code / Codex.
+
+Das Terminal ist dauerhaft und sichtbar: schließe es selbst, wenn du fertig bist, oder öffne es jederzeit, um manuell die Kontrolle zu übernehmen — Mensch und KI können die Steuerung konfliktfrei übergeben.
+
+---
+
+## KI Bedient Halo Selbst
+
+Hunderte Vorgänge — Einstellungen, Sitzungsverwaltung, WeCom-Bot-Konfiguration — direkt per natürlicher Sprache erledigt, ohne durch Menüs zu wühlen.
+
+Diese Vorgänge kosten standardmäßig keinen Kontext: Nur der, nach dem du fragst, wird bedarfsgerecht geladen, sodass Hunderte Fähigkeiten die Konversation nie verlangsamen.
 
 ---
 
@@ -188,7 +180,7 @@ npm run dev
 
 Öffne den KI-Digitalmensch-Store, wähle einen aus, fülle ein paar Konfigurationsfelder aus, und er beginnt automatisch zu laufen. Keine Programmierung nötig, keine Prompts zu schreiben.
 
-![AI Store](./assets/shop.png)
+![Digitalmensch-Installation](./assets/app_detail_install.png)
 
 </td>
 <td width="50%" valign="top">
@@ -210,6 +202,10 @@ Du kannst auch Halo Browser Actions (`.js`-Skripte) schreiben, damit KI-Digitalm
 ![Chat Intro](./assets/chat_intro.jpg)
 
 ![Chat Todo](./assets/chat_todo.jpg)
+
+*Skill Store: Ein-Klick-Installation für Content-Erstellung, Entwicklertools, Datenanalyse und mehr*
+
+![Skill Store](./assets/shop_skill.png)
 
 *Fernzugriff: Steuere Halo von überall*
 
@@ -233,20 +229,7 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 ## Architektur
 
-```
-┌──────────────────────────────────────────────────┐
-│                   Halo Desktop                    │
-│                                                   │
-│   React UI  <─IPC─>  Main Process  <──>  Claude  │
-│  (Renderer)          ┌───────────┐       Code SDK │
-│                      │ Digital   │      (Agent    │
-│                      │ Humans    │       Loop)    │
-│                      │ Scheduler │                │
-│                      └───────────┘                │
-│                           │                       │
-│                     ~/.halo/ (local)              │
-└──────────────────────────────────────────────────┘
-```
+Steckbare Engine: dieselbe Produkterfahrung, mit Claude Code, Codex und weiteren Agent-Engines austauschbar darunter.
 
 ---
 
@@ -254,10 +237,12 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 - **100% Lokal** — Deine Daten verlassen niemals deinen Rechner, erfüllt Unternehmens-Compliance-Anforderungen
 - **Kein Backend Erforderlich** — Reiner Desktop-Client, Bereitstellung auf jeder Arbeitsstation ohne Server-Infrastruktur
-- **Agent Loop** — Werkzeugausführung, nicht nur Textgenerierung
+- **Agent Loop** — Nicht nur Textgenerierung, die KI führt tatsächlich Werkzeuge aus, um Dinge zu erledigen
 - **Space-System** — Isolierte Arbeitsbereiche, Projekte beeinflussen sich nicht gegenseitig
 - **Skills** — Installiere Skill-Pakete, um die Agent-Fähigkeiten zu erweitern
 - **AI Browser** — Eingebetteter CDP-Browser, KI steuert Webseiten direkt
+- **Digitalmensch-Fähigkeitenverwaltung** — Verwalte MCP- und Skill-Berechtigungen jedes Digitalmenschen visuell
+- **Fenster-Zoom** — Frei von 50%-150%, passt sich jedem Bildschirm oder jeder Präsentation an
 - **Multi-Modell-Unterstützung** — Anthropic, OpenAI, DeepSeek und jede OpenAI-kompatible API (Verbindung zu deinem Unternehmens-LLM-Gateway)
 - **Dunkles/Helles Design** — Folgt der Systemeinstellung
 - **Mehrsprachig** — Chinesisch, Englisch, Spanisch und mehr
@@ -268,7 +253,7 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 ## Roadmap
 
-- [x] Claude Code SDK Agent Loop
+- [x] Agent Loop — Werkzeugausführung, nicht nur Textgenerierung
 - [x] Space- und Konversationsverwaltung
 - [x] Artifact-Vorschau (Code, HTML, Bilder, Markdown)
 - [x] Fernzugriff

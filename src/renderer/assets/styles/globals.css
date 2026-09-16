@@ -192,6 +192,12 @@ body {
   background: transparent;
 }
 
+/* Where both scrollbars meet. Left unstyled it falls back to the UA's opaque
+   square, which reads as a stray light dot on any dark surface. */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 ::-webkit-scrollbar-thumb {
   background: hsl(var(--muted));
   border-radius: 4px;
@@ -224,6 +230,14 @@ body {
 .scrollbar-thin {
   scrollbar-width: thin;
   scrollbar-color: hsl(var(--muted-foreground) / 0.2) transparent;
+}
+
+/* Scroll edge fade hint for overflow containers whose scrollbar is too subtle
+ * to signal "more content below". Applied as a mask on the whole scroll area,
+ * so the underlying list stays fully rendered while the bottom edge fades. */
+.scroll-fade-down {
+  mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
 }
 
 /* Disable text selection on UI elements */

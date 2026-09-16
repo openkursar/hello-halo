@@ -309,6 +309,126 @@ describe('single-source create / update / delete', () => {
   })
 })
 
+describe('refreshSourceConfig — token freshness and degraded catalogs', () => {
+  interface CatalogProviderStub {
+    refreshConfig: ReturnType<typeof vi.fn>
+    checkTokenWithConfig: ReturnType<typeof vi.fn>
+    refreshTokenWithConfig: ReturnType<typeof vi.fn>
+  }
+
+  function registerProvider(
+    mgr: AISourceManager,
+    stub: Partial<CatalogProviderStub>
+  ): CatalogProviderStub {
+    const provider: CatalogProviderStub = {
+      checkTokenWithConfig: vi.fn(() => ({ valid: true, needsRefresh: false })),
+      refreshTokenWithConfig: vi.fn(async () => ({
+        success: true,
+        data: { accessToken: 'fresh-tok', refreshToken: 'fresh-ref', expiresAt: 999 }
+      })),
+      refreshConfig: vi.fn(async () => ({
+        success: true,
+        data: { 'catalog-prov': { availableModels: ['m1'], modelNames: { m1: 'M1' } } }
+      })),
+      ...stub
+    }
+    ;(mgr as unknown as { providers: Map<string, unknown> }).providers.set('catalog-prov', provider)
+    return provider
+  }
+
+  function seedCatalogSource(over: Partial<AISource> = {}): void {
+    seed({
+      currentId: 'o1',
+      sources: [
+        oauthSource({
+          provider: 'catalog-prov' as never,
+          availableModels: [{ id: 'stored', name: 'Stored' }],
+          modelOverrides: { stored: { contextWindow: 200000 } },
+          ...over
+        })
+      ]
+    })
+  }
+
+  it('renews an expired token before the provider calls its catalog endpoint', async () => {
+    seedCatalogSource()
+    const mgr = new AISourceManager()
+    const provider = registerProvider(mgr, {
+      checkTokenWithConfig: vi.fn(() => ({ valid: false, expiresIn: 0, needsRefresh: true }))
+    })
+
+    await mgr.refreshSourceConfig('o1')
+
+    expect(provider.refreshTokenWithConfig).toHaveBeenCalled()
+    // The catalog call must see the rotated token, not the expired one on disk.
+    expect(provider.refreshConfig).toHaveBeenCalled()
+    const passedConfig = provider.refreshConfig.mock.calls[0][0] as Record<string, any>
+    expect(passedConfig['catalog-prov'].accessToken).toBe('fresh-tok')
+  })
+
+  it('aborts without calling the provider when the token cannot be renewed', async () => {
+    seedCatalogSource()
+    const mgr = new AISourceManager()
+    const provider = registerProvider(mgr, {
+      checkTokenWithConfig: vi.fn(() => ({ valid: false, expiresIn: 0, needsRefresh: true })),
+      refreshTokenWithConfig: vi.fn(async () => ({ success: false, error: 'refresh token revoked' }))
+    })
+
+    const result = await mgr.refreshSourceConfig('o1')
+
+    expect(result.success).toBe(false)
+    expect(provider.refreshConfig).not.toHaveBeenCalled()
+  })
+
+  it('keeps stored models and capabilities when the provider served a fallback catalog', async () => {
+    seedCatalogSource()
+    const mgr = new AISourceManager()
+    registerProvider(mgr, {
+      refreshConfig: vi.fn(async () => ({
+        success: true,
+        data: {
+          'catalog-prov': {
+            availableModels: ['hardcoded'],
+            modelNames: { hardcoded: 'Hardcoded' },
+            modelOverrides: {},
+            degraded: true
+          }
+        }
+      }))
+    })
+
+    const result = await mgr.refreshSourceConfig('o1')
+
+    expect(result.success).toBe(true)
+    const saved = store.value.aiSources as AISourcesConfig
+    expect(saved.sources[0].availableModels.map(m => m.id)).toEqual(['stored'])
+    expect(saved.sources[0].modelOverrides).toEqual({ stored: { contextWindow: 200000 } })
+  })
+
+  it('writes the catalog when the provider reached its endpoint', async () => {
+    seedCatalogSource()
+    const mgr = new AISourceManager()
+    registerProvider(mgr, {
+      refreshConfig: vi.fn(async () => ({
+        success: true,
+        data: {
+          'catalog-prov': {
+            availableModels: ['fetched'],
+            modelNames: { fetched: 'Fetched' },
+            modelOverrides: { fetched: { contextWindow: 128000 } }
+          }
+        }
+      }))
+    })
+
+    await mgr.refreshSourceConfig('o1')
+
+    const saved = store.value.aiSources as AISourcesConfig
+    expect(saved.sources[0].availableModels.map(m => m.id)).toEqual(['fetched'])
+    expect(saved.sources[0].modelOverrides).toEqual({ fetched: { contextWindow: 128000 } })
+  })
+})
+
 describe('user-initiated switch telemetry', () => {
   it('reports settings.source_switch only on the tracked wrapper, not the raw setter', () => {
     seed({

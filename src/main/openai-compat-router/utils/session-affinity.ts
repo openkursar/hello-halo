@@ -32,3 +32,13 @@ export function pickSessionAffinityHeaders(
   }
   return picked
 }
+
+/**
+ * The per-conversation id carried by either SDK header, or `''` when the caller
+ * sent neither. Providers that mirror the SDK's own session identity upstream
+ * (e.g. Codex's `prompt_cache_key` / `session-id`) read it from here.
+ */
+export function pickSessionId(sdkHeaders?: Record<string, string>): string {
+  const picked = pickSessionAffinityHeaders(sdkHeaders)
+  return picked['x-claude-code-session-id'] || picked['session_id'] || ''
+}

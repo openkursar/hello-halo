@@ -487,6 +487,32 @@ it throws `No "getHaloDir" export is defined on the ... mock` the moment a
 KB-aware code path runs, even in tests that never touch knowledge bases
 directly.
 
+### 2.16 Two Manual-Trigger Entries (Blocking vs Admission)
+
+**Decision**: `triggerManually` resolves when the run finishes; `startManually`
+resolves when the run is *admitted* and leaves it executing in the background.
+Both share `admitManualRun()`, so they reject an unrunnable or already-busy app
+identically before anything starts. Transport picks the one matching its
+consumer:
+
+| Consumer | Entry | Why |
+|---|---|---|
+| UI (`app:trigger`) / HTTP | `triggerManually` | The panel shows live progress from `app:status_changed` + the activity thread, so the pending call costs the user nothing. |
+| `trigger_automation_app` MCP tool | `startManually` | The call sits inside a user's conversation. A run takes minutes; blocking it froze the conversation with no output, indistinguishable from a hang. |
+
+**Why the conversation must not wait**: a digital human already owns its result
+delivery — `report_to_user`, the configured output channel, the activity
+timeline. Holding the conversation open to relay that result is duplicate
+delivery bought with an unbounded stall. `get_automation_status` closes the loop
+after the fact (`runtime_status` + `latest_run_output`) for the case where the
+user does come back and ask.
+
+**Admission signal**: `startManually` settles on the first of — `onQueued` (no
+global slot free), `onStarted` (the run row exists, fired from `executeRun`'s
+`onRunStarted`), or the run's own settlement. That last fallback is what
+guarantees the caller is never left waiting on an admission that already
+happened, e.g. when the run fails before inserting its row.
+
 ---
 
 ## 3. SQLite Schema
@@ -642,10 +668,12 @@ apps/runtime depends on:
 interface AppRuntimeService {
   activate(appId: string): Promise<void>
   deactivate(appId: string): Promise<void>
-  triggerManually(appId: string): Promise<AppRunResult>
+  triggerManually(appId: string): Promise<AppRunResult>      // resolves at run end
+  startManually(appId: string): Promise<AppRunStartInfo>      // resolves at run start (§2.16)
   getAppState(appId: string): AutomationAppState
   respondToEscalation(appId: string, entryId: string, response: EscalationResponse): Promise<void>
   getActivityEntries(appId: string, options?: ActivityQueryOptions): ActivityEntry[]
+  getEntriesForRun(runId: string): ActivityEntry[]
   getRun(runId: string): AutomationRun | null
   getRunsForApp(appId: string, limit?: number): AutomationRun[]
   activateAll(): Promise<void>

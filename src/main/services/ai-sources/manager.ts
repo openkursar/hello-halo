@@ -52,6 +52,7 @@ import { getCustomProvider } from './providers/custom.provider'
 import { getGitHubCopilotProvider } from './providers/github-copilot.provider'
 import { getClaudeProvider } from './providers/claude.provider'
 import { getZhipuCodingOAuthProvider } from './providers/zhipu-coding-oauth.provider'
+import { getChatGPTProvider } from './providers/chatgpt.provider'
 import { getCliDelegatedProvider } from './providers/cli-delegated.provider'
 import { loadAuthProvidersAsync } from './auth-loader'
 import { loadProductConfig } from '../../foundation/product-config'
@@ -96,6 +97,7 @@ class AISourceManager {
     this.registerProvider(getGitHubCopilotProvider())
     this.registerProvider(getClaudeProvider())
     this.registerProvider(getZhipuCodingOAuthProvider())
+    this.registerProvider(getChatGPTProvider())
     // Delegated auth depends on the CLI's credential store, whose layout is
     // only verified on macOS. Registering it elsewhere would surface a source
     // that cannot be logged into. See product.json `platforms`.
@@ -713,8 +715,9 @@ class AISourceManager {
     const tokenData = data._tokenData
     const availableModels: string[] = data._availableModels || []
     const modelNames: Record<string, string> = data._modelNames || {}
+    const modelCapabilities: Record<string, ModelOption['capabilities']> = data._modelCapabilities || {}
+    const modelVision: Record<string, boolean> = data._modelVision || {}
     const defaultModel = data._defaultModel || ''
-    const modelOverrides = data._modelOverrides as AISource['modelOverrides']
 
     const builtin = getBuiltinProvider(providerType)
     const now = new Date().toISOString()
@@ -722,7 +725,9 @@ class AISourceManager {
     // Convert to ModelOption format
     const models: ModelOption[] = availableModels.map(id => ({
       id,
-      name: modelNames[id] || id
+      name: modelNames[id] || id,
+      ...(modelCapabilities[id] ? { capabilities: modelCapabilities[id] } : {}),
+      ...(typeof modelVision[id] === 'boolean' ? { supportsVision: modelVision[id] } : {})
     }))
 
     if (models.length === 0 && defaultModel) {
@@ -758,7 +763,6 @@ class AISourceManager {
             user: { name: '', uid: acct.id },
             model: keepModel,
             availableModels: models.length > 0 ? models : s.availableModels,
-            modelOverrides: modelOverrides ?? s.modelOverrides,
             updatedAt: now
           } : s)
           if (!firstId) firstId = existing.id
@@ -776,7 +780,6 @@ class AISourceManager {
             user: { name: '', uid: acct.id },
             model: defaultModel,
             availableModels: models,
-            modelOverrides,
             createdAt: now,
             updatedAt: now
           })
@@ -813,7 +816,6 @@ class AISourceManager {
             },
             model: defaultModel || s.model,
             availableModels: models.length > 0 ? models : s.availableModels,
-            modelOverrides: modelOverrides ?? s.modelOverrides,
             updatedAt: now
           }
         }
@@ -838,7 +840,6 @@ class AISourceManager {
         },
         model: defaultModel,
         availableModels: models,
-        modelOverrides,
         createdAt: now,
         updatedAt: now
       }
@@ -869,11 +870,13 @@ class AISourceManager {
       return { success: false, error: 'Source not found' }
     }
 
-    // Call provider logout if OAuth
+    // Call provider logout if OAuth. The config is passed so a provider that can
+    // revoke its credential upstream does so before the local copy is dropped.
     if (source.authType === 'oauth') {
       const provider = this.providers.get(source.provider)
       if (provider && this.isOAuthProvider(provider)) {
-        await provider.logout()
+        const decrypted = this.getDecryptedAiSources().sources.find(s => s.id === sourceId) || source
+        await provider.logout(this.buildLegacyOAuthConfig(decrypted))
       }
     }
 
@@ -1003,10 +1006,10 @@ class AISourceManager {
   async refreshSourceConfig(sourceId: string): Promise<ProviderResult<void>> {
     await this.ensureInitialized()
 
-    // Decrypted config is needed so providers can make authenticated API calls
-    const aiSources = this.getDecryptedAiSources()
-    const source = aiSources.sources.find(s => s.id === sourceId)
-
+    // Capability check first — decide "unsupported" without an unrelated token
+    // refresh. Uses the plain (non-decrypted) config since only provider type
+    // is needed here.
+    const source = this.getAiSourcesConfig().sources.find(s => s.id === sourceId)
     if (!source) {
       return { success: false, error: 'Source not found' }
     }
@@ -1017,8 +1020,29 @@ class AISourceManager {
       return { success: true }
     }
 
+    // Renew an expired OAuth token before the provider calls its server;
+    // providers never retry internally. Without this, a refresh scheduled at
+    // startup runs against whatever token was on disk — expired after the app
+    // was closed overnight — and the resulting 401 degrades the source to its
+    // hardcoded fallback catalog for the rest of the session.
+    const tokenResult = await this.ensureValidToken(sourceId)
+    if (!tokenResult.success) {
+      console.error(
+        `[AISourceManager] Refresh aborted for "${source.name}" (${source.provider}): token refresh failed:`,
+        tokenResult.error
+      )
+      return { success: false, error: tokenResult.error || 'Token refresh failed' }
+    }
+
+    // Re-read decrypted config AFTER refresh so a rotated token is carried in.
+    // Decrypted config is needed so providers can make authenticated API calls.
+    const refreshed = this.getDecryptedAiSources().sources.find(s => s.id === sourceId)
+    if (!refreshed) {
+      return { success: false, error: 'Source not found' }
+    }
+
     // Build legacy config format that all providers consume
-    const legacyConfig = this.buildLegacyOAuthConfig(source)
+    const legacyConfig = this.buildLegacyOAuthConfig(refreshed)
 
     console.log(`[AISourceManager] Refreshing source "${source.name}" (${source.provider})`)
 
@@ -1033,6 +1057,20 @@ class AISourceManager {
     const providerData = (result.data as Record<string, any>)[source.provider]
     if (!providerData) {
       return { success: true } // No updates from provider
+    }
+
+    // A provider that could not reach its catalog answers with a hardcoded
+    // fallback list rather than failing, so the source stays usable. That list
+    // is non-empty and carries no capability data, which makes it indistinguishable
+    // from a real catalog at the merge below — and writing it would replace
+    // previously-fetched context windows with client-side defaults until the next
+    // successful refresh. Keep what is on disk instead.
+    if (providerData.degraded) {
+      console.warn(
+        `[AISourceManager] Refresh degraded for "${source.name}" (${source.provider}): ` +
+          `provider served a fallback catalog, keeping stored models and capabilities`
+      )
+      return { success: true }
     }
 
     // Convert provider's string[] + modelNames to v2 ModelOption[]
@@ -1175,7 +1213,9 @@ class AISourceManager {
         loggedIn: true,
         user: source.user,
         model: effectiveModel,
-        availableModels: source.availableModels.map(m => m.id),
+        // Runtime-tolerant: a legacy or externally written source can omit the
+        // list, and a throw here would abort logout before the source is deleted.
+        availableModels: (source.availableModels || []).map(m => m.id),
         accessToken: source.accessToken,
         refreshToken: source.refreshToken,
         tokenExpires: source.tokenExpires

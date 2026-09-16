@@ -7,6 +7,11 @@
  * Exposes app management tools to the AI during conversations so the
  * user can ask the AI to list, create, delete, pause, resume, or
  * manually trigger their installed automation apps.
+ *
+ * `read_halo_doc` used to live here and now has its own always-mounted server
+ * (`services/official-docs-mcp`); this one is mounted only where digital-human
+ * management belongs. The authoring gate below still observes reads from
+ * there, through the `guideConsulted` callback the caller passes in.
  */
 
 import { z } from 'zod'
@@ -14,10 +19,12 @@ import { tool, createSdkMcpServer } from '../../services/agent/resolved-sdk'
 import { getAppManager } from '../manager'
 import { AppAlreadyInstalledError } from '../manager/errors'
 import { getAppRuntime } from '../runtime'
+import type { ActivityEntry } from '../runtime'
 import { ConcurrencyLimitError } from '../runtime/errors'
+import { truncateUtf16Safe } from '../runtime/text-truncate'
 import { validateAppSpec } from '../spec'
 import { installFromStore, installRequiredSkills } from '../../store/registry.service'
-import { readOfficialDoc } from '../../services/official-docs.service'
+import { CREATE_GUIDE_PATH } from '../../services/official-docs-mcp'
 
 // ============================================
 // Helpers
@@ -34,15 +41,28 @@ function textResult(text: string, isError = false) {
 /** Error message returned when services are not yet initialised. */
 const NOT_READY = 'App services are not initialized. Please try again shortly.'
 
-/**
- * Guide the AI must consult before authoring a spec. The path is hard-coded
- * here and nowhere else; renaming the published document would strand every
- * shipped client, so it is fixed for the lifetime of the tool.
- */
-const CREATE_GUIDE_PATH = 'create-digital-human/SKILL.md'
+/** Cap on the run output returned by get_automation_status. */
+const RUN_OUTPUT_MAX_CHARS = 2000
 
-/** Everything under this prefix counts as "the authoring guide was consulted". */
-const CREATE_GUIDE_PREFIX = 'create-digital-human/'
+/**
+ * Render what a run reported, from the activity entries that back the timeline
+ * the user sees. Bounded, because this lands in a conversation the user is
+ * waiting on — a whole run transcript would crowd out everything else.
+ */
+function formatRunOutput(entries: ActivityEntry[]): string | null {
+  if (entries.length === 0) return null
+
+  // Entries arrive newest-first; a report reads in chronological order.
+  const lines = [...entries].reverse().map(entry => {
+    const parts = [`[${entry.type}] ${entry.content.summary}`]
+    if (entry.content.error) parts.push(`error: ${entry.content.error}`)
+    if (entry.content.question) parts.push(`question: ${entry.content.question}`)
+    if (entry.content.dataPath) parts.push(`details written to: ${entry.content.dataPath}`)
+    return parts.join(' — ')
+  })
+
+  return truncateUtf16Safe(lines.join('\n'), RUN_OUTPUT_MAX_CHARS)
+}
 
 /**
  * Wait for AppManager to become available (handles bootstrap race condition).
@@ -72,55 +92,13 @@ async function waitForAppManager(maxMs = 5000, intervalMs = 200) {
 // Tool Factories (closed over spaceId)
 // ============================================
 
-function buildTools(spaceId: string) {
-  /**
-   * Whether the authoring guide was consulted in this session. The MCP server
-   * instance is created per session (see toolsets/broker.ts), so this closure
-   * is exactly session-scoped. Set on any guide read attempt, successful or
-   * not: the point is that the AI tried, and readOfficialDoc's offline
-   * fallback must never be able to lock creation out on an air-gapped machine.
-   */
-  let guideConsulted = false
-
-  const read_halo_doc = tool(
-    'read_halo_doc',
-    "Read official Halo documentation and return its raw markdown. This is the authoritative, " +
-    'independently updated source for how Halo (yourself) works — consult it whenever the user asks about ' +
-    "Halo's features, capabilities, or usage. Paths are relative to the documentation root: " +
-    'read "index.md" for the list of available documents, or ' +
-    `"${CREATE_GUIDE_PATH}" before creating or updating a digital human. Each entry document ` +
-    'lists its companion documents.',
-    {
-      path: z.string().describe(
-        `Document path relative to the guide root, e.g. "${CREATE_GUIDE_PATH}".`
-      )
-    },
-    async (args) => {
-      const path = args.path.trim()
-      if (path.startsWith(CREATE_GUIDE_PREFIX)) {
-        guideConsulted = true
-      }
-
-      try {
-        const result = await readOfficialDoc(path)
-        if (!result.ok) {
-          const hint = result.available.length > 0
-            ? `\n\nDocuments available offline:\n${result.available.map(d => `- ${d}`).join('\n')}`
-            : ''
-          return textResult(`${result.reason}${hint}`, true)
-        }
-
-        const provenance = result.source === 'bundled'
-          ? `<!-- source: offline snapshot bundled with this Halo version${result.snapshotDate ? ` (${result.snapshotDate})` : ''} — the documentation host was unreachable, content may be outdated -->`
-          : `<!-- source: ${result.source === 'remote' ? 'documentation host (current)' : 'documentation host (cached this session)'} -->`
-
-        return textResult(`${provenance}\n\n${result.text}`)
-      } catch (e) {
-        return textResult(`Error reading guide document: ${(e as Error).message}`, true)
-      }
-    }
-  )
-
+/**
+ * @param spaceId - captured via closure by every tool below
+ * @param guideConsulted - whether the authoring guide was read in this session.
+ *   The read happens in the `halo-docs` server, so the two are created together
+ *   per session and this callback is how the gate below sees it.
+ */
+function buildTools(spaceId: string, guideConsulted: () => boolean) {
   const list_automation_apps = tool(
     'list_automation_apps',
     'List all automation apps installed in the current space. Returns app ID, name, description, status, and schedule.',
@@ -177,7 +155,7 @@ function buildTools(spaceId: string) {
     },
     async (args) => {
       try {
-        if (!guideConsulted) {
+        if (!guideConsulted()) {
           return textResult(
             `Read the authoring guide first: call read_halo_doc with path "${CREATE_GUIDE_PATH}", ` +
             'follow it (in particular its interview checklist), then call this tool again. ' +
@@ -296,8 +274,11 @@ function buildTools(spaceId: string) {
 
   const get_automation_status = tool(
     'get_automation_status',
-    'Get the full details of an automation app, including its complete spec (system_prompt, subscriptions, ' +
-    'config_schema, etc.), runtime status, last run time, and any errors.',
+    'Get the full details of an automation app: its complete spec (system_prompt, subscriptions, ' +
+    'config_schema, etc.), runtime status, last run time, and any errors.\n\n' +
+    'This is also how you answer "is it done yet?" and "what did it produce?" after starting a run ' +
+    'with trigger_automation_app: `runtime_status` is "running" while the run is in flight, and ' +
+    '`latest_run_output` carries what that run has reported so far (complete once it is no longer running).',
     {
       app_id: z.string().describe('The app ID')
     },
@@ -317,6 +298,10 @@ function buildTools(spaceId: string) {
 
         const state = runtime.getAppState(args.app_id)
 
+        // The most recent run, whether it is still going or already finished —
+        // this is what the user means by "how did it go?" after a trigger.
+        const latestRun = runtime.getRunsForApp(args.app_id, 1)[0] ?? null
+
         const result = {
           id: app.id,
           status: app.status,
@@ -325,6 +310,9 @@ function buildTools(spaceId: string) {
           last_outcome: state.lastStatus ?? null,
           last_error: state.lastError ?? null,
           next_run: state.nextRunAtMs ? new Date(state.nextRunAtMs).toISOString() : null,
+          latest_run_id: latestRun?.runId ?? null,
+          latest_run_status: latestRun?.status ?? null,
+          latest_run_output: latestRun ? formatRunOutput(runtime.getEntriesForRun(latestRun.runId)) : null,
           spec: app.spec,
           user_config: app.userConfig,
           user_overrides: app.userOverrides,
@@ -527,7 +515,12 @@ function buildTools(spaceId: string) {
 
   const trigger_automation_app = tool(
     'trigger_automation_app',
-    'Manually trigger an automation app to run immediately, regardless of its schedule. ' +
+    'Start an automation app immediately, regardless of its schedule.\n\n' +
+    'This returns as soon as the run has started — it does NOT wait for the run to finish, ' +
+    'because a run routinely takes many minutes. Tell the user it is running and end your turn; ' +
+    'do not poll and do not stall waiting for a result. The app delivers its own output ' +
+    '(its report to the user, its configured output channel, and its activity timeline), so nothing ' +
+    'is lost by not waiting. If the user later asks how it went, call get_automation_status.\n\n' +
     'Each app allows only one active execution at a time — if the app is already running ' +
     'or queued, the trigger is rejected and you should inform the user and wait.',
     {
@@ -541,10 +534,19 @@ function buildTools(spaceId: string) {
           return textResult(NOT_READY, true)
         }
 
-        const result = await runtime.triggerManually(args.app_id)
+        const result = await runtime.startManually(args.app_id)
 
-        const runIdPart = result.runId ? ` Run ID: ${result.runId}.` : ''
-        return textResult(`App ${args.app_id} triggered successfully. Outcome: ${result.outcome}.${runIdPart}`)
+        if (result.outcome === 'queued') {
+          return textResult(
+            `App ${args.app_id} is queued — other runs hold every execution slot right now. ` +
+            `It starts on its own as soon as one frees up; no further action is needed.`
+          )
+        }
+
+        return textResult(
+          `App ${args.app_id} started and is now running in the background. Run ID: ${result.runId}. ` +
+          `It reports its own result when finished — do not wait for it here.`
+        )
       } catch (e) {
         if (e instanceof ConcurrencyLimitError && e.isPerApp) {
           // Per-app dedup: the same app is already running or queued.
@@ -680,7 +682,6 @@ function buildTools(spaceId: string) {
   )
 
   return [
-    read_halo_doc,
     list_automation_apps,
     create_automation_app,
     update_automation_app,
@@ -702,9 +703,10 @@ function buildTools(spaceId: string) {
  * Runs in-process and handles all automation app management tools.
  *
  * @param spaceId - The current space ID (captured via closure by all tools)
+ * @param guideConsulted - the `halo-docs` session's authoring-guide gate
  */
-export function createHaloAppsMcpServer(spaceId: string) {
-  const allTools = buildTools(spaceId)
+export function createHaloAppsMcpServer(spaceId: string, guideConsulted: () => boolean) {
+  const allTools = buildTools(spaceId, guideConsulted)
 
   return createSdkMcpServer({
     name: 'halo-apps',

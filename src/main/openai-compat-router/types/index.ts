@@ -75,27 +75,6 @@ export interface ResponseConversionContext {
 // ============================================================================
 
 /**
- * State for tracking stream conversion
- */
-export interface StreamConversionState {
-  started: boolean
-  finished: boolean
-  messageId: string
-  model: string
-  currentBlockIndex: number
-  contentBlockIndex: number
-  hasTextBlock: boolean
-  hasThinkingBlock: boolean
-  reasoningClosed: boolean
-  usage: {
-    inputTokens: number
-    outputTokens: number
-    cacheReadInputTokens: number
-  }
-  stopReason: string | null
-}
-
-/**
  * Tool call state during streaming
  */
 export interface StreamToolCallState {

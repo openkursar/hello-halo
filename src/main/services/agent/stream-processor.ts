@@ -30,6 +30,7 @@ import {
   extractRealAssistantUsage,
   extractStreamDeltaUsage,
   buildTokenUsage,
+  hasPromptAccounting,
   isSyntheticAssistantMessage
 } from './context-usage'
 import { broadcastMcpStatus } from './mcp-manager'
@@ -348,7 +349,11 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
   let capturedSessionId: string | undefined
 
   // Token usage tracking
-  // lastSingleUsage: Last API call usage (single call, represents current context size)
+  // lastSingleUsage: the latest per-call frame carrying prompt accounting — what
+  // the context gauge shows. Fed by `message_delta` as well as by assistant
+  // frames, because an upstream that reports usage only at stream end leaves
+  // `message_start`, and therefore every assistant frame, at zero (DESIGN.md §2).
+  // The `result` frame is never a source: it carries the turn total.
   let lastSingleUsage: SingleCallUsage | null = null
   let tokenUsage: TokenUsage | null = null
 
@@ -575,15 +580,20 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
         }
       }
 
-      // Telemetry: token accounting for the call currently streaming. The id
-      // comes from message_start, the counts from message_delta — see
-      // streamUsageByMessageId.
+      // Token accounting for the call currently streaming. The id comes from
+      // message_start, the counts from message_delta — see streamUsageByMessageId
+      // for the telemetry side and `lastSingleUsage` for the context gauge.
       if (event.type === 'message_start') {
         streamingMessageId = event.message?.id
       } else if (event.type === 'message_delta') {
         const deltaUsage = extractStreamDeltaUsage(event)
-        if (deltaUsage && streamingMessageId) {
-          streamUsageByMessageId.set(streamingMessageId, deltaUsage)
+        if (deltaUsage) {
+          if (streamingMessageId) {
+            streamUsageByMessageId.set(streamingMessageId, deltaUsage)
+          }
+          if (hasPromptAccounting(deltaUsage)) {
+            lastSingleUsage = deltaUsage
+          }
         }
       }
 
@@ -854,16 +864,20 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       continue  // Sub-agent message handled, skip main processing
     }
 
-    // DEBUG: Log all SDK messages with timestamp
-    const elapsed = Date.now() - t1
-    console.log(`[Agent] SDK messages [${conversationId}] 🔵 +${elapsed}ms ${sdkMessage.type}:`,
-      JSON.stringify(sdkMessage, null, 2)
-    )
+    // DEBUG: Log all SDK messages with timestamp (ms since send).
+    // Same contract as the stream_event log above: debug channel, and the
+    // stringify stays behind the guard so it never runs on the hot path.
+    // A message carries user content and tool payloads, so it must not reach
+    // the production log.
+    if (isDeveloperMode()) {
+      const elapsed = Date.now() - t1
+      console.debug(`[Agent][${conversationId}] +${elapsed}ms ${sdkMessage.type}:`, JSON.stringify(sdkMessage))
+    }
 
-    // Capture per-call usage from real assistant messages (represents current
-    // context size). Synthetic messages (interrupt/cancel/reject) are skipped
-    // entirely — they are bookkeeping, not API calls, and must neither
-    // overwrite the last real usage nor open/flush a pending invocation.
+    // Capture per-call usage from real assistant messages. Synthetic messages
+    // (interrupt/cancel/reject) are skipped entirely — they are bookkeeping, not
+    // API calls, and must neither overwrite the last real usage nor open/flush a
+    // pending invocation.
     if (sdkMessage.type === 'assistant' && !isSyntheticAssistantMessage(sdkMessage)) {
       const messageId = (sdkMessage as { message?: { id?: string } }).message?.id
       // A frame with a different message id signals the previous API call's
@@ -876,7 +890,11 @@ export async function processStream(params: ProcessStreamParams): Promise<Stream
       }
       const usage = extractRealAssistantUsage(sdkMessage)
       if (usage) {
-        lastSingleUsage = usage
+        // Telemetry counts every call; the context gauge only accepts prompt
+        // accounting, so an output-only frame cannot blank it.
+        if (hasPromptAccounting(usage)) {
+          lastSingleUsage = usage
+        }
         pendingInvocation.usage = usage
       }
     }

@@ -45,6 +45,8 @@ export const updaterApi = {
     installMode?: 'installer' | 'restart'
     /** Download page to fall back to when the update cannot be applied. */
     downloadUrl?: string
+    /** Release marked unskippable by the feed — the prompt offers no way out but updating. */
+    mandatory?: boolean
   }) => void) => {
     if (!isElectron()) {
       return () => { } // No-op in remote mode

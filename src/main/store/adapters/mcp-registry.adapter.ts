@@ -9,9 +9,16 @@
  */
 
 import { fetchWithTimeout } from './halo.adapter'
-import type { RegistrySource, RegistryEntry, StoreQueryParams } from '../../../shared/store/store-types'
+import type { RegistrySource, RegistryEntry, StoreCategory, StoreQueryParams } from '../../../shared/store/store-types'
 import type { AppSpec, McpSpec } from '../../apps/spec/schema'
 import type { RegistryAdapter, AdapterQueryResult } from './types'
+
+/**
+ * The registry carries no category of its own, so every server lands in one
+ * Halo bucket. Labelling and filtering both read this constant, so they cannot
+ * drift apart (see the `query` contract in `adapters/types.ts`).
+ */
+const SERVED_CATEGORY: StoreCategory = 'dev-tools'
 
 // ── External API types ─────────────────────────────────────────────────────
 
@@ -58,6 +65,10 @@ export class McpRegistryAdapter implements RegistryAdapter {
   private cursorCache = new Map<string, string>()
 
   async query(source: RegistrySource, params: StoreQueryParams): Promise<AdapterQueryResult> {
+    if (params.category && params.category !== SERVED_CATEGORY) {
+      return { items: [], total: 0, hasMore: false }
+    }
+
     const baseUrl = source.url.replace(/\/+$/, '')
     const t0 = performance.now()
 
@@ -145,7 +156,7 @@ function mapServerItems(items: McpServerItem[]): RegistryEntry[] {
       type: 'mcp',
       format: 'bundle',
       path: server.name,
-      category: 'dev-tools',
+      category: SERVED_CATEGORY,
       tags: [],
       created_at: meta?.publishedAt,
       updated_at: meta?.updatedAt,

@@ -26,12 +26,24 @@ const MOCK_SOURCE: RegistrySource = {
   sourceType: 'skillhub',
 }
 
+/**
+ * SkillHub's published taxonomy (`GET /api/v1/categories`) minus `pay-skill`,
+ * which is a cross-cutting paid flag rather than a category. The list endpoint
+ * answers HTTP 400 for anything outside the published set, so the adapter must
+ * never emit a key that is missing here.
+ */
+const SKILLHUB_CATEGORY_KEYS = [
+  'office-efficiency', 'content-creation', 'dev-programming', 'data-analysis',
+  'design-media', 'ai-agent', 'knowledge-management', 'business-ops',
+  'education', 'professional', 'it-ops-security', 'life-service',
+]
+
 const MOCK_SKILL = {
   slug: 'code-review',
   name: 'Code Review',
   description: 'Automated code review assistant',
   description_zh: '自动代码审查助手',
-  category: 'DeveloperTools',
+  category: 'dev-programming',
   tags: ['code', 'review', 'quality'],
   ownerName: 'community-author',
   version: '1.2.0',
@@ -74,6 +86,11 @@ function jsonResponse(data: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   })
+}
+
+/** A fresh empty page per call — a Response body can only be read once. */
+function emptyPage(): Response {
+  return jsonResponse({ code: 0, message: 'success', data: { skills: [], total: 0 } })
 }
 
 function textResponse(body: string, status = 200): Response {
@@ -147,22 +164,26 @@ describe('SkillHubAdapter', () => {
       expect(entry.meta?.installs).toBe(100)
     })
 
-    it('appends search param when search is provided', async () => {
+    // The API silently ignores unknown parameters, so sending `search=` cost
+    // nothing visible and returned the unfiltered catalog on every query.
+    it('sends the search term as SkillHub\'s "keyword" parameter', async () => {
       fetchMock.mockResolvedValueOnce(jsonResponse({ ...MOCK_LIST_RESPONSE, data: { skills: [], total: 0 } }))
 
       await adapter.query(MOCK_SOURCE, { page: 1, pageSize: 10, search: 'code review' })
 
-      const url = String(fetchMock.mock.calls[0][0])
-      expect(url).toContain('search=code%20review')
+      const url = new URL(String(fetchMock.mock.calls[0][0]))
+      expect(url.searchParams.get('keyword')).toBe('code review')
+      expect(url.searchParams.has('search')).toBe(false)
     })
 
-    it('appends category param when category is provided', async () => {
-      fetchMock.mockResolvedValueOnce(jsonResponse({ ...MOCK_LIST_RESPONSE, data: { skills: [], total: 0 } }))
+    it('omits keyword when no search term is given', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(MOCK_LIST_RESPONSE))
 
-      await adapter.query(MOCK_SOURCE, { page: 1, pageSize: 24, category: 'dev-tools' })
+      await adapter.query(MOCK_SOURCE, { page: 1, pageSize: 24 })
 
-      const url = String(fetchMock.mock.calls[0][0])
-      expect(url).toContain('category=dev-tools')
+      const url = new URL(String(fetchMock.mock.calls[0][0]))
+      expect(url.searchParams.has('keyword')).toBe(false)
+      expect(url.searchParams.has('category')).toBe(false)
     })
 
     it('caps pageSize at 100', async () => {
@@ -248,9 +269,9 @@ describe('SkillHubAdapter', () => {
     })
   })
 
-  // ── Category mapping ──────────────────────────────────────────────────────
+  // ── Category vocabulary ───────────────────────────────────────────────────
 
-  describe('category mapping (via query)', () => {
+  describe('category display mapping', () => {
     async function querySingleCategory(category: string): Promise<string> {
       const response = {
         code: 0,
@@ -263,22 +284,133 @@ describe('SkillHubAdapter', () => {
     }
 
     it.each([
-      ['DeveloperTools', 'dev-tools'],
-      ['coding-assistant', 'dev-tools'],
-      ['data-analysis', 'data'],
+      ['office-efficiency', 'productivity'],
+      ['business-ops', 'productivity'],
       ['content-creation', 'content'],
-      ['writing-tools', 'content'],
-      ['productivity', 'productivity'],
-      ['workflow', 'productivity'],
-      ['social-media', 'social'],
-      ['chat-helpers', 'social'],
-      ['news-reader', 'news'],
-      ['web-search', 'news'],
-      ['unknown-category', 'other'],
+      ['design-media', 'content'],
+      ['dev-programming', 'dev-tools'],
+      ['ai-agent', 'dev-tools'],
+      ['it-ops-security', 'dev-tools'],
+      ['data-analysis', 'data'],
+      ['knowledge-management', 'data'],
+      ['education', 'other'],
+      ['professional', 'other'],
+      ['life-service', 'other'],
+      ['pay-skill', 'other'],   // a paid flag, never a real category value
+      ['a-category-added-after-this-release', 'other'],
       [undefined as unknown as string, 'other'],
     ])('maps %s → %s', async (input, expected) => {
       const mapped = await querySingleCategory(input)
       expect(mapped).toBe(expected)
+    })
+  })
+
+  describe('category filtering', () => {
+    function categoriesRequested(): string[] {
+      return fetchMock.mock.calls
+        .map(call => new URL(String(call[0])).searchParams.get('category'))
+        .filter((c): c is string => c !== null)
+    }
+
+    // Halo's key reaches the API verbatim on the old code and is answered with
+    // HTTP 400, which drops the whole source out of every category chip.
+    it('translates a Halo category into SkillHub keys', async () => {
+      fetchMock.mockImplementation(() => Promise.resolve(emptyPage()))
+
+      await adapter.query(MOCK_SOURCE, { page: 1, pageSize: 24, category: 'data' })
+
+      expect(categoriesRequested().sort()).toEqual(['data-analysis', 'knowledge-management'])
+    })
+
+    it('splits the page across the fanned-out streams', async () => {
+      fetchMock.mockImplementation(() => Promise.resolve(emptyPage()))
+
+      await adapter.query(MOCK_SOURCE, { page: 2, pageSize: 24, category: 'dev-tools' })
+
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      for (const call of fetchMock.mock.calls) {
+        const url = new URL(String(call[0]))
+        expect(url.searchParams.get('pageSize')).toBe('8')
+        expect(url.searchParams.get('page')).toBe('2')
+      }
+    })
+
+    it('carries the search term into every fanned-out stream', async () => {
+      fetchMock.mockImplementation(() => Promise.resolve(emptyPage()))
+
+      await adapter.query(MOCK_SOURCE, { page: 1, pageSize: 24, category: 'content', search: '文献采集' })
+
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      for (const call of fetchMock.mock.calls) {
+        expect(new URL(String(call[0])).searchParams.get('keyword')).toBe('文献采集')
+      }
+    })
+
+    it('interleaves the streams and sums their totals', async () => {
+      const page = (names: string[], total: number) => jsonResponse({
+        code: 0,
+        message: 'success',
+        data: { skills: names.map(n => ({ ...MOCK_SKILL, slug: n, name: n })), total },
+      })
+      fetchMock
+        .mockResolvedValueOnce(page(['a1', 'a2'], 100))
+        .mockResolvedValueOnce(page(['b1'], 7))
+
+      const result = await adapter.query(MOCK_SOURCE, { page: 1, pageSize: 24, category: 'data' })
+
+      expect(result.items.map(i => i.slug)).toEqual(['a1', 'b1', 'a2'])
+      expect(result.total).toBe(107)
+      expect(result.hasMore).toBe(true)
+    })
+
+    // Fanning out multiplied the chance of a failed request by the number of
+    // streams, so an all-or-nothing merge made a flaky sub-request cost the
+    // user the whole source.
+    it('serves the surviving streams and reports the result partial', async () => {
+      // Keyed on the stream rather than on call order: fetchWithTimeout retries,
+      // so a one-shot rejection is consumed by the first attempt alone.
+      fetchMock.mockImplementation((url: string) =>
+        new URL(String(url)).searchParams.get('category') === 'knowledge-management'
+          ? Promise.reject(new Error('ETIMEDOUT'))
+          : Promise.resolve(jsonResponse({
+              code: 0,
+              message: 'success',
+              data: { skills: [MOCK_SKILL], total: 100 },
+            }))
+      )
+
+      const result = await adapter.query(MOCK_SOURCE, { page: 1, pageSize: 24, category: 'data' })
+
+      expect(result.items.map(i => i.slug)).toEqual(['code-review'])
+      expect(result.total).toBe(100)
+      expect(result.partial).toContain('ETIMEDOUT')
+    })
+
+    it('throws when every stream fails', async () => {
+      fetchMock.mockRejectedValue(new Error('ETIMEDOUT'))
+
+      await expect(
+        adapter.query(MOCK_SOURCE, { page: 1, pageSize: 24, category: 'data' })
+      ).rejects.toThrow(/every category stream/)
+    })
+
+    it('answers a category SkillHub does not serve without any request', async () => {
+      const result = await adapter.query(MOCK_SOURCE, { page: 1, pageSize: 24, category: 'social' })
+
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(result).toEqual({ items: [], total: 0, hasMore: false })
+    })
+
+    it('never sends a Halo category key the API would reject', async () => {
+      fetchMock.mockImplementation(() => Promise.resolve(emptyPage()))
+
+      for (const category of ['shopping', 'news', 'social', 'other', 'content', 'dev-tools', 'productivity', 'data']) {
+        await adapter.query(MOCK_SOURCE, { page: 1, pageSize: 24, category })
+      }
+
+      for (const requested of categoriesRequested()) {
+        expect(SKILLHUB_CATEGORY_KEYS).toContain(requested)
+      }
     })
   })
 
@@ -298,7 +430,7 @@ describe('SkillHubAdapter', () => {
       tags: ['code', 'review'],
     }
 
-    it('fetches file manifest then downloads SKILL.md from COS', async () => {
+    it('fetches file manifest then downloads SKILL.md through the file redirect endpoint', async () => {
       fetchMock
         .mockResolvedValueOnce(jsonResponse(MOCK_FILES_RESPONSE))
         .mockResolvedValueOnce(textResponse(MOCK_SKILL_MD))
@@ -311,10 +443,29 @@ describe('SkillHubAdapter', () => {
       const manifestUrl = String(fetchMock.mock.calls[0][0])
       expect(manifestUrl).toContain('api.skillhub.cn/api/v1/skills/code-review/files')
 
-      // Second call: SKILL.md from COS
-      const cosUrl = String(fetchMock.mock.calls[1][0])
-      expect(cosUrl).toContain('code-review/v1.2.0/files/SKILL.md')
-      expect(cosUrl).toContain('skillhub-1388575217.cos.accelerate.myqcloud.com')
+      // Second call: SKILL.md via the API's own redirect, not a hand-built CDN URL —
+      // SkillHub's storage layout (flat/org/numeric-id prefixed) is not Halo's to assume.
+      const fileUrl = new URL(String(fetchMock.mock.calls[1][0]))
+      expect(fileUrl.origin + fileUrl.pathname).toBe('https://api.skillhub.cn/api/v1/skills/code-review/file')
+      expect(fileUrl.searchParams.get('path')).toBe('SKILL.md')
+      expect(fileUrl.searchParams.get('version')).toBe('v1.2.0')
+    })
+
+    it('keeps a nested manifest path intact through the query string', async () => {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse({
+          count: 2,
+          version: 'v1.2.0',
+          files: [{ path: 'SKILL.md' }, { path: 'scripts/review.py' }],
+        }))
+        .mockImplementation(() => Promise.resolve(textResponse(MOCK_SKILL_MD)))
+
+      await adapter.fetchSpec(MOCK_SOURCE, MOCK_ENTRY)
+
+      const requested = fetchMock.mock.calls
+        .slice(1)
+        .map(call => new URL(String(call[0])).searchParams.get('path'))
+      expect(requested).toContain('scripts/review.py')
     })
 
     it('returns a valid SkillSpec with SKILL.md content', async () => {

@@ -21,7 +21,7 @@ Deploy locally. Automate everything, around the clock. AI Digital Humans work wh
 <!-- TODO: Replace with a 30-second GIF showing: user types a sentence -> Agent automatically writes code -> files appear in Artifact Rail -> preview the result -->
 <div align="center">
 
-![Space Home](./docs/assets/space_home.jpg)
+![AI Digital Human Store](./docs/assets/shop_dh.png)
 
 </div>
 
@@ -37,6 +37,9 @@ Halo is an AI workstation powered by frontier Agent with a pluggable engine arch
 | **100% Local, Zero Cloud Dependency** — data never leaves your machine, meets enterprise compliance requirements |
 | **AI Digital Humans** — AI workers running autonomously 7x24, handling monitoring, reports, and routine operations |
 | **AI Browser** — embedded browser directly controlled by AI, automate any web-based system |
+| **Knowledge Base** — drop in your files, AI references them automatically when answering or working |
+| **AI Terminal** — built-in terminal the AI can operate directly, SSH, bastion hosts, any CLI tool |
+| **AI Operates Halo Itself** — hundreds of features, driven by natural language, loaded on demand with zero idle context cost |
 | **WeCom / WeChat Native Control** — manage AI agents from enterprise IM, zero training cost |
 | **Remote Access** — control from phone / H5 / WeChat / Android, managers review progress on the go |
 | **Download and Go** — zero configuration, no backend required, IT deploys in minutes |
@@ -47,7 +50,11 @@ Halo is an AI workstation powered by frontier Agent with a pluggable engine arch
 
 ## AI Digital Humans — Your Autonomous AI Workforce
 
-Traditional RPA follows rigid scripts and breaks when anything changes. Halo takes a different approach: **AI makes the decisions, Halo Browser Actions handle the operations.** The result is automation that understands context, adapts to changes, and executes with precision.
+Give it a goal and a schedule, and an AI Digital Human runs like an employee — not a bot executing a fixed script, but a digital coworker with memory, judgment, and hands.
+
+**Fully equipped:** Digital Humans share the exact same Agent capabilities as conversation mode — AI Browser for the web, AI Terminal for the OS and CLI tools, WeCom/WeChat for messaging, even operating Halo itself to change settings. Not a one-trick browser bot.
+
+**Long-term memory:** Every run doesn't start from zero — a Digital Human remembers where it left off, what it's seen, what it concluded — compounding over time instead of repeating the same work.
 
 ### Autonomous Agents Running 7x24
 
@@ -72,8 +79,6 @@ Install with one click from the **AI Digital Human Store**, deploy a **private s
 
 > Think of it as cron + RPA + AI Agent in one — except you just describe what you want in plain language.
 
-AI Digital Humans have the exact same Agent capabilities as conversation mode — the same Claude engine, MCP toolchain, and AI Browser — they just trigger automatically on schedule without needing you at the computer.
-
 **WeChat / WeCom is your control panel.** AI Digital Humans support two-way conversational control via personal WeChat / WeCom (Enterprise WeChat) — not just receiving notifications, you can give instructions, check progress, and request reports directly in your enterprise IM.
 
 ![AI Digital Human](./docs/assets/ai-digital-human.png)
@@ -84,56 +89,43 @@ AI Digital Humans have the exact same Agent capabilities as conversation mode �
 
 ### Halo Browser Action — AI Decides, Scripts Execute
 
-A Browser Action is a special kind of Skill: a reusable `.js` script that performs one concrete operation on one platform. This is what separates Halo from "AI browser agents" that fumble around clicking randomly.
+Traditional RPA follows a fixed script and breaks the moment something changes; Halo flips that: **AI makes the decision, Browser Action executes it precisely.**
 
-Halo Browser Actions take the RPA approach to reliability: **pre-write reusable scripts for common operations on each platform**. The AI only decides *what* to do and *when* — the script already knows *how*.
+A Browser Action is a special kind of Skill: a reusable `.js` script for one concrete operation on one platform. The AI only decides *what* to do and *when* — the script already knows *how*. This is what separates Halo from "AI browser agents" that fumble around clicking randomly.
 
-Scripts run directly in a real browser via Halo's `browser_run` — with full access to the page DOM, cookies, and internal APIs, just like the Chrome DevTools Console. This works for public platforms and private enterprise systems alike.
+Scripts run directly in a real browser, with full access to the page DOM, cookies, and internal APIs. Works for public platforms and private enterprise systems alike.
 
-**Example: Reading Bilibili notifications**
-
-```js
-// .claude/skills/bili-get-messages/index.js
-async (params) => {
-  const resp = await fetch('https://api.bilibili.com/x/msgfeed/reply?platform=web', {
-    credentials: 'include'  // cookies automatically included, no extra auth
-  }).then(r => r.json())
-
-  return {
-    success: true,
-    notifications: resp.data.items.map(item => ({
-      user: item.user.nickname,
-      comment: item.item.source_content,
-      video_title: item.item.title
-    }))
-  }
-}
-```
-
-AI calls it with: `browser_run({ file: ".claude/skills/bili-get-messages/index.js" })`
-
-**Example: Enterprise workflow — a Xiaohongshu content operations Digital Human:**
-1. AI decides: time to check for new comments on today's posts
-2. Calls `xhs-get-comments` Action → script fetches comment list via platform API
-3. AI judges: these 5 comments need replies, drafts personalized responses
-4. Calls `xhs-reply-comment` Action → script submits each reply
-
-**Example: Enterprise internal — a DevOps monitoring Digital Human:**
-1. AI decides: time for the hourly infra check
-2. Calls `check-grafana-alerts` Action → script reads alert dashboard via internal API
-3. AI judges: 2 alerts are critical, composes an incident summary
-4. Calls `create-jira-ticket` Action → script creates a P1 ticket with full context
-5. Calls `notify-oncall` Action → pushes alert to WeCom on-call group
-
-**AI decides. Actions execute. Stable, repeatable, auditable.**
-
-Ready-made Browser Actions are available for Xiaohongshu, Bilibili, Zhihu, Twitter / X, WeChat, and more. Enterprise teams can write private Actions for internal systems. The community can contribute and share their own.
+Ready-made Browser Actions are available for Xiaohongshu, Bilibili, Zhihu, Twitter / X, WeChat, and more. Enterprise teams can write private Actions for internal systems, and the community can contribute and share their own. **AI decides. Actions execute. Stable, repeatable, auditable.**
 
 Want to build one yourself? A full walkthrough — building an **OA Approval Assistant** that patrols a login-required internal system on a schedule — is in the docs: [**Build a Browser Action Digital Human →**](https://hello-halo.cc/docs/digital-humans/guide-02-build.html)
 
 ### Remote Access — Manage Your AI Fleet From Anywhere
 
 Once Remote Access is enabled, your phone / H5 / WeChat / Android client can control Halo on your desktop. During meetings, commuting, or on the road — check Digital Human outputs, approve decisions, and issue new instructions without being at your desk.
+
+---
+
+## Knowledge Base
+
+Drop in your everyday files, and AI references them automatically when answering questions or getting work done.
+
+Supports PDF, PPT, Markdown and other common office files, plus image OCR. Create a knowledge base, bind it to a space, then just ask AI "what's in my knowledge base" to use it.
+
+---
+
+## AI Terminal
+
+Halo has a built-in terminal the AI can operate directly — SSH, bastion hosts, ping+token logins, or driving native CLI tools like Claude Code / Codex.
+
+The terminal is persistent and visible: close it yourself when done, or open it anytime to take over manually — human and AI can hand off control without conflict.
+
+---
+
+## AI Operates Halo Itself
+
+Hundreds of operations — settings, session management, WeCom bot configuration — done directly through natural language, no digging through menus.
+
+These operations cost zero context by default: only the one you ask about gets loaded on demand, so hundreds of capabilities never slow down the conversation.
 
 ---
 
@@ -187,7 +179,7 @@ npm run dev
 
 Open the AI Digital Human Store, pick one, fill in a few configuration fields, and it starts running automatically. No coding required, no prompts to write.
 
-![AI Store](./docs/assets/shop.png)
+![Digital Human Install](./docs/assets/app_detail_install.png)
 
 </td>
 <td width="50%" valign="top">
@@ -209,6 +201,10 @@ You can also write Halo Browser Actions (`.js` scripts) for AI Digital Humans to
 ![Chat Intro](./docs/assets/chat_intro.jpg)
 
 ![Chat Todo](./docs/assets/chat_todo.jpg)
+
+*Skill Store: one-click install for content generation, dev tools, data analysis, and more*
+
+![Skill Store](./docs/assets/shop_skill.png)
 
 *Remote Access: Control Halo from anywhere*
 
@@ -232,20 +228,7 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────┐
-│                   Halo Desktop                    │
-│                                                   │
-│   React UI  <─IPC─>  Main Process  <──>  Claude  │
-│  (Renderer)          ┌───────────┐       Code SDK │
-│                      │ Digital   │      (Agent    │
-│                      │ Humans    │       Loop)    │
-│                      │ Scheduler │                │
-│                      └───────────┘                │
-│                           │                       │
-│                     ~/.halo/ (local)              │
-└──────────────────────────────────────────────────┘
-```
+Pluggable engine: the same product experience, with Claude Code, Codex, and other Agent engines swappable underneath.
 
 ---
 
@@ -253,10 +236,12 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 - **100% Local** — Your data never leaves your machine, meets enterprise compliance requirements
 - **No Backend Required** — Pure desktop client, deploy to every workstation with zero server infrastructure
-- **Agent Loop** — Tool execution, not just text generation
+- **Agent Loop** — Not just generating text, AI actually executes tools to get things done
 - **Space System** — Isolated workspaces, projects don't interfere with each other
 - **Skills** — Install skill packs to extend Agent capabilities
 - **AI Browser** — Embedded CDP browser, AI directly controls web pages
+- **Digital Human Capability Management** — Visually manage each Digital Human's MCP and Skill permissions
+- **Window Zoom** — 50%-150% freely, adapts to any screen or presentation
 - **Multi-Model Support** — Anthropic, OpenAI, DeepSeek, and any OpenAI-compatible API (connect to your enterprise LLM gateway)
 - **Dark/Light Themes** — Follows system preference
 - **Multi-Language** — Chinese, English, Spanish, and more
@@ -267,7 +252,7 @@ https://github.com/user-attachments/assets/2d4d2f3e-d27c-44b0-8f1d-9059c8372003
 
 ## Roadmap
 
-- [x] Claude Code SDK Agent Loop
+- [x] Agent Loop — tool execution, not just text generation
 - [x] Space and Conversation Management
 - [x] Artifact Preview (Code, HTML, Images, Markdown)
 - [x] Remote Access

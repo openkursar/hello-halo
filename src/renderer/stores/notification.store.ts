@@ -10,7 +10,6 @@
  * - Future: any module can push toasts via store actions
  *
  * Design:
- * - Visual style matches the existing UpdateNotification component
  * - Each toast auto-dismisses after a configurable duration
  * - Toasts stack from bottom-right, newest at the bottom
  */
@@ -50,6 +49,16 @@ export interface ToastItem {
   secondaryAction?: ToastAction
   /** Auto-dismiss duration in ms. 0 = sticky (manual dismiss only). Default: 6000 */
   duration: number
+  /**
+   * Whether the user may close this toast. Defaults to true.
+   *
+   * `false` removes the close button and keeps the toast alive across its own
+   * action, so the only way out is whatever the action itself does (currently:
+   * a mandatory update). Use it only when dismissing would let the user skip
+   * something they must not skip — a permanent toast they cannot act on is a
+   * dead end, not a policy.
+   */
+  dismissible?: boolean
   /** When this toast was created (for ordering) */
   createdAt: number
 }

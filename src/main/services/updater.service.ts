@@ -13,6 +13,11 @@
  *
  * If anything fails after an update was announced, the user is offered the
  * download page instead — a stalled progress toast is never a valid end state.
+ *
+ * A release can additionally be marked `mandatory: true` in its channel yml,
+ * which the renderer turns into a prompt with no defer and no dismiss. The flag
+ * lives in the feed rather than in product.json so a single release can be made
+ * unskippable after the fact, without shipping a client to decide it.
  */
 
 // Node/Electron imports
@@ -67,8 +72,35 @@ const MIN_CHECK_INTERVAL_MS = 5 * 60 * 1000
 /** Cached update config for constructing download URLs */
 let cachedUpdateConfig: UpdateConfig | undefined
 
-/** Update announced to the renderer but not yet downloaded, if any. */
-let pendingUpdate: { version: string; releaseNotes: UpdateInfo['releaseNotes'] } | null = null
+/**
+ * The update currently announced to the renderer, and how far it got.
+ *
+ * The phase decides whether an error still needs rescuing: 'downloading' and
+ * 'applying' both leave the user waiting on something that will never arrive,
+ * while 'ready' is a valid resting state — an update staged on disk survives a
+ * later network blip, so that failure is not the user's problem.
+ */
+let announcedUpdate:
+  | {
+      version: string
+      releaseNotes: UpdateInfo['releaseNotes']
+      mandatory: boolean
+      phase: 'downloading' | 'ready' | 'applying'
+    }
+  | null = null
+
+/**
+ * Whether the feed marks this release as one the user may not defer.
+ *
+ * `mandatory` is not part of electron-updater's UpdateInfo: the provider returns
+ * the parsed channel yml as-is, so a field added at publish time arrives here
+ * untouched and starts working without a client release. Only a literal `true`
+ * counts — a malformed feed must never be able to trap users behind a prompt
+ * they cannot close.
+ */
+function isMandatory(info: UpdateInfo): boolean {
+  return (info as UpdateInfo & { mandatory?: unknown }).mandatory === true
+}
 
 // ============================================================================
 // Configuration
@@ -161,7 +193,12 @@ export function initAutoUpdater(): void {
 
   autoUpdater.on('update-available', (info: UpdateInfo) => {
     console.log('[Updater] Update available:', info.version)
-    pendingUpdate = { version: info.version, releaseNotes: info.releaseNotes }
+    announcedUpdate = {
+      version: info.version,
+      releaseNotes: info.releaseNotes,
+      mandatory: isMandatory(info),
+      phase: 'downloading'
+    }
     sendUpdateStatus('available', {
       version: info.version,
       releaseDate: info.releaseDate,
@@ -171,7 +208,7 @@ export function initAutoUpdater(): void {
 
   autoUpdater.on('update-not-available', (info: UpdateInfo) => {
     console.log('[Updater] No update available, current version is latest:', info.version)
-    pendingUpdate = null
+    announcedUpdate = null
     sendUpdateStatus('not-available', { version: info.version })
   })
 
@@ -187,26 +224,33 @@ export function initAutoUpdater(): void {
 
   autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
     console.log('[Updater] Update downloaded:', info.version)
-    pendingUpdate = null
+    announcedUpdate = {
+      version: info.version,
+      releaseNotes: info.releaseNotes,
+      mandatory: isMandatory(info),
+      phase: 'ready'
+    }
     sendUpdateStatus('downloaded', {
       version: info.version,
       releaseNotes: info.releaseNotes,
-      installMode: INSTALL_MODE
+      installMode: INSTALL_MODE,
+      mandatory: announcedUpdate.mandatory
     })
   })
 
   autoUpdater.on('error', (error) => {
     console.error('[Updater] Error:', error.stack || error.message)
 
-    // An announced update that then fails to download or stage would otherwise
-    // leave the user on a progress toast that never completes. Hand them the
-    // download page so the release is still reachable.
-    if (pendingUpdate) {
-      const { version, releaseNotes } = pendingUpdate
-      pendingUpdate = null
+    // An announced update that then fails to download, or fails while being
+    // applied, would otherwise leave the user waiting on a toast that never
+    // resolves. Hand them the download page so the release is still reachable.
+    if (announcedUpdate && announcedUpdate.phase !== 'ready') {
+      const { version, releaseNotes, mandatory } = announcedUpdate
+      announcedUpdate = null
       sendUpdateStatus('manual-download', {
         version,
         releaseNotes,
+        mandatory,
         downloadUrl: getDownloadPageUrl(version)
       })
       return
@@ -322,11 +366,27 @@ export async function manualCheckForUpdates(): Promise<void> {
  * @see https://github.com/electron-userland/electron-builder/issues/1368
  */
 export function quitAndInstall(): void {
+  if (announcedUpdate) {
+    announcedUpdate.phase = 'applying'
+  }
+
   setTimeout(() => {
     try {
       autoUpdater.quitAndInstall(false, true)
     } catch (error) {
       console.error('[Updater] quitAndInstall failed:', error)
+      // Squirrel reports most staging failures asynchronously through the
+      // 'error' event; a synchronous throw never reaches it, so report here.
+      if (announcedUpdate) {
+        const { version, releaseNotes, mandatory } = announcedUpdate
+        announcedUpdate = null
+        sendUpdateStatus('manual-download', {
+          version,
+          releaseNotes,
+          mandatory,
+          downloadUrl: getDownloadPageUrl(version)
+        })
+      }
     }
   }, QUIT_AND_INSTALL_DELAY_MS)
 }

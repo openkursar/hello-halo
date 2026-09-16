@@ -92,7 +92,8 @@
 13. **Chat turn-level features must cover every chat entry point.**
     - Cross-cutting turn behavior (images/attachments, thinking, context injection, message assembly) must live in a shared module under `services/agent/` (the `message-utils.ts` / `image-attachments.ts` pattern); entry points only add thin wiring.
     - Entry-point checklist — verify each one when adding/changing a turn feature:
-      - `services/agent/send-message.ts` — space (main) chat
+      - `services/agent/send-message.ts` — space (main) chat (in-process MCP servers are
+        assembled in `services/agent/toolsets/broker.ts`)
       - `apps/runtime/app-chat.ts` — digital-human chat (IM inbound converges here via `dispatch-inbound.ts`)
       - `apps/runtime/execute.ts` — automation runs
     - Request shapes crossing renderer→main must use a shared type; never re-declare them inline per surface (the `media_type`/`mediaType` shape fork shipped a broken field for months because three inline declarations drifted).
@@ -204,7 +205,7 @@ client release.
    fallback served when the docs host is unreachable. Required before cutting a release;
    skipping it leaves offline users on outdated guidance.
 3. Never rename `index.md` or `create-digital-human/SKILL.md` — both paths are hard-coded in
-   `apps/conversation-mcp/index.ts` and shipped clients cannot follow a rename.
+   `services/official-docs-mcp/index.ts` and shipped clients cannot follow a rename.
 
 ## 4) Known Gaps You Must Account For
 

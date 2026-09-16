@@ -14,22 +14,26 @@ import type { ReasoningEffortSetting } from '../../../shared/constants/reasoning
 /**
  * Resolved per-model capability values consumed by the agent runtime.
  *
- * These come from `modelCapabilitiesService.resolve(modelId, source.modelOverrides)`,
- * which merges built-in presets with the per-source user overrides edited in
- * Settings > Provider > Model Config. Carrying them on the credential keeps
+ * These come from `modelCapabilitiesService.resolve(modelId, source.modelOverrides,
+ * catalogCapability)`, which merges built-in presets, the model's provider-declared
+ * catalog capability (`ModelOption.capabilities`), and the per-source user overrides
+ * edited in Settings > Provider > Model Config. Carrying them on the credential keeps
  * resolution in a single place (helpers.ts) so every SDK call site uses the
  * same effective numbers.
  */
 export interface ResolvedModelCapabilities {
-  /** Effective max output tokens for the model (preset merged with user override) */
   maxOutputTokens: number
-  /** Effective context window for the model (preset merged with user override) */
   contextWindow: number
-  /**
-   * How hard the model should think while Deep Thinking is on, as set by the
-   * user in Model Config. `undefined` = use Halo's default level.
-   */
   reasoningEffort?: ReasoningEffortSetting
+  /** User opted this model into a window above CC's 200K intrinsic. */
+  extendedContext?: boolean
+  /**
+   * False when `maxOutputTokens` is only Halo's blanket fallback — no preset,
+   * no catalog entry, no user value. Required rather than optional so every
+   * producer has to state it: an absent flag read as "configured" would put a
+   * guess on the wire for exactly the models Halo knows nothing about.
+   */
+  maxOutputTokensConfigured: boolean
 }
 
 /**

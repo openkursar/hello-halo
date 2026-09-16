@@ -377,7 +377,15 @@ export class QueryService {
         allItems.push(...result.value.items)
         if (result.value.total != null) totalAcc += result.value.total
         if (result.value.hasMore) anyHasMore = true
-        sources.push({ registryId: registry.id, status: 'ok' })
+        // A partly-answered source still contributes its items — dropping them
+        // helps nobody — but its total undercounts, so it is reported as failed
+        // and callers reading `total` as the catalog discard it.
+        if (result.value.partial) {
+          console.warn(`[QueryService] Partial proxy result for "${registry.name}": ${result.value.partial}`)
+          sources.push({ registryId: registry.id, status: 'error', error: result.value.partial })
+        } else {
+          sources.push({ registryId: registry.id, status: 'ok' })
+        }
       } else {
         const msg = result.reason instanceof Error ? result.reason.message : String(result.reason)
         console.error(`[QueryService] Proxy query failed for "${registry.name}": ${msg}`)
@@ -416,8 +424,12 @@ export class QueryService {
       `[StoreQuery] source=${registry.id} type=${queryType} status=request-done items=${result.items.length} total=${result.total ?? 0} hasMore=${result.hasMore} durationMs=${Math.round(performance.now() - startedAt)}`
     )
 
-    // Write to cache + LRU eviction
-    this.writeQueryCache(cacheKey, registry.id, params, result)
+    // Write to cache + LRU eviction. A partial result is never cached: the
+    // cache row has no column for the reason, so reading it back would present
+    // an undercounted total as a complete one for the rest of the TTL.
+    if (!result.partial) {
+      this.writeQueryCache(cacheKey, registry.id, params, result)
+    }
 
     return result
   }

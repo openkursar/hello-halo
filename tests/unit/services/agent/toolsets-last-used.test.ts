@@ -31,6 +31,9 @@ vi.mock('../../../../src/main/services/web-search', () => ({
 vi.mock('../../../../src/main/services/app-bridge', () => ({
   createHaloAppsMcpServer: vi.fn(() => ({}))
 }))
+vi.mock('../../../../src/main/services/official-docs-mcp', () => ({
+  createOfficialDocsSession: vi.fn(() => ({ server: {}, guideConsulted: () => false }))
+}))
 vi.mock('../../../../src/main/services/agent/toolsets/meta-server', () => ({
   createBrokerMetaServer: vi.fn(() => ({})),
   CAPABILITIES_SERVER_NAME: 'capabilities'

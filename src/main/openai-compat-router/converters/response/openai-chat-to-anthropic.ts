@@ -18,6 +18,8 @@ import {
 
 import { generateMessageId, generateServerToolUseId } from '../../utils'
 
+import { createEmptyUsage, normalizeOpenAIUsage } from './usage'
+
 // ============================================================================
 // Stop Reason Mapping
 // ============================================================================
@@ -210,6 +212,8 @@ export function convertOpenAIChatToAnthropic(
   // Map stop reason
   const stopReason = mapFinishReasonToStopReason(choice.finish_reason)
 
+  const usage = normalizeOpenAIUsage(openaiResponse.usage) ?? createEmptyUsage()
+
   return {
     id: openaiResponse.id,
     type: 'message',
@@ -219,9 +223,10 @@ export function convertOpenAIChatToAnthropic(
     stop_reason: stopReason,
     stop_sequence: null,
     usage: {
-      input_tokens: openaiResponse.usage?.prompt_tokens || 0,
-      output_tokens: openaiResponse.usage?.completion_tokens || 0,
-      cache_read_input_tokens: openaiResponse.usage?.cache_read_input_tokens
+      input_tokens: usage.inputTokens,
+      output_tokens: usage.outputTokens,
+      cache_read_input_tokens: usage.cacheReadTokens,
+      cache_creation_input_tokens: usage.cacheCreationTokens
     }
   }
 }

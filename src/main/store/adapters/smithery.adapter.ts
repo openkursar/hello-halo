@@ -10,9 +10,16 @@
 
 import { fetchWithTimeout } from './halo.adapter'
 import { sanitizeSlug } from './mcp-registry.adapter'
-import type { RegistrySource, RegistryEntry, StoreQueryParams } from '../../../shared/store/store-types'
+import type { RegistrySource, RegistryEntry, StoreCategory, StoreQueryParams } from '../../../shared/store/store-types'
 import type { AppSpec, McpSpec } from '../../apps/spec/schema'
 import type { RegistryAdapter, AdapterQueryResult } from './types'
+
+/**
+ * Smithery exposes no category of its own, so every server lands in one Halo
+ * bucket. Labelling and filtering both read this constant, so they cannot drift
+ * apart (see the `query` contract in `adapters/types.ts`).
+ */
+const SERVED_CATEGORY: StoreCategory = 'dev-tools'
 
 // ── External API types ─────────────────────────────────────────────────────
 
@@ -42,6 +49,10 @@ export class SmitheryAdapter implements RegistryAdapter {
   readonly strategy = 'proxy' as const
 
   async query(source: RegistrySource, params: StoreQueryParams): Promise<AdapterQueryResult> {
+    if (params.category && params.category !== SERVED_CATEGORY) {
+      return { items: [], total: 0, hasMore: false }
+    }
+
     const apiKey = source.adapterConfig?.apiKey as string | undefined
     const baseUrl = source.url.replace(/\/+$/, '')
     const pageSize = params.pageSize || 50
@@ -125,7 +136,7 @@ function mapSmitheryServers(servers: SmitheryServer[]): RegistryEntry[] {
       type: 'mcp',
       format: 'bundle',
       path: server.qualifiedName,
-      category: 'dev-tools',
+      category: SERVED_CATEGORY,
       tags: [],
       meta: {
         rank: typeof server.useCount === 'number' ? server.useCount : undefined,

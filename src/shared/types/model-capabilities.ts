@@ -7,10 +7,23 @@
  * Design:
  *   - Preset data lives in src/shared/data/model-capabilities.json
  *   - Users can override any field per-model inside their AISource config
- *   - Priority: user override > JSON preset > built-in defaults
+ *   - Priority, highest first: user override > `[1m]` id suffix (contextWindow
+ *     only) > exact preset entry > provider catalog data > family pattern
+ *     entry > built-in defaults. A pattern is a family guess and ranks below
+ *     the provider's live catalog; an exact entry is curated and ranks above
+ *     it. Resolved in src/main/services/model-capabilities.service.ts.
  *   - Vision has its own resolution chain implemented in
  *     src/shared/constants/model-capabilities.ts — every consumer
  *     (renderer hint, backend config, image fallback) resolves through it.
+ *
+ * TODO(shared/models): this concern is spread across six files in four
+ * directories — types/model-capabilities.ts, constants/model-capabilities.ts,
+ * constants/model-runtime-limits.ts, data/model-capabilities.json,
+ * model-catalog.ts and model-capability-overrides.ts. Nothing in the paths
+ * tells a newcomer where capability resolution lives. Fold them into
+ * `src/shared/models/` (preset-lookup / runtime-limits / catalog / overrides /
+ * types). Deferred deliberately: it is an import-only move touching many
+ * unrelated files and does not belong in a behavioural change.
  */
 
 import type { ReasoningEffortSetting } from '../constants/reasoning-effort'
@@ -45,6 +58,14 @@ export interface UserModelSettings {
    * on. Absent = Halo's default level.
    */
   reasoningEffort?: ReasoningEffortSetting
+  /** Allow Halo to opt the SDK-facing model into context above 200K. */
+  extendedContext?: boolean
+}
+
+/** Provider-reported numeric limits from a model catalog. */
+export interface CatalogModelCapability {
+  contextWindow?: number
+  maxOutputTokens?: number
 }
 
 /**
@@ -53,7 +74,7 @@ export interface UserModelSettings {
  */
 export type ModelCapabilityOverride = Partial<ModelCapability> & UserModelSettings
 
-/** Preset capability merged with the user's own settings. */
+/** Preset capability merged with catalog data and the user's own settings. */
 export type ResolvedModelCapability = ModelCapability & UserModelSettings
 
 /**

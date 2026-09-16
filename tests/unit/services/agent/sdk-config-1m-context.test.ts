@@ -3,6 +3,11 @@
  * id encoded into the API key stays clean. Without the suffix, CC clamps
  * unknown-model windows to its 200K default and the user's configured
  * contextWindow is silently truncated.
+ *
+ * The suffix is gated on the user's explicit `extendedContext` opt-in, not on
+ * the window alone: on anthropic-family sources it adds a long-context beta
+ * header that changes pricing tier, so a number arriving from a third-party
+ * catalog must not be able to open it on its own.
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -19,13 +24,42 @@ vi.mock('../../../../src/main/services/analytics/analytics.service', () => ({
 import { applyCC1mContextUnlock } from '../../../../src/main/services/agent/sdk-config'
 
 describe('applyCC1mContextUnlock', () => {
-  it('appends [1m] when contextWindow exceeds CC default (200K)', () => {
+  it('appends [1m] when the user opted in and contextWindow exceeds CC default (200K)', () => {
+    expect(
+      applyCC1mContextUnlock('deepseek-v4-flash', {
+        maxOutputTokens: 64_000,
+        contextWindow: 500_000,
+        extendedContext: true,
+      })
+    ).toBe('deepseek-v4-flash[1m]')
+  })
+
+  it('does not append for a large window the user never opted into', () => {
+    // The window can come straight from a provider catalog. Opening the beta
+    // branch off that alone would let remote data change pricing tier.
     expect(
       applyCC1mContextUnlock('deepseek-v4-flash', {
         maxOutputTokens: 64_000,
         contextWindow: 500_000,
       })
-    ).toBe('deepseek-v4-flash[1m]')
+    ).toBe('deepseek-v4-flash')
+    expect(
+      applyCC1mContextUnlock('deepseek-v4-flash', {
+        maxOutputTokens: 64_000,
+        contextWindow: 500_000,
+        extendedContext: false,
+      })
+    ).toBe('deepseek-v4-flash')
+  })
+
+  it('does not append when the user opted in but the window does not need it', () => {
+    expect(
+      applyCC1mContextUnlock('claude-sonnet-4', {
+        maxOutputTokens: 64_000,
+        contextWindow: 200_000,
+        extendedContext: true,
+      })
+    ).toBe('claude-sonnet-4')
   })
 
   it('does not append when contextWindow equals CC default (200K)', () => {
@@ -105,6 +139,7 @@ describe('applyCC1mContextUnlock', () => {
       applyCC1mContextUnlock('custom-large', {
         maxOutputTokens: 64_000,
         contextWindow: 200_001,
+        extendedContext: true,
       })
     ).toBe('custom-large[1m]')
   })
@@ -127,6 +162,7 @@ describe('applyCC1mContextUnlock', () => {
       applyCC1mContextUnlock('zai-org/GLM-4.7-1M', {
         maxOutputTokens: 64_000,
         contextWindow: 1_000_000,
+        extendedContext: true,
       })
     ).toBe('zai-org/GLM-4.7-1M[1m]')
   })

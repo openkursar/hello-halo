@@ -82,8 +82,8 @@ export function loadIgnoreRules(rootPath: string): Ignore {
 }
 
 /**
- * Tree scanning rules: no .gitignore, so gitignored files stay visible
- * (matching VS Code's file explorer).
+ * Tree scanning rules: VCS metadata only, matching VS Code's `files.exclude`.
+ * Everything else stays visible — gitignored files, node_modules, build output.
  *
  * Directories the watcher ignores still appear here but receive no fs events;
  * they refresh on window focus or manual reconcile, not on expand.
@@ -91,7 +91,6 @@ export function loadIgnoreRules(rootPath: string): Ignore {
 export function loadTreeIgnoreRules(): Ignore {
   const ig = ignore()
   ig.add(TREE_HIDDEN_DIRS)
-  ig.add(BASELINE_IGNORE_PATTERNS)
   return ig
 }
 
