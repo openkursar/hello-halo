@@ -63,6 +63,16 @@ const VIEWER_PATHS = [
 const GATE_PATHS = [/^scripts\/perf-gate\//, /^tests\/perf\//]
 
 /**
+ * The local macOS build path. Its tests are node:test rather than vitest, so
+ * the unit-test scoping below cannot reach them.
+ */
+const MAC_BUILD_PATHS = [
+  /^scripts\/(build|install)-mac-local\.cjs$/,
+  /^scripts\/lib\/mac-local-signing\.cjs$/,
+  /^tests\/check\/mac-local-signing\.test\.cjs$/
+]
+
+/**
  * Unit tests that do not pass on a clean checkout, and so cannot be part of any
  * gate: a check that is always red is a check people learn to ignore. Recorded
  * with the reason rather than silently dropped, so that fixing the cause also
@@ -161,6 +171,11 @@ const checks = [
     name: 'markdown chunking guards',
     argv: ['npx', 'tsx', 'tests/perf/checks/markdown-chunking-guards.ts'],
     when: touched(VIEWER_PATHS)
+  },
+  {
+    name: 'local macOS signing',
+    argv: ['node', '--test', 'tests/check/mac-local-signing.test.cjs'],
+    when: touched(MAC_BUILD_PATHS)
   }
 ]
 

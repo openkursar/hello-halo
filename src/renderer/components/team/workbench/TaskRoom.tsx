@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, AlertCircle, ArrowRight, Pencil, Check, X } from 'lucide-react'
-import type { TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
+import type { RosterMember, TeamConversation, TeamDetail } from '../../../../shared/apps/team-types'
 import { isRemoteMember } from '../../../../shared/apps/team-types'
 import { useTeamStore } from '../../../stores/team.store'
 import { useAppsStore } from '../../../stores/apps.store'
-import { useDefaultChatTarget, useTeamViewPrefsStore } from '../../../stores/team-view-prefs.store'
+import { useTeamViewPrefsStore } from '../../../stores/team-view-prefs.store'
 import { useTranslation } from '../../../i18n'
 import { TeamSessionChat } from '../TeamSessionChat'
 import { useTaskDecisions } from './useTaskDecisions'
@@ -15,16 +15,16 @@ import { ExecutionStatus } from './ExecutionStatus'
 import { TaskStartGuide } from './TaskStartGuide'
 import { AutomationAvatar } from '../../apps/AutomationAvatar'
 
-export function TaskRoom({ detail, task, onCreated, onActivity, boardState, decisionTarget, tasks, onTask, onExecution }: {
-  detail: TeamDetail; task: TeamConversation | null; onCreated: (id: string) => void; onActivity: (activityId?: string) => void; boardState: TaskBoardState; decisionTarget?: string; tasks: TeamConversation[]; onTask: (id: string, decisionEntry?: boolean) => void; onExecution: (appId: string) => void
+export function TaskRoom({ detail, task, selectedAppId, onSelectMember, onCreated, onActivity, boardState, decisionTarget, tasks, onTask, onExecution }: {
+  detail: TeamDetail; task: TeamConversation | null; selectedAppId: string | null; onSelectMember: (member: RosterMember) => void
+  onCreated: (id: string) => void; onActivity: (activityId?: string) => void; boardState: TaskBoardState; decisionTarget?: string; tasks: TeamConversation[]; onTask: (id: string, decisionEntry?: boolean) => void; onExecution: (appId: string) => void
 }) {
   const { t } = useTranslation()
   const apps = useAppsStore(s => s.apps)
   const own = useMemo(() => detail.members.filter(m => !isRemoteMember(m) && apps.some(app => app.id === m.appId)), [detail.members, apps])
   const ids = useMemo(() => own.map(m => m.appId), [own])
-  const defaultTarget = useDefaultChatTarget(detail.team.id, ids)
   const setDefault = useTeamViewPrefsStore(s => s.setDefaultMember)
-  const appId = task?.readonly ? task.memberAppId ?? detail.team.leadAppId : defaultTarget
+  const appId = selectedAppId
   const member = detail.roster.find(m => m.appId === appId)
   const epochId = task?.epochId ?? null
   const [renaming, setRenaming] = useState(false)
@@ -44,7 +44,11 @@ export function TaskRoom({ detail, task, onCreated, onActivity, boardState, deci
   useEffect(() => { if (decisionTarget) setFocusedDecision(decisionTarget) }, [decisionTarget])
   const reminder = pending.length > 0 && <button onClick={() => {
     const entry = pending.find(item => item.appId === appId) ?? pending[0]
-    if (ids.includes(entry.appId)) setDefault(detail.team.id, entry.appId)
+    if (ids.includes(entry.appId)) {
+      setDefault(detail.team.id, entry.appId)
+      const target = detail.roster.find(item => item.appId === entry.appId)
+      if (target) onSelectMember(target)
+    }
     setFocusedDecision(entry.id)
   }} className="mb-2 flex min-h-10 w-full items-center gap-2 rounded-lg border border-halo-warning/30 bg-halo-warning/5 px-3 py-2 text-left text-xs text-halo-warning focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
     <AlertCircle size={15} className="shrink-0" /><span className="min-w-0 flex-1">{t('{{count}} decisions need your answer', { count: pending.length })}</span><span>{t('View')}</span><ArrowRight size={14} />
@@ -71,7 +75,10 @@ export function TaskRoom({ detail, task, onCreated, onActivity, boardState, deci
   const rememberConversation = useCallback((id: string) => setLastConversation(previous => previous?.epochId === epochId && previous.appId === id ? previous : { epochId, appId: id }), [epochId])
   const otherDecisions = (detail.pendingEscalations ?? []).filter(entry => entry.appId === appId && entry.epochId && entry.epochId !== epochId)
   const emptyActions = <div className="mt-3 space-y-2">
-    {lastConversation && lastConversation.epochId === epochId && lastConversation.appId !== appId && <button onClick={() => setDefault(detail.team.id, lastConversation.appId)} className="block min-h-8 rounded text-left text-xs text-primary hover:underline">{t('Return to your conversation with {{name}}', { name: detail.roster.find(item => item.appId === lastConversation.appId)?.memberName ?? t('Former member') })} →</button>}
+    {lastConversation && lastConversation.epochId === epochId && lastConversation.appId !== appId && <button onClick={() => {
+      const target = detail.roster.find(item => item.appId === lastConversation.appId)
+      if (target) onSelectMember(target)
+    }} className="block min-h-8 rounded text-left text-xs text-primary hover:underline">{t('Return to your conversation with {{name}}', { name: detail.roster.find(item => item.appId === lastConversation.appId)?.memberName ?? t('Former member') })} →</button>}
     {otherDecisions.slice(0, 2).map(entry => <button key={entry.entryId} onClick={() => onTask(entry.epochId!, true)} className="block min-h-8 rounded text-left text-xs text-halo-warning hover:underline">{t('Needs your answer in {{task}}', { task: tasks.find(item => item.epochId === entry.epochId)?.label ?? t('Another task') })} →</button>)}
   </div>
   const timeline = (messages: import('../../../types').Message[], liveThoughts: import('../../../types').Thought[] = []) => <>
@@ -79,14 +86,19 @@ export function TaskRoom({ detail, task, onCreated, onActivity, boardState, deci
       emptyActions={emptyActions} onHumanConversation={rememberConversation} focusDecision={focusedDecision} onDecisionFocused={() => setFocusedDecision(null)} decisions={decisions.filter(entry => (entry.appId === appId || !ids.includes(entry.appId)) && !decisionHasReceipt(entry, liveThoughts))} onAnswered={entry => { decisionHistory.answered(entry); refresh() }} />
     {epochId && member && appId && isTeamBackgroundTurn(messages) && <ExecutionStatus teamId={detail.team.id} epochId={epochId} appId={appId} remote={member.sameMachine === false} busy={!!member.busy?.some(row => row.epochId === epochId)} latestResult={[...messages].reverse().find(message => message.role === 'assistant')} onOpen={() => onExecution(appId)} />}
   </>
-  const picker = !task?.readonly && member ? own.length > 1 ? <label className="flex min-w-0 items-center gap-1.5 rounded-lg border border-border bg-background pl-1.5 text-xs">
-    <span className="shrink-0"><AutomationAvatar name={member.memberName} size={20} /></span>
-    <select aria-label={t('Choose which of your digital humans to talk to')} title={member.memberName} value={appId ?? ''} onChange={event => setDefault(detail.team.id, event.target.value)} className="min-w-0 max-w-36 truncate rounded-lg bg-background py-1.5 pl-0.5 pr-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:max-w-48">
-      {own.map(m => <option key={m.appId} value={m.appId}>{m.memberName}</option>)}
-    </select>
-  </label> : <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" title={member.memberName}>
+  const memberLabel = member ? <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" title={member.memberName}>
     <span className="shrink-0"><AutomationAvatar name={member.memberName} size={20} /></span><span className="max-w-32 truncate sm:max-w-48">{member.memberName}</span>
   </span> : undefined
+  const picker = member && !task?.readonly && ids.includes(member.appId) && own.length > 1 ? <label className="flex min-w-0 items-center gap-1.5 rounded-lg border border-border bg-background pl-1.5 text-xs">
+    <span className="shrink-0"><AutomationAvatar name={member.memberName} size={20} /></span>
+    <select aria-label={t('Choose which of your digital humans to talk to')} title={member.memberName} value={appId ?? ''} onChange={event => {
+      setDefault(detail.team.id, event.target.value)
+      const target = detail.roster.find(item => item.appId === event.target.value)
+      if (target) onSelectMember(target)
+    }} className="min-w-0 max-w-36 truncate rounded-lg bg-background py-1.5 pl-0.5 pr-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:max-w-48">
+      {own.map(m => <option key={m.appId} value={m.appId}>{m.memberName}</option>)}
+    </select>
+  </label> : memberLabel
   return <section className="flex h-full min-h-0 min-w-0 flex-col" aria-label={t('Task room')}>
     <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-border px-4 py-2">
       {renaming ? <form className="flex min-w-0 flex-1 items-center gap-2" onSubmit={event => { event.preventDefault(); void saveTitle() }}>
@@ -104,7 +116,10 @@ export function TaskRoom({ detail, task, onCreated, onActivity, boardState, deci
     {(task?.readonly || !appId) && <div className="shrink-0 px-3">{reminder}</div>}
     {appId && member ? <TeamSessionChat key={appId}
       appId={appId} spaceId={apps.find(app => app.id === appId)?.spaceId ?? member.spaceId ?? ''}
-      teamId={detail.team.id} epochId={epochId} isRemote={member.sameMachine === false} readonly={task?.readonly || member.sameMachine === false}
+      teamId={detail.team.id} epochId={epochId} isRemote={member.sameMachine === false} ownerName={member.owner} readonly={task?.readonly || member.sameMachine === false}
+      readonlyMessage={member.sameMachine === false
+        ? member.owner ? t('Viewing {{name}}’s work. Only {{owner}} can send messages.', { name: member.memberName, owner: member.owner }) : t('Viewing this teammate’s digital human. Only its owner can send messages.')
+        : t('This task is read-only.')}
       draftKey={`${detail.team.id}:${task?.workItemId ?? epochId ?? 'draft'}:${appId}`}
       ensureEpochId={epochId ? undefined : ensureEpoch} toolbarSlot={picker}
 

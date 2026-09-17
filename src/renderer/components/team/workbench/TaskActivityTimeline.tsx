@@ -69,9 +69,10 @@ export function TaskActivityTimeline({ messages, activities, detail, showEmpty =
     })
     return () => cancelAnimationFrame(frame)
   }, [focusActivityId, rows, liveRows, readingRows, page])
+  const members = useMemo(() => new Map(detail.roster.map(member => [member.appId, member])), [detail.roster])
   const names = useMemo(() => new Map(detail.roster.map(member => [member.appId, member.memberName])), [detail.roster])
   const name = (id: string) => names.get(id) ?? t('Former member')
-  const kinds = { message: t('Message'), reply: t('Reply'), task_post: t('Task assigned'), task_update: t('Progress update'), finding: t('Output'), check_set: t('Follow-up scheduled'), check_stop: t('Follow-up stopped'), run_end: t('Task summary'), decision: t('Answered') }
+  const kinds = { message: t('Message'), reply: t('Reply'), task_post: t('Task assigned'), task_update: t('Progress update'), finding: t('Output'), check_set: t('Follow-up scheduled'), check_stop: t('Follow-up stopped'), run_end: t('Task summary'), decision: t('Decision') }
   const header = (appId: string, at: number | null, label: string, recordId: string, targetId?: string | null) => <div className="flex items-start gap-2.5">
     <span className="mt-0.5 shrink-0"><AutomationAvatar name={name(appId)} size={26} /></span>
     <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs leading-5"><span className="max-w-full truncate font-medium text-foreground">{name(appId)}</span>{targetId && <><ArrowRight size={12} className="shrink-0 text-muted-foreground/60" aria-hidden="true" /><span className="max-w-full truncate text-muted-foreground">{name(targetId)}</span></>}</div><p className="text-[11px] text-muted-foreground">{label}</p></div>
@@ -79,9 +80,16 @@ export function TaskActivityTimeline({ messages, activities, detail, showEmpty =
   </div>
   const activityCard = (act: TeamActivity) => {
     const attention = activityLevel(act) === 'attention'
+    const actor = members.get(act.actorAppId)
+    const attentionLabel = act.status === 'undelivered' ? t('Not delivered')
+      : act.status === 'timeout' ? t('Timed out')
+        : act.status === 'escalation' ? actor?.sameMachine === false
+          ? actor.owner ? t('Waiting for {{owner}}’s decision', { owner: actor.owner }) : t('Waiting for its owner’s decision')
+          : t('Needs your decision')
+        : t('Failed')
     return <article key={act.id} data-activity-id={act.id} tabIndex={-1} className={`min-w-0 rounded-xl border p-3 transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background ${attention ? 'border-halo-warning/40 bg-halo-warning/5' : 'border-border bg-background'}`}>
-      {header(act.actorAppId, taskTime(act.createdAt), kinds[act.kind], act.id, act.targetAppId)}
-      {attention && <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-halo-warning"><AlertTriangle size={13} />{act.status === 'undelivered' ? t('Not delivered') : act.status === 'timeout' ? t('Timed out') : act.status === 'escalation' ? t('Needs my decision') : t('Failed')}</p>}
+      {header(act.actorAppId, taskTime(act.createdAt), act.kind === 'decision' && act.status === 'escalation' ? t('Decision requested') : kinds[act.kind], act.id, act.targetAppId)}
+      {attention && <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-halo-warning"><AlertTriangle size={13} />{attentionLabel}</p>}
       <ActivityContent content={act.body || act.subject} attention={attention} />
       {act.kind === 'finding' && act.refId && canOpenArtifact?.(act.refId) && <button onClick={() => openArtifact(act.refId!)} className="mt-2 inline-flex min-h-8 items-center gap-1.5 rounded-lg bg-primary/5 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><FileText size={13} />{t('View output')}</button>}
     </article>

@@ -12,27 +12,34 @@ interface WorkbenchFixtureOptions {
   timestampAnomalies?: boolean
   provenanceMessages?: boolean
   collaborationJourney?: boolean
+  remoteDecision?: boolean
 }
 
 /** Deterministic IPC boundary fixture; all rendering and interaction use the built app. */
 export async function openTeamWorkbench(app: ElectronApplication, page: Page, options: WorkbenchFixtureOptions = {}) {
   await waitForHomePage(page)
-  await app.evaluate(({ ipcMain }, { ownCount: count = 2, withDecision: decision, historyFailure, readonlyKind, allowCreate, sendFailure, sendFailureDelay = 500, timestampAnomalies, provenanceMessages, collaborationJourney }) => {
+  await app.evaluate(({ ipcMain }, { ownCount: count = 2, withDecision: decision, historyFailure, readonlyKind, allowCreate, sendFailure, sendFailureDelay = 500, timestampAnomalies, provenanceMessages, collaborationJourney, remoteDecision }) => {
     const now = Date.now() - 60_000
     const roster = [
       { appId: 'lead', memberName: 'Lead', sameMachine: count > 0, isLead: true },
       { appId: 'research', memberName: 'Research', sameMachine: count > 1, isLead: false },
       { appId: 'remote', memberName: 'Remote Analyst', sameMachine: false, isLead: false },
-    ].map(member => ({ ...member, spaceId: 'halo-temp', role: 'Analyst', status: 'idle', presence: 'online', busy: [] }))
+    ].map(member => ({
+      ...member,
+      spaceId: 'halo-temp', role: 'Analyst', status: remoteDecision && member.appId === 'remote' ? 'waiting_user' : 'idle', presence: 'online', busy: [],
+      ...(member.sameMachine ? {} : { owner: member.appId === 'remote' ? 'Taylor' : 'Teammate' }),
+    }))
     const members = roster.map(member => ({ ...member, id: member.appId, teamId: 'render-team', origin: member.sameMachine ? 'local' : 'remote', ownerNodeId: member.sameMachine ? 'self' : 'remote-node' }))
     const team = { id: 'render-team', name: 'Workbench review', goal: 'A focused task workspace', status: 'idle', leadAppId: 'lead', owningSpaceId: 'halo-temp', hostNodeId: null, currentEpochId: null, collabMode: 'mesh' }
     const tasks = ['Product research', 'Release notes'].map((label, index) => ({ epochId: `epoch-${index}`, workItemId: `work-${index}`, teamId: team.id, kind: 'native', label, readonly: false, startedAt: now, lastActivityAt: now + index, createdByMe: true, involvedMe: true, completed: false }))
+    if (remoteDecision) Object.assign(tasks[0], { waitingUser: true, waitingForMe: false, waitingMemberAppIds: ['remote'] })
     if (readonlyKind) Object.assign(tasks[0], { kind: readonlyKind, readonly: true, memberAppId: 'lead' })
     const activities = [
       ...Array.from({ length: 100 }, (_, index) => ({ id: `coord-${index}`, epochId: 'epoch-0', actorAppId: 'research', targetAppId: 'lead', subject: `Research update ${index + 1}`, body: `Evidence from source ${index + 1}. Ready for review.`, kind: 'message', status: 'sent', createdAt: now + index * 100 })),
       { id: 'unrelated', epochId: 'epoch-0', actorAppId: 'remote', targetAppId: 'research', subject: 'Unrelated coordination record', body: 'This must stay out of the Lead conversation.', kind: 'message', status: 'sent', createdAt: now + 11000 },
       { id: 'other-task', epochId: 'epoch-1', actorAppId: 'remote', targetAppId: 'lead', subject: 'Release notes coordination', body: 'Only visible in the second task.', kind: 'message', status: 'sent', createdAt: now + 12000 },
-    ].map(activity => ({ ...activity, teamId: team.id, refId: null }))
+      ...(remoteDecision ? [{ id: 'decision-request:remote-1', epochId: 'epoch-0', actorAppId: 'remote', targetAppId: null, subject: 'Approve the evidence?', body: 'Should Taylor approve the collected evidence before publication?', kind: 'decision', status: 'escalation', createdAt: now + 13000, refId: 'remote-1' }] : []),
+    ].map(activity => ({ ...activity, teamId: team.id, refId: 'refId' in activity ? activity.refId : null }))
     if (timestampAnomalies) {
       const timestamps: Array<{ id: string; value?: unknown }> = [
         { id: 'iso', value: new Date(now).toISOString() },
@@ -123,7 +130,12 @@ export async function openTeamWorkbench(app: ElectronApplication, page: Page, op
   await page.evaluate(() => {
     localStorage.setItem('halo-locale', 'en')
     const preferences = JSON.parse(localStorage.getItem('halo-team-view-prefs') || '{"state":{}}')
-    preferences.state = { ...preferences.state, defaultMemberByTeam: { ...preferences.state?.defaultMemberByTeam, 'render-team': 'lead' } }
+    preferences.state = {
+      ...preferences.state,
+      defaultMemberByTeam: { ...preferences.state?.defaultMemberByTeam, 'render-team': 'lead' },
+      memberByTask: { ...preferences.state?.memberByTask, 'render-team': {} },
+      taskByTeam: { ...preferences.state?.taskByTeam, 'render-team': null },
+    }
     localStorage.setItem('halo-team-view-prefs', JSON.stringify(preferences))
   })
   await page.reload()

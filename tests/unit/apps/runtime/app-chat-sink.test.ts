@@ -12,7 +12,7 @@
  * queue is autonomous and must never settle somebody's round.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // ── Collaborators the sink reaches for on delivery / persistence ──
 const { pushToChat, findSession } = vi.hoisted(() => ({
@@ -32,6 +32,10 @@ vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
   openSessionWriter: () => ({ writeEvent: vi.fn(), writeTrigger: vi.fn() }),
   saveChatSessionId: vi.fn(),
 }))
+
+const { stopGeneration } = vi.hoisted(() => ({ stopGeneration: vi.fn(async () => {}) }))
+
+vi.mock('../../../../src/main/services/agent/control', () => ({ stopGeneration }))
 
 import {
   getAppChatSink,
@@ -272,5 +276,218 @@ describe('app-chat sink turn ownership', () => {
     sink.onTurnComplete(makeResult())
 
     expect(pushToChat).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * The settlement guarantees above all depend on the session *reporting*
+ * something. A session that simply never produces a turn — a resume against a
+ * transcript a crashed process left broken, an engine that failed to launch —
+ * reports nothing at all, and the caller was left awaiting a reply that could
+ * no longer arrive. To the user that is a message sent into silence: no answer,
+ * no error, nothing to act on.
+ */
+describe('app-chat sink undelivered messages', () => {
+  beforeEach(() => {
+    disposeAppChatSink(IM_KEY)
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('gives up waiting on a message no turn ever claims', async () => {
+    const sink = makeSink()
+    const round = sink.beginRound({})
+
+    await vi.advanceTimersByTimeAsync(90_000)
+
+    await expect(round.done).rejects.toThrow(/stopped waiting/i)
+  })
+
+  it('leaves a message alone while a turn is running', async () => {
+    const sink = makeSink()
+    const round = sink.beginRound({})
+    sink.onTurnStart()
+
+    // A turn legitimately working for far longer than the deadline is not late.
+    await vi.advanceTimersByTimeAsync(300_000)
+    feedText(sink, 'took a while')
+    sink.onTurnComplete(makeResult())
+
+    await expect(round.done).resolves.toBeUndefined()
+  })
+
+  // Only idle time counts: a queued message is waiting on the turn ahead of it,
+  // not on a dead session, and must not be failed for the queue's own depth.
+  it('does not fail a queued message waiting behind a long turn', async () => {
+    const sink = makeSink()
+    const first = sink.beginRound({})
+    const second = sink.beginRound({})
+
+    sink.onTurnStart()
+    await vi.advanceTimersByTimeAsync(300_000)
+    sink.onTurnComplete(makeResult({ finalContent: 'first answer' }))
+
+    sink.onTurnStart()
+    sink.onTurnComplete(makeResult({ finalContent: 'second answer' }))
+
+    await expect(first.done).resolves.toBeUndefined()
+    await expect(second.done).resolves.toBeUndefined()
+  })
+
+  // A turn the digital human started on its own claims no round, so the sink
+  // has no round to point at while it runs — but the engine is plainly alive,
+  // and a message sent during it is queued behind real work, not lost.
+  it('does not fail a message sent during a turn the digital human started itself', async () => {
+    const sink = makeSink()
+    sink.onTurnStart()                    // autonomous: nothing queued yet
+
+    const round = sink.beginRound({})
+    await vi.advanceTimersByTimeAsync(300_000)
+
+    feedText(sink, 'background work finished')
+    sink.onTurnComplete(makeResult())
+
+    sink.onTurnStart()                    // the turn this message caused
+    feedText(sink, 'your answer')
+    sink.onTurnComplete(makeResult())
+
+    await expect(round.done).resolves.toBeUndefined()
+  })
+
+  it('starts the clock again for the next message once a turn ends', async () => {
+    const sink = makeSink()
+    const first = sink.beginRound({})
+    sink.onTurnStart()
+    sink.onTurnComplete(makeResult({ finalContent: 'answered' }))
+    await expect(first.done).resolves.toBeUndefined()
+
+    const second = sink.beginRound({})
+    await vi.advanceTimersByTimeAsync(90_000)
+
+    await expect(second.done).rejects.toThrow(/stopped waiting/i)
+  })
+
+  // Giving up the wait must not give up the message's place in line. The turn
+  // it was dispatched for may still be coming, and ownership here is decided by
+  // order — so dropping it out of the queue would hand its answer to whatever
+  // was sent next, which is the very defect this module exists to prevent.
+  it('does not hand a late reply to the next message', async () => {
+    const sink = makeSink()
+    const first = sink.beginRound({})
+    await vi.advanceTimersByTimeAsync(90_000)
+    await expect(first.done).rejects.toThrow(/stopped waiting/i)
+
+    const secondReply = vi.fn()
+    const second = sink.beginRound({ onReply: secondReply })
+
+    // The abandoned message's turn finally arrives.
+    sink.onTurnStart()
+    feedText(sink, 'answer to the first message')
+    sink.onTurnComplete(makeResult())
+    expect(secondReply).not.toHaveBeenCalled()
+
+    sink.onTurnStart()
+    feedText(sink, 'answer to the second message')
+    sink.onTurnComplete(makeResult())
+
+    await expect(second.done).resolves.toBeUndefined()
+    expect(secondReply).toHaveBeenCalledWith('answer to the second message')
+  })
+
+  // The kept slot must not read as live work: every later message would be
+  // buffered as a supplement to a turn nobody is waiting for.
+  it('does not leave the conversation looking busy after giving up', async () => {
+    const sink = makeSink()
+    const round = sink.beginRound({})
+    expect(hasActiveAppChatRound(IM_KEY)).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(90_000)
+    await expect(round.done).rejects.toThrow(/stopped waiting/i)
+
+    expect(hasActiveAppChatRound(IM_KEY)).toBe(false)
+  })
+
+  it('does not fail a message the caller already withdrew', async () => {
+    const sink = makeSink()
+    const round = sink.beginRound({})
+    round.cancel()
+
+    await vi.advanceTimersByTimeAsync(90_000)
+
+    await expect(round.done).resolves.toBeUndefined()
+  })
+})
+
+// ============================================
+// Ending a turn that asked the user a question
+// ============================================
+
+describe('app-chat sink escalation cut', () => {
+  beforeEach(() => {
+    disposeAppChatSink(IM_KEY)
+    stopGeneration.mockClear()
+  })
+
+  /** One tool call and its result, as the SDK delivers them. */
+  function feedToolCall(sink: ReturnType<typeof makeSink>, id: string) {
+    sink.onRawMessage({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'mcp__halo-report__report_to_user' }] } })
+  }
+  function feedToolResult(sink: ReturnType<typeof makeSink>, id: string) {
+    sink.onRawMessage({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id }] } })
+  }
+
+  it('ends the turn once the question it asked has its tool result', () => {
+    const sink = makeSink()
+    sink.onTurnStart()
+    feedToolCall(sink, 'call-1')
+    sink.noteAskedUser()
+
+    expect(stopGeneration).not.toHaveBeenCalled()
+
+    feedToolResult(sink, 'call-1')
+
+    expect(stopGeneration).toHaveBeenCalledWith(IM_KEY)
+  })
+
+  it('leaves a turn that asked nothing alone', () => {
+    const sink = makeSink()
+    sink.onTurnStart()
+    feedToolCall(sink, 'call-1')
+    feedToolResult(sink, 'call-1')
+    feedText(sink, 'carrying on')
+
+    expect(stopGeneration).not.toHaveBeenCalled()
+  })
+
+  it('ends the turn once, however many messages follow', () => {
+    const sink = makeSink()
+    sink.onTurnStart()
+    feedToolCall(sink, 'call-1')
+    sink.noteAskedUser()
+    feedToolResult(sink, 'call-1')
+    feedText(sink, 'still talking')
+    feedToolCall(sink, 'call-2')
+    feedToolResult(sink, 'call-2')
+
+    expect(stopGeneration).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not carry the question over into the next turn', () => {
+    const sink = makeSink()
+    sink.onTurnStart()
+    feedToolCall(sink, 'call-1')
+    sink.noteAskedUser()
+    feedToolResult(sink, 'call-1')
+    sink.onTurnComplete(makeResult({ wasAborted: true }))
+    stopGeneration.mockClear()
+
+    sink.onTurnStart()
+    feedToolCall(sink, 'call-2')
+    feedToolResult(sink, 'call-2')
+
+    expect(stopGeneration).not.toHaveBeenCalled()
   })
 })

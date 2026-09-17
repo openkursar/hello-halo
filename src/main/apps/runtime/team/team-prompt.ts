@@ -9,6 +9,13 @@ export interface TeamPromptRosterEntry {
   memberName: string
   role: string
   /**
+   * What this teammate is in its own right, as its owner described the digital
+   * human itself. Absent when its owner wrote none, or when it runs on another
+   * machine (the app record lives there) — never an empty string, so rendering
+   * can key off presence alone.
+   */
+  description?: string
+  /**
    * What this teammate is responsible for in this team, written by its owner.
    * Carried in full — deciding who to hand work to, and what they will hand back,
    * is exactly what this text is for, so truncating it defeats the purpose.
@@ -155,11 +162,22 @@ function renderRoster(ctx: TeamPromptContext): string[] {
     const ownership =
       m.sameMachine === false ? ` — ${m.owner ? `${m.owner}\u2019s digital human` : 'a teammate\u2019s digital human'}` : ''
     const head = `- ${m.memberName} — ${m.role || 'member'}${tags ? ` (${tags})` : ''}${ownership}`
-    // Their owner's own description of what they do here — the basis for
-    // deciding who to hand a piece of work to, so it is carried verbatim.
+    // Both are their owner's own words and both decide who gets a piece of
+    // work, so both are carried verbatim: what the digital human is, and what
+    // it is responsible for here. Labelled only when both are present — alone,
+    // there is no ambiguity to resolve and a label is pure cost in a block that
+    // rides in every teammate's every turn.
+    const description = m.description?.trim()
     const duty = m.duty?.trim()
-    if (!duty) return head
-    const indented = duty.split('\n').map((line) => `    ${line}`).join('\n')
+    if (!description && !duty) return head
+    const body: string[] = []
+    if (description) body.push(duty ? `About: ${description}` : description)
+    if (duty) body.push(description ? `Duty here: ${duty}` : duty)
+    const indented = body
+      .join('\n')
+      .split('\n')
+      .map((line) => `    ${line}`)
+      .join('\n')
     return `${head}\n${indented}`
   })
 

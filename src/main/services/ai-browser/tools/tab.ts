@@ -51,7 +51,11 @@ The last remaining tab cannot be closed.`,
     )
   },
   async (args) => {
-    const states = browserViewManager.getAllStates()
+    // The tabs THIS caller owns, never every tab in the app. Enumerating the
+    // manager directly let one agent list, select and navigate another's pages
+    // (and the user's), which is how a page being worked on got overwritten
+    // with no signal to the side that lost it.
+    const states = ctx.visibleViewStates()
 
     switch (args.action) {
       case 'list': {
@@ -128,7 +132,7 @@ The last remaining tab cannot be closed.`,
         log(`close page [${args.pageIdx}]: ${closedState.id}, wasActive=${wasActive}`)
 
         if (wasActive) {
-          const remaining = browserViewManager.getAllStates()
+          const remaining = ctx.visibleViewStates()
           if (remaining.length > 0) {
             const newIdx = Math.min(args.pageIdx, remaining.length - 1)
             ctx.setActiveViewId(remaining[newIdx].id)

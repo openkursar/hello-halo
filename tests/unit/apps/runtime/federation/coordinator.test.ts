@@ -274,7 +274,7 @@ describe('FederationCoordinator', () => {
         correlationId,
         request: {
           appId: 'app-m', spaceId: 's', message: 'do', conversationId: convId,
-          teamContext: { teamId: OFFICE, epochId: 'e1', correlationId, fromAppId: null, wait: true, kind: 'message' },
+          teamContext: { teamId: OFFICE, epochId: 'e1', correlationId, fromAppId: null, wait: true, kind: 'message' as const },
         },
         fromNode: BOB,
       })
@@ -333,7 +333,7 @@ describe('FederationCoordinator', () => {
         correlationId: 'corr-dup',
         request: {
           appId: 'app-m', spaceId: 's', message: 'do', conversationId: convId,
-          teamContext: { teamId: OFFICE, epochId: 'e1', correlationId: 'corr-dup', fromAppId: null, wait: true, kind: 'message' },
+          teamContext: { teamId: OFFICE, epochId: 'e1', correlationId: 'corr-dup', fromAppId: null, wait: true, kind: 'message' as const },
         },
         fromNode: BOB,
       }
@@ -639,6 +639,41 @@ describe('FederationCoordinator', () => {
       const byId = Object.fromEntries(snap.nodes.map((n) => [n.nodeId, n.status]))
       expect(byId[BOB]).toBe('offline')
       expect(byId[CAROL]).toBe('online')
+    })
+  })
+
+  describe('wake this node cannot run', () => {
+    it('answers undelivered instead of dropping it silently', () => {
+      // Consuming the wake retires the sender's give-up deadline, so a silent
+      // return left the sender believing it landed — forever, with no record of
+      // the failure on either machine. That is the 75-minute "online + idle"
+      // member: the message that should have started it no longer existed.
+      makeHost() // no onWake → this node owns nothing runnable
+      const bob = recordingPeer(hub, BOB)
+
+      bob.link.send(HOST, {
+        kind: 'wake' as const,
+        officeId: OFFICE,
+        correlationId: 'corr-orphan',
+        request: {
+          appId: 'app-nobody',
+          spaceId: 'space-b',
+          message: 'start the analysis',
+          conversationId: `team:app-nobody:${OFFICE}:epoch-1`,
+          teamContext: {
+            teamId: OFFICE, epochId: 'epoch-1', correlationId: 'corr-orphan',
+            fromAppId: null, wait: false, kind: 'message' as const,
+          },
+        },
+        fromNode: BOB,
+      })
+
+      const completion = bob.received.find((r) => r.msg.kind === 'turn-complete')
+      expect(completion).toBeDefined()
+      expect(completion!.msg).toMatchObject({
+        correlationId: 'corr-orphan',
+        outcome: { kind: 'undelivered' },
+      })
     })
   })
 })

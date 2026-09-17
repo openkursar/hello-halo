@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Settings, Users, PanelLeft, UserPlus, Play, Pause } from 'lucide-react'
+import { ArrowLeft, Info, Settings, Users, PanelLeft, UserPlus, Play, Pause } from 'lucide-react'
 import { isRemoteMember, type RosterMember, type TeamDetail } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useDefaultChatTarget, useTeamViewPrefsStore } from '../../stores/team-view-prefs.store'
 import { useTranslation } from '../../i18n'
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/Popover'
 import { SettingsTab } from './SettingsTab'
 import { TeamInviteDialog } from './TeamInviteDialog'
 import { TaskSidebar } from './workbench/TaskSidebar'
@@ -44,14 +45,21 @@ export function TeamView({ detail }: { detail: TeamDetail }) {
   const setGroup = useTeamViewPrefsStore(s => s.setTaskGroup)
   const apps = useAppsStore(state => state.apps)
   const ownedMemberIds = useMemo(() => detail.members.filter(member => !isRemoteMember(member) && apps.some(app => app.id === member.appId)).map(member => member.appId), [detail.members, apps])
-  const selectedMemberId = useDefaultChatTarget(detail.team.id, ownedMemberIds)
+  const defaultOwnedMemberId = useDefaultChatTarget(detail.team.id, ownedMemberIds)
+  const rosterMemberIds = useMemo(() => detail.roster.map(member => member.appId), [detail.roster])
+  const leadMemberId = detail.team.leadAppId && rosterMemberIds.includes(detail.team.leadAppId) ? detail.team.leadAppId : null
+  const initialMemberId = defaultOwnedMemberId ?? leadMemberId ?? rosterMemberIds[0] ?? null
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(initialMemberId)
   const setDefaultMember = useTeamViewPrefsStore(state => state.setDefaultMember)
+  useEffect(() => {
+    if (selectedMemberId && rosterMemberIds.includes(selectedMemberId)) return
+    setSelectedMemberId(initialMemberId)
+  }, [initialMemberId, rosterMemberIds, selectedMemberId])
   const onTask = useCallback((id: string, decisionEntry = false, memberId?: string) => {
     const prefs = useTeamViewPrefsStore.getState()
     if (selectedId && selectedMemberId) prefs.rememberTaskMember(detail.team.id, selectedId, selectedMemberId)
-    const remembered = memberId ?? prefs.memberByTask[detail.team.id]?.[id]
-    if (remembered && ownedMemberIds.includes(remembered)) setDefaultMember(detail.team.id, remembered)
     const item = conversations.find(c => c.epochId === id)
+    let nextMember: string | null = memberId ?? prefs.memberByTask[detail.team.id]?.[id] ?? item?.memberAppId ?? defaultOwnedMemberId ?? leadMemberId
     if (item) setGroup(detail.team.id, taskGroup(item), true)
     setDecisionTarget(undefined)
     if (decisionEntry) {
@@ -59,28 +67,40 @@ export function TeamView({ detail }: { detail: TeamDetail }) {
         .sort((a, b) => (a.entry?.ts ?? 0) - (b.entry?.ts ?? 0))
       const decision = pending.find(entry => entry.appId === selectedMemberId) ?? pending[0]
       if (decision) {
-        if (ownedMemberIds.includes(decision.appId)) setDefaultMember(detail.team.id, decision.appId)
+        nextMember = decision.appId
         setDecisionTarget(decision.entryId)
       }
     }
+    if (!rosterMemberIds.includes(nextMember)) nextMember = rosterMemberIds[0] ?? null
+    setSelectedMemberId(nextMember)
+    if (nextMember) prefs.rememberTaskMember(detail.team.id, id, nextMember)
+    if (nextMember && ownedMemberIds.includes(nextMember)) setDefaultMember(detail.team.id, nextMember)
     select(id); setRoomKey(key => key + 1); setDrawer(null)
-  }, [conversations, detail, select, setGroup, selectedMemberId, ownedMemberIds, setDefaultMember, selectedId])
+  }, [conversations, defaultOwnedMemberId, detail, leadMemberId, select, setGroup, selectedMemberId, ownedMemberIds, rosterMemberIds, setDefaultMember, selectedId])
   const onMember = (member: RosterMember) => {
-    if (task?.readonly || !ownedMemberIds.includes(member.appId)) {
-      setSettingsMember(member.appId)
-      setDrawer('settings')
-      return
-    }
-    setDefaultMember(detail.team.id, member.appId)
+    setSelectedMemberId(member.appId)
+    if (selectedId) useTeamViewPrefsStore.getState().rememberTaskMember(detail.team.id, selectedId, member.appId)
+    if (ownedMemberIds.includes(member.appId)) setDefaultMember(detail.team.id, member.appId)
     setDrawer(null)
   }
-  const newTask = () => { setRoomKey(key => key + 1); select(null); setDrawer(null) }
-  const taskSidebar = <TaskSidebar query={taskQuery} onQuery={setTaskQuery} status={taskStatus} onStatus={setTaskStatus} teamId={detail.team.id} tasks={tasks} selectedId={selectedId} isOwner={!detail.team.hostNodeId} onSelect={id => onTask(id, conversations.some(item => item.epochId === id && item.waitingUser))} onNew={newTask} />
-  const members = <MemberRail detail={detail} selectedAppId={task?.readonly ? task.memberAppId ?? detail.team.leadAppId : selectedMemberId ?? undefined} selectableAppIds={task?.readonly ? [] : ownedMemberIds} onMember={onMember} onTask={(id, memberId, decisionId) => { onTask(id, false, memberId); if (decisionId) setDecisionTarget(decisionId) }} />
+  const newTask = () => { setSelectedMemberId(defaultOwnedMemberId ?? initialMemberId); setRoomKey(key => key + 1); select(null); setDrawer(null) }
+  const taskSidebar = <TaskSidebar query={taskQuery} onQuery={setTaskQuery} status={taskStatus} onStatus={setTaskStatus} teamId={detail.team.id} roster={detail.roster} tasks={tasks} selectedId={selectedId} isOwner={!detail.team.hostNodeId} onSelect={id => onTask(id, conversations.some(item => item.epochId === id && item.waitingForMe))} onNew={newTask} />
+  const members = <MemberRail detail={detail} selectedAppId={selectedMemberId ?? undefined} writableAppIds={ownedMemberIds} onMember={onMember} onDetails={member => { setSettingsMember(member.appId); setDrawer('settings') }} onTask={(id, memberId, decisionId) => { onTask(id, false, memberId); if (decisionId) setDecisionTarget(decisionId) }} />
   return <div className="flex h-full min-h-0 flex-col">
     <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
       <button onClick={() => useTeamStore.getState().selectTeam(null)} aria-label={t('Back to teams')} className="rounded-lg p-2 hover:bg-secondary"><ArrowLeft size={18} /></button>
-      <div className="min-w-0 flex-1"><h1 className="truncate text-sm font-medium">{detail.team.name}</h1><p className="truncate text-xs text-muted-foreground">{detail.team.goal}</p></div>
+      <div className="flex min-w-0 flex-1 items-center gap-1">
+        <h1 className="min-w-0 truncate text-sm font-medium">{detail.team.name}</h1>
+        <Popover>
+          <PopoverTrigger title={t('View team goal')} className="shrink-0 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+            <Info size={14} aria-hidden="true" />
+          </PopoverTrigger>
+          <PopoverContent align="start" sideOffset={6} className="max-h-[calc(100vh-1rem)] w-80 max-w-[calc(100vw-1rem)] overflow-y-auto p-4">
+            <h2 className="text-sm font-medium">{t('Team goal')}</h2>
+            <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">{detail.team.goal.trim() || t('No team goal has been set.')}</p>
+          </PopoverContent>
+        </Popover>
+      </div>
       <button onClick={() => setDrawer('tasks')} aria-label={t('Tasks')} className="rounded-lg p-2 hover:bg-secondary lg:hidden"><PanelLeft size={17} /></button>
       <button onClick={() => setDrawer('members')} aria-label={t('Members')} className="rounded-lg p-2 hover:bg-secondary xl:hidden"><Users size={17} /></button>
       <button onClick={() => { setSettingsMember(null); setDrawer('settings') }} aria-label={t('Team settings')} className="rounded-lg p-2 hover:bg-secondary"><Settings size={17} /></button>
@@ -89,7 +109,7 @@ export function TeamView({ detail }: { detail: TeamDetail }) {
     <div className="flex min-h-0 flex-1">
       {width >= 1024 && <div className="w-64 shrink-0 border-r border-border">{taskSidebar}</div>}
       <main className="flex min-w-0 flex-1 flex-col">
-        {selectedId && !task ? <p role="status" className="p-6 text-sm text-muted-foreground">{loadingTasks ? t('Loading task…') : t('This task is unavailable. Refresh the task list to try again.')}</p> : <TaskRoom key={roomKey} detail={detail} decisionTarget={decisionTarget}
+        {selectedId && !task ? <p role="status" className="p-6 text-sm text-muted-foreground">{loadingTasks ? t('Loading task…') : t('This task is unavailable. Refresh the task list to try again.')}</p> : <TaskRoom key={roomKey} detail={detail} selectedAppId={selectedMemberId} onSelectMember={onMember} decisionTarget={decisionTarget}
           onExecution={appId => { setExecutionTarget(appId); setActivityTarget(undefined); setDrawer('activity') }} task={task} tasks={tasks} onTask={onTask} onCreated={select} boardState={taskBoard} onActivity={id => { setExecutionTarget(undefined); setDecisionTarget(undefined); setActivityTarget(id); setDrawer('activity') }} />}
 
       </main>
@@ -103,7 +123,7 @@ export function TeamView({ detail }: { detail: TeamDetail }) {
     }} />}
     {drawer === 'tasks' && width < 1024 && <WorkbenchDrawer title={t('Tasks')} onClose={() => setDrawer(null)}>{taskSidebar}</WorkbenchDrawer>}
     {drawer === 'members' && width < 1280 && <WorkbenchDrawer title={t('Members')} onClose={() => setDrawer(null)}>{members}</WorkbenchDrawer>}
-    {drawer === 'settings' && <WorkbenchDrawer title={t('Team settings')} onClose={() => setDrawer(null)}>
+    {drawer === 'settings' && <WorkbenchDrawer title={settingsMember ? t('Member details') : t('Team settings')} onClose={() => setDrawer(null)}>
       {!detail.team.hostNodeId && <div className="flex gap-2 border-b border-border p-3">
         <button onClick={() => { setDrawer(null); setInvite(true) }} className="flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs"><UserPlus size={14} />{t('Invite')}</button>
         <button disabled={runningAction} onClick={async () => {

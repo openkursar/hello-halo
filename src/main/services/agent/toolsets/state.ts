@@ -7,6 +7,7 @@
  */
 
 import { getConversation, updateConversation } from '../../conversation.service'
+import { releaseInteractiveBrowserContext } from '../../ai-browser'
 
 /** conversationId -> open toolset ids */
 const openSets = new Map<string, Set<string>>()
@@ -57,4 +58,7 @@ function persist(spaceId: string, conversationId: string, set: Set<string>): voi
 /** Drop all in-memory state for a conversation (persisted record remains) */
 export function dropConversationState(conversationId: string): void {
   openSets.delete(conversationId)
+  // The conversation's view of the browser goes with it. Releases rather than
+  // destroys — the tabs are the user's and stay open.
+  releaseInteractiveBrowserContext(conversationId)
 }

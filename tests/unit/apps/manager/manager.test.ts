@@ -683,27 +683,72 @@ describe('AppManager', () => {
     })
   })
 
+  // The schedule must live in exactly one place. It used to be written here as
+  // a user override while the settings UI wrote the spec, and the scheduler
+  // read the override — so the interval on screen was not the one running.
   describe('updateFrequency', () => {
-    it('should set frequency override for a subscription', async () => {
-      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+    function specWithSchedules(): AppSpec {
+      return createTestSpec({
+        subscriptions: [
+          { id: 'sub-1', source: { type: 'schedule', config: { every: '30m' } } },
+          { id: 'sub-2', source: { type: 'schedule', config: { cron: '0 8 * * *' } } },
+        ],
+      } as Partial<AppSpec>)
+    }
 
-      service.updateFrequency(appId, 'sub-1', '15m')
-
+    function scheduleOf(appId: string, subscriptionId: string) {
       const app = service.getApp(appId)!
-      expect(app.userOverrides.frequency).toEqual({ 'sub-1': '15m' })
+      const spec = app.spec as { subscriptions: { id?: string; source: { config: Record<string, unknown> } }[] }
+      return spec.subscriptions.find(s => s.id === subscriptionId)!.source.config
+    }
+
+    it('writes the interval into the spec the scheduler reads', async () => {
+      const appId = await service.install(TEST_SPACE_ID, specWithSchedules())
+
+      service.updateFrequency(appId, 'sub-1', '1h')
+
+      expect(scheduleOf(appId, 'sub-1').every).toBe('1h')
+      expect(service.getApp(appId)!.userOverrides).not.toHaveProperty('frequency')
     })
 
-    it('should accumulate multiple frequency overrides', async () => {
-      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+    it('clears a cron expression the new interval replaces', async () => {
+      const appId = await service.install(TEST_SPACE_ID, specWithSchedules())
 
-      service.updateFrequency(appId, 'sub-1', '15m')
-      service.updateFrequency(appId, 'sub-2', '1h')
+      service.updateFrequency(appId, 'sub-2', '2h')
 
-      const app = service.getApp(appId)!
-      expect(app.userOverrides.frequency).toEqual({
-        'sub-1': '15m',
-        'sub-2': '1h',
-      })
+      expect(scheduleOf(appId, 'sub-2').every).toBe('2h')
+      expect(scheduleOf(appId, 'sub-2').cron).toBeUndefined()
+    })
+
+    // The remote API documents both spellings on this one field.
+    it('accepts a cron expression and clears the interval it replaces', async () => {
+      const appId = await service.install(TEST_SPACE_ID, specWithSchedules())
+
+      service.updateFrequency(appId, 'sub-1', '0 8 * * *')
+
+      expect(scheduleOf(appId, 'sub-1').cron).toBe('0 8 * * *')
+      expect(scheduleOf(appId, 'sub-1').every).toBeUndefined()
+    })
+
+    it('rejects a value that is neither an interval nor a valid cron', async () => {
+      const appId = await service.install(TEST_SPACE_ID, specWithSchedules())
+
+      expect(() => service.updateFrequency(appId, 'sub-1', 'whenever')).toThrow()
+      expect(scheduleOf(appId, 'sub-1').every).toBe('30m')
+    })
+
+    it('leaves other subscriptions alone', async () => {
+      const appId = await service.install(TEST_SPACE_ID, specWithSchedules())
+
+      service.updateFrequency(appId, 'sub-1', '1h')
+
+      expect(scheduleOf(appId, 'sub-2').cron).toBe('0 8 * * *')
+    })
+
+    it('rejects an unknown subscription instead of silently doing nothing', async () => {
+      const appId = await service.install(TEST_SPACE_ID, specWithSchedules())
+
+      expect(() => service.updateFrequency(appId, 'sub-missing', '1h')).toThrow()
     })
   })
 
@@ -817,7 +862,7 @@ describe('AppManager', () => {
       )
       await service.install(
         TEST_SPACE_ID,
-        createTestSpec({ name: 'skill-app', type: 'skill', system_prompt: 'test' })
+        createTestSpec({ name: 'skill-app', type: 'skill' })
       )
 
       const automations = service.listApps({ type: 'automation' })
@@ -836,7 +881,7 @@ describe('AppManager', () => {
       )
       await service.install(
         TEST_SPACE_ID,
-        createTestSpec({ name: 'app-2', type: 'skill', system_prompt: 'test' })
+        createTestSpec({ name: 'app-2', type: 'skill' })
       )
       await service.install(
         TEST_SPACE_ID_2,
@@ -1395,6 +1440,28 @@ describe('AppManager', () => {
       const indexNames = indexes.map(i => i.name)
       expect(indexNames).toContain('idx_installed_apps_space')
       expect(indexNames).toContain('idx_installed_apps_status')
+    })
+
+    // v7 removes the legacy schedule override. Rows carrying one were running an
+    // interval the settings UI could neither show nor change.
+    it('drops the legacy frequency override while keeping other overrides', () => {
+      const freshDb = createDatabaseManager(':memory:')
+      const db = freshDb.getAppDatabase()
+      freshDb.runMigrations(db, MIGRATION_NAMESPACE, migrations.filter(m => m.version < 7))
+
+      db.prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_overrides_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run('id-legacy', 'spec-1', 'space-1', '{}', 'active',
+        JSON.stringify({ frequency: { 'sub-1': '15m' }, notificationLevel: 'all' }), Date.now())
+
+      freshDb.runMigrations(db, MIGRATION_NAMESPACE, migrations)
+
+      const row = db.prepare('SELECT user_overrides_json FROM installed_apps WHERE id = ?')
+        .get('id-legacy') as { user_overrides_json: string }
+      expect(JSON.parse(row.user_overrides_json)).toEqual({ notificationLevel: 'all' })
+
+      freshDb.closeAll()
     })
 
     it('should enforce UNIQUE(spec_id, space_id) constraint', () => {

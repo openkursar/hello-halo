@@ -27,6 +27,12 @@ export interface TriggerContext {
   /** Escalation context (for escalation follow-ups) */
   escalation?: {
     originalQuestion: string
+    /**
+     * Every decision that was asked, normalised. Absent on a context persisted
+     * before escalations could ask more than one, which `originalQuestion`
+     * still describes on its own.
+     */
+    questions?: EscalationQuestion[]
     userResponse: EscalationResponse
     /** V2 session ID from the escalation run, used to restore conversation context */
     sessionId?: string
@@ -139,10 +145,30 @@ export interface ActivityEntryContent {
   question?: string
   /** Preset choices for escalation */
   choices?: string[]
+  /**
+   * The decisions asked, when an escalation asks for more than one. `summary`
+   * then frames why they are being asked and `choices` does not apply. A
+   * single-decision escalation leaves this empty and carries its question in
+   * `summary`. Read it through `getEscalationQuestions`, never directly.
+   */
+  questions?: EscalationQuestion[]
   /** File URL for output type */
   outputUrl?: string
   /** Persisted in content_json; avoids a separate column for team aggregation. */
   teamContext?: TeamContext
+}
+
+/** One decision an escalation asks the user to make. */
+export interface EscalationQuestion {
+  question: string
+  /** Preset answers; the user may still type their own. */
+  choices?: string[]
+}
+
+/** The user's answer to a single question. */
+export interface EscalationAnswer {
+  choice?: string
+  text?: string
 }
 
 /** User response to an escalation */
@@ -150,6 +176,8 @@ export interface EscalationResponse {
   ts: number
   choice?: string
   text?: string
+  /** One answer per `content.questions`, in the same order. */
+  answers?: EscalationAnswer[]
 }
 
 /** A single Activity Thread entry */

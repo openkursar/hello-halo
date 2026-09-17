@@ -26,10 +26,11 @@
 // 5. macOS ad-hoc signing (prevents "damaged app" prompts on unsigned builds).
 // ============================================================================
 
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { ENGINE_RUNTIMES, VALID_ENGINES, entryCandidates } = require('./engine-runtimes.cjs');
+const { signLocalApp } = require('./lib/mac-local-signing.cjs');
 
 // electron-builder Arch enum: 0=ia32, 1=x64, 2=armv7l, 3=arm64, 4=universal
 const ARCH_NAMES = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64', 4: 'universal' };
@@ -831,28 +832,23 @@ module.exports = async function(context) {
   const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
   const entitlementsPath = path.join(__dirname, '..', 'resources', 'entitlements.mac.plist');
 
-  console.warn('[afterPack] \u26a0\ufe0f AD-HOC signing (NOT notarized \u2014 will be blocked by macOS 26.5+ Gatekeeper/XProtect)');
+  console.log('[afterPack] Local ad-hoc signing (no Developer ID or notarization required for local development)');
   console.log(`[afterPack] Ad-hoc signing: ${appPath}`);
 
   try {
     // 1. Remove quarantine attribute (if exists)
     try {
-      execSync(`xattr -dr com.apple.quarantine "${appPath}"`, { stdio: 'pipe' });
-    } catch { }
+      execFileSync('/usr/bin/xattr', ['-dr', 'com.apple.quarantine', appPath], { stdio: 'pipe' });
+    } catch (error) {
+      if (!String(error.stderr).includes('No such xattr')) throw error;
+      console.log('[afterPack] No quarantine attribute to remove');
+    }
 
-    // 2. Ad-hoc sign with entitlements
-    const codesignCmd = `codesign --force --deep -s - --entitlements "${entitlementsPath}" --timestamp=none "${appPath}"`;
-    console.log(`[afterPack] Executing: ${codesignCmd}`);
-    execSync(codesignCmd, { stdio: 'inherit' });
-
-    // 3. Verify signature
-    console.log('[afterPack] Verifying signature...');
-    const verifyOutput = execSync(`codesign -dv "${appPath}" 2>&1`, { encoding: 'utf8' });
-    console.log(verifyOutput);
+    signLocalApp(appPath, entitlementsPath);
 
     console.log('[afterPack] Ad-hoc signing complete');
   } catch (error) {
     console.error('[afterPack] Signing failed:', error.message);
-    // Don't throw error, let build continue
+    throw error;
   }
 };

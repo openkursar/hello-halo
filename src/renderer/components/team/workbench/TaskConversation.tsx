@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { ArrowRight, ChevronDown, ChevronRight } from 'lucide-react'
+import { ArrowRight, CheckCircle2, ChevronDown, ChevronRight, Clock3 } from 'lucide-react'
 import type { TeamActivity, TeamDetail } from '../../../../shared/apps/team-types'
 import type { Message } from '../../../types'
 import type { ActivityEntry } from '../../../../shared/apps/app-types'
@@ -9,7 +9,7 @@ import { AutomationAvatar } from '../../apps/AutomationAvatar'
 import { MessageRow } from '../../chat/MessageRow'
 import { TaskTimestamp } from './TaskTimestamp'
 import { taskTime } from './time'
-import { activityLevel, conversationMessages, decisionMessageId, COLLABORATION_PREVIEW_LIMIT, taskConversationRows } from './model'
+import { activityLevel, conversationMessages, decisionMessageId, COLLABORATION_PREVIEW_LIMIT, taskConversationRows, type SharedTaskDecision } from './model'
 
 export function TaskConversation({ messages, activities, epochId, appId, detail, showEmpty, onActivity, decisions = [], onAnswered, focusDecision, onDecisionFocused, emptyActions, onHumanConversation }: {
   messages: Message[]; activities: TeamActivity[]; epochId: string | null; appId?: string; detail: TeamDetail; showEmpty: boolean; onActivity: (id?: string) => void
@@ -55,11 +55,33 @@ export function TaskConversation({ messages, activities, epochId, appId, detail,
         <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground"><AutomationAvatar name={name(decision.appId)} size={22} /><span>{name(decision.appId)}</span><TaskTimestamp value={decision.ts} recordId={decision.id} format="datetime" className="ml-auto text-[11px] tabular-nums" /></div>
         <EscalationCard compactResolved entry={decision} appId={decision.appId} onResolved={onAnswered} />
       </article>
+  const sharedDecisionCard = (decision: SharedTaskDecision) => {
+    const member = detail.roster.find(item => item.appId === decision.appId)
+    const actorName = member?.memberName ?? t('Former member')
+    const pendingLabel = member?.sameMachine === false
+      ? member.owner ? t('Waiting for {{owner}}’s decision', { owner: member.owner }) : t('Waiting for its owner’s decision')
+      : t('Waiting for your decision')
+    const answeredLabel = member?.owner ? t('{{owner}} answered', { owner: member.owner }) : t('Decision answered')
+    return <article key={decision.refId} className={`overflow-hidden rounded-xl border ${decision.answer ? 'border-border' : 'border-halo-warning/30 bg-halo-warning/5'}`}>
+      <header className="flex items-center gap-2 border-b border-border/70 px-3 py-2.5 text-xs">
+        <AutomationAvatar name={actorName} size={22} />
+        <span className="font-medium">{actorName}</span>
+        <span className={`ml-1 flex items-center gap-1 ${decision.answer ? 'text-halo-success' : 'text-halo-warning'}`}>{decision.answer ? <CheckCircle2 size={13} /> : <Clock3 size={13} />}{decision.answer ? answeredLabel : pendingLabel}</span>
+        <TaskTimestamp value={decision.answeredAt ?? decision.requestedAt} recordId={decision.refId} format="datetime" className="ml-auto text-[11px] tabular-nums text-muted-foreground" />
+      </header>
+      <div className="space-y-3 px-4 py-3">
+        <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{decision.question}</p>
+        {decision.answer && <div className="rounded-lg bg-secondary/60 px-3 py-2"><p className="text-[11px] text-muted-foreground">{t('Response')}</p><p className="mt-1 whitespace-pre-wrap break-words text-sm">{decision.answer}</p></div>}
+        {!decision.answer && <p className="text-xs text-muted-foreground">{t('You can follow this decision here, but only the digital human’s owner can answer it.')}</p>}
+      </div>
+    </article>
+  }
   return <div className="min-w-0 space-y-3">
     {showEmpty && !hasHumanConversation && <div className="rounded-xl border border-dashed border-border p-4"><p className="text-sm leading-6 text-muted-foreground">{t('You have not talked to this digital human in this task yet.')}</p>{emptyActions}</div>}
     {rows.length > 50 && <nav className="flex items-center justify-between text-xs text-primary"><button disabled={end <= 50} onClick={() => setOlderPage(value => value + 1)} className="min-h-9 disabled:opacity-40">{t('Older messages')}</button><button disabled={olderPage === 0} onClick={() => setOlderPage(value => Math.max(0, value - 1))} className="min-h-9 disabled:opacity-40">{t('Newer messages')}</button></nav>}
     {visibleRows.map(row => {
       if (row.decision) return decisionCard(row.decision)
+      if (row.sharedDecision) return sharedDecisionCard(row.sharedDecision)
       if (row.message) {
         const messageId = row.message.id
         const requests = decisions.filter(decision => attached.get(decision.id) === messageId)

@@ -9,7 +9,7 @@ import { ipcMain, BrowserWindow, Menu, clipboard, nativeImage, shell, nativeThem
 import { browserViewManager, type BrowserViewBounds, type DeviceMode } from '../services/browser-view.service'
 // Import the lightweight context module directly (NOT the ai-browser index,
 // which pulls the Agent SDK) to keep this startup-path handler cheap.
-import { browserContext } from '../services/ai-browser/context'
+import { notifyViewDestroyed } from '../services/ai-browser/context'
 import { resolveUserAgent } from '../services/user-agent-resolver'
 import { getConfig } from '../foundation/config.service'
 import { getDefaultBrowserHomepage } from '../services/browser-policy.service'
@@ -71,9 +71,11 @@ export function registerBrowserHandlers(mainWindow: BrowserWindow | null) {
   ipcMain.handle('browser:destroy', async (_event, { viewId }: { viewId: string }) => {
     try {
       browserViewManager.destroy(viewId)
-      // Keep the AI Browser singleton in sync: if this was the AI's active view,
-      // clear it and announce the removal so the renderer drops the live session.
-      browserContext.handleViewDestroyed(viewId)
+      // Reconcile EVERY context that may point at it, not just the singleton:
+      // each conversation holds its own active-tab pointer, and one left
+      // dangling turns that conversation's next navigation into a failure
+      // instead of a fresh page. Announces the removal exactly once.
+      notifyViewDestroyed(viewId)
       return { success: true }
     } catch (error) {
       console.error('[Browser IPC] Destroy failed:', error)

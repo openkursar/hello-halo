@@ -399,8 +399,12 @@ export interface TeamConversation {
   lastActivityAt: number
   /** True while a member is actively serving this conversation right now. */
   active?: boolean
-  /** True when a decision inside this conversation is waiting on the user. */
+  /** True when a decision inside this conversation is waiting on any teammate. */
   waitingUser?: boolean
+  /** True only when this machine's user can answer the waiting decision. */
+  waitingForMe?: boolean
+  /** Members whose owners currently owe a decision in this task. */
+  waitingMemberAppIds?: string[]
 }
 
 /** One busy assignment of a member: which thing it is serving, with a label. */
@@ -702,6 +706,14 @@ export interface TeamSendAsyncResult {
    * Absent → handed over to the target's session now.
    */
   delivery?: 'undelivered' | 'queued' | 'mid_turn'
+  /**
+   * The target runs on another machine, so nothing here can say it actually
+   * started: the message was accepted for its owner's machine, and whether that
+   * machine woke the member is only knowable there. Callers must not report a
+   * remote hand-over as "delivered" — a lead told that waited 75 minutes on a
+   * member that never ran, with no way to tell waiting from never-arrived.
+   */
+  remoteTarget?: boolean
 }
 /**
  * Receipt for a send that waited on the woken turn's ending. Not reachable from
@@ -927,6 +939,13 @@ export interface TeamArtifactGroup {
 export interface TeamUpdatedEvent {
   teamId: string
   team?: Team
+  /**
+   * The office's status as a viewer observes it, which `team.status` is not:
+   * that field is the persisted RUN status and knows nothing about a member
+   * working outside a run. A listener that refreshes its row from `team.status`
+   * alone resets a working office back to idle — prefer this when present.
+   */
+  liveStatus?: TeamStatus
   removed?: boolean
   /**
    * Why the office left this node's list. Only set for a removal the user did NOT

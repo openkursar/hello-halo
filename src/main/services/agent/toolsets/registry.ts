@@ -8,7 +8,11 @@
  * derives from this registry.
  */
 
-import { createAIBrowserMcpServer, AI_BROWSER_SYSTEM_PROMPT } from '../../ai-browser'
+import {
+  createAIBrowserMcpServer,
+  getInteractiveBrowserContext,
+  AI_BROWSER_SYSTEM_PROMPT,
+} from '../../ai-browser'
 import {
   createTerminalMcpServer,
   getGlobalTerminalContext,
@@ -51,7 +55,13 @@ registerToolset({
   summary: 'Control an embedded real browser: navigate pages, click/fill/snapshot, run scripts, inspect network.',
   usageGuide: AI_BROWSER_SYSTEM_PROMPT,
   isAvailable: () => true,
-  createServer: (scope: ToolsetScope) => createAIBrowserMcpServer(undefined, scope.workDir)
+  // Per conversation, not one shared context: "which tab am I on" is this
+  // conversation's, while the tabs stay the user's and stay shared. Passing
+  // nothing here meant every conversation moved one pointer, so a navigation in
+  // one silently retargeted another's next call. Lifecycle belongs to
+  // ai-browser; this only names whose view it is.
+  createServer: (scope: ToolsetScope) =>
+    createAIBrowserMcpServer(getInteractiveBrowserContext(scope.conversationId), scope.workDir)
 })
 
 registerToolset({

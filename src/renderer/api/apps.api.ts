@@ -12,7 +12,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
-import type { AvailableSkill } from '../../shared/apps/app-types'
+import type { AvailableSkill, EscalationAnswerPayload } from '../../shared/apps/app-types'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
 
 export const appsApi = {
@@ -115,7 +115,7 @@ export const appsApi = {
     return httpRequest('GET', `/api/apps/${appId}/runs/${runId}/session`)
   },
 
-  appRespondEscalation: async (appId: string, escalationId: string, response: { choice?: string; text?: string }): Promise<ApiResponse> => {
+  appRespondEscalation: async (appId: string, escalationId: string, response: EscalationAnswerPayload): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.appRespondEscalation({
         appId,

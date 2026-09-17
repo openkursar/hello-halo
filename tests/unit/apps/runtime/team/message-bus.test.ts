@@ -335,7 +335,33 @@ describe('MessageBus', () => {
       })
 
       expect('messageId' in result && result.delivery).toBeUndefined()
+      expect('messageId' in result && result.remoteTarget).toBeUndefined()
       expect(wakes).toHaveLength(1)
+    })
+
+    it('flags a hand-over to another machine, because none of the three states is knowable there', async () => {
+      seedTeam(store, 'free')
+      // A member brought by a teammate's machine. The receipt must say so: it
+      // queues on its OWNER, invisible from here, so reporting it as plain
+      // "delivered" is what let a lead wait on a member that never ran.
+      store.addMember({
+        teamId: TEAM_ID, appId: 'app-remote', memberName: 'remote-analyst', role: 'Analyst',
+        isLead: false, aiProvisioned: false, addedAt: Date.now(),
+        ownerNodeId: 'node-b', origin: 'remote',
+      })
+      const { hooks } = makeHooks()
+      const bus = createMessageBus({ store, hooks })
+
+      const result = await bus.send({
+        teamId: TEAM_ID,
+        epochId: EPOCH_ID,
+        fromAppId: LEAD_APP,
+        to: 'remote-analyst',
+        message: 'Do T1',
+        wait: false,
+      })
+
+      expect('messageId' in result && result.remoteTarget).toBe(true)
     })
 
     it('does NOT re-wake the sender for an escalation outcome (routed by session layer)', async () => {

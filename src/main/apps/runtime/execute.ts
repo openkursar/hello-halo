@@ -34,6 +34,7 @@ import { resolveNotifyAvailability } from './notify-availability'
 import { mergeConfigWithDefaults } from './config-defaults'
 import { createReportToolServer } from './report-tool'
 import type { ReportToolContext } from './report-tool'
+import { TurnCutPoint } from './escalation-cut'
 import { createNotifyToolServer } from './notify-tool'
 import { FileExportGate } from './file-export-gate'
 import { getImSessionRegistry } from './im-session-registry'
@@ -560,7 +561,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     })
 
     // ── 6. Process stream (headless: persist JSONL + detect report_to_user) ──
-    let streamResult = await processStream(session, initialMessage, abortController, runTag, sessionWriter)
+    let streamResult = await processStream(
+      session,
+      initialMessage,
+      abortController,
+      runTag,
+      sessionWriter,
+      () => escalationEntryId !== undefined
+    )
 
     // A free-text follow-up to an already-completed run (continue.interactive) is
     // a conversational turn: reply once and stop. The report_to_user auto-continue
@@ -590,7 +598,14 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         sessionWriter.writeTrigger(`[Auto-continue #${autoContinueCount}] ${AUTO_CONTINUE_FULL}`)
       }
 
-      const nextResult = await processStream(session, AUTO_CONTINUE_FULL, abortController, runTag, sessionWriter)
+      const nextResult = await processStream(
+        session,
+        AUTO_CONTINUE_FULL,
+        abortController,
+        runTag,
+        sessionWriter,
+        () => escalationEntryId !== undefined
+      )
 
       // Merge results: accumulate text and tokens, take latest flags
       streamResult = {
@@ -842,13 +857,17 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
  * block-level messages arrive — one JSONL append per completed block.
  *
  * Returns the StreamResult shape the completion logic in executeRun expects.
+ *
+ * @param turnAskedUser whether this turn has raised an escalation; when it has,
+ *   the run is ended at the next safe point (see escalation-cut.ts).
  */
 async function processStream(
   session: any,
   message: string,
   abortController: AbortController,
   runTag: string,
-  writer?: SessionWriter
+  writer?: SessionWriter,
+  turnAskedUser?: () => boolean
 ): Promise<StreamResult> {
   const result: StreamResult = {
     finalText: '',
@@ -861,6 +880,7 @@ async function processStream(
 
   let messageCount = 0
   let toolUseCount = 0
+  const cutPoint = new TurnCutPoint()
 
   try {
     for await (const sdkMessage of session.stream()) {
@@ -919,6 +939,14 @@ async function processStream(
       // Capture the CC session id so a user can later resume / continue this run.
       if (msgType === 'system' && (sdkMessage as any).subtype === 'init' && (sdkMessage as any).session_id) {
         result.sessionId = (sdkMessage as any).session_id
+      }
+
+      // The run asked the user something: it is over, and the transcript the
+      // answer will resume against is now complete.
+      if (cutPoint.observe(sdkMessage) && turnAskedUser?.()) {
+        console.log(`[Runtime][${runTag}] Escalation raised — ending the run here; the answer resumes it`)
+        abortController.abort()
+        break
       }
     }
   } catch (streamErr) {

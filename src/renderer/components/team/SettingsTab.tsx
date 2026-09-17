@@ -18,6 +18,7 @@ import type { ScheduleValue } from '../apps/schedule-utils'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Switch } from '../ui/Switch'
 import { HttpTriggerCard } from '../common/HttpTriggerCard'
+import { AppInstallDialog } from '../apps/AppInstallDialog'
 import { TeamMemberSettings } from './TeamMemberSettings'
 
 interface SettingsTabProps {
@@ -336,6 +337,7 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
   // (mirrors the same exclusion in TeamCreateDialog).
   const leadAppIds = useMemo(() => leadAppIdSet(teams), [teams])
   const [showAdd, setShowAdd] = useState(false)
+  const [showInlineCreate, setShowInlineCreate] = useState(false)
   const [promote, setPromote] = useState<{ appId: string; name: string } | null>(null)
   // What removal actually does decides what the confirmation may promise, and
   // it differs three ways: a member you added keeps everything; a member AI
@@ -467,6 +469,16 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
               ))}
             </div>
           )}
+          {/* Creating one from here is the same offer team creation already
+              makes; without it, the only way out of an empty list was to leave
+              the team, create, and come back. */}
+          <button
+            onClick={() => setShowInlineCreate(true)}
+            className="mt-1 flex w-full items-center gap-1.5 rounded-md border-t border-border px-2 pb-1 pt-2 text-left text-sm text-primary transition-colors hover:bg-secondary"
+          >
+            <Plus className="h-3.5 w-3.5 flex-shrink-0" />
+            {t('New digital human…')}
+          </button>
           <button onClick={() => setShowAdd(false)} className="mt-2 text-xs text-muted-foreground hover:text-foreground">
             {t('Cancel')}
           </button>
@@ -485,6 +497,20 @@ function MembersSection({ detail, readOnly, onOpenMember }: {
         <p className="mt-3 text-xs text-muted-foreground/60">
           {t('A duty applies only inside this team. Changing the digital human itself affects it everywhere.')}
         </p>
+      )}
+
+      {showInlineCreate && (
+        <AppInstallDialog
+          onClose={() => setShowInlineCreate(false)}
+          onInstalled={appId => {
+            // The install dialog owns its own dismissal (a bundle install stays
+            // open on a partial result), so only join the team here.
+            void addMember(detail.team.id, { appId }).then(ok => {
+              setShowAdd(false)
+              if (ok) onOpenMember(appId)
+            })
+          }}
+        />
       )}
     </Section>
   )

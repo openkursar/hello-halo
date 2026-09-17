@@ -14,7 +14,8 @@
 
 import type { AutomationSpec } from '../spec'
 import type { MemorySnapshot } from '../../platform/memory/snapshot'
-import type { EscalationResponse } from './types'
+import type { EscalationResponse, EscalationQuestion } from './types'
+import { formatEscalationAnswer } from '../../../shared/apps/app-types'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import type { LiveInstance } from './live-instances'
 import { getImSessionDisplayName } from '../../../shared/types/im-channel'
@@ -392,11 +393,23 @@ export function buildInitialMessage(options: {
  */
 export function buildEscalationResumeMessage(escalation: {
   originalQuestion: string
+  questions?: EscalationQuestion[]
   userResponse: EscalationResponse
 }): string {
-  const responseText = escalation.userResponse.text
-    || escalation.userResponse.choice
-    || '(no response)'
+  const questions = escalation.questions ?? []
+
+  // Several answers are listed against the questions they belong to: read on
+  // their own ("Yes; the second one") they are not answers at all.
+  if (questions.length > 1) {
+    return (
+      `User answered your escalation.\n\n` +
+      `${escalation.originalQuestion}\n\n` +
+      `${formatEscalationAnswer(questions, escalation.userResponse)}\n\n` +
+      `Continue your task based on these answers.`
+    )
+  }
+
+  const responseText = formatEscalationAnswer(questions, escalation.userResponse) || '(no response)'
   return (
     `User responded to your escalation.\n\n` +
     `Your question: "${escalation.originalQuestion}"\n` +

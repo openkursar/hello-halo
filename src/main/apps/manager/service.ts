@@ -727,14 +727,41 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       store.updateConfig(appId, config)
     },
 
+    // Writes the spec, which is the only interval the scheduler reads. An
+    // earlier implementation stored it as a user override instead, so the
+    // settings panel and this API wrote to two different places and the
+    // override silently won.
     updateFrequency(appId: string, subscriptionId: string, frequency: string): void {
       const app = requireApp(appId)
-      const overrides = { ...app.userOverrides }
-      if (!overrides.frequency) {
-        overrides.frequency = {}
+      if (app.spec.type !== 'automation') {
+        throw new Error(`App ${appId} has no subscriptions to schedule`)
       }
-      overrides.frequency[subscriptionId] = frequency
-      store.updateOverrides(appId, overrides)
+
+      const subscriptions = app.spec.subscriptions ?? []
+      const index = subscriptions.findIndex(
+        (sub, i) => (sub.id ?? String(i)) === subscriptionId && sub.source.type === 'schedule'
+      )
+      if (index === -1) {
+        throw new Error(`Schedule subscription not found: ${appId}/${subscriptionId}`)
+      }
+
+      // Callers pass either an interval ("30m") or a cron expression
+      // ("0 8 * * *"). They occupy the same slot and are mutually exclusive, so
+      // the one not being set is cleared — a leftover would keep competing for
+      // the schedule. The spec's own validation rejects a malformed value.
+      const isInterval = /^\d+[smhd]$/.test(frequency.trim())
+      const schedule = isInterval
+        ? { every: frequency.trim(), cron: undefined }
+        : { every: undefined, cron: frequency.trim() }
+
+      const target = subscriptions[index]
+      const next = subscriptions.map((sub, i) =>
+        i === index
+          ? { ...sub, source: { ...target.source, config: { ...target.source.config, ...schedule } } }
+          : sub
+      )
+
+      service.updateSpec(appId, { subscriptions: next })
     },
 
     updateOverrides(appId: string, partial: Partial<InstalledApp['userOverrides']>): void {

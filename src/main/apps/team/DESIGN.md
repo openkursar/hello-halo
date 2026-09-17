@@ -76,7 +76,9 @@ else:
   escalation is routed missed every turn path that does not route one. Projected
   into the member's roster status as `waiting_user`, office-shared through
   `member_profile`, and persisted because an unanswered question outlives a
-  restart.
+  restart. The request and answer are paired append-only `team_activity` records
+  sharing the escalation id. This gives every teammate the task and question
+  context without making the local activity entry or answer control portable.
 
 `materializeJoinedOffice` replaces the roster wholesale (the authority is the
 single writer) but exempts these for members owned by THIS node: a snapshot
@@ -194,6 +196,8 @@ The conversation list includes historical and current native tasks, reception an
 automatic runs. Direct member channels remain addressable but are excluded from
 the task list. Reception entries carry their serving member. List projections
 use relationship and output metadata rather than materializing activity bodies.
+Team cards use immutable creation order, newest first; runtime and decision
+updates do not move cards under the pointer.
 
 Rendering, navigation and audience rules are owned by
 [`components/team/workbench/DESIGN.md`](../../../renderer/components/team/workbench/DESIGN.md).

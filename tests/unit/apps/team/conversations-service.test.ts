@@ -55,6 +55,7 @@ function makeRuntime(store: TeamStore, busyByApp: Map<string, RosterBusyEntry[]>
     bus: {} as never,
     blackboard: { postTask: vi.fn(), updateTask: vi.fn(), postFinding: vi.fn(), readBoard: vi.fn(() => ({ tasks: [], findings: [], roster: [] })) } as never,
     getMemberStatus: () => 'idle' as const,
+    getObservableStatus: (teamId: string) => store.getTeamById(teamId)?.status ?? 'idle',
     getMemberBusy: (appId: string) => busyByApp.get(appId) ?? [],
     startEpoch: vi.fn(),
     ensureConversationEpoch: (teamId: string, chatKey: string, title?: string): TeamEpoch => {
@@ -165,6 +166,99 @@ describe('TeamService — conversations + pending escalations', () => {
     const { epochId } = svc.openConversation(TEAM_ID)
     busyByApp.set(MEMBER_APP, [{ epochId, kind: 'conversation', label: '' }])
     expect(svc.listConversations(TEAM_ID).find(c => c.epochId === epochId)?.active).toBe(true)
+  })
+
+  it('projects a teammate decision as visible but not answerable on this machine', () => {
+    const svc = build()
+    const { epochId } = svc.openConversation(TEAM_ID, 'Review')
+    store.updateMemberFields(TEAM_ID, MEMBER_APP, { awaitingDecision: true })
+    store.insertActivity({
+      id: 'decision-request:entry-1', teamId: TEAM_ID, epochId, kind: 'decision',
+      actorAppId: MEMBER_APP, targetAppId: null, subject: 'Approve?', body: 'Approve the proposed change?',
+      refId: 'entry-1', correlationId: null, status: 'escalation', createdAt: 100,
+    })
+
+    expect(svc.listConversations(TEAM_ID).find(item => item.epochId === epochId)).toMatchObject({
+      waitingUser: true,
+      waitingForMe: false,
+      waitingMemberAppIds: [MEMBER_APP],
+    })
+
+    store.insertActivity({
+      id: 'decision:entry-1', teamId: TEAM_ID, epochId, kind: 'decision',
+      actorAppId: MEMBER_APP, targetAppId: null, subject: 'Approve?', body: 'Approved',
+      refId: 'entry-1', correlationId: null, status: 'ok', createdAt: 200,
+    })
+    expect(svc.listConversations(TEAM_ID).find(item => item.epochId === epochId)).toMatchObject({
+      waitingUser: false,
+      waitingForMe: false,
+    })
+  })
+
+  it('projects a remote decision on a joined office from roster state until its shared answer arrives', () => {
+    const svc = build()
+    store.materializeJoinedOffice({
+      hostNodeId: 'host-1',
+      selfNodeId: 'viewer-1',
+      snapshot: {
+        team: { id: TEAM_ID, name: 'Team', goal: 'g', leadAppId: LEAD_APP, collabMode: 'free' },
+        members: [
+          { appId: LEAD_APP, memberName: 'Lead', role: 'Lead', isLead: true, ownerNodeId: 'host-1', memberIdentity: null },
+          { appId: MEMBER_APP, memberName: 'Alice', role: 'R', isLead: false, ownerNodeId: 'owner-2', memberIdentity: null, status: 'waiting_user' },
+        ],
+        edges: [],
+      },
+    })
+    store.insertEpoch({
+      id: 'remote-decision-task', teamId: TEAM_ID, startedAt: 100, endedAt: null, endReason: null,
+      summary: null, lifecycle: 'conversation', chatKey: nativeConversationChatKey('remote-decision'),
+    })
+    store.insertActivity({
+      id: 'decision-request:remote-entry', teamId: TEAM_ID, epochId: 'remote-decision-task', kind: 'decision',
+      actorAppId: MEMBER_APP, targetAppId: null, subject: 'Approve?', body: 'Approve the remote change?',
+      refId: 'remote-entry', correlationId: null, status: 'escalation', createdAt: 100,
+    })
+
+    expect(store.getMember(TEAM_ID, MEMBER_APP)?.awaitingDecision).toBe(false)
+    expect(svc.listConversations(TEAM_ID).find(item => item.epochId === 'remote-decision-task')).toMatchObject({
+      waitingUser: true,
+      waitingForMe: false,
+      waitingMemberAppIds: [MEMBER_APP],
+    })
+
+    store.insertActivity({
+      id: 'decision:remote-entry', teamId: TEAM_ID, epochId: 'remote-decision-task', kind: 'decision',
+      actorAppId: MEMBER_APP, targetAppId: null, subject: 'Approve?', body: 'Approved',
+      refId: 'remote-entry', correlationId: null, status: 'ok', createdAt: 200,
+    })
+    expect(svc.listConversations(TEAM_ID).find(item => item.epochId === 'remote-decision-task')).toMatchObject({
+      waitingUser: false,
+      waitingForMe: false,
+    })
+  })
+
+  it('merges a locally answerable decision with shared task state without duplicating its member', () => {
+    const svc = build()
+    const { epochId } = svc.openConversation(TEAM_ID, 'Local review')
+    pending = [{
+      appId: MEMBER_APP,
+      entryId: 'entry-local',
+      question: 'Proceed?',
+      teamId: TEAM_ID,
+      epochId,
+    }]
+    store.updateMemberFields(TEAM_ID, MEMBER_APP, { awaitingDecision: true })
+    store.insertActivity({
+      id: 'decision-request:entry-local', teamId: TEAM_ID, epochId, kind: 'decision',
+      actorAppId: MEMBER_APP, targetAppId: null, subject: 'Proceed?', body: 'Proceed with the rollout?',
+      refId: 'entry-local', correlationId: null, status: 'escalation', createdAt: 100,
+    })
+
+    expect(svc.listConversations(TEAM_ID).find(item => item.epochId === epochId)).toMatchObject({
+      waitingUser: true,
+      waitingForMe: true,
+      waitingMemberAppIds: [MEMBER_APP],
+    })
   })
 
   it('on a JOINED office, active is derived from the federated roster busy, not local sessions', () => {

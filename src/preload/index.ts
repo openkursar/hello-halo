@@ -5,6 +5,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { RpcContract, RpcClient } from '../shared/rpc/define'
 import type { CatalogModelCapability, ModelCapabilityOverride } from '../shared/types/model-capabilities'
+import type { EscalationResponse } from '../shared/apps/app-types'
 import type { UpdaterStatusPayload } from '../shared/types/updater'
 import { modelCapabilitiesRpc } from '../shared/rpc/contracts/model-capabilities.contract'
 import { onboardingRpc } from '../shared/rpc/contracts/onboarding.contract'
@@ -523,7 +524,7 @@ export interface HaloAPI {
   appGetState: (appId: string) => Promise<IpcResponse>
   appGetActivity: (input: { appId: string; options?: { limit?: number; offset?: number; type?: string; since?: number; teamId?: string; epochId?: string } }) => Promise<IpcResponse>
   appGetSession: (input: { appId: string; runId: string }) => Promise<IpcResponse>
-  appRespondEscalation: (input: { appId: string; escalationId: string; response: { ts: number; choice?: string; text?: string } }) => Promise<IpcResponse>
+  appRespondEscalation: (input: { appId: string; escalationId: string; response: EscalationResponse }) => Promise<IpcResponse>
   appContinueRun: (input: { appId: string; runId: string }) => Promise<IpcResponse>
   appInjectRun: (input: { appId: string; runId: string; text: string }) => Promise<IpcResponse>
   appUpdateConfig: (input: { appId: string; config: Record<string, unknown> }) => Promise<IpcResponse>

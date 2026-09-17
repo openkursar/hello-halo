@@ -534,6 +534,11 @@ async function initPlatformAndApps(): Promise<void> {
         // team runtime's host-local getMemberStatus; idle when the runtime is not
         // yet wired.
         getMemberRuntimeStatus: (appId) => getActiveTeamRuntime()?.getMemberStatus(appId) ?? 'idle',
+        // Joiners must see the same office status the host shows. The stored
+        // run status alone reads idle whenever a member works outside a run, so
+        // sending it made the host say "working" and every joiner "ready".
+        getObservableOfficeStatus: (officeId) =>
+          getActiveTeamRuntime()?.getObservableStatus(officeId) ?? teamStore.getTeamById(officeId)?.status ?? 'idle',
         // Stamp each member's live busy assignments (run + conversations) with
         // authority-generated labels so a joiner's board says "busy with another
         // conversation" truthfully (P0-2).
@@ -554,9 +559,24 @@ async function initPlatformAndApps(): Promise<void> {
           const teamId = request.teamContext.teamId
           const notifyLocalBoard = () => {
             const team = teamStore.getTeamById(teamId)
-            const payload = team ? { teamId, team } : { teamId }
+            // Carry the observable status: the row alone says idle for the whole
+            // turn (this is not a run of the office's own), so a push without it
+            // would reset the very board it is announcing work to.
+            const payload = team
+              ? { teamId, team, liveStatus: getActiveTeamRuntime()?.getObservableStatus(teamId) ?? team.status }
+              : { teamId }
             broadcastToAll(TEAM_EVENTS.updated, payload)
             sendToRenderer(TEAM_EVENTS.updated, payload)
+          }
+          // A paused digital human is one whose owner said "stop working". A
+          // teammate on another machine may not overrule that, and must not be
+          // left waiting on it either: refuse as a non-delivery so the sender
+          // can reassign. Deliberately NOT the auto-resume a manual trigger
+          // does — that is the owner choosing, and this is not the owner.
+          const local = appManager.getApp(request.appId)
+          if (local?.status === 'paused') {
+            console.warn(`[Team] wake refused: app=${request.appId} is paused by its owner`)
+            return { finalMessage: null, undelivered: { reason: 'owner-paused' } }
           }
           const run = async () => {
             notifyLocalBoard()
@@ -922,6 +942,10 @@ async function initPlatformAndApps(): Promise<void> {
         hasPendingEscalation: hasPendingEscalationFor,
         onTaskClosed: closeTaskDecisions,
         describeChatKey: describeTeamChatKey,
+        // The roster tells a member what its teammates are, not just what they
+        // were assigned — a duty is per-team and routinely blank, while the
+        // description is how its owner said what it can do at all.
+        getMemberDescription: (appId) => appManager.getApp(appId)?.spec.description ?? null,
         // Periodic checks ring on the machine that owns the target member.
         scheduler,
         // …and the row itself is office-shared, so every node's board shows the

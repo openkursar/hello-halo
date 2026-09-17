@@ -110,6 +110,13 @@ vi.mock('../../../../src/main/services/notification.service', () => ({
   notifyAppEvent: vi.fn(),
 }))
 
+const { getActiveTeamRuntimeMock } = vi.hoisted(() => ({
+  getActiveTeamRuntimeMock: vi.fn(),
+}))
+vi.mock('../../../../src/main/apps/runtime/team', () => ({
+  getActiveTeamRuntime: getActiveTeamRuntimeMock,
+}))
+
 // Mock AI browser (imports electron BrowserWindow)
 vi.mock('../../../../src/main/services/ai-browser', () => ({
   createAIBrowserMcpServer: vi.fn().mockReturnValue({ name: 'mock-ai-browser', _isMcpServer: true }),
@@ -204,7 +211,7 @@ import {
   migrations as managerMigrations,
 } from '../../../../src/main/apps/manager/migrations'
 import { Semaphore } from '../../../../src/main/apps/runtime/concurrency'
-import { buildAppSystemPrompt, buildInitialMessage, buildMemorySection } from '../../../../src/main/apps/runtime/prompt'
+import { buildAppSystemPrompt, buildInitialMessage, buildMemorySection, buildEscalationResumeMessage } from '../../../../src/main/apps/runtime/prompt'
 import { _resetTlonRegistry, createKB, bindToApp } from '../../../../src/main/services/tlon/service'
 import {
   AppNotRunnableError,
@@ -280,6 +287,7 @@ describe('Runtime Migrations', () => {
   let dbManager: DatabaseManager
 
   beforeEach(() => {
+    getActiveTeamRuntimeMock.mockReset()
     dbManager = createDatabaseManager(':memory:')
   })
 
@@ -1849,7 +1857,11 @@ describe('AppRuntimeService', () => {
       expect(mockScheduler.addJob).not.toHaveBeenCalled()
     })
 
-    it('should use user frequency override when available', async () => {
+    // The schedule the settings UI writes is the spec, and it is the only
+    // interval that may drive the scheduler. An earlier build also kept one in
+    // the app's overrides and let it win, so a value left there ran an interval
+    // the user could neither see nor change.
+    it('schedules on the spec interval, ignoring any leftover override', async () => {
       const appId = randomUUID()
       const app = {
         id: appId,
@@ -1858,7 +1870,7 @@ describe('AppRuntimeService', () => {
         spec: createTestSpec(),
         status: 'active' as const,
         userConfig: {},
-        userOverrides: { frequency: { 'check-prices': '1h' } },
+        userOverrides: { frequency: { 'check-prices': '15m' } } as Record<string, unknown>,
         permissions: { granted: [], denied: [] },
         installedAt: Date.now(),
       }
@@ -1868,7 +1880,7 @@ describe('AppRuntimeService', () => {
       await service.activate(appId)
 
       const addJobCall = mockScheduler.addJob.mock.calls[0][0]
-      expect(addJobCall.schedule.every).toBe('1h') // User override, not default 30m
+      expect(addJobCall.schedule.every).toBe('30m')
     })
 
     it('should resume existing scheduler job instead of creating new', async () => {
@@ -2241,6 +2253,51 @@ describe('AppRuntimeService', () => {
       const run = store.getRun('run-001')
       expect(run!.status).toBe('running')
     })
+
+    it('resumes a several-decision escalation with each answer next to its question', async () => {
+      // An answer read apart from its question ("2.1.0; stable") is not an
+      // answer, and the resumed session may have been rebuilt with no memory of
+      // having asked — so the resume text has to carry both.
+      const entryId = randomUUID()
+      store.insertEntry({
+        id: entryId,
+        appId: testAppId,
+        runId: 'run-001',
+        type: 'escalation',
+        ts: Date.now(),
+        content: {
+          summary: 'Two things before I can release',
+          questions: [{ question: 'Version?' }, { question: 'Channel?', choices: ['beta', 'stable'] }],
+        },
+      })
+
+      mockAppManager.getApp.mockReturnValue({
+        id: testAppId,
+        status: 'waiting_user',
+        spec: createTestSpec(),
+        userConfig: {},
+        userOverrides: {},
+        spaceId: 'space-001',
+      })
+      vi.mocked(executeRun).mockClear()
+
+      const service = createService()
+      await service.respondToEscalation(testAppId, entryId, {
+        ts: Date.now(),
+        answers: [{ text: '2.1.0' }, { choice: 'stable' }],
+      })
+      await new Promise((r) => setTimeout(r, 0)) // let the fire-and-forget run dispatch
+
+      expect(store.getEntry(entryId)!.userResponse!.answers).toHaveLength(2)
+
+      const trigger = vi.mocked(executeRun).mock.calls[0][0].trigger
+      expect(trigger.type).toBe('escalation_followup')
+      expect(trigger.escalation!.questions).toHaveLength(2)
+
+      const resume = buildEscalationResumeMessage(trigger.escalation!)
+      expect(resume).toContain('1. Version?\n   → 2.1.0')
+      expect(resume).toContain('2. Channel?\n   → stable')
+    })
   })
 
   // Bug fix: a free-text follow-up to a finished run must distinguish
@@ -2593,6 +2650,176 @@ describe('AppRuntimeService', () => {
       onUninstalled({ id: 'app-gone' })
       expect(sendToRenderer).toHaveBeenCalledWith('app:list_changed', { appId: 'app-gone', change: 'uninstalled' })
       expect(broadcastToAll).toHaveBeenCalledWith('app:list_changed', { appId: 'app-gone', change: 'uninstalled' })
+    })
+  })
+
+  // An escalating run ends, so the app looks idle to the executor and the next
+  // trigger would start a second run alongside the unanswered question. Both
+  // questions must then survive independently and stay separately answerable.
+  describe('waiting on a user decision', () => {
+    let testAppId: string
+    let activeApp: any
+
+    function seedApp(status: string): void {
+      const db = dbManager.getAppDatabase()
+      db.prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(testAppId, 'test-app', 'space-001', JSON.stringify(createTestSpec()), status, '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+    }
+
+    function seedQuestion(runId: string, entryId: string, ts: number): void {
+      store.insertRun({ runId, appId: testAppId, sessionKey: `sess-${runId}`, status: 'waiting_user', triggerType: 'schedule', startedAt: ts })
+      store.insertEntry({
+        id: entryId, appId: testAppId, runId, type: 'escalation', ts,
+        content: { summary: 'Need a decision', question: 'Proceed?' },
+      })
+    }
+
+    /** Fire the scheduler handler the service registers at construction time. */
+    function fireScheduledTrigger(): Promise<string> {
+      createService()
+      const onJobDue = mockScheduler.onJobDue.mock.calls[0][1]
+      return onJobDue({
+        id: 'job-1',
+        schedule: { kind: 'every', every: '30m' },
+        metadata: { appId: testAppId },
+      })
+    }
+
+    beforeEach(() => {
+      vi.mocked(executeRun).mockClear()
+      testAppId = randomUUID()
+      activeApp = {
+        id: testAppId, status: 'active', spec: createTestSpec(),
+        userConfig: {}, userOverrides: {}, spaceId: 'space-001',
+      }
+      mockAppManager.getApp.mockReturnValue(activeApp)
+    })
+
+    it('skips a scheduled run while a question is unanswered', async () => {
+      seedApp('active')
+      seedQuestion('run-a', 'entry-a', 1000)
+
+      const outcome = await fireScheduledTrigger()
+
+      expect(outcome).toBe('skipped')
+      expect(executeRun).not.toHaveBeenCalled()
+    })
+
+    // The app record is a cache of the same fact and can be stale or unwritten,
+    // so the stored questions are what the guard must consult.
+    it('skips even when the app record still says active', async () => {
+      seedApp('active')
+      seedQuestion('run-a', 'entry-a', 1000)
+      mockAppManager.getApp.mockReturnValue({ ...activeApp, status: 'active', pendingEscalationId: undefined })
+
+      const outcome = await fireScheduledTrigger()
+
+      expect(outcome).toBe('skipped')
+      expect(executeRun).not.toHaveBeenCalled()
+    })
+
+    it('runs on schedule once every question is answered', async () => {
+      seedApp('active')
+      seedQuestion('run-a', 'entry-a', 1000)
+      store.updateEntryResponse('entry-a', { ts: 2000, text: 'Go ahead' })
+
+      const outcome = await fireScheduledTrigger()
+
+      expect(outcome).not.toBe('skipped')
+      expect(executeRun).toHaveBeenCalled()
+    })
+
+    it('leaves an earlier question answerable after a later one is raised', async () => {
+      seedApp('waiting_user')
+      seedQuestion('run-a', 'entry-a', 1000)
+      seedQuestion('run-b', 'entry-b', 2000)
+      mockAppManager.getApp.mockReturnValue({ ...activeApp, status: 'waiting_user' })
+
+      const service = createService()
+      await service.respondToEscalation(testAppId, 'entry-b', { ts: 3000, text: 'Answer B' })
+
+      // Answering the newer question must not discard the older one, and the
+      // app must stay in waiting_user while it is still open.
+      expect(store.getEntry('entry-a')!.userResponse).toBeUndefined()
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalledWith(testAppId, 'active')
+
+      await expect(
+        service.respondToEscalation(testAppId, 'entry-a', { ts: 4000, text: 'Answer A' })
+      ).resolves.toBeUndefined()
+
+      // Each answer resumes its own run, not whichever was most recent.
+      expect(store.getRun('run-a')!.status).toBe('running')
+      expect(store.getRun('run-b')!.status).toBe('running')
+      expect(mockAppManager.updateStatus).toHaveBeenCalledWith(testAppId, 'active')
+    })
+
+    it('abandons open questions only when the app stops for good', () => {
+      seedApp('waiting_user')
+      seedQuestion('run-a', 'entry-a', 1000)
+      const reconcileAwaitingDecision = vi.fn()
+      getActiveTeamRuntimeMock.mockReturnValue({ reconcileAwaitingDecision })
+      createService()
+      const onStatusChange = mockAppManager.onAppStatusChange.mock.calls[0][0]
+
+      onStatusChange(testAppId, 'waiting_user', 'active')
+      expect(store.getEntry('entry-a')!.userResponse).toBeUndefined()
+
+      onStatusChange(testAppId, 'waiting_user', 'paused')
+      expect(store.getEntry('entry-a')!.userResponse).toBeDefined()
+      expect(reconcileAwaitingDecision).toHaveBeenCalledWith(testAppId)
+    })
+  })
+
+  // A run is only moved out of 'running' by the process executing it, so a
+  // crash leaves a row claiming to be live that nothing will ever settle.
+  describe('runs interrupted by a previous shutdown', () => {
+    let testAppId: string
+
+    beforeEach(() => {
+      testAppId = randomUUID()
+      const db = dbManager.getAppDatabase()
+      db.prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(testAppId, 'test-app', 'space-001', JSON.stringify(createTestSpec()), 'active', '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+      mockAppManager.getApp.mockReturnValue({
+        id: testAppId, status: 'active', spec: createTestSpec(),
+        userConfig: {}, userOverrides: {}, spaceId: 'space-001',
+      })
+    })
+
+    it('fails stranded runs on startup and puts them back on the timeline', async () => {
+      store.insertRun({
+        runId: 'run-stranded', appId: testAppId, sessionKey: 'sess-1',
+        status: 'running', triggerType: 'schedule', startedAt: Date.now() - 60_000,
+      })
+
+      await createService().activateAll()
+
+      const run = store.getRun('run-stranded')!
+      expect(run.status).toBe('error')
+      expect(run.finishedAt).toBeDefined()
+      expect(run.errorMessage).toContain('Interrupted')
+
+      // The timeline entry is the entry point back into the run; without it the
+      // run is invisible and the user has nothing to click.
+      const entries = store.getEntriesForRun('run-stranded')
+      expect(entries.some(e => e.type === 'run_error')).toBe(true)
+    })
+
+    it('leaves finished runs untouched', async () => {
+      store.insertRun({
+        runId: 'run-done', appId: testAppId, sessionKey: 'sess-2',
+        status: 'running', triggerType: 'schedule', startedAt: Date.now() - 60_000,
+      })
+      store.completeRun('run-done', { status: 'ok', finishedAt: Date.now(), durationMs: 10 })
+
+      await createService().activateAll()
+
+      expect(store.getRun('run-done')!.status).toBe('ok')
+      expect(store.getEntriesForRun('run-done')).toHaveLength(0)
     })
   })
 })

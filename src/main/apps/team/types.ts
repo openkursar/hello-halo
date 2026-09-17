@@ -346,7 +346,11 @@ export interface TeamStore {
   listActivityByEpoch(teamId: string, epochId: string): TeamActivity[]
   listRecentActivityByEpoch(teamId: string, epochId: string, limit: number): TeamActivity[]
   /** Every act of a team, across epochs — the replication snapshot's source. */
-  getConversationStats(teamId: string, ownAppIds: string[]): { involved: Set<string>; outputCounts: Map<string, number> }
+  getConversationStats(teamId: string, ownAppIds: string[]): {
+    involved: Set<string>
+    outputCounts: Map<string, number>
+    unansweredDecisionMembers: Map<string, string[]>
+  }
   listActivityByTeam(teamId: string): TeamActivity[]
   /**
    * How many acts an epoch holds, without loading them. Lets a bounded reader

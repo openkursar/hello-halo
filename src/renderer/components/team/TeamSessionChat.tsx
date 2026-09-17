@@ -11,7 +11,7 @@ import { invalidateTeamSessionHistory, loadTeamSessionHistory, matchesTeamHistor
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Loader2, AlertCircle } from 'lucide-react'
+import { Loader2, AlertCircle, LockKeyhole, MessageSquareMore } from 'lucide-react'
 import { api } from '../../api'
 import { useChatStore } from '../../stores/chat.store'
 import { useSmartScroll } from '../../hooks/useSmartScroll'
@@ -46,6 +46,8 @@ export interface TeamSessionChatProps {
    * framing, not in the chat engine.
    */
   readonly?: boolean
+  /** Persistent explanation shown where the composer would normally be. */
+  readonlyMessage?: string
   placeholder?: string
   emptyTitle?: string
   emptyContent?: React.ReactNode
@@ -72,7 +74,7 @@ type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
 
 export function TeamSessionChat({
   appId, spaceId, teamId, epochId, isRemote, ownerName, reachability = 'online',
-  readonly = false, placeholder, emptyTitle, emptyHint, emptyContent, topSlot, aboveInput, ensureEpochId, toolbarSlot, renderMessages, renderAfterStreaming, isBackgroundTurn, draftKey,
+  readonly = false, readonlyMessage, placeholder, emptyTitle, emptyHint, emptyContent, topSlot, aboveInput, ensureEpochId, toolbarSlot, renderMessages, renderAfterStreaming, isBackgroundTurn, draftKey,
 }: TeamSessionChatProps) {
   const { t } = useTranslation()
   const conversationId = buildTeamSessionKey(appId, teamId, epochId ?? 'none')
@@ -359,6 +361,22 @@ export function TeamSessionChat({
     thoughtCount: thoughts.length,
   })
 
+  const readonlyQuestion = readonly && pendingQuestion && pendingQuestion.status !== 'answered' ? <section className="mt-3 overflow-hidden rounded-xl border border-halo-warning/30 bg-halo-warning/5">
+    <header className="flex items-center gap-2 border-b border-halo-warning/20 px-4 py-2.5 text-xs text-halo-warning">
+      <MessageSquareMore size={15} />
+      <span className="font-medium">{pendingQuestion.status === 'cancelled' ? t('Decision request closed') : ownerName ? t('Waiting for {{owner}}’s decision', { owner: ownerName }) : t('Waiting for the owner’s decision')}</span>
+      <span className="ml-auto text-[11px] text-muted-foreground">{t('Read only')}</span>
+    </header>
+    <div className="space-y-4 px-4 py-3">{pendingQuestion.questions.map((question, index) => <div key={`${pendingQuestion.id}:${index}`} className="space-y-2">
+      <span className="inline-block rounded-md bg-halo-warning/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-halo-warning">{question.header}</span>
+      <p className="text-sm font-medium text-foreground">{question.question}</p>
+      {question.options.length > 0 && <ul className="space-y-1.5">{question.options.map(option => <li key={option.label} className="rounded-lg border border-border bg-background/70 px-3 py-2">
+        <p className="text-sm text-foreground/90">{option.label}</p>
+        {option.description && <p className="mt-0.5 text-xs text-muted-foreground">{option.description}</p>}
+      </li>)}</ul>}
+    </div>)}</div>
+  </section> : null
+
   const streamingSection = <StreamingSection
     streamingContent={streamingContent}
     isStreaming={isStreaming}
@@ -367,8 +385,8 @@ export function TeamSessionChat({
     textBlockVersion={textBlockVersion}
     browserToolCalls={streamingBrowserToolCalls}
     showBrowserViewButton={false}
-    pendingQuestion={pendingQuestion}
-    onAnswerQuestion={handleAnswerQuestion}
+    pendingQuestion={readonly ? undefined : pendingQuestion}
+    onAnswerQuestion={readonly ? undefined : handleAnswerQuestion}
   />
 
   return (
@@ -417,7 +435,7 @@ export function TeamSessionChat({
               <MessageRow key={message.id} message={message} hideBrowserViewButton />
             )))}
 
-            {(hasStreaming || showRelayedTranscript || pendingQuestion) && <div className="mt-4">{(isBackgroundTurn?.(messages)
+            {(hasStreaming || showRelayedTranscript || pendingQuestion) && <div className="mt-4">{readonlyQuestion ?? (isBackgroundTurn?.(messages)
               ? pendingQuestion && <StreamingSection streamingContent="" isStreaming={false} thoughts={[]} isThinking={false} textBlockVersion={0} showBrowserViewButton={false} pendingQuestion={pendingQuestion} onAnswerQuestion={handleAnswerQuestion} />
               : streamingSection)}</div>}
             {hasStreaming && renderAfterStreaming?.(thoughts)}
@@ -478,8 +496,13 @@ export function TeamSessionChat({
         </div>
       )}
 
-      {/* Input region — hidden for read-only surfaces and offline owners. */}
-      {readonly ? null : reachability === 'offline' ? (
+      {/* Input region — a read-only surface keeps its permission boundary visible. */}
+      {readonly ? <div className="shrink-0 border-t border-border p-3">
+        <div role="status" className="flex min-h-11 items-center gap-2 rounded-xl bg-secondary/60 px-3 py-2 text-xs text-muted-foreground">
+          <LockKeyhole size={14} className="shrink-0" />
+          <span>{readonlyMessage ?? t('This conversation is read-only.')}</span>
+        </div>
+      </div> : reachability === 'offline' ? (
         <div className="shrink-0 border-t border-border p-3">
           <div className="rounded-xl border border-halo-warning/30 bg-halo-warning/5 px-4 py-3">
             <p className="text-sm font-medium text-foreground">

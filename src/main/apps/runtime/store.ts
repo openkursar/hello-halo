@@ -110,6 +110,7 @@ export class ActivityStore {
   private readonly stmtUpdateEntryResponse: Database.Statement
   private readonly stmtGetPendingEscalation: Database.Statement
   private readonly stmtGetAllPendingEscalations: Database.Statement
+  private readonly stmtHasPendingSoloEscalation: Database.Statement
   private readonly stmtGetRunningRunForApp: Database.Statement
   private readonly stmtGetLatestRunForApp: Database.Statement
   private readonly stmtGetEntriesForRun: Database.Statement
@@ -180,6 +181,14 @@ export class ActivityStore {
       SELECT * FROM activity_entries
       WHERE type = 'escalation' AND user_response_json IS NULL AND json_extract(content_json, '$.resolution') IS NULL
       ORDER BY ts ASC
+    `)
+
+    this.stmtHasPendingSoloEscalation = db.prepare(`
+      SELECT 1 FROM activity_entries
+      WHERE app_id = ? AND type = 'escalation' AND user_response_json IS NULL
+        AND json_extract(content_json, '$.resolution') IS NULL
+        AND json_extract(content_json, '$.teamContext.epochId') IS NULL
+      LIMIT 1
     `)
 
     // Close orphan escalation entries for an app, excluding a specific active entry.
@@ -306,6 +315,37 @@ export class ActivityStore {
     this.stmtReopenRun.run(runId)
   }
 
+  /** Every run the database still believes is executing. */
+  listRunningRuns(): AutomationRun[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM automation_runs WHERE status = 'running' ORDER BY started_at ASC`)
+      .all() as RunRow[]
+    return rows.map(rowToRun)
+  }
+
+  /**
+   * Fail the given runs, which a caller has established are no longer executing.
+   *
+   * A run only reaches a terminal status from inside the process executing it,
+   * so a crash or a forced quit strands the row at 'running' forever: pruning
+   * skips it and the UI reads it as neither live nor finished.
+   */
+  failRuns(runIds: string[], errorMessage: string): AutomationRun[] {
+    if (runIds.length === 0) return []
+    const finishedAt = Date.now()
+    const placeholders = runIds.map(() => '?').join(', ')
+    const rows = this.db.prepare(`
+      UPDATE automation_runs
+      SET status = 'error',
+          finished_at = ?,
+          duration_ms = ? - started_at,
+          error_message = ?
+      WHERE status = 'running' AND run_id IN (${placeholders})
+      RETURNING *
+    `).all(finishedAt, finishedAt, errorMessage, ...runIds) as RunRow[]
+    return rows.map(rowToRun)
+  }
+
   // ── Entry Operations ──────────────────────────
 
   /** Insert an activity entry */
@@ -364,6 +404,17 @@ export class ActivityStore {
   getAllPendingEscalations(): ActivityEntry[] {
     const rows = this.stmtGetAllPendingEscalations.all() as EntryRow[]
     return rows.map(rowToEntry)
+  }
+
+  /**
+   * Whether the app is waiting on a human for anything outside a team task.
+   *
+   * An app can hold several such questions at once: each run escalates
+   * independently, and one whose question is still unanswered must stay
+   * answerable after a later run has raised its own.
+   */
+  hasPendingSoloEscalation(appId: string): boolean {
+    return !!this.stmtHasPendingSoloEscalation.get(appId)
   }
 
   hasPendingEscalation(appId: string, teamId: string, epochId?: string): boolean {

@@ -72,9 +72,8 @@ export interface InstalledApp {
   /** User-provided configuration values (corresponds to spec.config_schema) */
   userConfig: Record<string, unknown>
 
-  /** User overrides for subscription frequencies and other tunable settings */
+  /** User overrides for tunable per-app settings */
   userOverrides: {
-    frequency?: Record<string, string>  // subscriptionId -> frequency string
     /** Notification level: 'all' | 'important' | 'none'. Defaults to 'important'. */
     notificationLevel?: 'all' | 'important' | 'none'
     /** Override AI source for this App. When set, uses this source instead of the global one. */
@@ -165,8 +164,28 @@ export interface ActivityEntryContent {
   question?: string
   /** Preset choices for escalation */
   choices?: string[]
+  /**
+   * The decisions asked, when an escalation asks for more than one. `summary`
+   * then frames why they are being asked and `choices` does not apply. A
+   * single-decision escalation leaves this empty and carries its question in
+   * `summary`.
+   */
+  questions?: EscalationQuestion[]
   /** File URL for output type */
   outputUrl?: string
+}
+
+/** One decision an escalation asks the user to make. */
+export interface EscalationQuestion {
+  question: string
+  /** Preset answers; the user may still type their own. */
+  choices?: string[]
+}
+
+/** The user's answer to a single question. */
+export interface EscalationAnswer {
+  choice?: string
+  text?: string
 }
 
 /** User response to an escalation */
@@ -174,7 +193,16 @@ export interface EscalationResponse {
   ts: number
   choice?: string
   text?: string
+  /** One answer per `content.questions`, in the same order. */
+  answers?: EscalationAnswer[]
 }
+
+/**
+ * What a client sends when answering an escalation. One declaration for every
+ * surface that carries it (renderer API, store, preload, HTTP body) — the same
+ * shape written inline four times is how a field ships broken on one of them.
+ */
+export type EscalationAnswerPayload = Omit<EscalationResponse, 'ts'>
 
 /** A single Activity Thread entry */
 export interface ActivityEntry {
@@ -295,4 +323,46 @@ export function resolvePermission(
   if (app.permissions.granted.includes(permission)) return true
   if (app.spec.permissions?.includes(permission)) return true
   return defaultValue
+}
+
+/**
+ * The decisions an escalation asks for, in display order.
+ *
+ * Three shapes reach this: the current multi-decision one, the single-decision
+ * one that carries its question in `summary`, and entries written before
+ * `question` was folded into `summary`. Normalising here is what keeps every
+ * reader — the card, the prompt the AI is resumed with, the task history — from
+ * branching on which shape it was handed.
+ */
+export function getEscalationQuestions(content: ActivityEntryContent): EscalationQuestion[] {
+  if (content.questions?.length) return content.questions
+  return [{
+    question: content.question || content.summary,
+    ...(content.choices?.length ? { choices: content.choices } : {}),
+  }]
+}
+
+/**
+ * The user's answer rendered as one readable block: what the AI is resumed
+ * with, what the team task history records, and what the answered card shows.
+ *
+ * Numbered against the questions when several were asked, because an answer
+ * read apart from its decision ("Yes; the second one") is not an answer.
+ */
+export function formatEscalationAnswer(
+  questions: EscalationQuestion[],
+  response: Pick<EscalationResponse, 'choice' | 'text' | 'answers'>
+): string {
+  const one = (answer: EscalationAnswer) => [answer.choice, answer.text].filter(Boolean).join(' — ')
+
+  const answers = response.answers
+  if (!answers?.length) return one(response)
+  if (questions.length <= 1) return one(answers[0] ?? {})
+
+  return questions
+    .map((q, index) => {
+      const answer = answers[index]
+      return `${index + 1}. ${q.question}\n   → ${(answer && one(answer)) || '(not answered)'}`
+    })
+    .join('\n')
 }

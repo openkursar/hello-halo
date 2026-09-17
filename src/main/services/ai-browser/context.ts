@@ -17,6 +17,7 @@ import * as path from 'path'
 import * as fs from 'fs'
 import { nativeImage, app } from 'electron'
 import { browserViewManager } from '../browser-view.service'
+import type { BrowserViewState } from '../browser-view.service'
 import {
   createAccessibilitySnapshot,
   getElementBoundingBox,
@@ -39,6 +40,49 @@ import type {
   DownloadInfo,
   DownloadState
 } from './types'
+
+/**
+ * Every tab opened by an automation, across all of them.
+ *
+ * Ownership has to be answerable from outside the owning context: the
+ * interactive context must be able to tell "a tab the user opened" from "a tab
+ * some digital human opened" without holding a reference to every agent alive.
+ * Membership is added on track and removed on destroy, so the set tracks live
+ * automation views only.
+ */
+const automationOwnedViewIds = new Set<string>()
+
+/**
+ * Every context currently alive: the user's singleton, one per conversation,
+ * and every automation's.
+ *
+ * A tab can be closed by someone other than whoever is pointing at it — the
+ * user closing a canvas tab, the tray "stop" button — and more than one context
+ * may hold that pointer. Reconciling only the context the closer happens to
+ * know about leaves the rest pointing at a dead page, which surfaces as a
+ * navigation that fails instead of opening a fresh one.
+ */
+const liveContexts = new Set<BrowserContext>()
+
+/**
+ * A view is gone: reconcile EVERY context, then announce it once.
+ *
+ * Announcing per context would tell the renderer to drop the same live session
+ * several times; announcing from inside the loop would also fire for an
+ * automation's offscreen page, which the renderer has no entry for.
+ */
+export function notifyViewDestroyed(viewId: string): void {
+  automationOwnedViewIds.delete(viewId)
+  let announce = false
+  for (const ctx of liveContexts) {
+    const cleared = ctx.handleViewDestroyed(viewId)
+    if (cleared && !ctx.isScoped) announce = true
+  }
+  if (announce) {
+    emitBrowserViewGone({ viewId })
+    console.log(`[BrowserContext] Active view gone: ${viewId}`)
+  }
+}
 
 // Default timeout for CDP commands (ms)
 const CDP_TIMEOUT = 15_000
@@ -108,7 +152,8 @@ export class BrowserContext implements BrowserContextInterface {
   private isTracing: boolean = false
   private traceStartTime: number = 0
 
-  // View tracking for scoped cleanup
+  // The views this context opened. Both an access boundary (see
+  // `visibleViewStates`) and the cleanup list `destroy()` walks.
   private ownedViewIds: Set<string> = new Set()
 
   // Whether this is a scoped context (used for automation isolation).
@@ -116,9 +161,43 @@ export class BrowserContext implements BrowserContextInterface {
   // of the main window, preventing lifecycle conflicts with user-visible views.
   private _isScoped: boolean = false
 
+  constructor() {
+    // Enrolled here rather than at each factory so a context can never be built
+    // that an external tab close cannot reach (see `notifyViewDestroyed`).
+    liveContexts.add(this)
+  }
+
   /** Whether this context is scoped (automation) vs the global singleton (interactive). */
   get isScoped(): boolean {
     return this._isScoped
+  }
+
+  /**
+   * The tabs this context may see and act on — NOT every tab in the app.
+   *
+   * Tabs live in one process-wide manager, so enumerating it directly handed
+   * every agent every other agent's pages AND the user's own. That is how a
+   * digital human listed a colleague's logged-in pages, and how one agent
+   * navigated a tab another was working on straight out from under it (the
+   * victim keeps pointing at the same view id, so its next screenshot silently
+   * returns someone else's page).
+   *
+   * Two rules, from who the tab belongs to:
+   *   - an automation sees only what it opened itself;
+   *   - the interactive context (the user's own browser) sees the user's tabs
+   *     and never an automation's — the human asked about the page in front of
+   *     them, not about what some digital human is doing offscreen.
+   */
+  visibleViewStates(): Array<BrowserViewState & { id: string }> {
+    const all = browserViewManager.getAllStates()
+    if (this._isScoped) return all.filter((s) => this.ownedViewIds.has(s.id))
+    return all.filter((s) => !automationOwnedViewIds.has(s.id))
+  }
+
+  /** Whether this context may act on a view at all (see `visibleViewStates`). */
+  canReachView(viewId: string): boolean {
+    if (this._isScoped) return this.ownedViewIds.has(viewId)
+    return !automationOwnedViewIds.has(viewId)
   }
 
   /** Mark this context as scoped. Called by createScopedBrowserContext(). */
@@ -170,23 +249,26 @@ export class BrowserContext implements BrowserContextInterface {
   }
 
   /**
-   * Reconcile context state when a view is destroyed elsewhere (user closes the
-   * canvas tab, tray "stop", or AI closes a tab). If the destroyed view was the
-   * AI's active one, clear it — the next tool call will create a fresh page
-   * instead of operating a dead WebContents — and announce it so the renderer
-   * drops the live-session entry and the AI-operating indicator.
+   * Reconcile this context when a view is destroyed elsewhere (user closes the
+   * canvas tab, tray "stop", or an agent closes a tab). Clearing the pointer is
+   * what lets the next tool call create a fresh page instead of operating a
+   * dead WebContents.
+   *
+   * Returns whether this context had been pointing at it, so the caller can
+   * announce the removal exactly once — every context holding that pointer must
+   * be reconciled, but the renderer must not be told several times.
+   *
+   * Route external closes through {@link notifyViewDestroyed}, never here:
+   * calling one context leaves every other one holding a dead pointer.
    */
-  handleViewDestroyed(viewId: string): void {
+  handleViewDestroyed(viewId: string): boolean {
     this.ownedViewIds.delete(viewId)
-    if (this.activeViewId !== viewId) return
+    if (this.activeViewId !== viewId) return false
 
     this.disableMonitoring()
     this.activeViewId = null
     this.lastSnapshot = null
-    if (!this._isScoped) {
-      emitBrowserViewGone({ viewId })
-      console.log(`[BrowserContext] Active view gone: ${viewId}`)
-    }
+    return true
   }
 
   /**
@@ -1614,6 +1696,9 @@ export class BrowserContext implements BrowserContextInterface {
    */
   trackView(viewId: string): void {
     this.ownedViewIds.add(viewId)
+    // Claim it app-wide too, so the user's own browser can tell this tab is an
+    // automation's and leave it alone.
+    if (this._isScoped) automationOwnedViewIds.add(viewId)
 
     const wc = browserViewManager.getWebContents(viewId)
     if (!wc) return
@@ -1678,6 +1763,43 @@ export class BrowserContext implements BrowserContextInterface {
   }
 
   /**
+   * Let go of this context WITHOUT closing the tabs it opened.
+   *
+   * For an automation, closing its tabs on the way out is correct — nobody else
+   * was ever going to use them. For a conversation driving the user's own
+   * browser it is the opposite: those tabs are the user's, still on screen, and
+   * ending the conversation must not sweep them away. So the two endings are
+   * separate calls rather than one with a flag, because getting it wrong is
+   * silent and destroys the user's work.
+   */
+  release(): void {
+    this.disableMonitoring()
+
+    // Hand the tabs back before forgetting them. Download routing is keyed by
+    // WebContents, so a tab left registered to a released context keeps sending
+    // the USER's own downloads to the AI's download folder — silently, on a tab
+    // that outlives the conversation and looks like any other.
+    for (const viewId of this.ownedViewIds) {
+      const wc = browserViewManager.getWebContents(viewId)
+      if (wc && !wc.isDestroyed()) {
+        unregisterWebContentsForDownload(wc.id)
+      }
+    }
+
+    for (const waiter of this.pendingDownloadResolvers) {
+      clearTimeout(waiter.timer)
+      waiter.reject(new Error('Context released'))
+    }
+    this.pendingDownloadResolvers = []
+    this.downloads.clear()
+    this.ownedViewIds.clear()
+    this.activeViewId = null
+    this.lastSnapshot = null
+    this.workDir = undefined
+    liveContexts.delete(this)
+  }
+
+  /**
    * Cleanup when context is destroyed.
    * Also destroys any BrowserViews created during this context's lifetime.
    */
@@ -1702,6 +1824,7 @@ export class BrowserContext implements BrowserContextInterface {
 
     // Destroy owned views (scoped contexts only -- singleton has no owned views)
     for (const viewId of this.ownedViewIds) {
+      automationOwnedViewIds.delete(viewId)
       try {
         browserViewManager.destroy(viewId)
       } catch (_e) {
@@ -1713,6 +1836,7 @@ export class BrowserContext implements BrowserContextInterface {
     this.activeViewId = null
     this.lastSnapshot = null
     this.workDir = undefined
+    liveContexts.delete(this)
   }
 }
 
@@ -1793,6 +1917,39 @@ export function createScopedBrowserContext(): BrowserContext {
   const scoped = new BrowserContext()
   scoped.markAsScoped()
   return scoped
+}
+
+/**
+ * One interactive context per conversation, all sharing the user's tabs.
+ *
+ * "Which tab am I on" is per conversation; the tabs themselves are the user's
+ * and shared. Every conversation used to share ONE pointer, so a navigation in
+ * one silently retargeted the next tool call of another — no select needed, no
+ * error, just the wrong page. Splitting only the pointer fixes that without
+ * walling conversations off from the browser the user actually has open.
+ *
+ * NOT scoped: these must keep seeing the user's tabs (answering "what is on the
+ * page I have open" is the point). Only automations get their own tab set.
+ */
+const interactiveContexts = new Map<string, BrowserContext>()
+
+export function getInteractiveBrowserContext(conversationId: string): BrowserContext {
+  const existing = interactiveContexts.get(conversationId)
+  if (existing) return existing
+  const created = new BrowserContext()
+  interactiveContexts.set(conversationId, created)
+  return created
+}
+
+/**
+ * Drop a conversation's context when its agent session goes away. Releases
+ * rather than destroys: the tabs belong to the user and stay open.
+ */
+export function releaseInteractiveBrowserContext(conversationId: string): void {
+  const ctx = interactiveContexts.get(conversationId)
+  if (!ctx) return
+  interactiveContexts.delete(conversationId)
+  ctx.release()
 }
 
 // Singleton instance (used for interactive user-facing browser)

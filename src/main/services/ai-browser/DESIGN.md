@@ -96,13 +96,45 @@ of which caller path is used.
 ## Context Model
 
 ```
-BrowserContext (singleton)          — used by main chat (interactive UI)
-BrowserContext (scoped, per-agent)  — used by app-chat / automation (no UI)
+BrowserContext (singleton)            — the user's own browsing (Content Canvas / IPC)
+BrowserContext (interactive, per-conv) — used by main chat, one per conversation
+BrowserContext (scoped, per-agent)     — used by app-chat / automation (no UI)
 ```
 
-Scoped contexts are created via `createScopedBrowserContext()` and passed
-to `createAIBrowserMcpServer(scopedCtx, workDir)`. They isolate view ownership,
-download tracking, and monitoring state per agent session.
+Scoped contexts are created via `createScopedBrowserContext()` and passed to
+`createAIBrowserMcpServer(scopedCtx, workDir)`. Interactive ones come from
+`getInteractiveBrowserContext(conversationId)` and are dropped by
+`releaseInteractiveBrowserContext` when the agent session is cleaned up.
+
+### Who may see and touch which tab
+
+Views live in one process-wide `browserViewManager`, so **ownership is enforced
+in the context, not the manager**: `visibleViewStates()` / `canReachView()` are
+the boundary, and every tool that enumerates or targets a tab goes through them.
+Two rules, from whom the tab belongs to:
+
+- an **automation** sees only the tabs it opened itself;
+- an **interactive** context sees the user's tabs and never an automation's —
+  the user asked about the page in front of them.
+
+Both were previously unenforced: tools read `getAllStates()` directly, so any
+agent could list, select and navigate any other agent's pages *and* the user's.
+The victim keeps pointing at the same view id, so its next snapshot silently
+returns someone else's page — no error, no signal. `ownedViewIds` existed but
+was only a cleanup list; nothing consulted it before acting.
+
+What is deliberately **not** isolated: the Electron session partition
+(`persist:browser`). Cookies and logins are one pot on purpose, so a digital
+human can use sites the user is already logged into.
+
+A conversation's active tab is its own; the tabs themselves stay shared. One
+shared `activeViewId` meant a navigation in one conversation retargeted the next
+tool call of another, which is why the pointer is per conversation while
+visibility is not.
+
+`release()` vs `destroy()`: an automation's tabs are closed with it; a
+conversation's are the **user's** and stay open. Separate calls rather than one
+flag — getting it wrong is silent and destroys the user's work.
 
 The context holds **no BrowserWindow reference**. UI notifications go through a
 process-global event bus (see "View Lifecycle Events"), so delivery is owned by
@@ -131,8 +163,11 @@ the AI drives (shared `persist:browser` session across all views).
 
 ### Lifecycle
 
-- **Creation**: Caller creates scoped context → passes to MCP server factory
-- **Cleanup (scoped)**: Caller calls `ctx.destroy()` when the agent session ends
+- **Creation (scoped)**: Caller creates scoped context → passes to MCP server factory
+- **Creation (interactive)**: `getInteractiveBrowserContext(conversationId)`, on demand
+- **Cleanup (scoped)**: Caller calls `ctx.destroy()` when the agent session ends — closes its tabs
+- **Cleanup (interactive)**: `releaseInteractiveBrowserContext(conversationId)` from the
+  toolset broker's per-conversation teardown — leaves the user's tabs open
 - **Cleanup (singleton)**: `cleanupAIBrowser()` called by `bootstrap/extended.ts` on app shutdown
 
 ## File Map

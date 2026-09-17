@@ -175,3 +175,36 @@ describe('team duty in the prompt', () => {
     expect(entry).toContain('- researcher — Research')
   })
 })
+
+describe('what a teammate IS, alongside what it does here', () => {
+  it('carries the digital human’s own description so a blank duty still says something', () => {
+    const entry = buildTeamEntry(makeCtx({
+      roster: [{ ...localMate, description: 'Searches the web and writes sourced summaries.' }],
+    }))
+
+    expect(entry).toContain('Searches the web and writes sourced summaries.')
+    // Alone there is nothing to tell it apart from, so it costs no label.
+    expect(entry).not.toContain('About:')
+  })
+
+  it('labels both when both are present, so they cannot read as one paragraph', () => {
+    const entry = buildTeamEntry(makeCtx({
+      roster: [{
+        ...localMate,
+        description: 'Searches the web and writes sourced summaries.',
+        duty: 'You gather the competitor pricing.',
+      }],
+    }))
+
+    expect(entry).toContain('About: Searches the web and writes sourced summaries.')
+    expect(entry).toContain('Duty here: You gather the competitor pricing.')
+  })
+
+  it('writes no line at all when the owner described nothing', () => {
+    // The roster head is the whole entry — no stray blank or orphan label.
+    const entry = buildTeamEntry(makeCtx({ roster: [{ ...localMate, description: '   ' }] }))
+    expect(entry).toContain('- researcher — Research')
+    expect(entry).not.toContain('About:')
+    expect(entry).not.toMatch(/- researcher — Research\n\s*\n/)
+  })
+})

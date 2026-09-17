@@ -159,5 +159,20 @@ export const migrations: Migration[] = [
         ADD COLUMN knowledge_seeded INTEGER NOT NULL DEFAULT 0
       `)
     }
+  },
+  {
+    version: 7,
+    description: 'Drop the legacy schedule-interval override, superseded by the spec',
+    up(db) {
+      // The override used to win over the spec while only the spec was
+      // reachable from the settings UI, so a value left here by an older build
+      // kept running an interval the user could neither see nor change.
+      // Dropping the key makes the stored schedule agree with the displayed one.
+      db.exec(`
+        UPDATE installed_apps
+        SET user_overrides_json = json_remove(user_overrides_json, '$.frequency')
+        WHERE json_extract(user_overrides_json, '$.frequency') IS NOT NULL
+      `)
+    }
   }
 ]

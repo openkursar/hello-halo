@@ -84,6 +84,7 @@ const TRIGGER = {
 
 describe('report routing (§5.3)', () => {
   let capture: ReturnType<typeof vi.fn>
+  let postActivity: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     toolMock.mockClear()
@@ -91,9 +92,11 @@ describe('report routing (§5.3)', () => {
     sendToRenderer.mockClear()
     notifyAppEvent.mockClear()
     capture = vi.fn()
+    postActivity = vi.fn()
     // Default routing = 'user': the escalation surfaces to the user.
     getActiveTeamRuntime.mockReturnValue({
       captureReport: capture,
+      blackboard: { postActivity },
       buildPromptContext: vi.fn(() => ({ escalationRouting: 'user' })),
     })
   })
@@ -148,6 +151,15 @@ describe('report routing (§5.3)', () => {
       epochId: 'epoch-1',
       taskId: 'task-7',
     })
+    expect(postActivity).toHaveBeenCalledWith(expect.objectContaining({
+      id: `decision-request:${entries[0].id}`,
+      teamId: 'team-1',
+      epochId: 'epoch-1',
+      kind: 'decision',
+      actorAppId: 'app-researcher',
+      status: 'escalation',
+      refId: entries[0].id,
+    }))
     // Escalation event broadcast for the UI.
     expect(broadcastToAll).toHaveBeenCalledWith('app:escalation:new', expect.objectContaining({ appId: 'app-researcher' }))
     expect(res.content[0].text).toMatch(/escalation sent to user/i)
@@ -158,7 +170,7 @@ describe('report routing (§5.3)', () => {
     // first); it must not redirect a member that decided it needs a person.
     // Redirecting here answered the question in two places at once, while the
     // member had already been told to stop waiting for either answer.
-    getActiveTeamRuntime.mockReturnValue({ captureReport: capture })
+    getActiveTeamRuntime.mockReturnValue({ captureReport: capture, blackboard: { postActivity } })
     const { store, entries } = makeStore()
     const onEscalation = vi.fn()
     const ctx: ReportToolContext = {
@@ -187,7 +199,7 @@ describe('report routing (§5.3)', () => {
   })
 
   it('the LEAD\u2019s own escalation reaches the user too', async () => {
-    getActiveTeamRuntime.mockReturnValue({ captureReport: capture })
+    getActiveTeamRuntime.mockReturnValue({ captureReport: capture, blackboard: { postActivity } })
     const { store, entries } = makeStore()
     const onEscalation = vi.fn()
     const ctx: ReportToolContext = {
@@ -264,6 +276,26 @@ describe('report routing (§5.3)', () => {
     const res = await handler({ type: 'escalation', message: 'Go?' })
 
     expect(res.content[0].text as string).not.toMatch(/still unanswered/i)
+  })
+
+  it('keeps the owner escalation usable when shared history recording fails', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    postActivity.mockImplementationOnce(() => { throw new Error('replica unavailable') })
+    const { store, entries } = makeStore()
+    const handler = getReportHandler({
+      appId: 'app-researcher', appName: 'Researcher', runId: 'chat',
+      sessionKey: 'app-chat:app-researcher:team:team-1', teamContext: TRIGGER,
+    }, store)
+
+    const res = await handler({ type: 'escalation', message: 'Continue?' })
+
+    expect(entries).toHaveLength(1)
+    expect(res.content[0].text).toMatch(/escalation sent to user/i)
+    expect(log).toHaveBeenCalledWith(
+      '[Runtime] Decision request could not be added to shared task history',
+      expect.objectContaining({ appId: 'app-researcher', teamId: 'team-1', epochId: 'epoch-1' })
+    )
+    log.mockRestore()
   })
 
   it('non-team turn → unchanged: a normal activity entry is written', async () => {

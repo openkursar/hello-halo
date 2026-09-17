@@ -15,6 +15,7 @@ import {
   TEAM_EVENTS,
   TEAM_CIRCUIT_DEFAULTS,
   toActivitySubject,
+  isRemoteMember,
 } from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 import type { TeamStore } from '../../team'
@@ -641,9 +642,13 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       // learns, and the three outcomes call for three different next moves:
       // wait for a turn that has not started ('queued'), expect an answer from
       // work already under way ('mid_turn'), or nothing special.
-      if (disposition === 'buffered') return { messageId: envelope.id, delivery: 'queued' }
-      if (disposition === 'mid_turn') return { messageId: envelope.id, delivery: 'mid_turn' }
-      return { messageId: envelope.id }
+      // Locality rides along because none of the three is knowable for a target
+      // on another machine — it queues on its OWNER, out of sight from here.
+      const remoteTarget = isRemoteMember(store.getMember(input.teamId, toAppId) ?? { origin: 'local' })
+      const locality = remoteTarget ? { remoteTarget: true as const } : {}
+      if (disposition === 'buffered') return { messageId: envelope.id, delivery: 'queued', ...locality }
+      if (disposition === 'mid_turn') return { messageId: envelope.id, delivery: 'mid_turn', ...locality }
+      return { messageId: envelope.id, ...locality }
     }
 
     return new Promise<TeamSendSyncResult>((resolve) => {

@@ -63,6 +63,12 @@ dependency between manager and runtime schemas. Instead:
 - Runtime is responsible for keeping it semantically valid.
 - On uninstall, runtime cleans up its own tables (CASCADE on `app_id`).
 
+**Not the authority on what is pending.** An app can hold several unanswered questions at
+once (one per escalating run), which a single id cannot express; this column only names the
+most recent one, for display. Whether the app is waiting, and which question an answer
+belongs to, are both resolved against `activity_entries` in `apps/runtime`. Treating this
+column as the authority is what once let a second run auto-close the first run's question.
+
 ### 2.3 Uninstall: Default Preserve, Optional Purge
 
 **Decision**: `uninstall(appId, options?)` with `options.purge?: boolean` (default `false`).

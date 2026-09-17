@@ -20,12 +20,20 @@ contains the selected task's team record, not a cross-task notification feed.
 The renderer has one task selection and a three-column workbench. Task activity
 is a modal drawer bound to that selection; it has no independent task selector.
 It contains unfinished work, outputs, coordination history and internal member
-reports. Switching the owned digital human changes only the human conversation.
+reports. Switching the selected digital human changes only the member view inside
+the current task. Every team member uses the same conversation and execution
+renderer; a teammate-owned digital human is read-only and keeps its ownership
+boundary visible where the composer would otherwise appear.
+The team header keeps the selected task visually primary: the team goal is
+available on demand instead of occupying a persistent subtitle. Sidebar group
+names describe the task source plainly; inbound channel work is labelled as IM
+conversations, while unrelated work in the same team is labelled as other tasks.
 Answers occur in the room, scoped by the persisted question's execution id,
 never by a member-wide waiting flag. The sender picker targets only the viewer's
-own installed digital humans. Member-rail selection uses that same preference
-and preserves the current task and per-member draft; it never opens a separate
-direct channel. One owned member renders a static identity instead of a selector.
+own installed digital humans. Member-rail selection is task observation for every
+member and preserves the current task and per-member draft; it never opens a
+separate direct channel. Member details remain a separate explicit action in the
+member summary. One owned member renders a static identity instead of a selector.
 The client remembers the last task per team and member choice per task. An
 explicit decision entry instead selects the relevant member and question.
 New-task guidance explains this scope and links to active tasks. Member work
@@ -42,7 +50,11 @@ history. Missing execution events are reported as unavailable, not interpreted a
 a stalled agent. Conversation subscriptions are reference-counted across mounted
 views so closing an inspector does not unsubscribe the chat beneath it.
 
-Decision requests occupy their creation time in the member conversation. A fixed
+Decision requests occupy their creation time in the member conversation. Their
+request and answer are also append-only team activities, so every teammate sees
+the blocking question and its resolution while only the digital human's owner
+receives controls. Another person's decision never enters the viewer's "Needs my
+decision" group. A fixed
 composer reminder locates unanswered requests, switching the owned member when
 needed. Answered cards retain the answer and timestamp with an expandable original
 question. The activity store supplies this history after reopening; pending team
@@ -51,7 +63,7 @@ When a tool receipt identifies the request, its card follows that turn's thought
 panel, before the persisted reply. Live requests follow the streaming work;
 unmatched historical requests retain their own timestamp position.
 
-Task rooms contain human exchanges with the selected owned member, interleaved
+Task rooms contain human exchanges with the selected member, interleaved
 with compact coordination segments. Only directed messages involving that member
 in the selected task qualify; prior collaboration does not expose unrelated acts.
 Consecutive coordination is grouped between human exchanges, collapsed by default,

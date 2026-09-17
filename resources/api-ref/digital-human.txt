@@ -23,12 +23,12 @@ operations on this page:
   POST   /api/apps/<appId>/clear-memory                              Delete all of a digital human's memory files   !! destructive
   POST   /api/apps/<appId>/config                                    Replace a digital human's user configuration values
   POST   /api/apps/<appId>/escalation/<entryId>/respond              Answer a digital human's pending question (it stopped to ask a human before continuing)   !! destructive
-  POST   /api/apps/<appId>/frequency                                 Change how often a digital human runs, without editing its full definition (spec)
+  POST   /api/apps/<appId>/frequency                                 Change how often a digital human runs, without editing the rest of its definition (spec)
   POST   /api/apps/<appId>/im-chat/clear                             Clear a digital human's chat history in a bound IM chat   !! destructive
   GET    /api/apps/<appId>/im-chat/messages                          Read a digital human's transcript in a bound IM chat
   POST   /api/apps/<appId>/im-chat/stop                              Stop a digital human's in-progress reply in a bound IM chat (keeps history)
   POST   /api/apps/<appId>/move-space                                Move a digital human to a different space (or make it global)
-  PATCH  /api/apps/<appId>/overrides                                 Merge-patch per-installation overrides (frequency, notification level, model)
+  PATCH  /api/apps/<appId>/overrides                                 Merge-patch per-installation overrides (notification level, model)
   POST   /api/apps/<appId>/pause                                     Pause a digital human (stops scheduling)
   DELETE /api/apps/<appId>/permanent                                 Permanently delete a digital human and all its data
   POST   /api/apps/<appId>/permissions/grant                         Grant a named permission to a digital human
@@ -154,7 +154,7 @@ POST   /api/apps/<appId>/escalation/<entryId>/respond              Answer a digi
      # out: {success:true}
      # note: choice and text are both optional (send whichever the pending question asked for). Find the pending entryId via GET /:appId/activity (type:"escalation") or by app.status==="waiting_user". This is the human decision it was waiting for — answer with the user's actual input, never a guessed one, and there is no way to un-answer it afterward.
 
-POST   /api/apps/<appId>/frequency                                 Change how often a digital human runs, without editing its full definition (spec)
+POST   /api/apps/<appId>/frequency                                 Change how often a digital human runs, without editing the rest of its definition (spec)
      # note: reversible — can be undone or corrected afterward.
      curl -sX POST "$HALO_API_URL/api/apps/<appId>/frequency" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
@@ -162,7 +162,7 @@ POST   /api/apps/<appId>/frequency                                 Change how of
           -d '{"subscriptionId":"<subscriptionId — read app.spec.subscriptions via GET /api/apps/<appId>>","frequency":"30m"}'
      # body: {"subscriptionId": "<subscriptionId — read app.spec.subscriptions via GET /api/apps/<appId>>", "frequency": "30m"}
      # out: {success:true}
-     # note: frequency can also be a cron expression (e.g. "0 8 * * *"). subscriptionId must already exist — read app.spec.subscriptions via GET /:appId first. This sets a non-destructive override; it does not change the spec.
+     # note: frequency can also be a cron expression (e.g. "0 8 * * *"); either one replaces the other. subscriptionId must name an existing schedule subscription — read app.spec.subscriptions via GET /:appId first. This rewrites that subscription's schedule in the spec, which is the only interval the scheduler reads and the one the settings panel shows; the rest of the spec is untouched.
 
 POST   /api/apps/<appId>/im-chat/clear                             Clear a digital human's chat history in a bound IM chat
      !! DESTRUCTIVE: cannot be undone. Confirm with the user in plain language before running this.
@@ -199,7 +199,7 @@ POST   /api/apps/<appId>/move-space                                Move a digita
      # out: {success:true,data:{activationWarning?:string}}
      # note: Send {"newSpaceId": null} to make it global (available in every space). 404 if appId does not exist; 400 if newSpaceId is an empty string.
 
-PATCH  /api/apps/<appId>/overrides                                 Merge-patch per-installation overrides (frequency, notification level, model)
+PATCH  /api/apps/<appId>/overrides                                 Merge-patch per-installation overrides (notification level, model)
      # note: reversible — can be undone or corrected afterward.
      curl -sX PATCH "$HALO_API_URL/api/apps/<appId>/overrides" \
           -H "Authorization: Bearer $HALO_API_TOKEN" \
@@ -207,7 +207,7 @@ PATCH  /api/apps/<appId>/overrides                                 Merge-patch p
           -d '{"notificationLevel":"important"}'
      # body: {"notificationLevel": "important"}
      # out: {success:true}
-     # note: Other fields you can set the same way: frequency (object keyed by subscriptionId), modelSourceId, modelId. JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model).
+     # note: Other fields you can set the same way: modelSourceId, modelId. JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.
 
 POST   /api/apps/<appId>/pause                                     Pause a digital human (stops scheduling)
      # note: reversible — can be undone or corrected afterward.

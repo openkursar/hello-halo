@@ -37,7 +37,9 @@ import { getImSessionRegistry } from './im-session-registry'
 import { getActiveImChannelManager } from './im-channels'
 import { ReplyTextAccumulator } from './reply-accumulator'
 import { ProgressEventParser } from './progress-formatter'
+import { TurnCutPoint } from './escalation-cut'
 import { openSessionWriter, saveChatSessionId, type SessionWriter } from './session-store'
+import { stopGeneration } from '../../services/agent/control'
 
 // ============================================
 // Types
@@ -68,11 +70,43 @@ interface Round {
   settled: boolean
 }
 
+/**
+ * How long the engine may leave a dispatched message unclaimed while nothing
+ * else is running.
+ *
+ * Only idle time counts, and idle means the engine is producing nothing at all
+ * — not merely that it is producing something nobody claimed. A message queued
+ * behind a turn working for minutes is not late, whether that turn answers an
+ * earlier message or the digital human started it on its own.
+ *
+ * What this catches is a session that will never produce a turn at all — a
+ * resume against a transcript a crashed process left broken, an engine that
+ * failed to launch — which reports nothing, so the caller would otherwise wait
+ * forever on a reply that can no longer arrive. Silence is the one outcome a
+ * user cannot act on.
+ */
+const TURN_START_TIMEOUT_MS = 90_000
+
+/**
+ * Says only what the sink can actually establish: nothing came back and it
+ * stopped waiting. Whether the engine took the message in is not observable
+ * from here, so the wording claims neither delivery nor failure — and it does
+ * not invite a resend, which would risk the work being done twice. A turn
+ * arriving late is still persisted and delivered as an unsolicited one, so the
+ * answer does reach the user if it ever comes.
+ */
+const NO_RESPONSE_MESSAGE =
+  'No response to this message yet, so Halo stopped waiting on it. If it is picked up later, the reply still appears in this conversation.'
+
 /** State rebuilt for every turn, solicited or not. */
 interface TurnState {
   accumulator: ReplyTextAccumulator
   progressParser: ProgressEventParser
   accepted: boolean
+  cutPoint: TurnCutPoint
+  /** Set when this turn asked the user a question (see escalation-cut.ts). */
+  askedUser: boolean
+  cutIssued: boolean
 }
 
 function newTurnState(): TurnState {
@@ -80,6 +114,9 @@ function newTurnState(): TurnState {
     accumulator: new ReplyTextAccumulator(),
     progressParser: new ProgressEventParser(),
     accepted: false,
+    cutPoint: new TurnCutPoint(),
+    askedUser: false,
+    cutIssued: false,
   }
 }
 
@@ -93,6 +130,13 @@ class AppChatSink implements TurnSink {
   private turn: TurnState = newTurnState()
   private writer: SessionWriter | undefined
   private writerOpened = false
+  private turnStartTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * Whether the engine is mid-turn — including a turn it started on its own,
+   * which claims no round. Liveness is the question the deadline below asks,
+   * and an unclaimed turn is proof of liveness just the same.
+   */
+  private turnRunning = false
 
   constructor(
     private readonly appId: string,
@@ -111,8 +155,15 @@ class AppChatSink implements TurnSink {
       reject = rej
     })
 
+    // Unlike every other settlement, the deadline below fires on its own clock
+    // rather than in response to something the caller did, so it can reject
+    // before a handler is attached. Claim the rejection here so that never
+    // surfaces as an unhandled one; the caller's own await still sees it.
+    void done.catch(() => {})
+
     const round: Round = { hooks, resolve, reject, settled: false }
     this.queue.push(round)
+    this.armTurnStartDeadline()
 
     return {
       done,
@@ -123,13 +174,20 @@ class AppChatSink implements TurnSink {
         if (queued !== -1) this.queue.splice(queued, 1)
         if (this.current === round) this.current = null
         resolve()
+        this.armTurnStartDeadline()
       },
     }
   }
 
-  /** Whether a message is awaiting its answer, or its turn is running. */
+  /**
+   * Whether a message is awaiting its answer, or its turn is running.
+   *
+   * Abandoned slots do not count: nobody is waiting on them, and treating one
+   * as live would leave the conversation looking permanently busy — which would
+   * buffer every later message as a supplement instead of answering it.
+   */
   hasActiveRound(): boolean {
-    return this.current !== null || this.queue.length > 0
+    return this.current !== null || this.queue.some(round => !round.settled)
   }
 
   /** Persist a user message to the transcript ahead of the turn it triggers. */
@@ -137,19 +195,34 @@ class AppChatSink implements TurnSink {
     this.getWriter()?.writeTrigger(text, images, teamOrigin)
   }
 
+  /**
+   * This turn asked the user a decision, so it ends as soon as the transcript
+   * allows it. Called from the report tool while the turn is still running; the
+   * cut itself happens in {@link onRawMessage}, which is the only place that can
+   * see when the question's tool call is complete.
+   */
+  noteAskedUser(): void {
+    this.turn.askedUser = true
+  }
+
   // ── TurnSink ───────────────────────────────────────────
 
   onTurnStart(): void {
     this.turn = newTurnState()
     this.current = this.queue.shift() ?? null
+    this.turnRunning = true
+    // The engine is producing again; whatever is still queued is waiting on
+    // this turn rather than on a session that will never answer.
+    this.clearTurnStartDeadline()
   }
 
   onRawMessage(sdkMessage: unknown): void {
     const message = sdkMessage as { type?: string }
 
     // The first message of the turn is the earliest proof the engine took our
-    // input: before it, nothing entered the engine's history.
-    if (this.current && !this.turn.accepted) {
+    // input: before it, nothing entered the engine's history. An abandoned slot
+    // has no caller left to tell.
+    if (this.current && !this.current.settled && !this.turn.accepted) {
       this.turn.accepted = true
       try {
         this.current.hooks.onMessageAccepted?.()
@@ -188,9 +261,28 @@ class AppChatSink implements TurnSink {
         }
       }
     }
+
+    this.cutTurnIfItAskedUser(sdkMessage)
   }
 
   onTurnComplete(result: StreamResult): void {
+    try {
+      this.completeTurn(result)
+    } finally {
+      this.turnRunning = false
+      // Anything still queued is owed a turn of its own from here.
+      this.armTurnStartDeadline()
+    }
+  }
+
+  onTurnError(error: Error): void {
+    const round = this.takeCurrentRound()
+    round?.reject(error)
+    this.turnRunning = false
+    this.armTurnStartDeadline()
+  }
+
+  private completeTurn(result: StreamResult): void {
     this.persistSessionId(result)
 
     // Read the reply from the raw SDK messages rather than processStream's
@@ -237,12 +329,9 @@ class AppChatSink implements TurnSink {
     round.resolve()
   }
 
-  onTurnError(error: Error): void {
-    const round = this.takeCurrentRound()
-    round?.reject(error)
-  }
-
   onConsumerStopped(): void {
+    this.turnRunning = false
+    this.clearTurnStartDeadline()
     const pending = this.takeCurrentRound()
     pending?.reject(new Error('Chat session ended before the reply completed.'))
     while (this.queue.length > 0) {
@@ -253,7 +342,71 @@ class AppChatSink implements TurnSink {
     }
   }
 
+  /** Drop the sink's timer so a discarded sink cannot outlive its conversation. */
+  dispose(): void {
+    this.clearTurnStartDeadline()
+  }
+
   // ── Internals ──────────────────────────────────────────
+
+  /**
+   * Start the clock on a message the engine has not claimed, if one is waiting
+   * and nothing is running. Idempotent — safe to call on every state change.
+   */
+  private armTurnStartDeadline(): void {
+    this.clearTurnStartDeadline()
+    if (this.turnRunning || this.queue.length === 0) return
+
+    this.turnStartTimer = setTimeout(() => {
+      this.turnStartTimer = null
+      const round = this.queue.find(r => !r.settled)
+      if (!round) return
+      // Settled but deliberately LEFT IN THE QUEUE. Ownership here is decided by
+      // order, and the turn this message was dispatched for may still arrive —
+      // removing its place would hand its answer to whatever was sent next.
+      // The slot stays as a marker nobody is waiting on; when the turn lands it
+      // claims this slot and is delivered as an unsolicited reply.
+      round.settled = true
+      console.error(
+        `[AppChat][${this.appId}] No turn started within ${TURN_START_TIMEOUT_MS / 1000}s ` +
+        `of dispatch and no turn is running (conversation=${this.conversationId}) — ` +
+        `giving up the wait; acceptance by the engine is unknown`
+      )
+      round.reject(new Error(NO_RESPONSE_MESSAGE))
+      // Whatever is behind it is owed a turn on the same terms.
+      this.armTurnStartDeadline()
+    }, TURN_START_TIMEOUT_MS)
+
+    // Never a reason to hold the process open.
+    this.turnStartTimer.unref?.()
+  }
+
+  private clearTurnStartDeadline(): void {
+    if (!this.turnStartTimer) return
+    clearTimeout(this.turnStartTimer)
+    this.turnStartTimer = null
+  }
+
+  /**
+   * End a turn that raised an escalation, once its tool call is complete.
+   *
+   * Interrupting is what actually stops the engine; the round below settles on
+   * its own when the stream ends, and the escalation has already been recorded
+   * out of band, so no result is lost by cutting the turn short here.
+   */
+  private cutTurnIfItAskedUser(sdkMessage: unknown): void {
+    const settled = this.turn.cutPoint.observe(sdkMessage)
+    if (!settled || !this.turn.askedUser || this.turn.cutIssued) return
+
+    this.turn.cutIssued = true
+    console.log(
+      `[AppChat][${this.appId}] Escalation raised — ending this turn ` +
+      `(conversation=${this.conversationId}); the answer arrives as its own wake`
+    )
+    void stopGeneration(this.conversationId).catch((err) => {
+      console.error(`[AppChat][${this.appId}] Could not end the turn after an escalation:`, err)
+    })
+  }
 
   private takeCurrentRound(): Round | null {
     const round = this.current
@@ -372,6 +525,7 @@ export function getConversationsWithActiveRound(): string[] {
  * is deleted — the next message builds a fresh one.
  */
 export function disposeAppChatSink(conversationId: string): void {
+  sinks.get(conversationId)?.dispose()
   sinks.delete(conversationId)
 }
 

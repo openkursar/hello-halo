@@ -13,7 +13,7 @@
  */
 
 import { relative, sep } from 'path'
-import { getMainWindow } from '../index'
+import { getMainWindow } from '../foundation/window.service'
 import { broadcastToAll } from '../http/websocket'
 import {
   initSpaceWatcher,
@@ -659,6 +659,9 @@ export async function reconcileLoadedDirs(spaceId: string, reason = 'manual'): P
         }
       }
     }
+    // A scanned tree node carries no timestamps, so both stamps are the scan's
+    // own — taken once so the two cannot disagree for the same entry.
+    const scannedAt = new Date().toISOString()
     for (const freshNode of freshNodes) {
       if (freshNode.type === 'file') {
         addToFlatItemsCache(cache, freshNode.path, {
@@ -670,7 +673,8 @@ export async function reconcileLoadedDirs(spaceId: string, reason = 'manual'): P
           relativePath: relative(cache.rootPath, freshNode.path),
           extension: freshNode.name.includes('.') ? freshNode.name.slice(freshNode.name.lastIndexOf('.')) : '',
           icon: '',
-          createdAt: new Date().toISOString(),
+          createdAt: scannedAt,
+          modifiedAt: scannedAt,
           size: freshNode.size,
         })
       }

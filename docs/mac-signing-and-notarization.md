@@ -2,6 +2,10 @@
 
 How to produce a distributable macOS build that opens cleanly on other machines.
 
+For frequent local development builds, use `npm run build:mac`. Developer ID and
+notarization are not prerequisites for that workflow. See
+[Local macOS builds](./local-macos-builds.md) for local signing and safe installation.
+
 > Chinese version: [mac-signing-and-notarization.zh.md](./mac-signing-and-notarization.zh.md)
 
 ## Why this is required

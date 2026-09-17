@@ -225,22 +225,6 @@ async function refreshTeamsCoalesced(load: () => Promise<void>): Promise<void> {
   }
 }
 
-function sortTeams(teams: TeamListItem[]): TeamListItem[] {
-  const rank = (t: TeamListItem): number => {
-    // hasWaitingUser alone: it already means "a decision is waiting on YOU",
-    // whereas a joined office's status mirrors the host and can announce a
-    // decision someone else owes.
-    if (t.hasWaitingUser) return 0
-    if (t.status === 'running') return 1
-    return 2
-  }
-  return [...teams].sort((a, b) => {
-    const ra = rank(a)
-    const rb = rank(b)
-    if (ra !== rb) return ra - rb
-    return b.updatedAt - a.updatedAt
-  })
-}
 // ── Store ────────────────────────────────────────────────────────────────────
 
 export const useTeamStore = create<TeamState>((set, get) => ({
@@ -271,7 +255,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     try {
       const res = await api.teamList(spaceId)
       if (res.success && Array.isArray(res.data)) {
-        set({ teams: sortTeams(res.data as TeamListItem[]) })
+        set({ teams: res.data as TeamListItem[] })
       } else {
         set({ error: (res.error as string) || i18n.t('Couldn\u2019t load your teams. Please try again.') })
       }
@@ -625,7 +609,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       const res = await api.teamRun(teamId)
       if (res.success) {
         set(s => ({
-          teams: sortTeams(s.teams.map(t => t.id === teamId ? { ...t, status: 'running' } : t)),
+          teams: s.teams.map(t => t.id === teamId ? { ...t, status: 'running' } : t),
           detail: s.detail && s.detail.team.id === teamId
             ? { ...s.detail, team: { ...s.detail.team, status: 'running' } }
             : s.detail,
@@ -648,7 +632,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       const res = await api.teamPause(teamId)
       if (res.success) {
         set(s => ({
-          teams: sortTeams(s.teams.map(t => t.id === teamId ? { ...t, status: 'idle' } : t)),
+          teams: s.teams.map(t => t.id === teamId ? { ...t, status: 'idle' } : t),
           detail: s.detail && s.detail.team.id === teamId
             ? { ...s.detail, team: { ...s.detail.team, status: 'idle' } }
             : s.detail,
@@ -667,7 +651,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   // ── Real-time Event Handlers ──────────────
 
   applyTeamUpdated: (event) => {
-    const { teamId, team, removed, removedReason } = event
+    const { teamId, team, liveStatus, removed, removedReason } = event
 
     // A kick of one of this user's members (host-initiated) must not be a silent
     // row disappearance — tell them who was removed and from which office.
@@ -727,7 +711,9 @@ export const useTeamStore = create<TeamState>((set, get) => ({
         const item: TeamListItem = {
           id: team.id,
           name: team.name,
-          status: team.status,
+          // The row carries the persisted RUN status, which reads idle while a
+          // member works outside a run — `liveStatus` is what the card shows.
+          status: liveStatus ?? team.status,
           memberCount: existing?.memberCount ?? s.detail?.members.length ?? 0,
           // A joined office adopts the host's status, so its 'waiting_user' is a
           // decision owed by the blocked member's owner — never by this reader.
@@ -750,7 +736,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
         // Team, not a list item), so pull the real one.
         if (!existing) void refreshTeamsCoalesced(() => get().loadTeams())
         return {
-          teams: sortTeams(teams),
+          teams,
           detail: s.detail && s.detail.team.id === teamId
             ? { ...s.detail, team }
             : s.detail,

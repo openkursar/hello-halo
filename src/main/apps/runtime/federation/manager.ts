@@ -53,7 +53,7 @@ import { createCtrlFeed, type CtrlFeed } from './ctrl-feed'
 import { createSessionFeed, historyCacheKey, isSessionFeedFrame, type SessionFeed } from './session-feed'
 import { isFeedSyncFrame, type FeedSyncFrame } from './log/types'
 import { getFeedStore, type AuthorityStore, type FeedStore } from '../../federation'
-import { SELF_NODE_ID, type TeamMemberRuntimeStatus } from '../../../../shared/apps/team-types'
+import { SELF_NODE_ID, type TeamMemberRuntimeStatus, type TeamStatus } from '../../../../shared/apps/team-types'
 import { parseTeamSessionKey } from '../../../../shared/apps/im-keys'
 import type {
   FederationMessage,
@@ -182,6 +182,12 @@ export interface FederationManagerDeps {
    */
   getMemberRuntimeStatus?: (appId: string) => TeamMemberRuntimeStatus
   /**
+   * The office's status as a viewer observes it (a member working outside the
+   * office's own run still counts), stamped into the roster snapshot so joiners
+   * do not sit on a stale 'idle'. Absent → the stored run status.
+   */
+  getObservableOfficeStatus?: (officeId: string) => TeamStatus
+  /**
    * Everything a member is serving right now (run + conversations), each with a
    * human label the authority generated (P0-2), stamped into the roster snapshot
    * so a joiner can say "busy with another conversation". Bootstrap passes the
@@ -192,8 +198,14 @@ export interface FederationManagerDeps {
    * Owner role: run a brought member's turn locally when a wake arrives over a
    * joined office. Bootstrap injects the local createDefaultSessionDeps adapter.
    * Absent → a wake on a joined office logs+drops (node owns no runnable member).
+   *
+   * May answer `undelivered` instead of running: the owner is the only side that
+   * can refuse (its member is paused, its user withheld it), and that refusal
+   * has to reach the sender as a non-delivery rather than an empty answer.
    */
-  runLocalTurn?: (request: SerializedWakeRequest) => Promise<{ finalMessage: string | null }>
+  runLocalTurn?: (
+    request: SerializedWakeRequest
+  ) => Promise<{ finalMessage: string | null; undelivered?: { reason: string } }>
   /**
    * Fired once per bound member when its owner node is confirmed-offline.
    * Bootstrap wires this to bus.resolvePendingWaitsForMember so a waiting lead
@@ -1337,6 +1349,7 @@ export function createFederationManager(deps: FederationManagerDeps): Federation
       // passes the runtime's status (which already folds in this manager's
       // remote-busy overlay via isMemberRemoteBusy).
       getMemberRuntimeStatus: deps.getMemberRuntimeStatus,
+      getObservableOfficeStatus: deps.getObservableOfficeStatus,
       // Run-context: stamp each member's live busy assignments (run + conversations)
       // with authority-generated labels so a joiner's board can say "busy with
       // another conversation" truthfully (P0-2).

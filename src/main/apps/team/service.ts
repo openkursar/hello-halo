@@ -49,6 +49,7 @@ import type {
   RosterMember,
   UpdateTeamMemberInput,
   TeamCheckView,
+  TeamStatus,
 } from '../../../shared/apps/team-types'
 import { isRemoteMember, toLocalMembers } from '../../../shared/apps/team-types'
 
@@ -273,7 +274,15 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
   }
 
   function emitUpdated(teamId: string, payload: Omit<TeamUpdatedEvent, 'teamId'>): void {
-    const event: TeamUpdatedEvent = { teamId, ...payload }
+    // Any update carrying the office row must also carry its observable status,
+    // or a rename while a member is working would reset the card to idle.
+    const event: TeamUpdatedEvent = {
+      teamId,
+      ...payload,
+      ...(payload.team && payload.liveStatus === undefined
+        ? { liveStatus: liveStatus(payload.team) }
+        : {}),
+    }
     broadcastToAll(TEAM_EVENTS.updated, event as unknown as Record<string, unknown>)
     sendToRenderer(TEAM_EVENTS.updated, event)
   }
@@ -506,6 +515,15 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     return spaceId ? store.listTeamsBySpace(spaceId) : store.listTeams()
   }
 
+  /**
+   * The office's status as the reader observes it. The rule lives in the team
+   * runtime (it is the only side that can see live turns); without a runtime
+   * there are no turns to miss, so the stored status is already the whole truth.
+   */
+  function liveStatus(team: Team): TeamStatus {
+    return getRuntime()?.getObservableStatus(team.id) ?? team.status
+  }
+
   function listTeamItems(spaceId?: string): TeamListItem[] {
     return listTeams(spaceId).map((team) => {
       const members = store.listMembersByTeam(team.id)
@@ -520,7 +538,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       return {
         id: team.id,
         name: team.name,
-        status: team.status,
+        status: liveStatus(team),
         memberCount: members.filter((m) => !m.isLead).length,
         hasWaitingUser: blockedOnUs || waitingCount > 0,
         waitingCount,
@@ -564,11 +582,21 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         members,
         edges,
         roster: members.map((m) => {
-          // A decision of our own outranks the authority's projection: the
-          // question lives on this machine, so we know it first (and still know
-          // it while the authority is unreachable) — without this the person
-          // being waited on is the one person who cannot see the ask.
-          const status = m.awaitingDecision ? 'waiting_user' : statuses.get(m.appId) ?? 'idle'
+          // Anything WE can observe outranks the authority's projection: it
+          // happens on this machine, so we know it first and still know it while
+          // the authority is unreachable.
+          //
+          // That was true for a decision we owe. It is just as true for a member
+          // of ours that is working — its turn runs here, yet its status came
+          // back from the host's snapshot, so the owner's own digital human read
+          // "on standby" for the whole turn it was visibly running, and only
+          // caught up when the roster round-tripped.
+          const localLive = isRemoteMember(m) ? undefined : getRuntime()?.getMemberStatus(m.appId)
+          const status = m.awaitingDecision
+            ? 'waiting_user'
+            : localLive && localLive !== 'idle'
+              ? localLive
+              : statuses.get(m.appId) ?? 'idle'
           const taskTitle = status === 'working' ? store.getJoinedMemberTaskTitle(teamId, m.appId) : undefined
           const busy = store.getJoinedMemberBusy(teamId, m.appId)
           return {
@@ -1114,10 +1142,14 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
     const nameByApp = new Map(members.map((m) => [m.appId, m.memberName]))
     const out: TeamPendingEscalation[] = []
     for (const e of all) {
-      // A pending escalation belongs to this team when it is tagged with the
-      // team (team turn) OR its app is a member here (defensive for legacy rows).
-      const belongs = e.teamId ? e.teamId === teamId : nameByApp.has(e.appId)
-      if (!belongs || !nameByApp.has(e.appId)) continue
+      // Only a decision raised BY a turn of this team belongs to it. Every team
+      // turn stamps the team on the entry (see report-tool), so an untagged
+      // decision was raised outside any office — a solo run or a 1:1 chat — and
+      // is answered in the digital human's own chat. Falling back to "is its app
+      // a member here" handed those to every office the member belongs to: one
+      // office showed another's decision, and a purely solo question lit an
+      // office as "waiting for you" with nothing to open.
+      if (e.teamId !== teamId || !nameByApp.has(e.appId)) continue
       out.push({
         appId: e.appId,
         memberName: nameByApp.get(e.appId)!,
@@ -1155,18 +1187,38 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       const busy = isJoined ? store.getJoinedMemberBusy(teamId, m.appId) : rt?.getMemberBusy(m.appId, teamId) ?? []
       for (const b of busy) activeEpochIds.add(b.epochId)
     }
-    const waitingEpochIds = new Set(
-      pendingEscalationsForTeam(teamId)
-        .map((e) => e.epochId)
-        .filter((id): id is string => !!id)
-    )
+    const localWaitingMembers = new Map<string, string[]>()
+    for (const escalation of pendingEscalationsForTeam(teamId)) {
+      if (!escalation.epochId) continue
+      localWaitingMembers.set(escalation.epochId, [
+        ...(localWaitingMembers.get(escalation.epochId) ?? []),
+        escalation.appId,
+      ])
+    }
 
     const ownIds = new Set(members.filter(m => !isRemoteMember(m)).map(m => m.appId))
-    const { involved, outputCounts } = store.getConversationStats(teamId, [...ownIds])
+    const { involved, outputCounts, unansweredDecisionMembers } = store.getConversationStats(teamId, [...ownIds])
+    const joinedStatuses = isJoined ? store.getJoinedMemberStatuses(teamId) : null
+    const membersByAppId = new Map(members.map(member => [member.appId, member]))
+    const memberOrder = new Map(members.map((member, index) => [member.appId, index]))
     return openEpochs.map((epoch) => {
       const chatKey = epoch.chatKey ?? ''
       const kind = epoch.lifecycle === 'run' ? 'run' : conversationKindOf(chatKey)
       const memberAppId = parseMemberChatKey(chatKey) ?? epoch.workItem?.entryAppId ?? deps.getConversationMember?.(teamId, chatKey) ?? (kind === 'run' ? team.leadAppId : undefined) ?? undefined
+      const localWaiting = localWaitingMembers.get(epoch.id) ?? []
+      const sharedWaiting = (unansweredDecisionMembers.get(epoch.id) ?? []).filter((appId) => {
+        const member = membersByAppId.get(appId)
+        if (!member) return false
+        if (member.awaitingDecision) return true
+        return isRemoteMember(member) && joinedStatuses?.get(appId) === 'waiting_user'
+      })
+      const waitingMembers = [...new Set([
+        ...sharedWaiting,
+        ...localWaiting,
+      ])].sort((left, right) => {
+        const byRoster = (memberOrder.get(left) ?? Number.MAX_SAFE_INTEGER) - (memberOrder.get(right) ?? Number.MAX_SAFE_INTEGER)
+        return byRoster || left.localeCompare(right)
+      })
       return {
         epochId: epoch.id,
         teamId,
@@ -1186,7 +1238,9 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
         startedAt: epoch.startedAt,
         lastActivityAt: epoch.lastActivityAt ?? epoch.startedAt,
         active: activeEpochIds.has(epoch.id),
-        waitingUser: waitingEpochIds.has(epoch.id),
+        waitingUser: waitingMembers.length > 0,
+        waitingForMe: localWaiting.length > 0,
+        ...(waitingMembers.length > 0 ? { waitingMemberAppIds: waitingMembers } : {}),
       }
     })
   }

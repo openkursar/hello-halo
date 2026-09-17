@@ -57,18 +57,20 @@ function textResult(text: string, isError = false) {
 const OPEN_QUESTION_EXCERPT = 80
 
 /**
- * A solo run really is suspended on the answer; a team turn is not — teammate
- * messages and periodic checks keep waking the member while its question sits
- * unanswered, and a member told otherwise reads the next unrelated wake as the
- * answer it was promised.
+ * Both endings are now enforced by the runtime, which cuts the turn as soon as
+ * this call is complete (see escalation-cut.ts) — neither wording asks the model
+ * to cooperate. What still differs is what follows: a solo run is genuinely
+ * suspended on the answer, while a team member keeps being woken by teammate
+ * messages and periodic checks, and one told otherwise reads the next unrelated
+ * wake as the answer it was promised.
  */
 function resumeExpectation(inTeamTurn: boolean): string {
   return inTeamTurn
-    ? 'End this turn now. The question stays open until the user answers it; ' +
+    ? 'This turn ends here. The question stays open until the user answers it; ' +
       'you may still be woken for other work meanwhile, and the answer will ' +
       'arrive as its own wake quoting the question it belongs to.'
-    : 'The user has been notified. End this run now — you will be ' +
-      'resumed with the user\'s response once they reply.'
+    : 'The user has been notified. This run ends here and resumes with ' +
+      'their answer.'
 }
 
 /**
@@ -114,14 +116,18 @@ export function createReportToolServer(
     'ALWAYS call this at the end of every execution.\n\n' +
     '`message` is what the user reads — plain markdown, written for a human.\n' +
     'For an escalation, `message` IS the question: one concrete thing to decide.\n' +
-    'Add `choices` when the answers are obvious. End your turn after the call.\n\n' +
+    'Add `choices` when the answers are obvious. End your turn after the call.\n' +
+    'Need several decisions? Ask for them in ONE call: put a one-line framing in ' +
+    '`message` and the decisions in `questions`. The user answers them together, ' +
+    'so splitting them across calls interrupts them once per question.\n\n' +
     'type:\n' +
     '- run_complete — the run finished and needs nothing from the user. ' +
     'Errors count too: say what broke.\n' +
     '- run_skipped — there was nothing to run this time.\n' +
     '- milestone — notifies the user of an important event; the run continues.\n' +
     '- escalation — a human decision or approval is required. ' +
-    'Ends the run; it resumes when the user answers.\n' +
+    'The run ends at this call and resumes when the user answers, so ask for ' +
+    'everything you need first.\n' +
     '- output — a file or report was produced; say what it is and where.\n\n' +
     'App instructions that say to alert or notify the user about something mean ' +
     'a milestone or an escalation, not a line in the final report.\n\n' +
@@ -165,7 +171,20 @@ export function createReportToolServer(
         'To revise content later, Edit the file and re-escalate with the same path.'
       ),
       choices: z.array(z.string()).optional().describe(
-        'Only for escalation: preset answer choices (user can also type freely).'
+        'Only for escalation: preset answer choices (user can also type freely). ' +
+        'Ignored when `questions` is used — each question carries its own.'
+      ),
+      questions: z.array(
+        z.object({
+          question: z.string().describe('One concrete thing to decide.'),
+          choices: z.array(z.string()).optional().describe(
+            'Preset answers for this question (user can also type freely).'
+          ),
+        })
+      ).optional().describe(
+        'Only for escalation, and only when you need MORE THAN ONE decision. ' +
+        '`message` then becomes a one-line framing of why you are asking, and ' +
+        'these are the decisions. The user answers all of them at once.'
       ),
     },
     async (input) => {
@@ -191,11 +210,25 @@ export function createReportToolServer(
         ? input.type
         : 'run_complete'
 
+      // Only an escalation offers the user a way to answer, so questions on any
+      // other type are dropped. A blank one is dropped for the same reason: it
+      // would render a row the Send button then waits on forever.
+      const askedQuestions =
+        safeType === 'escalation'
+          ? (input.questions ?? [])
+              .filter((q) => typeof q?.question === 'string' && q.question.trim().length > 0)
+              .map((q) => ({
+                question: q.question.trim(),
+                ...(q.choices?.length ? { choices: q.choices } : {}),
+              }))
+          : []
+
       console.log(
         `[Runtime][${runTag}] report_to_user called: type=${safeType}${input.type !== safeType ? ` (original: ${input.type})` : ''}, ` +
         `message="${input.message.slice(0, 80)}"` +
         (input.data_path ? `, data_path="${input.data_path}"` : '') +
-        (input.choices ? `, choices=${input.choices.length}` : '')
+        (input.choices ? `, choices=${input.choices.length}` : '') +
+        (askedQuestions.length ? `, questions=${askedQuestions.length}` : '')
       )
 
       // Build content
@@ -213,7 +246,10 @@ export function createReportToolServer(
       // Optional fields
       if (input.data) content.data = input.data
       if (input.data_path) content.dataPath = input.data_path
-      if (input.choices) content.choices = input.choices
+      // With several questions each carries its own choices and `message` is
+      // the framing, so a top-level `choices` has no question to belong to.
+      if (input.choices && askedQuestions.length === 0) content.choices = input.choices
+      if (askedQuestions.length > 0) content.questions = askedQuestions
 
       // ── Team-channel routing ────────────────────────────────────────────────
       // In a team turn, report_to_user keeps its ORIGINAL purpose: escalation
@@ -253,6 +289,7 @@ export function createReportToolServer(
         sessionKey: runContext.sessionKey,
         content,
       }
+      let persisted = true
       try {
         if (emitEntry) {
           // Automation path: the entry is also how the user receives the report,
@@ -266,9 +303,37 @@ export function createReportToolServer(
           store.insertEntry(entry)
         }
       } catch (err) {
+        persisted = false
         console.error('[Runtime] Failed to insert activity entry:', err)
         if (emitEntry) {
           return textResult(`Failed to save report: ${err instanceof Error ? err.message : String(err)}`, true)
+        }
+      }
+
+      if (persisted && team && safeType === 'escalation') {
+        try {
+          const runtime = getActiveTeamRuntime()
+          if (!runtime) throw new Error('Team runtime is unavailable')
+          const reportText = input.data ? `${input.message}\n\n${input.data}` : input.message
+          runtime.blackboard.postActivity({
+            id: `decision-request:${entryId}`,
+            teamId: team.teamId,
+            epochId: team.epochId,
+            kind: 'decision',
+            actorAppId: runContext.appId,
+            subject: oneLineExcerpt(input.message, 80),
+            body: reportText,
+            status: 'escalation',
+            refId: entryId,
+          })
+        } catch (error) {
+          console.error('[Runtime] Decision request could not be added to shared task history', {
+            appId: runContext.appId,
+            entryId,
+            teamId: team.teamId,
+            epochId: team.epochId,
+            error,
+          })
         }
       }
 

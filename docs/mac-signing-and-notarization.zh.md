@@ -2,6 +2,10 @@
 
 如何打出一个能在别人机器上正常打开的、可分发的 macOS 版本。
 
+日常本地开发使用 `npm run build:mac`，不需要 Developer ID 证书或 Apple 公证。
+构建后退出旧应用，再运行 `npm run install:mac` 完成安全替换并打开。
+详见[本地 macOS 构建说明](./local-macos-builds.md)。本文后续讲的是对外分发流程。
+
 > English version: [mac-signing-and-notarization.md](./mac-signing-and-notarization.md)
 
 ## 为什么必须做

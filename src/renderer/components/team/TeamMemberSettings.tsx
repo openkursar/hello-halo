@@ -49,6 +49,12 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
   const description = useAppsStore(
     s => s.apps.find(a => a.id === member.appId)?.spec.description?.trim() ?? ''
   )
+  // Its own instructions, shown to explain the member to a reader — NOT shared
+  // with the team. Same reason it is read live: it is the app's, not the row's.
+  const systemPrompt = useAppsStore(s => {
+    const spec = s.apps.find(a => a.id === member.appId)?.spec
+    return spec?.type === 'automation' ? spec.system_prompt?.trim() ?? '' : ''
+  })
   // Every check on this member in this office, not just the one you happened to
   // walk in from: the member's live panel is where a single conversation's are.
   const checks = checksForMember(detail.checks ?? [], member.appId)
@@ -99,6 +105,9 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
               <p className="whitespace-pre-wrap rounded-lg border border-border bg-secondary/40 px-3 py-2 text-sm leading-relaxed text-muted-foreground">
                 {description}
               </p>
+              <p className="text-xs text-muted-foreground/60">
+                {t('Teammates can read this — it is how they tell what this one can do.')}
+              </p>
             </div>
           )}
 
@@ -131,13 +140,58 @@ export function TeamMemberSettings({ detail, member, onBack }: TeamMemberSetting
                 </p>
               </div>
             )}
+            <p className="text-xs text-muted-foreground/60">
+              {t('Teammates can read this too, and it is what they go on when handing out work.')}
+            </p>
           </div>
+
+          {isMine && systemPrompt && <OwnInstructions prompt={systemPrompt} />}
 
           {isMine && <DelegatedCapabilities teamId={detail.team.id} member={member} />}
 
           <MemberChecks teamId={detail.team.id} checks={checks} />
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * The digital human's own instructions, read-only and folded away.
+ *
+ * It is here to answer "who am I actually working with" — the same reason you
+ * open a colleague's profile — and for no other reason: it is NOT shared with
+ * the team, and editing it belongs on the digital human itself, where the
+ * change applies everywhere rather than only in this office.
+ *
+ * Folded because it is usually long: a full prompt dropped into this panel
+ * buries the duty, which is the part that gets read and rewritten constantly.
+ */
+function OwnInstructions({ prompt }: { prompt: string }) {
+  const { t } = useTranslation()
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-medium text-foreground">{t('Its own instructions')}</h3>
+      <div className="rounded-lg border border-border bg-secondary/40 px-3 py-2">
+        <p
+          className={`whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground ${
+            expanded ? '' : 'line-clamp-6'
+          }`}
+        >
+          {prompt}
+        </p>
+        <button
+          onClick={() => setExpanded(v => !v)}
+          className="mt-1.5 text-xs text-primary transition-colors hover:text-primary/80"
+        >
+          {expanded ? t('Show less') : t('Show more')}
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground/60">
+        {t('Only you see this. Change it on the digital human itself, where it applies everywhere.')}
+      </p>
     </div>
   )
 }

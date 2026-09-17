@@ -192,6 +192,16 @@ describe('TeamStore', () => {
       expect(inA).toEqual(['t1', 't3'])
     })
 
+    it('keeps teams in stable creation order when runtime status changes', () => {
+      store.insertTeam(makeTeam({ id: 'older', name: 'Older', owningSpaceId: SPACE_A, createdAt: 100, updatedAt: 100 }))
+      store.insertTeam(makeTeam({ id: 'newer', name: 'Newer', owningSpaceId: SPACE_A, createdAt: 200, updatedAt: 200 }))
+
+      store.updateTeamStatus('older', 'running')
+
+      expect(store.listTeams().map(team => team.id)).toEqual(['newer', 'older'])
+      expect(store.listTeamsBySpace(SPACE_A).map(team => team.id)).toEqual(['newer', 'older'])
+    })
+
     it('enforces unique team name per space, allows same name across spaces', () => {
       store.insertTeam(makeTeam({ id: 't1', name: 'Dup', owningSpaceId: SPACE_A }))
       expect(() =>

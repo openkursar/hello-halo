@@ -77,7 +77,7 @@ function makeAppManager() {
 // Mock Runtime
 // ============================================
 
-function makeRuntime() {
+function makeRuntime(store: TeamStore) {
   let epochCounter = 0
   const startEpoch = vi.fn(async (teamId: string): Promise<TeamEpoch> => {
     return {
@@ -100,12 +100,16 @@ function makeRuntime() {
   }
   return {
     bus: {} as never,
-    blackboard: blackboard as never,
+    blackboard,
     checks: { viewForTeam: () => [], cancelById: vi.fn() } as never,
     startEpoch,
     sealEpoch,
     captureReport: vi.fn(),
     buildPromptContext: vi.fn(),
+    // No live sessions in these tests, so the office reads exactly as stored and
+    // every member reads idle. Individual tests override to simulate a live turn.
+    getObservableStatus: vi.fn((teamId: string) => store.getTeamById(teamId)?.status ?? 'idle'),
+    getMemberStatus: vi.fn((_appId: string): 'idle' | 'working' | 'waiting_user' | 'error' => 'idle'),
   }
 }
 
@@ -120,7 +124,7 @@ function buildService(overrides?: Partial<TeamServiceDeps>) {
   const store = new TeamStore(db)
 
   const appManager = makeAppManager()
-  const runtime = makeRuntime()
+  const runtime = makeRuntime(store)
   const createdSpaces: string[] = []
   const deletedSpaces: string[] = []
   let spaceCounter = 0
@@ -493,7 +497,7 @@ describe('TeamService', () => {
         snapshot: {
           team: {
             id: 'shadow-office', name: 'Shadow', goal: 'g', leadAppId: LEAD,
-            collabMode: 'structured', hostNodeId: NODE_HOST, epochId: EPOCH, status: 'running',
+            collabMode: 'structured', epochId: EPOCH, status: 'running',
           },
           members: [
             { appId: LEAD, memberName: 'lead', role: 'Lead', isLead: true, ownerNodeId: NODE_HOST, memberIdentity: 'id-host', status: 'idle' },
@@ -545,7 +549,7 @@ describe('TeamService', () => {
         snapshot: {
           team: {
             id: 'shadow-office', name: 'Shadow', goal: 'g', leadAppId: 'shadow-lead',
-            collabMode: 'structured', hostNodeId: NODE_HOST, status: 'running',
+            collabMode: 'structured', status: 'running',
           },
           members: [
             { appId: WORKER, memberName: 'worker', role: 'Analyst', isLead: false, ownerNodeId: NODE_HOST, memberIdentity: 'id-host', status: 'idle' },
@@ -582,7 +586,7 @@ describe('TeamService', () => {
         snapshot: {
           team: {
             id: 'shadow-office', name: 'Shadow', goal: 'g', leadAppId: HOST_LEAD,
-            collabMode: 'structured', hostNodeId: NODE_HOST, epochId: 'epoch-host-run',
+            collabMode: 'structured', epochId: 'epoch-host-run',
             status: 'waiting_user',
           },
           members: [
@@ -640,6 +644,64 @@ describe('TeamService', () => {
         expect(item.waitingCount).toBe(1)
       } finally {
         withEscalation.dbManager.closeAll()
+      }
+    })
+
+    it('shows OUR member working from our own machine, not from the host snapshot', () => {
+      // Its turn runs here, so this machine knows first. Deferring to the
+      // authority's projection made the owner's own digital human read "on
+      // standby" for the whole turn it was visibly running, catching up only
+      // when the roster round-tripped — the same mistake already fixed for a
+      // decision we owe, one field short.
+      const working = buildService({})
+      try {
+        materializeBlockedOffice(working.store)
+        working.runtime.getMemberStatus.mockImplementation((appId: string) =>
+          appId === OWN_MEMBER ? 'working' : 'idle'
+        )
+
+        const roster = working.service.getTeamDetail('shadow-office')!.roster
+        const mine = roster.find((m) => m.appId === OWN_MEMBER)!
+        expect(mine.status).toBe('working')
+
+        // The host's own member still comes from the host — we cannot see it.
+        expect(roster.find((m) => m.appId === HOST_LEAD)!.status).toBe('waiting_user')
+      } finally {
+        working.dbManager.closeAll()
+      }
+    })
+
+    it('ignores a decision raised outside any office, even by one of its members', () => {
+      // A solo run's question is answered in the digital human's own chat. Claiming
+      // it here lit every office the member belongs to with nothing to open.
+      const withSolo = buildService({
+        getPendingEscalations: () => [
+          { appId: OWN_MEMBER, entryId: 'entry-solo', question: 'Ship it?' },
+        ],
+      })
+      try {
+        materializeBlockedOffice(withSolo.store)
+
+        const item = withSolo.service.listTeamItems().find((i) => i.id === 'shadow-office')!
+        expect(item.waitingCount).toBe(0)
+        expect(withSolo.service.listPendingEscalations('shadow-office')).toHaveLength(0)
+      } finally {
+        withSolo.dbManager.closeAll()
+      }
+    })
+
+    it('does not show a decision that belongs to a different office', () => {
+      const withOther = buildService({
+        getPendingEscalations: () => [
+          { appId: OWN_MEMBER, entryId: 'entry-other', question: 'Ship it?', teamId: 'other-office' },
+        ],
+      })
+      try {
+        materializeBlockedOffice(withOther.store)
+
+        expect(withOther.service.listPendingEscalations('shadow-office')).toHaveLength(0)
+      } finally {
+        withOther.dbManager.closeAll()
       }
     })
   })

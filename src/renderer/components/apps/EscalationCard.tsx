@@ -2,13 +2,19 @@
  * EscalationCard
  *
  * Renders an escalation activity entry that requires user action.
- * - Unresolved: shows the question, preset choices, and a free-text input
- * - Resolved: shows a summary of the question + the user's choice
+ * - Unresolved: shows the question(s), preset choices, and a free-text input
+ * - Resolved: shows a summary of the question + the user's answer
+ *
+ * An escalation may ask for several decisions at once. They are answered
+ * together and sent as one response — asking them one per card would interrupt
+ * the user once per question, which is the reason the multi-question shape
+ * exists at all.
  */
 
 import { useState } from 'react'
 import { Loader2, MessageSquare, CheckCircle2, ChevronDown, FileText, FolderOpen } from 'lucide-react'
-import type { ActivityEntry } from '../../../shared/apps/app-types'
+import type { ActivityEntry, EscalationAnswer, EscalationAnswerPayload, EscalationQuestion } from '../../../shared/apps/app-types'
+import { getEscalationQuestions, formatEscalationAnswer } from '../../../shared/apps/app-types'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTranslation } from '../../i18n'
 import { useDataContent } from '../../hooks/useDataContent'
@@ -22,45 +28,50 @@ interface EscalationCardProps {
   compactResolved?: boolean
 }
 
+function isAnswered(answer: EscalationAnswer | undefined): boolean {
+  return !!(answer?.choice || answer?.text?.trim())
+}
+
 export function EscalationCard({ entry, appId, onResolved, compactResolved = false }: EscalationCardProps) {
   const { t } = useTranslation()
   const { respondToEscalation } = useAppsStore()
-  const [customText, setCustomText] = useState('')
-  const [showTextInput, setShowTextInput] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState(false)
-  const [selectedChoice, setSelectedChoice] = useState<string | null>(null)
 
   const [savedEntry, setSavedEntry] = useState<ActivityEntry | null>(null)
   const response = entry.userResponse ?? savedEntry?.userResponse
   const closed = !!entry.content.resolution
   const resolved = !!response || closed
-  const question = entry.content.question ?? entry.content.summary
-  const choices = entry.content.choices ?? []
+  const questions = getEscalationQuestions(entry.content)
+  const multi = questions.length > 1
+  // With several questions `summary` is the framing that introduces them; with
+  // one it IS the question, already carried by questions[0].
+  const heading = multi ? entry.content.summary : questions[0].question
   const data = useDataContent(entry.content)
 
-  async function submit(response: { choice?: string; text?: string }) {
+  const [drafts, setDrafts] = useState<EscalationAnswer[]>(() => questions.map(() => ({})))
+
+  function setDraft(index: number, answer: EscalationAnswer) {
+    setDrafts(prev => prev.map((draft, i) => (i === index ? answer : draft)))
+  }
+
+  async function submit(payload: EscalationAnswerPayload) {
     if (isSubmitting) return
     setIsSubmitting(true)
     setSubmitError(false)
     try {
-      const ok = await respondToEscalation(appId, entry.id, response)
+      const ok = await respondToEscalation(appId, entry.id, payload)
       setSubmitError(!ok)
       if (ok) {
-        const answered = { ...entry, userResponse: { ts: Date.now(), ...response } }
+        const answered = { ...entry, userResponse: { ts: Date.now(), ...payload } }
         setSavedEntry(answered)
         onResolved?.(answered)
       }
     } finally { setIsSubmitting(false) }
   }
 
-  async function handleChoice(choice: string) { setSelectedChoice(choice); await submit({ choice }) }
-  async function handleCustomSubmit() {
-    if (customText.trim()) await submit({ text: customText.trim() })
-  }
-
   if (resolved) {
-    const userAnswer = response?.choice ?? response?.text ?? ''
+    const userAnswer = response ? formatEscalationAnswer(questions, response) : ''
     return <details open={compactResolved ? undefined : true} className="group/decision rounded-xl border border-border bg-secondary/20">
       <summary className="cursor-pointer list-none rounded-xl p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
         <span className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -73,12 +84,16 @@ export function EscalationCard({ entry, appId, onResolved, compactResolved = fal
         <span className="mt-2 block text-xs text-primary group-open/decision:hidden">{t('View original question')}</span>
       </summary>
       <div className="space-y-3 border-t border-border p-3 text-sm [overflow-wrap:anywhere]">
-        <p className="whitespace-pre-wrap">{question}</p>
+        <p className="whitespace-pre-wrap">{heading}</p>
         {entry.content.dataPath && <button onClick={() => api.showArtifactInFolder(entry.content.dataPath!)} className="flex max-w-full items-center gap-2 rounded-lg bg-secondary px-2 py-1 text-xs text-muted-foreground"><FileText size={13} className="shrink-0" /><span className="truncate">{entry.content.dataPath.split('/').pop()}</span><FolderOpen size={13} className="shrink-0" /></button>}
         {data && <MarkdownRenderer content={data} className="text-sm" />}
       </div>
     </details>
   }
+
+  // Asked over the questions, not the drafts: a draft list shorter than the
+  // questions would otherwise read as complete and send a partial answer.
+  const allAnswered = questions.every((_, index) => isAnswered(drafts[index]))
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 border border-halo-warning/40 rounded-lg p-3 bg-halo-warning/5">
@@ -87,10 +102,10 @@ export function EscalationCard({ entry, appId, onResolved, compactResolved = fal
       {/* Question + data scroll when long, so the actions below stay in view.
           break-words keeps unbroken tokens (constant names, URLs) inside the card. */}
       <div className="min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto break-words">
-        {/* Question */}
+        {/* Question, or the line framing the several that follow */}
         <div className="flex items-start gap-2">
           <MessageSquare className="w-3.5 h-3.5 text-halo-warning mt-0.5 flex-shrink-0" />
-          <p className="min-w-0 text-sm text-foreground">{question}</p>
+          <p className="min-w-0 text-sm text-foreground">{heading}</p>
         </div>
 
         {/* Detailed context data */}
@@ -116,17 +131,83 @@ export function EscalationCard({ entry, appId, onResolved, compactResolved = fal
         ) : data ? (
           <MarkdownRenderer content={data} className="text-sm" />
         ) : null}
+
+        {/* Each decision, when there is more than one. A single question needs
+            no restating — the heading above already is it. */}
+        {multi && (
+          <div className="space-y-3">
+            {questions.map((question, index) => (
+              <QuestionFields
+                key={index}
+                index={index}
+                question={question}
+                answer={drafts[index] ?? {}}
+                disabled={isSubmitting}
+                onChange={answer => setDraft(index, answer)}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Preset choices */}
+      {multi ? (
+        <div className="flex shrink-0 items-center gap-2">
+          {!allAnswered && <span className="text-xs text-muted-foreground">{t('Answer every question to send')}</span>}
+          <button
+            onClick={() => submit({
+              answers: questions.map((_, index) => {
+                const draft = drafts[index] ?? {}
+                const text = draft.text?.trim()
+                return { ...(draft.choice ? { choice: draft.choice } : {}), ...(text ? { text } : {}) }
+              }),
+            })}
+            disabled={isSubmitting || !allAnswered}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {isSubmitting && <Loader2 className="w-3 h-3 animate-spin" />}
+            {t('Send')}
+          </button>
+        </div>
+      ) : (
+        <SingleAnswerFields
+          question={questions[0]}
+          disabled={isSubmitting}
+          onSubmit={submit}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * The one-question layout, kept as it was: a preset choice is the answer, so
+ * clicking it sends immediately rather than asking for a second confirming tap.
+ */
+function SingleAnswerFields({
+  question,
+  disabled,
+  onSubmit,
+}: {
+  question: EscalationQuestion
+  disabled: boolean
+  onSubmit: (payload: EscalationAnswerPayload) => void
+}) {
+  const { t } = useTranslation()
+  const choices = question.choices ?? []
+  const [showTextInput, setShowTextInput] = useState(false)
+  const [customText, setCustomText] = useState('')
+  const [selectedChoice, setSelectedChoice] = useState<string | null>(null)
+
+  return (
+    <>
       {choices.length > 0 && !showTextInput && (
         <div className="flex shrink-0 flex-wrap gap-2">
           {choices.map(choice => (
             <button
               key={choice}
-              onClick={() => handleChoice(choice)}
+              onClick={() => { setSelectedChoice(choice); onSubmit({ choice }) }}
               aria-pressed={selectedChoice === choice}
-              disabled={isSubmitting}
+              disabled={disabled}
               className={`px-3 py-1.5 text-xs border rounded-lg hover:bg-secondary transition-colors disabled:opacity-50 ${selectedChoice === choice ? 'border-primary bg-primary/5' : 'border-border'}`}
             >
               {choice}
@@ -134,7 +215,7 @@ export function EscalationCard({ entry, appId, onResolved, compactResolved = fal
           ))}
           <button
             onClick={() => setShowTextInput(true)}
-            disabled={isSubmitting}
+            disabled={disabled}
             className="px-3 py-1.5 text-xs border border-border rounded-lg hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50"
           >
             {t('Type a response')} ▾
@@ -142,7 +223,6 @@ export function EscalationCard({ entry, appId, onResolved, compactResolved = fal
         </div>
       )}
 
-      {/* Free text input (no preset choices or after expanding) */}
       {(choices.length === 0 || showTextInput) && (
         <div className="shrink-0 space-y-2">
           <textarea
@@ -151,7 +231,7 @@ export function EscalationCard({ entry, appId, onResolved, compactResolved = fal
             placeholder={t('Type your response...')}
             rows={2}
             className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/50"
-            disabled={isSubmitting}
+            disabled={disabled}
             autoFocus={showTextInput}
           />
           <div className="flex items-center gap-2">
@@ -164,15 +244,78 @@ export function EscalationCard({ entry, appId, onResolved, compactResolved = fal
               </button>
             )}
             <button
-              onClick={handleCustomSubmit}
-              disabled={isSubmitting || !customText.trim()}
+              onClick={() => { if (customText.trim()) onSubmit({ text: customText.trim() }) }}
+              disabled={disabled || !customText.trim()}
               className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
             >
-              {isSubmitting && <Loader2 className="w-3 h-3 animate-spin" />}
               {t('Send')}
             </button>
           </div>
         </div>
+      )}
+    </>
+  )
+}
+
+/** One decision inside a multi-question escalation: selected, not yet sent. */
+function QuestionFields({
+  index,
+  question,
+  answer,
+  disabled,
+  onChange,
+}: {
+  index: number
+  question: EscalationQuestion
+  answer: EscalationAnswer
+  disabled: boolean
+  onChange: (answer: EscalationAnswer) => void
+}) {
+  const { t } = useTranslation()
+  const choices = question.choices ?? []
+  const [showTextInput, setShowTextInput] = useState(choices.length === 0)
+
+  return (
+    <div className="rounded-lg border border-border bg-background/60 p-2.5 sm:p-3">
+      <p className="flex gap-2 text-sm text-foreground">
+        <span className="shrink-0 tabular-nums text-muted-foreground">{index + 1}.</span>
+        <span className="min-w-0">{question.question}</span>
+      </p>
+
+      {choices.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {choices.map(choice => (
+            <button
+              key={choice}
+              onClick={() => { setShowTextInput(false); onChange({ choice }) }}
+              aria-pressed={answer.choice === choice}
+              disabled={disabled}
+              className={`px-3 py-1.5 text-xs border rounded-lg hover:bg-secondary transition-colors disabled:opacity-50 ${answer.choice === choice ? 'border-primary bg-primary/5' : 'border-border'}`}
+            >
+              {choice}
+            </button>
+          ))}
+          {!showTextInput && (
+            <button
+              onClick={() => { setShowTextInput(true); onChange({}) }}
+              disabled={disabled}
+              className="px-3 py-1.5 text-xs border border-border rounded-lg hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50"
+            >
+              {t('Type a response')} ▾
+            </button>
+          )}
+        </div>
+      )}
+
+      {showTextInput && (
+        <textarea
+          value={answer.text ?? ''}
+          onChange={e => onChange({ text: e.target.value })}
+          placeholder={t('Type your response...')}
+          rows={2}
+          className="mt-2 w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/50"
+          disabled={disabled}
+        />
       )}
     </div>
   )

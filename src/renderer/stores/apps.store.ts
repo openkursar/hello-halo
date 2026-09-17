@@ -19,9 +19,9 @@ import type {
   AutomationAppState,
   ActivityEntry,
   ActivityQueryOptions,
+  EscalationAnswerPayload,
 } from '../../shared/apps/app-types'
 import type { AppSpec } from '../../shared/apps/spec-types'
-import type { ScheduleValue } from '../types'
 
 // ============================================
 // Typed error for App install/import failures
@@ -89,7 +89,7 @@ interface AppsState {
   loadMoreActivity: (appId: string) => Promise<void>
 
   // ── Escalation ───────────────────────────
-  respondToEscalation: (appId: string, escalationId: string, response: { choice?: string; text?: string }) => Promise<boolean>
+  respondToEscalation: (appId: string, escalationId: string, response: EscalationAnswerPayload) => Promise<boolean>
 
   // ── Continue ─────────────────────────────
   continueApp: (appId: string, runId: string) => Promise<boolean>
@@ -104,10 +104,8 @@ interface AppsState {
 
   // ── Config Updates ────────────────────────
   updateAppConfig: (appId: string, config: Record<string, unknown>) => Promise<boolean>
-  updateAppFrequency: (appId: string, subscriptionId: string, frequency: string) => Promise<boolean>
   updateAppOverrides: (appId: string, overrides: Record<string, unknown>) => Promise<boolean>
   updateAppSpec: (appId: string, specPatch: Record<string, unknown>) => Promise<boolean>
-  updateAppSchedule: (appId: string, subscriptionId: string, value: ScheduleValue) => Promise<boolean>
 
   // ── Space Management ────────────────────
   /**
@@ -456,20 +454,6 @@ export const useAppsStore = create<AppsState>((set, get) => ({
     }
   },
 
-  updateAppFrequency: async (appId, subscriptionId, frequency) => {
-    try {
-      const res = await api.appUpdateFrequency(appId, subscriptionId, frequency)
-      if (res.success) {
-        await get().refreshApp(appId)
-        return true
-      }
-      return false
-    } catch (err) {
-      console.error('[AppsStore] updateAppFrequency error:', err)
-      return false
-    }
-  },
-
   updateAppOverrides: async (appId, overrides) => {
     try {
       const res = await api.appUpdateOverrides(appId, overrides)
@@ -496,24 +480,6 @@ export const useAppsStore = create<AppsState>((set, get) => ({
       console.error('[AppsStore] updateAppSpec error:', err)
       return false
     }
-  },
-
-  updateAppSchedule: async (appId, subscriptionId, value) => {
-    if (value.type === 'every') {
-      return get().updateAppFrequency(appId, subscriptionId, value.every)
-    }
-    // cron: update via spec merge patch
-    const app = get().apps.find(a => a.id === appId)
-    if (!app || app.spec.type !== 'automation') return false
-    const subs = app.spec.subscriptions ?? []
-    const newSubs = subs.map((s, i) => {
-      const sid = s.id ?? String(i)
-      if (sid === subscriptionId) {
-        return { ...s, source: { type: 'schedule' as const, config: { cron: value.cron } } }
-      }
-      return s
-    })
-    return get().updateAppSpec(appId, { subscriptions: newSubs })
   },
 
   // ── Space Management ─────────────────

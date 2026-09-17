@@ -144,8 +144,14 @@ vi.mock('../../../../src/main/platform/memory/snapshot', () => ({
   createMemoryStatusMcpServer: vi.fn().mockReturnValue({ name: 'halo-memory', _isMcpServer: true }),
 }))
 
+// Captures the escalation callback so a test can raise one mid-stream, the way
+// the real tool handler does from inside the turn.
+let raiseEscalation: ((entryId: string) => void) | undefined
 vi.mock('../../../../src/main/apps/runtime/report-tool', () => ({
-  createReportToolServer: vi.fn().mockReturnValue({ name: 'halo-report', _isMcpServer: true }),
+  createReportToolServer: vi.fn((_store: unknown, _ctx: unknown, onEscalation?: (id: string) => void) => {
+    raiseEscalation = onEscalation
+    return { name: 'halo-report', _isMcpServer: true }
+  }),
 }))
 
 vi.mock('../../../../src/main/apps/runtime/notify-tool', () => ({
@@ -221,21 +227,36 @@ class FakeSession {
   close = vi.fn()
   private readonly script: SdkMessage[]
   private readonly throwOnStream: Error | null
+  private readonly onYield: ((message: SdkMessage) => void) | null
   /** How many times stream() has been consumed (each auto-continue re-streams). */
   streamCalls = 0
+  /** Messages actually handed to the consumer — a cut turn leaves some unread. */
+  yielded: SdkMessage[] = []
 
-  constructor(opts: { script?: SdkMessage[]; throwOnStream?: Error | null } = {}) {
+  constructor(opts: {
+    script?: SdkMessage[]
+    throwOnStream?: Error | null
+    /** Runs after each message is yielded, for side effects a tool would have. */
+    onYield?: (message: SdkMessage) => void
+  } = {}) {
     this.script = opts.script ?? []
     this.throwOnStream = opts.throwOnStream ?? null
+    this.onYield = opts.onYield ?? null
   }
 
   stream(): AsyncGenerator<SdkMessage> {
     this.streamCalls++
     const script = this.streamCalls === 1 ? this.script : []
     const throwOnStream = this.throwOnStream
+    const onYield = this.onYield
+    const yielded = this.yielded
     return (async function* () {
       if (throwOnStream) throw throwOnStream
-      for (const m of script) yield m
+      for (const m of script) {
+        yielded.push(m)
+        yield m
+        onYield?.(m)
+      }
     })()
   }
 }
@@ -396,6 +417,57 @@ describe('executeRun — completion branches', () => {
     expect(nextSession.streamCalls).toBe(11)
     // A run_error activity entry is surfaced for the no-report case.
     expect(emitEntry).toHaveBeenCalled()
+  })
+})
+
+describe('executeRun — a run that asks the user', () => {
+  /**
+   * The run used to be asked, in the tool result, to stop after escalating —
+   * and routinely kept working, acting on the very decision it had just said it
+   * could not make alone. The stop is now the runtime's, and it lands only once
+   * the question's tool call has its result: cutting earlier would leave a call
+   * unanswered in the transcript the user's reply has to resume against.
+   */
+  it('ends the run at the escalation instead of letting the model carry on', async () => {
+    const askUser: SdkMessage = {
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: 'call-1', name: 'mcp__halo-report__report_to_user' }] },
+    }
+    const askResult: SdkMessage = {
+      type: 'user',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'call-1' }] },
+    }
+    const afterwards: SdkMessage = {
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'carrying on anyway' }] },
+    }
+
+    raiseEscalation = undefined
+    nextSession = new FakeSession({
+      script: [systemInit(), askUser, askResult, afterwards],
+      // The real tool handler fires this from inside the turn, between the
+      // call and its result reaching the consumer.
+      onYield: message => { if (message === askUser) raiseEscalation?.('entry-1') },
+    })
+
+    const store = makeStore()
+    const result = await executeRun({
+      app: makeApp(),
+      trigger: baseTrigger,
+      store,
+      memory: makeMemory(),
+    })
+
+    expect(store.completeRun).toHaveBeenCalledWith(
+      result.runId,
+      expect.objectContaining({ status: 'waiting_user' }),
+    )
+    expect(result.outcome).toBe('useful')
+    // Whatever the model said after asking is discarded, not reported.
+    expect(nextSession.yielded).not.toContain(afterwards)
+    expect(result.finalText ?? '').not.toContain('carrying on anyway')
+    // The question counts as having reported, so nothing nags the run onward.
+    expect(nextSession.streamCalls).toBe(1)
   })
 })
 

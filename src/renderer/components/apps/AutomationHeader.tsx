@@ -114,19 +114,15 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
     }
   }
 
-  // Frequency label
+  // Frequency label — the configured schedule, not the spec's suggested
+  // default, so this reads the same value the scheduler runs on.
   const sub = app.spec.type === 'automation' ? app.spec.subscriptions?.[0] : undefined
   let freqLabel: string | null = null
   if (sub) {
-    const subId = sub.id ?? '0'
-    const userOverride = app.userOverrides?.frequency?.[subId]
-    if (userOverride) {
-      freqLabel = userOverride
-    } else if (sub.frequency?.default) {
-      freqLabel = sub.frequency.default
-    } else if (sub.source.type === 'schedule') {
-      freqLabel = sub.source.config.every ?? sub.source.config.cron ?? null
-    }
+    freqLabel = sub.source.type === 'schedule'
+      ? sub.source.config.every ?? sub.source.config.cron ?? null
+      : null
+    freqLabel ??= sub.frequency?.default ?? null
   }
 
   // Last activity summary from runtime state

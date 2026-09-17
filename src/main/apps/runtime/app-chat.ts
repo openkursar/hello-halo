@@ -65,6 +65,7 @@ import {
 import { stopGeneration, getSessionState } from '../../services/agent/control'
 import {
   getAppChatSink,
+  peekAppChatSink,
   hasActiveAppChatRound,
   getConversationsWithActiveRound,
   disposeAppChatSink,
@@ -602,7 +603,16 @@ async function runAppChatTurn(
     // Inject file-send tool when the originating IM channel supports file delivery
     ...(imFileSend ? { 'im-file-send': createFileSendMcpServer(imFileSend) } : {}),
     // report_to_user for team turns only (escalation routing); see reportContext note.
-    ...(teamContext && activityStore ? { 'halo-report': createReportToolServer(activityStore, reportContext) } : {}),
+    // A question to the user ends the turn that asked it — the sink is looked up
+    // when the tool fires rather than captured here, because it is created later
+    // in this same call and outlives the session underneath it.
+    ...(teamContext && activityStore
+      ? {
+          'halo-report': createReportToolServer(activityStore, reportContext, () => {
+            peekAppChatSink(conversationId)?.noteAskedUser()
+          }),
+        }
+      : {}),
     // Team coordination tools (team-channel turns only).
     ...(teamContext && teamPromptCtx && getActiveTeamRuntime()
       ? {

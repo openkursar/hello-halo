@@ -50,7 +50,11 @@ Use device: "h5" only when the target site is mobile-only or the user explicitly
   async (args) => {
     const timeout = (args.timeout && args.timeout > 0) ? args.timeout : NAV_TIMEOUT
     const requestedDevice: DeviceMode = args.device ?? 'pc'
-    const activeViewId = ctx.getActiveViewId()
+    // Only reuse a tab this caller still owns. Without the ownership check a
+    // stale pointer navigates someone else's page — the failure the user saw as
+    // "my page was overwritten", with nothing reported on either side.
+    const rawActiveViewId = ctx.getActiveViewId()
+    const activeViewId = rawActiveViewId && ctx.canReachView(rawActiveViewId) ? rawActiveViewId : null
     const activeState = activeViewId ? browserViewManager.getState(activeViewId) : undefined
     const shouldCreatePage = !activeViewId || (args.device !== undefined && activeState?.deviceMode !== requestedDevice)
 

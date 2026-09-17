@@ -1,14 +1,15 @@
 import { taskTime } from '../../../src/renderer/components/team/workbench/time'
 import { executionTurns } from '../../../src/renderer/components/team/workbench/model'
 import { describe, expect, it } from 'vitest'
-import { taskConversationRows, COLLABORATION_PREVIEW_LIMIT, conversationMessages, activityLevel, taskGroup, visibleTasks, taskActivityRows, taskReportMessages, isTeamBackgroundTurn, decisionMessageId } from '../../../src/renderer/components/team/workbench/model'
+import { taskConversationRows, COLLABORATION_PREVIEW_LIMIT, conversationMessages, activityLevel, taskGroup, visibleTasks, taskActivityRows, taskReportMessages, isTeamBackgroundTurn, decisionMessageId, sharedTaskDecisions } from '../../../src/renderer/components/team/workbench/model'
 import type { TeamConversation, TeamActivity } from '../../../src/shared/apps/team-types'
 import type { ActivityEntry } from '../../../src/shared/apps/app-types'
 const task = (patch: Partial<TeamConversation> = {}): TeamConversation => ({ epochId: 'task', teamId: 'team', kind: 'native', label: 'Task', readonly: false, startedAt: 1, lastActivityAt: 1, ...patch })
 describe('task workbench projection', () => {
   it('keeps questions above completion and source grouping', () => {
-    expect(taskGroup(task({ waitingUser: true, completed: true, kind: 'im' }))).toBe('attention')
-    expect(taskGroup(task({ waitingUser: true, kind: 'run' }))).toBe('attention')
+    expect(taskGroup(task({ waitingUser: true, waitingForMe: true, completed: true, kind: 'im' }))).toBe('attention')
+    expect(taskGroup(task({ waitingUser: true, waitingForMe: true, kind: 'run' }))).toBe('attention')
+    expect(taskGroup(task({ waitingUser: true, waitingForMe: false, kind: 'run' }))).toBe('automatic')
     expect(taskGroup(task({ completed: true, involvedMe: true }))).toBe('involved')
   })
   it('uses exclusive viewer relationships and excludes direct channels', () => {
@@ -105,6 +106,30 @@ describe('conversation collaboration awareness', () => {
     expect(rows).toHaveLength(3)
     expect(rows[0].activities).toHaveLength(1)
     expect(rows[1].activities?.[0].status).toBe('undelivered')
+  })
+})
+
+describe('shared decision visibility', () => {
+  const decisionActivity = (id: string, patch: Partial<TeamActivity> = {}): TeamActivity => ({
+    id, teamId: 'team', epochId: 'task', kind: 'decision', actorAppId: 'remote', targetAppId: null,
+    subject: 'Approve?', body: 'Approve the deployment?', refId: 'entry-1', correlationId: null,
+    status: 'escalation', createdAt: 2000, ...patch,
+  })
+
+  it('pairs the shared request and answer for the selected member', () => {
+    const request = decisionActivity('request')
+    const answer = decisionActivity('answer', { status: 'ok', body: 'Approved', createdAt: 3000 })
+    expect(sharedTaskDecisions([request, answer], 'task', 'remote')).toEqual([{
+      refId: 'entry-1', appId: 'remote', question: 'Approve the deployment?', requestedAt: 2000,
+      answer: 'Approved', answeredAt: 3000,
+    }])
+    expect(taskConversationRows([], [request, answer], 'task', 'remote')[0].sharedDecision?.answer).toBe('Approved')
+  })
+
+  it('does not duplicate a shared decision that has a local actionable entry', () => {
+    const local: ActivityEntry = { id: 'entry-1', appId: 'remote', runId: 'run', type: 'escalation', ts: 2000, content: { summary: 'Approve?' } }
+    const rows = taskConversationRows([], [decisionActivity('request')], 'task', 'remote', [local])
+    expect(rows.map(row => row.id)).toEqual(['decision:entry-1'])
   })
 })
 

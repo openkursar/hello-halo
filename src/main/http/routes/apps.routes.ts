@@ -48,6 +48,7 @@ import type {
   UninstallOptions,
 } from './_shared'
 import { resolveAppChatTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
+import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
 
 export function registerAppsRoutes(app: Express): void {
@@ -463,11 +464,12 @@ export function registerAppsRoutes(app: Express): void {
       }
       const runtime = getRuntimeOrFail(res)
       if (!runtime) return
-      const { choice, text } = req.body as { choice?: string; text?: string }
+      const { choice, text, answers } = req.body as EscalationAnswerPayload
       const response: EscalationResponse = {
         ts: Date.now(),
         choice,
         text,
+        ...(answers ? { answers } : {}),
       }
       await runtime.respondToEscalation(appId, entryId, response)
       console.log('[HTTP] POST /api/apps/%s/escalation/%s/respond', appId, entryId)

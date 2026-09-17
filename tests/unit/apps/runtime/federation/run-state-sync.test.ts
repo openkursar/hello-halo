@@ -19,6 +19,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createDatabaseManager } from '../../../../../src/main/platform/store/database-manager'
 import type { DatabaseManager } from '../../../../../src/main/platform/store/types'
 import { FederationStore } from '../../../../../src/main/apps/federation/store'
+import { DEFAULT_OFFICE_SCOPE } from '../../../../../src/main/apps/federation/types'
 import {
   MIGRATION_NAMESPACE as FED_NS,
   migrations as fedMigrations,
@@ -32,7 +33,7 @@ import { createFederationManager } from '../../../../../src/main/apps/runtime/fe
 import { LanMeshLink } from '../../../../../src/main/apps/runtime/federation/lan-mesh-provider'
 import { SELF_NODE_ID } from '../../../../../src/shared/apps/team-types'
 import type { Team } from '../../../../../src/main/apps/team/types'
-import type { TeamMemberRuntimeStatus } from '../../../../../src/shared/apps/team-types'
+import type { TeamMemberRuntimeStatus, TeamStatus } from '../../../../../src/shared/apps/team-types'
 import type {
   FederationMessage,
   JoinRequest,
@@ -101,7 +102,7 @@ describe('federation live run-state propagation', () => {
     })
     federationStore.upsertNode({
       nodeId: NODE_A, officeId: OFFICE, identity: 'identity-a', displayName: 'Host A',
-      joinedAt: Date.now(), lastSeen: Date.now(), status: 'online',
+      joinedAt: Date.now(), lastSeen: Date.now(), status: 'online', advertisedUrl: null,
     })
   }
 
@@ -109,9 +110,10 @@ describe('federation live run-state propagation', () => {
   function wireTwoNodes(opts?: {
     getMemberRuntimeStatus?: (appId: string) => TeamMemberRuntimeStatus
     getCurrentRunEpoch?: (officeId: string) => { teamId: string; epochId: string } | null
+    getObservableOfficeStatus?: (officeId: string) => TeamStatus
   }) {
     const verify = (token: string): OfficeCredentialLike | null =>
-      token === VALID_TOKEN ? { officeId: OFFICE } : null
+      token === VALID_TOKEN ? { officeId: OFFICE, scope: DEFAULT_OFFICE_SCOPE } : null
     const bReceived: FederationMessage[] = []
 
     const bLink = new LanMeshLink((_to, frame) => {
@@ -131,6 +133,7 @@ describe('federation live run-state propagation', () => {
       verifyCredential: verify,
       getLocalNodeId: () => NODE_A,
       getMemberRuntimeStatus: opts?.getMemberRuntimeStatus,
+      getObservableOfficeStatus: opts?.getObservableOfficeStatus,
       getCurrentRunEpoch: opts?.getCurrentRunEpoch,
     })
 
@@ -177,6 +180,30 @@ describe('federation live run-state propagation', () => {
     // An idle member carries no task title.
     expect(byApp.get(LEAD_APP)!.status).toBe('idle')
     expect(byApp.get(LEAD_APP)!.currentTaskTitle).toBeUndefined()
+  })
+
+  it('sends the OBSERVABLE office status, so a joiner is not left on a stale idle', () => {
+    // Nothing is running as far as the office record is concerned — the member
+    // is busy on its own chat/IM/schedule. The host shows that as working, so
+    // the snapshot has to carry it or the joiner shows "ready" for the whole
+    // turn, and every list refresh puts it back.
+    seedHostTeam({ status: 'idle', currentEpochId: EPOCH })
+    const { hostManager, bReceived } = wireTwoNodes({
+      getMemberRuntimeStatus: (appId) => (appId === HOST_MEMBER ? 'working' : 'idle'),
+      getObservableOfficeStatus: () => 'running',
+    })
+    hostManager.handleHostInbound({ clientId: B_CLIENT_ID, officeId: OFFICE, frame: joinRequestFromB() })
+
+    expect(teamStore.getTeamById(OFFICE)!.status).toBe('idle')
+    expect(lastRoster(bReceived).team.status).toBe('running')
+  })
+
+  it('falls back to the stored status when no observable status is injected', () => {
+    seedHostTeam({ status: 'running', currentEpochId: EPOCH })
+    const { hostManager, bReceived } = wireTwoNodes({})
+    hostManager.handleHostInbound({ clientId: B_CLIENT_ID, officeId: OFFICE, frame: joinRequestFromB() })
+
+    expect(lastRoster(bReceived).team.status).toBe('running')
   })
 
   // ── 2. Joiner persists run-state + overlays member status ───────────────────

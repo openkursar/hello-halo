@@ -66,9 +66,8 @@ export interface InstalledApp {
   /** User-provided configuration values (corresponds to spec.config_schema) */
   userConfig: Record<string, unknown>
 
-  /** User overrides for subscription frequencies and other tunable settings */
+  /** User overrides for tunable per-app settings */
   userOverrides: {
-    frequency?: Record<string, string>  // subscriptionId -> frequency string
     /** Notification level: 'all' | 'important' | 'none'. Defaults to 'important'. */
     notificationLevel?: 'all' | 'important' | 'none'
     /** Override AI source for this App. When set, uses this source instead of the global one. */

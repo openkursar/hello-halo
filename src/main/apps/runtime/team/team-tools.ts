@@ -227,6 +227,18 @@ function buildSendTool(ctx: TeamMcpContext) {
               `something, so give them room to react; if they answer, it arrives later as a new turn.`
           )
         }
+        if (result.remoteTarget) {
+          // Never "delivered" for another machine: acceptance by their machine is
+          // all this end can observe, and whether it woke the member is knowable
+          // only there. Said plainly because the alternative is a lead that waits
+          // indefinitely on a member that never ran, unable to tell the two apart.
+          return textResult(
+            `Message accepted for "${input.to}" (id: ${result.messageId}). They run on another machine, so ` +
+              `this end cannot confirm they actually started — silence is NOT evidence they are working. ` +
+              `Carry on with other work, and if nothing comes back, check whether they ever picked it up ` +
+              `(team_read_board) rather than waiting longer.`
+          )
+        }
         return textResult(
           `Message delivered to "${input.to}" (id: ${result.messageId}). If they answer, it will arrive ` +
             `later as a new turn — carry on with other work.`

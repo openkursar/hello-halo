@@ -7,7 +7,7 @@ export type TaskGroup = 'attention' | 'involved' | 'mine' | 'other' | 'reception
 export const taskGroups: TaskGroup[] = ['attention', 'mine', 'involved', 'other', 'reception', 'automatic']
 
 export function taskGroup(task: TeamConversation): TaskGroup {
-  if (task.waitingUser) return 'attention'
+  if (task.waitingForMe) return 'attention'
   if (task.kind === 'im') return 'reception'
   if (task.kind === 'run') return 'automatic'
   if (task.createdByMe) return 'mine'
@@ -110,9 +110,19 @@ export function taskReportMessages(messages: Message[]): Message[] {
 }
 
 export type ConversationRow =
-  | { id: string; message: Message; activities?: never; decision?: never }
-  | { id: string; activities: TeamActivity[]; message?: never; decision?: never }
-  | { id: string; decision: ActivityEntry; message?: never; activities?: never }
+  | { id: string; message: Message; activities?: never; decision?: never; sharedDecision?: never }
+  | { id: string; activities: TeamActivity[]; message?: never; decision?: never; sharedDecision?: never }
+  | { id: string; decision: ActivityEntry; message?: never; activities?: never; sharedDecision?: never }
+  | { id: string; sharedDecision: SharedTaskDecision; message?: never; activities?: never; decision?: never }
+
+export interface SharedTaskDecision {
+  refId: string
+  appId: string
+  question: string
+  requestedAt: number
+  answer?: string
+  answeredAt?: number
+}
 
 export const COLLABORATION_PREVIEW_LIMIT = 3
 
@@ -126,10 +136,42 @@ export function decisionHasReceipt(decision: ActivityEntry, thoughts: Thought[])
     (thought.toolResult?.output ?? thought.toolOutput ?? (thought.type === 'tool_result' ? thought.content : '')).includes(decision.id))
 }
 
+export function sharedTaskDecisions(activities: TeamActivity[], epochId: string | null, appId?: string, localDecisionIds: Set<string> = new Set()): SharedTaskDecision[] {
+  if (!epochId || !appId) return []
+  const paired = new Map<string, { request?: TeamActivity; answer?: TeamActivity }>()
+  for (const activity of activities) {
+    if (activity.epochId !== epochId || activity.kind !== 'decision' || activity.actorAppId !== appId || !activity.refId || localDecisionIds.has(activity.refId)) continue
+    const pair = paired.get(activity.refId) ?? {}
+    if (activity.status === 'escalation') pair.request = activity
+    else if (activity.status === 'ok') pair.answer = activity
+    paired.set(activity.refId, pair)
+  }
+  return [...paired.entries()].flatMap(([refId, pair]) => {
+    const source = pair.request ?? pair.answer
+    if (!source) return []
+    return [{
+      refId,
+      appId,
+      question: pair.request?.body?.trim() || source.subject.trim(),
+      requestedAt: pair.request?.createdAt ?? source.createdAt,
+      ...(pair.answer?.body?.trim() ? { answer: pair.answer.body.trim(), answeredAt: pair.answer.createdAt } : {}),
+    }]
+  })
+}
+
 export function taskConversationRows(messages: Message[], activities: TeamActivity[], epochId: string | null, appId?: string, decisions: ActivityEntry[] = []): ConversationRow[] {
-  const entries = [
+  const sharedDecisions = sharedTaskDecisions(activities, epochId, appId, new Set(decisions.map(decision => decision.id)))
+  const entries: Array<{
+    id: string
+    at: number | null
+    message?: Message
+    decision?: ActivityEntry
+    sharedDecision?: SharedTaskDecision
+    activity?: TeamActivity
+  }> = [
     ...conversationMessages(messages).map(message => ({ id: `message:${message.id}`, at: taskTime(message.timestamp), message, activity: undefined, decision: undefined })),
     ...decisions.map(decision => ({ id: `decision:${decision.id}`, at: taskTime(decision.ts), decision, message: undefined, activity: undefined })),
+    ...sharedDecisions.map(sharedDecision => ({ id: `shared-decision:${sharedDecision.refId}`, at: taskTime(sharedDecision.requestedAt), sharedDecision })),
     ...[...new Map(activities.map(activity => [activity.id, activity])).values()]
       .filter(activity => appId && epochId && activity.epochId === epochId &&
         (activity.kind === 'message' || activity.kind === 'reply') && activity.targetAppId &&
@@ -141,6 +183,7 @@ export function taskConversationRows(messages: Message[], activities: TeamActivi
   const rows: ConversationRow[] = []
   for (const entry of entries) {
     if (entry.decision) rows.push({ id: entry.id, decision: entry.decision })
+    else if ('sharedDecision' in entry && entry.sharedDecision) rows.push({ id: entry.id, sharedDecision: entry.sharedDecision })
     else if (entry.message) rows.push({ id: entry.id, message: entry.message })
     else if (entry.activity) {
       const previous = rows[rows.length - 1]

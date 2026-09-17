@@ -148,7 +148,7 @@ export interface AgentConfig {
   teamMaxConcurrentTurns?: number; // Cap on team member turns running at once on this machine
 }
 
-// Schedule value type (used by apps.store + schedule components)
+// Schedule value type (re-exported by components/apps/schedule-utils)
 export type ScheduleValue =
   | { type: 'every'; every: string }
   | { type: 'cron'; cron: string }

@@ -30,6 +30,7 @@ import type {
   AppRunStartInfo,
   TriggerContext,
   EscalationResponse,
+  EscalationQuestion,
   ActivityQueryOptions,
   ActivityEntry,
   AutomationRun,
@@ -47,6 +48,7 @@ import { readSessionMessages } from './session-store'
 import { getActiveTeamRuntime } from './team'
 import { truncateUtf16Safe } from './text-truncate'
 import { getSpace } from '../../services/space.service'
+import { getEscalationQuestions, formatEscalationAnswer } from '../../../shared/apps/app-types'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { broadcastToAll } from '../../http/websocket'
 import { sendToRenderer } from '../../foundation/window.service'
@@ -73,6 +75,9 @@ const ESCALATION_CHECK_INTERVAL_MS = 5 * 60 * 1000
 
 /** Minimum interval between data prune runs (24 hours) */
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000
+
+/** Recorded on runs whose process died before they could finish. */
+const INTERRUPTED_RUN_MESSAGE = 'Interrupted — Halo stopped while this run was in progress.'
 
 // ============================================
 // Service Factory
@@ -301,6 +306,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   function buildEscalationTriggerContext(
     app: InstalledApp,
     originalQuestion: string,
+    questions: EscalationQuestion[],
     response: EscalationResponse,
     sessionId?: string
   ): TriggerContext {
@@ -308,10 +314,11 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       type: 'escalation_followup',
       description: `Follow-up run for "${app.spec.name}" after user responded to escalation. ` +
         `Original question: "${originalQuestion}". ` +
-        `User response: "${response.text || response.choice || '(no text)'}". ` +
+        `User response: "${formatEscalationAnswer(questions, response) || '(no text)'}". ` +
         `Time: ${new Date().toISOString()}`,
       escalation: {
         originalQuestion,
+        questions,
         userResponse: response,
         sessionId,
       },
@@ -354,6 +361,42 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     broadcastToAll('app:activity_entry:new', { appId: entry.appId, entry: entry as unknown as Record<string, unknown> })
   }
 
+  /**
+   * Whether the app already has an execution running or waiting for a slot.
+   *
+   * One execution per app at a time — a second concurrent run duplicates work
+   * (a monitoring app would run 50 identical checks) and races the first one's
+   * state. Every trigger entry must consult this, not just the manual one.
+   */
+  function isAppBusy(appId: string): boolean {
+    const running = Array.from(runningAbortControllers.keys()).some(k => k.startsWith(`${appId}:`))
+    return running || (pendingTriggers.get(appId) ?? 0) > 0
+  }
+
+  /**
+   * Admit a run the app started by itself (a schedule tick or a subscribed
+   * event), or explain why it may not start. Unlike a manual trigger this must
+   * never resume a stopped app or displace work already under way, so a refusal
+   * is a skip rather than an error.
+   */
+  function admitAutomaticRun(appId: string): { app: InstalledApp } | { skipReason: string } {
+    const app = appManager.getApp(appId)
+    if (!app) return { skipReason: 'app no longer installed' }
+    if (app.status !== 'active') return { skipReason: `status=${app.status}` }
+
+    // A question put to the user is the app declaring it cannot proceed alone.
+    // Starting the next run regardless would work around the person it just
+    // asked. Read from the stored questions rather than the app's status, which
+    // is a cache of the same fact and can be absent.
+    if (store.hasPendingSoloEscalation(appId)) return { skipReason: 'awaiting a user decision' }
+
+    // The previous run may still be going when the next trigger lands (a long
+    // run, or one held behind the global slot limit).
+    if (isAppBusy(appId)) return { skipReason: 'previous run still active' }
+
+    return { app }
+  }
+
   // ── Helper: Admit a manual run ──────────────────────
   /**
    * Run every check a manual trigger must pass and build its trigger context.
@@ -387,12 +430,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       throw new AppNotRunnableError(appId, app.status)
     }
 
-    // Per-app dedup: reject if this specific app is already running or queued.
-    // Each app should have at most one active execution at a time to avoid
-    // redundant work (e.g. a monitoring app running 50 identical checks).
-    const appIsRunning = Array.from(runningAbortControllers.keys()).some(k => k.startsWith(`${appId}:`))
-    const appIsQueued = (pendingTriggers.get(appId) ?? 0) > 0
-    if (appIsRunning || appIsQueued) {
+    if (isAppBusy(appId)) {
       throw new ConcurrencyLimitError(DEFAULT_MAX_CONCURRENT, appId)
     }
 
@@ -543,23 +581,25 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       const outcome = result.outcome as RunOutcome
       appManager.updateLastRun(app.id, outcome, result.errorMessage)
 
-      // Handle escalation result
+      // Handle escalation result.
+      //
+      // The question belongs to THIS run, so it is looked up by run rather than
+      // by "the app's newest escalation" — an app can hold several unanswered
+      // questions, and answering one must not depend on it being the latest.
+      // Earlier questions from other runs are deliberately left open.
       if (result.outcome === 'useful' && store.getRun(result.runId)?.status === 'waiting_user') {
-        // The run resulted in an escalation - find the pending escalation entry
-        const entries = store.getEntriesForApp(app.id, { type: 'escalation', limit: 1 })
-        const pendingEntry = entries.find(e => !e.userResponse && !e.content.resolution)
+        const pendingEntry = store
+          .getEntriesForRun(result.runId)
+          .find(e => e.type === 'escalation' && !e.userResponse && !e.content.resolution)
         if (pendingEntry) {
-          // Close any orphan escalation entries from previous runs before
-          // setting the new pendingEscalationId. This prevents stale entries
-          // from triggering false timeouts when the app re-enters waiting_user.
-          const closed = store.closeOrphanEscalations(app.id, pendingEntry.id)
-          if (closed > 0) {
-            console.log(`[Runtime] Closed ${closed} orphan escalation(s) before entering waiting_user: app=${app.id}`)
-          }
-
           appManager.updateStatus(app.id, 'waiting_user', {
             pendingEscalationId: pendingEntry.id,
           })
+        } else {
+          console.warn(
+            `[Runtime] Run ended waiting_user with no pending escalation entry: ` +
+            `app=${app.id}, run=${result.runId}`
+          )
         }
       }
 
@@ -651,6 +691,46 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   }
 
   /**
+   * Settle runs a previous process left mid-flight.
+   *
+   * A run is only ever moved out of 'running' by the process executing it, so a
+   * crash or a forced quit leaves the row claiming to be live: the timeline
+   * shows no outcome, the "view progress" affordance points at a run nothing is
+   * driving, and pruning skips it forever. Nothing of that process survived, so
+   * on startup every such run is failed and given a timeline entry saying why —
+   * which also makes it resumable through the normal continue path.
+   */
+  function settleInterruptedRuns(): void {
+    try {
+      // Anything this process is actually driving is excluded, so the sweep
+      // stays safe if it is ever reached outside of startup.
+      const stranded = store.listRunningRuns().filter(run => !isRunActive(run.runId))
+      const interrupted = store.failRuns(stranded.map(run => run.runId), INTERRUPTED_RUN_MESSAGE)
+      if (interrupted.length === 0) return
+
+      for (const run of interrupted) {
+        emitActivityEntry({
+          id: randomUUID(),
+          appId: run.appId,
+          runId: run.runId,
+          type: 'run_error',
+          ts: run.finishedAt ?? Date.now(),
+          sessionKey: run.sessionKey,
+          content: {
+            summary: INTERRUPTED_RUN_MESSAGE,
+            status: 'error',
+            error: INTERRUPTED_RUN_MESSAGE,
+          },
+        })
+      }
+
+      console.log(`[Runtime] Settled ${interrupted.length} run(s) interrupted by a previous shutdown`)
+    } catch (err) {
+      console.error('[Runtime] Failed to settle interrupted runs:', err)
+    }
+  }
+
+  /**
    * Periodically scans for pending escalations that have exceeded their
    * timeout (default: 24 hours). Timed-out escalations are:
    * 1. Auto-resolved with a timeout response
@@ -676,22 +756,9 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         // Only process apps that are actually in waiting_user state
         if (app.status !== 'waiting_user') continue
 
-        // ── Orphan detection ─────────────────────────────────────
-        // An orphan is a pending escalation that does NOT match the app's
-        // current pendingEscalationId. This happens when the app leaves
-        // waiting_user (e.g. pause → resume) without resolving the entry,
-        // then later re-enters waiting_user for a NEW escalation. The old
-        // entry's user_response_json is still NULL, so it appears in
-        // getAllPendingEscalations(). If we timeout the orphan, the app
-        // instantly errors out — which is the bug we're fixing.
-        if (!entry.content.teamContext && app.pendingEscalationId && entry.id !== app.pendingEscalationId) {
-          store.closeOrphanEscalations(app.id, app.pendingEscalationId)
-          console.log(
-            `[Runtime] Closed orphan escalation: app=${app.id}, orphan=${entry.id}, ` +
-            `active=${app.pendingEscalationId}`
-          )
-          continue
-        }
+        // Every unanswered question ages on its own clock. An entry that is not
+        // the app's newest one is still answerable, so it is timed out on its
+        // own merits rather than discarded for being superseded.
 
         // Determine timeout from app spec (default: 24 hours)
         const timeoutHours = (app.spec.type === 'automation' ? app.spec.escalation?.timeout_hours : undefined) ?? DEFAULT_ESCALATION_TIMEOUT_HOURS
@@ -767,11 +834,9 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     if (sub.source.type === 'schedule') {
       const config = sub.source.config
-      // Check for user frequency override
-      const overriddenFreq = app.userOverrides.frequency?.[subId]
 
-      if (config.every || overriddenFreq) {
-        const every = overriddenFreq || config.every!
+      if (config.every) {
+        const every = config.every
         return {
           id: `${app.id}:${subId}`,
           name: `${app.spec.name} - ${subId}`,
@@ -871,9 +936,12 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         const filter = subscriptionToEventFilter(sub)
         if (filter) {
           const unsub = eventRouter.on(filter, async (event) => {
-            // Check if app is still active
-            const currentApp = appManager.getApp(appId)
-            if (!currentApp || currentApp.status !== 'active') return
+            const admission = admitAutomaticRun(appId)
+            if ('skipReason' in admission) {
+              console.log(`[Runtime] Skipping event-triggered run: app=${appId}, ${admission.skipReason}`)
+              return
+            }
+            const currentApp = admission.app
 
             console.log(`[Runtime] Event triggered: type=${event.type}, app=${appId}`)
             const trigger = buildEventTriggerContext(event.type, event.payload, currentApp)
@@ -1012,8 +1080,12 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         const filter = subscriptionToEventFilter(sub)
         if (filter) {
           const unsub = eventRouter.on(filter, async (event) => {
-            const currentApp = appManager.getApp(appId)
-            if (!currentApp || currentApp.status !== 'active') return
+            const admission = admitAutomaticRun(appId)
+            if ('skipReason' in admission) {
+              console.log(`[Runtime] Skipping event-triggered run: app=${appId}, ${admission.skipReason}`)
+              return
+            }
+            const currentApp = admission.app
 
             console.log(`[Runtime] Event triggered: type=${event.type}, app=${appId}`)
             const trigger = buildEventTriggerContext(event.type, event.payload, currentApp)
@@ -1184,7 +1256,10 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         answeringTeamDecisions.add(entryId)
         try {
           const runtime = getActiveTeamRuntime()
-          const decision = [response.choice, response.text].filter(Boolean).join(' — ') || 'Proceed.'
+          // Restates each question beside its answer when several were asked:
+          // the member is woken with this text and cannot re-read the card.
+          const decision =
+            formatEscalationAnswer(getEscalationQuestions(entry.content), response) || 'Proceed.'
           const resumed = await runtime?.resumeFromEscalation({
             teamId: teamContext.teamId, epochId: teamContext.epochId,
             appId, taskId: teamContext.taskId, response: decision,
@@ -1224,9 +1299,12 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       broadcastToAll('app:escalation:resolved', { appId, entryId, response })
       sendToRenderer('app:escalation:resolved', { appId, entryId, response })
 
-      // Clear the waiting_user status
+      // Leave waiting_user only once nothing is left to answer — the app may
+      // hold questions from other runs, and clearing the state early both lets
+      // the scheduler start work the user has not unblocked and discards those
+      // questions through the status-change cleanup.
       const app = appManager.getApp(appId)
-      if (app && app.status === 'waiting_user') {
+      if (app && app.status === 'waiting_user' && !store.hasPendingSoloEscalation(appId)) {
         appManager.updateStatus(appId, 'active')
       }
 
@@ -1260,7 +1338,13 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         store.reopenRun(entry.runId)
         broadcastAppStatus(appId)
 
-        const trigger = buildEscalationTriggerContext(app, originalQuestion, response, sessionId)
+        const trigger = buildEscalationTriggerContext(
+          app,
+          originalQuestion,
+          getEscalationQuestions(entry.content),
+          response,
+          sessionId
+        )
 
         // Execute asynchronously, reusing the original run record
         executeWithConcurrency(app, trigger, {
@@ -1398,6 +1482,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     // ── Lifecycle ───────────────────────────────────
 
     async activateAll(): Promise<void> {
+      settleInterruptedRuns()
+
       console.log('[Runtime] Activating all active automation apps...')
       const apps = appManager.listApps({ status: 'active', type: 'automation' })
 
@@ -1476,16 +1562,12 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       return 'skipped'
     }
 
-    const app = appManager.getApp(appId)
-    if (!app) {
-      console.warn(`[Runtime] App not found for scheduler job: ${job.id}, appId=${appId}`)
+    const admission = admitAutomaticRun(appId)
+    if ('skipReason' in admission) {
+      console.log(`[Runtime] Skipping scheduled run: app=${appId}, ${admission.skipReason}`)
       return 'skipped'
     }
-
-    if (app.status !== 'active') {
-      console.log(`[Runtime] Skipping scheduled run: app=${appId} status=${app.status}`)
-      return 'skipped'
-    }
+    const app = admission.app
 
     const trigger = buildScheduleTriggerContext(job, app)
 
@@ -1512,18 +1594,25 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
   // ── Listen for App status changes ───────────────────
   appManager.onAppStatusChange((appId: string, oldStatus: AppStatus, newStatus: AppStatus) => {
-    // ── Orphan escalation cleanup ───────────────────────
-    // When an app leaves waiting_user for any reason OTHER than the normal
-    // timeout path (which already resolves the entry), close all remaining
-    // pending escalation entries so they don't cause false timeouts later.
-    if (oldStatus === 'waiting_user' && newStatus !== 'waiting_user') {
+    // ── Abandon questions the app can no longer answer ──────────
+    // Only when it stops for good: a paused or errored app is deactivated, so
+    // nothing would ever resume from an answer given to it. Returning to
+    // 'active' deliberately does NOT clear them — an app can be active while
+    // earlier runs still wait on a human, and discarding those was what made a
+    // second run destroy the first one's question.
+    if (newStatus === 'paused' || newStatus === 'error') {
       try {
         const closed = store.closeOrphanEscalations(appId)
         if (closed > 0) {
-          console.log(`[Runtime] Closed ${closed} orphan escalation(s) on state change: app=${appId}, ${oldStatus} -> ${newStatus}`)
+          console.log(`[Runtime] Closed ${closed} unanswerable escalation(s): app=${appId}, ${oldStatus} -> ${newStatus}`)
+        }
+        try {
+          getActiveTeamRuntime()?.reconcileAwaitingDecision(appId)
+        } catch (err) {
+          console.error(`[Runtime] Failed to reconcile team decision state after escalation cleanup: app=${appId}, closed=${closed}:`, err)
         }
       } catch (err) {
-        console.error(`[Runtime] Failed to close orphan escalations: app=${appId}:`, err)
+        console.error(`[Runtime] Failed to close escalations: app=${appId}:`, err)
       }
     }
 

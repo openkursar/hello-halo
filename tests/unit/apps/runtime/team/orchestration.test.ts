@@ -1364,6 +1364,44 @@ describe('TeamOrchestration', () => {
     })
   })
 
+  describe('getObservableStatus', () => {
+    it('reports an office as running while a member serves a turn outside a run', async () => {
+      // The reported symptom: a conversation turn is not a run, so the stored
+      // status stayed idle while that member's avatar was visibly working.
+      seedTeam(store)
+      const { deps, pendings } = makeSession()
+      const orch = build(deps)
+      const epoch = orch.ensureConversationEpoch(TEAM_ID, 'direct:researcher', 'Side chat')
+
+      expect(store.getTeamById(TEAM_ID)!.status).toBe('idle')
+      expect(orch.getObservableStatus(TEAM_ID)).toBe('idle')
+
+      const receipt = bus.send({
+        teamId: TEAM_ID, epochId: epoch.id, fromAppId: LEAD_APP,
+        to: 'researcher', message: 'take a look', wait: false,
+      })
+      await flush()
+      expect(bus.isSessionOccupied(buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epoch.id))).toBe(true)
+      expect(orch.getObservableStatus(TEAM_ID)).toBe('running')
+      // Still stored as idle — the office never started a run of its own.
+      expect(store.getTeamById(TEAM_ID)!.status).toBe('idle')
+
+      pendings[0].resolve('done')
+      await receipt
+      await flush()
+      expect(orch.getObservableStatus(TEAM_ID)).toBe('idle')
+    })
+
+    it('never overrides a stored status that says more than idle', () => {
+      seedTeam(store)
+      store.updateTeamStatus(TEAM_ID, 'waiting_user')
+      const { deps } = makeSession()
+      const orch = build(deps)
+      // A decision owed is something a live read cannot see, so it must win.
+      expect(orch.getObservableStatus(TEAM_ID)).toBe('waiting_user')
+    })
+  })
+
   // ===========================================================================
   // System prompt stability. The team Entry is frozen into the agent session's
   // reuse fingerprint: a per-turn difference rebuilds the CC subprocess every

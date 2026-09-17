@@ -306,9 +306,9 @@ export class TeamStore implements ITeamStore {
       )
     `)
     this.stmtGetTeamById = db.prepare(`SELECT * FROM teams WHERE id = ?`)
-    this.stmtListTeams = db.prepare(`SELECT * FROM teams ORDER BY updated_at DESC`)
+    this.stmtListTeams = db.prepare(`SELECT * FROM teams ORDER BY created_at DESC, id ASC`)
     this.stmtListTeamsBySpace = db.prepare(`
-      SELECT * FROM teams WHERE owning_space_id = ? ORDER BY updated_at DESC
+      SELECT * FROM teams WHERE owning_space_id = ? ORDER BY created_at DESC, id ASC
     `)
     this.stmtUpdateTeamStatus = db.prepare(`
       UPDATE teams SET status = @status, updated_at = @updated_at WHERE id = @id
@@ -1079,7 +1079,11 @@ export class TeamStore implements ITeamStore {
     return rows.reverse().map(rowToActivity)
   }
 
-  getConversationStats(teamId: string, ownAppIds: string[]): { involved: Set<string>; outputCounts: Map<string, number> } {
+  getConversationStats(teamId: string, ownAppIds: string[]): {
+    involved: Set<string>
+    outputCounts: Map<string, number>
+    unansweredDecisionMembers: Map<string, string[]>
+  } {
     const own = JSON.stringify(ownAppIds)
     const involved = ownAppIds.length ? this.db.prepare(`SELECT DISTINCT epoch_id FROM team_activity
       WHERE team_id = ? AND (actor_app_id IN (SELECT value FROM json_each(?)) OR target_app_id IN (SELECT value FROM json_each(?)))
@@ -1089,7 +1093,26 @@ export class TeamStore implements ITeamStore {
       SELECT epoch_id, ref FROM blackboard_findings WHERE team_id = ? AND ref IS NOT NULL AND ref != ''
       UNION SELECT epoch_id, result_ref AS ref FROM blackboard_tasks WHERE team_id = ? AND result_ref IS NOT NULL AND result_ref != ''
     ) GROUP BY epoch_id`).all(teamId, teamId) as { epoch_id: string; count: number }[]
-    return { involved: new Set(involved.map(row => row.epoch_id)), outputCounts: new Map(counts.map(row => [row.epoch_id, row.count])) }
+    const waiting = this.db.prepare(`SELECT DISTINCT request.epoch_id, request.actor_app_id
+      FROM team_activity request
+      JOIN team_members member ON member.team_id = request.team_id AND member.app_id = request.actor_app_id
+      JOIN team_epochs epoch ON epoch.team_id = request.team_id AND epoch.id = request.epoch_id
+      WHERE request.team_id = ? AND request.kind = 'decision' AND request.status = 'escalation'
+        AND request.ref_id IS NOT NULL
+        AND COALESCE(epoch.task_status, 'open') = 'open'
+        AND NOT EXISTS (
+          SELECT 1 FROM team_activity answer
+          WHERE answer.team_id = request.team_id AND answer.epoch_id = request.epoch_id
+            AND answer.kind = 'decision' AND answer.status = 'ok' AND answer.ref_id = request.ref_id
+        )
+      ORDER BY request.epoch_id, request.actor_app_id`).all(teamId) as { epoch_id: string; actor_app_id: string }[]
+    const unansweredDecisionMembers = new Map<string, string[]>()
+    for (const row of waiting) unansweredDecisionMembers.set(row.epoch_id, [...(unansweredDecisionMembers.get(row.epoch_id) ?? []), row.actor_app_id])
+    return {
+      involved: new Set(involved.map(row => row.epoch_id)),
+      outputCounts: new Map(counts.map(row => [row.epoch_id, row.count])),
+      unansweredDecisionMembers,
+    }
   }
 
   listActivityByTeam(teamId: string): TeamActivity[] {

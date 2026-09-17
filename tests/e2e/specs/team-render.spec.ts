@@ -270,7 +270,7 @@ test.describe('Task workbench interaction', () => {
     const room = window.getByRole('region', { name: 'Task room' })
     const picker = room.getByRole('combobox', { name: 'Choose which of your digital humans to talk to' })
     await room.locator('textarea').fill('Keep this Lead draft')
-    await window.getByRole('button', { name: 'Switch to Research', exact: true }).click()
+    await window.getByRole('button', { name: 'View Research’s work in this task', exact: true }).click()
     await expect(picker).toHaveValue('research')
     await expect(room.getByRole('heading', { name: 'Product research', exact: true })).toBeVisible()
     await expect(window.getByRole('button', { name: 'Back to task', exact: true })).toHaveCount(0)
@@ -288,6 +288,28 @@ test.describe('Task workbench interaction', () => {
     await expect(room.getByRole('combobox')).toHaveCount(0)
     await expect(room.locator('textarea')).toBeVisible()
     await window.screenshot({ path: 'tests/e2e/results/team-workbench-single-member.png' })
+  })
+
+  test('a teammate digital human opens the full task view read-only and keeps member details separate', async ({ electronApp, window }) => {
+    await openTeamWorkbench(electronApp, window)
+    const room = window.getByRole('region', { name: 'Task room' })
+    await window.getByRole('button', { name: 'View Remote Analyst’s work in this task', exact: true }).click()
+    await expect(room.locator('textarea')).toHaveCount(0)
+    await expect(room.getByText('Viewing Remote Analyst’s work. Only Taylor can send messages.', { exact: true })).toBeVisible()
+    await expect(room.getByText('Unrelated coordination record', { exact: true })).toBeVisible()
+
+    await window.getByRole('button', { name: 'View Remote Analyst’s member details', exact: true }).click()
+    await expect(window.getByRole('dialog', { name: 'Member details', exact: true })).toBeVisible()
+  })
+
+  test('a teammate decision is visible in context without becoming my action item', async ({ electronApp, window }) => {
+    await openTeamWorkbench(electronApp, window, { remoteDecision: true })
+    const room = window.getByRole('region', { name: 'Task room' })
+    await expect(window.getByRole('navigation', { name: 'Tasks', exact: true }).getByText('Waiting for Taylor’s decision', { exact: true })).toBeVisible()
+    await window.getByRole('button', { name: 'View Remote Analyst’s work in this task', exact: true }).click()
+    await expect(room.getByText('Should Taylor approve the collected evidence before publication?', { exact: true })).toBeVisible()
+    await expect(room.getByText('You can follow this decision here, but only the digital human’s owner can answer it.', { exact: true })).toBeVisible()
+    await expect(room.getByRole('button', { name: /Approve/ })).toHaveCount(0)
   })
 
   test('task selection changes both conversation and activity without losing drafts', async ({ electronApp, window }) => {
@@ -402,18 +424,18 @@ test.describe('Task workbench interaction', () => {
       const room = window.getByRole('region', { name: 'Task room' })
       await expect(room.locator('textarea')).toHaveCount(0)
       await expect(room.getByRole('combobox')).toHaveCount(0)
-      await expect(room.getByText(/read-only/)).toBeVisible()
+      await expect(room.getByText('This task is read-only.', { exact: true })).toBeVisible()
       await room.getByRole('button', { name: 'Task activity', exact: true }).click()
       await expect(window.getByRole('dialog', { name: 'Task activity' })).toBeVisible()
     })
   }
 
-  test('a viewer without owned members sees an honest empty state and can inspect activity', async ({ electronApp, window }) => {
+  test('a viewer without owned members can inspect teammate work but cannot send', async ({ electronApp, window }) => {
     await openTeamWorkbench(electronApp, window, { ownCount: 0 })
     const room = window.getByRole('region', { name: 'Task room' })
     await expect(room.locator('textarea')).toHaveCount(0)
     await expect(room.getByRole('combobox')).toHaveCount(0)
-    await expect(room.getByText('Bring one of your digital humans into this team to start talking.', { exact: true })).toBeVisible()
+    await expect(room.getByText(/Only Teammate can send messages/)).toBeVisible()
     await room.getByRole('button', { name: 'Task activity', exact: true }).click()
     await expect(window.getByRole('dialog', { name: 'Task activity' })).toBeVisible()
   })

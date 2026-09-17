@@ -73,6 +73,43 @@ records the escalation and ends. User response triggers a new run.
 - This is simpler than session hibernation and more resilient to process crashes.
 - V2 could introduce session persistence if needed, but V1 prioritizes robustness.
 
+**The ending is enforced by the runtime, not requested of the model.** The tool result used
+to ask the model to stop; it frequently kept working, acting on the very decision it had
+just said it could not make alone. `escalation-cut.ts` now ends the turn for it, and both
+consumers apply the same rule — `execute.ts` reading the SDK stream, `app-chat-sink.ts`
+observing it for chat and team turns. The cut waits for every tool call the turn issued to
+have its result: a call left without one is a transcript some engines refuse to resume,
+which would strand the conversation the answer is meant to return to. What the model
+produced after asking is discarded.
+
+The two cases differ only in what follows, and the tool result says so: a solo run is
+genuinely suspended on the answer, while a team member keeps being woken by teammates and
+periodic checks, so it is told the answer will arrive as its own wake quoting the question.
+
+**One escalation may ask for several decisions.** `content.questions` carries them, and
+`summary` then frames why they are being asked; a single-decision escalation leaves
+`questions` empty and carries its question in `summary` as before. Because the run ends at
+the escalation, splitting decisions across calls would interrupt the user once per
+question and cost a round trip each — the array is what makes "ask for everything you need
+first" possible. Read the shape through `getEscalationQuestions` and render answers
+through `formatEscalationAnswer` (both in `shared/apps/app-types`, shared with the
+renderer); no caller should branch on which shape was written, and the legacy
+`content.question` field only exists for entries written before it moved into `summary`.
+
+**An app may hold several unanswered questions.** Because the escalating run ends, the app
+is idle from the executor's point of view, and a further trigger can produce a second
+question before the first is answered. Each is an independent `activity_entries` row keyed
+by its own run, and each is answerable in any order; answering one resumes only its own run.
+Two consequences follow:
+- **Automatic triggers stand down while any question is open** (`admitAutomaticRun`). The app
+  asking is the app declaring it cannot proceed alone, so starting the next scheduled or
+  event-driven run would route around the person it just asked. Manual triggers are
+  unaffected — that is the user acting, not the app acting around the user.
+- **Pending questions are resolved by query, never from the app record.** `waiting_user` and
+  `pendingEscalationId` are caches of the same fact and can be stale or absent; the store is
+  the authority (`hasPendingSoloEscalation`). Open questions are
+  discarded only when the app stops for good (paused/error), never on a return to `active`.
+
 ### 2.4 report_to_user as SDK MCP Server
 
 **Decision**: `report_to_user` is implemented as an SDK MCP server using
@@ -117,6 +154,15 @@ the App and unregisters the keep-alive reason.
 **State tracking**: An internal `Map<appId, ActivationState>` tracks the
 scheduler job IDs, event-bus unsubscribe functions, and keep-alive disposer for
 each activated App.
+
+**Startup settles runs a previous process abandoned.** A run leaves `'running'`
+only from inside the process executing it, so a crash or a forced quit strands
+the row claiming to be live — invisible to pruning, and read by the UI as
+neither live nor finished, which leaves the user with no way back into it.
+`activateAll` therefore fails every `'running'` row not backed by a live
+execution and writes it a `run_error` entry, which both restores it to the
+timeline and makes it resumable through `continueFailedRun`. The live-execution
+filter is what keeps the sweep safe if it is ever reached outside startup.
 
 ### 2.8 Trigger Context in Initial Message
 
@@ -337,6 +383,32 @@ Consequences that matter:
 - A round that can never be answered is settled, not left hanging:
   `onConsumerStopped` rejects outstanding rounds when the session dies, and an
   empty interrupted/errored turn rejects rather than leaving an IM stream open.
+- Those cover a session that *reports* its death. A session that simply never
+  produces a turn — a resume against a transcript a crashed process left broken,
+  an engine that failed to launch — reports nothing, and the caller would await a
+  reply that can no longer arrive. `TURN_START_TIMEOUT_MS` bounds that wait, and
+  what it measures is the one thing that distinguishes the two cases: **whether
+  the engine is producing anything at all**. The clock runs only while no turn is
+  running and something is queued; it is cleared for the whole duration of any
+  turn, including one the digital human started itself, which claims no round but
+  is proof of liveness all the same. Keying it on "a round is claimed" instead
+  was a real defect — a message sent during background work was failed while the
+  engine was plainly alive.
+- On expiry the sink stops waiting; it does **not** declare the message
+  undelivered. Acceptance is not observable from here, and a wrongly-confident
+  "not delivered, send it again" invites duplicated work — the worse failure of
+  the two. Supplements injected into a running turn never create a round, so
+  this deadline does not apply to them at all.
+- **Giving up the wait must not give up the queue slot.** The round is settled
+  but stays in the queue, because the turn it was dispatched for may still
+  arrive and ownership here is decided purely by order — removing it shifts
+  every later pairing by one, which is precisely the one-turn-behind defect this
+  module was built to eliminate. The abandoned slot is a marker nobody awaits:
+  when its turn lands it claims that slot and is delivered as an unsolicited
+  reply (so a late answer still reaches the user), and `hasActiveRound` excludes
+  settled slots so the conversation does not read as permanently busy. Contrast
+  `cancel()`, which *does* remove the round — it means the send itself threw, so
+  nothing reached the engine and no turn is owed.
 
 **Generating state moved off `activeSessions`**. App chat no longer registers
 there; `isAppChatConversationGenerating` is the single predicate (queued round OR
@@ -586,6 +658,7 @@ src/main/apps/runtime/
   store.ts                   -- ActivityStore (CRUD for runs and entries)
   prompt.ts                  -- buildAppSystemPrompt() for automation (headless) sessions
   report-tool.ts             -- report_to_user SDK MCP tool
+  escalation-cut.ts          -- when a turn that asked the user may be ended (§2.3); applied by execute.ts and app-chat-sink.ts
   notify-tool.ts             -- halo-notify SDK MCP tool (notify_channel + notify_bot)
   notify-availability.ts     -- resolveNotifyAvailability() — single source of truth for whether notify tools are actually loaded (mirrors notify-tool injection rules; consumed by chat + automation prompts)
   concurrency.ts              -- Counting semaphore

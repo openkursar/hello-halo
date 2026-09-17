@@ -212,19 +212,19 @@ export const MODULE: RouteModuleMeta = {
     'PATCH /api/apps/:appId/overrides': {
       expose: 'ai',
       group: 'digital-human',
-      summary: 'Merge-patch per-installation overrides (frequency, notification level, model)',
+      summary: 'Merge-patch per-installation overrides (notification level, model)',
       body: '{"notificationLevel": "important"}',
       returns: '{success:true}',
-      notes: 'Other fields you can set the same way: frequency (object keyed by subscriptionId), modelSourceId, modelId. JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model).',
+      notes: 'Other fields you can set the same way: modelSourceId, modelId. JSON Merge Patch semantics: send null to clear a field (e.g. {"modelSourceId":null} to fall back to the global model). The run schedule is NOT set here — use POST /:appId/frequency.',
       impact: 'reversible',
     },
     'POST /api/apps/:appId/frequency': {
       expose: 'ai',
       group: 'digital-human',
-      summary: 'Change how often a digital human runs, without editing its full definition (spec)',
+      summary: 'Change how often a digital human runs, without editing the rest of its definition (spec)',
       body: '{"subscriptionId": "<subscriptionId — read app.spec.subscriptions via GET /api/apps/<appId>>", "frequency": "30m"}',
       returns: '{success:true}',
-      notes: 'frequency can also be a cron expression (e.g. "0 8 * * *"). subscriptionId must already exist — read app.spec.subscriptions via GET /:appId first. This sets a non-destructive override; it does not change the spec.',
+      notes: 'frequency can also be a cron expression (e.g. "0 8 * * *"); either one replaces the other. subscriptionId must name an existing schedule subscription — read app.spec.subscriptions via GET /:appId first. This rewrites that subscription\'s schedule in the spec, which is the only interval the scheduler reads and the one the settings panel shows; the rest of the spec is untouched.',
       impact: 'reversible',
     },
     'POST /api/apps/:appId/permissions/grant': {

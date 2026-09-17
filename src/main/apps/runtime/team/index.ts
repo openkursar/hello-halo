@@ -26,6 +26,7 @@ import type {
   EpochEndReason,
   TeamRunTrigger,
   TeamMemberRuntimeStatus,
+  TeamStatus,
   RosterBusyEntry,
   TeamCheck,
   TeamDelegatedPolicy,
@@ -148,6 +149,14 @@ export interface TeamRuntime {
    * the host; never mutates orchestration state.
    */
   getMemberStatus(appId: string): TeamMemberRuntimeStatus
+  /**
+   * The office's status as a viewer observes it, which is NOT the same as the
+   * stored run status: the stored one only tracks the office's own orchestrated
+   * run, so a member working outside one (its own schedule, a 1:1 chat, an IM
+   * turn) leaves the office reading idle. Every surface that shows an office's
+   * status reads it from here, so none of them can disagree.
+   */
+  getObservableStatus(teamId: string): TeamStatus
   /** Live busy assignments (open run/conversations being served) with human labels. */
   getMemberBusy(appId: string, teamId: string): RosterBusyEntry[]
   /**
@@ -292,6 +301,12 @@ export interface CreateTeamRuntimeDeps {
   /** Human name for an IM chatKey (IM session registry). Absent → raw chat id. */
   describeChatKey?: (teamId: string, chatKey: string) => string | null
   /**
+   * The digital human's own description, read from the app record so the roster
+   * can say what a teammate IS, not only what it was assigned here. Blank for a
+   * member owned by another machine. Absent → the roster carries duties only.
+   */
+  getMemberDescription?: (appId: string) => string | null
+  /**
    * The platform scheduler that rings periodic checks for locally-owned members.
    * Absent → checks are still recorded and shared, but nothing wakes (test runtimes).
    */
@@ -374,6 +389,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     hasPendingEscalation: deps.hasPendingEscalation,
     onTaskClosed: deps.onTaskClosed,
     describeChatKey: deps.describeChatKey,
+    getMemberDescription: deps.getMemberDescription,
     renderDigest: (teamId, epochId, viewerAppId) => digest.render({ teamId, epochId, viewerAppId }),
     noteTurnEnded: (input) => turnReport.noteTurnEnded(input),
     // A 'stopped' epoch (pause) is reopenable — noteEpochTurn wakes it back up
@@ -446,6 +462,7 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     getDelegatedPolicy: (teamId, appId) => store.getMember(teamId, appId)?.delegatedPolicy ?? null,
     ...(deps.readArtifact ? { readArtifact: deps.readArtifact } : {}),
     getMemberStatus: memberStatus,
+    getObservableStatus: (teamId) => orchestration!.getObservableStatus(teamId),
     getMemberBusy: (appId, teamId) => orchestration!.getMemberBusy(appId, teamId),
     noteMemberStatusChanged: (teamId) => orchestration!.noteMemberStatusChanged(teamId),
     noteMemberTurnStarted: (params) => turnReport.noteTurnStarted(params),

@@ -108,7 +108,7 @@ subscriptions:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `id` | `string` | No | Unique within the spec. When omitted, the runtime auto-generates `sub-0`, `sub-1`, etc. Used by `userOverrides.frequency[id]` to let users override the schedule. |
+| `id` | `string` | No | Unique within the spec. When omitted, the runtime auto-generates `sub-0`, `sub-1`, etc. Identifies the subscription when a user changes its schedule. |
 | `source` | `SubscriptionSource` | **Yes** | Trigger source — a discriminated union; see 3.2. |
 | `frequency` | `FrequencyDef` | No | User-adjustable frequency range. When set, the UI displays a frequency slider constrained to this range. |
 | `config_key` | `string` | No | References a `config_schema` field key. The user-supplied value is passed as dynamic input to this trigger source (e.g. a URL). Must match an existing key in `config_schema`, otherwise validation fails. |
@@ -133,7 +133,8 @@ source:
 | `cron` | string (≥5 chars) | Standard 5-field cron expression, e.g. `"0 8 * * *"` (daily at 08:00). Mutually exclusive with `every`. |
 
 > **Runtime behavior**: `every` creates a fixed-interval scheduled task; `cron` creates a cron-based
-> scheduled task. Users can override the `every` value via `userOverrides.frequency[subscriptionId]`.
+> scheduled task. A user changing the schedule rewrites these fields, so they are always the
+> interval actually running.
 
 ---
 

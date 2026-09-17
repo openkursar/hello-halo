@@ -89,8 +89,8 @@ POST   /api/apps/<appId>/runs/<runId>/continue                     [ai]       di
 POST   /api/apps/<appId>/runs/<runId>/inject                       [ai]       digital-human           Inject a text message into a currently active run
 GET    /api/apps/<appId>/runs/<runId>/session                      [ai]       digital-human           Read what a run actually did, step by step
 POST   /api/apps/<appId>/config                                    [ai]       digital-human           Replace a digital human's user configuration values
-PATCH  /api/apps/<appId>/overrides                                 [ai]       digital-human           Merge-patch per-installation overrides (frequency, notification level, model)
-POST   /api/apps/<appId>/frequency                                 [ai]       digital-human           Change how often a digital human runs, without editing its full definition (spec)
+PATCH  /api/apps/<appId>/overrides                                 [ai]       digital-human           Merge-patch per-installation overrides (notification level, model)
+POST   /api/apps/<appId>/frequency                                 [ai]       digital-human           Change how often a digital human runs, without editing the rest of its definition (spec)
 POST   /api/apps/<appId>/permissions/grant                         [ai]       digital-human           Grant a named permission to a digital human
 POST   /api/apps/<appId>/upgrade-strategy                          [ai]       digital-human,store     Set how a store-installed digital human handles version upgrades
 POST   /api/apps/<appId>/permissions/revoke                        [ai]       digital-human           Revoke a named permission from a digital human

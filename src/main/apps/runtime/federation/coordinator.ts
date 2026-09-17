@@ -34,7 +34,7 @@ import {
   type M2Frame,
 } from './protocol-m2'
 import { isFeedSyncFrame, type FeedSyncFrame } from './log/types'
-import { SELF_NODE_ID, type TeamMemberRuntimeStatus, type RosterBusyEntry } from '../../../../shared/apps/team-types'
+import { SELF_NODE_ID, type TeamMemberRuntimeStatus, type TeamStatus, type RosterBusyEntry } from '../../../../shared/apps/team-types'
 import {
   PRESENCE_CONFIRMED_OFFLINE_MS,
   PRESENCE_HEARTBEAT_INTERVAL_MS,
@@ -186,6 +186,15 @@ export interface FederationCoordinatorDeps {
    */
   getMemberRuntimeStatus?: (appId: string) => TeamMemberRuntimeStatus
   /**
+   * The office's status as a viewer observes it, which is NOT the stored run
+   * status: that one only tracks the office's own orchestrated run, so a member
+   * working outside one (its own schedule, a 1:1 chat, an IM turn) leaves it
+   * reading idle. Sending the stored value made the host show "working" while
+   * every joiner showed "ready" — and a joiner's list refresh would undo even a
+   * correct local guess. Absent → the stored status (M1 behaviour).
+   */
+  getObservableOfficeStatus?: (officeId: string) => TeamStatus
+  /**
    * Everything a member is serving right now (run + conversations), each with an
    * authority-generated human label, stamped into the roster snapshot so a joiner
    * can say "busy with another conversation" truthfully (P0-2). Read-only
@@ -284,6 +293,7 @@ export function createFederationCoordinator(
     getJoinGrantExtras,
     getCurrentRunEpoch,
     getMemberRuntimeStatus,
+    getObservableOfficeStatus,
     getMemberBusy,
     onNodePresence,
     onNodeAdmitted,
@@ -474,7 +484,9 @@ export function createFederationCoordinator(
         collabMode: (team?.collabMode as 'structured' | 'free') ?? 'structured',
         hostNodeId: context.selfNodeId,
         ...(epochId ? { epochId } : {}),
-        status: team?.status ?? 'idle',
+        // What a viewer observes, not the stored run status — otherwise a
+        // member working outside a run shows on the host and nowhere else.
+        status: getObservableOfficeStatus?.(officeId) ?? team?.status ?? 'idle',
       },
       members,
       edges: teamStore.listEdgesByTeam(officeId).map((e) => ({
@@ -818,7 +830,23 @@ export function createFederationCoordinator(
 
   function handleWake(from: NodeId, msg: WakeFrame): void {
     if (!onWake) {
-      console.warn(`${LOG_TAG} wake for non-owner office=${officeId} corr=${msg.correlationId}; dropping`)
+      // Answer, never just drop. This node consumed the wake off the durable
+      // feed, which retires the sender's give-up deadline — so a silent return
+      // left the sender believing it was delivered, forever, with no record of
+      // the failure on either machine. The member simply read "online, idle"
+      // while the message that was supposed to start it no longer existed
+      // anywhere. An explicit non-delivery is filed as a failed act by the
+      // sender's bus, which is office-shared, so both sides can see it.
+      console.warn(
+        `${LOG_TAG} wake for non-owner office=${officeId} app=${msg.request.appId} ` +
+          `corr=${msg.correlationId}; reporting undelivered`
+      )
+      link.send(from, {
+        kind: 'turn-complete',
+        officeId,
+        correlationId: msg.correlationId,
+        outcome: { kind: 'undelivered', reason: 'not-the-owner' },
+      })
       return
     }
     const corr = msg.correlationId

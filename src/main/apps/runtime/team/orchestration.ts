@@ -25,6 +25,7 @@ import type {
   EpochEndReason,
   EpochOutcome,
   TeamMemberRuntimeStatus,
+  TeamStatus,
   RosterBusyEntry,
 } from '../../../../shared/apps/team-types'
 import type { TeamStore } from '../../team'
@@ -167,6 +168,8 @@ export interface Orchestration {
    */
   buildPromptContext(teamId: string, selfAppId: string): TeamPromptContext | null
   getMemberStatus(appId: string): TeamMemberRuntimeStatus
+  /** The office's status as a viewer observes it (see {@link observableStatus}). */
+  getObservableStatus(teamId: string): TeamStatus
   /**
    * Everything a member is serving right now for one team (open run and/or
    * conversations), each with a human label resolved on this side (P0-2).
@@ -268,6 +271,17 @@ export interface OrchestrationDeps {
    * labeling a conversation a member is busy with. Absent → raw chat id.
    */
   describeChatKey?: (teamId: string, chatKey: string) => string | null
+  /**
+   * What a digital human is in its own right, as its owner wrote it on the app
+   * itself. A duty says what a member does HERE and is routinely left blank, so
+   * without this the roster cannot answer "what can this one even do" — which is
+   * the question that decides who to hand work to.
+   *
+   * Blank for a member on a teammate's machine (the app record lives there) and
+   * for one whose owner wrote nothing. Both mean the roster says less about that
+   * member, never that it carries an empty line.
+   */
+  getMemberDescription?: (appId: string) => string | null
   /**
    * What the member being woken has missed since it last looked at the board,
    * or null when there is nothing to say. Rendered into the turn's INPUT (see
@@ -1448,9 +1462,13 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       .filter((m) => m.appId !== selfAppId)
       .map((m) => {
         const remote = isRemoteMember(m)
+        const description = deps.getMemberDescription?.(m.appId)?.trim()
         return {
           memberName: m.memberName,
           role: m.role,
+          // Omitted rather than nulled when there is nothing to say, so the
+          // renderer never has to decide whether a blank line means anything.
+          ...(description ? { description } : {}),
           duty: m.duty ?? null,
           isLead: m.isLead,
           contactable:
@@ -1516,6 +1534,47 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     return 'idle'
   }
 
+  /**
+   * Is anyone in this office actively serving a turn right now?
+   *
+   * The team list needs this one boolean per office, and asking
+   * `getMemberStatus` member by member re-reads the roster and the open epochs
+   * once per member. This walks the office's epochs once, so the list stays
+   * flat in the number of members — a 22-member office costs the same as a
+   * 3-member one.
+   *
+   * Deliberately the same occupancy question `getMemberStatus` asks, so the
+   * card and the member avatars can never disagree about who is working.
+   */
+  function hasWorkingMember(teamId: string): boolean {
+    const epochs = store.listOpenEpochs(teamId)
+    if (epochs.length === 0) return false
+    for (const member of store.listMembersByTeam(teamId)) {
+      for (const epoch of epochs) {
+        if (isSessionOccupied(buildTeamSessionKey(member.appId, teamId, epoch.id))) return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * The office's status as a viewer can observe it, and the ONLY place that
+   * rule lives — the list read and every pushed update both come through here,
+   * so a card can never disagree with the update that refreshed it.
+   *
+   * The stored status tracks the office's own orchestrated run. A member
+   * working outside one (its own schedule, a 1:1 chat, an IM turn) left the
+   * office reading idle while that member's avatar was visibly running. Live
+   * occupancy only ever answers "is anyone working"; the stored status still
+   * owns what a live read cannot see (a decision owed, a failed run), so
+   * anything other than idle wins over it.
+   */
+  function observableStatus(teamId: string): TeamStatus {
+    const stored = store.getTeamById(teamId)?.status ?? 'idle'
+    if (stored !== 'idle') return stored
+    return hasWorkingMember(teamId) ? 'running' : 'idle'
+  }
+
   /** Every open epoch this member is actively serving, with a human label (P0-2). */
   function getMemberBusy(appId: string, teamId: string): RosterBusyEntry[] {
     const out: RosterBusyEntry[] = []
@@ -1543,7 +1602,12 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
 
   function emitTeamUpdated(teamId: string): void {
     const team = store.getTeamById(teamId)
-    const payload = team ? { teamId, team } : { teamId, removed: true }
+    // `team.status` is the persisted run status; `liveStatus` is what the card
+    // shows. Without it a push would reset a working office back to idle, since
+    // the row it carries knows nothing about turns run outside its own run.
+    const payload = team
+      ? { teamId, team, liveStatus: observableStatus(teamId) }
+      : { teamId, removed: true }
     broadcastToAll(TEAM_EVENTS.updated, payload)
     sendToRenderer(TEAM_EVENTS.updated, payload)
   }
@@ -1581,6 +1645,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     captureReport,
     buildPromptContext,
     getMemberStatus,
+    getObservableStatus: observableStatus,
     getMemberBusy,
     noteMemberStatusChanged: notifyMemberStatusChanged,
     reconcileAwaitingDecision,
