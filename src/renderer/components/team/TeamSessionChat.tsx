@@ -13,6 +13,7 @@ import { invalidateTeamSessionHistory, loadTeamSessionHistory, matchesTeamHistor
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Loader2, AlertCircle, LockKeyhole, MessageSquareMore } from 'lucide-react'
 import { api } from '../../api'
+import { usePeopleViewStore } from '../../stores/people-view.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useSmartScroll } from '../../hooks/useSmartScroll'
 import { MessageRow } from '../chat/MessageRow'
@@ -93,6 +94,8 @@ export function TeamSessionChat({
    */
   const [deliveredNoReply, setDeliveredNoReply] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const restoredScroll = useRef(false)
+  const savedScroll = useRef(usePeopleViewStore.getState().scrolls[`team-chat:${conversationId}`])
 
   const session = useChatStore(s => s.getSession(conversationId))
   const resetSession = useChatStore(s => s.resetSession)
@@ -110,6 +113,15 @@ export function TeamSessionChat({
   })
 
   const streamingBrowserToolCalls = useBrowserToolCalls(thoughts)
+
+  useEffect(() => {
+    if (restoredScroll.current || (loadState !== 'loaded' && loadState !== 'empty') || !scrollRef.current) return
+    restoredScroll.current = true
+    if (savedScroll.current !== undefined) {
+      scrollRef.current.scrollTop = savedScroll.current
+      handleScroll()
+    }
+  }, [loadState, messages, handleScroll])
 
   const inputIdentity = useRef({ appId, epochId, key: draftKey ?? conversationId })
   if (inputIdentity.current.appId !== appId || inputIdentity.current.epochId !== epochId) {
@@ -398,7 +410,7 @@ export function TeamSessionChat({
           <span className="text-sm">{t('Loading chat...')}</span>
         </div>
       ) : (
-        <div ref={scrollRef} className="flex-1 overflow-y-auto" onScroll={handleScroll}>
+        <div ref={scrollRef} className="flex-1 overflow-y-auto" onScroll={event => { handleScroll(); if (restoredScroll.current) usePeopleViewStore.getState().saveScroll(`team-chat:${conversationId}`, event.currentTarget.scrollTop) }}>
           <div className="mx-auto max-w-3xl px-4 py-5">
             {topSlot}
 

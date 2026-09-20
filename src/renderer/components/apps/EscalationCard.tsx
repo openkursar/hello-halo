@@ -1,21 +1,9 @@
-/**
- * EscalationCard
- *
- * Renders an escalation activity entry that requires user action.
- * - Unresolved: shows the question(s), preset choices, and a free-text input
- * - Resolved: shows a summary of the question + the user's answer
- *
- * An escalation may ask for several decisions at once. They are answered
- * together and sent as one response — asking them one per card would interrupt
- * the user once per question, which is the reason the multi-question shape
- * exists at all.
- */
-
-import { useState } from 'react'
-import { Loader2, MessageSquare, CheckCircle2, ChevronDown, FileText, FolderOpen } from 'lucide-react'
-import type { ActivityEntry, EscalationAnswer, EscalationAnswerPayload, EscalationQuestion } from '../../../shared/apps/app-types'
+import { useEffect, useState } from 'react'
+import { Loader2, CheckCircle2, ChevronDown, AlertCircle, FileText } from 'lucide-react'
+import type { ActivityEntry, EscalationAnswer } from '../../../shared/apps/app-types'
 import { getEscalationQuestions, formatEscalationAnswer } from '../../../shared/apps/app-types'
 import { useAppsStore } from '../../stores/apps.store'
+import { usePeopleViewStore } from '../../stores/people-view.store'
 import { useTranslation } from '../../i18n'
 import { useDataContent } from '../../hooks/useDataContent'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
@@ -28,295 +16,87 @@ interface EscalationCardProps {
   compactResolved?: boolean
 }
 
-function isAnswered(answer: EscalationAnswer | undefined): boolean {
-  return !!(answer?.choice || answer?.text?.trim())
-}
-
 export function EscalationCard({ entry, appId, onResolved, compactResolved = false }: EscalationCardProps) {
   const { t } = useTranslation()
-  const { respondToEscalation } = useAppsStore()
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [submitError, setSubmitError] = useState(false)
-
-  const [savedEntry, setSavedEntry] = useState<ActivityEntry | null>(null)
-  const response = entry.userResponse ?? savedEntry?.userResponse
-  const closed = !!entry.content.resolution
-  const resolved = !!response || closed
-  const questions = getEscalationQuestions(entry.content)
-  const multi = questions.length > 1
-  // With several questions `summary` is the framing that introduces them; with
-  // one it IS the question, already carried by questions[0].
-  const heading = multi ? entry.content.summary : questions[0].question
-  const data = useDataContent(entry.content)
-
-  const [drafts, setDrafts] = useState<EscalationAnswer[]>(() => questions.map(() => ({})))
-
-  function setDraft(index: number, answer: EscalationAnswer) {
-    setDrafts(prev => prev.map((draft, i) => (i === index ? answer : draft)))
-  }
-
-  async function submit(payload: EscalationAnswerPayload) {
-    if (isSubmitting) return
-    setIsSubmitting(true)
-    setSubmitError(false)
+  const cached = useAppsStore(state => state.activityEntries[appId]?.find(item => item.id === entry.id))
+  const current = cached ?? entry
+  const questions = getEscalationQuestions(current.content)
+  const key = `${appId}:${entry.id}`
+  const drafts = usePeopleViewStore(state => state.drafts[key]) ?? []
+  const saveDraft = usePeopleViewStore(state => state.saveDraft)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState(false)
+  const [operationFailed, setOperationFailed] = useState(false)
+  const [fileError, setFileError] = useState(false)
+  const [deadline, setDeadline] = useState('')
+  const [confirmClose, setConfirmClose] = useState(false)
+  const response = current.userResponse
+  const resolution = current.content.resolution
+  const resolved = !!response || !!resolution
+  const data = useDataContent(current.content)
+  const continuation = current.continuation
+  const complete = questions.every((_, index) => !!(drafts[index]?.choice || drafts[index]?.text?.trim()))
+  const refresh = () => Promise.all([useAppsStore.getState().loadActivity(appId), useAppsStore.getState().loadPending(appId), useAppsStore.getState().loadAppState(appId)])
+  const changeAnswer = (index: number, answer: EscalationAnswer) => saveDraft(key, questions.map((_, position) => position === index ? answer : drafts[position] ?? {}))
+  useEffect(() => { setError(false) }, [entry.id])
+  const submit = async () => {
+    setOperationFailed(false)
+    if (submitting || !complete || resolved) return
+    setSubmitting(true); setError(false)
     try {
-      const ok = await respondToEscalation(appId, entry.id, payload)
-      setSubmitError(!ok)
+      const answers = questions.map((_, index) => ({ ...drafts[index], ...(drafts[index]?.text ? { text: drafts[index].text!.trim() } : {}) }))
+      const ok = await useAppsStore.getState().respondToEscalation(appId, entry.id, questions.length > 1 ? { answers } : answers[0])
+      setError(!ok)
       if (ok) {
-        const answered = { ...entry, userResponse: { ts: Date.now(), ...payload } }
-        setSavedEntry(answered)
-        onResolved?.(answered)
+        usePeopleViewStore.getState().clearDraft(key)
+        const saved = useAppsStore.getState().activityEntries[appId]?.find(item => item.id === entry.id)
+        if (saved) onResolved?.(saved)
       }
-    } finally { setIsSubmitting(false) }
+    } finally { setSubmitting(false) }
   }
-
-  if (resolved) {
-    const userAnswer = response ? formatEscalationAnswer(questions, response) : ''
-    return <details open={compactResolved ? undefined : true} className="group/decision rounded-xl border border-border bg-secondary/20">
-      <summary className="cursor-pointer list-none rounded-xl p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
-        <span className="flex items-center gap-2 text-xs text-muted-foreground">
-          <CheckCircle2 size={15} className={closed ? "shrink-0 text-muted-foreground" : "shrink-0 text-halo-success"} />
-          <span>{closed ? t('Closed') : t('Answered')}</span>
-          {response && Number.isFinite(new Date(response.ts).getTime()) && <time dateTime={new Date(response.ts).toISOString()} title={new Date(response.ts).toLocaleString()} className="ml-auto tabular-nums">{new Date(response.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>}
-          <ChevronDown size={14} className="shrink-0 transition-transform group-open/decision:rotate-180" />
-        </span>
-        <span className="mt-2 block whitespace-pre-wrap break-words text-sm">{closed ? t('This request was closed when the task ended.') : <>{t('Your response')}: <span className="font-medium">{userAnswer}</span></>}</span>
-        <span className="mt-2 block text-xs text-primary group-open/decision:hidden">{t('View original question')}</span>
-      </summary>
-      <div className="space-y-3 border-t border-border p-3 text-sm [overflow-wrap:anywhere]">
-        <p className="whitespace-pre-wrap">{heading}</p>
-        {entry.content.dataPath && <button onClick={() => api.showArtifactInFolder(entry.content.dataPath!)} className="flex max-w-full items-center gap-2 rounded-lg bg-secondary px-2 py-1 text-xs text-muted-foreground"><FileText size={13} className="shrink-0" /><span className="truncate">{entry.content.dataPath.split('/').pop()}</span><FolderOpen size={13} className="shrink-0" /></button>}
-        {data && <MarkdownRenderer content={data} className="text-sm" />}
-      </div>
+  const perform = async (operation: () => Promise<{ success: boolean; error?: string }>) => {
+    setOperationFailed(true)
+    if (submitting) return
+    setSubmitting(true); setError(false)
+    try {
+      const result = await operation()
+      if (!result.success) {
+        console.warn('[EscalationCard] Decision operation rejected', { appId, entryId: entry.id, error: result.error })
+        setError(true)
+      }
+      await refresh()
+    } catch (cause) {
+      console.warn('[EscalationCard] Decision operation failed', { appId, entryId: entry.id, cause })
+      setError(true)
+    } finally { setSubmitting(false) }
+  }
+  if (resolved) return <div className="space-y-3">
+    <details open={compactResolved ? undefined : true} className="group/decision rounded-xl border border-border bg-secondary/20">
+      <summary className="cursor-pointer list-none rounded-xl p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"><span className="flex items-center gap-2 text-xs text-muted-foreground"><CheckCircle2 size={15} className={resolution ? 'text-muted-foreground' : 'text-halo-success'} /><span>{resolution ? resolution.reason === 'expired' ? t('Expired') : t('Closed') : t('Answered')}</span><span className="ml-auto">{new Date(response?.ts ?? resolution!.ts).toLocaleString()}</span><ChevronDown size={14} /></span>
+        <span className="mt-2 block whitespace-pre-wrap break-words text-sm">{resolution ? resolution.reason === 'expired' ? t('The deadline passed without an answer.') : resolution.reason === 'legacy_system_closed' ? t('Historical closure (source unverified)') : t('This request was closed when the task ended.') : <>{t('Your response')}: {formatEscalationAnswer(questions, response!)}</>}</span>
+      </summary><div className="space-y-3 border-t border-border p-3 text-sm"><p className="whitespace-pre-wrap break-words">{current.content.summary}</p>{resolution?.legacyText && <p className="whitespace-pre-wrap break-words text-xs text-muted-foreground">{t('Original record')}: {resolution.legacyText}</p>}{questions.length > 1 && questions.map((question, index) => <p key={index} className="whitespace-pre-wrap">{question.question}</p>)}{data && <MarkdownRenderer content={data} className="text-sm" />}</div>
     </details>
-  }
-
-  // Asked over the questions, not the drafts: a draft list shorter than the
-  // questions would otherwise read as complete and send a partial answer.
-  const allAnswered = questions.every((_, index) => isAnswered(drafts[index]))
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 border border-halo-warning/40 rounded-lg p-3 bg-halo-warning/5">
-      {isSubmitting && <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 size={13} className="animate-spin" />{t('Sending your answer…')}</p>}
-      {submitError && <p role="alert" className="text-xs text-destructive">{t('Could not send your answer. Please try again.')}</p>}
-      {/* Question + data scroll when long, so the actions below stay in view.
-          break-words keeps unbroken tokens (constant names, URLs) inside the card. */}
-      <div className="min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto break-words">
-        {/* Question, or the line framing the several that follow */}
-        <div className="flex items-start gap-2">
-          <MessageSquare className="w-3.5 h-3.5 text-halo-warning mt-0.5 flex-shrink-0" />
-          <p className="min-w-0 text-sm text-foreground">{heading}</p>
-        </div>
-
-        {/* Detailed context data */}
-        {entry.content.dataPath ? (
-          <div className="rounded-md border border-border overflow-hidden">
-            <button
-              onClick={() => api.showArtifactInFolder(entry.content.dataPath!)}
-              title={entry.content.dataPath}
-              className="w-full flex items-center gap-1.5 px-2.5 py-1.5
-                bg-secondary/60 hover:bg-secondary text-muted-foreground
-                text-[11px] font-mono transition-colors group border-b border-border"
-            >
-              <FileText className="w-3 h-3 flex-shrink-0" />
-              <span className="truncate">{entry.content.dataPath.split('/').pop()}</span>
-              <FolderOpen className="w-3 h-3 flex-shrink-0 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
-            </button>
-            {data && (
-              <div className="p-3">
-                <MarkdownRenderer content={data} className="text-sm" />
-              </div>
-            )}
-          </div>
-        ) : data ? (
-          <MarkdownRenderer content={data} className="text-sm" />
-        ) : null}
-
-        {/* Each decision, when there is more than one. A single question needs
-            no restating — the heading above already is it. */}
-        {multi && (
-          <div className="space-y-3">
-            {questions.map((question, index) => (
-              <QuestionFields
-                key={index}
-                index={index}
-                question={question}
-                answer={drafts[index] ?? {}}
-                disabled={isSubmitting}
-                onChange={answer => setDraft(index, answer)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      {multi ? (
-        <div className="flex shrink-0 items-center gap-2">
-          {!allAnswered && <span className="text-xs text-muted-foreground">{t('Answer every question to send')}</span>}
-          <button
-            onClick={() => submit({
-              answers: questions.map((_, index) => {
-                const draft = drafts[index] ?? {}
-                const text = draft.text?.trim()
-                return { ...(draft.choice ? { choice: draft.choice } : {}), ...(text ? { text } : {}) }
-              }),
-            })}
-            disabled={isSubmitting || !allAnswered}
-            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
-            {isSubmitting && <Loader2 className="w-3 h-3 animate-spin" />}
-            {t('Send')}
-          </button>
-        </div>
-      ) : (
-        <SingleAnswerFields
-          question={questions[0]}
-          disabled={isSubmitting}
-          onSubmit={submit}
-        />
-      )}
-    </div>
-  )
-}
-
-/**
- * The one-question layout, kept as it was: a preset choice is the answer, so
- * clicking it sends immediately rather than asking for a second confirming tap.
- */
-function SingleAnswerFields({
-  question,
-  disabled,
-  onSubmit,
-}: {
-  question: EscalationQuestion
-  disabled: boolean
-  onSubmit: (payload: EscalationAnswerPayload) => void
-}) {
-  const { t } = useTranslation()
-  const choices = question.choices ?? []
-  const [showTextInput, setShowTextInput] = useState(false)
-  const [customText, setCustomText] = useState('')
-  const [selectedChoice, setSelectedChoice] = useState<string | null>(null)
-
-  return (
-    <>
-      {choices.length > 0 && !showTextInput && (
-        <div className="flex shrink-0 flex-wrap gap-2">
-          {choices.map(choice => (
-            <button
-              key={choice}
-              onClick={() => { setSelectedChoice(choice); onSubmit({ choice }) }}
-              aria-pressed={selectedChoice === choice}
-              disabled={disabled}
-              className={`px-3 py-1.5 text-xs border rounded-lg hover:bg-secondary transition-colors disabled:opacity-50 ${selectedChoice === choice ? 'border-primary bg-primary/5' : 'border-border'}`}
-            >
-              {choice}
-            </button>
-          ))}
-          <button
-            onClick={() => setShowTextInput(true)}
-            disabled={disabled}
-            className="px-3 py-1.5 text-xs border border-border rounded-lg hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50"
-          >
-            {t('Type a response')} ▾
-          </button>
-        </div>
-      )}
-
-      {(choices.length === 0 || showTextInput) && (
-        <div className="shrink-0 space-y-2">
-          <textarea
-            value={customText}
-            onChange={e => setCustomText(e.target.value)}
-            placeholder={t('Type your response...')}
-            rows={2}
-            className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/50"
-            disabled={disabled}
-            autoFocus={showTextInput}
-          />
-          <div className="flex items-center gap-2">
-            {choices.length > 0 && (
-              <button
-                onClick={() => { setShowTextInput(false); setCustomText('') }}
-                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-              >
-                ← {t('Back')}
-              </button>
-            )}
-            <button
-              onClick={() => { if (customText.trim()) onSubmit({ text: customText.trim() }) }}
-              disabled={disabled || !customText.trim()}
-              className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
-              {t('Send')}
-            </button>
-          </div>
-        </div>
-      )}
-    </>
-  )
-}
-
-/** One decision inside a multi-question escalation: selected, not yet sent. */
-function QuestionFields({
-  index,
-  question,
-  answer,
-  disabled,
-  onChange,
-}: {
-  index: number
-  question: EscalationQuestion
-  answer: EscalationAnswer
-  disabled: boolean
-  onChange: (answer: EscalationAnswer) => void
-}) {
-  const { t } = useTranslation()
-  const choices = question.choices ?? []
-  const [showTextInput, setShowTextInput] = useState(choices.length === 0)
-
-  return (
-    <div className="rounded-lg border border-border bg-background/60 p-2.5 sm:p-3">
-      <p className="flex gap-2 text-sm text-foreground">
-        <span className="shrink-0 tabular-nums text-muted-foreground">{index + 1}.</span>
-        <span className="min-w-0">{question.question}</span>
-      </p>
-
-      {choices.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-2">
-          {choices.map(choice => (
-            <button
-              key={choice}
-              onClick={() => { setShowTextInput(false); onChange({ choice }) }}
-              aria-pressed={answer.choice === choice}
-              disabled={disabled}
-              className={`px-3 py-1.5 text-xs border rounded-lg hover:bg-secondary transition-colors disabled:opacity-50 ${answer.choice === choice ? 'border-primary bg-primary/5' : 'border-border'}`}
-            >
-              {choice}
-            </button>
-          ))}
-          {!showTextInput && (
-            <button
-              onClick={() => { setShowTextInput(true); onChange({}) }}
-              disabled={disabled}
-              className="px-3 py-1.5 text-xs border border-border rounded-lg hover:bg-secondary transition-colors text-muted-foreground disabled:opacity-50"
-            >
-              {t('Type a response')} ▾
-            </button>
-          )}
-        </div>
-      )}
-
-      {showTextInput && (
-        <textarea
-          value={answer.text ?? ''}
-          onChange={e => onChange({ text: e.target.value })}
-          placeholder={t('Type your response...')}
-          rows={2}
-          className="mt-2 w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg resize-none focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/50"
-          disabled={disabled}
-        />
-      )}
-    </div>
-  )
+    {response && <div role="status" className="rounded-lg bg-secondary/40 p-3 text-xs text-muted-foreground">{continuation?.status === 'queued' ? t('Answer received. Waiting to continue the original work.') : continuation?.status === 'running' ? t('Answer received. The original work is continuing.') : continuation?.status === 'failed' ? t('Your answer is saved, but the work could not continue.') : continuation?.status === 'completed' ? t('The work continued after your answer.') : continuation?.status === 'cancelled' ? t('Your answer is saved. The task has since closed.') : t('Your answer has been received.')}
+      {continuation?.status === 'failed' && <><p className="mt-2 break-words">{continuation.error}</p><button disabled={submitting} onClick={() => void perform(() => api.appRetryEscalationContinuation(appId, entry.id))} className="mt-2 min-h-8 text-primary disabled:opacity-50">{t('Retry continuing')}</button></>}
+    </div>}
+    {drafts.some(answer => answer.text || answer.choice) && <details className="text-xs text-muted-foreground"><summary>{t('Your unsent draft was preserved')}</summary><p className="whitespace-pre-wrap break-words">{drafts.map(answer => answer.text ?? answer.choice).join('\n')}</p></details>}
+    {error && <p role="alert" className="text-xs text-destructive">{t('Could not apply this action. Please try again.')}</p>}
+  </div>
+  return <div className="space-y-4 rounded-xl border border-halo-warning/30 bg-halo-warning/5 p-4">
+    <p className="whitespace-pre-wrap break-words text-sm font-medium">{current.content.summary}</p>
+    {current.content.dataPath && <button onClick={async () => {
+      setFileError(false)
+      try {
+        if (api.isRemoteMode()) api.downloadArtifact(current.content.dataPath!)
+        else { const result = await api.showArtifactInFolder(current.content.dataPath!); if (!result.success) throw new Error(result.error ?? 'File opening rejected') }
+      } catch (cause) { console.warn('[EscalationCard] Evidence file could not open', { appId, entryId: entry.id, cause }); setFileError(true) }
+    }} className="flex min-h-8 max-w-full items-center gap-2 text-xs text-primary"><FileText size={14} className="shrink-0" /><span className="truncate">{current.content.dataPath.split('/').pop()}</span></button>}
+    {data && <MarkdownRenderer content={data} className="text-sm" />}
+    {fileError && <p role="alert" className="text-xs text-destructive">{t('Could not open this file. Please try again.')}</p>}
+    {current.content.deadlineReviewRequired && <div className="space-y-3 rounded-lg border border-halo-warning/30 bg-background p-3"><p className="flex items-start gap-2 text-xs text-halo-warning"><AlertCircle size={15} className="shrink-0" />{t('This request has a deadline from an earlier version. Confirm a new deadline before answering.')}</p><input type="datetime-local" aria-label={t('New deadline')} value={deadline} onChange={event => setDeadline(event.target.value)} className="max-w-full rounded border border-border bg-background p-2 text-xs" /><div className="flex flex-wrap gap-3"><button disabled={submitting || !deadline || new Date(deadline).getTime() <= Date.now()} onClick={() => void perform(() => api.appConfirmEscalationDeadline(appId, entry.id, new Date(deadline).getTime()))} className="min-h-8 text-xs text-primary disabled:opacity-50">{t('Confirm new deadline')}</button><button disabled={submitting} onClick={() => void perform(() => api.appConfirmEscalationDeadline(appId, entry.id, null))} className="min-h-8 text-xs text-primary">{t('Keep without a deadline')}</button></div></div>}
+    {!current.content.deadlineReviewRequired && questions.map((question, index) => <div key={index} className="space-y-2">{questions.length > 1 && <p className="text-sm">{question.question}</p>}<div className="flex flex-wrap gap-2">{question.choices?.map(choice => <button key={choice} aria-pressed={drafts[index]?.choice === choice} disabled={submitting} onClick={() => changeAnswer(index, { choice })} className={`min-h-9 rounded-lg border px-3 py-2 text-left text-xs ${drafts[index]?.choice === choice ? 'border-primary bg-primary/10' : 'border-border bg-background'}`}>{choice}</button>)}</div><textarea aria-label={question.question} placeholder={t('Type your response...')} value={drafts[index]?.text ?? ''} disabled={submitting} onChange={event => changeAnswer(index, { text: event.target.value })} rows={2} className="w-full resize-y rounded-lg border border-border bg-background p-3 text-sm" /></div>)}
+    {error && <p role="alert" className="text-xs text-destructive">{operationFailed ? t('Could not apply this change. Your answer and draft are preserved. Check the current status and retry.') : t('Could not confirm receipt of your answer. Your draft is preserved. Check the current status and retry.')}</p>}
+    {!current.content.teamContext && current.content.source?.kind !== 'team' && <div className="border-t border-border pt-3 text-xs">{confirmClose ? <><p className="mb-2 text-muted-foreground">{t('Close this independent work and all its unanswered requests? Other work is unaffected.')}</p><button disabled={submitting} onClick={() => void perform(() => api.appCloseRun(appId, entry.runId))} className="mr-4 min-h-8 text-destructive">{t('Close this work')}</button><button onClick={() => setConfirmClose(false)} className="min-h-8 text-muted-foreground">{t('Cancel')}</button></> : <button onClick={() => setConfirmClose(true)} className="min-h-8 text-muted-foreground hover:text-destructive">{t('Close this work…')}</button>}</div>}
+    <div className="flex flex-wrap items-center justify-between gap-3"><span className="text-xs text-muted-foreground">{questions.length > 1 && !complete ? t('Answer every question to send') : t('Only this work will continue. Automatic tasks remain unchanged.')}</span><button disabled={submitting || !complete || !!current.content.deadlineReviewRequired} onClick={() => void submit()} className="flex min-h-10 items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs text-primary-foreground disabled:opacity-50">{submitting && <Loader2 size={14} className="animate-spin" />}{submitting ? t('Sending your answer…') : t('Submit and continue this work')}</button></div>
+  </div>
 }

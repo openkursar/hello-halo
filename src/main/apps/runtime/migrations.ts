@@ -131,5 +131,89 @@ export const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 7,
+    description: 'Durable decision continuations, independent deadlines and retained migration audit',
+    up(db) {
+      db.exec(`
+        ALTER TABLE automation_runs ADD COLUMN environment_json TEXT;
+        ALTER TABLE automation_runs ADD COLUMN stopped_at INTEGER;
+        CREATE TABLE app_session_environments (
+          session_key TEXT PRIMARY KEY,
+          app_id TEXT NOT NULL REFERENCES installed_apps(id) ON DELETE CASCADE,
+          environment_json TEXT NOT NULL
+        );
+        CREATE TABLE runtime_closed_runs (run_id TEXT PRIMARY KEY, closed_at INTEGER NOT NULL);
+        CREATE TABLE decision_continuations (
+          entry_id TEXT PRIMARY KEY REFERENCES activity_entries(id) ON DELETE CASCADE,
+          app_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'queued',
+          attempts INTEGER NOT NULL DEFAULT 0,
+          receipt_published INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL,
+          error TEXT
+        );
+        CREATE INDEX idx_continuations_pending ON decision_continuations(status, updated_at);
+        CREATE INDEX idx_continuations_app ON decision_continuations(app_id, status);
+        CREATE TABLE runtime_legacy_deadlines (
+          app_id TEXT PRIMARY KEY,
+          timeout_hours REAL NOT NULL
+        );
+        INSERT INTO runtime_legacy_deadlines SELECT id,
+          COALESCE(json_extract(spec_json, '$.escalation.timeout_hours'), 24)
+          FROM installed_apps WHERE json_extract(spec_json, '$.type') = 'automation';
+        CREATE TABLE runtime_decision_migration_backup AS
+          SELECT id, content_json, user_response_json FROM activity_entries;
+      `)
+      const now = Date.now()
+      type LegacyEntry = {
+        id: string; app_id: string; run_id: string; session_key: string | null;
+        run_session_key: string | null; type: string; ts: number; entry_rowid: number;
+        content_json: string; user_response_json: string | null; timeout_hours: number | null
+      }
+      const entries = db.prepare(`SELECT e.*, e.rowid AS entry_rowid, r.session_key AS run_session_key,
+        l.timeout_hours FROM activity_entries e
+        LEFT JOIN automation_runs r ON r.run_id = e.run_id
+        LEFT JOIN runtime_legacy_deadlines l ON l.app_id = e.app_id
+        WHERE e.rowid > ? ORDER BY e.rowid LIMIT 200`)
+      const update = db.prepare('UPDATE activity_entries SET content_json = ?, user_response_json = ? WHERE id = ?')
+      let migrated = 0
+      let cursor = 0
+      for (;;) {
+        const rows = entries.all(cursor) as LegacyEntry[]
+        if (rows.length === 0) break
+        for (const row of rows) {
+          migrated++
+          const content = JSON.parse(row.content_json)
+          const team = content.teamContext
+          content.source ??= team?.teamId && team?.epochId
+            ? { kind: 'team', appId: row.app_id, teamId: team.teamId, epochId: team.epochId, taskId: team.taskId, memberId: row.app_id, sessionKey: row.session_key ?? undefined }
+            : row.run_session_key
+              ? { kind: 'automation', appId: row.app_id, runId: row.run_id, sessionKey: row.run_session_key }
+              : { kind: 'unknown', appId: row.app_id, sessionKey: row.session_key ?? undefined }
+          let response = row.user_response_json
+          if (row.type === 'escalation' && response) {
+            const answer = JSON.parse(response)
+            const exactSystemResponse = answer.text === '[Auto-closed] Escalation orphaned by app state change.' ||
+              /^\[Auto-closed\] User did not respond within \d+(?:\.\d+)? (?:day\(s\)|hour\(s\))\.$/.test(answer.text ?? '')
+            if (exactSystemResponse && typeof answer.ts === 'number' && !answer.choice && !answer.answers && Object.keys(answer).every(key => key === 'text' || key === 'ts')) {
+              content.resolution = { reason: 'legacy_system_closed', ts: answer.ts, legacyText: answer.text, attribution: 'unverified' }
+              response = null
+            }
+          }
+          if (row.type === 'escalation' && !response && !content.resolution && !team && row.timeout_hours != null) {
+            content.deadlineAt = row.ts + row.timeout_hours * 3600000
+            if (content.deadlineAt <= now) {
+              content.deadlineReviewRequired = true
+              content.deadlineReview = { originalDeadlineAt: content.deadlineAt }
+            }
+          }
+          update.run(JSON.stringify(content), response, row.id)
+          cursor = row.entry_rowid
+        }
+      }
+      console.log('[Runtime] Decision migration completed', { entries: migrated, auditTable: 'runtime_decision_migration_backup' })
+    },
+  },
 
 ]

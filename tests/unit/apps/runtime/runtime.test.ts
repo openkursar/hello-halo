@@ -974,181 +974,6 @@ describe('ActivityStore', () => {
     })
   })
 
-  // ── Orphan Escalation Cleanup ──────────────────
-
-  describe('closeOrphanEscalations', () => {
-    it('keeps independent team questions when another question is answered or solo cleanup runs', () => {
-      const runId = createTestRunId()
-      store.insertRun({ runId, appId: testAppId, sessionKey: 'team-session', status: 'running', triggerType: 'manual', startedAt: 1000 })
-      for (const epochId of ['task-a', 'task-b']) {
-        store.insertEntry({ id: epochId, appId: testAppId, runId, type: 'escalation', ts: 1000,
-          content: { summary: epochId, question: epochId, teamContext: { teamId: 'team', epochId } } })
-      }
-      expect(store.closeOrphanEscalations(testAppId, 'task-b')).toBe(0)
-      store.updateEntryResponse('task-b', { ts: 2000, text: 'Approved B' })
-      expect(store.closeOrphanEscalations(testAppId)).toBe(0)
-      expect(store.getEntry('task-a')!.userResponse).toBeFalsy()
-      expect(store.getEntry('task-b')!.userResponse!.text).toBe('Approved B')
-    })
-
-    it('should close orphan entries while keeping the active entry open', () => {
-      const activeEntryId = randomUUID()
-      const orphanEntryId = randomUUID()
-      const runId1 = createTestRunId()
-      const runId2 = createTestRunId()
-
-      // Insert a run for each entry
-      store.insertRun({
-        runId: runId1,
-        appId: testAppId,
-        sessionKey: 'sess-1',
-        status: 'running',
-        triggerType: 'schedule',
-        startedAt: 1000,
-      })
-      store.insertRun({
-        runId: runId2,
-        appId: testAppId,
-        sessionKey: 'sess-2',
-        status: 'running',
-        triggerType: 'schedule',
-        startedAt: 2000,
-      })
-
-      // Orphan: old pending escalation from a previous run
-      store.insertEntry({
-        id: orphanEntryId,
-        appId: testAppId,
-        runId: runId1,
-        type: 'escalation',
-        ts: 1000,
-        content: { summary: 'Old question', question: 'Old?' },
-      })
-
-      // Active: current pending escalation
-      store.insertEntry({
-        id: activeEntryId,
-        appId: testAppId,
-        runId: runId2,
-        type: 'escalation',
-        ts: 2000,
-        content: { summary: 'Current question', question: 'Current?' },
-      })
-
-      const closed = store.closeOrphanEscalations(testAppId, activeEntryId)
-
-      expect(closed).toBe(1)
-      // Orphan should be closed (has user_response_json)
-      const orphan = store.getEntry(orphanEntryId)
-      expect(orphan!.userResponse).toBeDefined()
-      expect(orphan!.userResponse!.text).toContain('Auto-closed')
-      // Active should remain open
-      const active = store.getEntry(activeEntryId)
-      expect(active!.userResponse).toBeUndefined()
-    })
-
-    it('should close all pending entries when no activeEntryId is given', () => {
-      const entry1 = randomUUID()
-      const entry2 = randomUUID()
-      // Entries no longer require a parent run row (migration v4).
-      const runId = createTestRunId()
-
-      store.insertEntry({
-        id: entry1,
-        appId: testAppId,
-        runId,
-        type: 'escalation',
-        ts: 1000,
-        content: { summary: 'Q1', question: 'Q1?' },
-      })
-      store.insertEntry({
-        id: entry2,
-        appId: testAppId,
-        runId,
-        type: 'escalation',
-        ts: 2000,
-        content: { summary: 'Q2', question: 'Q2?' },
-      })
-
-      const closed = store.closeOrphanEscalations(testAppId)
-
-      expect(closed).toBe(2)
-      expect(store.getEntry(entry1)!.userResponse).toBeDefined()
-      expect(store.getEntry(entry2)!.userResponse).toBeDefined()
-    })
-
-    it('should not affect entries from other apps', () => {
-      const otherAppId = randomUUID()
-      const otherRunId = createTestRunId()
-      const runId = createTestRunId()
-
-      // Insert run for other app
-      // (Use raw db to insert a minimal installed_apps row for FK)
-      store['db'].exec(`INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, installed_at) VALUES ('${otherAppId}', 'spec-${otherAppId}', 'test-space', '{}', 'active', ${Date.now()})`)
-      store.insertRun({
-        runId: otherRunId,
-        appId: otherAppId,
-        sessionKey: 'sess-other',
-        status: 'running',
-        triggerType: 'schedule',
-        startedAt: 1000,
-      })
-
-      const ourEntry = randomUUID()
-      const otherEntry = randomUUID()
-
-      store.insertEntry({
-        id: ourEntry,
-        appId: testAppId,
-        runId,
-        type: 'escalation',
-        ts: 1000,
-        content: { summary: 'Ours', question: 'Ours?' },
-      })
-      store.insertEntry({
-        id: otherEntry,
-        appId: otherAppId,
-        runId: otherRunId,
-        type: 'escalation',
-        ts: 1000,
-        content: { summary: 'Theirs', question: 'Theirs?' },
-      })
-
-      const closed = store.closeOrphanEscalations(testAppId)
-
-      expect(closed).toBe(1)
-      // Our entry is closed
-      expect(store.getEntry(ourEntry)!.userResponse).toBeDefined()
-      // Other app's entry is untouched
-      expect(store.getEntry(otherEntry)!.userResponse).toBeUndefined()
-    })
-
-    it('should return 0 when there are no orphans', () => {
-      const closed = store.closeOrphanEscalations(testAppId)
-      expect(closed).toBe(0)
-    })
-
-    it('should not close already-responded entries', () => {
-      const respondedEntry = randomUUID()
-      const runId = createTestRunId()
-
-      store.insertEntry({
-        id: respondedEntry,
-        appId: testAppId,
-        runId,
-        type: 'escalation',
-        ts: 1000,
-        content: { summary: 'Answered', question: 'Answered?' },
-      })
-      store.updateEntryResponse(respondedEntry, { ts: Date.now(), text: 'User reply' })
-
-      const closed = store.closeOrphanEscalations(testAppId)
-
-      expect(closed).toBe(0)
-      // Response should still be the user's, not the auto-close marker
-      expect(store.getEntry(respondedEntry)!.userResponse!.text).toBe('User reply')
-    })
-  })
 })
 
 // ============================================
@@ -1988,7 +1813,7 @@ describe('AppRuntimeService', () => {
       expect(state.status).toBe('paused')
     })
 
-    it('should return waiting_user state with escalation ID', () => {
+    it('derives waiting from pending questions rather than the stale status field', () => {
       const appId = randomUUID()
       mockAppManager.getApp.mockReturnValue({
         id: appId,
@@ -2002,8 +1827,8 @@ describe('AppRuntimeService', () => {
       const service = createService()
       const state = service.getAppState(appId)
 
-      expect(state.status).toBe('waiting_user')
-      expect(state.pendingEscalationId).toBe('esc-001')
+      expect(state.status).toBe('idle')
+      expect(state.pendingDecisionCount).toBe(0)
     })
 
     it('should return error state for error and needs_login', () => {
@@ -2211,7 +2036,7 @@ describe('AppRuntimeService', () => {
       ).rejects.toThrow(EscalationNotFoundError)
     })
 
-    it('should record response, reopen original run, and clear waiting_user status', async () => {
+    it('records the answer without enabling automatic execution', async () => {
       const entryId = randomUUID()
       store.insertEntry({
         id: entryId,
@@ -2231,6 +2056,7 @@ describe('AppRuntimeService', () => {
         spaceId: 'space-001',
       })
 
+      store.updateRunSessionId('run-001', 'session-original')
       const service = createService()
 
       // Don't await the full thing - the follow-up run will fail because
@@ -2246,7 +2072,7 @@ describe('AppRuntimeService', () => {
       expect(entry!.userResponse!.text).toBe('Go with option B')
 
       // Verify status was updated
-      expect(mockAppManager.updateStatus).toHaveBeenCalledWith(testAppId, 'active')
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalledWith(testAppId, 'active')
 
       // Verify the original run was reopened (waiting_user → running)
       // instead of creating a new run
@@ -2280,6 +2106,7 @@ describe('AppRuntimeService', () => {
         spaceId: 'space-001',
       })
       vi.mocked(executeRun).mockClear()
+      store.updateRunSessionId('run-001', 'session-original')
 
       const service = createService()
       await service.respondToEscalation(testAppId, entryId, {
@@ -2534,7 +2361,7 @@ describe('AppRuntimeService', () => {
     })
 
     it('rejects a non-runnable app without starting anything', async () => {
-      seedApp('waiting_user')
+      seedApp('needs_login')
       const service = createService()
 
       await expect(service.startManually(testAppId)).rejects.toThrow(AppNotRunnableError)
@@ -2747,15 +2574,14 @@ describe('AppRuntimeService', () => {
 
       await expect(
         service.respondToEscalation(testAppId, 'entry-a', { ts: 4000, text: 'Answer A' })
-      ).resolves.toBeUndefined()
+      ).resolves.toMatchObject({ id: 'entry-a', userResponse: { text: 'Answer A' } })
 
-      // Each answer resumes its own run, not whichever was most recent.
-      expect(store.getRun('run-a')!.status).toBe('running')
-      expect(store.getRun('run-b')!.status).toBe('running')
-      expect(mockAppManager.updateStatus).toHaveBeenCalledWith(testAppId, 'active')
+      expect(store.getEntry('entry-a')!.continuation?.status).toBe('failed')
+      expect(store.getEntry('entry-b')!.continuation?.status).toBe('failed')
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalledWith(testAppId, 'active')
     })
 
-    it('abandons open questions only when the app stops for good', () => {
+    it('preserves unanswered questions across pause and error', () => {
       seedApp('waiting_user')
       seedQuestion('run-a', 'entry-a', 1000)
       const reconcileAwaitingDecision = vi.fn()
@@ -2767,8 +2593,130 @@ describe('AppRuntimeService', () => {
       expect(store.getEntry('entry-a')!.userResponse).toBeUndefined()
 
       onStatusChange(testAppId, 'waiting_user', 'paused')
-      expect(store.getEntry('entry-a')!.userResponse).toBeDefined()
-      expect(reconcileAwaitingDecision).toHaveBeenCalledWith(testAppId)
+      expect(store.getEntry('entry-a')!.userResponse).toBeUndefined()
+      onStatusChange(testAppId, 'paused', 'error')
+      expect(store.getPendingEscalation(testAppId, 'entry-a')).not.toBeNull()
+    })
+  })
+
+  describe('durable continuation scheduling', () => {
+    let app: any
+    const answer = { ts: 1, text: 'Approved' }
+    function seedQuestion(): void {
+      store.insertRun({ runId: 'decision-run', appId: app.id, sessionKey: 'original-session', status: 'waiting_user', triggerType: 'manual', startedAt: Date.now() })
+      store.updateRunSessionId('decision-run', 'engine-session')
+      store.insertEntry({ id: 'decision', appId: app.id, runId: 'decision-run', type: 'escalation', ts: Date.now(), content: { summary: 'Proceed?' } })
+    }
+    beforeEach(() => {
+      getActiveTeamRuntimeMock.mockReset()
+      vi.mocked(executeRun).mockClear()
+      app = { id: randomUUID(), status: 'paused', spec: createTestSpec(), userConfig: {}, userOverrides: {}, spaceId: 'space-001' }
+      dbManager.getAppDatabase().prepare(`INSERT INTO installed_apps(id, spec_id, space_id, spec_json, installed_at) VALUES (?, ?, 'space-001', ?, ?)`).run(app.id, app.id, JSON.stringify(app.spec), Date.now())
+      mockAppManager.getApp.mockReturnValue(app)
+    })
+
+    it('runs once while paused without resuming automatic work or consuming older questions', async () => {
+      seedQuestion()
+      const service = createService()
+      await service.triggerManually(app.id)
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalled()
+      expect(service.getAppState(app.id).automaticEnabled).toBe(false)
+      expect(store.getPendingEscalation(app.id, 'decision')).not.toBeNull()
+    })
+
+    it('durably queues a busy answer, rejects duplicate manual work, then resumes the original run', async () => {
+      seedQuestion()
+      let finish!: () => void
+      let signal: AbortSignal | undefined
+      vi.mocked(executeRun).mockImplementationOnce(async (options: any) => {
+        signal = options.abortSignal
+        await new Promise<void>(resolve => { finish = resolve })
+        return { appId: app.id, runId: 'manual-run', sessionKey: 'manual-session', outcome: 'useful', startedAt: 0, finishedAt: 1, durationMs: 1 }
+      })
+      const service = createService()
+      const manual = service.triggerManually(app.id)
+      await service.respondToEscalation(app.id, 'decision', answer)
+      expect(store.getEntry('decision')?.continuation?.status).toBe('queued')
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      await expect(service.triggerManually(app.id)).rejects.toThrow(ConcurrencyLimitError)
+      mockAppManager.onAppStatusChange.mock.calls[0][0](app.id, 'active', 'paused')
+      expect(signal?.aborted).toBe(false)
+      finish()
+      await manual
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(executeRun).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(executeRun).mock.calls[1][0]).toMatchObject({ existingRunId: 'decision-run', existingSessionKey: 'original-session' })
+      expect(store.getEntry('decision')?.userResponse?.text).toBe('Approved')
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalled()
+    })
+
+    it('uses current permissions when queued execution finally obtains a resource slot', async () => {
+      const apps = new Map(Array.from({ length: 11 }, (_, index) => [`person-${index}`, { ...app, id: `person-${index}`, permissions: { granted: ['ai-browser'], denied: [] } }]))
+      mockAppManager.getApp.mockImplementation((id: string) => apps.get(id))
+      const releases: Array<() => void> = []
+      vi.mocked(executeRun).mockImplementation(async (options: any) => {
+        if (options.app.id !== 'person-10') await new Promise<void>(resolve => releases.push(resolve))
+        return { appId: options.app.id, runId: options.app.id, sessionKey: options.app.id, outcome: 'useful', startedAt: 0, finishedAt: 1, durationMs: 1 }
+      })
+      const service = createService()
+      const runs = [...apps.keys()].map(id => service.triggerManually(id))
+      expect(executeRun).toHaveBeenCalledTimes(10)
+      apps.set('person-10', { ...apps.get('person-10')!, permissions: { granted: [], denied: ['ai-browser'] } })
+      releases.splice(0).forEach(release => release())
+      await Promise.all(runs)
+      expect(vi.mocked(executeRun).mock.calls.find(([options]) => options.app.id === 'person-10')?.[0].app.permissions).toEqual({ granted: [], denied: ['ai-browser'] })
+    })
+
+
+    it('preserves explicit pause after repeated manual execution failures', async () => {
+      for (let index = 0; index < 3; index++) {
+        store.insertRun({ runId: `failure-${index}`, appId: app.id, sessionKey: `failure-${index}`, status: 'error', triggerType: 'manual', startedAt: index })
+      }
+      vi.mocked(executeRun).mockResolvedValueOnce({ appId: app.id, runId: 'failure-2', sessionKey: 'failure-2', outcome: 'error', errorMessage: 'Connection unavailable', startedAt: 0, finishedAt: 1, durationMs: 1 })
+      const service = createService()
+      await service.triggerManually(app.id)
+      expect(service.getAppState(app.id).automaticEnabled).toBe(false)
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalled()
+    })
+
+    it('settles the original run when continuation fails before SDK setup', async () => {
+      seedQuestion()
+      vi.mocked(executeRun).mockRejectedValueOnce(new Error('Original environment missing'))
+      const service = createService()
+      await service.respondToEscalation(app.id, 'decision', answer)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(store.getRun('decision-run')?.status).toBe('error')
+      expect(store.getEntry('decision')?.continuation?.status).toBe('failed')
+      expect(store.getEntry('decision')?.userResponse?.text).toBe('Approved')
+      expect(store.getEntriesForRun('decision-run').some(entry => entry.type === 'run_error' && entry.content.error === 'Original environment missing')).toBe(true)
+      expect(service.getAppState(app.id).automaticEnabled).toBe(false)
+      expect(mockAppManager.updateStatus).not.toHaveBeenCalled()
+    })
+
+    it('recovers an accepted but unstarted answer from storage after restart', async () => {
+      seedQuestion()
+      store.acceptDecision(app.id, 'decision', answer)
+      store = new ActivityStore(dbManager.getAppDatabase())
+      const service = createService()
+      await service.activateAll()
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(executeRun).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(executeRun).mock.calls[0][0].existingRunId).toBe('decision-run')
+      expect(store.getEntry('decision')?.userResponse?.text).toBe('Approved')
+      await service.deactivateAll()
+    })
+
+    it('does not resurrect a queued task that the user closed', async () => {
+      seedQuestion()
+      store.acceptDecision(app.id, 'decision', answer)
+      const service = createService()
+      await service.closeRun(app.id, 'decision-run')
+      await service.activateAll()
+      expect(executeRun).not.toHaveBeenCalled()
+      expect(store.getEntry('decision')?.continuation?.status).toBe('cancelled')
+      expect(store.getEntry('decision')?.userResponse?.text).toBe('Approved')
+      await service.deactivateAll()
     })
   })
 

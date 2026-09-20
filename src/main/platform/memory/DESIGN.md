@@ -186,6 +186,11 @@ the recent timeline without loading full content.
 
 ## 4. Memory File Structure on Disk
 
+An app caller may supply a trusted `appDataPath` from the app manager. When
+present it replaces the default app root below, keeping identity memory stable
+across default-space changes. It never changes user/space memory paths or the
+permission matrix, and is not accepted as model tool input.
+
 ```
 {spacePath}/.halo/apps/{appId}/
   memory.md              -- Active memory (# now + # History)

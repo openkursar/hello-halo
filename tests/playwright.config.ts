@@ -78,6 +78,11 @@ export default defineConfig({
   // Projects - different test configurations
   projects: [
     {
+      name: 'people-upgrade',
+      testMatch: ['**/people-upgrade.spec.ts', '**/people-capabilities.spec.ts'],
+      use: { actionTimeout: 15000 }
+    },
+    {
       name: 'smoke',
       testMatch: '**/smoke.spec.ts',
       use: {

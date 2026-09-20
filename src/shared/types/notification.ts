@@ -45,5 +45,9 @@ export interface ToastPayload {
   duration?: number
   /** Deep-links the toast to an installed App's activity thread. */
   appId?: string
+  entryId?: string
+  teamId?: string
+  epochId?: string
+  runId?: string
   action?: ToastLinkAction
 }

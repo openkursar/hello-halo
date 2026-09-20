@@ -16,7 +16,9 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 import { createSession } from '../../services/agent/resolved-sdk'
-import type { InstalledApp } from '../manager'
+import { getAppManager, type InstalledApp } from '../manager'
+import { resolveExecutionEnvironment, validateExecutionEnvironment, validateEnvironmentConnections } from './execution-environment'
+import { createPersonContextMcpServer, personContextPrompt } from './person-context-tool'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import type { MemoryService, MemoryCallerScope } from '../../platform/memory'
 import { createMemoryStatusMcpServer } from '../../platform/memory/snapshot'
@@ -39,7 +41,7 @@ import { createNotifyToolServer } from './notify-tool'
 import { FileExportGate } from './file-export-gate'
 import { getImSessionRegistry } from './im-session-registry'
 import { autoSyncRunResult } from './im-auto-sync'
-import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getWorkingDir, getMcpServersForRequires } from '../../services/agent/helpers'
+import { getApiCredentials, getApiCredentialsForSource, getHeadlessElectronPath, getMcpServersForRequires } from '../../services/agent/helpers'
 import { resolveCredentialsForSdk, buildBaseSdkOptions } from '../../services/agent/sdk-config'
 import { applyReasoningEffort } from '../../services/agent/reasoning-effort'
 import { getOrCreateV2Session } from '../../services/agent/session-manager'
@@ -51,7 +53,6 @@ import { createApiRefMcpServer, HALO_API_TOOLSET_ID } from '../../services/api-r
 import { createOfficialDocsSession } from '../../services/official-docs-mcp'
 import { createEmailMcpServer } from '../../services/email-mcp'
 import { getConfig, resolveClaudeConfigDir } from '../../foundation/config.service'
-import { getSpace, getSpaceDir } from '../../services/space.service'
 import { openSessionWriter, type SessionWriter } from './session-store'
 import { prepareMemoryForTurn, finalizeMemoryAfterTurn, type CompactionCredentialsProvider } from './turn/memory-lifecycle'
 import { registerActiveRun, unregisterActiveRun } from './active-runs'
@@ -178,13 +179,15 @@ const SESSION_KEY_PREFIX = 'app-run'
  * @throws RunExecutionError on unrecoverable failure
  */
 export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResult> {
-  const { app, trigger, store, memory, abortSignal, emitEntry, existingRunId, existingSessionKey, onRunStarted } = options
+  const { trigger, store, memory, abortSignal, emitEntry, existingRunId, existingSessionKey, onRunStarted } = options
+  let app = options.app
 
   // Guard: executeRun is only valid for automation apps.
   // This narrows app.spec to AutomationSpec for the rest of the function.
   if (app.spec.type !== 'automation') {
     throw new RunExecutionError('unknown', 'unknown', `executeRun called for non-automation app type: ${app.spec.type}`)
   }
+  const appSpec = app.spec
 
   // For continue_followup and escalation_followup (with existingRunId), reuse the
   // existing run record. For all other triggers, generate a new run ID and insert fresh.
@@ -193,6 +196,16 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
   const runId = existingRunId ?? randomUUID()
   const sessionKey = existingSessionKey ?? `${SESSION_KEY_PREFIX}-${runId.slice(0, 8)}`
   const startedAt = Date.now()
+
+  const manager = getAppManager()
+  if (!manager) throw new RunExecutionError(app.id, runId, 'App manager is unavailable')
+  const originalEnvironment = existingRunId ? store.getRun(existingRunId)?.environment : undefined
+  if (existingRunId && !originalEnvironment) {
+    throw new RunExecutionError(app.id, runId, 'The original execution environment is unavailable; restore it before continuing')
+  }
+  const environment = originalEnvironment ?? resolveExecutionEnvironment(app, manager)
+  if (existingRunId) store.pinRunEnvironment(existingRunId, environment)
+  app = { ...app, spaceId: environment.spaceId }
 
   const runTag = runId.slice(0, 8)
   const selfInstance = describeSelfInstance(app.id, {
@@ -217,6 +230,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       triggerType: trigger.type,
       triggerData: trigger.eventPayload ?? (trigger.escalation ? { escalation: trigger.escalation } : undefined),
       startedAt,
+      environment,
     })
   }
 
@@ -246,11 +260,18 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     spaceId: app.spaceId!, // Automation apps always have a spaceId
     // Use space.path (not workingDir) to match the directory layout that
     // AppManager creates: {space.path}/.halo/apps/{appId}/memory/
-    spacePath: getSpace(app.spaceId!)?.path ?? '',
+    spacePath: environment.spacePath,
     appId: app.id,
+    appDataPath: environment.memoryDir,
   }
 
   try {
+    if ((trigger.type === 'continue_followup' || trigger.type === 'escalation_followup') &&
+      (!existingRunId || !existingSessionKey || !(trigger.continue?.sessionId || trigger.escalation?.sessionId))) {
+      throw new Error('The original execution context is unavailable; no replacement task was started')
+    }
+    validateExecutionEnvironment(environment)
+    validateEnvironmentConnections(environment, app, manager)
     // ── 1. Resolve credentials and working directory ─────
     //    (needed early: workDir feeds into system prompt,
     //     modelInfo feeds into base prompt's model display)
@@ -260,7 +281,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
       : await getApiCredentials(config)
     const resolvedCreds = await resolveCredentialsForSdk(credentials)
     const electronPath = getHeadlessElectronPath()
-    const workDir = getWorkingDir(app.spaceId!)
+    const workDir = environment.workDir
 
     console.log(
       `[Runtime][${runTag}] Credentials resolved: provider=${credentials.provider}, ` +
@@ -306,7 +327,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
 
     const systemPrompt = buildAppSystemPrompt({
       appId: app.id,
-      appSpec: app.spec,
+      appSpec,
       memoryInstructions,
       triggerContext: trigger.description,
       userConfig: mergedConfig,
@@ -322,7 +343,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         imContactsAvailable: notifyAvail.imContactsAvailable,
       }) ?? undefined,
       notifyToolsAvailable: notifyAvail.anyNotifyToolAvailable,
-    })
+    }) + '\n\n' + personContextPrompt({ authority: 'owner', appId: app.id })
 
     console.log(
       `[Runtime][${runTag}] ── SYSTEM PROMPT ──────────────────────────\n` +
@@ -406,7 +427,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
     // cwd) + tmpdir. memoryScope.spacePath is intentionally NOT reused here:
     // memory lives under space.path (internal storage), while exportable
     // files live under workingDir||path — see getSpaceDir().
-    const exportGate = new FileExportGate([getSpaceDir(app.spaceId!), tmpdir()])
+    const exportGate = new FileExportGate([environment.workDir, tmpdir()])
     const notifyMcpServer = createNotifyToolServer({
       appId: app.id,
       appName: app.spec.name,
@@ -467,6 +488,7 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         'halo-report': reportMcpServer,     // built-in: completion signal
         'halo-notify': notifyMcpServer,     // built-in: user notification
         'halo-docs': docsMcpServer,         // built-in: Halo's own documentation
+        'halo-person-context': createPersonContextMcpServer({ authority: 'owner', appId: app.id, environmentSpaceId: app.spaceId!, capabilityMode: 'automation' }),
         'web-search': createWebSearchMcpServer(), // built-in: web search
         'ocr': createOcrMcpServer(),              // built-in: on-device image OCR
         ...(usesAIBrowser ? { 'ai-browser': createAIBrowserMcpServer(scopedBrowserCtx, workDir) } : {}),
@@ -530,15 +552,12 @@ export async function executeRun(options: ExecuteRunOptions): Promise<AppRunResu
         workDir
       )
     } else {
-      if (trigger.type === 'continue_followup') {
-        console.warn(`[Runtime][${runTag}] continue_followup has no sessionId — starting fresh session`)
-      }
       session = await createSession(sdkOptions)
     }
     console.log(`[Runtime][${runTag}] V2 session created, sending initial message`)
 
     // ── 5b. Open session writer for "View process" ────────
-    const spacePath = getSpace(app.spaceId!)?.path ?? ''
+    const spacePath = environment.spacePath
     let sessionWriter: SessionWriter | undefined
     if (spacePath) {
       sessionWriter = openSessionWriter(spacePath, app.id, runId)

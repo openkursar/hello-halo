@@ -174,5 +174,19 @@ export const migrations: Migration[] = [
         WHERE json_extract(user_overrides_json, '$.frequency') IS NOT NULL
       `)
     }
+  },
+  {
+    version: 8,
+    description: 'Preserve digital human data location across default space changes',
+    up(db) {
+      db.exec('ALTER TABLE installed_apps ADD COLUMN data_path TEXT')
+    }
+  },
+  {
+    version: 9,
+    description: 'Index stable digital human directory ordering',
+    up(db) {
+      db.exec("CREATE INDEX idx_apps_directory ON installed_apps(json_extract(spec_json, '$.type'), installed_at DESC, id ASC)")
+    }
   }
 ]

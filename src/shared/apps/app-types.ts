@@ -48,6 +48,7 @@ export type RunOutcome = 'useful' | 'noop' | 'error' | 'skipped'
  * Stores a snapshot of the AppSpec at install time plus user configuration.
  */
 export interface InstalledApp {
+  dataPath?: string
   /** Unique installation ID (UUID v4) */
   id: string
 
@@ -142,9 +143,44 @@ export type ActivityEntryType =
   | 'escalation'
   | 'output'
 
+export interface ExecutionEnvironment {
+  spaceId: string | null
+  spacePath: string
+  workDir: string
+  memoryDir: string
+  /** Connections resolved for this environment; a missing instance must not fall back by name. */
+  mcpBindings?: Record<string, string>
+}
+
+export interface ActivitySource {
+  kind: 'automation' | 'team' | 'chat' | 'unknown'
+  appId: string
+  runId?: string
+  sessionKey?: string
+  teamId?: string
+  epochId?: string
+  taskId?: string
+  memberId?: string
+  teamName?: string
+  label?: string
+}
+
+export interface EscalationContinuation {
+  status: 'queued' | 'running' | 'failed' | 'completed' | 'cancelled'
+  attempts: number
+  updatedAt: number
+  error?: string
+}
+
 /** Content of an activity entry */
 export interface ActivityEntryContent {
-  resolution?: { reason: 'task_closed'; ts: number }
+  resolution?: { reason: 'task_closed' | 'expired' | 'legacy_system_closed'; ts: number; legacyText?: string; attribution?: 'unverified' }
+  source?: ActivitySource
+  resumeAvailable?: boolean
+  stopped?: boolean
+  deadlineAt?: number
+  deadlineReviewRequired?: boolean
+  deadlineReview?: { originalDeadlineAt: number; confirmedAt?: number; deadlineAt?: number | null }
   teamContext?: import('./team-types').TeamContext
   /** Human-readable summary (required, written by AI) */
   summary: string
@@ -214,10 +250,16 @@ export interface ActivityEntry {
   sessionKey?: string
   content: ActivityEntryContent
   userResponse?: EscalationResponse
+  continuation?: EscalationContinuation
 }
 
 /** Real-time state of an automation App (for UI display) */
 export interface AutomationAppState {
+  automaticEnabled?: boolean
+  runningCount?: number
+  pendingDecisionCount?: number
+  pendingSoloDecisionCount?: number
+  continuationCount?: number
   /**
    * - running:      Actively executing a run right now
    * - queued:       Manually triggered; waiting for a global concurrency slot
@@ -241,6 +283,25 @@ export interface AutomationAppState {
   pendingEscalationId?: string
 }
 
+export interface PendingDecisionQuery {
+  limit?: number
+  afterTs?: number
+  afterId?: string
+}
+
+export interface PendingDecisionInbox {
+  entries: ActivityEntry[]
+  total: number
+  names: Record<string, string>
+}
+
+export interface AppRunStartInfo {
+  outcome: 'started' | 'queued'
+  runId?: string
+  sessionKey?: string
+  startedAt?: number
+}
+
 /** Options for querying activity entries */
 export interface ActivityQueryOptions {
   teamId?: string
@@ -249,6 +310,7 @@ export interface ActivityQueryOptions {
   offset?: number
   type?: ActivityEntryType
   since?: number
+  beforeId?: string
 }
 
 // ============================================

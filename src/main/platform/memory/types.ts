@@ -33,6 +33,8 @@ export interface MemoryCallerScope {
   spacePath: string
   /** App identifier (required when type === 'app') */
   appId?: string
+  /** Trusted identity storage root supplied by the app manager, never by a tool caller. */
+  appDataPath?: string
 }
 
 // ============================================================================

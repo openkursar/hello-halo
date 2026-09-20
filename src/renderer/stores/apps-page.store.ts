@@ -77,19 +77,20 @@ function reportDetailView(detail: StoreAppDetail, availableUpdates: UpdateInfo[]
 // Types
 // ============================================
 
-export type AppsDetailViewType = 'activity-thread' | 'session-detail' | 'app-chat' | 'app-config' | 'mcp-status' | 'skill-info' | 'uninstalled-detail'
+export type AppsDetailViewType = 'activity-thread' | 'session-detail' | 'app-chat' | 'app-config' | 'mcp-status' | 'skill-info' | 'uninstalled-detail' | 'app-teams'
 
 export type AppsDetailView =
   | { type: 'activity-thread'; appId: string }
-  | { type: 'session-detail'; appId: string; runId: string; sessionKey: string }
+  | { type: 'session-detail'; appId: string; runId: string; sessionKey?: string }
   | { type: 'app-chat'; appId: string; spaceId: string }
   | { type: 'app-config'; appId: string }
+  | { type: 'app-teams'; appId: string }
   | { type: 'mcp-status'; appId: string }
   | { type: 'skill-info'; appId: string }
   | { type: 'uninstalled-detail'; appId: string }
   | null
 
-export type AppsPageTab = 'my-digital-humans' | 'team' | 'my-skills' | 'my-mcp' | 'store'
+export type AppsPageTab = 'my-digital-humans' | 'team' | 'my-skills' | 'my-mcp' | 'store' | 'inbox'
 
 /**
  * Map an app type to its owning AppsPage tab.
@@ -116,7 +117,7 @@ export function tabForAppType(type: AppType): AppsPageTab {
 }
 
 /** Which detail tab was last selected for automation apps (persisted to localStorage) */
-export type AutomationDetailTab = 'activity' | 'chat' | 'config'
+export type AutomationDetailTab = 'activity' | 'chat' | 'config' | 'teams'
 
 // ============================================
 // State Interface
@@ -168,9 +169,10 @@ interface AppsPageState {
   selectApp: (appId: string, appType?: string, spaceId?: string) => void
   clearSelection: () => void
   openActivityThread: (appId: string) => void
-  openSessionDetail: (appId: string, runId: string, sessionKey: string) => void
+  openSessionDetail: (appId: string, runId: string, sessionKey?: string) => void
   openAppChat: (appId: string, spaceId: string) => void
   openAppConfig: (appId: string) => void
+  openAppTeams: (appId: string) => void
   setInitialAppId: (appId: string | null) => void
   setShowInstallDialog: (show: boolean) => void
   toggleImPanel: () => void
@@ -263,6 +265,7 @@ export const useAppsPageStore = create<AppsPageState>()(
       const tab = get().lastAutomationTab
       if (tab === 'chat' && spaceId) detailView = { type: 'app-chat', appId, spaceId }
       else if (tab === 'config') detailView = { type: 'app-config', appId }
+      else if (tab === 'teams') detailView = { type: 'app-teams', appId }
       // else default 'activity' → activity-thread (already set)
     }
     set({ selectedAppId: appId, detailView })
@@ -281,6 +284,8 @@ export const useAppsPageStore = create<AppsPageState>()(
 
   openAppConfig: (appId) =>
     set({ selectedAppId: appId, detailView: { type: 'app-config', appId }, lastAutomationTab: 'config' }),
+
+  openAppTeams: (appId) => set({ selectedAppId: appId, detailView: { type: 'app-teams', appId }, lastAutomationTab: 'teams' }),
 
   setInitialAppId: (appId) => set({ initialAppId: appId }),
 

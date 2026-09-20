@@ -29,6 +29,7 @@ import { AppNotifyChannelsSection } from './AppNotifyChannelsSection'
 import { AppCapabilitiesSection } from './AppCapabilitiesSection'
 import { AppMcpDepsSection } from './AppMcpDepsSection'
 import { AppSkillsSection } from './AppSkillsSection'
+import { DefaultWorkspaceSection } from './DefaultWorkspaceSection'
 import { AppKnowledgeSection } from './AppKnowledgeSection'
 import { appTypeLabel } from './appTypeUtils'
 import { sanitizeCommandName } from './skill-import-utils'
@@ -348,9 +349,9 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
 
   // Type-narrowed helpers for automation-specific fields
   const isAutomation = app.spec.type === 'automation'
-  const specSystemPromptValue = isAutomation ? app.spec.system_prompt : ''
-  const specSubscriptions = isAutomation ? (app.spec.subscriptions ?? []) : []
-  const specRecommendedModel = isAutomation ? app.spec.recommended_model : undefined
+  const specSystemPromptValue = app.spec.type === 'automation' ? app.spec.system_prompt : ''
+  const specSubscriptions = app.spec.type === 'automation' ? (app.spec.subscriptions ?? []) : []
+  const specRecommendedModel = app.spec.type === 'automation' ? app.spec.recommended_model : undefined
   // ── Spec fields (name, description, system_prompt) ──
   // A skill's spec.name is its command identifier, so the editable "name" is the
   // display name and the identifier gets its own field.
@@ -558,6 +559,8 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
           )}
         </div>
       )}
+
+      {isAutomation && <DefaultWorkspaceSection app={app} />}
 
       {/* ── Model ── */}
       <div className="space-y-3">
@@ -950,7 +953,7 @@ function YamlTab({ app, appId, t, onRequireRestart }: YamlTabProps) {
 
     // Detect whether the saved YAML changed a session-affecting field so the
     // manual-restart fallback banner is not raised for cosmetic edits.
-    const promptChanged = parsed.system_prompt !== app.spec.system_prompt
+    const promptChanged = parsed.system_prompt !== (app.spec.type === 'automation' ? app.spec.system_prompt : undefined)
     const configChanged = JSON.stringify(parsed.config_schema ?? null)
       !== JSON.stringify(app.spec.config_schema ?? null)
 
@@ -1163,7 +1166,7 @@ export function AppConfigPanel({ appId, spaceName }: AppConfigPanelProps) {
             <RefreshCw className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
             <div className="min-w-0">
               <p className="text-sm text-foreground">
-                {t('Quickly restart the AI digital human to apply your changes.')}
+                {t('Changes are saved and apply when the chat reloads its configuration. If the next message still uses old settings, restart the chat below.')}
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {t('No data is affected. Any work in progress will be stopped and interrupted.')}

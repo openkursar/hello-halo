@@ -71,6 +71,8 @@ export interface TeamMember {
   isLead: boolean
   /** Drives orphan cleanup on dissolve — only AI-sourced apps are auto-deleted. */
   aiProvisioned: boolean
+  /** True only for the dedicated coordinator provisioned with a team. */
+  isSystemCoordinator?: boolean
   addedAt: number
   /**
    * Owning node of this member. SELF_NODE_ID sentinel for a locally-owned
@@ -826,6 +828,7 @@ export interface TeamLocalMember {
   appId: string
   memberName: string
   isLead: boolean
+  isSystemCoordinator?: boolean
 }
 
 export interface TeamListItem {
@@ -1053,7 +1056,7 @@ export function toLocalMembers(members: readonly TeamMember[]): TeamLocalMember[
   return members
     .filter((m) => !isRemoteMember(m))
     .sort((a, b) => Number(b.isLead) - Number(a.isLead))
-    .map((m) => ({ appId: m.appId, memberName: m.memberName, isLead: m.isLead }))
+    .map((m) => ({ appId: m.appId, memberName: m.memberName, isLead: m.isLead, isSystemCoordinator: m.isSystemCoordinator === true }))
 }
 
 /**

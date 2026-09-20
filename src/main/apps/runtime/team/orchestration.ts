@@ -195,6 +195,10 @@ export interface Orchestration {
    * false when the team/epoch is gone (caller must NOT fall back to a solo run).
    */
   resumeFromEscalation(params: {
+    continuationId?: string
+    onDeferred?: () => void
+    onStarted?: () => void
+    onSettled?: (error?: string) => void
     teamId: string
     epochId: string
     appId: string
@@ -394,6 +398,18 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   }
 
   // Only escalations are captured out-of-band; normal results come from onReply.
+  const decisionStarts = new Map<string, () => void>()
+  const decisionCompletions = new Map<string, (error?: string) => void>()
+  function settleDecision(correlationId: string, outcome: TurnCompletion): void {
+    const callback = decisionCompletions.get(correlationId)
+    if (!callback) return
+    decisionCompletions.delete(correlationId)
+    decisionStarts.delete(correlationId)
+    const error = outcome.kind === 'error' ? outcome.message : outcome.kind === 'undelivered' ? outcome.reason
+      : outcome.kind === 'timeout' ? 'The continuation timed out' : undefined
+    callback(error)
+  }
+
   const capturedEscalations = new Map<string, TurnCompletion>()
 
   // Deferred seal: applied after the lead's turn ends, never mid-turn.
@@ -468,6 +484,8 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
       if (!canDeliverTurn(request.teamContext.teamId, request.teamContext.epochId, request.teamContext.kind)) {
         return { finalMessage: null, undelivered: { reason: 'Task ended before its notice could run' } }
       }
+      decisionStarts.get(request.teamContext.correlationId)?.()
+      decisionStarts.delete(request.teamContext.correlationId)
       return await session.sendAppChatMessage(request)
     } finally {
       turnSemaphore.release()
@@ -489,6 +507,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     const { sessionKey, appId, teamId, epochId, envelope, trigger } = params
     if (!canDeliverTurn(teamId, epochId, trigger.kind)) {
       bus.resetEpoch(epochId)
+      settleDecision(trigger.correlationId, { kind: 'undelivered', reason: 'Task closed before this wake could run' })
       bus.completeTurn({ sessionKey, trigger, outcome: { kind: 'undelivered', reason: 'Task closed before this wake could run' } })
       return
     }
@@ -505,6 +524,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         requestSummary: envelope.body,
         requestFromAppId: envelope.fromAppId,
       })
+      settleDecision(trigger.correlationId, { kind: 'error', message: 'Member has no space' })
       bus.completeTurn({ sessionKey, trigger, outcome: { kind: 'error', message: 'Member has no space' } })
       return
     }
@@ -629,6 +649,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         }
 
         busTurns.delete(sessionKey)
+        settleDecision(trigger.correlationId, outcome)
         bus.completeTurn({ sessionKey, trigger, outcome, ...(sealing ? { sealPending: true } : {}) })
 
         try {
@@ -647,6 +668,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
         // A `void`-ed chain that rejected would otherwise vanish, and the slot it
         // left behind would only be explained by the gate's watchdog, hours later.
         busTurns.delete(sessionKey)
+        settleDecision(trigger.correlationId, { kind: 'error', message: String(err) })
         console.error(`${LOG_TAG} turn-completion chain rejected: session=${sessionKey}`, err)
       })
   }
@@ -989,6 +1011,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
   // epoch automatically. Where the outcome goes from there is the member's call:
   // the member must explicitly `team_send` whoever is waiting for its answer.
   async function resumeFromEscalation(params: {
+    continuationId?: string
+    onDeferred?: () => void
+    onStarted?: () => void
+    onSettled?: (error?: string) => void
     teamId: string
     epochId: string
     appId: string
@@ -999,7 +1025,7 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     const { teamId, epochId, appId, taskId, response, question } = params
     const team = store.getTeamById(teamId)
     const epoch = store.getEpochById(epochId)
-    if (!team || !epoch || epoch.teamId !== teamId || !store.getMember(teamId, appId) || !session.getMemberSpaceId(appId)) {
+    if (!team || !epoch || epoch.endReason === 'cleared' || epoch.workItem?.status === 'completed' || epoch.teamId !== teamId || !store.getMember(teamId, appId) || !session.getMemberSpaceId(appId)) {
       console.warn(`${LOG_TAG} Decision resume rejected: team=${teamId} epoch=${epochId} app=${appId}`)
       return false
     }
@@ -1008,7 +1034,10 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     // Attributed to the lead so the member reads it as coming from its team,
     // not from nowhere.
     const fromAppId = isLeadSelf ? null : team.leadAppId ?? null
-    const correlationId = randomUUID()
+    const correlationId = params.continuationId ? `decision:${params.continuationId}` : randomUUID()
+    if (decisionCompletions.has(correlationId)) return true
+    if (params.onSettled) decisionCompletions.set(correlationId, params.onSettled)
+    if (params.onStarted) decisionStarts.set(correlationId, params.onStarted)
     // Written for two readers: the member, which needs the question to bind the
     // answer, and the person, for whom this is the member's visible transcript.
     const asked = question?.trim()
@@ -1046,8 +1075,18 @@ export function createOrchestration(deps: OrchestrationDeps): Orchestration {
     // Buffered rather than dispatched when the member is mid-turn: losing this
     // wake would leave the digital human waiting on an answer it already got,
     // with nothing left to wake it again.
-    const disposition = await bus.deliverRuntimeWake({ envelope, trigger, onBusy: 'buffer' })
+    let disposition
+    try {
+      disposition = await bus.deliverRuntimeWake({ envelope, trigger, onBusy: params.continuationId ? 'skip' : 'buffer' })
+    } catch (error) {
+      decisionCompletions.delete(correlationId)
+      decisionStarts.delete(correlationId)
+      throw error
+    }
     if (disposition === 'skipped') {
+      decisionCompletions.delete(correlationId)
+      decisionStarts.delete(correlationId)
+      if (params.continuationId) { params.onDeferred?.(); return true }
       console.warn(`${LOG_TAG} Decision wake was not admitted: team=${teamId} epoch=${epochId} app=${appId}`)
       return false
     }

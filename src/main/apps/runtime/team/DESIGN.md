@@ -1161,3 +1161,17 @@ resource cleanup. Replica cleanup resets the mailbox and closes local sessions
 without publishing another epoch; the original lifecycle write remains the sole
 replicated transition. Human resume waits until local teardown has finished.
 Resource-only seals retain unanswered decisions.
+
+
+### Durable decision delivery
+
+The automation runtime persists an answer and continuation atomically before
+calling `resumeFromEscalation`. Its optional `continuationId` makes the wake
+identifiable and idempotent within the process. A busy session defers to the
+persistent outbox via `onDeferred`; it does not put this durable wake in the
+bounded transient mailbox or inject it into an unrelated running turn.
+`onStarted` fires after the team concurrency slot is acquired; `onSettled` records
+the actual outcome. Closed/cleared tasks reject continuations, including after a
+restart. Other team messages retain their existing buffering and mid-turn behavior.
+Resource-only cleanup keeps questions; explicit business closure cancels pending
+continuations as well as unresolved questions. Stored answers remain audit facts.

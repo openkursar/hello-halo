@@ -216,6 +216,8 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
    * Global: {haloDir}/apps/{appId}/
    */
   function resolveWorkDir(appId: string, spaceId: string | null): string {
+    const app = store.getById(appId)
+    if (app?.dataPath) return app.dataPath
     if (spaceId === null) {
       return join(getGlobalAppDir(), 'apps', appId)
     }
@@ -911,6 +913,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
 
       const oldSpaceId = app.spaceId
 
+      // Freeze identity storage before the default environment can change.
+      if (app.spec.type === 'automation') {
+        store.pinDataPath(appId, resolveWorkDir(appId, oldSpaceId))
+      }
+
       // For skill apps: remove from the old FS location before updating the DB.
       // If the DB update fails below, the skill file is already gone — this is
       // acceptable because the DB is authoritative; a re-sync can restore the file.
@@ -963,6 +970,10 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     getApp(appId: string): InstalledApp | null {
       return store.getById(appId)
     },
+
+    getStudioSummary(language, excludeIds) { return store.getStudioSummary(language, excludeIds) },
+
+    listPeopleDirectory(filter) { return store.listPeopleDirectory(filter) },
 
     listApps(filter?: AppListFilter): InstalledApp[] {
       return store.list(filter)
@@ -1019,6 +1030,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
     getAppWorkDir(appId: string): string {
       const app = requireApp(appId)
       const workDir = resolveWorkDir(appId, app.spaceId)
+
+      if (app.dataPath && !existsSync(workDir)) {
+        console.warn('[AppManager] Pinned digital human storage is unavailable', { appId })
+        throw new Error('The digital human memory directory is unavailable. Restore it before continuing.')
+      }
 
       // Auto-create if missing (contract: returned path always exists)
       ensureDir(workDir)

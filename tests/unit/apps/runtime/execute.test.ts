@@ -18,6 +18,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 
 // The raw compaction path dynamic-imports @anthropic-ai/sdk; mock it so the
 // API-key-path test can observe which client was (not) constructed.
@@ -84,6 +87,21 @@ vi.mock('../../../../src/main/services/agent/sdk-config', () => ({
 vi.mock('../../../../src/main/foundation/config.service', () => ({
   getConfig: vi.fn().mockReturnValue({ agent: {}, notificationChannels: {} }),
   resolveClaudeConfigDir: vi.fn().mockReturnValue('/tmp/cc-config'),
+}))
+
+vi.mock('../../../../src/main/apps/manager', () => ({
+  getAppManager: vi.fn(() => ({ getAppWorkDir: () => '/tmp/app-1' })),
+}))
+vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
+  resolveExecutionEnvironment: vi.fn(() => ({
+    spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1',
+  })),
+  validateExecutionEnvironment: vi.fn(),
+  validateEnvironmentConnections: vi.fn(),
+}))
+vi.mock('../../../../src/main/apps/runtime/person-context-tool', () => ({
+  createPersonContextMcpServer: vi.fn(() => ({ name: 'halo-person-context' })),
+  personContextPrompt: vi.fn(() => ''),
 }))
 
 vi.mock('../../../../src/main/services/space.service', () => ({
@@ -214,6 +232,9 @@ import { RunExecutionError } from '../../../../src/main/apps/runtime/errors'
 import { query as agentSdkQuery, createSession } from '../../../../src/main/services/agent/resolved-sdk'
 import { getApiCredentials, getMcpServersForRequires } from '../../../../src/main/services/agent/helpers'
 import { resolveCredentialsForSdk } from '../../../../src/main/services/agent/sdk-config'
+import { getOrCreateV2Session } from '../../../../src/main/services/agent/session-manager'
+import { resolveExecutionEnvironment } from '../../../../src/main/apps/runtime/execution-environment'
+import { openSessionWriter } from '../../../../src/main/apps/runtime/session-store'
 
 // ============================================
 // Fakes
@@ -281,6 +302,8 @@ function makeApp(overrides: Record<string, unknown> = {}) {
 
 function makeStore() {
   return {
+    getRun: vi.fn(),
+    pinRunEnvironment: vi.fn(),
     insertRun: vi.fn(),
     completeRun: vi.fn(),
     updateRunSessionId: vi.fn(),
@@ -797,5 +820,65 @@ describe('providerRequiresFirstPartyClient', () => {
     expect(providerRequiresFirstPartyClient('oauth', 'github-copilot')).toBe(false)
     expect(providerRequiresFirstPartyClient('anthropic')).toBe(false)
     expect(providerRequiresFirstPartyClient('openai')).toBe(false)
+  })
+})
+
+
+describe('executeRun — original continuation context', () => {
+  it('refuses to infer an unpinned old execution environment from the current default', async () => {
+    vi.mocked(resolveExecutionEnvironment).mockClear()
+    vi.mocked(createSession).mockClear()
+    await expect(executeRun({
+      app: makeApp({ spaceId: 'new-space' }), store: makeStore(), memory: makeMemory(),
+      existingRunId: 'old-run', existingSessionKey: 'old-thread',
+      trigger: { type: 'continue_followup', description: 'Continue', continue: { sessionId: 'old-engine' } },
+    })).rejects.toThrow('original execution environment is unavailable')
+    expect(resolveExecutionEnvironment).not.toHaveBeenCalled()
+    expect(createSession).not.toHaveBeenCalled()
+  })
+
+  it('fails a continuation without an original engine session instead of starting fresh', async () => {
+    vi.mocked(createSession).mockClear()
+    vi.mocked(getOrCreateV2Session).mockClear()
+    const store = makeStore()
+    store.getRun.mockReturnValue({ environment: { spaceId: 'space-1', spacePath: '/tmp/space-1', workDir: '/tmp/space-1', memoryDir: '/tmp/app-1' } })
+    const result = await executeRun({
+      app: makeApp(), store, memory: makeMemory(), existingRunId: 'old-run', existingSessionKey: 'old-thread',
+      trigger: { type: 'continue_followup', description: 'Continue interrupted work', continue: {} },
+    })
+    expect(result.outcome).toBe('error')
+    expect(result.errorMessage).toContain('original execution context is unavailable')
+    expect(createSession).not.toHaveBeenCalled()
+    expect(getOrCreateV2Session).not.toHaveBeenCalled()
+    expect(store.insertRun).not.toHaveBeenCalled()
+  })
+
+  it('restores the original engine session and storage despite a changed default space', async () => {
+    vi.mocked(createSession).mockClear()
+    vi.mocked(getOrCreateV2Session).mockClear()
+    vi.mocked(resolveExecutionEnvironment).mockClear()
+    vi.mocked(openSessionWriter).mockClear()
+    nextSession = new FakeSession({ script: [assistantReport()] })
+    vi.mocked(getOrCreateV2Session).mockResolvedValueOnce(nextSession as any)
+    const store = makeStore()
+    const directory = mkdtempSync(join(tmpdir(), 'halo-execute-context-'))
+    const environment = { spaceId: 'old-space', spacePath: join(directory, 'storage'), workDir: join(directory, 'work'), memoryDir: join(directory, 'memory') }
+    store.getRun.mockReturnValue({ runId: 'old-run', sessionKey: 'old-thread', sessionId: 'old-engine', environment })
+    const result = await executeRun({
+      app: makeApp({ spaceId: 'new-space' }), store, memory: makeMemory(),
+      existingRunId: 'old-run', existingSessionKey: 'old-thread',
+      trigger: { type: 'escalation_followup', description: 'Answer received', escalation: {
+        sessionId: 'old-engine', originalQuestion: 'Proceed?', userResponse: { ts: 1, text: 'Approved' },
+      } },
+    })
+    expect(result.outcome).toBe('useful')
+    expect(result.runId).toBe('old-run')
+    expect(result.sessionKey).toBe('old-thread')
+    expect(getOrCreateV2Session).toHaveBeenCalledWith('old-space', 'old-thread', expect.any(Object), 'old-engine', environment.workDir)
+    expect(createSession).not.toHaveBeenCalled()
+    expect(resolveExecutionEnvironment).not.toHaveBeenCalled()
+    expect(store.insertRun).not.toHaveBeenCalled()
+    expect(openSessionWriter).toHaveBeenCalledWith(environment.spacePath, 'app-1', 'old-run')
+    rmSync(directory, { recursive: true, force: true })
   })
 })

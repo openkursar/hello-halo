@@ -1,3 +1,4 @@
+import { openWorkNotification, type WorkNavigationTarget } from './utils/people-navigation'
 /**		      	    				  	  	  	 		 		       	 	 	         	 	    					 
  * Halo - Main App Component
  */
@@ -664,6 +665,7 @@ export default function App() {
   // These run globally so events are captured even when AppsPage is not mounted
   useEffect(() => {
     console.log('[App] Registering app event listeners')
+    void useAppsStore.getState().loadAllStates()
 
     const unsubStatus = api.onAppStatusChanged((data) => {
       const { appId, state } = data as { appId: string; state: unknown }
@@ -690,12 +692,8 @@ export default function App() {
 
     // Deep navigation: notification click → navigate to specific App's Activity Thread
     const unsubNavigate = api.onAppNavigate((data) => {
-      const { appId } = data as { appId: string }
-      if (appId) {
-        console.log(`[App] Notification deep navigation: appId=${appId}`)
-        setInitialAppId(appId)
-        setView('apps')
-      }
+      const target = data as WorkNavigationTarget
+      if (target.appId) void openWorkNotification(target)
     })
 
     return () => {
@@ -785,6 +783,7 @@ export default function App() {
   useEffect(() => {
     const unsub = api.onNotificationToast((data) => {
       const { id, title, body, bodyFormat, variant, duration, appId, action } = data as ToastPayload
+      const target = data as ToastPayload & WorkNavigationTarget
 
       // A declared link action wins over app deep-navigation: the sender asked
       // for a specific destination, which appId can only approximate.
@@ -794,8 +793,7 @@ export default function App() {
           ? {
             label: t('View'),
             onClick: () => {
-              setInitialAppId(appId)
-              setView('apps')
+              void openWorkNotification(target)
             },
           }
           : undefined

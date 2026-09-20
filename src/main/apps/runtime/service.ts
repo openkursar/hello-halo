@@ -32,6 +32,7 @@ import type {
   EscalationResponse,
   EscalationQuestion,
   ActivityQueryOptions,
+  PendingDecisionQuery,
   ActivityEntry,
   AutomationRun,
   RunStartedHandler,
@@ -45,6 +46,7 @@ import { Semaphore } from './concurrency'
 import { executeRun } from './execute'
 import { injectIntoActiveRun, isRunActive } from './active-runs'
 import { readSessionMessages } from './session-store'
+import { legacySessionEnvironmentKey } from './execution-environment'
 import { getActiveTeamRuntime } from './team'
 import { truncateUtf16Safe } from './text-truncate'
 import { getSpace } from '../../services/space.service'
@@ -66,9 +68,6 @@ const MAX_CONSECUTIVE_ERRORS = 5
 
 /** Keep-alive reason string for the background service */
 const KEEP_ALIVE_REASON = 'automation-apps-active'
-
-/** Default escalation timeout in hours (used when spec.escalation.timeout_hours is not set) */
-const DEFAULT_ESCALATION_TIMEOUT_HOURS = 24
 
 /** How often to check for timed-out escalations (5 minutes) */
 const ESCALATION_CHECK_INTERVAL_MS = 5 * 60 * 1000
@@ -93,7 +92,13 @@ const INTERRUPTED_RUN_MESSAGE = 'Interrupted — Halo stopped while this run was
  * @returns Fully initialized AppRuntimeService
  */
 export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService {
-  const answeringTeamDecisions = new Set<string>()
+  const queuedAutomatic = new Map<string, Set<AbortController>>()
+  const intentionallyStoppedRuns = new Set<string>()
+  const activeRunControllers = new Map<string, AbortController>()
+  const continuationDispatches = new Set<string>()
+  let continuationInterval: ReturnType<typeof setInterval> | null = null
+  let shuttingDown = false
+  let drainingContinuations = false
   const { store, appManager, scheduler, eventRouter, memory, background } = deps
   const imSessionRegistry = deps.imSessionRegistry ?? null
 
@@ -224,14 +229,20 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     sessions: ImSessionRecord[]
   ): string | null {
     const space = app.spaceId ? getSpace(app.spaceId) : null
-    if (!space?.path) return null
-
     const sections: string[] = []
 
     for (const session of sessions) {
       // Derive JSONL runId — mirrors deriveRunId() in app-chat.ts
       const chatRunId = `chat-${session.channel}-${session.chatType}-${session.chatId}`
-      const messages = readSessionMessages(space.path, app.id, chatRunId)
+      const sessionKey = `app-chat:${app.id}:${session.channel}:${session.chatType}:${session.chatId}`
+      const environment = store.getSessionEnvironment(sessionKey)
+        ?? store.getSessionEnvironment(legacySessionEnvironmentKey(app.id, chatRunId))
+      const spacePath = environment?.spacePath ?? space?.path
+      if (!spacePath) {
+        console.warn('[Runtime] IM trigger history unavailable: missing session environment', { appId: app.id, sessionKey })
+        continue
+      }
+      const messages = readSessionMessages(spacePath, app.id, chatRunId)
       if (messages.length === 0) continue
 
       // ── Group into turns ──────────────────────────────────────────────────
@@ -349,8 +360,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       const state = service.getAppState(appId)
       broadcastToAll('app:status_changed', { appId, state: state as unknown as Record<string, unknown> })
       sendToRenderer('app:status_changed', { appId, state })
-    } catch (_err) {
-      // Non-fatal — continue execution
+    } catch (error) {
+      console.error('[Runtime] Failed to publish execution state', { appId, error })
     }
   }
 
@@ -382,7 +393,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   function admitAutomaticRun(appId: string): { app: InstalledApp } | { skipReason: string } {
     const app = appManager.getApp(appId)
     if (!app) return { skipReason: 'app no longer installed' }
-    if (app.status !== 'active') return { skipReason: `status=${app.status}` }
+    if (app.status !== 'active' && app.status !== 'waiting_user') return { skipReason: `status=${app.status}` }
 
     // A question put to the user is the app declaring it cannot proceed alone.
     // Starting the next run regardless would work around the person it just
@@ -392,7 +403,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     // The previous run may still be going when the next trigger lands (a long
     // run, or one held behind the global slot limit).
-    if (isAppBusy(appId)) return { skipReason: 'previous run still active' }
+    if (isAppBusy(appId) || store.hasQueuedSoloContinuation(appId)) return { skipReason: 'previous run still active or continuation queued' }
 
     return { app }
   }
@@ -413,24 +424,10 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       throw new AppNotFoundError(appId)
     }
 
-    if (app.status === 'error') {
-      // Manual trigger from error state is treated as user-initiated retry.
-      // Resume resets status to 'active' and re-activates the scheduler,
-      // which is the same path as pause → resume in the UI.
-      console.log(`[Runtime] app:trigger recovering from error state: ${appId}`)
-      appManager.resume(appId)
-    } else if (app.status === 'paused') {
-      // Manual trigger from paused state: auto-resume so the user can
-      // run on demand without a separate resume step.  The scheduler
-      // is re-activated, and the trigger continues below.
-      console.log(`[Runtime] app:trigger auto-resuming paused app: ${appId}`)
-      appManager.resume(appId)
-    } else if (app.status !== 'active') {
-      // waiting_user and any other non-active states are not runnable.
+    if (!['active', 'waiting_user', 'paused', 'error'].includes(app.status)) {
       throw new AppNotRunnableError(appId, app.status)
     }
-
-    if (isAppBusy(appId)) {
+    if (isAppBusy(appId) || store.hasQueuedSoloContinuation(appId)) {
       throw new ConcurrencyLimitError(DEFAULT_MAX_CONCURRENT, appId)
     }
 
@@ -448,6 +445,17 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     }
 
     return { app, trigger }
+  }
+
+  function recordSkippedAutomatic(app: InstalledApp, trigger: TriggerContext, reason: string): AppRunResult {
+    const now = Date.now()
+    const runId = randomUUID()
+    const sessionKey = `${app.id}:${runId}`
+    store.insertRun({ runId, appId: app.id, sessionKey, status: 'skipped', triggerType: trigger.type, startedAt: now })
+    store.completeRun(runId, { status: 'skipped', finishedAt: now, durationMs: 0 })
+    emitActivityEntry({ id: randomUUID(), appId: app.id, runId, sessionKey, type: 'run_skipped', ts: now, content: { summary: reason, status: 'skipped' } })
+    console.log('[Runtime] Queued automatic execution skipped', { appId: app.id, runId, reason })
+    return { appId: app.id, runId, sessionKey, outcome: 'noop', startedAt: now, finishedAt: now, durationMs: 0 }
   }
 
   // ── Helper: Execute with concurrency control ────────
@@ -474,9 +482,22 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       console.log(`[Runtime] app:queued (waiting for global slot): ${app.id}`)
       options?.onQueued?.()
 
+      const queuedController = new AbortController()
+      const automatic = trigger.type === 'schedule' || trigger.type === 'event'
+      if (automatic) {
+        const queued = queuedAutomatic.get(app.id) ?? new Set<AbortController>()
+        queued.add(queuedController)
+        queuedAutomatic.set(app.id, queued)
+      }
       try {
-        await semaphore.acquire()
+        await semaphore.acquire(queuedController.signal)
+      } catch (error) {
+        if (!queuedController.signal.aborted) throw error
+        return recordSkippedAutomatic(app, trigger, typeof queuedController.signal.reason === 'string' ? queuedController.signal.reason : 'Queued automatic execution cancelled')
       } finally {
+        const automaticQueue = queuedAutomatic.get(app.id)
+        automaticQueue?.delete(queuedController)
+        if (automaticQueue?.size === 0) queuedAutomatic.delete(app.id)
         // Whether we got the slot or were rejected (e.g. shutdown), decrement queued count.
         // Only remove the key when the last queued run for this app has been resolved.
         const remaining = (pendingTriggers.get(app.id) ?? 1) - 1
@@ -485,9 +506,33 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         } else {
           pendingTriggers.set(app.id, remaining)
         }
+        if (queuedController.signal.aborted) {
+          broadcastAppStatus(app.id)
+          drainContinuations()
+        }
       }
     }
 
+    const currentApp = appManager.getApp(app.id)
+    if (!currentApp || currentApp.status === 'uninstalled') {
+      semaphore.release()
+      console.warn('[Runtime] Execution cancelled after resource wait: person unavailable', { appId: app.id, runId: options?.existingRunId })
+      throw new AppNotFoundError(app.id)
+    }
+    // Permissions may be revoked while this execution waits for a resource slot.
+    app = currentApp
+    if (trigger.type === 'schedule' || trigger.type === 'event') {
+      const current = currentApp
+      if (!current || !['active', 'waiting_user'].includes(current.status) || store.hasPendingSoloEscalation(app.id) || store.hasQueuedSoloContinuation(app.id)) {
+        semaphore.release()
+        return recordSkippedAutomatic(app, trigger, 'Automatic execution is paused or waiting for a decision')
+      }
+    }
+    if (options?.existingRunId && store.isRunClosed(options.existingRunId)) {
+      semaphore.release()
+      throw new Error('The original task was closed before continuing')
+    }
+    let executingRunId: string | undefined
     const abortController = new AbortController()
     // Use a unique per-run key so concurrent runs of the same App
     // each get their own abort controller entry.
@@ -498,6 +543,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     broadcastAppStatus(app.id)
 
     try {
+      if (options?.existingRunId) store.reopenRun(options.existingRunId)
       const result = await executeRun({
         app,
         trigger,
@@ -512,6 +558,8 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         // the started/finished event pair semantically meaningful for
         // dashboards that count in-flight runs.
         onRunStarted: ({ runId, sessionKey, startedAt }) => {
+          executingRunId = runId
+          activeRunControllers.set(runId, abortController)
           emitRunStarted({
             appId: app.id,
             runId,
@@ -581,33 +629,11 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       const outcome = result.outcome as RunOutcome
       appManager.updateLastRun(app.id, outcome, result.errorMessage)
 
-      // Handle escalation result.
-      //
-      // The question belongs to THIS run, so it is looked up by run rather than
-      // by "the app's newest escalation" — an app can hold several unanswered
-      // questions, and answering one must not depend on it being the latest.
-      // Earlier questions from other runs are deliberately left open.
-      if (result.outcome === 'useful' && store.getRun(result.runId)?.status === 'waiting_user') {
-        const pendingEntry = store
-          .getEntriesForRun(result.runId)
-          .find(e => e.type === 'escalation' && !e.userResponse && !e.content.resolution)
-        if (pendingEntry) {
-          appManager.updateStatus(app.id, 'waiting_user', {
-            pendingEscalationId: pendingEntry.id,
-          })
-        } else {
-          console.warn(
-            `[Runtime] Run ended waiting_user with no pending escalation entry: ` +
-            `app=${app.id}, run=${result.runId}`
-          )
-        }
-      }
-
       // Handle consecutive errors -> auto-pause
-      if (outcome === 'error') {
+      if (outcome === 'error' && !intentionallyStoppedRuns.has(result.runId)) {
         const recentRuns = store.getRunsForApp(app.id, MAX_CONSECUTIVE_ERRORS)
         const consecutiveErrors = countConsecutiveErrors(recentRuns)
-        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS && ['active', 'waiting_user'].includes(appManager.getApp(app.id)?.status ?? '')) {
           console.warn(
             `[Runtime] Auto-pausing app=${app.id}: ${consecutiveErrors} consecutive errors`
           )
@@ -640,6 +666,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
               : `${app.spec.name} completed`
             notifyAppEvent(app.spec.name, body, {
               appId: app.id,
+              runId: result.runId,
             })
           }
         } catch (notifyErr) {
@@ -648,9 +675,25 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       }
 
       return result
+    } catch (error) {
+      if (options?.existingRunId) {
+        const message = error instanceof Error ? error.message : String(error)
+        for (const failed of store.failRuns([options.existingRunId], message)) {
+          console.error('[Runtime] Continuation failed before execution could settle', { appId: app.id, runId: failed.runId, error })
+          emitActivityEntry({ id: randomUUID(), appId: app.id, runId: failed.runId,
+            sessionKey: failed.sessionKey, type: 'run_error', ts: failed.finishedAt ?? Date.now(),
+            content: { summary: message, error: message, status: 'error' } })
+        }
+      }
+      throw error
     } finally {
+      if (executingRunId) {
+        activeRunControllers.delete(executingRunId)
+        intentionallyStoppedRuns.delete(executingRunId)
+      }
       runningAbortControllers.delete(executionKey)
       semaphore.release()
+      drainContinuations()
 
       // Broadcast run-end status (app transitions back to 'idle' or other state)
       broadcastAppStatus(app.id)
@@ -661,13 +704,104 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   function countConsecutiveErrors(runs: AutomationRun[]): number {
     let count = 0
     for (const run of runs) {
-      if (run.status === 'error') {
+      if (run.status === 'error' && !store.wasRunStopped(run.runId) && !store.isRunClosed(run.runId)) {
         count++
       } else {
         break
       }
     }
     return count
+  }
+
+  function publishDecision(entry: ActivityEntry): void {
+    try {
+      sendToRenderer('app:activity_entry:new', { appId: entry.appId, entry })
+      broadcastToAll('app:activity_entry:new', { appId: entry.appId, entry: entry as unknown as Record<string, unknown> })
+      if (entry.userResponse) {
+        const payload = { appId: entry.appId, entryId: entry.id, response: entry.userResponse, ...entry.content.teamContext }
+        sendToRenderer('app:escalation:resolved', payload)
+        broadcastToAll('app:escalation:resolved', payload)
+      }
+      broadcastAppStatus(entry.appId)
+    } catch (error) {
+      console.error('[Runtime] Decision persisted but live update failed', { appId: entry.appId, entryId: entry.id, error })
+    }
+  }
+
+  function finishContinuation(entry: ActivityEntry, error?: string): void {
+    continuationDispatches.delete(entry.id)
+    store.updateContinuation(entry.id, error ? shuttingDown ? 'queued' : 'failed' : 'completed', error)
+    console[error ? 'error' : 'log']('[Runtime] Decision continuation settled', { appId: entry.appId, entryId: entry.id, error })
+    const current = store.getEntry(entry.id)
+    if (current) publishDecision(current)
+    drainContinuations()
+  }
+
+  function drainContinuations(): void {
+    if (shuttingDown || drainingContinuations) return
+    drainingContinuations = true
+    try {
+      dispatchContinuations()
+    } catch (error) {
+      console.error('[Runtime] Durable continuation dispatch failed; retained for retry', error)
+    } finally {
+      drainingContinuations = false
+    }
+  }
+
+  function dispatchContinuations(): void {
+    for (const entry of store.getQueuedContinuations()) {
+      if (continuationDispatches.has(entry.id)) continue
+      const team = entry.content.teamContext
+      if (!team && isAppBusy(entry.appId)) continue
+      const app = appManager.getApp(entry.appId)
+      if (!app || !entry.userResponse || entry.content.resolution || store.isRunClosed(entry.runId)) {
+        console.warn('[Runtime] Cancelled unavailable continuation', { entryId: entry.id, appId: entry.appId })
+        store.updateContinuation(entry.id, 'cancelled')
+        continue
+      }
+      if (team && !getActiveTeamRuntime()) continue
+      continuationDispatches.add(entry.id)
+      const onStarted = (): void => {
+        store.updateContinuation(entry.id, 'running')
+        publishDecision(store.getEntry(entry.id)!)
+      }
+      if (team) {
+        const decision = formatEscalationAnswer(getEscalationQuestions(entry.content), entry.userResponse)
+        try {
+          if (store.needsDecisionReceipt(entry.id)) {
+            getActiveTeamRuntime()!.blackboard.postActivity({
+              id: `decision:${entry.id}`, teamId: team.teamId, epochId: team.epochId,
+              kind: 'decision', actorAppId: entry.appId, subject: entry.content.question || entry.content.summary,
+              body: decision, status: 'ok', refId: entry.id,
+            })
+            store.markDecisionReceiptPublished(entry.id)
+          }
+        } catch (error) {
+          console.error('[Runtime] Could not publish durable answer receipt', { entryId: entry.id, teamId: team.teamId, error })
+        }
+        void getActiveTeamRuntime()!.resumeFromEscalation({
+          teamId: team.teamId, epochId: team.epochId, appId: entry.appId, taskId: team.taskId,
+          continuationId: entry.id, response: decision, question: entry.content.question || entry.content.summary,
+          onDeferred: () => continuationDispatches.delete(entry.id),
+          onStarted,
+          onSettled: error => finishContinuation(entry, error),
+        }).then(accepted => {
+          if (!accepted) finishContinuation(entry, 'The original team task is unavailable')
+        }).catch(error => finishContinuation(entry, error instanceof Error ? error.message : String(error)))
+      } else {
+        const run = store.getRun(entry.runId)
+        if (!run?.sessionId) {
+          finishContinuation(entry, 'The original execution context is unavailable; no replacement task was started')
+          continue
+        }
+        const trigger = buildEscalationTriggerContext(app, entry.content.question || entry.content.summary,
+          getEscalationQuestions(entry.content), entry.userResponse, run.sessionId)
+        void executeWithConcurrency(app, trigger, { existingRunId: run.runId, existingSessionKey: run.sessionKey, onStarted })
+          .then(result => finishContinuation(entry, result.outcome === 'error' ? result.errorMessage || 'Continuation failed' : undefined))
+          .catch(error => finishContinuation(entry, error instanceof Error ? error.message : String(error)))
+      }
+    }
   }
 
   // ── Helper: Check and auto-timeout stale escalations ──
@@ -730,98 +864,22 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     }
   }
 
-  /**
-   * Periodically scans for pending escalations that have exceeded their
-   * timeout (default: 24 hours). Timed-out escalations are:
-   * 1. Auto-resolved with a timeout response
-   * 2. Recorded as a run_error activity entry
-   * 3. App status changed from waiting_user → error
-   * 4. Desktop notification sent to inform the user
-   */
   function checkEscalationTimeouts(): void {
     try {
-      const pendingEscalations = store.getAllPendingEscalations()
-      // No early return here: the data-pruning piggyback at the end of this
-      // function must run on every tick — "no pending escalations" is the
-      // common state, and returning early starved pruneOldDataIfNeeded()
-      // forever (old runs were never cleaned up).
-      const now = Date.now()
-
-      for (const entry of pendingEscalations) {
-        // Team decisions outlive the execution and remain answerable after idle cleanup.
-        if (entry.content.teamContext) continue
-        const app = appManager.getApp(entry.appId)
-        if (!app) continue
-
-        // Only process apps that are actually in waiting_user state
-        if (app.status !== 'waiting_user') continue
-
-        // Every unanswered question ages on its own clock. An entry that is not
-        // the app's newest one is still answerable, so it is timed out on its
-        // own merits rather than discarded for being superseded.
-
-        // Determine timeout from app spec (default: 24 hours)
-        const timeoutHours = (app.spec.type === 'automation' ? app.spec.escalation?.timeout_hours : undefined) ?? DEFAULT_ESCALATION_TIMEOUT_HOURS
-        const timeoutMs = timeoutHours * 60 * 60 * 1000
-        const elapsed = now - entry.ts
-
-        if (elapsed < timeoutMs) continue
-
-        const timeoutLabel = timeoutHours >= 24
-          ? `${Math.round(timeoutHours / 24)} day(s)`
-          : `${timeoutHours} hour(s)`
-
-        console.log(
-          `[Runtime] Escalation timed out: app=${app.id}, entry=${entry.id}, ` +
-          `elapsed=${Math.round(elapsed / 3600000)}h, timeout=${timeoutLabel}`
-        )
-
-        // 1. Auto-resolve the escalation with a timeout response
-        const timeoutResponse = {
-          ts: now,
-          text: `[Auto-closed] User did not respond within ${timeoutLabel}.`,
+      for (const entry of store.expireDecisions(Date.now())) {
+        console.log('[Runtime] Decision expired', { appId: entry.appId, entryId: entry.id, runId: entry.runId })
+        publishDecision(entry)
+        getActiveTeamRuntime()?.reconcileAwaitingDecision(entry.appId)
+        const run = store.getRun(entry.runId)
+        if (run && !store.getEntriesForRun(run.runId).some(item => item.type === 'escalation' && !item.userResponse && !item.content.resolution)) {
+          store.updateRunStatus(run.runId, 'error', 'Decision deadline expired without an answer')
         }
-        store.updateEntryResponse(entry.id, timeoutResponse)
-
-        // 2. Insert a run_error activity entry
-        const errorEntry = {
-          id: randomUUID(),
-          appId: app.id,
-          runId: entry.runId,
-          type: 'run_error' as const,
-          ts: now,
-          sessionKey: entry.sessionKey,
-          content: {
-            summary: `Escalation timed out — user did not respond within ${timeoutLabel}.`,
-            status: 'error' as const,
-            error: `Escalation timeout (${timeoutLabel})`,
-          },
-        }
-
-        emitActivityEntry(errorEntry)
-
-        // 3. Transition app status: waiting_user → error
-        try {
-          appManager.updateStatus(app.id, 'error', {
-            errorMessage: `Escalation timed out after ${timeoutLabel}`,
-          })
-        } catch (statusErr) {
-          console.error(`[Runtime] Failed to update status after escalation timeout: app=${app.id}:`, statusErr)
-        }
-
-        // 4. Notify the user
-        notifyAppEvent(
-          app.spec.name,
-          `Escalation timed out — no response within ${timeoutLabel}.`,
-          { appId: app.id }
-        )
       }
-    } catch (err) {
-      console.error('[Runtime] Escalation timeout check failed:', err)
+      console.log('[Runtime] Durable continuation state', store.getContinuationSummary())
+      pruneOldDataIfNeeded()
+    } catch (error) {
+      console.error('[Runtime] Decision expiration failed', error)
     }
-
-    // Piggyback data pruning on the same interval (self-throttled to 24h)
-    pruneOldDataIfNeeded()
   }
 
   // ── Helper: Map subscription to scheduler job ───────
@@ -1002,15 +1060,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         state.keepAliveDisposer()
       }
 
-      // Abort all running executions for this App (handles concurrent runs)
-      const prefix = `${appId}:`
-      for (const [key, controller] of Array.from(runningAbortControllers.entries())) {
-        if (key.startsWith(prefix)) {
-          controller.abort()
-          runningAbortControllers.delete(key)
-        }
-      }
-
       activations.delete(appId)
       console.log(`[Runtime] App deactivated: ${appId}`)
     },
@@ -1155,6 +1204,31 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     // ── State Queries ───────────────────────────────
 
+    getDirectoryRuntimeSnapshot() {
+      const result: import('../../../shared/apps/people-directory').DirectoryRuntimeSnapshot = {}
+      for (const key of runningAbortControllers.keys()) {
+        const appId = key.slice(0, key.indexOf(':'))
+        const row = result[appId] ??= { runningCount: 0, queued: false }
+        row.runningCount++
+      }
+      for (const [appId, count] of pendingTriggers) {
+        const row = result[appId] ??= { runningCount: 0, queued: false }
+        row.queued = count > 0
+      }
+      for (const [appId, activation] of activations) {
+        const row = result[appId] ??= { runningCount: 0, queued: false }
+        for (const jobId of activation.schedulerJobIds) {
+          const next = scheduler.getJob(jobId)?.nextRunAtMs
+          if (next !== undefined && (row.nextRunAtMs === undefined || next < row.nextRunAtMs)) row.nextRunAtMs = next
+        }
+      }
+      return result
+    },
+
+    getAllAppStates(): Record<string, AutomationAppState> {
+      return Object.fromEntries(appManager.listApps({ type: 'automation' }).map(app => [app.id, service.getAppState(app.id)]))
+    },
+
     getAppState(appId: string): AutomationAppState {
       const app = appManager.getApp(appId)
       if (!app) {
@@ -1169,28 +1243,17 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       const isRunning = Array.from(runningAbortControllers.keys()).some(k => k.startsWith(appPrefix))
       const isQueued = (pendingTriggers.get(appId) ?? 0) > 0
 
-      switch (app.status) {
-        case 'active':
-          if (isRunning) status = 'running'
-          else if (isQueued) status = 'queued'
-          else status = 'idle'
-          break
-        case 'paused':
-          status = 'paused'
-          break
-        case 'waiting_user':
-          status = 'waiting_user'
-          break
-        case 'error':
-        case 'needs_login':
-          status = 'error'
-          break
-        default:
-          status = 'idle'
-      }
-
+      const counts = store.getDecisionCounts(appId)
+      const automaticEnabled = app.status === 'active' || app.status === 'waiting_user'
+      status = isRunning ? 'running' : isQueued || counts.continuations > 0 ? 'queued'
+        : counts.pending > 0 ? 'waiting_user' : automaticEnabled ? 'idle' : app.status === 'paused' ? 'paused' : 'error'
       const state: AutomationAppState = {
         status,
+        automaticEnabled,
+        runningCount: Array.from(runningAbortControllers.keys()).filter(key => key.startsWith(appPrefix)).length,
+        pendingDecisionCount: counts.pending,
+        pendingSoloDecisionCount: counts.solo,
+        continuationCount: counts.continuations,
         pendingEscalationId: app.pendingEscalationId,
       }
 
@@ -1239,124 +1302,60 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     // ── Escalation ──────────────────────────────────
 
-    async respondToEscalation(
-      appId: string,
-      entryId: string,
-      response: EscalationResponse
-    ): Promise<void> {
-      // Verify the escalation exists and is pending
-      const entry = store.getPendingEscalation(appId, entryId)
-      if (!entry) {
-        throw new EscalationNotFoundError(appId, entryId)
-      }
-
-      const teamContext = entry.content.teamContext
-      if (teamContext) {
-        if (answeringTeamDecisions.has(entryId)) throw new Error('This decision is already being answered')
-        answeringTeamDecisions.add(entryId)
-        try {
-          const runtime = getActiveTeamRuntime()
-          // Restates each question beside its answer when several were asked:
-          // the member is woken with this text and cannot re-read the card.
-          const decision =
-            formatEscalationAnswer(getEscalationQuestions(entry.content), response) || 'Proceed.'
-          const resumed = await runtime?.resumeFromEscalation({
-            teamId: teamContext.teamId, epochId: teamContext.epochId,
-            appId, taskId: teamContext.taskId, response: decision,
-            question: entry.content.question || entry.content.summary,
-          })
-          if (!resumed) throw new Error('The task is unavailable. Your decision remains pending.')
-          store.updateEntryResponse(entryId, response)
-          runtime!.reconcileAwaitingDecision(appId)
-          try {
-            runtime!.blackboard.postActivity({
-              id: `decision:${entryId}`, teamId: teamContext.teamId, epochId: teamContext.epochId,
-              kind: 'decision', actorAppId: appId, subject: entry.content.question || entry.content.summary,
-              body: decision, status: 'ok', refId: entryId,
-            })
-          } catch (error) {
-            console.error('[Runtime] Decision receipt could not be added to task history', { appId, entryId, teamId: teamContext.teamId, error })
-          }
-          const stillWaiting = store.getAllPendingEscalations().some(item => item.appId === appId)
-          const app = appManager.getApp(appId)
-          if (app?.status === 'waiting_user' && !stillWaiting) appManager.updateStatus(appId, 'active')
-          broadcastToAll('app:escalation:resolved', { appId, entryId, response, teamId: teamContext.teamId, epochId: teamContext.epochId })
-          sendToRenderer('app:escalation:resolved', { appId, entryId, response, teamId: teamContext.teamId, epochId: teamContext.epochId })
-          console.log(`[Runtime] Team decision accepted: app=${appId} entry=${entryId} team=${teamContext.teamId} epoch=${teamContext.epochId}`)
-        } catch (error) {
-          console.error('[Runtime] Team decision resume failed; leaving answer pending', { appId, entryId, error })
-          throw error
-        } finally { answeringTeamDecisions.delete(entryId) }
-        return
-      }
-
-      // Record the user's response
-      store.updateEntryResponse(entryId, response)
-
-      console.log(`[Runtime] Escalation responded: app=${appId}, entry=${entryId}`)
-
-      // Broadcast escalation resolved event for multi-client sync
-      broadcastToAll('app:escalation:resolved', { appId, entryId, response })
-      sendToRenderer('app:escalation:resolved', { appId, entryId, response })
-
-      // Leave waiting_user only once nothing is left to answer — the app may
-      // hold questions from other runs, and clearing the state early both lets
-      // the scheduler start work the user has not unblocked and discards those
-      // questions through the status-change cleanup.
-      const app = appManager.getApp(appId)
-      if (app && app.status === 'waiting_user' && !store.hasPendingSoloEscalation(appId)) {
-        appManager.updateStatus(appId, 'active')
-      }
-
-      // If this digital human is also in an office, what the office reads is
-      // derived from the very entry just answered — and an escalation raised
-      // outside a team turn is answered here and nowhere else, so it has to
-      // settle here too. A no-op for an app in no team.
+    async respondToEscalation(appId: string, entryId: string, response: EscalationResponse): Promise<ActivityEntry> {
+      if (!appManager.getApp(appId)) throw new AppNotFoundError(appId)
+      const existing = store.getEntry(entryId)
+      if (!existing || existing.appId !== appId) throw new EscalationNotFoundError(appId, entryId)
+      const entry = store.acceptDecision(appId, entryId, response)
+      if (!entry.content.teamContext) for (const controller of queuedAutomatic.get(appId) ?? []) controller.abort('An accepted answer takes priority over queued automatic work')
+      console.log('[Runtime] Decision accepted durably', { appId, entryId, continuation: entry.continuation?.status })
+      publishDecision(entry)
       getActiveTeamRuntime()?.reconcileAwaitingDecision(appId)
+      drainContinuations()
+      return store.getEntry(entryId)!
+    },
 
-      // Resume the original run with the escalation context.
-      // Unlike creating a new run, we reopen the existing run so the entire
-      // escalation lifecycle (original trigger → AI work → question → response → continuation)
-      // stays as a single run in the Activity Thread and session history.
-      if (app) {
-        const originalQuestion = entry.content.question || entry.content.summary
+    async retryEscalationContinuation(appId: string, entryId: string): Promise<void> {
+      const entry = store.getEntry(entryId)
+      if (!entry || entry.appId !== appId || !entry.userResponse || entry.continuation?.status !== 'failed') throw new Error('No failed continuation to retry')
+      if (entry.content.resolution || store.isRunClosed(entry.runId)) throw new Error('This task is closed')
+      store.updateContinuation(entryId, 'queued')
+      console.log('[Runtime] Decision continuation retry queued', { appId, entryId })
+      publishDecision(store.getEntry(entryId)!)
+      drainContinuations()
+    },
 
-        // Retrieve session ID from the escalation run for context recovery.
-        // The follow-up will restore the full conversation context
-        // (reasoning, tool calls, intermediate results) via session resumption.
-        const escalationRun = store.getRun(entry.runId)
-        const sessionId = escalationRun?.sessionId
-        if (sessionId) {
-          console.log(`[Runtime] Escalation follow-up will resume session: ${sessionId}`)
-        } else {
-          console.warn(`[Runtime] No session ID found for escalation run ${entry.runId}, follow-up will start fresh`)
-        }
+    confirmEscalationDeadline(appId: string, entryId: string, deadlineAt: number | null): void {
+      publishDecision(store.confirmDeadline(appId, entryId, deadlineAt))
+    },
 
-        // Reopen the original run: waiting_user → running.
-        // This causes getAppState() to return status:'running' + runningRunId
-        // so the UI immediately reflects the live state without a new timeline entry.
-        store.reopenRun(entry.runId)
-        broadcastAppStatus(appId)
+    async stopRun(appId: string, runId: string): Promise<void> {
+      const run = store.getRun(runId)
+      if (!run || run.appId !== appId) throw new Error('Task not found')
+      const controller = activeRunControllers.get(runId)
+      if (!controller) throw new Error('This execution is no longer running')
+      intentionallyStoppedRuns.add(runId)
+      store.markRunStopped(runId)
+      controller.abort()
+      console.log('[Runtime] Execution attempt stopped; decisions retained', { appId, runId })
+    },
 
-        const trigger = buildEscalationTriggerContext(
-          app,
-          originalQuestion,
-          getEscalationQuestions(entry.content),
-          response,
-          sessionId
-        )
+    async closeRun(appId: string, runId: string): Promise<void> {
+      const run = store.getRun(runId)
+      if (!run || run.appId !== appId) throw new Error('Task not found')
+      for (const entry of store.closeRun(runId)) publishDecision(entry)
+      if (activeRunControllers.has(runId)) intentionallyStoppedRuns.add(runId)
+      activeRunControllers.get(runId)?.abort()
+      console.log('[Runtime] Task closed', { appId, runId })
+      broadcastAppStatus(appId)
+    },
 
-        // Execute asynchronously, reusing the original run record
-        executeWithConcurrency(app, trigger, {
-          existingRunId: entry.runId,
-          existingSessionKey: escalationRun?.sessionKey,
-        }).catch((err) => {
-          console.error(
-            `[Runtime] Escalation follow-up run failed: app=${appId}:`,
-            err
-          )
-        })
-      }
+    getPendingInbox(options?: PendingDecisionQuery): import('../../../shared/apps/app-types').PendingDecisionInbox {
+      return store.getPendingInbox(options)
+    },
+
+    getPendingEntries(appId: string, options?: PendingDecisionQuery): ActivityEntry[] {
+      return store.getPendingEntries(appId, options)
     },
 
     // ── User-initiated Continue ─────────────────────
@@ -1368,24 +1367,18 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       }
 
       const run = store.getRun(runId)
-      if (!run) {
+      if (!run || run.appId !== appId) {
         throw new Error(`Run not found: ${runId}`)
       }
+      if (store.isRunClosed(runId)) throw new Error('This task is closed')
       if (run.status !== 'error') {
         throw new Error(`Run ${runId} is not in error state (status: ${run.status})`)
       }
 
-      // Guard: only allow continue on runs that ended due to premature LLM termination.
-      // Runs that failed for other reasons (runtime exception, AI-reported error) should
-      // be retried via triggerManually, not continued from a broken session.
-      if (!run.sessionId) {
-        console.warn(
-          `[Runtime] continueFailedRun: run ${runId} has no sessionId — ` +
-          `falling back to fresh run. This is unexpected for a premature-stop error.`
-        )
-      }
+      if (!run.sessionId) throw new Error('The original execution context is unavailable')
+      if (store.hasUnfinishedRunDecision(runId)) throw new Error('Answer or retry the original decision to continue this task')
 
-      const appIsRunning = Array.from(runningAbortControllers.keys()).some(k => k.startsWith(`${appId}:`))
+      const appIsRunning = isAppBusy(appId) || store.hasQueuedSoloContinuation(appId)
       if (appIsRunning) {
         throw new Error(`App ${appId} already has a running execution — cannot continue simultaneously`)
       }
@@ -1394,12 +1387,6 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         `[Runtime] User-initiated continue: app=${appId}, run=${runId}, ` +
         `sessionId=${run.sessionId ?? 'none'}`
       )
-
-      // Reopen the run record: error → running.
-      // This causes getAppState() to return status:'running' + runningRunId=runId
-      // so the UI immediately reflects the live state without a new timeline entry.
-      store.reopenRun(runId)
-      broadcastAppStatus(appId)
 
       const trigger = buildContinueTriggerContext(app, run.sessionId)
 
@@ -1434,16 +1421,14 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       // talking to that run with full context (the subprocess was closed to free
       // resources, but the CC session id was persisted for resume).
       const run = store.getRun(runId)
-      if (!run) {
+      if (!run || run.appId !== appId) {
         throw new Error(`Run not found: ${runId}`)
       }
-      const appIsRunning = Array.from(runningAbortControllers.keys()).some(k => k.startsWith(`${appId}:`))
+      if (store.isRunClosed(runId)) throw new Error('This task is closed')
+      const appIsRunning = isAppBusy(appId) || store.hasQueuedSoloContinuation(appId)
       if (appIsRunning) {
         throw new Error(`App ${appId} is busy with another run — try again once it finishes`)
       }
-
-      store.reopenRun(runId)
-      broadcastAppStatus(appId)
 
       // A follow-up to a run that already completed successfully (status 'ok' ⇒
       // report_to_user was called) is a conversation, not task execution: mark it
@@ -1462,6 +1447,11 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     },
 
     // ── Activity Queries ────────────────────────────
+
+    getActivityEntry(appId: string, entryId: string): ActivityEntry | null {
+      const entry = store.getEntry(entryId)
+      return entry?.appId === appId ? entry : null
+    },
 
     getActivityEntries(appId: string, options?: ActivityQueryOptions): ActivityEntry[] {
       return store.getEntriesForApp(appId, options)
@@ -1482,10 +1472,15 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     // ── Lifecycle ───────────────────────────────────
 
     async activateAll(): Promise<void> {
+      shuttingDown = false
       settleInterruptedRuns()
+      const recovered = store.recoverContinuations()
+      console.log('[Runtime] Restored durable continuation queue', { recovered })
+      drainContinuations()
+      if (!continuationInterval) continuationInterval = setInterval(drainContinuations, 5000)
 
       console.log('[Runtime] Activating all active automation apps...')
-      const apps = appManager.listApps({ status: 'active', type: 'automation' })
+      const apps = appManager.listApps({ type: 'automation' }).filter(app => app.status === 'active' || app.status === 'waiting_user')
 
       let activated = 0
       for (const app of apps) {
@@ -1510,6 +1505,9 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
     },
 
     async deactivateAll(): Promise<void> {
+      shuttingDown = true
+      if (continuationInterval) { clearInterval(continuationInterval); continuationInterval = null }
+      for (const controller of runningAbortControllers.values()) controller.abort()
       console.log('[Runtime] Deactivating all apps...')
       const appIds = Array.from(activations.keys())
 
@@ -1593,31 +1591,10 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   })
 
   // ── Listen for App status changes ───────────────────
-  appManager.onAppStatusChange((appId: string, oldStatus: AppStatus, newStatus: AppStatus) => {
-    // ── Abandon questions the app can no longer answer ──────────
-    // Only when it stops for good: a paused or errored app is deactivated, so
-    // nothing would ever resume from an answer given to it. Returning to
-    // 'active' deliberately does NOT clear them — an app can be active while
-    // earlier runs still wait on a human, and discarding those was what made a
-    // second run destroy the first one's question.
-    if (newStatus === 'paused' || newStatus === 'error') {
-      try {
-        const closed = store.closeOrphanEscalations(appId)
-        if (closed > 0) {
-          console.log(`[Runtime] Closed ${closed} unanswerable escalation(s): app=${appId}, ${oldStatus} -> ${newStatus}`)
-        }
-        try {
-          getActiveTeamRuntime()?.reconcileAwaitingDecision(appId)
-        } catch (err) {
-          console.error(`[Runtime] Failed to reconcile team decision state after escalation cleanup: app=${appId}, closed=${closed}:`, err)
-        }
-      } catch (err) {
-        console.error(`[Runtime] Failed to close escalations: app=${appId}:`, err)
-      }
-    }
-
+  appManager.onAppStatusChange((appId: string, _oldStatus: AppStatus, newStatus: AppStatus) => {
     // When an app is paused, deactivate it
     if (newStatus === 'paused' || newStatus === 'error') {
+      for (const controller of queuedAutomatic.get(appId) ?? []) controller.abort('Automatic execution paused before it started')
       service.deactivate(appId).catch(err => {
         console.error(`[Runtime] Failed to deactivate on status change: ${appId}:`, err)
       })
@@ -1654,7 +1631,11 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
   }
 
   appManager.onAppInstalled((app: InstalledApp) => announceListChange(app.id, 'installed'))
-  appManager.onAppUninstalled((app: InstalledApp) => announceListChange(app.id, 'uninstalled'))
+  appManager.onAppUninstalled((app: InstalledApp) => {
+    for (const [key, controller] of runningAbortControllers) if (key.startsWith(`${app.id}:`)) controller.abort()
+    for (const controller of queuedAutomatic.get(app.id) ?? []) controller.abort()
+    announceListChange(app.id, 'uninstalled')
+  })
 
   return service
 }

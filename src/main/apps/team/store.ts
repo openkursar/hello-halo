@@ -80,6 +80,7 @@ function rowToMember(row: TeamMemberRow): TeamMember {
     role: row.role,
     isLead: row.is_lead === 1,
     aiProvisioned: row.ai_provisioned === 1,
+    isSystemCoordinator: row.is_system_coordinator === 1,
     addedAt: row.added_at,
     ownerNodeId: row.owner_node_id,
     origin: row.origin as 'local' | 'remote',
@@ -326,11 +327,11 @@ export class TeamStore implements ITeamStore {
       INSERT INTO team_members (
         team_id, app_id, member_name, role, is_lead, ai_provisioned, added_at, owner_display_name,
         owner_node_id, origin, member_identity, scope_json, duty, delegated_policy_json, accepts_checks,
-        awaiting_decision
+        awaiting_decision, is_system_coordinator
       ) VALUES (
         @team_id, @app_id, @member_name, @role, @is_lead, @ai_provisioned, @added_at, @owner_display_name,
         @owner_node_id, @origin, @member_identity, @scope_json, @duty, @delegated_policy_json, @accepts_checks,
-        @awaiting_decision
+        @awaiting_decision, @is_system_coordinator
       )
     `)
     this.stmtSetMemberScope = db.prepare(`
@@ -653,6 +654,7 @@ export class TeamStore implements ITeamStore {
       role: member.role,
       is_lead: member.isLead ? 1 : 0,
       ai_provisioned: member.aiProvisioned ? 1 : 0,
+      is_system_coordinator: member.isSystemCoordinator ? 1 : 0,
       added_at: member.addedAt,
       // Default to a locally-owned member so existing callers need not change.
       owner_node_id: member.ownerNodeId ?? SELF_NODE_ID,
@@ -669,6 +671,11 @@ export class TeamStore implements ITeamStore {
 
   removeMember(teamId: string, appId: string): boolean {
     return this.stmtRemoveMember.run(teamId, appId).changes > 0
+  }
+
+  markSystemCoordinator(teamId: string, appId: string): void {
+    this.db.prepare('UPDATE team_members SET is_system_coordinator = 1 WHERE team_id = ? AND app_id = ?')
+      .run(teamId, appId)
   }
 
   setMemberScope(teamId: string, appId: string, scopeJson: string | null): void {
@@ -720,6 +727,13 @@ export class TeamStore implements ITeamStore {
   }
 
   /** Cross-team lookup: every membership for an app (one app may join many teams). */
+  listDirectoryMemberships(): import('../../../shared/apps/people-directory').DirectoryMembership[] {
+    const rows = this.db.prepare(`SELECT m.app_id AS appId, m.team_id AS teamId, t.name AS teamName,
+      m.is_system_coordinator AS coordinator FROM team_members m JOIN teams t ON t.id = m.team_id`)
+      .all() as Array<{ appId: string; teamId: string; teamName: string; coordinator: number }>
+    return rows.map(({ coordinator, ...row }) => ({ ...row, isSystemCoordinator: coordinator === 1 }))
+  }
+
   listMembersByAppId(appId: string): TeamMember[] {
     return (this.stmtListMembersByAppId.all(appId) as TeamMemberRow[]).map(rowToMember)
   }
@@ -855,6 +869,7 @@ export class TeamStore implements ITeamStore {
           role: m.role,
           is_lead: m.isLead ? 1 : 0,
           ai_provisioned: 0,
+          is_system_coordinator: mine?.is_system_coordinator ?? 0,
           added_at: now,
           owner_node_id: ownedHere ? SELF_NODE_ID : m.ownerNodeId,
           origin: ownedHere ? 'local' : 'remote',

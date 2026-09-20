@@ -21,23 +21,37 @@ import { CreateSpaceDialog } from '../components/space/CreateSpaceDialog'
 import { SortableSpaceList } from '../components/space/SortableSpaceList'
 import { Blocks, ArrowRight, AlertCircle, SendHorizontal, Unplug, BookOpen } from 'lucide-react'
 import { api } from '../api'
-import { useTranslation } from '../i18n'
-import { useAppsStore } from '../stores/apps.store'
+import { useTranslation, getCurrentLanguage } from '../i18n'
 import { useAppsPageStore } from '../stores/apps-page.store'
-import type { InstalledApp } from '../../shared/apps/app-types'
+import type { PersonDirectoryRecord, StudioSummary } from '../../shared/apps/people-directory'
 import type { AppType } from '../../shared/apps/spec-types'
 
 export function HomePage() {
   const { t } = useTranslation()
   const { setView } = useAppStore()
   const { haloSpace, spaces, loadSpaces, setCurrentSpace, refreshCurrentSpace, updateSpace, deleteSpace, reorderSpaces } = useSpaceStore()
-  const { apps, loadApps } = useAppsStore()
+  const [studio, setStudio] = useState<StudioSummary | null>(null)
+  const [studioError, setStudioError] = useState(false)
+  const [studioRevision, setStudioRevision] = useState(0)
+  const language = getCurrentLanguage()
   const { setInitialAppId, setCurrentTab, setShowInstallDialog, openMarketplaceFilteredBy } = useAppsPageStore()
 
-  // Load apps on mount for the Apps card
   useEffect(() => {
-    loadApps()
-  }, [loadApps])
+    let active = true
+    let generation = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const load = async () => {
+      const request = ++generation
+      try {
+        const result = await api.appGetStudioSummary(language)
+        if (!result.success || !result.data) throw new Error(result.error ?? 'Studio summary unavailable')
+        if (active && request === generation) { setStudio(result.data); setStudioError(false) }
+      } catch (error) { if (active && request === generation) setStudioError(true); console.warn('[HomePage] Studio summary unavailable', { error }) }
+    }
+    void load()
+    const off = api.onAppListChanged(() => { if (!timer) timer = setTimeout(() => { timer = undefined; void load() }, 250) })
+    return () => { active = false; off(); if (timer) clearTimeout(timer) }
+  }, [language, studioRevision])
 
   // Dialog state
   const [showCreateDialog, setShowCreateDialog] = useState(false)
@@ -177,7 +191,9 @@ export function HomePage() {
 
           {/* Studio card — three categorized rows (digital humans / skills / MCP) */}
           <StudioCard
-            apps={apps}
+            summary={studio}
+            error={studioError}
+            onRetry={() => setStudioRevision(value => value + 1)}
             onOpenAutomationList={() => {
               setCurrentTab('my-digital-humans')
               setView('apps')
@@ -374,7 +390,9 @@ export function HomePage() {
 // ──────────────────────────────────────────────
 
 interface StudioCardProps {
-  apps: InstalledApp[]
+  summary: StudioSummary | null
+  error: boolean
+  onRetry: () => void
   onOpenAutomationList: () => void
   onOpenSkillsList: () => void
   onOpenMcpList: () => void
@@ -386,7 +404,7 @@ interface StudioCardProps {
 }
 
 function StudioCard({
-  apps,
+  summary, error, onRetry,
   onOpenAutomationList,
   onOpenSkillsList,
   onOpenMcpList,
@@ -396,10 +414,6 @@ function StudioCard({
   onBrowseMcpMarket,
 }: StudioCardProps) {
   const { t } = useTranslation()
-
-  const automationApps = apps.filter(a => a.spec.type === 'automation' && a.status !== 'uninstalled')
-  const skillApps = apps.filter(a => a.spec.type === 'skill' && a.status !== 'uninstalled')
-  const mcpApps = apps.filter(a => a.spec.type === 'mcp' && a.status !== 'uninstalled')
 
   return (
     <div
@@ -411,11 +425,13 @@ function StudioCard({
         <h2 className="text-sm font-semibold">{t('Studio')}</h2>
       </div>
 
-      <div className="flex-1 flex flex-col gap-2">
+      {error && <p role="alert" className="text-xs text-destructive">{t('Could not load Studio.')} <button onClick={event => { event.stopPropagation(); onRetry() }} className="underline">{t('Retry')}</button></p>}
+      {!summary && !error && <p role="status" className="text-xs text-muted-foreground">{t('Loading…')}</p>}
+      {summary && <div className="flex-1 flex flex-col gap-2">
         <StudioRow
           label={t('Digital Humans')}
           type="automation"
-          apps={automationApps}
+          apps={summary.automation.items} total={summary.automation.total}
           onOpenList={onOpenAutomationList}
           onSelectApp={onSelectApp}
           emptyAction={{ label: t('Create'), onAction: onCreateAutomation }}
@@ -423,7 +439,7 @@ function StudioCard({
         <StudioRow
           label={t('Skills')}
           type="skill"
-          apps={skillApps}
+          apps={summary.skill.items} total={summary.skill.total}
           onOpenList={onOpenSkillsList}
           onSelectApp={onSelectApp}
           emptyAction={{ label: t('Add from marketplace'), onAction: onBrowseSkillsMarket }}
@@ -431,12 +447,12 @@ function StudioCard({
         <StudioRow
           label={t('MCP')}
           type="mcp"
-          apps={mcpApps}
+          apps={summary.mcp.items} total={summary.mcp.total}
           onOpenList={onOpenMcpList}
           onSelectApp={onSelectApp}
           emptyAction={{ label: t('Add from marketplace'), onAction: onBrowseMcpMarket }}
         />
-      </div>
+      </div>}
 
       <div className="flex justify-end">
         <span className="text-xs text-muted-foreground flex items-center gap-1">
@@ -450,7 +466,8 @@ function StudioCard({
 interface StudioRowProps {
   label: string
   type: AppType
-  apps: InstalledApp[]
+  apps: PersonDirectoryRecord[]
+  total: number
   onOpenList: () => void
   onSelectApp: (appId: string) => void
   emptyAction: { label: string; onAction: () => void }
@@ -458,10 +475,10 @@ interface StudioRowProps {
 
 const PREVIEW_COUNT = 3
 
-function StudioRow({ label, type, apps, onOpenList, onSelectApp, emptyAction }: StudioRowProps) {
-  const isEmpty = apps.length === 0
+function StudioRow({ label, type, apps, total, onOpenList, onSelectApp, emptyAction }: StudioRowProps) {
+  const isEmpty = total === 0
   const previewApps = apps.slice(0, PREVIEW_COUNT)
-  const extraCount = Math.max(0, apps.length - PREVIEW_COUNT)
+  const extraCount = Math.max(0, total - previewApps.length)
   // Only automation apps have meaningful runtime status worth surfacing inline
   const showStatusDot = type === 'automation'
 
@@ -475,7 +492,7 @@ function StudioRow({ label, type, apps, onOpenList, onSelectApp, emptyAction }: 
       className="flex items-center gap-2 py-1 px-1 -mx-1 rounded hover:bg-secondary/60 transition-colors cursor-pointer"
     >
       <span className="text-xs font-medium text-foreground flex-shrink-0">{label}</span>
-      <span className="text-[11px] text-muted-foreground flex-shrink-0 tabular-nums">{apps.length}</span>
+      <span className="text-[11px] text-muted-foreground flex-shrink-0 tabular-nums">{total}</span>
 
       {isEmpty ? (
         <span className="text-xs text-muted-foreground/80 truncate flex-1 min-w-0">
@@ -501,7 +518,7 @@ function StudioRow({ label, type, apps, onOpenList, onSelectApp, emptyAction }: 
 }
 
 interface AppPreviewChipProps {
-  app: InstalledApp
+  app: PersonDirectoryRecord
   showStatusDot: boolean
   onSelect: () => void
 }
@@ -518,14 +535,14 @@ function AppPreviewChip({ app, showStatusDot, onSelect }: AppPreviewChipProps) {
     >
       {showStatusDot && (
         <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-          isWaiting ? 'bg-orange-400' :
-          app.status === 'active' ? 'bg-green-500/70' :
-          app.status === 'error' ? 'bg-red-500' : 'border border-muted-foreground/40'
+          isWaiting ? 'bg-halo-warning' :
+          app.status === 'active' ? 'bg-halo-success/70' :
+          app.status === 'error' ? 'bg-destructive' : 'border border-muted-foreground/40'
         }`} />
       )}
-      <span className="text-xs text-foreground truncate">{app.spec.name}</span>
+      <span className="text-xs text-foreground truncate">{app.name}</span>
       {showStatusDot && isWaiting && (
-        <AlertCircle className="w-3 h-3 text-orange-400 flex-shrink-0" />
+        <AlertCircle className="w-3 h-3 text-halo-warning flex-shrink-0" />
       )}
     </button>
   )

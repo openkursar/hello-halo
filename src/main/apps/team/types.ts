@@ -94,6 +94,7 @@ export interface TeamMemberRow {
   role: string
   is_lead: number
   ai_provisioned: number
+  is_system_coordinator: number
   added_at: number
   /** Owning node; added in migration v5 (default 'SELF' for local members). */
   owner_node_id: string
@@ -282,6 +283,7 @@ export interface TeamStore {
   getMemberByName(teamId: string, memberName: string): TeamMember | null
   getMember(teamId: string, appId: string): TeamMember | null
   listMembersByAppId(appId: string): TeamMember[]
+  listDirectoryMemberships(): import('../../../shared/apps/people-directory').DirectoryMembership[]
 
   // ── joined-office projection ──────────────────
   /**

@@ -51,17 +51,17 @@ vi.mock('../../../src/main/services/proxy-fetch', () => ({
   proxyFetch: (...a: unknown[]) => proxyFetch(...a),
 }))
 
-const applyProviderAdapter = vi.fn(() => null)
+const applyProviderAdapter = vi.fn((..._args: unknown[]) => null)
 vi.mock('../../../src/main/openai-compat-router/server/provider-adapters', () => ({
   applyProviderAdapter: (...a: unknown[]) => applyProviderAdapter(...a),
 }))
 
 // Run the queued fn inline so conversion-path assertions stay synchronous.
 // api-type: real-ish behavior driven per test via mockReturnValue.
-const getApiTypeFromUrl = vi.fn(() => 'chat_completions')
-const isValidEndpointUrl = vi.fn(() => true)
-const getEndpointUrlError = vi.fn(() => 'bad url')
-const shouldForceStream = vi.fn(() => false)
+const getApiTypeFromUrl = vi.fn((..._args: unknown[]) => 'chat_completions')
+const isValidEndpointUrl = vi.fn((..._args: unknown[]) => true)
+const getEndpointUrlError = vi.fn((..._args: unknown[]) => 'bad url')
+const shouldForceStream = vi.fn((..._args: unknown[]) => false)
 vi.mock('../../../src/main/openai-compat-router/server/api-type', () => ({
   getApiTypeFromUrl: (...a: unknown[]) => getApiTypeFromUrl(...a),
   isValidEndpointUrl: (...a: unknown[]) => isValidEndpointUrl(...a),
@@ -69,14 +69,14 @@ vi.mock('../../../src/main/openai-compat-router/server/api-type', () => ({
   shouldForceStream: (...a: unknown[]) => shouldForceStream(...a),
 }))
 
-const isNativeAnthropicHost = vi.fn(() => false)
-const normalizeSystemPrompt = vi.fn((request: unknown) => ({ request, modified: false }))
+const isNativeAnthropicHost = vi.fn((..._args: unknown[]) => false)
+const normalizeSystemPrompt = vi.fn((request: unknown, ..._args: unknown[]) => ({ request, modified: false }))
 vi.mock('../../../src/main/openai-compat-router/utils', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/main/openai-compat-router/utils')>()
   return {
     ...actual,
     isNativeAnthropicHost: (...a: unknown[]) => isNativeAnthropicHost(...a),
-    normalizeSystemPrompt: (...a: unknown[]) => normalizeSystemPrompt(...a),
+    normalizeSystemPrompt: (request: unknown, ...args: unknown[]) => normalizeSystemPrompt(request, ...args),
   }
 })
 
@@ -387,6 +387,21 @@ describe('anthropic passthrough header merge', () => {
     const ctKeys = Object.keys(headers).filter((k) => k.toLowerCase() === 'content-type')
     expect(ctKeys).toHaveLength(1)
     expect(headers[ctKeys[0]]).toBe('application/json')
+  })
+
+  it('overrides user-agent with the latest Claude Code identity', async () => {
+    const headers = await runPassthrough({
+      sdkHeaders: { 'user-agent': 'claude-cli/2.1.89 (external, cli)' },
+      customHeaders: { 'User-Agent': 'custom-client/1.0' },
+    })
+    const userAgentKeys = Object.keys(headers).filter((k) => k.toLowerCase() === 'user-agent')
+    expect(userAgentKeys).toHaveLength(1)
+    expect(headers[userAgentKeys[0]]).toBe('claude-cli/2.1.278 (external, cli)')
+  })
+
+  it('injects the latest Claude Code identity when user-agent is absent', async () => {
+    const headers = await runPassthrough({})
+    expect(headers['user-agent']).toBe('claude-cli/2.1.278 (external, cli)')
   })
 
   it('skips x-api-key when the provider supplies an Authorization header', async () => {

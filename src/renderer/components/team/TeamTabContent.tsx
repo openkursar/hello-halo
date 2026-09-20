@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import { ChevronLeft, Loader2 } from 'lucide-react'
 import { useTeamStore } from '../../stores/team.store'
 import { useAppsStore } from '../../stores/apps.store'
+import { usePeopleViewStore } from '../../stores/people-view.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
@@ -21,6 +22,8 @@ import { TeamJoinDialog } from './TeamJoinDialog'
 export function TeamTabContent() {
   const { t } = useTranslation()
 
+  const returnInbox = usePeopleViewStore(state => state.returnInbox)
+  const returnPerson = usePeopleViewStore(state => state.returnPerson)
   const error = useTeamStore(s => s.error)
   const loading = useTeamStore(s => s.isLoadingDetail)
   const currentTeamId = useTeamStore(s => s.currentTeamId)
@@ -66,6 +69,7 @@ export function TeamTabContent() {
 
   return (
     <>
+      {(returnPerson || returnInbox) && <button onClick={() => { if (returnPerson && !returnInbox) useAppsPageStore.getState().openActivityThread(returnPerson); useAppsPageStore.getState().setCurrentTab(returnInbox ? 'inbox' : 'my-digital-humans'); usePeopleViewStore.setState({ returnPerson: null, returnInbox: false }) }} className="min-h-9 shrink-0 border-b border-border px-4 text-left text-xs text-primary">{returnInbox ? t('Return to requests') : t('Return to digital human activity')}</button>}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {currentTeamId ? detail ? <TeamView key={detail.team.id} detail={detail} /> : <div className="flex flex-1 flex-col items-center justify-center gap-3 p-4">
           {loading ? <Loader2 className="animate-spin text-muted-foreground" /> : <>

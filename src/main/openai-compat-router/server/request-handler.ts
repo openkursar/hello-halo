@@ -48,6 +48,7 @@ export interface RequestHandlerOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
+const CLAUDE_CODE_USER_AGENT = 'claude-cli/2.1.278 (external, cli)'
 
 /**
  * Anthropic error type to HTTP status code mapping
@@ -284,6 +285,13 @@ async function fetchAnthropicUpstream(
       }
     }
     headers['content-type'] = contentTypeValue || 'application/json'
+
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === 'user-agent') {
+        delete headers[key]
+      }
+    }
+    headers['user-agent'] = CLAUDE_CODE_USER_AGENT
 
     return await proxyFetch(targetUrl, {
       method: 'POST',

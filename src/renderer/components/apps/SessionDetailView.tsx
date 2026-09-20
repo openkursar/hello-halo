@@ -62,22 +62,23 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
   const runtimeState = useAppsStore(s => s.appStates[appId])
   const isLive = runtimeState?.status === 'running' && runtimeState?.runningRunId === runId
 
-  // ── Premature-termination Continue affordance ──
   const activityEntries = useAppsStore(s => s.activityEntries[appId])
   const continueApp = useAppsStore(s => s.continueApp)
   const [isContinuing, setIsContinuing] = useState(false)
+  const [continueError, setContinueError] = useState(false)
 
   const errorEntry = activityEntries?.find(
-    e => e.runId === runId && e.type === 'run_error' && e.content.error === 'report_to_user not called'
+    e => e.runId === runId && e.type === 'run_error' && e.content.resumeAvailable === true
   )
-  const isPrematureTermination = !!errorEntry
+  const canResume = !!errorEntry
   const isAppBusy = runtimeState?.status === 'running' || runtimeState?.status === 'queued'
 
   const handleContinue = async () => {
     if (isContinuing || isAppBusy) return
     setIsContinuing(true)
+    setContinueError(false)
     try {
-      await continueApp(appId, runId)
+      setContinueError(!await continueApp(appId, runId))
     } finally {
       setIsContinuing(false)
     }
@@ -199,8 +200,9 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
       <Loader2 className="w-3.5 h-3.5 animate-spin" />
       <span className="text-xs">{t('Running…')}</span>
     </div>
-  ) : (isPrematureTermination ? (
-    <div className="mt-2 flex">
+  ) : (canResume ? (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      {continueError && <p role="alert" className="text-xs text-destructive">{t('Could not continue this execution. Please refresh and try again.')}</p>}
       <button
         onClick={handleContinue}
         disabled={isContinuing || isAppBusy}
@@ -218,12 +220,12 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
     <div className="h-full flex flex-col">
       {/* Live indicator — container-owned bar above the shell */}
       {isLive && (
-        <div className="flex items-center gap-2 mx-4 mt-4 px-2 py-1.5 rounded-md bg-green-500/10 border border-green-500/20 shrink-0">
+        <div className="flex items-center gap-2 mx-4 mt-4 px-2 py-1.5 rounded-md bg-halo-success/10 border border-halo-success/20 shrink-0">
           <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full rounded-full bg-green-500/60 animate-ping" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+            <span className="absolute inline-flex h-full w-full rounded-full bg-halo-success/60 animate-ping" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-halo-success" />
           </span>
-          <span className="text-xs text-green-600 dark:text-green-400">{t('Running — live')}</span>
+          <span className="text-xs text-halo-success">{t('Running — live')}</span>
         </div>
       )}
 

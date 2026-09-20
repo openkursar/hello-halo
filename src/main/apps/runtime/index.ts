@@ -32,7 +32,12 @@
  */
 
 import type { DatabaseManager } from '../../platform/store'
-import type { AppManagerService } from '../manager'
+import { getAppManager, type AppManagerService } from '../manager'
+import { previewAppSpaceChange, changeAppDefaultSpace, retainAppEnvironments } from './space-change'
+import { readSessionMessages } from './session-store'
+import { buildAppCapabilityInventory } from './capability-inventory'
+import { buildPeopleDirectory } from './people-directory'
+import { getTeamStore } from '../team'
 import type { SchedulerService } from '../../platform/scheduler'
 import type { MemoryService } from '../../platform/memory'
 import type { BackgroundService } from '../../platform/background'
@@ -55,7 +60,6 @@ import { clearAllImPermissionContexts } from './im-permission-registry'
 import { clearAllImStreamHandles } from './im-stream-registry'
 import { getConfig } from '../../foundation/config.service'
 import { getDataFolderName } from '../../foundation/product-config'
-import { getAppManager } from '../manager'
 import { onMcpAppsChange } from '../manager/service'
 import { createHaloAppsMcpServer } from '../conversation-mcp'
 import { registerAppBridge } from '../../services/app-bridge'
@@ -70,10 +74,14 @@ export type {
   AppRunStartInfo,
   AutomationAppState,
   AutomationRun,
+  ExecutionEnvironment,
+  ActivitySource,
+  EscalationContinuation,
   ActivityEntry,
   ActivityEntryContent,
   ActivityEntryType,
   ActivityQueryOptions,
+  PendingDecisionQuery,
   EscalationResponse,
   TriggerContext,
   TriggerType,
@@ -92,6 +100,7 @@ export {
 
 // Re-export concurrency for testing
 export { Semaphore } from './concurrency'
+export { createPersonContextTool } from './person-context-tool'
 
 // Re-export app chat functions
 export {
@@ -278,6 +287,16 @@ export async function initAppRuntime(
   setImSessionRegistry(registry)
   imSessionRegistryInstance = registry
 
+  for (const app of deps.appManager.listApps({ type: 'automation' })) {
+    if (app.status === 'uninstalled' || store.getSessionEnvironment(`environment-backfill:${app.id}`)) continue
+    try {
+      retainAppEnvironments(deps.appManager, store, app)
+    } catch (error) {
+      console.warn('[Runtime] Legacy environment backfill blocked; original storage must be restored', { appId: app.id, error })
+    }
+  }
+
+
   // ── Pending Relay Spool ─────────────────────────────────────────────
   // Records notify_bot pushes against their target sessions so the target's
   // AI regains awareness of them on its next inbound message.
@@ -381,6 +400,46 @@ export function getAppMemoryService(): MemoryService | null {
  */
 export function getActivityStore(): ActivityStore | null {
   return activityStoreRef
+}
+
+function spaceChangeDependencies() {
+  const manager = getAppManager()
+  if (!manager || !activityStoreRef || !runtimeService) throw new Error('App services are not initialized')
+  return { manager, store: activityStoreRef, runtime: runtimeService }
+}
+
+export function getStudioSummary(language?: string) {
+  const manager = getAppManager()
+  if (!manager) throw new Error('App manager is not initialized')
+  const coordinators = getTeamStore()?.listDirectoryMemberships().filter(member => member.isSystemCoordinator).map(member => member.appId) ?? []
+  return manager.getStudioSummary(language, coordinators)
+}
+
+export function listPeopleDirectory(query: import('../../../shared/apps/people-directory').PeopleDirectoryQuery = {}) {
+  const deps = spaceChangeDependencies()
+  return buildPeopleDirectory(deps.manager, deps.store, deps.runtime, getTeamStore()?.listDirectoryMemberships() ?? [], query)
+}
+
+export function getAppCapabilityInventory() {
+  const manager = getAppManager()
+  if (!manager || !activityStoreRef) throw new Error('App services are not initialized')
+  return buildAppCapabilityInventory(manager, activityStoreRef)
+}
+
+export function getAppSpaceChangePreview(appId: string, newSpaceId: string) {
+  return previewAppSpaceChange(spaceChangeDependencies(), appId, newSpaceId)
+}
+
+export async function moveAppDefaultSpace(appId: string, newSpaceId: string): Promise<void> {
+  await changeAppDefaultSpace(spaceChangeDependencies(), appId, newSpaceId)
+}
+
+export function readAppRunMessages(appId: string, runId: string) {
+  const run = activityStoreRef?.getRun(runId)
+  if (!run || run.appId !== appId) throw new Error('Execution is unavailable for this digital human')
+  const spacePath = run.environment?.spacePath
+  if (!spacePath) throw new Error('The original execution environment is unavailable')
+  return readSessionMessages(spacePath, appId, runId)
 }
 
 /**

@@ -512,6 +512,18 @@ export interface HaloAPI {
   weixinIlinkDisconnect: (instanceId: string) => Promise<IpcResponse>
 
   // Apps Management
+  appGetStudioSummary: (language?: string) => Promise<IpcResponse<import('../shared/apps/people-directory').StudioSummary>>
+  appListPeople: (query?: import('../shared/apps/people-directory').PeopleDirectoryQuery) => Promise<IpcResponse<import('../shared/apps/people-directory').PeopleDirectoryPage>>
+  appGetAllStates: () => Promise<IpcResponse<Record<string, import('../shared/apps/app-types').AutomationAppState>>>
+  appGetActivityEntry: (input: { appId: string; entryId: string }) => Promise<IpcResponse<import('../shared/apps/app-types').ActivityEntry | null>>
+  appGetPendingEntries: (input: { appId: string; options?: import('../shared/apps/app-types').PendingDecisionQuery }) => Promise<IpcResponse<import('../shared/apps/app-types').ActivityEntry[]>>
+  appGetPendingInbox: (options?: import('../shared/apps/app-types').PendingDecisionQuery) => Promise<IpcResponse<import('../shared/apps/app-types').PendingDecisionInbox>>
+  appRetryEscalationContinuation: (input: { appId: string; entryId: string }) => Promise<IpcResponse>
+  appConfirmEscalationDeadline: (input: { appId: string; entryId: string; deadlineAt: number | null }) => Promise<IpcResponse>
+  appCloseRun: (input: { appId: string; runId: string }) => Promise<IpcResponse>
+  appStopRun: (input: { appId: string; runId: string }) => Promise<IpcResponse>
+  appGetCapabilityInventory: () => Promise<IpcResponse<import('../shared/apps/capability-inventory').CapabilityInventory>>
+  appPreviewSpaceChange: (input: { appId: string; newSpaceId: string }) => Promise<IpcResponse<import('../shared/apps/app-environment').AppSpaceChangePreview>>
   appList: (filter?: { spaceId?: string; status?: string; type?: string }) => Promise<IpcResponse>
   appGet: (appId: string) => Promise<IpcResponse>
   appInstall: (input: { spaceId: string | null; spec: unknown; userConfig?: Record<string, unknown> }) => Promise<IpcResponse>
@@ -521,6 +533,7 @@ export interface HaloAPI {
   appPause: (appId: string) => Promise<IpcResponse>
   appResume: (appId: string) => Promise<IpcResponse>
   appTrigger: (appId: string) => Promise<IpcResponse>
+  appStartRun: (appId: string) => Promise<IpcResponse<import('../shared/apps/app-types').AppRunStartInfo>>
   appGetState: (appId: string) => Promise<IpcResponse>
   appGetActivity: (input: { appId: string; options?: { limit?: number; offset?: number; type?: string; since?: number; teamId?: string; epochId?: string } }) => Promise<IpcResponse>
   appGetSession: (input: { appId: string; runId: string }) => Promise<IpcResponse>

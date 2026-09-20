@@ -29,7 +29,6 @@ import {
   forkNativeChatSession,
   deleteNativeChatSession,
   patchTouchesMcp,
-  readSessionMessages,
   rejectIfRemoteMcpForbidden,
   restartAppChat,
   sendAppChatMessage,
@@ -50,6 +49,16 @@ import type {
 import { resolveAppChatTarget, type AppChatTarget } from '../../controllers/app-chat-target.controller'
 import type { EscalationAnswerPayload } from '../../../shared/apps/app-types'
 import type { ImageAttachment } from '../../../shared/types/image-attachment'
+import { getStudioSummary, listPeopleDirectory, getAppCapabilityInventory, getAppSpaceChangePreview, moveAppDefaultSpace, readAppRunMessages } from '../../apps/runtime'
+
+async function respondOperation(res: Response, name: string, operation: () => unknown | Promise<unknown>): Promise<void> {
+  try {
+    res.json({ success: true, data: await operation() })
+  } catch (error) {
+    console.error(`[HTTP][Apps] ${name} failed:`, error)
+    res.json({ success: false, error: error instanceof Error ? error.message : String(error) })
+  }
+}
 
 export function registerAppsRoutes(app: Express): void {
   // ===== Apps Routes =====
@@ -83,6 +92,82 @@ export function registerAppsRoutes(app: Express): void {
     }
     return runtime
   }
+
+  app.get('/api/apps/states', async (_req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'states', () => runtime.getAllAppStates())
+  })
+  app.get('/api/apps/studio-summary', async (req: Request, res: Response) => {
+    await respondOperation(res, 'studio-summary', () => getStudioSummary(typeof req.query.language === 'string' ? req.query.language : undefined))
+  })
+  app.get('/api/apps/people', async (req: Request, res: Response) => {
+    await respondOperation(res, 'list-people', () => listPeopleDirectory({
+      q: typeof req.query.q === 'string' ? req.query.q : undefined,
+      language: typeof req.query.language === 'string' ? req.query.language : undefined,
+      spaceId: typeof req.query.spaceId === 'string' ? req.query.spaceId : undefined,
+      teamId: typeof req.query.teamId === 'string' ? req.query.teamId : undefined,
+      attention: req.query.attention === 'true', removed: req.query.removed === 'true',
+      limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
+      offset: req.query.offset === undefined ? undefined : Number(req.query.offset),
+    }))
+  })
+  app.get('/api/apps/pending-inbox', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'pending-inbox', () => runtime.getPendingInbox({
+      limit: req.query.limit !== undefined ? Number(req.query.limit) : undefined,
+      afterTs: req.query.afterTs !== undefined ? Number(req.query.afterTs) : undefined,
+      afterId: typeof req.query.afterId === 'string' ? req.query.afterId : undefined,
+    }))
+  })
+  app.get('/api/apps/capability-inventory', async (_req: Request, res: Response) => {
+    const manager = getManagerOrFail(res)
+    if (!manager) return
+    await respondOperation(res, 'capability-inventory', () => getAppCapabilityInventory())
+  })
+  app.get('/api/apps/:appId/pending-entries', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'pending-entries', () => runtime.getPendingEntries(req.params.appId, {
+      limit: req.query.limit !== undefined ? Number(req.query.limit) : undefined,
+      afterTs: req.query.afterTs !== undefined ? Number(req.query.afterTs) : undefined,
+      afterId: typeof req.query.afterId === 'string' ? req.query.afterId : undefined,
+    }))
+  })
+  app.get('/api/apps/:appId/activity/:entryId', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'activity-entry', () => runtime.getActivityEntry(req.params.appId, req.params.entryId))
+  })
+  app.post('/api/apps/:appId/space-preview', async (req: Request, res: Response) => {
+    await respondOperation(res, 'space-preview', () => getAppSpaceChangePreview(req.params.appId, req.body.newSpaceId))
+  })
+  app.post('/api/apps/:appId/escalation/:entryId/retry', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'retry-continuation', () => runtime.retryEscalationContinuation(req.params.appId, req.params.entryId))
+  })
+  app.post('/api/apps/:appId/escalation/:entryId/deadline', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'confirm-deadline', () => runtime.confirmEscalationDeadline(req.params.appId, req.params.entryId, req.body.deadlineAt))
+  })
+  app.post('/api/apps/:appId/runs/:runId/close', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'close-run', () => runtime.closeRun(req.params.appId, req.params.runId))
+  })
+  app.post('/api/apps/:appId/runs/start', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'start-run', () => runtime.startManually(req.params.appId))
+  })
+  app.post('/api/apps/:appId/runs/:runId/stop', async (req: Request, res: Response) => {
+    const runtime = getRuntimeOrFail(res)
+    if (!runtime) return
+    await respondOperation(res, 'stop-run', () => runtime.stopRun(req.params.appId, req.params.runId))
+  })
 
   // GET /api/apps — list all installed Apps, optional ?spaceId= and ?status=
   app.get('/api/apps', async (req: Request, res: Response) => {
@@ -279,35 +364,15 @@ export function registerAppsRoutes(app: Express): void {
         return
       }
 
-      // For automation apps that are active: deactivate before moving so the
-      // scheduler and event router don't hold stale space references, then
-      // re-activate after the move completes.
-      const isAutomation = appData.spec.type === 'automation'
-      const wasActive = appData.status === 'active'
-      const runtime = getAppRuntime()
-
-      if (isAutomation && wasActive && runtime) {
-        await runtime.deactivate(appId).catch((err: Error) => {
-          console.warn(`[HTTP] POST /api/apps/:appId/move-space -- runtime deactivate failed (non-fatal): ${err.message}`)
-        })
-      }
-
-      await manager.moveToSpace(appId, newSpaceId ?? null)
-
-      // Re-activate automation apps that were running before the move
-      let activationWarning: string | undefined
-      if (isAutomation && wasActive && runtime) {
-        try {
-          await runtime.activate(appId)
-        } catch (err) {
-          const errMsg = err instanceof Error ? err.message : String(err)
-          console.warn(`[HTTP] POST /api/apps/:appId/move-space -- runtime activate failed: ${errMsg}`)
-          activationWarning = errMsg
-        }
+      if (appData.spec.type === 'automation') {
+        if (!newSpaceId) throw new Error('Digital humans require a work space')
+        await moveAppDefaultSpace(appId, newSpaceId)
+      } else {
+        await manager.moveToSpace(appId, newSpaceId ?? null)
       }
 
       console.log('[HTTP] POST /api/apps/%s/move-space: newSpaceId=%s', appId, newSpaceId ?? 'global')
-      res.json({ success: true, data: { activationWarning } })
+      res.json({ success: true, data: {} })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -442,6 +507,7 @@ export function registerAppsRoutes(app: Express): void {
       const options: ActivityQueryOptions = {}
       if (req.query.limit) options.limit = Number(req.query.limit)
       if (req.query.before) options.since = Number(req.query.before)
+      if (typeof req.query.beforeId === 'string') options.beforeId = req.query.beforeId
       if (req.query.offset) options.offset = Number(req.query.offset)
       const entryTypes = ['run_complete', 'run_skipped', 'run_error', 'milestone', 'escalation', 'output']
       if (typeof req.query.type === 'string' && entryTypes.includes(req.query.type)) options.type = req.query.type as ActivityQueryOptions['type']
@@ -471,9 +537,9 @@ export function registerAppsRoutes(app: Express): void {
         text,
         ...(answers ? { answers } : {}),
       }
-      await runtime.respondToEscalation(appId, entryId, response)
+      const entry = await runtime.respondToEscalation(appId, entryId, response)
       console.log('[HTTP] POST /api/apps/%s/escalation/%s/respond', appId, entryId)
-      res.json({ success: true })
+      res.json({ success: true, data: entry })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -533,13 +599,7 @@ export function registerAppsRoutes(app: Express): void {
         return
       }
 
-      const space = appData.spaceId ? getSpace(appData.spaceId) : null
-      if (!space?.path) {
-        res.status(404).json({ success: false, error: `Space not found for app: ${appId}` })
-        return
-      }
-
-      const messages = readSessionMessages(space.path, appId, runId)
+      const messages = readAppRunMessages(appId, runId)
       res.json({ success: true, data: messages })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })

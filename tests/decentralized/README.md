@@ -58,6 +58,7 @@ npm run build                        # once per code change (suites run the buil
 
 npm run test:team                    # print the suite catalog + prerequisites
 npm run test:team -- workbench       # task conversation, collaboration, archive/resume and decisions
+npm run test:team -- people          # independent decisions, workspace retention and self-awareness
 npm run test:team -- single          # §1 single-machine fundamentals
 npm run test:team -- federation      # §3 federation, all 62 scenarios (writes RESULTS.md)
 npm run test:team -- upgrade         # §4 upgrade/migration

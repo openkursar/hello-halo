@@ -11,6 +11,7 @@
  */
 
 import { create } from 'zustand'
+import { mergeActivityEntries, isPendingDecision } from '../utils/people-model'
 import { api } from '../api'
 import { useNotificationStore } from './notification.store'
 import type {
@@ -65,6 +66,13 @@ interface AppsState {
   activityEntries: Record<string, ActivityEntry[]>
   /** Tracks whether we've loaded more pages per app */
   activityHasMore: Record<string, boolean>
+  pendingEntries: Record<string, ActivityEntry[]>
+  pendingHasMore: Record<string, boolean>
+  pendingCursor: Record<string, { ts: number; id: string }>
+  activityCursor: Record<string, { ts: number; id: string }>
+  activityErrors: Record<string, boolean>
+  summariesError: boolean
+  hasFullList: boolean
   isLoading: boolean
   error: string | null
 
@@ -83,6 +91,9 @@ interface AppsState {
 
   // ── State Queries ─────────────────────────
   loadAppState: (appId: string) => Promise<void>
+  loadAllStates: () => Promise<void>
+  loadPending: (appId: string) => Promise<void>
+  loadMorePending: (appId: string) => Promise<void>
 
   // ── Activity Feed ─────────────────────────
   loadActivity: (appId: string, options?: ActivityQueryOptions) => Promise<void>
@@ -138,6 +149,11 @@ interface AppsState {
 // ============================================
 
 const PAGE_SIZE = 30
+let activityRevision = 0
+const activityEvents = new Map<string, { revision: number; entry: ActivityEntry }>()
+function eventsAfter(appId: string, revision: number): ActivityEntry[] {
+  return [...activityEvents.values()].filter(event => event.revision > revision && event.entry.appId === appId).map(event => event.entry)
+}
 
 /**
  * One user action can install several Apps (an App plus its bundled skills, an
@@ -152,6 +168,13 @@ export const useAppsStore = create<AppsState>((set, get) => ({
   appStates: {},
   activityEntries: {},
   activityHasMore: {},
+  pendingEntries: {},
+  pendingHasMore: {},
+  pendingCursor: {},
+  activityCursor: {},
+  activityErrors: {},
+  summariesError: false,
+  hasFullList: false,
   isLoading: false,
   error: null,
 
@@ -162,7 +185,7 @@ export const useAppsStore = create<AppsState>((set, get) => ({
     try {
       const res = await api.appList(spaceId ? { spaceId } : undefined)
       if (res.success && res.data) {
-        set({ apps: res.data as InstalledApp[] })
+        set({ hasFullList: !spaceId, apps: res.data as InstalledApp[] })
       } else {
         set({ error: (res.error as string) || 'Failed to load apps' })
       }
@@ -180,9 +203,9 @@ export const useAppsStore = create<AppsState>((set, get) => ({
       if (res.success && res.data) {
         const updated = res.data as InstalledApp
         set(state => ({
-          apps: state.apps.map(a => a.id === appId ? updated : a),
+          apps: state.apps.some(a => a.id === appId) ? state.apps.map(a => a.id === appId ? updated : a) : [...state.apps, updated],
         }))
-      }
+      } else console.warn('[AppsStore] Person detail unavailable', { appId, error: res.error })
     } catch (err) {
       console.error('[AppsStore] refreshApp error:', err)
     }
@@ -268,6 +291,7 @@ export const useAppsStore = create<AppsState>((set, get) => ({
             a.id === appId ? { ...a, status: 'paused' as AppStatus } : a
           ),
         }))
+        await get().loadAppState(appId)
         return true
       }
       return false
@@ -287,6 +311,7 @@ export const useAppsStore = create<AppsState>((set, get) => ({
             a.id === appId ? { ...a, status: 'active' as AppStatus } : a
           ),
         }))
+        await get().loadAppState(appId)
         return true
       }
       return false
@@ -298,7 +323,7 @@ export const useAppsStore = create<AppsState>((set, get) => ({
 
   triggerApp: async (appId) => {
     try {
-      const res = await api.appTrigger(appId)
+      const res = await api.appStartRun(appId)
       if (!res.success && res.error) {
         // Surface backend rejections (e.g. per-app concurrency limit) as a toast
         // so the user sees clear feedback rather than a silent no-op.
@@ -308,6 +333,7 @@ export const useAppsStore = create<AppsState>((set, get) => ({
           duration: 4000,
         })
       }
+      if (res.success) await get().loadAppState(appId)
       return res.success
     } catch (err) {
       console.error('[AppsStore] triggerApp error:', err)
@@ -330,48 +356,104 @@ export const useAppsStore = create<AppsState>((set, get) => ({
     }
   },
 
+  loadAllStates: async () => {
+    try {
+      const result = await api.appGetAllStates()
+      if (!result.success) throw new Error(result.error ?? 'State query rejected')
+      set({ appStates: result.data as Record<string, AutomationAppState>, summariesError: false })
+    } catch (error) { set({ summariesError: true }); console.warn('[AppsStore] Directory execution summaries unavailable', { error }) }
+  },
+
+  loadPending: async (appId) => {
+    const revision = activityRevision
+    try {
+      const result = await api.appGetPendingEntries(appId, { limit: 100 })
+      if (!result.success) throw new Error(result.error ?? 'Pending requests query rejected')
+      const page = result.data as ActivityEntry[]
+      const last = page[page.length - 1]
+      set(state => ({
+        pendingEntries: { ...state.pendingEntries, [appId]: mergeActivityEntries(page, eventsAfter(appId, revision)).filter(isPendingDecision).reverse() },
+        pendingHasMore: { ...state.pendingHasMore, [appId]: page.length === 100 },
+        pendingCursor: last ? { ...state.pendingCursor, [appId]: { ts: last.ts, id: last.id } } : state.pendingCursor,
+      }))
+    } catch (error) {
+      console.warn('[AppsStore] Pending requests unavailable', { appId, error })
+      set(state => ({ activityErrors: { ...state.activityErrors, [appId]: true } }))
+    }
+  },
+
+  loadMorePending: async (appId) => {
+    const cursor = get().pendingCursor[appId]
+    if (!cursor || !get().pendingHasMore[appId]) return
+    const revision = activityRevision
+    try {
+      const result = await api.appGetPendingEntries(appId, { limit: 100, afterTs: cursor.ts, afterId: cursor.id })
+      if (!result.success) throw new Error(result.error ?? 'Pending page rejected')
+      const page = result.data as ActivityEntry[]
+      const last = page[page.length - 1]
+      set(state => ({
+        pendingEntries: { ...state.pendingEntries, [appId]: mergeActivityEntries(state.pendingEntries[appId] ?? [], [...page, ...eventsAfter(appId, revision)]).filter(isPendingDecision).reverse() },
+        pendingHasMore: { ...state.pendingHasMore, [appId]: page.length === 100 },
+        pendingCursor: last ? { ...state.pendingCursor, [appId]: { ts: last.ts, id: last.id } } : state.pendingCursor,
+      }))
+    } catch (error) {
+      console.warn('[AppsStore] Pending request page unavailable', { appId, error })
+      set(state => ({ activityErrors: { ...state.activityErrors, [appId]: true } }))
+    }
+  },
+
   // ── Activity Feed ─────────────────────────
 
   loadActivity: async (appId, options) => {
+    const revision = activityRevision
+    set(state => ({ activityErrors: { ...state.activityErrors, [appId]: false } }))
     try {
       const res = await api.appGetActivity(appId, { limit: PAGE_SIZE, ...options })
       if (res.success && res.data) {
-        const entries = res.data as ActivityEntry[]
+        const page = res.data as ActivityEntry[]
+        const last = page[page.length - 1]
+        const entries = mergeActivityEntries(page, eventsAfter(appId, revision))
         set(state => ({
-          activityEntries: { ...state.activityEntries, [appId]: entries },
-          activityHasMore: { ...state.activityHasMore, [appId]: entries.length === PAGE_SIZE },
+          activityEntries: { ...state.activityEntries, [appId]: mergeActivityEntries(state.activityEntries[appId] ?? [], entries) },
+          activityHasMore: { ...state.activityHasMore, [appId]: (res.data as ActivityEntry[]).length === PAGE_SIZE },
+          activityCursor: last ? { ...state.activityCursor, [appId]: { ts: last.ts, id: last.id } } : state.activityCursor,
         }))
-      }
+      } else { throw new Error(res.error ?? 'Activity request rejected') }
     } catch (err) {
+      set(state => ({ activityErrors: { ...state.activityErrors, [appId]: true } }))
       console.error('[AppsStore] loadActivity error:', err)
     }
   },
 
   loadMoreActivity: async (appId) => {
-    const existing = get().activityEntries[appId] ?? []
-    if (!get().activityHasMore[appId]) return
+    const cursor = get().activityCursor[appId]
+    if (!get().activityHasMore[appId] || !cursor) return
+    const revision = activityRevision
 
     try {
-      // Use the oldest entry's ts as the cursor (before = entries older than this)
-      const oldest = existing[existing.length - 1]
       const res = await api.appGetActivity(appId, {
         limit: PAGE_SIZE,
-        since: oldest?.ts,
+        since: cursor.ts,
+        beforeId: cursor.id,
       })
       if (res.success && res.data) {
-        const newEntries = res.data as ActivityEntry[]
+        const page = res.data as ActivityEntry[]
+        const last = page[page.length - 1]
+        const newEntries = mergeActivityEntries(page, eventsAfter(appId, revision))
         set(state => ({
           activityEntries: {
             ...state.activityEntries,
-            [appId]: [...(state.activityEntries[appId] ?? []), ...newEntries],
+            [appId]: mergeActivityEntries(state.activityEntries[appId] ?? [], newEntries),
           },
+          activityCursor: last ? { ...state.activityCursor, [appId]: { ts: last.ts, id: last.id } } : state.activityCursor,
           activityHasMore: {
             ...state.activityHasMore,
-            [appId]: newEntries.length === PAGE_SIZE,
+            [appId]: page.length === PAGE_SIZE,
           },
         }))
-      }
+      } else { throw new Error(res.error ?? 'Activity page rejected') }
     } catch (err) {
+      set(state => ({ activityErrors: { ...state.activityErrors, [appId]: true } }))
       console.error('[AppsStore] loadMoreActivity error:', err)
     }
   },
@@ -382,20 +464,11 @@ export const useAppsStore = create<AppsState>((set, get) => ({
     try {
       const res = await api.appRespondEscalation(appId, escalationId, response)
       if (res.success) {
-        // Update the local entry to reflect the user's response
-        const userResponse = { ts: Date.now(), ...response }
-        set(state => {
-          const entries = state.activityEntries[appId] ?? []
-          const updated = entries.map(e =>
-            e.id === escalationId ? { ...e, userResponse } : e
-          )
-          return {
-            activityEntries: { ...state.activityEntries, [appId]: updated },
-
-          }
-        })
+        if (res.data && typeof res.data === 'object' && 'id' in res.data) get().handleNewActivityEntry(appId, res.data as ActivityEntry)
+        await Promise.all([get().loadPending(appId), get().loadAppState(appId)])
         return true
       }
+      await Promise.all([get().loadActivity(appId), get().loadPending(appId)])
       console.warn('[AppsStore] Escalation answer rejected', { appId, escalationId, error: res.error })
       return false
     } catch (err) {
@@ -411,7 +484,7 @@ export const useAppsStore = create<AppsState>((set, get) => ({
       const res = await api.appContinueRun(appId, runId)
       if (res.success) {
         get().loadAppState(appId)
-      }
+      } else console.warn('[AppsStore] Continue request rejected', { appId, runId, error: res.error })
       return !!res.success
     } catch (err) {
       console.error('[AppsStore] continueApp error:', err)
@@ -611,33 +684,29 @@ export const useAppsStore = create<AppsState>((set, get) => ({
     if (listReloadTimer) clearTimeout(listReloadTimer)
     listReloadTimer = setTimeout(() => {
       listReloadTimer = null
-      void get().loadApps()
+      if (get().hasFullList) void get().loadApps()
+      else for (const app of get().apps) void get().refreshApp(app.id)
     }, LIST_RELOAD_DELAY_MS)
   },
 
   handleNewActivityEntry: (appId, entry) => {
+    activityEvents.set(entry.id, { revision: ++activityRevision, entry })
+    if (activityEvents.size > 2000) activityEvents.delete(activityEvents.keys().next().value!)
     set(state => {
       const existing = state.activityEntries[appId] ?? []
-      // Prepend (newest first); avoid duplicates by id
-      if (existing.some(e => e.id === entry.id)) return {}
+      const pending = state.pendingEntries[appId] ?? []
+      const isPending = isPendingDecision(entry)
       return {
-        activityEntries: {
-          ...state.activityEntries,
-          [appId]: [entry, ...existing],
-        },
+        activityEntries: { ...state.activityEntries, [appId]: mergeActivityEntries(existing, [entry]) },
+        pendingEntries: { ...state.pendingEntries, [appId]: [...pending.filter(item => item.id !== entry.id), ...(isPending ? [entry] : [])].sort((a, b) => a.ts - b.ts) },
       }
     })
+    if (entry.type === 'escalation') void get().loadAppState(appId)
   },
 
-  handleNewEscalation: (appId, entryId, _question, _choices) => {
-    // The activity entry is already added via handleNewActivityEntry.
-    // Here we just update the app status to waiting_user.
-    set(state => ({
-      apps: state.apps.map(a =>
-        a.id === appId
-          ? { ...a, status: 'waiting_user' as AppStatus, pendingEscalationId: entryId }
-          : a
-      ),
-    }))
+  handleNewEscalation: (appId, _entryId, _question, _choices) => {
+    void get().loadPending(appId)
+    void get().loadAppState(appId)
+    // Lifecycle state remains authoritative even while requests are pending.
   },
 }))

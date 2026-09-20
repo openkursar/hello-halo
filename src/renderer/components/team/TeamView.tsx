@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Info, Settings, Users, PanelLeft, UserPlus, Play, Pause } from 'lucide-react'
 import { isRemoteMember, type RosterMember, type TeamDetail } from '../../../shared/apps/team-types'
 import { useTeamStore } from '../../stores/team.store'
+import { useAppsPageStore } from '../../stores/apps-page.store'
+import { usePeopleViewStore } from '../../stores/people-view.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useDefaultChatTarget, useTeamViewPrefsStore } from '../../stores/team-view-prefs.store'
 import { useTranslation } from '../../i18n'
@@ -18,6 +20,7 @@ import { taskGroup, visibleTasks } from './workbench/model'
 
 export function TeamView({ detail }: { detail: TeamDetail }) {
   const { t } = useTranslation()
+  const navigationTarget = usePeopleViewStore(state => state.teamTarget)
   const [width, setWidth] = useState(() => window.innerWidth)
   const [taskQuery, setTaskQuery] = useState('')
   const [taskStatus, setTaskStatus] = useState('all')
@@ -77,6 +80,19 @@ export function TeamView({ detail }: { detail: TeamDetail }) {
     if (nextMember && ownedMemberIds.includes(nextMember)) setDefaultMember(detail.team.id, nextMember)
     select(id); setRoomKey(key => key + 1); setDrawer(null)
   }, [conversations, defaultOwnedMemberId, detail, leadMemberId, select, setGroup, selectedMemberId, ownedMemberIds, rosterMemberIds, setDefaultMember, selectedId])
+  useEffect(() => {
+    if (!navigationTarget || navigationTarget.teamId !== detail.team.id || loadingTasks) return
+    if (navigationTarget.epochId) {
+      onTask(navigationTarget.epochId, false, navigationTarget.appId)
+      if (navigationTarget.entryId) {
+        if (navigationTarget.decision) setDecisionTarget(navigationTarget.entryId)
+        else { setActivityTarget(navigationTarget.entryId); setDrawer('activity') }
+      }
+    } else if (navigationTarget.appId && rosterMemberIds.includes(navigationTarget.appId)) {
+      setSelectedMemberId(navigationTarget.appId)
+    }
+    usePeopleViewStore.setState({ teamTarget: null })
+  }, [navigationTarget, detail.team.id, loadingTasks, onTask, rosterMemberIds])
   const onMember = (member: RosterMember) => {
     setSelectedMemberId(member.appId)
     if (selectedId) useTeamViewPrefsStore.getState().rememberTaskMember(detail.team.id, selectedId, member.appId)
@@ -132,6 +148,11 @@ export function TeamView({ detail }: { detail: TeamDetail }) {
           finally { setRunningAction(false) }
         }} className="flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs">{detail.team.currentEpochId ? <Pause size={14} /> : <Play size={14} />}{detail.team.currentEpochId ? t('Pause') : t('Run')}</button>
       </div>}
+      {settingsMember && ownedMemberIds.includes(settingsMember) && <button onClick={() => {
+        usePeopleViewStore.setState({ returnTeam: { teamId: detail.team.id, epochId: selectedId ?? undefined, appId: selectedMemberId ?? undefined }, returnPerson: null })
+        useAppsPageStore.getState().openActivityThread(settingsMember)
+        useAppsPageStore.getState().setCurrentTab('my-digital-humans')
+      }} className="m-3 min-h-10 rounded-lg border border-border px-3 text-sm text-primary">{t('Open digital human profile')}</button>}
       <SettingsTab detail={detail} openMemberId={settingsMember} onOpenMemberChange={setSettingsMember} />
     </WorkbenchDrawer>}
     {invite && <TeamInviteDialog teamId={detail.team.id} onClose={() => setInvite(false)} />}

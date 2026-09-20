@@ -132,13 +132,33 @@ vi.mock('../../../../src/main/services/space.service', () => ({
 }))
 
 vi.mock('../../../../src/main/apps/manager', () => ({
-  getAppManager: vi.fn().mockReturnValue(null),
+  getAppManager: vi.fn().mockReturnValue({ getApp: (id: string) => ({ id, spaceId: 'new-space' }) }),
+}))
+const { environment, activityStore, resolveChatEnvironment, copySessionJsonl } = vi.hoisted(() => {
+  const environment = { spaceId: 'old-space', spacePath: '/original-space', workDir: '/original-cwd', memoryDir: '/original-memory' }
+  return {
+    environment,
+    activityStore: { getSessionEnvironment: vi.fn(), deleteSessionEnvironment: vi.fn(), pinSessionEnvironment: vi.fn() },
+    resolveChatEnvironment: vi.fn(() => environment),
+    copySessionJsonl: vi.fn(() => true),
+  }
+})
+vi.mock('../../../../src/main/apps/runtime/execution-environment', () => ({
+  resolveChatEnvironment,
+  appChatRunId: (conversationId: string, appId: string) => conversationId === `app-chat:${appId}` ? 'chat' : `chat-${conversationId.slice(`app-chat:${appId}:`.length).replace(/:/g, '-')}`,
+  legacySessionEnvironmentKey: (appId: string, runId: string) => `legacy-file:${appId}:${runId}`,
+}))
+vi.mock('../../../../src/main/apps/runtime/session-store', () => ({
+  copySessionJsonl,
+  loadChatSessionId: vi.fn(() => 'original-sdk-session'),
+  deleteChatSessionId: vi.fn(),
 }))
 vi.mock('../../../../src/main/apps/conversation-mcp', () => ({
   createHaloAppsMcpServer: vi.fn(),
 }))
 vi.mock('../../../../src/main/apps/runtime/index', () => ({
   getAppMemoryService: vi.fn().mockReturnValue(null),
+  getActivityStore: () => activityStore,
 }))
 vi.mock('../../../../src/main/apps/runtime/dispatch-inbound', () => ({
   flushSupplementBuffer: vi.fn(),
@@ -215,30 +235,39 @@ describe('clearAppChat trust boundary', () => {
 describe('forkNativeChatSession trust boundary', () => {
   beforeEach(() => {
     createLocalSession.mockClear()
+    resolveChatEnvironment.mockClear()
+    activityStore.pinSessionEnvironment.mockClear()
+    copySessionJsonl.mockClear()
   })
 
   it('rejects a source owned by another app', () => {
     const foreign = `${getAppChatConversationId(OTHER)}:local:direct:abc`
     expect(() => forkNativeChatSession(APP, 'space-1', foreign)).toThrow(/Invalid sourceConversationId for fork/)
     expect(createLocalSession).not.toHaveBeenCalled()
+    expect(resolveChatEnvironment).not.toHaveBeenCalled()
   })
 
   it('rejects the native default key of another app', () => {
     expect(() => forkNativeChatSession(APP, 'space-1', getAppChatConversationId(OTHER)))
       .toThrow(/Invalid sourceConversationId for fork/)
     expect(createLocalSession).not.toHaveBeenCalled()
+    expect(resolveChatEnvironment).not.toHaveBeenCalled()
   })
 
   it('rejects a non-app-chat source key', () => {
     expect(() => forkNativeChatSession(APP, 'space-1', 'random-garbage'))
       .toThrow(/Invalid sourceConversationId for fork/)
     expect(createLocalSession).not.toHaveBeenCalled()
+    expect(resolveChatEnvironment).not.toHaveBeenCalled()
   })
 
   it('allows forking from the app’s own native default session', () => {
     const result = forkNativeChatSession(APP, 'space-1', getAppChatConversationId(APP))
     expect(result.conversationId).toMatch(new RegExp(`^app-chat:${APP}:local:direct:`))
     expect(createLocalSession).toHaveBeenCalledTimes(1)
+    expect(activityStore.pinSessionEnvironment).toHaveBeenCalledWith(result.conversationId, APP, environment)
+    expect(copySessionJsonl).toHaveBeenCalledWith('/original-space', APP, expect.any(String), expect.any(String))
+    expect(createLocalSession).toHaveBeenCalledWith(APP, expect.any(String), expect.objectContaining({ pendingResumeSessionId: 'original-sdk-session' }))
   })
 
   it('allows forking from the app’s own IM session', () => {
@@ -246,6 +275,9 @@ describe('forkNativeChatSession trust boundary', () => {
     const result = forkNativeChatSession(APP, 'space-1', imKey)
     expect(result.conversationId).toMatch(new RegExp(`^app-chat:${APP}:local:direct:`))
     expect(createLocalSession).toHaveBeenCalledTimes(1)
+    expect(activityStore.pinSessionEnvironment).toHaveBeenCalledWith(result.conversationId, APP, environment)
+    expect(copySessionJsonl).toHaveBeenCalledWith('/original-space', APP, expect.any(String), expect.any(String))
+    expect(createLocalSession).toHaveBeenCalledWith(APP, expect.any(String), expect.objectContaining({ pendingResumeSessionId: 'original-sdk-session' }))
   })
 })
 

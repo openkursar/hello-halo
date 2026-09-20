@@ -445,6 +445,58 @@
   },
   {
     "method": "GET",
+    "path": "/api/apps/states"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/studio-summary"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/people"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/pending-inbox"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/capability-inventory"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/pending-entries"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/activity/:entryId"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/space-preview"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/escalation/:entryId/retry"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/escalation/:entryId/deadline"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/runs/:runId/close"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/runs/start"
+  },
+  {
+    "method": "POST",
+    "path": "/api/apps/:appId/runs/:runId/stop"
+  },
+  {
+    "method": "GET",
     "path": "/api/apps",
     "group": "digital-human"
   },

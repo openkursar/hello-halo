@@ -14,12 +14,14 @@
  *           Import tabs inside SkillInstallDialog / AppInstallDialog.
  */
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { X, Server, BookOpen, ChevronLeft, Plus, Settings2, Code, AlertCircle, Package, Loader2 } from 'lucide-react'
 import { useAppsStore } from '../../stores/apps.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { getCapabilityDraft, saveCapabilityDraft, clearCapabilityDraft } from '../../stores/capability-drafts'
 import type { McpServerConfig } from '../../../shared/apps/spec-types'
 import {
   internalMcpServerToJsonConfig,
@@ -43,11 +45,20 @@ interface ManualAddDialogProps {
    * Use 'skill' to immediately delegate to SkillInstallDialog via onSkillAdd.
    */
   initialType?: AddType
+  initialSpaceId?: string | null
+  draftKey?: string
+  initialMcpMode?: 'visual' | 'json'
+  onInstalled?: (appIds: string[]) => Promise<void>
+  contextName?: string
 }
 
-export function ManualAddDialog({ onClose, onSkillAdd, initialType }: ManualAddDialogProps) {
+export function ManualAddDialog({ onClose, onSkillAdd, initialType, initialSpaceId, initialMcpMode, onInstalled, contextName, draftKey }: ManualAddDialogProps) {
   const { t } = useTranslation()
   const { installApp, loadApps } = useAppsStore()
+  const [hasDraft, setHasDraft] = useState(false)
+  const [discarding, setDiscarding] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const requestClose = () => { if (!busy) { if (hasDraft) setDiscarding(true); else onClose() } }
 
   // If initialType is provided, jump straight to the corresponding form/delegate.
   const startInForm = initialType === 'mcp'
@@ -110,8 +121,9 @@ export function ManualAddDialog({ onClose, onSkillAdd, initialType }: ManualAddD
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div
+    <div role="dialog" aria-modal="true" aria-label={t('Add connection')} className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/30">
+      {discarding && <ConfirmDialog title={t('Close connection draft?')} message={t('The name and scope are kept for this digital human. Connection details and credentials must be entered again after closing.')} confirmLabel={t('Close')} cancelLabel={t('Keep editing')} onConfirm={onClose} onCancel={() => setDiscarding(false)} />}
+      <div onChangeCapture={() => setHasDraft(true)}
         className="bg-background border border-border rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] overflow-y-auto"
         onMouseDown={e => e.stopPropagation()}
       >
@@ -135,7 +147,9 @@ export function ManualAddDialog({ onClose, onSkillAdd, initialType }: ManualAddD
             </h2>
           </div>
           <button
-            onClick={onClose}
+            onClick={requestClose}
+            disabled={busy}
+            aria-label={t('Close')}
             className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
           >
             <X className="w-5 h-5" />
@@ -155,7 +169,7 @@ export function ManualAddDialog({ onClose, onSkillAdd, initialType }: ManualAddD
               )}
             </>
           ) : addType === 'mcp' ? (
-            <McpForm onClose={onClose} installApp={installApp} loadApps={loadApps} />
+            <McpForm onClose={requestClose} onCompleted={() => setHasDraft(false)} onBusyChange={setBusy} installApp={installApp} loadApps={loadApps} draftKey={draftKey} initialSpaceId={initialSpaceId} initialMcpMode={initialMcpMode} onInstalled={onInstalled} contextName={contextName} />
           ) : (
             <SkillForm onClose={onClose} installApp={installApp} loadApps={loadApps} />
           )}
@@ -246,9 +260,12 @@ function buildMcpServer(
   }
 }
 
-function McpForm({ onClose, installApp, loadApps }: FormProps) {
+function McpForm({ onClose, installApp, loadApps, initialSpaceId, initialMcpMode, onInstalled, contextName, draftKey, onCompleted, onBusyChange }: FormProps & { onCompleted: () => void; onBusyChange: (busy: boolean) => void } & Pick<ManualAddDialogProps, 'initialSpaceId' | 'initialMcpMode' | 'onInstalled' | 'contextName' | 'draftKey'>) {
   const { t } = useTranslation()
-  const [editMode, setEditMode] = useState<EditMode>('visual')
+  const cacheKey = `mcp:${draftKey ?? 'library'}:${initialSpaceId ?? 'global'}`
+  const [draft] = useState(() => getCapabilityDraft<{ name: string; jsonName: string; spaceId: string; transport: McpTransport }>(cacheKey))
+  const completed = useRef(false)
+  const [editMode, setEditMode] = useState<EditMode>(initialMcpMode ?? 'visual')
 
   // Space selector
   const haloSpace = useSpaceStore(state => state.haloSpace)
@@ -259,26 +276,46 @@ function McpForm({ onClose, installApp, loadApps }: FormProps) {
     result.push(...spaces)
     return result
   }, [haloSpace, spaces])
-  const [selectedSpaceId, setSelectedSpaceId] = useState(GLOBAL_SCOPE)
+  const [selectedSpaceId, setSelectedSpaceId] = useState(draft?.spaceId ?? initialSpaceId ?? GLOBAL_SCOPE)
 
   // Visual fields
-  const [name, setName] = useState('')
-  const [transport, setTransport] = useState<McpTransport>('stdio')
+  const [name, setName] = useState(draft?.name ?? '')
+  const [transport, setTransport] = useState<McpTransport>(draft?.transport ?? 'stdio')
   const [command, setCommand] = useState('')
   const [args, setArgs] = useState<string[]>([])
   const [envText, setEnvText] = useState('')
   const [headersText, setHeadersText] = useState('')
 
   // JSON fields
-  const [jsonName, setJsonName] = useState('')
+  const [jsonName, setJsonName] = useState(draft?.jsonName ?? '')
   const [jsonText, setJsonText] = useState('{\n  "command": "npx",\n  "args": ["-y", "@example/mcp-server"]\n}')
   const [jsonError, setJsonError] = useState<string | null>(null)
   // Parsed servers from the JSON paste; > 1 when the user pasted a whole
   // mcpServers map (Cursor / Claude Desktop export) — installed as a batch.
   const [jsonServers, setJsonServers] = useState<NamedMcpServerConfig[]>([])
 
+  useEffect(() => {
+    if (!completed.current) saveCapabilityDraft(cacheKey, { name, jsonName, spaceId: selectedSpaceId, transport })
+  }, [cacheKey, name, jsonName, selectedSpaceId, transport])
   const [error, setError] = useState<string | null>(null)
   const [installing, setInstalling] = useState(false)
+  useEffect(() => { onBusyChange(installing) }, [installing, onBusyChange])
+  const installedIds = useRef(new Map<string, string>())
+  const [created, setCreated] = useState<string[]>([])
+  const [probeState, setProbeState] = useState<Record<string, string>>({})
+  const [probing, setProbing] = useState<string | null>(null)
+  const testConnection = async (appId: string) => {
+    setProbing(appId)
+    try {
+      const response = await api.probeMcpApp(appId)
+      const result = response.result as { status?: string } | undefined
+      setProbeState(previous => ({ ...previous, [appId]: response.success ? result?.status ?? 'failed' : 'failed' }))
+      if (!response.success) console.warn('[ManualAddDialog] Connection probe failed', { appId })
+    } catch {
+      console.warn('[ManualAddDialog] Connection probe request failed', { appId })
+      setProbeState(previous => ({ ...previous, [appId]: 'failed' }))
+    } finally { setProbing(null) }
+  }
 
   const switchToJsonMode = useCallback(() => {
     const mcpServer = buildMcpServer(transport, command, args, envText, headersText)
@@ -358,7 +395,12 @@ function McpForm({ onClose, installApp, loadApps }: FormProps) {
     try {
       const resolvedSpaceId = selectedSpaceId === GLOBAL_SCOPE ? null : selectedSpaceId
       const failures: string[] = []
-      let installedCount = 0
+      const completedIds: string[] = []
+      if (contextName && resolvedSpaceId === null && initialSpaceId && toInstall.some(entry =>
+        useAppsStore.getState().apps.some(app => app.spaceId === initialSpaceId && app.status !== 'uninstalled' && app.spec.type === 'mcp' && app.specId === entry.name))) {
+        setError(t('A workspace connection with this name would override the global connection. Choose a different name or use the existing connection.'))
+        return
+      }
 
       for (const entry of toInstall) {
         const spec = {
@@ -371,24 +413,46 @@ function McpForm({ onClose, installApp, loadApps }: FormProps) {
           mcp_server: entry.mcpServer,
         }
         try {
-          const appId = await installApp(resolvedSpaceId, spec)
-          if (appId) installedCount++
+          const signature = JSON.stringify([resolvedSpaceId, spec])
+          const appId = installedIds.current.get(signature) ?? await installApp(resolvedSpaceId, spec)
+          if (appId) { installedIds.current.set(signature, appId); completedIds.push(appId) }
           else failures.push(entry.name)
         } catch (err) {
+          console.warn('[ManualAddDialog] MCP installation failed; draft retained')
           failures.push(`${entry.name} (${err instanceof Error ? err.message : String(err)})`)
         }
       }
 
-      if (installedCount > 0) await loadApps()
+      if (completedIds.length > 0) await loadApps()
       if (failures.length === 0) {
-        onClose()
+        await onInstalled?.(completedIds)
+        setCreated(completedIds)
+        completed.current = true
+        clearCapabilityDraft(cacheKey)
+        onCompleted()
       } else {
         setError(t('Failed to install: {{names}}', { names: failures.join(', ') }))
       }
+    } catch (err) {
+      console.warn('[ManualAddDialog] Created connection could not be enabled; draft retained')
+      setError(err instanceof Error ? err.message : t('Could not enable the connection. Retry to finish.'))
     } finally {
       setInstalling(false)
     }
-  }, [args, command, editMode, envText, headersText, installApp, jsonName, jsonText, loadApps, name, onClose, selectedSpaceId, t, transport])
+  }, [initialSpaceId, contextName, onInstalled, onCompleted, args, command, editMode, envText, headersText, installApp, jsonName, jsonText, loadApps, name, onClose, selectedSpaceId, t, transport])
+
+  if (created.length > 0) return (
+    <div className="space-y-4">
+      <p className="text-sm">{contextName ? t('Connections saved and enabled for {{name}}.', { name: contextName }) : t('Connections saved.')}</p>
+      <p className="text-xs text-muted-foreground">{t('Test connectivity separately. A saved configuration does not guarantee that a task can use it.')}</p>
+      {created.map(appId => <div key={appId} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border p-3">
+        <span className="text-sm">{useAppsStore.getState().apps.find(app => app.id === appId)?.spec.name}</span>
+        <span role="status" className="text-xs text-muted-foreground">{probeState[appId] === 'connected' ? t('Connected') : probeState[appId] === 'needs-auth' ? t('Login required. Update authentication in connection settings.') : probeState[appId] === 'failed' ? t('Connection failed. Your configuration is saved; check settings and retry.') : t('Not tested')}</span>
+        <button disabled={probing !== null} onClick={() => void testConnection(appId)} className="text-sm text-primary disabled:opacity-50">{probing === appId ? t('Testing...') : t('Test connection')}</button>
+      </div>)}
+      <button onClick={onClose} className="rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground">{t('Done')}</button>
+    </div>
+  )
 
   const addArg = () => setArgs(prev => [...prev, ''])
   const updateArg = (i: number, v: string) => setArgs(prev => { const n = [...prev]; n[i] = v; return n })
@@ -428,11 +492,13 @@ function McpForm({ onClose, installApp, loadApps }: FormProps) {
             className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/50 transition-colors"
           >
             <option value={GLOBAL_SCOPE}>{t('Global (all spaces)')}</option>
-            {allSpaces.map(s => (
+            {allSpaces.filter(s => initialSpaceId === undefined || s.id === initialSpaceId).map(s => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </select>
         </div>
+
+        <p className="text-xs text-muted-foreground">{selectedSpaceId === GLOBAL_SCOPE ? t('This shared connection is available across all workspaces. Digital humans must be enabled separately.') : t('This shared connection is available in the selected workspace. Digital humans must be enabled separately.')}</p>
 
         {/* Name — hidden for multi-server pastes (wrapper keys are the names) */}
         {!(editMode === 'json' && jsonServers.length > 1) && (
@@ -603,7 +669,7 @@ function McpForm({ onClose, installApp, loadApps }: FormProps) {
               ? t('Installing...')
               : editMode === 'json' && jsonServers.length > 1
                 ? t('Install {{count}} servers', { count: jsonServers.length })
-                : t('Install')}
+                : contextName ? t('Create and enable for {{name}}', { name: contextName }) : t('Create connection')}
           </button>
         </div>
       </div>

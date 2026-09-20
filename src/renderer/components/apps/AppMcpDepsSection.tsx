@@ -1,25 +1,4 @@
-/**
- * AppMcpDepsSection
- *
- * Visualizes the external MCP tools an automation digital human depends on.
- *
- * At runtime the automation only receives MCP servers it declares in
- * `requires.mcps` AND that are installed + active in its space (least
- * privilege — see execute.ts getMcpServersForRequires). A missing or paused
- * dependency is otherwise silent: the run just loses those tools. This section
- * makes that state visible — each declared dependency shows a live health
- * badge (connected / disabled / not installed / connection failed), and
- * missing ones are highlighted so the user understands why a run underperforms.
- *
- * Unlike built-in Capabilities (guaranteed present, plain on/off), MCP
- * dependencies may be absent — hence the health-list visual language rather
- * than a switch. The row switch pauses/resumes the underlying MCP server
- * (space-wide); adding/removing a dependency edits this digital human's
- * `requires.mcps` (local to this app).
- *
- * Data is joined entirely on the client from existing stores (installed apps +
- * the agent:mcp-status broadcast) — no new backend surface.
- */
+/** Shared MCP availability and per-person grants are separate controls. */
 
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import {
@@ -28,9 +7,12 @@ import {
 } from 'lucide-react'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { api } from '../../api'
+import { CapabilityStoreDialog } from './CapabilityStoreDialog'
+import { ManualAddDialog } from './ManualAddDialog'
+import { CapabilityDialog } from './CapabilityDialog'
+import { McpStatusCard } from './McpStatusCard'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppStore } from '../../stores/app.store'
-import { useAppsPageStore, tabForAppType } from '../../stores/apps-page.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
 import { isSessionOnlyFailure } from '../../utils/mcpStatus'
@@ -187,6 +169,7 @@ function DepRow({
   const [toggling, setToggling] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testError, setTestError] = useState<string | null>(null)
+  const [probeStatus, setProbeStatus] = useState<string | null>(null)
 
   const { mcpApp, sdkEntry, health, reason, enabled } = dep
   const name = mcpApp ? resolveSpecI18n(mcpApp.spec, getCurrentLanguage()).name : dep.specId
@@ -199,15 +182,15 @@ function DepRow({
 
   // Server-side availability text — independent of the per-app enable switch.
   // Empty for an installed-but-unprobed server (no news is good news).
-  const statusText = (() => {
+  const statusText = probeStatus === 'connected' ? t('Connected') : probeStatus === 'needs-auth' ? t('Needs login') : probeStatus === 'failed' ? t('Connection failed') : (() => {
     switch (health) {
       case 'connected':    return toolCount > 0 ? t('Connected · {{count}} tools', { count: toolCount }) : t('Connected')
-      case 'disabled':     return t('MCP server globally disabled')
+      case 'disabled':     return t('Shared connection disabled')
       case 'failed':       return t('Connection failed')
       case 'needs-login':  return t('Needs login')
       case 'session-stale':return t('Retrying on next message')
       case 'not-installed':return t('Not installed')
-      default:             return ''
+      default:             return t('Not tested')
     }
   })()
 
@@ -228,6 +211,7 @@ function DepRow({
     try {
       const res = await api.probeMcpApp(mcpApp.id)
       if (!res.success) setTestError(res.error ?? t('Connection test failed'))
+      else setProbeStatus((res.result as { status?: string } | undefined)?.status ?? 'failed')
     } catch (e) {
       setTestError((e as Error).message)
     } finally {
@@ -416,6 +400,12 @@ export function AppMcpDepsSection({ app, appId, onRequireRestart }: AppMcpDepsSe
   const apps = useAppsStore(s => s.apps)
   const { updateAppSpec } = useAppsStore()
   const mcpStatus = useAppStore(s => s.mcpStatus)
+  const [createMode, setCreateMode] = useState<'visual' | 'json' | null>(null)
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [showStore, setShowStore] = useState(false)
+  const writing = useRef(false)
 
   // Full declared list — the source of truth we write back to (preserves any
   // built-in entries the spec documents, so edits never silently drop them).
@@ -446,7 +436,8 @@ export function AppMcpDepsSection({ app, appId, onRequireRestart }: AppMcpDepsSe
   const resolvedDeps: ResolvedDep[] = useMemo(
     () => declaredMcps.map(dep => {
       const mcpApp = effectiveMcpApps.find(a => a.specId === dep.id) ?? null
-      const sdkEntry = mcpStatus.find(s => s.name === dep.id)
+      const sameNameCount = apps.filter(item => item.spec.type === 'mcp' && item.status !== 'uninstalled' && item.specId === dep.id).length
+      const sdkEntry = sameNameCount === 1 ? mcpStatus.find(s => s.name === dep.id) : undefined
       return {
         specId: dep.id,
         reason: dep.reason,
@@ -456,7 +447,7 @@ export function AppMcpDepsSection({ app, appId, onRequireRestart }: AppMcpDepsSe
         health: resolveHealth(mcpApp, sdkEntry),
       }
     }),
-    [declaredMcps, effectiveMcpApps, mcpStatus]
+    [declaredMcps, effectiveMcpApps, mcpStatus, apps]
   )
 
   // Installed MCP servers not yet declared as dependencies (candidates to add)
@@ -468,11 +459,24 @@ export function AppMcpDepsSection({ app, appId, onRequireRestart }: AppMcpDepsSe
   // Persist requires.mcps. The backend auto-restarts this app's chat session on
   // the change so it applies next message; the fallback banner is surfaced too.
   const writeMcps = useCallback(async (next: McpDependency[]) => {
-    const ok = await updateAppSpec(appId, {
-      requires: { ...(app.spec.requires ?? {}), mcps: next },
-    })
-    if (ok) onRequireRestart()
-  }, [appId, app.spec.requires, updateAppSpec, onRequireRestart])
+    if (writing.current) {
+      console.warn('[AppMcpDepsSection] Deferred overlapping connection edit', { appId })
+      setSaveError(t('Another connection change is being saved. Please retry after it finishes.'))
+      return false
+    }
+    writing.current = true
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const current = useAppsStore.getState().apps.find(item => item.id === appId)
+      const ok = await updateAppSpec(appId, {
+        requires: { ...(current?.spec.requires ?? {}), mcps: next },
+      })
+      if (!ok) { setSaveError(t('Could not save this digital human’s connections. Please retry.')); return false }
+      onRequireRestart()
+      return true
+    } finally { writing.current = false; setSaving(false) }
+  }, [appId, updateAppSpec, onRequireRestart, t])
 
   const handleAdd = useCallback((specId: string) => {
     if (allDeclaredMcps.some(d => d.id === specId)) return
@@ -486,7 +490,7 @@ export function AppMcpDepsSection({ app, appId, onRequireRestart }: AppMcpDepsSe
   // Per-digital-human enable switch — writes requires.mcps[].enabled on THIS
   // app's own spec. Enabling drops the flag (clean YAML, default = enabled);
   // disabling sets enabled:false. The shared MCP server is never touched.
-  const setDepEnabled = useCallback((specId: string, enabled: boolean) => {
+  const setDepEnabled = useCallback(async (specId: string, enabled: boolean) => {
     const next = allDeclaredMcps.map(d => {
       if (d.id !== specId) return d
       if (enabled) {
@@ -495,19 +499,15 @@ export function AppMcpDepsSection({ app, appId, onRequireRestart }: AppMcpDepsSe
       }
       return { ...d, enabled: false }
     })
-    return writeMcps(next)
+    await writeMcps(next)
   }, [allDeclaredMcps, writeMcps])
 
   const openStore = useCallback(() => {
-    void useAppsPageStore.getState().openMarketplaceFilteredBy('mcp')
+    setShowStore(true)
   }, [])
 
   const openMcpDetail = useCallback((mcpApp: InstalledApp) => {
-    // Switch the tab too, otherwise the detail panel shows the MCP while the
-    // left list + tab highlight stay on the digital-humans tab (mismatch).
-    const store = useAppsPageStore.getState()
-    store.setCurrentTab(tabForAppType('mcp'))
-    store.selectApp(mcpApp.id, 'mcp', mcpApp.spaceId ?? undefined)
+    setDetailId(mcpApp.id)
   }, [])
 
   // Warn only for dependencies this digital human actually uses (enabled).
@@ -515,7 +515,7 @@ export function AppMcpDepsSection({ app, appId, onRequireRestart }: AppMcpDepsSe
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
           <Wrench className="w-3.5 h-3.5" />
           {t('MCP Tools')}
@@ -525,8 +525,36 @@ export function AppMcpDepsSection({ app, appId, onRequireRestart }: AppMcpDepsSe
             </span>
           )}
         </h3>
-        <AddDependencyMenu candidates={addCandidates} onAdd={handleAdd} onBrowseStore={openStore} />
+        <div className="flex flex-wrap items-center gap-2">
+          <AddDependencyMenu candidates={addCandidates} onAdd={handleAdd} onBrowseStore={openStore} />
+          <button onClick={() => setCreateMode('visual')} className="rounded-lg px-2 py-1 text-xs text-primary hover:bg-primary/10">{t('New connection')}</button>
+          <button onClick={() => setCreateMode('json')} className="rounded-lg px-2 py-1 text-xs text-primary hover:bg-primary/10">{t('Import JSON')}</button>
+        </div>
       </div>
+      {saveError && <p role="alert" className="text-xs text-destructive">{saveError}</p>}
+      {saving && <p role="status" className="text-xs text-muted-foreground">{t('Saving...')}</p>}
+      {showStore && <CapabilityStoreDialog type="mcp" spaceId={app.spaceId} onClose={() => setShowStore(false)} onInstalled={async id => {
+        const state = useAppsStore.getState()
+        const current = state.apps.find(item => item.id === appId)
+        const resource = state.apps.find(item => item.id === id)
+        if (!resource) throw new Error(t('Connection installed but could not be loaded. Retry to finish.'))
+        const dependencies = [...(current?.spec.requires?.mcps ?? [])]
+        const index = dependencies.findIndex(dependency => dependency.id === resource.specId)
+        if (index >= 0) dependencies[index] = { ...dependencies[index], enabled: true }
+        else dependencies.push({ id: resource.specId })
+        if (!await writeMcps(dependencies)) throw new Error(t('Connection installed but could not be enabled. Retry to finish.'))
+      }} />}
+      {createMode && <ManualAddDialog draftKey={appId} initialType="mcp" initialSpaceId={app.spaceId} initialMcpMode={createMode} contextName={app.spec.name} onClose={() => setCreateMode(null)} onInstalled={async ids => {
+        const state = useAppsStore.getState()
+        const current = state.apps.find(item => item.id === appId)
+        const dependencies = [...(current?.spec.requires?.mcps ?? [])]
+        for (const id of ids) {
+          const resource = state.apps.find(item => item.id === id)
+          if (resource && !dependencies.some(dependency => dependency.id === resource.specId)) dependencies.push({ id: resource.specId })
+        }
+        if (!await writeMcps(dependencies)) throw new Error(t('The connection is saved, but could not be enabled. Retry to finish.'))
+      }} />}
+      {detailId && <CapabilityDialog title={t('Shared connection settings')} onClose={() => setDetailId(null)}><McpStatusCard key={detailId} appId={detailId} /></CapabilityDialog>}
 
       {missingCount > 0 && (
         <p className="text-xs text-amber-500 flex items-center gap-1.5">
@@ -569,7 +597,7 @@ export function AppMcpDepsSection({ app, appId, onRequireRestart }: AppMcpDepsSe
       )}
 
       <p className="text-[11px] text-muted-foreground/60 flex items-start gap-1">
-        <span>{t('Only declared MCP servers are injected at runtime (least privilege).')}</span>
+        <span>{t('Chat inherits connections from its workspace except explicitly disabled ones. Independent tasks use declared connections. Team and external-contact permissions can further restrict access; connection health does not grant those permissions.')}</span>
       </p>
     </div>
   )

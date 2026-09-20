@@ -86,6 +86,13 @@ taken before the owner's latest edit reached the authority must not undo it.
 
 ### Schema notes / deviations from 技术 §8.2
 
+- `is_system_coordinator` (v16) identifies the dedicated coordinator created
+  with a team. It is independent of `is_lead`: an existing human promoted to
+  lead stays in the personal directory. The local summary projects this bit;
+  joined snapshots retain the owning node's value. Legacy recovery requires
+  AI provisioning provenance plus the exact system-generated prompt, author
+  and description. Ambiguous/custom legacy records stay visible.
+
 - `team_members` carries an extra column `ai_provisioned INTEGER NOT NULL
   DEFAULT 0`, present in the frozen `TeamMember` contract but not shown in
   §8.2. It marks members whose app was auto-created for this team (AI sourcing)
@@ -201,3 +208,7 @@ updates do not move cards under the pointer.
 
 Rendering, navigation and audience rules are owned by
 [`components/team/workbench/DESIGN.md`](../../../renderer/components/team/workbench/DESIGN.md).
+
+The public store exposes a single lightweight directory-membership projection for
+cross-team people filtering. It returns local app/team IDs, names and coordinator
+flags without loading every team's tasks, transcripts or full member specs.

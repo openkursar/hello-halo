@@ -50,6 +50,9 @@ export interface InstalledApp {
   /** Space this App is installed in (null = global, available in all spaces) */
   spaceId: string | null
 
+  /** Stable identity storage root, retained when the default space changes. */
+  dataPath?: string
+
   /** Full AppSpec (initially set at install time, updatable via updateSpec) */
   spec: AppSpec
 
@@ -434,6 +437,9 @@ export interface AppManagerService {
    * List installed Apps with optional filtering.
    * Supports filtering by spaceId, status, and App type.
    */
+  getStudioSummary(language?: string, excludeIds?: string[]): import('../../../shared/apps/people-directory').StudioSummary
+  listPeopleDirectory(filter: import('../../../shared/apps/people-directory').PersonDirectoryFilter): { items: import('../../../shared/apps/people-directory').PersonDirectoryRecord[]; total: number; offset: number; limit: number }
+
   listApps(filter?: AppListFilter): InstalledApp[]
 
   /**
@@ -462,7 +468,7 @@ export interface AppManagerService {
 
   /**
    * Get the work directory path for an App.
-   * Ensures the directory exists (auto-creates if missing).
+   * Creates initial storage; an unavailable persisted data path blocks instead of recreating memory.
    *
    * @returns Absolute path to `{space.path}/.halo/apps/{appId}/`
    * @throws AppNotFoundError if the App does not exist

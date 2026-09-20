@@ -284,6 +284,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
         </div>
         <div className="shrink-0 p-4">
           <InputArea
+            draftKey={conversationId}
             onSend={handleSend}
             onStop={handleStop}
             isGenerating={false}
@@ -309,6 +310,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
         </div>
         <div className="shrink-0 p-4">
           <InputArea
+            draftKey={conversationId}
             onSend={handleSend}
             onStop={handleStop}
             isGenerating={false}
@@ -396,6 +398,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
           </div>
         )}
         <InputArea
+            draftKey={conversationId}
           onSend={handleSend}
           onStop={handleStop}
           isGenerating={isGenerating}

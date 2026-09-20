@@ -1462,6 +1462,36 @@ describe('TeamOrchestration', () => {
       return buildTeamSessionKey(RESEARCHER_APP, TEAM_ID, epochId)
     }
 
+    it('defers a durable answer without putting it in a transient mailbox, then acknowledges its own turn', async () => {
+      seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
+      const epoch = makeEpoch(store)
+      const { deps, pendings, injected } = makeSession({ acceptMidTurn: true })
+      const orch = build(deps)
+      await startResearcherTurn(epoch.id)
+      const onDeferred = vi.fn()
+      const onStarted = vi.fn()
+      const onSettled = vi.fn()
+      const params = { teamId: TEAM_ID, epochId: epoch.id, appId: RESEARCHER_APP, response: 'go ahead',
+        continuationId: 'saved-answer', onDeferred, onStarted, onSettled }
+      expect(await orch.resumeFromEscalation(params)).toBe(true)
+      expect(onDeferred).toHaveBeenCalledTimes(1)
+      expect(onStarted).not.toHaveBeenCalled()
+      expect(injected).toHaveLength(0)
+      expect(bus.hasBufferedMessages(epoch.id)).toBe(false)
+      pendings[0].resolve('done')
+      await flush()
+      await orch.resumeFromEscalation(params)
+      await flush()
+      expect(onStarted).toHaveBeenCalledTimes(1)
+      await orch.resumeFromEscalation(params)
+      const answerTurn = pendings.find(p => p.teamContext.correlationId === 'decision:saved-answer')!
+      expect(answerTurn).toBeTruthy()
+      answerTurn.resolve('continued')
+      await flush()
+      expect(onSettled).toHaveBeenCalledTimes(1)
+      expect(onSettled).toHaveBeenCalledWith(undefined)
+    })
+
     it('buffers an escalation resume and delivers it when the current turn ends', async () => {
       seedTeam(store, { collabMode: 'free', escalationRouting: 'user' })
       const epoch = makeEpoch(store)

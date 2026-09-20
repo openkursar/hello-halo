@@ -402,6 +402,7 @@ export function createTeamService(deps: TeamServiceDeps): TeamService {
       role: 'Team Lead',
       isLead: true,
       aiProvisioned: true,
+      isSystemCoordinator: true,
       addedAt: Date.now(),
     })
     return leadAppId

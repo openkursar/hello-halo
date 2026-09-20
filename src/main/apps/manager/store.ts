@@ -36,6 +36,7 @@ interface AppRow {
   upgrade_strategy: string
   ignored_versions: string
   knowledge_seeded: number
+  data_path: string | null
 }
 
 // ============================================
@@ -50,6 +51,7 @@ function rowToInstalledApp(row: AppRow): InstalledApp {
     id: row.id,
     specId: row.spec_id,
     spaceId: row.space_id,  // null for global apps
+    dataPath: row.data_path ?? undefined,
     spec: JSON.parse(row.spec_json) as AppSpec,
     status: row.status as AppStatus,
     pendingEscalationId: row.pending_escalation_id ?? undefined,
@@ -64,6 +66,17 @@ function rowToInstalledApp(row: AppRow): InstalledApp {
     upgradeStrategy: (row.upgrade_strategy as UpgradeStrategy) ?? 'auto',
     ignoredVersions: row.ignored_versions ? (JSON.parse(row.ignored_versions) as string[]) : [],
     knowledgeSeeded: row.knowledge_seeded === 1,
+  }
+}
+
+function directoryDisplayExpressions(language?: string) {
+  const locale = language && /^[A-Za-z0-9-]{1,40}$/.test(language) ? language : 'en'
+  const prefix = locale.split('-')[0]
+  const block = `COALESCE(json_extract(spec_json, '$.i18n."${locale}"'),
+    (SELECT value FROM json_each(json_extract(spec_json, '$.i18n')) WHERE key = '${prefix}' OR key LIKE '${prefix}-%' LIMIT 1))`
+  return {
+    name: `COALESCE(json_extract(${block}, '$.name'), json_extract(spec_json, '$.display_name'), json_extract(spec_json, '$.name'), '')`,
+    description: `COALESCE(json_extract(${block}, '$.description'), json_extract(spec_json, '$.description'), '')`,
   }
 }
 
@@ -96,6 +109,50 @@ export class AppManagerStore {
   private readonly stmtUpdateUpgradeStrategy: Database.Statement
   private readonly stmtUpdateIgnoredVersions: Database.Statement
   private readonly stmtUpdateKnowledgeSeeded: Database.Statement
+
+  getStudioSummary(language?: string, excludeIds: string[] = []): import('../../../shared/apps/people-directory').StudioSummary {
+    const { name, description } = directoryDisplayExpressions(language)
+    const rows = this.db.prepare(`WITH summaries AS (
+      SELECT id, json_extract(spec_json, '$.type') AS type,
+        COUNT(*) OVER (PARTITION BY json_extract(spec_json, '$.type')) AS total,
+        ROW_NUMBER() OVER (PARTITION BY json_extract(spec_json, '$.type') ORDER BY installed_at DESC, id ASC) AS position
+      FROM installed_apps WHERE status != 'uninstalled' AND id NOT IN (SELECT value FROM json_each(?))
+    ) SELECT app.id, app.spec_id AS specId, app.space_id AS spaceId, app.status, app.installed_at AS installedAt,
+      ${name} AS name, ${description} AS description, summaries.type, summaries.total, summaries.position
+      FROM summaries JOIN installed_apps app ON app.id = summaries.id WHERE summaries.position <= 3
+      ORDER BY app.installed_at DESC, app.id ASC`)
+      .all(JSON.stringify(excludeIds)) as Array<import('../../../shared/apps/people-directory').AppDirectoryRecord & { type: 'automation' | 'skill' | 'mcp'; total: number; position: number }>
+    const result: import('../../../shared/apps/people-directory').StudioSummary = { automation: { total: 0, items: [] }, skill: { total: 0, items: [] }, mcp: { total: 0, items: [] } }
+    for (const { type, total, position: _position, ...item } of rows) {
+      if (!Object.prototype.hasOwnProperty.call(result, type)) continue
+      result[type].total = total
+      result[type].items.push(item)
+    }
+    return result
+  }
+
+  listPeopleDirectory(filter: import('../../../shared/apps/people-directory').PersonDirectoryFilter) {
+    const limit = Math.min(100, Math.max(1, Math.floor(filter.limit ?? 24)))
+    const offset = Math.max(0, Math.floor(filter.offset ?? 0))
+    if (!Number.isFinite(limit) || !Number.isFinite(offset)) throw new Error('Invalid directory pagination')
+    const where = ["json_extract(spec_json, '$.type') = 'automation'", filter.removed ? "status = 'uninstalled'" : "status != 'uninstalled'"]
+    const params: unknown[] = []
+    if (filter.spaceId) { where.push('space_id = ?'); params.push(filter.spaceId) }
+    if (filter.includeIds) { where.push('id IN (SELECT value FROM json_each(?))'); params.push(JSON.stringify(filter.includeIds)) }
+    if (filter.excludeIds?.length) { where.push('id NOT IN (SELECT value FROM json_each(?))'); params.push(JSON.stringify(filter.excludeIds)) }
+    const { name, description } = directoryDisplayExpressions(filter.language)
+    if (filter.q?.trim()) {
+      where.push(`(instr(lower(${name} || ' ' || ${description}), lower(?)) > 0 OR id IN (SELECT value FROM json_each(?)))`)
+      params.push(filter.q.trim(), JSON.stringify(filter.searchTeamMemberIds ?? []))
+    }
+    const clause = where.join(' AND ')
+    const total = (this.db.prepare(`SELECT COUNT(*) AS count FROM installed_apps WHERE ${clause}`).get(...params) as { count: number }).count
+    const items = this.db.prepare(`SELECT id, spec_id AS specId, space_id AS spaceId, status,
+      installed_at AS installedAt, ${name} AS name, ${description} AS description
+      FROM installed_apps WHERE ${clause} ORDER BY installed_at DESC, id ASC LIMIT ? OFFSET ?`)
+      .all(...params, limit, offset) as import('../../../shared/apps/people-directory').PersonDirectoryRecord[]
+    return { items, total, offset, limit }
+  }
 
   constructor(private readonly db: Database.Database) {
     // ── INSERT ────────────────────────────────────
@@ -260,6 +317,11 @@ export class AppManagerStore {
   }
 
   // ── Read ───────────────────────────────────────
+
+  pinDataPath(appId: string, dataPath: string): void {
+    this.db.prepare('UPDATE installed_apps SET data_path = COALESCE(data_path, ?) WHERE id = ?')
+      .run(dataPath, appId)
+  }
 
   /**
    * Get an installed App by its unique ID.

@@ -53,7 +53,7 @@ export function getMemoryBaseDir(caller: MemoryCallerScope, scope: MemoryScopeTy
         throw new Error('Memory scope "app" requires an appId in the caller scope')
       }
       // App memory lives in the space's .halo/apps/{appId}/ directory
-      return join(caller.spacePath, '.halo', 'apps', caller.appId)
+      return caller.appDataPath ?? join(caller.spacePath, '.halo', 'apps', caller.appId)
     }
 
     default:

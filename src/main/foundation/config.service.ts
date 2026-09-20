@@ -617,6 +617,9 @@ interface HaloConfig {
   system: {
     autoLaunch: boolean
   }
+  notifications?: {
+    taskComplete: boolean
+  }
   // Agent behavior configuration
   agent?: {
     maxTurns: number

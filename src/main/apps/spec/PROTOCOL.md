@@ -513,13 +513,13 @@ Controls the App's behavior when the AI encounters a situation that requires a h
 ```yaml
 escalation:
   enabled: true      # whether the AI may pause and ask the user; defaults to true
-  timeout_hours: 48  # hours before an unanswered escalation times out; defaults to 24
+  timeout_hours: 48  # hours before this unanswered request expires; omitted means no deadline for new installations
 ```
 
 | Field | Type | Description |
 |---|---|---|
 | `enabled` | `boolean` | Defaults to `true`. When enabled, the AI may pause execution to ask the user a question and resume once they respond. Set to `false` to disable escalation (the AI must make decisions autonomously). |
-| `timeout_hours` | `number` (positive) | If the user does not respond within this many hours, the escalation is automatically closed and the App status switches to `error`. Defaults to 24 hours. |
+| `timeout_hours` | `number` (positive) | An unanswered request expires after this many hours without answering it or changing the App status. New installations have no implicit deadline; upgraded installations retain their historical policy. |
 
 > **App status flow**:
 > - AI raises an escalation → App status: `waiting_user`

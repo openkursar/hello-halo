@@ -16,6 +16,8 @@
  * - Copy support: Easy clipboard access
  */
 
+import { PeopleContextViewer } from './PeopleContextViewer'
+import { peopleContextReferences } from './people-context'
 import { memo } from 'react'
 import type { ToolResultViewerProps } from './types'
 import { detectContentType, getLanguageForTool } from './detection'
@@ -45,6 +47,9 @@ export const ToolResultViewer = memo(function ToolResultViewer({
       </div>
     )
   }
+
+  const references = !isError ? peopleContextReferences(toolName, output) : null
+  if (references) return <PeopleContextViewer references={references} output={output} />
 
   // Detect content type
   const contentType = detectContentType(toolName, toolInput, output)

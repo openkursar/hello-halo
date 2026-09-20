@@ -361,5 +361,12 @@ export const migrations: Migration[] = [
         DROP TABLE team_work_items;
       `)
     }
+  },
+  {
+    version: 16,
+    description: 'Track dedicated system coordinators independently of member roles',
+    up(db) {
+      db.exec('ALTER TABLE team_members ADD COLUMN is_system_coordinator INTEGER NOT NULL DEFAULT 0')
+    }
   }
 ]

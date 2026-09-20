@@ -14,12 +14,16 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Terminal, ChevronDown, ChevronRight, Globe, ExternalLink,
-  FolderOpen, Download, Loader2,
+  FolderOpen, Download, Loader2, Plus, Upload, Search,
 } from 'lucide-react'
 import { api } from '../../api'
+import { CapabilityStoreDialog } from './CapabilityStoreDialog'
+import { ExistingSkillDialog } from './ExistingSkillDialog'
+import { SkillInstallDialog } from './SkillInstallDialog'
+import { SkillInfoCard } from './SkillInfoCard'
+import { CapabilityDialog } from './CapabilityDialog'
 import { isElectron } from '../../api/transport'
 import { useAppsStore } from '../../stores/apps.store'
-import { useAppsPageStore, tabForAppType } from '../../stores/apps-page.store'
 import { useTranslation } from '../../i18n'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import type { InstalledApp, AvailableSkill } from '../../../shared/apps/app-types'
@@ -40,12 +44,15 @@ function stripFrontmatter(md: string): string {
 function SkillRow({
   skill,
   installedApp,
+  overridesGlobal,
 }: {
   skill: AvailableSkill
   installedApp?: InstalledApp
+  overridesGlobal?: boolean
 }) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
+  const [showDetail, setShowDetail] = useState(false)
 
   const isGlobal = skill.scope === 'global'
   const body = stripFrontmatter(skill.content).trim()
@@ -61,14 +68,12 @@ function SkillRow({
 
   function openDetail() {
     if (!installedApp) return
-    // Switch the tab too so the left list + tab highlight match the detail.
-    const store = useAppsPageStore.getState()
-    store.setCurrentTab(tabForAppType('skill'))
-    store.selectApp(installedApp.id, 'skill', installedApp.spaceId ?? undefined)
+    setShowDetail(true)
   }
 
   return (
     <div className="rounded-lg border border-border bg-secondary/40">
+      {showDetail && installedApp && <CapabilityDialog title={t('Shared skill settings')} onClose={() => setShowDetail(false)}><SkillInfoCard appId={installedApp.id} /></CapabilityDialog>}
       <div className="flex items-center gap-2.5 px-3 py-2">
         <button
           onClick={() => setExpanded(v => !v)}
@@ -104,6 +109,9 @@ function SkillRow({
 
       {expanded && (
         <div className="px-3 pb-3 pt-1 space-y-2.5 border-t border-border/50">
+          {!installedApp && <p className="text-xs text-muted-foreground">{t('External file. Edit it in its source folder; it is not managed as an installed library item.')}</p>}
+          {overridesGlobal && <p className="text-xs text-muted-foreground">{t('This workspace version overrides the global skill with the same command name.')}</p>}
+          {installedApp?.spec.requires?.mcps?.length ? <p className="text-xs text-muted-foreground">{t('Required connections: {{names}}', { names: installedApp.spec.requires.mcps.map(dependency => dependency.id).join(', ') })}</p> : null}
           {skill.description && (
             <p className="text-xs text-muted-foreground leading-relaxed">{skill.description}</p>
           )}
@@ -139,23 +147,31 @@ export function AppSkillsSection({ appId, spaceId }: AppSkillsSectionProps) {
 
   const [skills, setSkills] = useState<AvailableSkill[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [revision, setRevision] = useState(0)
+  const [addMode, setAddMode] = useState<'visual' | 'import' | null>(null)
+  const [query, setQuery] = useState('')
+  const [chooseExisting, setChooseExisting] = useState(false)
+  const [showStore, setShowStore] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
+    setError(null)
     api.appListAvailableSkills(appId)
       .then((res) => {
         if (cancelled) return
         if (res.success && Array.isArray(res.data)) {
           setSkills(res.data)
         } else {
-          setSkills([])
+          console.warn('[AppSkillsSection] Failed to load available skills', { appId })
+          setError(res.error || t('Could not load available skills.'))
         }
       })
-      .catch(() => { if (!cancelled) setSkills([]) })
+      .catch(() => { if (!cancelled) { console.warn('[AppSkillsSection] Skill discovery request failed', { appId }); setError(t('Could not load available skills.')) } })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [appId])
+  }, [appId, spaceId, apps, revision, t])
 
   // Scope must match too: the same dir name can exist as a global install and
   // as space installs in several spaces — dirName alone would pick the wrong one.
@@ -168,10 +184,11 @@ export function AppSkillsSection({ appId, spaceId }: AppSkillsSectionProps) {
     ),
   [apps, spaceId])
 
-  const openStore = () => { void useAppsPageStore.getState().openMarketplaceFilteredBy('skill') }
+  const openStore = () => setShowStore(true)
 
   return (
     <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
       <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
         <Terminal className="w-3.5 h-3.5" />
         {t('Available Skills')}
@@ -181,19 +198,31 @@ export function AppSkillsSection({ appId, spaceId }: AppSkillsSectionProps) {
           </span>
         )}
       </h3>
-
+      <div className="flex flex-wrap gap-2">
+        <button onClick={() => setChooseExisting(true)} className="rounded-lg px-2 py-1 text-xs text-primary hover:bg-primary/10">{t('Choose existing')}</button>
+        <button onClick={() => setAddMode('visual')} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-primary hover:bg-primary/10"><Plus className="h-3.5 w-3.5" />{t('New skill')}</button>
+        <button onClick={() => setAddMode('import')} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-primary hover:bg-primary/10"><Upload className="h-3.5 w-3.5" />{t('Import')}</button>
+      </div></div>
+      <p className="text-xs text-muted-foreground">{t('Skills are inherited from this workspace and global settings. Changes can affect other digital humans in the same scope.')}</p>
+      <label className="flex items-center gap-2 rounded-lg border border-border px-3 py-2"><Search className="h-4 w-4 text-muted-foreground" /><input value={query} onChange={event => setQuery(event.target.value)} aria-label={t('Search skills')} placeholder={t('Search skills')} className="min-w-0 flex-1 bg-transparent text-sm outline-none" /></label>
+      {showStore && <CapabilityStoreDialog type="skill" spaceId={spaceId} onClose={() => setShowStore(false)} onInstalled={async () => { setRevision(value => value + 1) }} />}
+      {chooseExisting && <ExistingSkillDialog spaceId={spaceId} onClose={() => setChooseExisting(false)} onAdded={() => setRevision(value => value + 1)} />}
+      {addMode && <SkillInstallDialog draftKey={appId} initialMode={addMode} initialSpaceId={spaceId} onClose={() => setAddMode(null)} onInstalled={() => setRevision(value => value + 1)} />}
+      {error && <div role="alert" className="rounded-lg border border-destructive/30 p-3 text-xs text-destructive">{error}<button onClick={() => setRevision(value => value + 1)} className="ml-3 text-primary">{t('Retry')}</button></div>}
       {loading ? (
         <div className="flex items-center justify-center py-4 text-muted-foreground">
           <Loader2 className="w-4 h-4 animate-spin" />
         </div>
       ) : skills.length > 0 ? (
         <>
+          {query && !skills.some(skill => `${skill.name} ${skill.description}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())) && <p className="text-xs text-muted-foreground">{t('No skills match your search.')}</p>}
           <div className="space-y-1.5">
-            {skills.map(skill => (
+            {skills.filter(skill => `${skill.name} ${skill.description}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map(skill => (
               <SkillRow
                 key={`${skill.scope}:${skill.dirName}`}
                 skill={skill}
                 installedApp={findInstalled(skill)}
+                overridesGlobal={skill.scope === 'space' && apps.some(app => app.spec.type === 'skill' && app.spaceId === null && app.status !== 'uninstalled' && toSkillDirName(app.specId) === skill.dirName)}
               />
             ))}
           </div>

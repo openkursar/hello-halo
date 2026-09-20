@@ -19,6 +19,10 @@ import path from 'node:path'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 const SUITES = {
+  people: {
+    file: 'checklist-people.mjs',
+    blurb: 'Digital human live decisions, duplicate answers, default workspace retention and authorized self-awareness',
+  },
   workbench: {
     file: 'checklist-workbench.mjs',
     blurb: 'Task workbench live model verification (conversation isolation, collaboration, archive/resume, independent decisions)',

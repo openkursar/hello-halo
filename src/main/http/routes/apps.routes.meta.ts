@@ -3,6 +3,19 @@ import type { RouteModuleMeta } from './_meta-types'
 export const MODULE: RouteModuleMeta = {
   file: 'apps',
   routes: {
+    'GET /api/apps/states': { expose: 'internal' },
+    'GET /api/apps/pending-inbox': { expose: 'internal' },
+    'GET /api/apps/:appId/activity/:entryId': { expose: 'internal' },
+    'GET /api/apps/studio-summary': { expose: 'internal' },
+    'GET /api/apps/people': { expose: 'internal' },
+    'GET /api/apps/capability-inventory': { expose: 'internal' },
+    'GET /api/apps/:appId/pending-entries': { expose: 'internal' },
+    'POST /api/apps/:appId/space-preview': { expose: 'internal' },
+    'POST /api/apps/:appId/escalation/:entryId/retry': { expose: 'internal' },
+    'POST /api/apps/:appId/escalation/:entryId/deadline': { expose: 'internal' },
+    'POST /api/apps/:appId/runs/:runId/close': { expose: 'internal' },
+    'POST /api/apps/:appId/runs/:runId/stop': { expose: 'internal' },
+    'POST /api/apps/:appId/runs/start': { expose: 'internal' },
     // ── Listing / reading ─────────────────────────────────────────────
     // Full InstalledApp includes userConfig (raw config_schema values — no
     // 'password' input type exists, so credential fields are plain strings)

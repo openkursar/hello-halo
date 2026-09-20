@@ -15,6 +15,7 @@ import {
   Plus, Settings2, Code, AlertCircle, ChevronDown, ChevronRight, PlugZap
 } from 'lucide-react'
 import { api } from '../../api'
+import { CapabilityImpact, CapabilityChangeDialog } from './CapabilityImpact'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppStore } from '../../stores/app.store'
 import { AppStatusDot } from './AppStatusDot'
@@ -132,6 +133,7 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
   const { apps, pauseApp, resumeApp, uninstallApp, updateAppSpec } = useAppsStore()
   const { mcpStatus } = useAppStore()
   const app = apps.find(a => a.id === appId)
+  const [pendingChange, setPendingChange] = useState<{ title: string; apply: () => Promise<void> } | null>(null)
 
   // Toggle state
   const [toggling, setToggling]       = useState(false)
@@ -140,6 +142,7 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
   // Connection test state (result arrives via the agent:mcp-status broadcast)
   const [testing, setTesting]     = useState(false)
   const [testError, setTestError] = useState<string | null>(null)
+  const [probeStatus, setProbeStatus] = useState<string | null>(null)
 
   // Edit state
   const [isEditing, setIsEditing] = useState(false)
@@ -167,7 +170,7 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
   const isEnabled = status === 'active'
   const canToggle = status === 'active' || status === 'paused' || status === 'error'
 
-  const sdkEntry = mcpStatus.find(s => s.name === app.specId)
+  const sdkEntry = apps.filter(item => item.spec.type === 'mcp' && item.status !== 'uninstalled' && item.specId === app.specId).length === 1 ? mcpStatus.find(s => s.name === app.specId) : undefined
   let displayStatus: AppStatus = status
   let neverConnected = false
   if (status === 'active') {
@@ -177,6 +180,10 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
     } else {
       neverConnected = true
     }
+  }
+  if (status === 'active' && probeStatus) {
+    neverConnected = false
+    displayStatus = probeStatus === 'connected' ? 'active' : probeStatus === 'needs-auth' ? 'needs_login' : 'error'
   }
   const isError = displayStatus === 'error'
   // Editing the token would not help here — Halo clears the leftover state and
@@ -270,14 +277,16 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
     setSaveError(null)
     try {
       const ok = await updateAppSpec(appId, { mcp_server: serverConfig })
+      if (ok) setProbeStatus(null)
       if (ok) {
         setIsEditing(false)
         setHasChanges(false)
       } else {
-        setSaveError(t('Save failed. Please try again.'))
+        throw new Error(t('Save failed. Please try again.'))
       }
     } catch (e) {
       setSaveError((e as Error).message)
+      throw e
     } finally {
       setIsSaving(false)
     }
@@ -288,9 +297,11 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
     setToggling(true)
     setToggleError(null)
     try {
-      await (isEnabled ? pauseApp(appId) : resumeApp(appId))
+      const ok = await (isEnabled ? pauseApp(appId) : resumeApp(appId))
+      if (!ok) throw new Error(t('Could not change shared resource availability.'))
     } catch (e) {
       setToggleError((e as Error).message)
+      throw e
     } finally {
       setToggling(false)
     }
@@ -305,6 +316,7 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
     try {
       const res = await api.probeMcpApp(appId)
       if (!res.success) setTestError(res.error ?? t('Connection test failed'))
+      else setProbeStatus((res.result as { status?: string } | undefined)?.status ?? 'failed')
     } catch (e) {
       setTestError((e as Error).message)
     } finally {
@@ -317,7 +329,9 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
   const headerEntries = mcpServer?.headers ? Object.entries(mcpServer.headers) : []
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-5">
+    <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
+      {pendingChange && <CapabilityChangeDialog appId={appId} title={pendingChange.title} onConfirm={pendingChange.apply} onClose={() => setPendingChange(null)} />}
+      <CapabilityImpact appId={appId} />
 
       {/* ── Header ── */}
       <div className="flex items-start justify-between gap-3">
@@ -339,7 +353,7 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
               aria-label={isEnabled ? t('Disable') : t('Enable')}
               aria-checked={isEnabled}
               disabled={!canToggle || toggling}
-              onClick={handleToggle}
+              onClick={() => setPendingChange({ title: t('Change shared resource availability?'), apply: handleToggle })}
               className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full transition-colors duration-200
                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2
                 disabled:opacity-50 disabled:cursor-not-allowed
@@ -642,7 +656,7 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
                     {t('Cancel')}
                   </button>
                   <button
-                    onClick={handleSave}
+                    onClick={() => setPendingChange({ title: t('Save shared resource changes?'), apply: handleSave })}
                     disabled={!!jsonError || isSaving || !hasChanges}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground text-primary-foreground rounded-lg transition-colors"
                   >
@@ -699,7 +713,7 @@ export function McpStatusCard({ appId }: McpStatusCardProps) {
       {/* ── Danger zone ── */}
       <div className="pt-2 border-t border-border">
         <button
-          onClick={() => uninstallApp(appId)}
+          onClick={() => setPendingChange({ title: t('Remove this shared resource?'), apply: async () => { if (!await uninstallApp(appId)) throw new Error('Uninstall failed') } })}
           className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-red-400 hover:text-red-300
             border border-red-400/30 hover:border-red-400/60 rounded-lg transition-colors"
         >

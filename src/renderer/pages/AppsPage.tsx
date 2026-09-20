@@ -17,8 +17,13 @@ import { useAppsStore } from '../stores/apps.store'
 import { useAppsPageStore, tabForAppType } from '../stores/apps-page.store'
 import { useTeamStore } from '../stores/team.store'
 import type { AppType } from '../../shared/apps/spec-types'
-import { leadAppIdSet } from '../../shared/apps/team-types'
 import { Header } from '../components/layout/Header'
+import { visibleDigitalHumans } from '../utils/people-model'
+import { PeopleInbox } from '../components/apps/PeopleInbox'
+import { PeopleDirectory } from '../components/apps/PeopleDirectory'
+import { PersonTeams } from '../components/apps/PersonTeams'
+import { CapabilityLibrary } from '../components/apps/CapabilityLibrary'
+import { usePeopleViewStore } from '../stores/people-view.store'
 import { AppList } from '../components/apps/AppList'
 import { AutomationHeader } from '../components/apps/AutomationHeader'
 import { LoginNoticeBar } from '../components/apps/LoginNoticeBar'
@@ -78,13 +83,10 @@ export function AppsPage() {
     return null
   }, [currentTab])
 
-  // Team lead apps are an internal coordination role, not standalone digital
-  // humans — hide them from the digital-humans list (they are managed inside
-  // the team view). Derived from the loaded team list (kept fresh via events).
   const selectedTeamId = useTeamStore(s => s.currentTeamId)
   const inTeamWorkbench = currentTab === 'team' && selectedTeamId !== null
   const teams = useTeamStore(s => s.teams)
-  const leadAppIds = useMemo(() => leadAppIdSet(teams), [teams])
+
 
   // How many teams have a decision waiting on the user — surfaced on the Teams
   // tab itself so it's visible without having to switch away and back.
@@ -93,11 +95,8 @@ export function AppsPage() {
   /** Filter apps visible in the current tab (excludes store tab) */
   const appsForCurrentTab = useMemo(() => {
     if (!appTypeForCurrentTab) return []
-    return apps.filter(a =>
-      a.spec.type === appTypeForCurrentTab &&
-      !(appTypeForCurrentTab === 'automation' && leadAppIds.has(a.id))
-    )
-  }, [apps, appTypeForCurrentTab, leadAppIds])
+    return appTypeForCurrentTab === 'automation' ? visibleDigitalHumans(apps, teams) : apps.filter(app => app.spec.type === appTypeForCurrentTab)
+  }, [apps, appTypeForCurrentTab, teams])
 
   /**
    * Open the marketplace pre-filtered by the target type. Delegates to the
@@ -107,10 +106,22 @@ export function AppsPage() {
     void openMarketplaceFilteredBy(type)
   }, [openMarketplaceFilteredBy])
 
-  // Load all apps globally (across all spaces) on mount
+  useEffect(() => { void useTeamStore.getState().loadTeams() }, [])
   useEffect(() => {
-    loadApps()
-  }, [loadApps])
+    if (currentTab === 'team' || currentTab === 'my-skills' || currentTab === 'my-mcp' || currentTab === 'store' || detailView?.type === 'app-config') void loadApps()
+  }, [currentTab, detailView?.type, loadApps])
+  const [detailFailed, setDetailFailed] = useState(false)
+  const [detailRevision, setDetailRevision] = useState(0)
+  const targetAppId = initialAppId ?? selectedAppId
+  useEffect(() => {
+    if (!targetAppId || apps.some(app => app.id === targetAppId)) return
+    let active = true
+    setDetailFailed(false)
+    void useAppsStore.getState().refreshApp(targetAppId).then(() => {
+      if (active) { setDetailFailed(!useAppsStore.getState().apps.some(app => app.id === targetAppId)) }
+    })
+    return () => { active = false }
+  }, [targetAppId, detailRevision])
 
   // Fetch available updates on mount and stay subscribed to push events so
   // the "Update" badge in AppListItem stays fresh without polling.
@@ -163,7 +174,7 @@ export function AppsPage() {
       // the selection together — clearing here would wipe the just-opened
       // detail and auto-select the first app instead.
       const sel = apps.find(a => a.id === selectedAppId)
-      const belongsToNewTab = sel ? tabForAppType(sel.spec.type) === currentTab : false
+      const belongsToNewTab = sel ? tabForAppType(sel.spec.type) === currentTab : currentTab === 'my-digital-humans' && !!detailView
       if (!belongsToNewTab) clearSelection()
     }
   }, [currentTab, clearSelection, apps, selectedAppId])
@@ -172,7 +183,7 @@ export function AppsPage() {
   // on mobile the user should see the full-width list first and tap to select)
   useEffect(() => {
     if (isMobile) return
-    if (currentTab === 'store') return
+    if (currentTab === 'store' || currentTab === 'my-digital-humans' || currentTab === 'my-skills' || currentTab === 'my-mcp') return
     if (!selectedAppId && appsForCurrentTab.length > 0) {
       const activeApps = appsForCurrentTab.filter(a => a.status !== 'uninstalled')
       const waitingApp = activeApps.find(a => a.status === 'waiting_user')
@@ -242,6 +253,8 @@ export function AppsPage() {
             spaceId={detailView.spaceId}
           />
         )
+      case 'app-teams':
+        return <PersonTeams appId={detailView.appId} />
       case 'app-config':
         return <AppConfigPanel appId={detailView.appId} spaceName={selectedApp?.spaceId ? spaceMap[selectedApp.spaceId] : t('Global')} />
       case 'mcp-status':
@@ -276,8 +289,9 @@ export function AppsPage() {
         right={
           <button
             onClick={() => setView('settings')}
-            className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
+            className="min-h-9 min-w-9 flex items-center justify-center p-1.5 hover:bg-secondary rounded-lg transition-colors"
             title={t('Settings')}
+            aria-label={t('Settings')}
           >
             <Settings className="w-5 h-5" />
           </button>
@@ -298,15 +312,11 @@ export function AppsPage() {
           onClick={() => setCurrentTab('team')}
         />
         <TabButton
-          active={currentTab === 'my-skills'}
-          label={t('My Skills')}
+          active={currentTab === 'my-skills' || currentTab === 'my-mcp'}
+          label={t('Capability library')}
           onClick={() => setCurrentTab('my-skills')}
         />
-        <TabButton
-          active={currentTab === 'my-mcp'}
-          label={t('My MCP')}
-          onClick={() => setCurrentTab('my-mcp')}
-        />
+        <TabButton active={currentTab === 'inbox'} label={t('Needs my attention')} onClick={() => setCurrentTab('inbox')} />
         <TabButton
           active={currentTab === 'store'}
           label={t('Marketplace')}
@@ -319,9 +329,25 @@ export function AppsPage() {
         <StoreView />
       ) : currentTab === 'team' ? (
         <TeamTabContent />
+      ) : currentTab === 'inbox' ? (
+        <PeopleInbox />
+      ) : currentTab === 'my-digital-humans' ? (
+        selectedAppId && !selectedApp ? <div className="flex-1 p-6"><button onClick={clearSelection} className="mb-5 min-h-9 text-sm text-primary">{t('All digital humans')}</button>{detailFailed ? <p role="alert" className="text-sm text-destructive">{t('Could not load this digital human.')} <button onClick={() => setDetailRevision(value => value + 1)} className="underline">{t('Retry')}</button></p> : <p role="status" className="text-sm text-muted-foreground">{t('Loading…')}</p>}</div> : selectedAppId && selectedApp ? <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border px-4 py-2 text-xs">
+            <button onClick={clearSelection} className="flex min-h-8 items-center gap-1 text-muted-foreground hover:text-primary"><ChevronLeft size={15} />{t('All digital humans')}</button>
+            <PersonReturnLink />
+            <RecentPeople />
+          </div>
+          {isSessionDetail ? <SessionBreadcrumb appName={selectedAppName ?? ''} runId={(detailView as { runId: string }).runId} onBack={() => openActivityThread(selectedApp.id)} /> : !isUninstalledDetail && <AutomationHeader appId={selectedAppId} spaceName={selectedApp.spaceId ? spaceMap[selectedApp.spaceId] : t('Global')} />}
+          {showLoginNotice && resolvedSpec?.browser_login && detailView?.type === 'activity-thread' && <LoginNoticeBar browserLogin={resolvedSpec.browser_login} onDismiss={() => void updateAppOverrides(selectedAppId, { loginNoticeDismissed: true })} onOpenBrowser={(url, label) => api.openLoginWindow(url, label)} />}
+          <div className={`min-h-0 flex-1 ${isAppChat || isSessionDetail ? 'overflow-hidden' : 'overflow-y-auto'}`}>{renderDetail()}</div>
+        </div> : <PeopleDirectory spaceMap={spaceMap} onCreate={() => setShowInstallDialog(true)} />
+      ) : (currentTab === 'my-skills' || currentTab === 'my-mcp') && !selectedAppId ? (
+        <div className="flex min-h-0 flex-1 flex-col"><div className="flex gap-2 border-b border-border p-3"><TabButton active={currentTab === 'my-skills'} label={t('Skills')} onClick={() => setCurrentTab('my-skills')} /><TabButton active={currentTab === 'my-mcp'} label={t('MCP connections')} onClick={() => setCurrentTab('my-mcp')} /></div><CapabilityLibrary type={currentTab === 'my-skills' ? 'skill' : 'mcp'} onSelect={id => { const app = apps.find(item => item.id === id); if (app) selectApp(id, app.spec.type, app.spaceId ?? undefined) }} onAdd={() => currentTab === 'my-skills' ? setShowSkillInstallDialog(true) : setManualAddType('mcp')} /></div>
       ) : !isMobile ? (
         /* ── Desktop: split layout — left sidebar + right detail (unchanged) ── */
         <div className="flex-1 flex overflow-hidden">
+          <button onClick={clearSelection} className="self-start p-3 text-xs text-primary">{t('Back to capability library')}</button>
           {/* Left: App list (fixed 240px width) */}
           <div className="w-60 flex-shrink-0 border-r border-border flex flex-col overflow-hidden">
             {currentTab === 'my-skills' ? (
@@ -504,6 +530,7 @@ function TabButton({ active, label, onClick, badge }: TabButtonProps) {
   return (
     <button
       onClick={onClick}
+      aria-pressed={active}
       className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors whitespace-nowrap ${
         active
           ? 'bg-secondary text-foreground font-medium'
@@ -512,7 +539,7 @@ function TabButton({ active, label, onClick, badge }: TabButtonProps) {
     >
       {label}
       {!!badge && (
-        <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-medium text-white">
+        <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-halo-warning px-1 text-[10px] font-medium text-background">
           {badge}
         </span>
       )}
@@ -556,4 +583,21 @@ function SessionBreadcrumb({ appName, runId, label, onBack }: SessionBreadcrumbP
       )}
     </div>
   )
+}
+
+function RecentPeople() {
+  const { t } = useTranslation()
+  const recent = usePeopleViewStore(state => state.recent)
+  const apps = useAppsStore(state => state.apps)
+  const selected = useAppsPageStore(state => state.selectedAppId)
+  return <select aria-label={t('Recent digital humans')} value={selected ?? ''} onChange={event => { usePeopleViewStore.getState().rememberPerson(event.target.value); useAppsPageStore.getState().openActivityThread(event.target.value) }} className="ml-auto max-w-48 rounded-lg border border-border bg-background px-2 py-1.5"><option value={selected ?? ''}>{t('Recently visited')}</option>{recent.filter(id => id !== selected).map(id => { const app = apps.find(item => item.id === id); return app ? <option key={id} value={id}>{resolveSpecI18n(app.spec, getCurrentLanguage()).name}</option> : null })}</select>
+}
+
+function PersonReturnLink() {
+  const { t } = useTranslation()
+  const target = usePeopleViewStore(state => state.returnTeam)
+  const inbox = usePeopleViewStore(state => state.returnInbox)
+  if (inbox) return <button onClick={() => { usePeopleViewStore.setState({ returnInbox: false }); useAppsPageStore.getState().setCurrentTab('inbox') }} className="min-h-8 text-primary">{t('Return to requests')}</button>
+  if (!target) return null
+  return <button onClick={() => { usePeopleViewStore.setState({ teamTarget: target, returnTeam: null, returnPerson: null }); useTeamStore.getState().selectTeam(target.teamId); useAppsPageStore.getState().setCurrentTab('team') }} className="min-h-8 text-primary">{t('Return to team task')}</button>
 }

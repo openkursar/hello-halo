@@ -9,7 +9,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { Play, Pause, RotateCcw, RefreshCw, Globe, ExternalLink, MessageSquare, Activity, Cog, ChevronRight, Share2 } from 'lucide-react'
+import { Play, Pause, RefreshCw, Globe, ExternalLink, MessageSquare, Activity, Cog, ChevronRight, Share2, Users } from 'lucide-react'
 import { AutomationAvatar } from './AutomationAvatar'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
@@ -37,20 +37,28 @@ function statusLabel(s: string, t: (key: string) => string): string {
     case 'queued': return t('Queued')
     case 'idle': return t('Standing by')
     case 'waiting_user': return t('Waiting for you')
-    case 'paused': return t('Standing by')
+    case 'paused': return t('Automatic tasks paused')
     case 'error': return t('Encountered an issue')
     default: return s
   }
 }
 
-export type AutomationTab = 'chat' | 'activity' | 'config'
+export type AutomationTab = 'chat' | 'activity' | 'config' | 'teams'
 
 export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
   const { t } = useTranslation()
   const { apps, appStates, pauseApp, resumeApp, triggerApp } = useAppsStore()
-  const { openAppConfig, openAppChat, openActivityThread, detailView } = useAppsPageStore()
+  const { openAppConfig, openAppChat, openActivityThread, openAppTeams, detailView } = useAppsPageStore()
   const app = apps.find(a => a.id === appId)
   const runtimeState = appStates[appId]
+
+  const [action, setAction] = useState(false)
+  const [actionError, setActionError] = useState(false)
+  const perform = async (operation: () => Promise<boolean>) => {
+    if (action) return
+    setAction(true); setActionError(false)
+    try { setActionError(!await operation()) } finally { setAction(false) }
+  }
 
   // Browser popover state
   const [showBrowserPopover, setShowBrowserPopover] = useState(false)
@@ -80,19 +88,19 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
   const currentTab: AutomationTab = useMemo(() => {
     if (detailView?.type === 'app-chat') return 'chat'
     if (detailView?.type === 'app-config') return 'config'
+    if (detailView?.type === 'app-teams') return 'teams'
     return 'activity'
   }, [detailView])
 
   if (!app) return null
 
-  const { name, browser_login } = resolveSpecI18n(app.spec, getCurrentLanguage())
+  const { name, description, browser_login } = resolveSpecI18n(app.spec, getCurrentLanguage())
   const status = app.status
   const runtimeStatus = runtimeState?.status
   const effectiveStatus = runtimeStatus ?? (status === 'active' ? 'idle' : status)
   const isAutomation = app.spec.type === 'automation'
 
-  const isWaiting = status === 'waiting_user'
-  const isPaused = status === 'paused'
+  const isPaused = runtimeState?.automaticEnabled === false || status === 'paused'
   const isRunning = effectiveStatus === 'running'
   const isQueued = effectiveStatus === 'queued'
 
@@ -140,15 +148,16 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
   const handleTabConfig = () => openAppConfig(appId)
 
   const tabs: { key: AutomationTab; label: string; icon: typeof MessageSquare; onClick: () => void }[] = [
-    { key: 'chat', label: t('Chat'), icon: MessageSquare, onClick: handleTabChat },
-    { key: 'activity', label: t('Activity'), icon: Activity, onClick: handleTabActivity },
-    { key: 'config', label: t('Settings'), icon: Cog, onClick: handleTabConfig },
+    { key: 'activity', label: t('Work activity'), icon: Activity, onClick: handleTabActivity },
+    { key: 'chat', label: t('Conversation'), icon: MessageSquare, onClick: handleTabChat },
+    { key: 'teams', label: t('Participating teams'), icon: Users, onClick: () => openAppTeams(appId) },
+    { key: 'config', label: t('Capabilities and settings'), icon: Cog, onClick: handleTabConfig },
   ]
 
   return (
     <div className="flex-shrink-0 border-b border-border">
       {/* ── Persona Card ── */}
-      <div className="flex items-start gap-3 px-4 pt-4 pb-3">
+      <div className="flex flex-wrap items-start gap-3 px-4 pt-5 pb-4 sm:px-8">
         {/* Avatar */}
         <div className="flex-shrink-0 rounded-xl overflow-hidden">
           <AutomationAvatar name={name || appId} size={44} />
@@ -156,14 +165,17 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
 
         {/* Info */}
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold text-foreground truncate leading-tight">{name}</h2>
-          <div className="flex items-center gap-1.5 mt-0.5">
+          <h2 className="text-lg font-semibold text-foreground truncate leading-tight">{name}</h2>
+          {description && <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <AppStatusDot status={status} runtimeStatus={runtimeStatus} size="sm" />
             <span className="text-xs text-muted-foreground">
               {statusLabel(effectiveStatus, t)}
               {freqLabel && <span className="mx-1">·</span>}
               {freqLabel && <span>{freqLabel}</span>}
             </span>
+            {(runtimeState?.pendingDecisionCount ?? 0) > 0 && <button onClick={handleTabActivity} className="min-h-7 rounded-md bg-halo-warning/10 px-2 text-xs text-halo-warning">{t('{{count}} waiting for you', { count: runtimeState!.pendingDecisionCount })}</button>}
+            {isPaused && (isRunning || isQueued) && <span className="text-xs text-muted-foreground">{t('Automatic tasks paused')}</span>}
           </div>
           {(nextRunLabel || lastRunLabel || (spaceName && app.spaceId)) && (
             <p className="text-[11px] text-muted-foreground/60 mt-0.5 truncate flex items-center gap-0">
@@ -175,10 +187,13 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
                   onClick={(e) => {
                     e.stopPropagation()
                     const spaceStore = useSpaceStore.getState()
-                    const target = spaceStore.spaces.find(s => s.id === app.spaceId) ?? spaceStore.haloSpace
+                    const target = spaceStore.spaces.find(s => s.id === app.spaceId) ?? (spaceStore.haloSpace?.id === app.spaceId ? spaceStore.haloSpace : null)
                     if (target) {
                       spaceStore.setCurrentSpace(target)
                       useAppStore.getState().setView('space')
+                    } else {
+                      console.warn('[AutomationHeader] Workspace navigation unavailable', { appId, spaceId: app.spaceId })
+                      setActionError(true)
                     }
                   }}
                   className="inline-flex items-center gap-1 ml-1.5 px-1.5 py-0.5 rounded-sm bg-secondary/50 text-muted-foreground hover:bg-secondary hover:text-primary transition-colors text-[11px] leading-tight"
@@ -194,48 +209,16 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
 
         {/* Action buttons */}
         {isAutomation && (
-          <div className="flex items-center gap-0.5 flex-shrink-0">
-            {/* Trigger now (also available when paused — backend auto-resumes) */}
-            {!isWaiting && (
-              <button
-                onClick={() => triggerApp(appId)}
-                disabled={isRunning || isQueued}
-                title={isQueued ? t('Queued — waiting for a run slot') : isPaused ? t('Resume and run now') : t('Run now')}
-                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors disabled:opacity-40"
-              >
-                <Play className="w-3.5 h-3.5" />
-              </button>
-            )}
-
-            {/* Retry */}
-            {status === 'error' && (
-              <button
-                onClick={() => triggerApp(appId)}
-                title={t('Retry now')}
-                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-            )}
-
-            {/* Pause / Resume */}
-            {isPaused ? (
-              <button
-                onClick={() => resumeApp(appId)}
-                title={t('Resume')}
-                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-              </button>
-            ) : (
-              <button
-                onClick={() => pauseApp(appId)}
-                title={t('Pause')}
-                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
-              >
-                <Pause className="w-3.5 h-3.5" />
-              </button>
-            )}
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={() => void perform(() => triggerApp(appId))} disabled={action || isRunning || isQueued}
+              title={isQueued ? t('An independent execution is already queued') : isRunning ? t('An independent execution is already running') : t('Start a new independent execution')}
+              className="flex min-h-9 items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs hover:bg-secondary disabled:opacity-50">
+              <Play size={14} />{isQueued ? t('Queued') : isRunning ? t('Working') : t('Run once')}
+            </button>
+            <button onClick={() => void perform(() => isPaused ? resumeApp(appId) : pauseApp(appId))} disabled={action}
+              aria-pressed={!isPaused} className="flex min-h-9 items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs hover:bg-secondary disabled:opacity-50">
+              {isPaused ? <RefreshCw size={14} /> : <Pause size={14} />}{isPaused ? t('Enable automatic tasks') : t('Pause automatic tasks')}
+            </button>
 
             {/* Browser */}
             {showBrowserButton && (
@@ -243,7 +226,8 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
                 <button
                   onClick={() => setShowBrowserPopover(prev => !prev)}
                   title={t('Browser')}
-                  className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
+                  aria-label={t('Browser')} aria-expanded={showBrowserPopover}
+                  className="min-h-9 min-w-9 flex items-center justify-center p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
                 >
                   <Globe className="w-3.5 h-3.5" />
                 </button>
@@ -262,7 +246,8 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
             <button
               onClick={() => setShowShareDialog(true)}
               title={t('Share')}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
+              aria-label={t('Share')}
+              className="min-h-9 min-w-9 flex items-center justify-center p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-md transition-colors"
             >
               <Share2 className="w-3.5 h-3.5" />
             </button>
@@ -270,6 +255,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
         )}
       </div>
 
+      {actionError && <p role="alert" className="px-4 pb-3 text-sm text-destructive">{t('Could not apply this action. Please try again.')}</p>}
       {showShareDialog && (
         <ShareCurrentAppDialog
           appId={appId}
@@ -279,7 +265,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
 
       {/* ── Tab Bar ── */}
       {isAutomation && (
-        <div className="flex items-center gap-0.5 px-4">
+        <div className="flex items-center gap-0.5 overflow-x-auto px-4 sm:px-8">
           {tabs.map(tab => {
             const Icon = tab.icon
             const isActive = currentTab === tab.key
@@ -287,7 +273,8 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
               <button
                 key={tab.key}
                 onClick={tab.onClick}
-                className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px ${
+                aria-pressed={isActive}
+                className={`flex shrink-0 items-center gap-1.5 px-3 py-3 text-xs font-medium transition-colors border-b-2 -mb-px ${
                   isActive
                     ? 'text-foreground border-foreground'
                     : 'text-muted-foreground border-transparent hover:text-foreground hover:border-border'
@@ -356,6 +343,7 @@ function BrowserLoginPopover({ entries, onOpen, onOpenCustomUrl, t }: BrowserLog
             value={customUrl}
             onChange={(e) => setCustomUrl(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') handleOpenCustom() }}
+            aria-label={t('Browser URL')}
             placeholder={t('Enter URL')}
             className="flex-1 min-w-0 bg-muted border border-border rounded-md px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
             autoFocus
@@ -365,6 +353,7 @@ function BrowserLoginPopover({ entries, onOpen, onOpenCustomUrl, t }: BrowserLog
             disabled={!customUrl.trim()}
             className="flex-shrink-0 p-1.5 rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             title={t('Open')}
+            aria-label={t('Open URL')}
           >
             <ExternalLink className="w-3.5 h-3.5" />
           </button>

@@ -352,7 +352,7 @@ export function createMessageBus(deps: MessageBusDeps): MessageBus {
       ...(hooks.deliverMidTurn
         ? {
             deliverMidTurn: (sessionKey: string, job: EnvelopeJob): boolean =>
-              hooks.deliverMidTurn!({
+              !job.trigger.correlationId.startsWith('decision:') && hooks.deliverMidTurn!({
                 sessionKey,
                 appId: job.envelope.toAppId,
                 teamId: job.envelope.teamId,

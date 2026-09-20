@@ -11,4 +11,5 @@ export const BUILTIN_MCP_SERVER_IDS: ReadonlySet<string> = new Set([
   'ai-browser', 'ai-terminal', 'email', 'halo-email',
   'web-search', 'halo-memory', 'halo-report', 'halo-notify',
   'halo-apps', 'halo-docs', 'im-file-send', 'ocr', 'halo-api-ref',
+  'halo-person-context',
 ])

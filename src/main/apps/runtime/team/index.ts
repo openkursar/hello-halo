@@ -215,11 +215,16 @@ export interface TeamRuntime {
    * team it is working in.
    */
   getTeamName(teamId: string): string | null
+  describeTaskSource(teamId: string, epochId: string): { teamName: string; label?: string } | null
   /**
    * Resume a team turn after the user answered a member's escalation. Returns
    * false when the team/epoch is gone (caller must NOT fall back to a solo run).
    */
   resumeFromEscalation(params: {
+    continuationId?: string
+    onDeferred?: () => void
+    onStarted?: () => void
+    onSettled?: (error?: string) => void
     teamId: string
     epochId: string
     appId: string
@@ -498,6 +503,12 @@ export function createTeamRuntime(deps: CreateTeamRuntimeDeps): TeamRuntime {
     buildPromptContext: (teamId, selfAppId) =>
       orchestration!.buildPromptContext(teamId, selfAppId),
     getTeamName: (teamId) => store.getTeamById(teamId)?.name ?? null,
+    describeTaskSource: (teamId, epochId) => {
+      const team = store.getTeamById(teamId)
+      const epoch = store.getEpochById(epochId)
+      return team && epoch?.teamId === teamId
+        ? { teamName: team.name, label: epoch.workItem?.title || epoch.title || undefined } : null
+    },
     resumeFromEscalation: (params) => orchestration!.resumeFromEscalation(params),
   }
 }

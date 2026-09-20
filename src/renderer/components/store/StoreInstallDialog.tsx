@@ -23,12 +23,14 @@ const GLOBAL_SCOPE = '__global__'
 interface StoreInstallDialogProps {
   detail: StoreAppDetail
   onClose: () => void
-  onInstalled: (appId: string) => void
+  onInstalled: (appId: string) => void | Promise<void>
+  initialSpaceId?: string | null
+  lockScope?: boolean
   /** If true, adds "Global (all spaces)" as the first scope option */
   showGlobalOption?: boolean
 }
 
-export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOption }: StoreInstallDialogProps) {
+export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOption, initialSpaceId, lockScope }: StoreInstallDialogProps) {
   const { t } = useTranslation()
   const installFromStore = useAppsPageStore(state => state.installFromStore)
   // Install downloads spec+files from the registry; block it while offline so it
@@ -54,7 +56,7 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
   // Require an explicit choice. Only auto-select when there is a single space
   // and no dropdown is shown (nothing for the user to pick).
   const [selectedSpaceId, setSelectedSpaceId] = useState(
-    !showGlobalOption && allSpaces.length <= 1 ? (allSpaces[0]?.id ?? '') : ''
+    initialSpaceId !== undefined ? initialSpaceId ?? GLOBAL_SCOPE : !showGlobalOption && allSpaces.length <= 1 ? (allSpaces[0]?.id ?? '') : ''
   )
   // Spaces can resolve after mount; when there is exactly one space (the selector
   // is hidden and only a read-only label shows) adopt it, so Install is not left
@@ -66,6 +68,7 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
     }
   }, [showGlobalOption, allSpaces, selectedSpaceId])
   const [loading, setLoading] = useState(false)
+  const installedId = useRef<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<StoreInstallProgress | null>(null)
   // Required config keys flagged by a failed install; cleared as each is filled.
@@ -163,7 +166,7 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
       // Map sentinel '__global__' back to null for global installs
       const resolvedSpaceId = selectedSpaceId === GLOBAL_SCOPE ? null : selectedSpaceId
 
-      const appId = await installFromStore(
+      const appId = installedId.current ?? await installFromStore(
         detail.entry.slug,
         resolvedSpaceId,
         Object.keys(userConfig).length > 0 ? userConfig : undefined,
@@ -171,7 +174,8 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
       )
 
       if (appId) {
-        onInstalled(appId)
+        installedId.current = appId
+        await onInstalled(appId)
       } else {
         setError(t('Installation failed. Please try again.'))
       }
@@ -225,7 +229,9 @@ export function StoreInstallDialog({ detail, onClose, onInstalled, showGlobalOpt
               <label className="block text-xs font-semibold text-muted-foreground">
                 {t('Install to')}
               </label>
-              {!showGlobalOption && allSpaces.length <= 1 ? (
+              {lockScope ? (
+                <p className="text-sm text-foreground">{initialSpaceId === null ? t('Global (all spaces)') : allSpaces.find(space => space.id === initialSpaceId)?.name ?? t('Unavailable workspace')}</p>
+              ) : !showGlobalOption && allSpaces.length <= 1 ? (
                 <p className="text-sm text-foreground">
                   {allSpaces[0] ? spaceLabel(allSpaces[0]) : t('No spaces available')}
                 </p>

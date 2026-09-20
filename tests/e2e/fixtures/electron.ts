@@ -16,7 +16,7 @@ import { _electron as electron } from 'playwright'
 import path from 'path'
 import fs from 'fs'
 import crypto from 'crypto'
-import { fileURLToPath } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
 
 // ESM compatibility: __dirname is not available in ES modules
 const __filename = fileURLToPath(import.meta.url)
@@ -162,7 +162,7 @@ export function createTestConfigDir(appPath: string): string {
       sources.push(oauthSource)
       console.log(`[E2E] Loaded OAuth source: ${oauthSource.provider}`)
     } catch (err) {
-      console.warn('[E2E] Failed to parse HALO_TEST_OAUTH_SOURCE:', err.message)
+      console.warn('[E2E] Failed to parse HALO_TEST_OAUTH_SOURCE:', err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -261,8 +261,14 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
   // but Playwright needs Electron in full app mode to connect via CDP.
   const { ELECTRON_RUN_AS_NODE: _, ...cleanEnv } = process.env
 
-  return electron.launch({
-    args: [appEntryPath],
+  const bootstrap = path.join(path.dirname(appEntryPath), `.e2e-bootstrap-${crypto.randomUUID()}.cjs`)
+  const appData = path.join(testConfigDir, 'electron-data')
+  const userData = path.join(appData, 'user')
+  fs.mkdirSync(userData, { recursive: true })
+  // macOS resolves appData independently of HOME. Isolate browser storage before main imports.
+  fs.writeFileSync(bootstrap, `const { app } = require('electron');\napp.setPath('appData', ${JSON.stringify(appData)});\napp.setPath('userData', ${JSON.stringify(userData)});\nimport(${JSON.stringify(pathToFileURL(appEntryPath).href)});\n`)
+  const instance = await electron.launch({
+    args: [bootstrap],
     env: {
       ...cleanEnv,
       // Use test-specific config directory
@@ -277,7 +283,9 @@ export async function launchElectronApp(appEntryPath: string, testConfigDir: str
       // Mark as E2E test
       HALO_E2E_TEST: '1'
     }
-  })
+  }).catch(error => { fs.rmSync(bootstrap, { force: true }); throw error })
+  instance.once('close', () => fs.rmSync(bootstrap, { force: true }))
+  return instance
 }
 
 /**

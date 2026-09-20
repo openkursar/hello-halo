@@ -145,7 +145,6 @@ output:
 # -- Escalation --
 escalation:
   enabled: true
-  timeout_hours: 24
 
 # -- Permissions --
 permissions:

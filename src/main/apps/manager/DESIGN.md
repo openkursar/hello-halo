@@ -149,6 +149,14 @@ uses `'app_manager'` as a namespace. Follows the underscore convention used by o
 
 ### 2.8 App Work Directory Structure
 
+Automation identity storage is pinned in `installed_apps.data_path` before a
+default-space change. A nullable column (migration 8) preserves legacy layouts;
+the first move records the existing absolute root without moving files. All
+manager memory/purge operations resolve that root thereafter. Runtime captures
+each run/session's separate working and transcript environment; changing the
+default does not interrupt running work or relocate its files. Skills and MCP
+scope changes retain their existing resource-specific behavior.
+
 ```
 {space.path}/.halo/apps/{appId}/          -- App root work directory
 {space.path}/.halo/apps/{appId}/memory/   -- App memory directory
@@ -349,3 +357,43 @@ interface AppManagerService {
   onAppStatusChange(handler: StatusChangeHandler): Unsubscribe
 }
 ```
+
+## Capability inventory and shared-resource impact
+
+`getCapabilityInventory(manager)` is a read-only public projection of installed
+skills and MCP connection instances. It exposes installation IDs, scope and
+human consumers, never credentials or transcripts. MCP consumers include disabled
+declarations so removing a connection does not erase its dependency record.
+Workspace MCP installations override global installations with the same spec ID;
+active workspace skills override global skill directories. Skill counts describe
+installed-resource scope, not proof that an agent used a skill. Disk-authored
+skills remain owned by skill discovery and are labelled separately in the UI.
+
+The capability library and shared mutation dialogs consume this projection.
+Creation dialogs keep their originating person and workspace rather than using a
+previously selected global UI workspace. Store installation reuses the store
+installer with a locked contextual scope. A successful install ID survives a
+failed binding attempt within the form, so retry does not create another resource.
+Shared edits, disables, scope changes and removal show consumers before applying;
+per-person MCP switches only change that person's dependency declaration.
+
+Renderer capability drafts are volatile and keyed by origin and scope. Skill
+content survives closing a creation form. MCP draft caching excludes raw JSON,
+commands, arguments, environment variables and headers because they can contain
+credentials; only name, transport and scope are retained after leaving the form.
+The form states this limitation before closing. In-place failures retain the full
+form without persisting credentials in a generic draft store.
+
+The capability inventory distinguishes inherited chat access from independent-task
+MCP declarations. Shared edits include undeclared chat consumers in their impact.
+`getPersonConnectionAccess` exposes only installation/configuration booleans and
+instance references; health is explicitly `not_checked`. Team and guest permission
+policies further constrain this scope eligibility and remain runtime-owned.
+
+Digital-human directory reads use explicit lightweight records projected by SQL,
+never truncated InstalledApp objects. The public paginated query accepts bounded
+limits, stable installed-time/id ordering and ID filters provided by runtime for
+membership and pending work. Full app retrieval remains unchanged for detail,
+team and store consumers. Prompts and connection configuration do not enter the
+summary contract. Runtime owns cross-module directory orchestration and grouped
+state projection; transport only forwards that public query.

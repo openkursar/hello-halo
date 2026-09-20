@@ -9,6 +9,7 @@ import type { DatabaseManager } from '../../platform/store'
 import { TeamStore } from './store'
 import { MIGRATION_NAMESPACE, migrations } from './migrations'
 import { createTeamService, proposeMembersViaSdk } from './service'
+import { reconcileCoordinatorIdentity } from './coordinator-identity'
 import type { TeamService, TeamServiceDeps } from './service'
 import type { AppManagerService } from '../manager'
 import type { TeamRuntime } from '../runtime/team'
@@ -130,6 +131,7 @@ export function initTeamService(deps: InitTeamServiceDeps): TeamService {
     getConversationMember: deps.getConversationMember,
   })
   serviceInstance = service
+  reconcileCoordinatorIdentity(deps.store, deps.appManager)
 
   const duration = performance.now() - start
   console.log(`[TeamService] Initialized in ${duration.toFixed(1)}ms`)

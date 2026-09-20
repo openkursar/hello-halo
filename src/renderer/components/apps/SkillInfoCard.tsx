@@ -41,6 +41,8 @@ import { buildSkillContentPatch } from '../../utils/skill-content'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
 import { CodeMirrorEditor } from '../canvas/viewers/CodeMirrorEditor'
 import { api } from '../../api'
+import { SkillCopyDialog } from './SkillCopyDialog'
+import { CapabilityImpact, CapabilityChangeDialog } from './CapabilityImpact'
 import { ShareCurrentAppDialog } from '../store/ShareCurrentAppDialog'
 import type { AppStatus } from '../../../shared/apps/app-types'
 import type { SkillSpec } from '../../../shared/apps/spec-types'
@@ -78,6 +80,7 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
   const spaces    = useSpaceStore(s => s.spaces)
   const haloSpace = useSpaceStore(s => s.haloSpace)
   const app = apps.find(a => a.id === appId)
+  const [pendingChange, setPendingChange] = useState<{ title: string; apply: () => Promise<void> } | null>(null)
 
   const [toggling, setToggling]         = useState(false)
   const [toggleError, setToggleError]   = useState<string | null>(null)
@@ -89,6 +92,7 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
   const [moveError, setMoveError]       = useState<string | null>(null)
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [showShareDialog, setShowShareDialog] = useState(false)
+  const [showCopy, setShowCopy] = useState(false)
   const dropdownRef                     = useRef<HTMLDivElement>(null)
 
   // Close the space dropdown when the user clicks outside it
@@ -140,9 +144,11 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
     setToggling(true)
     setToggleError(null)
     try {
-      await (isEnabled ? pauseApp(appId) : resumeApp(appId))
+      const ok = await (isEnabled ? pauseApp(appId) : resumeApp(appId))
+      if (!ok) throw new Error(t('Could not change shared resource availability.'))
     } catch (e) {
       setToggleError((e as Error).message)
+      throw e
     } finally {
       setToggling(false)
     }
@@ -170,10 +176,11 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
         setIsEditing(false)
         setDraft('')
       } else {
-        setSaveError(t('Save failed. Please try again.'))
+        throw new Error(t('Save failed. Please try again.'))
       }
     } catch (e) {
       setSaveError((e as Error).message)
+      throw e
     } finally {
       setSaving(false)
     }
@@ -197,10 +204,11 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
     try {
       const ok = await moveAppToSpace(appId, newSpaceId)
       if (!ok) {
-        setMoveError(t('Failed to move skill. Please try again.'))
+        throw new Error(t('Failed to move skill. Please try again.'))
       }
     } catch (e) {
       setMoveError((e as Error).message)
+      throw e
     } finally {
       setMoving(false)
     }
@@ -209,7 +217,10 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
   // ── Render ────────────────────────────────
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-5">
+    <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
+      {pendingChange && <CapabilityChangeDialog appId={appId} title={pendingChange.title} onConfirm={pendingChange.apply} onClose={() => setPendingChange(null)} />}
+      <CapabilityImpact appId={appId} />
+      {showCopy && <SkillCopyDialog spec={spec} content={isEditing ? draftContent : skillContent} spaceId={app.spaceId} onClose={() => setShowCopy(false)} onSaved={() => { setIsEditing(false); setDraft('') }} />}
 
       {/* ── Header ── */}
       <div className="flex items-start justify-between gap-3">
@@ -260,7 +271,7 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
                   {/* Global option */}
                   <button
                     type="button"
-                    onClick={() => handleMoveToSpace(null)}
+                    onClick={() => setPendingChange({ title: t('Change this skill’s scope?'), apply: () => handleMoveToSpace(null) })}
                     className={`w-full flex items-center gap-2 px-3 py-1.5 text-left
                       hover:bg-muted/60 transition-colors
                       ${app.spaceId === null ? 'text-blue-400 font-medium' : 'text-foreground'}`}
@@ -282,7 +293,7 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
                     <button
                       key={space.id}
                       type="button"
-                      onClick={() => handleMoveToSpace(space.id)}
+                      onClick={() => setPendingChange({ title: t('Change this skill’s scope?'), apply: () => handleMoveToSpace(space.id) })}
                       className={`w-full flex items-center gap-2 px-3 py-1.5 text-left
                         hover:bg-muted/60 transition-colors
                         ${app.spaceId === space.id ? 'text-foreground font-medium' : 'text-muted-foreground'}`}
@@ -321,7 +332,7 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
               aria-label={isEnabled ? t('Disable') : t('Enable')}
               aria-checked={isEnabled}
               disabled={!canToggle || toggling}
-              onClick={handleToggle}
+              onClick={() => setPendingChange({ title: t('Change shared resource availability?'), apply: handleToggle })}
               className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full transition-colors duration-200
                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2
                 disabled:opacity-50 disabled:cursor-not-allowed
@@ -409,6 +420,7 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
                 </button>
               ) : (
                 <>
+                  <button onClick={() => setShowCopy(true)} disabled={saving} className="text-xs text-primary">{t('Save custom copy')}</button>
                   <button
                     onClick={handleCancelEdit}
                     className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -417,7 +429,7 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
                     {t('Cancel')}
                   </button>
                   <button
-                    onClick={handleSave}
+                    onClick={() => setPendingChange({ title: t('Save shared resource changes?'), apply: handleSave })}
                     disabled={saving}
                     className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors disabled:opacity-50"
                   >
@@ -467,7 +479,7 @@ export function SkillInfoCard({ appId, spaceName }: SkillInfoCardProps) {
       {/* ── Danger zone ── */}
       <div className="pt-2 border-t border-border">
         <button
-          onClick={() => uninstallApp(appId)}
+          onClick={() => setPendingChange({ title: t('Remove this shared resource?'), apply: async () => { if (!await uninstallApp(appId)) throw new Error('Uninstall failed') } })}
           className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-red-400 hover:text-red-300
             border border-red-400/30 hover:border-red-400/60 rounded-lg transition-colors"
         >

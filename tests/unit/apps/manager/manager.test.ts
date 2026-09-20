@@ -1122,6 +1122,17 @@ describe('AppManager', () => {
   // ===========================================================================
 
   describe('moveToSpace', () => {
+    it('keeps automation identity memory at its original location across moves and reloads', async () => {
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec({ name: 'stable-person' }))
+      const originalPath = service.getAppWorkDir(appId)
+      await service.moveToSpace(appId, TEST_SPACE_ID_2)
+      expect(service.getApp(appId)?.spaceId).toBe(TEST_SPACE_ID_2)
+      expect(service.getApp(appId)?.dataPath).toBe(originalPath)
+      expect(service.getAppWorkDir(appId)).toBe(originalPath)
+      await service.moveToSpace(appId, TEST_SPACE_ID)
+      expect(service.getAppWorkDir(appId)).toBe(originalPath)
+    })
+
     it('should update spaceId from one space to another', async () => {
       const spec  = createTestSpec({ name: 'movable-app', type: 'skill' })
       const appId = await service.install(TEST_SPACE_ID, spec)

@@ -78,10 +78,13 @@ function resumeExpectation(inTeamTurn: boolean): string {
  * earlier one. Naming what is still outstanding lets the model fold the new ask
  * into an old one, or say plainly that it supersedes it.
  */
-function describeOpenQuestions(store: ActivityStore, appId: string, exceptEntryId: string): string {
+function describeOpenQuestions(store: ActivityStore, context: ReportToolContext, exceptEntryId: string): string {
   const others = store
     .getAllPendingEscalations()
-    .filter((e) => e.appId === appId && e.id !== exceptEntryId)
+    .filter((e) => e.appId === context.appId && e.id !== exceptEntryId &&
+      (context.teamContext
+        ? e.content.teamContext?.teamId === context.teamContext.teamId && e.content.teamContext?.epochId === context.teamContext.epochId
+        : !e.content.teamContext && e.runId === context.runId))
   if (others.length === 0) return ''
 
   const quoted = others
@@ -262,6 +265,15 @@ export function createReportToolServer(
       // person left the question answered in two places at once, while the member
       // itself had already stopped waiting for either answer.
       const team = runContext.teamContext
+      if (team) {
+        content.teamContext = { teamId: team.teamId, epochId: team.epochId, ...(team.taskId ? { taskId: team.taskId } : {}) }
+        const snapshot = getActiveTeamRuntime()?.describeTaskSource?.(team.teamId, team.epochId)
+        content.source = {
+          kind: 'team', appId: runContext.appId, teamId: team.teamId, epochId: team.epochId,
+          memberId: runContext.appId, taskId: team.taskId, sessionKey: runContext.sessionKey,
+          ...(snapshot ?? {}),
+        }
+      }
       if (team && safeType === 'escalation') {
         const reportText = input.data ? `${input.message}\n\n${input.data}` : input.message
         // Tag the escalation entry so the team view aggregates it.
@@ -310,24 +322,24 @@ export function createReportToolServer(
         }
       }
 
-      if (persisted && team && safeType === 'escalation') {
+      if (persisted && team) {
         try {
           const runtime = getActiveTeamRuntime()
           if (!runtime) throw new Error('Team runtime is unavailable')
           const reportText = input.data ? `${input.message}\n\n${input.data}` : input.message
           runtime.blackboard.postActivity({
-            id: `decision-request:${entryId}`,
+            id: safeType === 'escalation' ? `decision-request:${entryId}` : `report:${entryId}`,
             teamId: team.teamId,
             epochId: team.epochId,
-            kind: 'decision',
+            kind: safeType === 'escalation' ? 'decision' : 'finding',
             actorAppId: runContext.appId,
             subject: oneLineExcerpt(input.message, 80),
             body: reportText,
-            status: 'escalation',
+            status: safeType === 'escalation' ? 'escalation' : 'ok',
             refId: entryId,
           })
         } catch (error) {
-          console.error('[Runtime] Decision request could not be added to shared task history', {
+          console.error('[Runtime] Report could not be added to shared task history', {
             appId: runContext.appId,
             entryId,
             teamId: team.teamId,
@@ -347,6 +359,10 @@ export function createReportToolServer(
       if (shouldNotify) {
         notifyAppEvent(runContext.appName, input.message, {
           appId: runContext.appId,
+          entryId: entry.id,
+          runId: team ? undefined : entry.runId,
+          teamId: team?.teamId,
+          epochId: team?.epochId,
           // External channels are now AI-driven via notify_channel tool
         })
       }
@@ -375,7 +391,7 @@ export function createReportToolServer(
         return textResult(
           `Escalation sent to user (entry: ${entryId}). ` +
           resumeExpectation(!!team) +
-          describeOpenQuestions(store, runContext.appId, entryId)
+          describeOpenQuestions(store, runContext, entryId)
         )
       }
 
