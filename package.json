@@ -3,7 +3,7 @@
   "version": "2.1.16-dev.0-rc.6",
   "description": "AI that gets things done",
   "type": "module",
-  "main": "./out/main/index.mjs",
+  "main": "./out/main/index.cjs",
   "author": "Halo Team",
   "license": "MIT",
   "scripts": {
@@ -26,7 +26,6 @@
     "build:mac-x64": "node scripts/build-mac-local.cjs --x64",
     "build:linux": "npm run bump-rc && node scripts/prepare-binaries.mjs --platform linux && npm run build && electron-builder --linux --config electron-builder.cjs",
     "build:server": "bash scripts/build-server-halo.sh",
-    "icons": "bash scripts/generate-icons.sh",
     "release": "npm run prepare:all && npm run build && electron-builder --mac --win --publish always",
     "release:mac": "npm run prepare:all && npm run build && electron-builder --mac --publish always",
     "release:win": "node scripts/prepare-binaries.mjs --platform win && npm run build && electron-builder --win --publish always",

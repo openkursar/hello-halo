@@ -1370,6 +1370,32 @@ describe('AppManager', () => {
     it('ensureKnowledgeSeeded throws AppNotFoundError for an unknown app', () => {
       expect(() => service.ensureKnowledgeSeeded('missing')).toThrow(AppNotFoundError)
     })
+
+    it('deleteApp unbinds the app from every KB it was mounted to', async () => {
+      const kb = createKB({ name: 'Mounted KB' })
+      setDefaultKB(kb.id)
+
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      expect(listKBsForApp(appId).map(k => k.id)).toEqual([kb.id])
+
+      await service.uninstall(appId)
+      await service.deleteApp(appId)
+
+      expect(listKBsForApp(appId)).toEqual([])
+      expect(getKB(kb.id)!.appIds).toEqual([])
+    })
+
+    it('soft uninstall alone does not unbind the app from its KBs', async () => {
+      const kb = createKB({ name: 'Mounted KB' })
+      setDefaultKB(kb.id)
+
+      const appId = await service.install(TEST_SPACE_ID, createTestSpec())
+      await service.uninstall(appId)
+
+      // Reversible: a reinstall must not need to re-seed to get its KB back,
+      // since knowledgeSeeded is a one-shot flag that never re-fires.
+      expect(listKBsForApp(appId).map(k => k.id)).toEqual([kb.id])
+    })
   })
 
   // ===========================================================================

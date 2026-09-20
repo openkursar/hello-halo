@@ -28,12 +28,12 @@ export function AppKnowledgeSection({ appId }: AppKnowledgeSectionProps) {
   const loadKBs = useTlonStore(s => s.loadKBs)
   const bindApp = useTlonStore(s => s.bindApp)
   const unbindApp = useTlonStore(s => s.unbindApp)
-  const setView = useAppStore(s => s.setView)
+  const navigate = useAppStore(s => s.navigate)
 
   useEffect(() => { void loadKBs() }, [loadKBs])
 
   const bound = kbs.filter(kb => kb.appIds.includes(appId))
-  const openKnowledgePage = () => setView('tlon')
+  const openKnowledgePage = () => navigate('tlon')
 
   const toggleKb = (kbId: string) => {
     const isBound = kbs.find(kb => kb.id === kbId)?.appIds.includes(appId)
@@ -81,7 +81,7 @@ export function AppKnowledgeSection({ appId }: AppKnowledgeSectionProps) {
                       {kb.spaceIds.length > 0 && (
                         <span className="inline-flex items-center gap-1 text-[9px] leading-none px-1 py-0.5 rounded bg-primary/15 text-primary flex-shrink-0 uppercase tracking-wide">
                           <Globe className="w-2.5 h-2.5" />
-                          {t('Space')}
+                          {t('Workspace')}
                         </span>
                       )}
                       {kb.isDefault && (

@@ -7,6 +7,9 @@ import { api } from '../api'
 import { isCapacitor } from '../api/transport'
 import type { HaloConfig, AppView, McpServerStatus } from '../types'
 import { hasAnyAISource } from '../types'
+import { useSpaceStore } from './space.store'
+import { useAppsStore } from './apps.store'
+import { useChatStore } from './chat.store'
 
 // Git Bash installation progress
 interface GitBashInstallProgress {
@@ -17,9 +20,12 @@ interface GitBashInstallProgress {
 }
 
 interface AppState {
-  // View state
+  // View state — `view` is the current persistent destination; `returnTo` is
+  // the destination a "back" affordance should resolve to, not a history
+  // stack. Callers that need back behavior read `returnTo` and pick their
+  // own fallback (e.g. `navigate(returnTo || 'space')`).
   view: AppView
-  previousView: AppView | null  // Track previous view for back navigation
+  returnTo: AppView | null
   isLoading: boolean
   error: string | null
 
@@ -36,11 +42,29 @@ interface AppState {
   gitBashCheckPending: boolean  // True when git-bash check was deferred due to IPC not ready
 
   // Actions
-  setView: (view: AppView) => void
-  goBack: () => void  // Navigate back to previous view
+  // The single write entry point for UI-driven navigation (rail, header,
+  // deep links). Bootstrap/init flows setting the landing view are a
+  // separate concern and are not required to route through these.
+  navigate: (view: AppView) => void
+  // For "back" affordances: resolves to returnTo (or the caller's fallback)
+  // and, unlike navigate(), consumes returnTo so a later back doesn't loop
+  // back to where "back" itself was pressed from.
+  navigateBack: (fallback: AppView) => void
+  // Land in the main app experience: resolves which space to open via
+  // space.store's own selection rule (space.store.ts:selectDefaultSpace —
+  // kept there since it depends on space-domain knowledge this store has
+  // no business knowing) and only then switches to the space view, so
+  // there is never a frame where the view is 'space' but no space is set.
+  // Cross-store call, an intentional new dependency edge (app.store ->
+  // space.store, peers not layers): every "setup/onboarding just finished"
+  // call site needs the same sequencing, so it lives here once rather than
+  // being re-inlined at each of them.
+  enterApp: () => Promise<void>
   setLoading: (loading: boolean) => void
   setError: (error: string | null) => void
   setConfig: (config: HaloConfig) => void
+  /** Re-read config from main after a write that bypassed setConfig. */
+  refreshConfig: () => Promise<void>
   updateConfig: (updates: Partial<HaloConfig>) => void
   setMcpStatus: (status: McpServerStatus[], timestamp: number) => void
 
@@ -57,7 +81,7 @@ interface AppState {
 export const useAppStore = create<AppState>((set, get) => ({
   // Initial state
   view: 'splash',
-  previousView: null,
+  returnTo: null,
   isLoading: true,
   error: null,
   config: null,
@@ -68,25 +92,55 @@ export const useAppStore = create<AppState>((set, get) => ({
   gitBashCheckPending: false,
 
   // Actions
-  setView: (view) => {
+  navigate: (view) => {
     const currentView = get().view
-    // Save current view as previous (except for transient screens)
+    // Record the view being left as the return target, except for transient
+    // screens that are never a meaningful place to come back to.
     if (currentView !== 'splash' && currentView !== 'setup' && currentView !== 'serverConnect' && currentView !== 'serverList') {
-      set({ previousView: currentView, view })
+      set({ returnTo: currentView, view })
     } else {
       set({ view })
     }
   },
 
-  goBack: () => {
-    const previousView = get().previousView
-    // Go back to previous view, or default to home
-    set({ view: previousView || 'home', previousView: null })
+  navigateBack: (fallback) => {
+    set({ view: get().returnTo || fallback, returnTo: null })
+  },
+
+  enterApp: async () => {
+    const spaceStore = useSpaceStore.getState()
+    const target = await spaceStore.selectDefaultSpace()
+    if (target) {
+      spaceStore.setCurrentSpace(target)
+      spaceStore.refreshCurrentSpace()  // fire-and-forget: fills in preferences once loaded
+    }
+    set({ view: 'space' })
+
+    // Fire-and-forget: without this, running/waiting automation apps only
+    // appear in the task panel after the user visits the Apps page, since
+    // that page is what previously triggered loadApps/loadAppState.
+    useAppsStore.getState().loadAutomationTaskState().catch(err => {
+      console.error('[Store] loadAutomationTaskState error:', err)
+    })
+
+    // Fire-and-forget: restores completed-but-unseen conversations and
+    // in-progress grace periods that were persisted before the last restart.
+    useChatStore.getState().loadPersistedTaskState().catch(err => {
+      console.error('[Store] loadPersistedTaskState error:', err)
+    })
   },
 
   setLoading: (isLoading) => set({ isLoading }),
   setError: (error) => set({ error }),
   setConfig: (config) => set({ config }),
+
+  // Config is loaded once at startup, so a write made in main (e.g. binding a
+  // bot from a digital human's settings page) leaves every other config-backed
+  // view stale until restart. Surfaces that write through main call this.
+  refreshConfig: async () => {
+    const response = await api.getConfig()
+    if (response.success && response.data) set({ config: response.data as HaloConfig })
+  },
 
   updateConfig: (updates) => {
     const currentConfig = get().config
@@ -264,9 +318,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           console.log('[Store] First launch or no AI source, showing setup')
           set({ view: 'setup' })
         } else {
-          // Go to home
-          console.log('[Store] Config loaded, showing home')
-          set({ view: 'home' })
+          console.log('[Store] Config loaded, entering app')
+          await get().enterApp()
 
           // Silently refresh remote model lists in background (fire-and-forget).
           // Ensures users see the latest available models without manual refresh,

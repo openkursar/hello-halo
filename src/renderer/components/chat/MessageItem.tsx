@@ -326,8 +326,8 @@ export const MessageItem = memo(function MessageItem({ message, previousCost = 0
     </div>
   ) : (
     <div
-      className={`rounded-2xl px-4 py-3 ${
-        isUser ? 'message-user' : 'message-assistant'
+      className={`rounded-lg text-sm ${
+        isUser ? 'message-user px-3.5 py-2.5' : 'message-assistant px-4 py-3'
       } ${isStreaming ? 'streaming-message' : ''} ${isWorking ? 'message-working' : ''} ${!isInContainer ? 'max-w-[85%]' : 'w-full'}`}
     >
       {/* Working indicator - shows when AI is working */}

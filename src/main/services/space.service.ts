@@ -20,6 +20,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSy
 import { getHaloDir, getTempSpacePath, getSpacesDir } from '../foundation/config.service'
 import { v4 as uuidv4 } from 'uuid'
 import { getAppManager } from './app-bridge'
+import { getTaskStateService } from '../platform/task-state'
 
 // Re-export config helper for backward compatibility with existing imports
 export { getSpacesDir } from '../foundation/config.service'
@@ -32,6 +33,7 @@ interface Space {
   id: string
   name: string
   icon: string
+  color?: string
   path: string
   isTemp: boolean
   createdAt: string
@@ -56,6 +58,7 @@ interface SpaceMeta {
   id: string
   name: string
   icon: string
+  color?: string
   createdAt: string
   updatedAt: string
   preferences?: SpacePreferences
@@ -70,6 +73,7 @@ interface SpaceIndexEntry {
   path: string
   name: string
   icon: string
+  color?: string
   createdAt: string
   updatedAt: string
   lastActiveAt?: string  // Last user activity time (cached, derivable from conversation data)
@@ -114,6 +118,7 @@ function metaToEntry(meta: SpaceMeta, spacePath: string): SpaceIndexEntry {
     path: spacePath,
     name: meta.name,
     icon: meta.icon,
+    color: meta.color,
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
     workingDir: meta.workingDir
@@ -330,6 +335,7 @@ function entryToSpace(id: string, entry: SpaceIndexEntry): Space {
     id,
     name: entry.name,
     icon: entry.icon,
+    color: entry.color,
     path: entry.path,
     isTemp: !!entry.isTemp,
     createdAt: entry.createdAt,
@@ -471,7 +477,7 @@ export function getAllSpacePaths(): string[] {
 /**
  * Create a new space. Registers in both memory and disk index.
  */
-export function createSpace(input: { name: string; icon: string; customPath?: string }): Space {
+export function createSpace(input: { name: string; icon: string; color?: string; customPath?: string }): Space {
   const id = uuidv4()
   const now = new Date().toISOString()
 
@@ -491,6 +497,7 @@ export function createSpace(input: { name: string; icon: string; customPath?: st
     id,
     name: input.name,
     icon: input.icon,
+    color: input.color,
     createdAt: now,
     updatedAt: now,
     workingDir
@@ -513,6 +520,7 @@ export function createSpace(input: { name: string; icon: string; customPath?: st
     path: spacePath,
     name: input.name,
     icon: input.icon,
+    color: input.color,
     createdAt: now,
     updatedAt: now,
     workingDir,
@@ -524,6 +532,31 @@ export function createSpace(input: { name: string; icon: string; customPath?: st
   console.log(`[Space] Created space ${id}: path=${spacePath}${workingDir ? `, workingDir=${workingDir}` : ''}`)
 
   return entryToSpace(id, entry)
+}
+
+/**
+ * Remove a space's registry entry without touching anything on disk —
+ * distinct from deleteSpace(), which deletes files. For spaces whose path
+ * is currently unreachable (external drive unplugged, etc.): the data isn't
+ * gone, Halo just stops tracking it. Reconnecting the drive and creating a
+ * space pointed at the same path won't recover the old id/conversations —
+ * this only clears the dead entry, it doesn't preserve a path to relink one.
+ *
+ * Refuses to run on a space whose path actually resolves — this is not a
+ * shortcut around deleteSpace()'s confirmation flow for live spaces.
+ */
+export function forgetSpace(spaceId: string): boolean {
+  const entry = getRegistry().get(spaceId)
+  if (!entry || entry.isTemp) return false
+  if (existsSync(entry.path)) {
+    console.warn(`[Space] forgetSpace refused: path still resolves for ${spaceId}`)
+    return false
+  }
+
+  getRegistry().delete(spaceId)
+  persistIndex(getRegistry())
+  console.log(`[Space] Forgot unreachable space ${spaceId} (path: ${entry.path})`)
+  return true
 }
 
 /**
@@ -548,6 +581,8 @@ export async function deleteSpace(spaceId: string): Promise<boolean> {
         console.error(`[Space] Failed to cleanup apps for space ${spaceId}:`, err)
       }
     }
+
+    getTaskStateService()?.deleteAllInSpace(spaceId)
 
     if (isCentralized) {
       // Centralized storage (new spaces + default spaces): delete entire folder
@@ -597,7 +632,7 @@ export function openSpaceFolder(spaceId: string): boolean {
 /**
  * Update space metadata. Updates registry (memory + disk) and meta.json.
  */
-export function updateSpace(spaceId: string, updates: { name?: string; icon?: string }): Space | null {
+export function updateSpace(spaceId: string, updates: { name?: string; icon?: string; color?: string }): Space | null {
   const entry = getRegistry().get(spaceId)
   if (!entry || entry.isTemp) return null
 
@@ -605,6 +640,7 @@ export function updateSpace(spaceId: string, updates: { name?: string; icon?: st
     // Update registry entry in memory
     if (updates.name) entry.name = updates.name
     if (updates.icon) entry.icon = updates.icon
+    if (updates.color !== undefined) entry.color = updates.color
     entry.updatedAt = new Date().toISOString()
 
     // Persist index
@@ -616,6 +652,7 @@ export function updateSpace(spaceId: string, updates: { name?: string; icon?: st
       id: spaceId,
       name: entry.name,
       icon: entry.icon,
+      color: entry.color,
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
       preferences: existingMeta?.preferences,

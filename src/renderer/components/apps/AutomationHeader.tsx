@@ -16,7 +16,7 @@ import { useAppsPageStore } from '../../stores/apps-page.store'
 import { AppStatusDot } from './AppStatusDot'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
-import { formatTimeAgo } from '../../utils/time'
+import { formatTimeAgo } from '../../utils/format-time'
 import { resolvePermission } from '../../../shared/apps/app-types'
 import { api } from '../../api'
 import { useSpaceStore } from '../../stores/space.store'
@@ -190,7 +190,7 @@ export function AutomationHeader({ appId, spaceName }: AutomationHeaderProps) {
                     const target = spaceStore.spaces.find(s => s.id === app.spaceId) ?? (spaceStore.haloSpace?.id === app.spaceId ? spaceStore.haloSpace : null)
                     if (target) {
                       spaceStore.setCurrentSpace(target)
-                      useAppStore.getState().setView('space')
+                      useAppStore.getState().navigate('space')
                     } else {
                       console.warn('[AutomationHeader] Workspace navigation unavailable', { appId, spaceId: app.spaceId })
                       setActionError(true)

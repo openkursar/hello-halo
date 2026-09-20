@@ -9,6 +9,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
+import type { ImChannelInstanceConfig } from '../../shared/types/im-channel'
 
 export const imApi = {
   // ===== WeCom Bot (legacy compat) =====
@@ -100,6 +101,27 @@ export const imApi = {
       return window.halo.imChannelsPermissionDefaults()
     }
     return httpRequest('GET', '/api/im-channels/permission-defaults')
+  },
+
+  imChannelsSetInstanceApp: async (instanceId: string, appId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.imChannelsSetInstanceApp(instanceId, appId)
+    }
+    return httpRequest('POST', '/api/im-channels/set-instance-app', { instanceId, appId })
+  },
+
+  imChannelsCreateInstance: async (instance: ImChannelInstanceConfig): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.imChannelsCreateInstance(instance)
+    }
+    return httpRequest('POST', '/api/im-channels/create-instance', { instance })
+  },
+
+  imChannelsUnbindInstance: async (instanceId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.imChannelsUnbindInstance(instanceId)
+    }
+    return httpRequest('POST', '/api/im-channels/unbind-instance', { instanceId })
   },
 
   // ===== WeChat Personal Bot via iLink API =====

@@ -82,7 +82,7 @@ export function RankBoard({ title, entries }: { title?: string; entries: Registr
   }
 
   return (
-    <div className="rounded-xl border border-border/60 bg-background px-4 pt-2.5 pb-2">
+    <div className="rounded-xl border border-border/60 bg-card px-4 pt-2.5 pb-2">
       {title && (
         <div className="px-1 pb-2.5 mb-1 border-b border-border/60 text-[13px] font-bold text-foreground">{title}</div>
       )}

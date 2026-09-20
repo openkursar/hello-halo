@@ -12,7 +12,7 @@ import {
 import type {
   ApiResponse,
 } from './_shared'
-import type { ActivityEntry, AutomationAppState, AvailableSkill, EscalationAnswerPayload, PendingDecisionQuery } from '../../shared/apps/app-types'
+import type { ActivityEntry, AutomationAppState, AvailableSkill, EscalationAnswerPayload, InstalledApp, PendingDecisionQuery } from '../../shared/apps/app-types'
 import type { CapabilityInventory } from '../../shared/apps/capability-inventory'
 import type { AppSpaceChangePreview } from '../../shared/apps/app-environment'
 import type { ImageAttachment } from '../../shared/types/image-attachment'
@@ -180,6 +180,33 @@ export const appsApi = {
     return httpRequest('GET', `/api/apps/${appId}/runs/${runId}/session`)
   },
 
+  appGetRuns: async (appId: string, options?: { limit?: number; offset?: number }): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appGetRuns({ appId, options })
+    }
+    const params = new URLSearchParams()
+    if (options?.limit) params.set('limit', String(options.limit))
+    if (options?.offset) params.set('offset', String(options.offset))
+    const qs = params.toString()
+    return httpRequest('GET', `/api/apps/${appId}/runs${qs ? '?' + qs : ''}`)
+  },
+
+  appGetRunStats: async (appId: string, runWindow?: number): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appGetRunStats({ appId, window: runWindow })
+    }
+    const qs = runWindow ? `?window=${runWindow}` : ''
+    return httpRequest('GET', `/api/apps/${appId}/run-stats${qs}`)
+  },
+
+  appGetOverview: async (spaceId?: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.appGetOverview(spaceId ? { spaceId } : undefined)
+    }
+    const qs = spaceId ? `?spaceId=${encodeURIComponent(spaceId)}` : ''
+    return httpRequest('GET', `/api/apps/overview${qs}`)
+  },
+
   appRespondEscalation: async (appId: string, escalationId: string, response: EscalationAnswerPayload): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.appRespondEscalation({
@@ -306,6 +333,20 @@ export const appsApi = {
       return window.halo.appListAvailableSkills(appId)
     }
     return httpRequest('GET', `/api/apps/${appId}/available-skills`)
+  },
+
+  appListAvailableSkillsForSpace: async (spaceId: string): Promise<ApiResponse<AvailableSkill[]>> => {
+    if (isElectron()) {
+      return window.halo.appListAvailableSkillsForSpace(spaceId)
+    }
+    return httpRequest('GET', `/api/spaces/${spaceId}/available-skills`)
+  },
+
+  appListEffectiveMcpApps: async (spaceId: string): Promise<ApiResponse<InstalledApp[]>> => {
+    if (isElectron()) {
+      return window.halo.appListEffectiveMcpApps(spaceId)
+    }
+    return httpRequest('GET', `/api/spaces/${spaceId}/effective-mcp-apps`)
   },
 
   appOpenDataFolder: async (appId: string): Promise<ApiResponse> => {

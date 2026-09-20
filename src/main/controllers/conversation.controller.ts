@@ -15,6 +15,7 @@ import {
   toggleStarConversation as serviceToggleStarConversation
 } from '../services/conversation.service'
 import { closeV2Session } from '../services/agent'
+import { getTaskStateService } from '../platform/task-state'
 
 export interface ControllerResponse<T = unknown> {
   success: boolean
@@ -93,6 +94,7 @@ export function deleteConversation(spaceId: string, conversationId: string): Con
     // with the record instead of lingering until the 30-min idle sweep.
     closeV2Session(conversationId)
     const result = serviceDeleteConversation(spaceId, conversationId)
+    getTaskStateService()?.remove(conversationId)
     return { success: result }
   } catch (error: unknown) {
     const err = error as Error

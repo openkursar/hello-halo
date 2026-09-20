@@ -19,7 +19,7 @@ import type { Message } from '../../../types'
 import { useTranslation } from '../../../i18n'
 import { useChatStore } from '../../../stores/chat.store'
 import { navigateToConversation } from '../../pulse'
-import { formatTimeAgo } from '../../../utils/time'
+import { formatTimeAgo } from '../../../utils/format-time'
 import { readProvenance } from './message-source'
 
 /**

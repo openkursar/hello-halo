@@ -26,8 +26,11 @@ import { isElectron } from '../../api/transport'
 import { useAppsStore } from '../../stores/apps.store'
 import { useTranslation } from '../../i18n'
 import { MarkdownRenderer } from '../chat/MarkdownRenderer'
+import { APP_TYPE_GLYPH } from '../store/app-type-glyph'
 import type { InstalledApp, AvailableSkill } from '../../../shared/apps/app-types'
 import { toSkillDirName } from '../../../shared/skill-naming'
+
+const SkillGlyph = APP_TYPE_GLYPH.skill
 
 interface AppSkillsSectionProps {
   appId: string
@@ -82,7 +85,7 @@ function SkillRow({
           {expanded
             ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
             : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />}
-          <Terminal className="w-3.5 h-3.5 flex-shrink-0 text-muted-foreground" />
+          <SkillGlyph className="w-3.5 h-3.5 flex-shrink-0 text-app-skill" />
           <span className="text-sm truncate text-foreground">{skill.name}</span>
         </button>
 
@@ -103,7 +106,7 @@ function SkillRow({
             : 'bg-muted/60 text-muted-foreground border-border/40'}`}
         >
           {isGlobal && <Globe className="w-3 h-3" />}
-          {isGlobal ? t('Global') : t('This space')}
+          {isGlobal ? t('Global') : t('This workspace')}
         </span>
       </div>
 
@@ -190,7 +193,7 @@ export function AppSkillsSection({ appId, spaceId }: AppSkillsSectionProps) {
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
       <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-        <Terminal className="w-3.5 h-3.5" />
+        <SkillGlyph className="w-3.5 h-3.5" />
         {t('Available Skills')}
         {!loading && skills.length > 0 && (
           <span className="text-muted-foreground/60 font-normal normal-case tracking-normal">
@@ -228,7 +231,7 @@ export function AppSkillsSection({ appId, spaceId }: AppSkillsSectionProps) {
           </div>
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] text-muted-foreground/60">
-              {t('Digital humans can use all skills installed in their space and globally.')}
+              {t('Digital humans can use all skills installed in their workspace and globally.')}
             </p>
             <button
               onClick={openStore}
@@ -242,7 +245,7 @@ export function AppSkillsSection({ appId, spaceId }: AppSkillsSectionProps) {
       ) : (
         <div className="rounded-lg border border-dashed border-border p-4 text-center space-y-2">
           <p className="text-xs text-muted-foreground">
-            {t('No skills available in this space yet.')}
+            {t('No skills available in this workspace yet.')}
           </p>
           <button
             onClick={openStore}

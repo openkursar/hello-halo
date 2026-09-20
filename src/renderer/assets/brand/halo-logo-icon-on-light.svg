@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-labelledby="halo-title halo-desc">
+  <title id="halo-title">Halo</title>
+  <desc id="halo-desc">A blue halo ring with a soft inner gradient, no arc</desc>
+  <defs>
+    <linearGradient id="halo-inner" x1="0.131" y1="1.0" x2="0.869" y2="0.0">
+      <stop offset="0" stop-color="#2474F5" stop-opacity=".3"/>
+      <stop offset="1" stop-color="#2474F5" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <circle cx="48" cy="48" r="36" fill="url(#halo-inner)"/>
+  <circle cx="48" cy="48" r="46" fill="none" stroke="#2474F5" stroke-opacity=".6" stroke-width="4"/>
+</svg>

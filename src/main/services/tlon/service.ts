@@ -476,6 +476,20 @@ export function unbindFromApp(kbId: string, appId: string): boolean {
   return true
 }
 
+/**
+ * Remove an app from every KB it is bound to. Called on permanent app
+ * deletion so `kb.appIds` never keeps a reference to a row that no longer
+ * exists. Not called on soft uninstall — that transition is reversible
+ * (reinstall) and KB seeding only ever runs once per app (see apps/manager
+ * DESIGN.md §2.12), so unbinding there would strand the app without its
+ * knowledge bases on reinstall with no way to get them back automatically.
+ */
+export function unbindAppFromAllKBs(appId: string): void {
+  for (const kb of listKBsForApp(appId)) {
+    unbindFromApp(kb.id, appId)
+  }
+}
+
 // ============================================================================
 // Linked directories
 // ============================================================================
@@ -1166,6 +1180,7 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
     result.push({
       name: rel.split(sep).pop() || rel,
       path: recordedKey,
+      openPath: join(rawDir, rel),
       size,
       learned: state === 'learned',
       state,
@@ -1186,6 +1201,7 @@ export function getRawFileLearnedStatus(kbId: string): RawFileStatus[] {
       result.push({
         name: rel.split(sep).pop() || rel,
         path: abs,
+        openPath: abs,
         size,
         learned: state === 'learned',
         state,

@@ -176,11 +176,11 @@ export function CodeViewer({ tab, onScrollChange, onContentChange, onSaveComplet
       onKeyDown={handleKeyDown}
     >
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-card/50">
+      <div className="flex h-9 items-center justify-between px-3 border-b border-border">
         {/* Left: File info */}
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <FileCode className="w-3.5 h-3.5 text-muted-foreground/60" />
-          <span className="font-mono">{tab.language || 'text'}</span>
+        <div className="flex items-center gap-2 text-xs text-subtle-foreground">
+          <FileCode className="w-3.5 h-3.5 text-subtle-foreground" />
+          <span className="font-mono text-[10px] px-1.5 rounded bg-secondary text-subtle-foreground">{tab.language || 'text'}</span>
           <span className="text-muted-foreground/50">·</span>
           <span>{t('{{count}} lines', { count: lineCount })}</span>
           {/* mimeType hidden - redundant with language in most cases */}
@@ -241,23 +241,23 @@ export function CodeViewer({ tab, onScrollChange, onContentChange, onSaveComplet
               {canEdit && (
                 <button
                   onClick={handleEnterEdit}
-                  className="p-1.5 rounded hover:bg-secondary transition-colors"
+                  className="p-1.5 rounded-sm text-subtle-foreground hover:bg-secondary hover:text-foreground transition-colors ease-halo"
                   title={t('Edit file')}
                 >
-                  <Pencil className="w-4 h-4 text-muted-foreground" />
+                  <Pencil className="w-4 h-4" />
                 </button>
               )}
 
               {/* Copy button */}
               <button
                 onClick={handleCopy}
-                className="p-1.5 rounded hover:bg-secondary transition-colors"
+                className="p-1.5 rounded-sm text-subtle-foreground hover:bg-secondary hover:text-foreground transition-colors ease-halo"
                 title={t('Copy code')}
               >
                 {copied ? (
                   <Check className="w-4 h-4 text-green-500" />
                 ) : (
-                  <Copy className="w-4 h-4 text-muted-foreground" />
+                  <Copy className="w-4 h-4" />
                 )}
               </button>
 
@@ -265,10 +265,10 @@ export function CodeViewer({ tab, onScrollChange, onContentChange, onSaveComplet
               {canOpenExternal && (
                 <button
                   onClick={handleOpenExternal}
-                  className="p-1.5 rounded hover:bg-secondary transition-colors"
+                  className="p-1.5 rounded-sm text-subtle-foreground hover:bg-secondary hover:text-foreground transition-colors ease-halo"
                   title={t('Open in external application')}
                 >
-                  <ExternalLink className="w-4 h-4 text-muted-foreground" />
+                  <ExternalLink className="w-4 h-4" />
                 </button>
               )}
             </>
@@ -283,6 +283,7 @@ export function CodeViewer({ tab, onScrollChange, onContentChange, onSaveComplet
           content={tab.content || ''}
           language={tab.language}
           readOnly={!isEditing}
+          isEditing={isEditing}
           onChange={isEditing ? onContentChange : undefined}
           onScroll={handleScroll}
           scrollPosition={tab.scrollPosition}

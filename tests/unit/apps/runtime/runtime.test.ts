@@ -600,6 +600,145 @@ describe('ActivityStore', () => {
       expect(latest!.startedAt).toBe(2000)
       expect(latest!.status).toBe('error')
     })
+
+    it('should attach each run\'s last activity entry summary', () => {
+      const runId = createTestRunId()
+      store.insertRun({
+        runId,
+        appId: testAppId,
+        sessionKey: 'sess-001',
+        status: 'ok',
+        triggerType: 'manual',
+        startedAt: 1000,
+      })
+      store.insertEntry(createTestEntry({
+        appId: testAppId,
+        runId,
+        type: 'milestone',
+        ts: 1100,
+        content: { summary: 'Earlier milestone' },
+      }))
+      store.insertEntry(createTestEntry({
+        appId: testAppId,
+        runId,
+        type: 'run_complete',
+        ts: 1200,
+        content: { summary: 'Final summary' },
+      }))
+
+      const runs = store.getRunsForAppWithSummary(testAppId)
+      expect(runs).toHaveLength(1)
+      expect(runs[0].summary).toBe('Final summary')
+    })
+
+    it('should leave summary undefined for a run with no activity entries', () => {
+      const runId = createTestRunId()
+      store.insertRun({
+        runId,
+        appId: testAppId,
+        sessionKey: 'sess-001',
+        status: 'running',
+        triggerType: 'manual',
+        startedAt: 1000,
+      })
+
+      const runs = store.getRunsForAppWithSummary(testAppId)
+      expect(runs).toHaveLength(1)
+      expect(runs[0].summary).toBeUndefined()
+    })
+
+    it('should paginate run history with limit/offset', () => {
+      for (let i = 0; i < 5; i++) {
+        store.insertRun({
+          runId: createTestRunId(),
+          appId: testAppId,
+          sessionKey: `sess-${i}`,
+          status: 'ok',
+          triggerType: 'schedule',
+          startedAt: 1000 + i * 100,
+        })
+      }
+
+      const page1 = store.getRunsForAppWithSummary(testAppId, { limit: 2, offset: 0 })
+      const page2 = store.getRunsForAppWithSummary(testAppId, { limit: 2, offset: 2 })
+      expect(page1.map(r => r.startedAt)).toEqual([1400, 1300])
+      expect(page2.map(r => r.startedAt)).toEqual([1200, 1100])
+    })
+
+    it('should aggregate run stats over the most recent window', () => {
+      store.insertRun({ runId: createTestRunId(), appId: testAppId, sessionKey: 's1', status: 'ok', triggerType: 'manual', startedAt: 1000 })
+      store.completeRun(store.getRunsForApp(testAppId, 1)[0].runId, { status: 'ok', finishedAt: 1100, durationMs: 100, tokensUsed: 10 })
+
+      store.insertRun({ runId: createTestRunId(), appId: testAppId, sessionKey: 's2', status: 'ok', triggerType: 'manual', startedAt: 2000 })
+      store.completeRun(store.getRunsForApp(testAppId, 1)[0].runId, { status: 'error', finishedAt: 2200, durationMs: 200, tokensUsed: 20 })
+
+      store.insertRun({ runId: createTestRunId(), appId: testAppId, sessionKey: 's3', status: 'ok', triggerType: 'manual', startedAt: 3000 })
+      store.completeRun(store.getRunsForApp(testAppId, 1)[0].runId, { status: 'skipped', finishedAt: 3050, durationMs: 50 })
+
+      const stats = store.getRunStats(testAppId)
+      expect(stats.total).toBe(3)
+      expect(stats.ok).toBe(1)
+      expect(stats.error).toBe(1)
+      expect(stats.skipped).toBe(1)
+      expect(stats.totalTokens).toBe(30)
+      expect(stats.avgDurationMs).toBeCloseTo((100 + 200 + 50) / 3)
+    })
+
+    it('should only aggregate stats within the requested window', () => {
+      for (let i = 0; i < 5; i++) {
+        const runId = createTestRunId()
+        store.insertRun({ runId, appId: testAppId, sessionKey: `s${i}`, status: 'ok', triggerType: 'manual', startedAt: 1000 + i * 100 })
+        store.completeRun(runId, { status: i === 4 ? 'error' : 'ok', finishedAt: 1000 + i * 100 + 10, durationMs: 10, tokensUsed: 1 })
+      }
+
+      const stats = store.getRunStats(testAppId, 2)
+      expect(stats.total).toBe(2)
+      // Window keeps only the 2 most recent runs (started at 1300, 1400) — the
+      // single error run at 1400 is included, the other 3 ok runs are not.
+      expect(stats.error).toBe(1)
+      expect(stats.ok).toBe(1)
+    })
+
+    it('should return recent run statuses oldest-first, capped at the limit', () => {
+      for (let i = 0; i < 10; i++) {
+        store.insertRun({
+          runId: createTestRunId(),
+          appId: testAppId,
+          sessionKey: `sess-${i}`,
+          status: i === 9 ? 'error' : 'ok',
+          triggerType: 'schedule',
+          startedAt: 1000 + i * 100,
+        })
+      }
+
+      const statuses = store.getRecentRunStatuses(testAppId)
+      expect(statuses).toHaveLength(7)
+      // Oldest-first: the most recent run (status 'error') is last.
+      expect(statuses[statuses.length - 1]).toBe('error')
+    })
+
+    it('should get the latest run_complete/output entry, ignoring other types', () => {
+      const runId = createTestRunId()
+      store.insertRun({
+        runId,
+        appId: testAppId,
+        sessionKey: 'sess-001',
+        status: 'ok',
+        triggerType: 'manual',
+        startedAt: 1000,
+      })
+      store.insertEntry(createTestEntry({ appId: testAppId, runId, type: 'run_complete', ts: 1100, content: { summary: 'Done' } }))
+      store.insertEntry(createTestEntry({ appId: testAppId, runId, type: 'milestone', ts: 1200, content: { summary: 'Later milestone' } }))
+
+      const latest = store.getLatestOutputEntry(testAppId)
+      expect(latest).not.toBeNull()
+      expect(latest!.type).toBe('run_complete')
+      expect(latest!.content.summary).toBe('Done')
+    })
+
+    it('should return null from getLatestOutputEntry when no output entries exist', () => {
+      expect(store.getLatestOutputEntry(testAppId)).toBeNull()
+    })
   })
 
   // ── Entry Operations ────────────────────────
@@ -1831,7 +1970,7 @@ describe('AppRuntimeService', () => {
       expect(state.pendingDecisionCount).toBe(0)
     })
 
-    it('should return error state for error and needs_login', () => {
+    it('should return error state for error', () => {
       const appId = randomUUID()
       mockAppManager.getApp.mockReturnValue({
         id: appId,
@@ -1847,6 +1986,22 @@ describe('AppRuntimeService', () => {
 
       expect(state.status).toBe('error')
       expect(state.lastError).toBe('Something failed')
+    })
+
+    it('should return needs_login state distinct from error', () => {
+      const appId = randomUUID()
+      mockAppManager.getApp.mockReturnValue({
+        id: appId,
+        status: 'needs_login',
+        userConfig: {},
+        userOverrides: {},
+        permissions: { granted: [], denied: [] },
+      })
+
+      const service = createService()
+      const state = service.getAppState(appId)
+
+      expect(state.status).toBe('needs_login')
     })
 
     it('should return idle for non-existent app', () => {
@@ -1884,6 +2039,101 @@ describe('AppRuntimeService', () => {
 
       const state = service.getAppState(appId)
       expect(state.nextRunAtMs).toBe(99999)
+    })
+  })
+
+  describe('getOverview', () => {
+    function insertAppRecord(appId: string, status: string): void {
+      const db = dbManager.getAppDatabase()
+      const specJson = JSON.stringify(createTestSpec())
+      db.prepare(`
+        INSERT INTO installed_apps (id, spec_id, space_id, spec_json, status, user_config_json, user_overrides_json, permissions_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(appId, `spec-${appId}`, 'space-001', specJson, status, '{}', '{}', '{"granted":[],"denied":[]}', Date.now())
+    }
+
+    it('should attach state, latest summary and recent run statuses per app', () => {
+      const appId = randomUUID()
+      insertAppRecord(appId, 'active')
+      const app = {
+        id: appId,
+        specId: `spec-${appId}`,
+        spaceId: 'space-001',
+        spec: createTestSpec(),
+        status: 'active' as const,
+        userConfig: {},
+        userOverrides: {},
+        permissions: { granted: [], denied: [] },
+        installedAt: Date.now(),
+      }
+      mockAppManager.listApps.mockReturnValue([app])
+      mockAppManager.getApp.mockReturnValue(app)
+
+      const runId = createTestRunId()
+      store.insertRun({ runId, appId, sessionKey: 'sess-001', status: 'ok', triggerType: 'manual', startedAt: 1000 })
+      store.completeRun(runId, { status: 'ok', finishedAt: 1100, durationMs: 100 })
+      store.insertEntry(createTestEntry({ appId, runId, type: 'run_complete', ts: 1100, content: { summary: 'All done' } }))
+
+      const service = createService()
+      const overview = service.getOverview()
+
+      expect(overview).toHaveLength(1)
+      expect(overview[0].appId).toBe(appId)
+      expect(overview[0].state.status).toBe('idle')
+      expect(overview[0].latestSummary?.summary).toBe('All done')
+      expect(overview[0].recentRunStatuses).toEqual(['ok'])
+    })
+
+    it('should exclude uninstalled apps returned by the manager', () => {
+      const appId = randomUUID()
+      insertAppRecord(appId, 'uninstalled')
+      mockAppManager.listApps.mockReturnValue([{
+        id: appId,
+        specId: `spec-${appId}`,
+        spaceId: 'space-001',
+        spec: createTestSpec(),
+        status: 'uninstalled' as const,
+        userConfig: {},
+        userOverrides: {},
+        permissions: { granted: [], denied: [] },
+        installedAt: Date.now(),
+      }])
+
+      const service = createService()
+      expect(service.getOverview()).toHaveLength(0)
+    })
+
+    it('should scope the manager query to the given space', () => {
+      mockAppManager.listApps.mockReturnValue([])
+      const service = createService()
+
+      service.getOverview('space-001')
+
+      expect(mockAppManager.listApps).toHaveBeenCalledWith({ spaceId: 'space-001', type: 'automation' })
+    })
+
+    it('should return an empty recent-run-statuses array for an app with no runs', () => {
+      const appId = randomUUID()
+      insertAppRecord(appId, 'active')
+      const app = {
+        id: appId,
+        specId: `spec-${appId}`,
+        spaceId: 'space-001',
+        spec: createTestSpec(),
+        status: 'active' as const,
+        userConfig: {},
+        userOverrides: {},
+        permissions: { granted: [], denied: [] },
+        installedAt: Date.now(),
+      }
+      mockAppManager.listApps.mockReturnValue([app])
+      mockAppManager.getApp.mockReturnValue(app)
+
+      const service = createService()
+      const overview = service.getOverview()
+
+      expect(overview[0].recentRunStatuses).toEqual([])
+      expect(overview[0].latestSummary).toBeUndefined()
     })
   })
 

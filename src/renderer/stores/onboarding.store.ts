@@ -2,7 +2,7 @@
  * Onboarding Store - Manages first-time user guided tour state
  *
  * Flow:
- * 1. step 1: Highlight Halo Space card on HomePage
+ * 1. step 1: Highlight Halo Space card
  * 2. step 2: Pre-fill input with prompt, highlight send button
  * 3. step 3: Show mock AI response, highlight artifact
  * 4. User clicks artifact -> onboarding complete
@@ -59,8 +59,8 @@ export const useOnboardingStore = create<OnboardingState>((set, get) => ({
         const config = response.data as { onboarding?: { completed?: boolean } }
         const completed = config.onboarding?.completed === true
         set({ hasCompleted: completed })
-        // Note: Don't auto-start onboarding here. HomePage will call startOnboarding
-        // when user navigates there, so the spotlight targets the correct elements.
+        // Note: Don't auto-start onboarding here — startOnboarding() has no
+        // caller currently, this flow is dormant.
       }
     } catch (error) {
       console.error('[Onboarding] Failed to load state from config:', error)

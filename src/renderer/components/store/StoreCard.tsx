@@ -75,7 +75,7 @@ function StoreCardBase({ entry, onClick, source }: StoreCardProps) {
       tabIndex={0}
       onClick={openDetail}
       onKeyDown={handleKeyDown}
-      className="flex flex-col gap-2.5 w-full text-left p-4 rounded-[10px] border border-border/60 bg-background transition-all cursor-pointer hover:border-border hover:shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
+      className="flex flex-col gap-2.5 w-full text-left p-4 rounded-[10px] border border-border/60 bg-card transition-all cursor-pointer hover:border-border hover:shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
     >
       {/* Top: shaped type icon + name / author */}
       <div className="flex items-start gap-3">

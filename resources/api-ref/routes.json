@@ -86,6 +86,10 @@
     "group": "workspace"
   },
   {
+    "method": "GET",
+    "path": "/api/spaces/summaries"
+  },
+  {
     "method": "POST",
     "path": "/api/spaces",
     "group": "workspace"
@@ -109,6 +113,10 @@
     "method": "DELETE",
     "path": "/api/spaces/:spaceId",
     "group": "workspace"
+  },
+  {
+    "method": "POST",
+    "path": "/api/spaces/:spaceId/forget"
   },
   {
     "method": "POST",
@@ -387,6 +395,18 @@
     "group": "channels"
   },
   {
+    "method": "POST",
+    "path": "/api/im-channels/set-instance-app"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-channels/create-instance"
+  },
+  {
+    "method": "POST",
+    "path": "/api/im-channels/unbind-instance"
+  },
+  {
     "method": "GET",
     "path": "/api/im-channels/permission-defaults",
     "group": "channels"
@@ -507,6 +527,10 @@
   },
   {
     "method": "GET",
+    "path": "/api/apps/overview"
+  },
+  {
+    "method": "GET",
     "path": "/api/apps/:appId",
     "group": "digital-human"
   },
@@ -514,6 +538,14 @@
     "method": "GET",
     "path": "/api/apps/:appId/available-skills",
     "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/available-skills"
+  },
+  {
+    "method": "GET",
+    "path": "/api/spaces/:spaceId/effective-mcp-apps"
   },
   {
     "method": "GET",
@@ -564,6 +596,14 @@
     "method": "GET",
     "path": "/api/apps/:appId/activity",
     "group": "digital-human"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/runs"
+  },
+  {
+    "method": "GET",
+    "path": "/api/apps/:appId/run-stats"
   },
   {
     "method": "POST",
@@ -1059,5 +1099,25 @@
     "method": "GET",
     "path": "/api/tlon/:kbId/ingest-status",
     "group": "knowledge-base"
+  },
+  {
+    "method": "GET",
+    "path": "/api/task-state"
+  },
+  {
+    "method": "POST",
+    "path": "/api/task-state/mark-unseen"
+  },
+  {
+    "method": "POST",
+    "path": "/api/task-state/mark-read"
+  },
+  {
+    "method": "POST",
+    "path": "/api/task-state/set-kept"
+  },
+  {
+    "method": "POST",
+    "path": "/api/task-state/remove"
   }
 ]

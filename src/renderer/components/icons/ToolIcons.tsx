@@ -177,66 +177,6 @@ export function StatusIcon({ status, className = '', size = 16 }: StatusIconProp
 }
 
 // ============================================
-// Space Icons with Colors
-// ============================================
-
-// Space icon identifiers (used in data storage)
-export const SPACE_ICON_IDS = [
-  'folder', 'code', 'globe', 'chart', 'file-text', 'palette',
-  'gamepad', 'wrench', 'smartphone', 'lightbulb', 'rocket', 'star'
-] as const
-
-export type SpaceIconId = typeof SPACE_ICON_IDS[number]
-
-// Map icon IDs to Lucide components
-export const spaceIconMap: Record<string, LucideIcon> = {
-  folder: Folder,
-  code: FileCode,
-  globe: Globe,
-  chart: Database,
-  'file-text': FileText,
-  palette: Palette,
-  gamepad: Gamepad2,
-  wrench: Wrench,
-  smartphone: Smartphone,
-  lightbulb: Lightbulb,
-  rocket: Rocket,
-  star: Star,
-  sparkles: Sparkles,
-}
-
-// Professional color palette for space icons
-export const spaceIconColors: Record<string, string> = {
-  folder: 'text-amber-500',        // Classic folder yellow
-  code: 'text-blue-500',           // Tech/programming blue
-  globe: 'text-cyan-500',          // Internet/global cyan
-  chart: 'text-violet-500',        // Data/analytics purple
-  'file-text': 'text-slate-500',   // Document neutral
-  palette: 'text-pink-500',        // Design/art pink
-  gamepad: 'text-emerald-500',     // Gaming green
-  wrench: 'text-orange-500',       // Tools orange
-  smartphone: 'text-indigo-500',   // Mobile tech
-  lightbulb: 'text-yellow-500',    // Ideas/creativity
-  rocket: 'text-rose-500',         // Launch/speed
-  star: 'text-amber-400',          // Favorite/important
-  sparkles: 'text-primary',        // Halo brand color
-}
-
-// Space icon component with color
-interface SpaceIconProps {
-  iconId: SpaceIconId | string
-  className?: string
-  size?: number
-  colored?: boolean  // Whether to apply default color
-}
-
-export function SpaceIcon({ iconId, className = '', size = 20, colored = true }: SpaceIconProps) {
-  const Icon = spaceIconMap[iconId as SpaceIconId] || Folder
-  const colorClass = colored ? (spaceIconColors[iconId] || 'text-muted-foreground') : ''
-  return <Icon className={`${colorClass} ${className}`} size={size} />
-}
-
-// ============================================
 // File Type Icons
 // ============================================
 
@@ -382,8 +322,11 @@ export const fileIconColors: Record<string, string> = {
   rar: 'text-purple-600',
   // Default
   default: 'text-slate-500',
-  // Folder
-  folder: 'text-amber-500',        // Classic folder yellow
+  // Folder — neutral gray rather than the generic OS yellow or the app accent.
+  // A folder icon repeats on nearly every tree row, so a saturated color there
+  // is noise; structure is already carried by the icon shape and the bolder
+  // folder label. One tier above the chevrons so it doesn't go faint.
+  folder: 'text-muted-foreground',
 }
 
 // Get file icon color

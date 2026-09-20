@@ -44,6 +44,7 @@ import type {
   TeamRunTrigger,
   TeamTriggerInput,
 } from '../shared/apps/team-types'
+import { taskRpc } from '../shared/rpc/contracts/task.contract'
 import type {
   HealthStatusResponse,
   HealthStateResponse,
@@ -117,11 +118,11 @@ export interface HaloAPI {
   // Space
   getHaloSpace: () => Promise<IpcResponse>
   listSpaces: () => Promise<IpcResponse>
-  createSpace: (input: { name: string; icon: string; customPath?: string }) => Promise<IpcResponse>
+  createSpace: (input: { name: string; icon: string; color?: string; customPath?: string }) => Promise<IpcResponse>
   deleteSpace: (spaceId: string) => Promise<IpcResponse>
   getSpace: (spaceId: string) => Promise<IpcResponse>
   openSpaceFolder: (spaceId: string) => Promise<IpcResponse>
-  updateSpace: (spaceId: string, updates: { name?: string; icon?: string }) => Promise<IpcResponse>
+  updateSpace: (spaceId: string, updates: { name?: string; icon?: string; color?: string }) => Promise<IpcResponse>
   getDefaultSpacePath: () => Promise<IpcResponse>
   selectFolder: () => Promise<IpcResponse>
   updateSpacePreferences: (spaceId: string, preferences: {
@@ -132,6 +133,8 @@ export interface HaloAPI {
   }) => Promise<IpcResponse>
   getSpacePreferences: (spaceId: string) => Promise<IpcResponse>
   reorderSpaces: (spaceIds: string[]) => Promise<IpcResponse>
+  listSpaceSummaries: () => Promise<IpcResponse>
+  forgetSpace: (spaceId: string) => Promise<IpcResponse>
 
   // Conversation
   listConversations: (spaceId: string) => Promise<IpcResponse>
@@ -498,6 +501,9 @@ export interface HaloAPI {
   imChannelsReload: () => Promise<IpcResponse>
   imChannelsProviders: () => Promise<IpcResponse>
   imChannelsPermissionDefaults: () => Promise<IpcResponse>
+  imChannelsSetInstanceApp: (instanceId: string, appId: string) => Promise<IpcResponse>
+  imChannelsCreateInstance: (instance: unknown) => Promise<IpcResponse>
+  imChannelsUnbindInstance: (instanceId: string) => Promise<IpcResponse>
 
   // IM Sessions
   imSessionsList: (appId?: string) => Promise<IpcResponse>
@@ -538,6 +544,9 @@ export interface HaloAPI {
   appGetActivity: (input: { appId: string; options?: { limit?: number; offset?: number; type?: string; since?: number; teamId?: string; epochId?: string } }) => Promise<IpcResponse>
   appGetSession: (input: { appId: string; runId: string }) => Promise<IpcResponse>
   appRespondEscalation: (input: { appId: string; escalationId: string; response: EscalationResponse }) => Promise<IpcResponse>
+  appGetRuns: (input: { appId: string; options?: { limit?: number; offset?: number } }) => Promise<IpcResponse<import('../shared/apps/app-types').AutomationRunWithSummary[]>>
+  appGetRunStats: (input: { appId: string; window?: number }) => Promise<IpcResponse<import('../shared/apps/app-types').RunStats>>
+  appGetOverview: (input?: { spaceId?: string }) => Promise<IpcResponse<import('../shared/apps/app-types').AppOverviewEntry[]>>
   appContinueRun: (input: { appId: string; runId: string }) => Promise<IpcResponse>
   appInjectRun: (input: { appId: string; runId: string; text: string }) => Promise<IpcResponse>
   appUpdateConfig: (input: { appId: string; config: Record<string, unknown> }) => Promise<IpcResponse>
@@ -554,6 +563,8 @@ export interface HaloAPI {
   appOpenSkillFolder: (appId: string) => Promise<IpcResponse>
   appDeriveSkillCommandName: (name: string) => Promise<IpcResponse<string>>
   appListAvailableSkills: (appId: string) => Promise<IpcResponse<import('../shared/apps/app-types').AvailableSkill[]>>
+  appListAvailableSkillsForSpace: (spaceId: string) => Promise<IpcResponse<import('../shared/apps/app-types').AvailableSkill[]>>
+  appListEffectiveMcpApps: (spaceId: string) => Promise<IpcResponse<import('../shared/apps/app-types').InstalledApp[]>>
   appGetDataPath: (appId: string) => Promise<IpcResponse<{ path: string }>>
   appOpenDataFolder: (appId: string) => Promise<IpcResponse>
   appClearMemory: (appId: string) => Promise<IpcResponse<{ filesRemoved: number }>>
@@ -657,6 +668,13 @@ export interface HaloAPI {
   onTeamOfficeStatus: (callback: (data: unknown) => void) => () => void
   onTeamInviteLink: (callback: (data: unknown) => void) => () => void
   onTeamMemberHistory: (callback: (data: unknown) => void) => () => void
+  // Task panel bookkeeping (completed-but-unseen conversations, post-view grace period)
+  taskListState: () => Promise<IpcResponse<import('../main/platform/task-state').ConversationTaskState[]>>
+  taskMarkUnseen: (conversationId: string, spaceId: string, title: string) => Promise<IpcResponse>
+  taskMarkRead: (conversationId: string, spaceId: string, title: string, originalStatus: 'completed-unseen' | 'error') => Promise<IpcResponse>
+  taskSetKept: (conversationId: string, kept: boolean) => Promise<IpcResponse>
+  taskRemoveState: (conversationId: string) => Promise<IpcResponse>
+  onTaskStateChanged: (callback: (data: unknown) => void) => () => void
 
   // Notification (in-app toast)
   onNotificationToast: (callback: (data: unknown) => void) => () => void
@@ -1013,6 +1031,9 @@ const api: HaloAPI = {
   onTeamOfficeStatus: (callback) => createEventListener(TEAM_EVENTS.officeStatus, callback),
   onTeamInviteLink: (callback) => createEventListener(TEAM_EVENTS.inviteLink, callback),
   onTeamMemberHistory: (callback) => createEventListener(TEAM_EVENTS.memberHistory, callback),
+  // Task panel bookkeeping (all derived from taskRpc contract)
+  ...bindRpc(taskRpc),
+  onTaskStateChanged: (callback) => createEventListener('task:state_changed', callback),
 
   // Store (App Registry) — most methods derived from storeRpc contract;
   // storeInstall keeps its custom progress-listener wrapper below.

@@ -11,8 +11,9 @@
 import { getImChannelManager } from '../apps/runtime'
 import { getConfig } from '../foundation/config.service'
 import { dispatchInboundMessage, invalidateImSessions } from '../apps/runtime'
+import { setInstanceApp, createInstance, unbindInstance } from '../apps/runtime/im-channels/binding'
 import { getImChannelsPermissionDefaults } from '../foundation/product-config'
-import type { ImChannelInstanceStatus } from '../../shared/types/im-channel'
+import type { ImChannelInstanceStatus, ImChannelInstanceConfig } from '../../shared/types/im-channel'
 import { imChannelsRpc } from '../../shared/rpc/contracts/im-channels.contract'
 import { registerRawRpcHandlers } from './rpc'
 
@@ -102,6 +103,30 @@ export function registerImChannelHandlers(): void {
           defaultConfig: p.defaultConfig,
         }))
         return { success: true, data: providers }
+      } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
+      }
+    },
+
+    imChannelsSetInstanceApp: async (instanceId: string, appId: string) => {
+      try {
+        return setInstanceApp(instanceId, appId)
+      } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
+      }
+    },
+
+    imChannelsUnbindInstance: async (instanceId: string) => {
+      try {
+        return unbindInstance(instanceId)
+      } catch (error: unknown) {
+        return { success: false, error: (error as Error).message }
+      }
+    },
+
+    imChannelsCreateInstance: async (instance: ImChannelInstanceConfig) => {
+      try {
+        return createInstance(instance)
       } catch (error: unknown) {
         return { success: false, error: (error as Error).message }
       }

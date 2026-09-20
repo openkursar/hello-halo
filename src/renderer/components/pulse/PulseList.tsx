@@ -1,34 +1,66 @@
 /**
- * PulseList - Shared presentational component for rendering pulse task items
+ * PulseList - Shared presentational component for rendering task-panel items
  *
- * Pure list rendering of active tasks, unseen completions, and pinned conversations.
- * Used by PulseSidebarSection in the conversation list sidebar.
+ * Pure list rendering of active tasks, unseen completions, and pinned
+ * conversations, aggregated across conversations and automation apps
+ * (stores/task.store.ts). Used by TaskPanel.
  *
  * Responsibilities:
- * - Renders grouped items (active first, then pinned idle)
- * - Status indicators per item
- * - Pin/unpin toggle
- * - Cross-space navigation on click
+ * - Renders grouped items: "Continue" (waiting / completed-unseen / error —
+ *   needs the user) and "Running", each with a header + count, then pinned
+ *   idle conversations last
+ * - Source-specific identity: MessageSquare icon for conversations,
+ *   AutomationAvatar for digital humans — never a generic status dot
+ * - Pin/unpin toggle and grace-period "seen" Keep/Remove — conversation
+ *   items only; automation items never enter the seen/auto-remove flow
+ *   (see task.store.ts's docstring for why)
+ * - Cross-space navigation on click (conversations) / Apps-page navigation
+ *   with optional escalation deep-link (automation)
  * - Empty state
  *
  * Does NOT handle: positioning, open/close, collapse/expand, or responsive logic.
  */
 
-import { useCallback, useMemo } from 'react'
-import { Star } from 'lucide-react'
-import { usePulseItems, useChatStore } from '../../stores/chat.store'
+import { useCallback, useEffect, useState } from 'react'
+import { Pin, SquareCheckBig, ChevronRight, MessageSquare } from 'lucide-react'
+import { useChatStore } from '../../stores/chat.store'
+import { useTaskItems } from '../../stores/task.store'
 import { useSpaceStore } from '../../stores/space.store'
 import { useAppStore } from '../../stores/app.store'
+import { useAppsPageStore } from '../../stores/apps-page.store'
+import { AutomationAvatar } from '../apps/AutomationAvatar'
 import { useTranslation } from '../../i18n'
-import { TaskStatusDot } from './TaskStatusDot'
-import type { PulseItem, TaskStatus } from '../../types'
+import { cn } from '../../lib/utils'
+import type { TaskItem, TaskItemStatus } from '../../types'
 
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  'generating': 'Generating...',
-  'waiting': 'Waiting for input',
+/** mm:ss for under an hour, h:mm:ss past that — running tasks rarely run long. */
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+// Fallback for an item with no `detail` — a conversation whose last message
+// hasn't been previewed yet (brand new, or an index written before previews).
+// Status stays legible regardless: it drives the detail line's color, and the
+// section the item is grouped under.
+const STATUS_LABEL: Partial<Record<TaskItemStatus, string>> = {
+  'running': 'Generating...',
+  'waiting': 'Waiting for your input',
   'completed-unseen': 'Completed',
   'error': 'Error',
   'idle': 'Pinned',
+}
+
+const STATUS_TEXT_CLASS: Record<TaskItemStatus, string> = {
+  'running': 'text-primary',
+  'waiting': 'text-halo-warning',
+  'completed-unseen': 'text-halo-success',
+  'error': 'text-halo-error',
+  'idle': 'text-muted-foreground',
 }
 
 /**
@@ -38,6 +70,11 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 export function navigateToConversation(spaceId: string, conversationId: string) {
   const chatStore = useChatStore.getState()
   const currentSpaceId = chatStore.currentSpaceId
+
+  // Always land on the space view — a caller outside it (e.g. the task
+  // panel from the Apps page) would otherwise select the conversation
+  // without ever switching the top-level view to show it.
+  useAppStore.getState().navigate('space')
 
   if (currentSpaceId === spaceId) {
     chatStore.selectConversation(conversationId)
@@ -57,7 +94,54 @@ export function navigateToConversation(spaceId: string, conversationId: string) 
 
   // Switch space — SpacePage's initSpace will pick up the flag and call selectConversation
   spaceStore.setCurrentSpace(targetSpace)
-  useAppStore.getState().setView('space')
+}
+
+/**
+ * Navigate to a digital-human conversation, handling cross-space switching
+ * exactly like navigateToConversation above, but landing on the app-chat
+ * link (selectAppChatConversation) instead of a regular conversation.
+ *
+ * @param appSpaceId - The digital human's home space, or null for a global
+ *   app — a global app has no space to switch to, so it opens in whichever
+ *   space is currently active instead of forcing a jump.
+ */
+export function navigateToAppChat(appSpaceId: string | null, appId: string, conversationId: string) {
+  const chatStore = useChatStore.getState()
+  useAppStore.getState().navigate('space')
+
+  const targetSpaceId = appSpaceId ?? chatStore.currentSpaceId
+  if (!targetSpaceId) return
+
+  if (chatStore.currentSpaceId === targetSpaceId) {
+    chatStore.selectAppChatConversation(targetSpaceId, appId, conversationId)
+    return
+  }
+
+  const spaceStore = useSpaceStore.getState()
+  const targetSpace = spaceStore.haloSpace?.id === targetSpaceId
+    ? spaceStore.haloSpace
+    : spaceStore.spaces.find(s => s.id === targetSpaceId)
+  if (!targetSpace) return
+
+  useChatStore.setState({ pendingAppChatNavigation: { appId, conversationId } })
+  spaceStore.setCurrentSpace(targetSpace)
+}
+
+/**
+ * Navigate to a digital human's activity thread. Every automation status
+ * lands here (including 'running', which already surfaces a live "Working…"
+ * card with its own link into session detail) — a `waiting` item additionally
+ * deep-links to its EscalationCard when one is pending.
+ */
+function navigateToAutomation(item: TaskItem) {
+  if (!item.appId) return
+  useAppsPageStore.getState().setCurrentTab('my-digital-humans')
+  if (item.status === 'waiting' && item.escalationId) {
+    useAppsPageStore.getState().openActivityThreadAt(item.appId, item.escalationId)
+  } else {
+    useAppsPageStore.getState().openActivityThread(item.appId)
+  }
+  useAppStore.getState().navigate('apps')
 }
 
 interface PulseListProps {
@@ -71,126 +155,278 @@ interface PulseListProps {
 
 export function PulseList({ maxHeight, onItemClick, compact = false }: PulseListProps) {
   const { t } = useTranslation()
-  const rawItems = usePulseItems()
-  const haloSpace = useSpaceStore(state => state.haloSpace)
-  const spaces = useSpaceStore(state => state.spaces)
+  const items = useTaskItems()
 
-  // Build set of valid space IDs for filtering orphan items
-  const validSpaceIds = useMemo(() => {
-    const ids = new Set<string>()
-    if (haloSpace) ids.add(haloSpace.id)
-    for (const s of spaces) ids.add(s.id)
-    return ids
-  }, [haloSpace, spaces])
+  // "Selected" = the item whose content is currently showing on the right,
+  // independent of read/seen state — stays highlighted even once a
+  // conversation item has faded into its seen/countdown look (prototype:
+  // `.tk.sel`, `.tk.seen.sel{opacity:1}`).
+  const currentSpaceId = useChatStore(state => state.currentSpaceId)
+  const currentConversationId = useChatStore(state =>
+    state.currentSpaceId ? state.spaceStates.get(state.currentSpaceId)?.currentConversationId ?? null : null
+  )
+  const selectedAppId = useAppsPageStore(state => state.selectedAppId)
+  const appView = useAppStore(state => state.view)
 
-  // Enrich items with proper space names and filter out orphans from deleted spaces
-  const items = useMemo(() => {
-    return rawItems
-      .filter(item => validSpaceIds.has(item.spaceId))
-      .map(item => {
-        if (item.spaceName !== item.spaceId) return item
-        const space = haloSpace?.id === item.spaceId
-          ? haloSpace
-          : spaces.find(s => s.id === item.spaceId)
-        return space ? { ...item, spaceName: space.isTemp ? 'Halo' : space.name } : item
-      })
-  }, [rawItems, haloSpace, spaces, validSpaceIds])
+  // Drives the elapsed-time text for running items. Only ticks while at
+  // least one item is running, so idle panels don't re-render every second.
+  const [, forceTick] = useState(0)
+  const hasRunning = items.some(i => i.status === 'running')
+  useEffect(() => {
+    if (!hasRunning) return
+    const id = setInterval(() => forceTick(n => n + 1), 1000)
+    return () => clearInterval(id)
+  }, [hasRunning])
 
-  const handleItemClick = useCallback((item: PulseItem) => {
-    navigateToConversation(item.spaceId, item.conversationId)
+  const handleItemClick = useCallback((item: TaskItem) => {
+    if (item.source === 'conversation' && item.conversationId) {
+      navigateToConversation(item.spaceId!, item.conversationId)
+    } else {
+      navigateToAutomation(item)
+    }
     onItemClick?.()
   }, [onItemClick])
 
   // Pin/Unpin: UI uses "Pin" terminology, backend API uses "Star" (starred field).
-  // The mapping is: Pin = starred:true, Unpin = starred:false.
-  const handleTogglePin = useCallback((e: React.MouseEvent, item: PulseItem) => {
+  // The mapping is: Pin = starred:true, Unpin = starred:false. Conversation-only.
+  const handleTogglePin = useCallback((e: React.MouseEvent, item: TaskItem) => {
     e.stopPropagation()
-    useChatStore.getState().toggleStarConversation(item.spaceId, item.conversationId, !item.starred)
+    if (!item.conversationId) return
+    useChatStore.getState().toggleStarConversation(item.spaceId!, item.conversationId, !item.starred)
   }, [])
 
-  const activeItems = items.filter(i => i.status !== 'idle')
+  const handleKeep = useCallback((e: React.MouseEvent, item: TaskItem) => {
+    e.stopPropagation()
+    if (item.conversationId) useChatStore.getState().keepPulseItem(item.conversationId)
+  }, [])
+
+  const handleRemove = useCallback((e: React.MouseEvent, item: TaskItem) => {
+    e.stopPropagation()
+    if (item.conversationId) useChatStore.getState().removePulseItem(item.conversationId)
+  }, [])
+
+  // "Continue" = needs the user (waiting for input, done but unseen, or
+  // errored) — conversations and digital humans both land here. "Running"
+  // covers both actively-generating conversations and running/queued apps.
+  const continueItems = items.filter(i => i.status === 'waiting' || i.status === 'completed-unseen' || i.status === 'error')
+  const runningItems = items.filter(i => i.status === 'running')
   const pinnedIdleItems = items.filter(i => i.status === 'idle')
 
   if (items.length === 0) {
     return (
-      <div className="px-4 py-6 text-center">
-        <p className="text-sm text-muted-foreground">{t('No active tasks')}</p>
-        <p className="text-xs text-muted-foreground/60 mt-1">
+      <div className="flex flex-col items-center px-3 py-8 text-center">
+        <SquareCheckBig className="w-[26px] h-[26px] mb-2 text-subtle-foreground" strokeWidth={1.5} />
+        <p className="text-xs text-subtle-foreground">{t('No active tasks')}</p>
+        <p className="text-xs text-subtle-foreground mt-1">
           {t('Tasks and pinned conversations appear here')}
         </p>
       </div>
     )
   }
 
-  const py = compact ? 'py-1.5' : 'py-2.5'
-  const px = compact ? 'px-3' : 'px-4'
+  const py = compact ? 'py-1.5' : 'py-[11px]'
+  const px = 'px-3'
 
-  const renderItem = (item: PulseItem) => {
-    const isRead = !!item.readAt
+  const renderSectionHeader = (label: string, count: number, indicator: 'ready' | 'running' | 'idle') => (
+    <div className={`${px} first:mt-1 mt-4 mb-2 flex items-center gap-[7px]`}>
+      {indicator === 'running' ? (
+        <span className="w-[11px] h-[11px] rounded-full border-2 border-primary border-t-transparent animate-spin" />
+      ) : indicator === 'idle' ? (
+        <Pin className="w-[11px] h-[11px] text-subtle-foreground" strokeWidth={2} />
+      ) : (
+        <span className="w-[7px] h-[7px] rounded-full bg-primary" />
+      )}
+      <span className="text-xs font-semibold text-muted-foreground">{label}</span>
+      <span className="ml-auto text-xs font-medium text-subtle-foreground/60 tabular-nums">{count}</span>
+    </div>
+  )
+
+  const renderItem = (item: TaskItem) => {
+    const isConversation = item.source === 'conversation'
+    // Grace-period item: user already looked at it, counting down to
+    // auto-hide (chat.store `pulseReadAt`, 60s) unless kept. Automation
+    // items never carry readAt, so this is always false for them.
+    const isSeen = isConversation && !!item.readAt && !item.kept
+    const isReady = item.status === 'waiting' || item.status === 'completed-unseen' || item.status === 'error'
+    const isRunning = item.status === 'running'
+    const isQueued = !isConversation && item.status === 'running' && !item.startedAt
+    const elapsedMs = item.readAt ? Date.now() - item.readAt : 0
+    const runningElapsedMs = isRunning && item.startedAt ? Date.now() - item.startedAt : 0
+    // Gated on the current top-level view too — chat.store keeps the last
+    // selected conversation around even while the user is on the Apps page
+    // (and vice versa for apps-page.store), so without this guard both a
+    // conversation and a digital human could show as selected at once.
+    const isSelected = isConversation
+      ? appView === 'space' && item.spaceId === currentSpaceId && item.conversationId === currentConversationId
+      : appView === 'apps' && item.appId === selectedAppId
+
     return (
       <div
-        key={item.conversationId}
+        key={item.key}
         onClick={() => handleItemClick(item)}
-        className={`pulse-item flex items-center gap-3 ${px} ${py} cursor-pointer ${isRead ? 'opacity-50' : ''}`}
+        className={cn(
+          'group/tk flex items-center gap-[11px] rounded-lg border cursor-pointer transition-colors ease-halo mx-2 mb-1.5',
+          px, py,
+          isSelected
+            ? 'border-blue-500 bg-blue-500/[0.12]'
+            : cn(
+                'border-border',
+                isSeen
+                  ? 'opacity-[.62] hover:opacity-100 hover:bg-secondary'
+                  : isReady
+                    ? isConversation
+                      ? 'bg-secondary hover:bg-surface-hover'
+                      : 'bg-card hover:bg-surface-hover'
+                    : 'bg-transparent hover:bg-secondary'
+              )
+        )}
       >
-        {/* Status dot */}
-        <TaskStatusDot status={item.status} size="md" />
+        {/* Identity icon — MessageSquare for a conversation, the digital
+            human's own generated face for automation. Never a status dot:
+            status is conveyed by the section and elapsed text. */}
+        {isConversation ? (
+          <div className={cn(
+            'w-[30px] h-[30px] flex-shrink-0 rounded-sm flex items-center justify-center',
+            isReady && !isSeen ? 'bg-primary/[0.12] text-accent-on-dark' : 'bg-secondary text-subtle-foreground'
+          )}>
+            <MessageSquare className="w-4 h-4" strokeWidth={1.8} />
+          </div>
+        ) : (
+          <div className="w-[30px] h-[30px] flex-shrink-0 rounded-sm overflow-hidden">
+            <AutomationAvatar name={item.appName || item.title} size={30} />
+          </div>
+        )}
 
-        {/* Content */}
+        {/* Content — no source badge next to the title: the identity icon
+            above already says conversation vs digital human, and the room it
+            frees goes to the title and the status line, which is what the
+            user actually scans this panel for. */}
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium truncate text-foreground">
-            {item.title}
-          </p>
-          <div className="flex items-center gap-1.5 mt-0.5">
-            <span className="text-xs text-muted-foreground truncate">
+          <div className="flex items-center gap-[6px]">
+            <p className="text-[13px] font-semibold truncate text-foreground">
+              {item.title}
+            </p>
+            {/* Space rides beside the title as a muted pill, same treatment as
+                AutomationCard's — it's context for where clicking lands you,
+                not something to scan for. Native `title` rather than the
+                Tooltip component: its bubble is absolutely positioned and
+                `whitespace-nowrap`, which overflows this 340px panel's
+                scroll box sideways. */}
+            <span
+              title={item.spaceId
+                ? t('Workspace: {{name}}', { name: item.spaceName })
+                : t('Global — runs outside any workspace')}
+              className="flex-shrink-0 max-w-[45%] truncate text-[10px] text-muted-foreground px-1.5 py-0.5 rounded bg-secondary/70"
+            >
               {item.spaceName}
             </span>
-            <span className="text-muted-foreground/30 text-xs">·</span>
-            <span className={`text-xs ${
-              item.status === 'waiting' ? 'text-yellow-500' :
-              item.status === 'error' ? 'text-red-500' :
-              item.status === 'completed-unseen' ? 'text-green-500' :
-              item.status === 'generating' ? 'text-blue-500' :
-              'text-muted-foreground'
-            }`}>
-              {t(STATUS_LABEL[item.status])}
+            {isRunning && (
+              <span className="ml-auto flex items-center flex-shrink-0 text-[11px] text-subtle-foreground tabular-nums">
+                {isQueued ? (
+                  t('Queued')
+                ) : (
+                  <>
+                    <span className="inline-block w-2.5 h-2.5 rounded-full border-[1.5px] border-subtle-foreground border-t-transparent opacity-70 mr-[5px] animate-spin" />
+                    {formatElapsed(runningElapsedMs)}
+                  </>
+                )}
+              </span>
+            )}
+          </div>
+          <div className="mt-0.5">
+            <span className={cn('block text-[11px] truncate', STATUS_TEXT_CLASS[item.status])}>
+              {item.detail || t(STATUS_LABEL[item.status] ?? '')}
             </span>
           </div>
+
+          {/* Removal countdown — only while actively counting down (not kept) */}
+          {isSeen && (
+            <div className="h-[3px] rounded-[2px] bg-secondary mt-[9px] overflow-hidden">
+              <div
+                className="h-full bg-subtle-foreground animate-countdown"
+                style={{ animationDelay: `-${elapsedMs}ms` }}
+              />
+            </div>
+          )}
         </div>
 
-        {/* Pin toggle */}
-        <button
-          onClick={(e) => handleTogglePin(e, item)}
-          className={`p-1 rounded transition-colors flex-shrink-0 ${
-            item.starred
-              ? 'text-yellow-500 hover:text-yellow-400'
-              : 'text-muted-foreground/40 hover:text-yellow-500'
-          }`}
-          title={item.starred ? t('Unpin') : t('Pin')}
-        >
-          <Star className={`w-3.5 h-3.5 ${item.starred ? 'fill-current' : ''}`} />
-        </button>
+        {/* Trailing actions — conversation-only (Pin, or Keep/Remove once
+            counting down); automation items get just the chevron. */}
+        {isConversation && isSeen ? (
+          <div className="hidden group-hover/tk:flex items-center gap-[5px] flex-shrink-0">
+            <span className="animate-fadehint mr-1 text-[11px] text-subtle-foreground">
+              {t('Removing soon')}
+            </span>
+            <button
+              onClick={(e) => handleKeep(e, item)}
+              className="h-[26px] px-[9px] rounded-sm border border-primary/[0.18] text-[11px] text-accent-on-dark transition-colors ease-halo hover:bg-primary/[0.12] hover:border-primary"
+            >
+              {t('Keep')}
+            </button>
+            <button
+              onClick={(e) => handleRemove(e, item)}
+              className="h-[26px] px-[9px] rounded-sm border border-border bg-card text-[11px] text-muted-foreground transition-colors ease-halo hover:bg-surface-hover hover:text-foreground"
+            >
+              {t('Remove')}
+            </button>
+          </div>
+        ) : isConversation ? (
+          <button
+            onClick={(e) => handleTogglePin(e, item)}
+            className={cn(
+              'w-[22px] h-[22px] flex-shrink-0 rounded-[6px] flex items-center justify-center transition-colors',
+              item.starred
+                ? 'text-blue-500'
+                : 'hidden group-hover/tk:flex text-subtle-foreground hover:bg-surface-hover hover:text-foreground'
+            )}
+            title={item.starred ? t('Unpin') : t('Pin')}
+            aria-pressed={item.starred}
+          >
+            <Pin className="w-[13px] h-[13px]" strokeWidth={1.8} />
+          </button>
+        ) : null}
+
+        <ChevronRight
+          className={cn(
+            'w-4 h-4 flex-shrink-0 transition-[transform,color] ease-halo',
+            'text-subtle-foreground group-hover/tk:translate-x-0.5 group-hover/tk:text-foreground',
+            isReady && !isSeen && 'text-accent-on-dark'
+          )}
+        />
       </div>
     )
   }
 
   return (
-    <div className="overflow-auto scrollbar-thin" style={maxHeight ? { maxHeight } : undefined}>
-      {/* Active items */}
-      {activeItems.length > 0 && (
-        <div className="py-1">
-          {activeItems.map(renderItem)}
+    <div className="overflow-auto scrollbar-thin pt-2" style={maxHeight ? { maxHeight } : undefined}>
+      {/* Continue: waiting for input, done but unseen, or errored */}
+      {continueItems.length > 0 && (
+        <div className="pb-1">
+          {renderSectionHeader(t('Continue'), continueItems.length, 'ready')}
+          {continueItems.map(renderItem)}
         </div>
       )}
 
-      {/* Divider */}
-      {activeItems.length > 0 && pinnedIdleItems.length > 0 && (
-        <div className="mx-4 border-t border-border/30" />
+      {continueItems.length > 0 && (runningItems.length > 0 || pinnedIdleItems.length > 0) && (
+        <div className="mx-4 my-3 border-t border-border/30" />
+      )}
+
+      {/* Running: actively generating (conversations) or running/queued (apps) */}
+      {runningItems.length > 0 && (
+        <div className="pb-1">
+          {renderSectionHeader(t('Running'), runningItems.length, 'running')}
+          {runningItems.map(renderItem)}
+        </div>
+      )}
+
+      {runningItems.length > 0 && pinnedIdleItems.length > 0 && (
+        <div className="mx-4 my-3 border-t border-border/30" />
       )}
 
       {/* Pinned idle items */}
       {pinnedIdleItems.length > 0 && (
-        <div className="py-1">
+        <div className="pb-1">
+          {renderSectionHeader(t('Pinned'), pinnedIdleItems.length, 'idle')}
           {pinnedIdleItems.map(renderItem)}
         </div>
       )}

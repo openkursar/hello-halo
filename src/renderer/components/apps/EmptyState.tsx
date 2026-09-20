@@ -5,10 +5,8 @@
  * Shown when no app is selected (either because the user hasn't picked one,
  * or because the current tab has no apps at all).
  *
- * The CTAs for installing/adding apps live in AppList's prominent empty
+ * The CTAs for installing/adding apps live in each card wall's own empty
  * state — this component intentionally does NOT duplicate those buttons.
- * Its sole job is to tell the user what would appear here once they pick
- * an item from the sidebar.
  *
  * Variants control the per-tab copy and icon:
  *   - 'automation' (default)
@@ -44,7 +42,7 @@ function useVariantCopy(variant: EmptyStateVariant): VariantCopy {
         selectHint: t('Choose a Skill to view details'),
         icon: BookOpen,
         emptyTitle: t('No Skills installed yet'),
-        emptyHint: t('Use the sidebar to browse the marketplace or add one manually'),
+        emptyHint: t('Browse the marketplace or add one manually'),
       }
     case 'mcp':
       return {
@@ -52,7 +50,7 @@ function useVariantCopy(variant: EmptyStateVariant): VariantCopy {
         selectHint: t('Choose an MCP server to view details'),
         icon: Server,
         emptyTitle: t('No MCP servers connected yet'),
-        emptyHint: t('Use the sidebar to browse the marketplace or add one manually'),
+        emptyHint: t('Browse the marketplace or add one manually'),
       }
     case 'automation':
     default:

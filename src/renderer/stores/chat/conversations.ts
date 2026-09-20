@@ -213,14 +213,20 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
     // Subscribe to conversation events (for remote mode)
     api.subscribeToConversation(conversationId)
 
-    // Update the pointer + move unseen/error items to readAt grace period
+    // Update the pointer + move unseen/error items to readAt grace period.
+    // Persistence (taskMarkRead) happens after set() resolves, since a task
+    // for this conversation may transition here via either branch below.
+    let markReadTask: { spaceId: string; title: string; originalStatus: 'completed-unseen' | 'error' } | null = null
+
     set((state) => {
       const newSpaceStates = new Map(state.spaceStates)
       const latestSpaceState = newSpaceStates.get(currentSpaceId!)
       if (!latestSpaceState) return state
       newSpaceStates.set(currentSpaceId!, {
         ...latestSpaceState,
-        currentConversationId: conversationId
+        currentConversationId: conversationId,
+        // Explicitly picking a regular conversation exits digital-human mode.
+        selectedAppChat: null
       })
 
       const newUnseenCompletions = new Map(state.unseenCompletions)
@@ -238,6 +244,7 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
           title: unseenInfo.title
         })
         newUnseenCompletions.delete(conversationId)
+        markReadTask = { spaceId: unseenInfo.spaceId, title: unseenInfo.title, originalStatus: 'completed-unseen' }
       }
 
       // If this conversation had an error session, move to readAt grace period and clear session error
@@ -250,11 +257,13 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
           meta = ss.conversations.find(c => c.id === conversationId)
           if (meta) break
         }
+        const spaceId = meta?.spaceId || currentSpaceId
+        const title = meta?.title || 'Conversation'
         newPulseReadAt.set(conversationId, {
           readAt: now,
           originalStatus: 'error',
-          spaceId: meta?.spaceId || currentSpaceId,
-          title: meta?.title || 'Conversation'
+          spaceId,
+          title
         })
         // Clear session error — persisted error in message.error handles display after reload
         newSessions.set(conversationId, {
@@ -262,6 +271,7 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
           error: null,
           errorType: null
         })
+        markReadTask = { spaceId, title, originalStatus: 'error' }
       }
 
       return {
@@ -271,6 +281,12 @@ export const createConversationsSlice: ChatSlice<'setCurrentSpace' | 'loadConver
         sessions: newSessions
       }
     })
+
+    if (markReadTask) {
+      const { spaceId: taskSpaceId, title: taskTitle, originalStatus } = markReadTask
+      api.taskMarkRead(conversationId, taskSpaceId, taskTitle, originalStatus).catch(err =>
+        console.error('[ChatStore] taskMarkRead error:', err))
+    }
 
     // Ensure store-level cleanup is scheduled (independent of sidebar mount state)
     get().cleanupPulseReadAt()

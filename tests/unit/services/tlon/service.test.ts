@@ -613,6 +613,41 @@ describe('Tlon Service', () => {
       expect(statuses.map(s => s.path)).toEqual([...statuses.map(s => s.path)].sort())
     })
 
+    it('openPath is always absolute and existsSync-able, even for a folder-import nested path', () => {
+      // Reproduces a real bug report: importing a folder (Browse folder) keeps
+      // the subfolder structure in the raw-relative `path` (e.g.
+      // "imported/sub/index.html"); opening it must not pass that relative
+      // path straight to readArtifactContent — it needs `openPath`.
+      const kb = createKB({ name: 'OpenPath' })
+      const scratch = makeScratchDir()
+      const folder = path.join(scratch, 'imported')
+      fs.mkdirSync(path.join(folder, 'sub'), { recursive: true })
+      fs.writeFileSync(path.join(folder, 'sub', 'index.html'), '<html></html>', 'utf-8')
+      addRawFiles(kb.id, [folder])
+
+      const statuses = getRawFileLearnedStatus(kb.id)
+      const entry = statuses.find(s => s.name === 'index.html')!
+      expect(entry.source).toBe('raw')
+      expect(entry.path).toBe('imported/sub/index.html')
+      expect(path.isAbsolute(entry.path)).toBe(false) // display path stays raw-relative
+      expect(path.isAbsolute(entry.openPath)).toBe(true)
+      expect(entry.openPath).toBe(path.join(getKBRawDir(kb.id), 'imported', 'sub', 'index.html'))
+      expect(fs.existsSync(entry.openPath)).toBe(true)
+    })
+
+    it('linked sources have openPath equal to path (already absolute)', () => {
+      const kb = createKB({ name: 'OpenPathLinked' })
+      const watched = makeScratchDir()
+      const linkedDoc = writeScratchFile(watched, 'memo.md', 'watched content')
+      addLinkedDir(kb.id, { path: watched, label: 'Onboarding' })
+
+      const statuses = getRawFileLearnedStatus(kb.id)
+      const entry = statuses.find(s => s.path === linkedDoc)!
+      expect(entry.source).toBe('linked')
+      expect(entry.openPath).toBe(entry.path)
+      expect(fs.existsSync(entry.openPath)).toBe(true)
+    })
+
     it('derives the refined state (learned / no-text / failed / pending)', () => {
       const kb = createKB({ name: 'States' })
       const scratch = makeScratchDir()

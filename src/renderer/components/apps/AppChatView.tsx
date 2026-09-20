@@ -29,6 +29,7 @@ import { useTranslation } from '../../i18n'
 import type { Message, ImageAttachment, Artifact } from '../../types'
 import type { SlashCommandItem } from '../../types/slash-command'
 import { getAppChatConversationId } from '../../../shared/apps/im-keys'
+import type { DigitalHumanSelectorConfig } from '../chat/DigitalHumanSelector'
 
 interface AppChatViewProps {
   /** App ID */
@@ -42,11 +43,20 @@ interface AppChatViewProps {
    * (key={conversationId}) on session switch, so per-session state stays clean.
    */
   conversationId?: string
+  /**
+   * Passed straight through to InputArea — only the main conversation board
+   * sets this when it renders this view for its digital-human mode. The
+   * digital-human detail page's own Chat tab usage omits it.
+   */
+  digitalHumanSelector?: DigitalHumanSelectorConfig
+  /** Passed straight through to InputArea. */
+  /** Overrides the conversation-derived draft key when the caller owns draft identity. */
+  draftKey?: string
 }
 
 type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
 
-export function AppChatView({ appId, spaceId, conversationId: conversationIdProp }: AppChatViewProps) {
+export function AppChatView({ appId, spaceId, conversationId: conversationIdProp, digitalHumanSelector, draftKey }: AppChatViewProps) {
   const { t } = useTranslation()
   const conversationId = conversationIdProp ?? getAppChatConversationId(appId)
 
@@ -284,13 +294,14 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
         </div>
         <div className="shrink-0 p-4">
           <InputArea
-            draftKey={conversationId}
+            draftKey={draftKey ?? conversationId}
             onSend={handleSend}
             onStop={handleStop}
             isGenerating={false}
             placeholder={t('Chat with this App...')}
             hideToolsetControls
             hideKnowledgeControls
+            digitalHumanSelector={digitalHumanSelector}
           />
         </div>
       </div>
@@ -310,13 +321,14 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
         </div>
         <div className="shrink-0 p-4">
           <InputArea
-            draftKey={conversationId}
+            draftKey={draftKey ?? conversationId}
             onSend={handleSend}
             onStop={handleStop}
             isGenerating={false}
             placeholder={t('Chat with this App...')}
             hideToolsetControls
             hideKnowledgeControls
+            digitalHumanSelector={digitalHumanSelector}
           />
         </div>
       </div>
@@ -398,7 +410,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
           </div>
         )}
         <InputArea
-            draftKey={conversationId}
+            draftKey={draftKey ?? conversationId}
           onSend={handleSend}
           onStop={handleStop}
           isGenerating={isGenerating}
@@ -407,6 +419,7 @@ export function AppChatView({ appId, spaceId, conversationId: conversationIdProp
           hideKnowledgeControls
           slashCommands={slashCommands}
           mentionArtifacts={mentionArtifacts}
+          digitalHumanSelector={digitalHumanSelector}
         />
       </div>
     </div>

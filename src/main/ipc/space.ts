@@ -8,6 +8,7 @@ import {
   listSpaces,
   createSpace,
   deleteSpace,
+  forgetSpace,
   getSpaceWithPreferences,
   openSpaceFolder,
   updateSpace,
@@ -15,6 +16,7 @@ import {
   getSpacePreferences,
   reorderSpaces
 } from '../services/space.service'
+import { listSpaceSummaries } from '../controllers/space.controller'
 import { getSpacesDir } from '../foundation/config.service'
 import { spaceRpc } from '../../shared/rpc/contracts/space.contract'
 import { registerRawRpcHandlers } from './rpc'
@@ -58,7 +60,7 @@ export function registerSpaceHandlers(): void {
     },
 
     // Create a new space
-    createSpace: async (input: { name: string; icon: string; customPath?: string }) => {
+    createSpace: async (input: { name: string; icon: string; color?: string; customPath?: string }) => {
       try {
         const space = createSpace(input)
         return { success: true, data: space }
@@ -102,7 +104,7 @@ export function registerSpaceHandlers(): void {
     },
 
     // Update space
-    updateSpace: async (spaceId: string, updates: { name?: string; icon?: string }) => {
+    updateSpace: async (spaceId: string, updates: { name?: string; icon?: string; color?: string }) => {
       try {
         const space = updateSpace(spaceId, updates)
         return { success: true, data: space }
@@ -177,6 +179,24 @@ export function registerSpaceHandlers(): void {
         return { success: false, error: err.message }
       }
     },
+
+    // Remove an unreachable space's registry entry (does not touch disk)
+    forgetSpace: async (spaceId: string) => {
+      try {
+        const result = forgetSpace(spaceId)
+        return { success: true, data: result }
+      } catch (error: unknown) {
+        const err = error as Error
+        return { success: false, error: err.message }
+      }
+    },
+
+    // Per-space asset counts for the workspace management page. Spans four
+    // domains (apps/skills/conversations/artifacts), so this delegates to
+    // the controller instead of a space.service function — the HTTP route
+    // needs the exact same aggregation, and the controller is the one place
+    // both already share.
+    listSpaceSummaries: async () => listSpaceSummaries(),
   })
 
 }

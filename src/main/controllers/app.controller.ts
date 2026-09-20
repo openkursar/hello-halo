@@ -12,6 +12,17 @@ import { getAppRuntime } from '../apps/runtime'
 import { parseAndValidateAppSpec, AppSpecValidationError, type AppSpec } from '../apps/spec'
 import { MCP_COMMAND_BLOCKED_MESSAGE } from '../services/security-policy'
 
+/**
+ * Both install entry points here (a pre-built spec object, or a pasted/dropped
+ * YAML file) mean the user assembled the spec by hand rather than picking it
+ * from the store — store installs are stamped separately in
+ * registry.service.ts's withInstallStoreMetadata(), which runs before specs
+ * ever reach this controller.
+ */
+function withManualInstallSource(spec: AppSpec): AppSpec {
+  return { ...spec, store: { tags: [], ...(spec.store ?? {}), install_source: spec.store?.install_source ?? 'manual' } }
+}
+
 // ============================================================================
 // Error Codes
 // ============================================================================
@@ -128,7 +139,7 @@ export async function installApp(
       return { success: false, error: 'App Manager is not yet initialized. Please try again shortly.', code: 'NOT_INITIALIZED' }
     }
 
-    const appId = await manager.install(spaceId, spec, userConfig)
+    const appId = await manager.install(spaceId, withManualInstallSource(spec), userConfig)
 
     // Auto-activate in runtime if available (non-fatal on failure)
     const runtime = getAppRuntime()
@@ -201,7 +212,7 @@ export async function importSpec(
       return { success: false, error: `Invalid YAML: ${msg}`, code: 'INVALID_YAML' }
     }
 
-    const appId = await manager.install(input.spaceId, spec, input.userConfig)
+    const appId = await manager.install(input.spaceId, withManualInstallSource(spec), input.userConfig)
 
     // Auto-activate in runtime if available
     const runtime = getAppRuntime()

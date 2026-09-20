@@ -71,9 +71,11 @@ import type { AppRuntimeService } from './types'
 export type {
   AppRuntimeService,
   AppRunResult,
+  AppOverviewEntry,
   AppRunStartInfo,
   AutomationAppState,
   AutomationRun,
+  AutomationRunWithSummary,
   ExecutionEnvironment,
   ActivitySource,
   EscalationContinuation,
@@ -82,6 +84,8 @@ export type {
   ActivityEntryType,
   ActivityQueryOptions,
   PendingDecisionQuery,
+  RunQueryOptions,
+  RunStats,
   EscalationResponse,
   TriggerContext,
   TriggerType,
@@ -123,6 +127,7 @@ export {
   createNativeChatSession,
   forkNativeChatSession,
   deleteNativeChatSession,
+  renameChatSession,
 } from './app-chat'
 export type { AppChatRequest, NativeSessionResult } from './app-chat'
 

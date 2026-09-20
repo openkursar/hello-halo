@@ -14,9 +14,10 @@ import { Monitor, FolderOpen } from 'lucide-react'
 import { useSpaceStore } from '../../stores/space.store'
 import { api } from '../../api'
 import { useTranslation } from '../../i18n'
-import { SpaceIcon } from '../icons/ToolIcons'
-import { SPACE_ICONS, DEFAULT_SPACE_ICON } from '../../types'
-import type { Space, SpaceIconId } from '../../types'
+import { DEFAULT_SPACE_ICON } from '../../types'
+import { SpaceColorSwatch } from './SpaceColorSwatch'
+import { type SpaceColorId } from './spaceAvatarUtils'
+import type { Space } from '../../types'
 
 const isWebMode = api.isRemoteMode()
 
@@ -32,7 +33,10 @@ export function CreateSpaceForm({ onCreated, onCancel, compact = false }: Create
   const createSpace = useSpaceStore(state => state.createSpace)
 
   const [name, setName] = useState('')
-  const [icon, setIcon] = useState<SpaceIconId>(DEFAULT_SPACE_ICON)
+  // Icon glyph picking is gone from this form (replaced by the color swatch
+  // below) — DEFAULT_SPACE_ICON is still sent silently since the backend's
+  // `icon` field remains required; nothing renders it anymore.
+  const [color, setColor] = useState<SpaceColorId>('primary')
   const [useCustomPath, setUseCustomPath] = useState(false)
   const [customPath, setCustomPath] = useState<string | null>(null)
   const [defaultPath, setDefaultPath] = useState<string>('~/.halo/spaces')
@@ -72,48 +76,44 @@ export function CreateSpaceForm({ onCreated, onCancel, compact = false }: Create
     if (!trimmed) return
     const space = await createSpace({
       name: trimmed,
-      icon,
+      icon: DEFAULT_SPACE_ICON,
+      color,
       customPath: useCustomPath && customPath ? customPath : undefined,
     })
     if (space) onCreated(space)
-  }, [name, icon, useCustomPath, customPath, createSpace, onCreated])
+  }, [name, color, useCustomPath, customPath, createSpace, onCreated])
 
   const canCreate = name.trim().length > 0 && !(useCustomPath && !customPath)
 
   // Responsive sizing tokens driven by compact mode
-  const iconBtnSize  = compact ? 'w-8 h-8'   : 'w-10 h-10'
-  const iconSize     = compact ? 16            : 20
   const cardPad      = compact ? 'p-2.5'      : 'p-3'
   const inputPad     = compact ? 'py-1.5 px-3' : 'py-2 px-4'
-  const btnPad       = compact ? 'px-3 py-1.5 text-sm' : 'px-4 py-2'
+  // Prototype `.btn`: height:36px, padding:0 16px — fixed height, horizontal
+  // padding only. Compact (inline/accordion) context keeps a smaller variant
+  // since the prototype has no analog for that embedding.
+  const btnSize      = compact ? 'h-8 px-3.5' : 'h-9 px-4'
   const sectionGap   = compact ? 'space-y-3'  : 'space-y-4'
   const labelClass   = `block text-xs font-medium text-muted-foreground mb-1.5`
 
   return (
     <div className={sectionGap}>
-      {/* Icon picker */}
+      {/* Space name */}
       <div>
-        <label className={labelClass}>{t('Icon (optional)')}</label>
-        <div className="flex flex-wrap gap-1.5">
-          {SPACE_ICONS.map((iconId) => (
-            <button
-              key={iconId}
-              onClick={() => setIcon(iconId)}
-              className={`${iconBtnSize} rounded-lg flex items-center justify-center transition-all ${
-                icon === iconId
-                  ? 'bg-primary/15 border-2 border-primary'
-                  : 'bg-secondary hover:bg-secondary/80 border border-transparent'
-              }`}
-            >
-              <SpaceIcon iconId={iconId} size={iconSize} />
-            </button>
-          ))}
-        </div>
+        <label className={labelClass}>{t('Name')}</label>
+        <input
+          ref={nameInputRef}
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && canCreate) handleCreate() }}
+          placeholder={t('e.g. Payment Refactor')}
+          className={`w-full ${inputPad} text-sm bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors`}
+        />
       </div>
 
       {/* Storage location */}
       <div>
-        <label className={labelClass}>{t('Storage Location')}</label>
+        <label className={labelClass}>{t('Local Directory')}</label>
         <div className="space-y-1.5">
           {/* Default location */}
           <label
@@ -186,32 +186,24 @@ export function CreateSpaceForm({ onCreated, onCancel, compact = false }: Create
         </div>
       </div>
 
-      {/* Space name */}
+      {/* Color */}
       <div>
-        <label className={labelClass}>{t('Name this space')}</label>
-        <input
-          ref={nameInputRef}
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && canCreate) handleCreate() }}
-          placeholder={t('My Project')}
-          className={`w-full ${inputPad} text-sm bg-input rounded-lg border border-border focus:border-primary focus:outline-none transition-colors`}
-        />
+        <label className={labelClass}>{t('Icon Color')}</label>
+        <SpaceColorSwatch value={color} onChange={setColor} />
       </div>
 
       {/* Actions */}
-      <div className="flex justify-end gap-2 pt-0.5">
+      <div className="flex justify-end gap-2.5 pt-0.5">
         <button
           onClick={onCancel}
-          className={`${btnPad} text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors`}
+          className={`${btnSize} rounded-sm border border-border bg-secondary text-foreground text-[13px] font-medium hover:bg-surface-hover transition-colors ease-halo`}
         >
           {t('Cancel')}
         </button>
         <button
           onClick={handleCreate}
           disabled={!canCreate}
-          className={`${btnPad} bg-primary text-primary-foreground rounded-lg btn-primary disabled:opacity-40 disabled:cursor-not-allowed`}
+          className={`${btnSize} rounded-sm border border-primary bg-primary text-primary-foreground text-[13px] font-medium hover:bg-primary-hover transition-colors ease-halo disabled:opacity-40 disabled:cursor-not-allowed`}
         >
           {t('Create')}
         </button>

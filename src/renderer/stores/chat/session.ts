@@ -3,12 +3,45 @@
  */
 import type { ChatSlice } from './internal'
 import { PULSE_READ_GRACE_PERIOD_MS, api, createEmptySessionState } from './internal'
-import type { Thought } from './internal'
+import type { Thought, PulseReadInfo } from './internal'
 
 // Store-level timer for pulseReadAt cleanup (independent of UI components)
 let _pulseCleanupTimer: ReturnType<typeof setTimeout> | null = null
 
-export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThoughts' | 'cleanupPulseReadAt' | 'resetSession' | 'setSessionError' | 'markSessionStopped' | 'reset' | 'resetSpace'> = (set, get) => ({
+type TaskStateRow = {
+  conversationId: string
+  spaceId: string
+  title: string
+  state: 'unseen' | 'read'
+  originalStatus: 'completed-unseen' | 'error' | null
+  readAt: number | null
+  kept: boolean
+}
+
+/** Splits persisted rows into the two Maps chat.store tracks locally. */
+function splitTaskStateRows(rows: TaskStateRow[]): {
+  unseenCompletions: Map<string, { spaceId: string; title: string }>
+  pulseReadAt: Map<string, PulseReadInfo>
+} {
+  const unseenCompletions = new Map<string, { spaceId: string; title: string }>()
+  const pulseReadAt = new Map<string, PulseReadInfo>()
+  for (const row of rows) {
+    if (row.state === 'unseen') {
+      unseenCompletions.set(row.conversationId, { spaceId: row.spaceId, title: row.title })
+    } else if (row.readAt !== null && row.originalStatus !== null) {
+      pulseReadAt.set(row.conversationId, {
+        readAt: row.readAt,
+        originalStatus: row.originalStatus,
+        spaceId: row.spaceId,
+        title: row.title,
+        kept: row.kept,
+      })
+    }
+  }
+  return { unseenCompletions, pulseReadAt }
+}
+
+export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThoughts' | 'cleanupPulseReadAt' | 'keepPulseItem' | 'removePulseItem' | 'loadPersistedTaskState' | 'syncPersistedTaskState' | 'resetSession' | 'setSessionError' | 'markSessionStopped' | 'reset' | 'resetSpace'> = (set, get) => ({
   answerQuestion: async (conversationId: string, answers: Record<string, string>) => {
     const session = get().sessions.get(conversationId)
     if (!session?.pendingQuestion) {
@@ -84,31 +117,106 @@ export const createSessionSlice: ChatSlice<'answerQuestion' | 'loadMessageThough
     return []
   },
 
-  // Remove expired pulse readAt entries and schedule next cleanup
+  // Remove expired pulse readAt entries and schedule next cleanup. `kept`
+  // entries (user clicked "Keep") never expire, so they're excluded from
+  // both deletion and the "when's the next check due" calculation.
   cleanupPulseReadAt: () => {
     if (_pulseCleanupTimer) { clearTimeout(_pulseCleanupTimer); _pulseCleanupTimer = null }
     const now = Date.now()
     const state = get()
     const newPulseReadAt = new Map(state.pulseReadAt)
     let changed = false
+    let earliest = Infinity
     for (const [id, info] of newPulseReadAt) {
+      if (info.kept) continue
       if (now - info.readAt >= PULSE_READ_GRACE_PERIOD_MS) {
         newPulseReadAt.delete(id)
         changed = true
+      } else {
+        earliest = Math.min(earliest, info.readAt)
       }
     }
     if (changed) {
       set({ pulseReadAt: newPulseReadAt })
     }
-    // Schedule next cleanup if entries remain
-    if (newPulseReadAt.size > 0) {
-      let earliest = Infinity
-      for (const [, info] of newPulseReadAt) {
-        earliest = Math.min(earliest, info.readAt)
-      }
+    // Schedule next cleanup if any non-kept entries remain
+    if (earliest !== Infinity) {
       const delay = Math.max(0, earliest + PULSE_READ_GRACE_PERIOD_MS - now)
       _pulseCleanupTimer = setTimeout(() => get().cleanupPulseReadAt(), delay)
     }
+  },
+
+  // "Keep" — cancel the auto-removal timer, the item stays in the pulse
+  // list until explicitly removed or re-opened. Does not touch the
+  // underlying conversation/task, only this UI-side bookkeeping entry.
+  keepPulseItem: (conversationId: string) => {
+    set((state) => {
+      const info = state.pulseReadAt.get(conversationId)
+      if (!info || info.kept) return state
+      const newPulseReadAt = new Map(state.pulseReadAt)
+      newPulseReadAt.set(conversationId, { ...info, kept: true })
+      return { pulseReadAt: newPulseReadAt }
+    })
+    api.taskSetKept(conversationId, true).catch(err =>
+      console.error('[ChatStore] taskSetKept error:', err))
+  },
+
+  // "Remove" — hide immediately. Only clears this UI-side grace-period
+  // entry; the conversation and its history are untouched.
+  removePulseItem: (conversationId: string) => {
+    set((state) => {
+      if (!state.pulseReadAt.has(conversationId)) return state
+      const newPulseReadAt = new Map(state.pulseReadAt)
+      newPulseReadAt.delete(conversationId)
+      return { pulseReadAt: newPulseReadAt }
+    })
+    api.taskRemoveState(conversationId).catch(err =>
+      console.error('[ChatStore] taskRemoveState error:', err))
+  },
+
+  // Cold-start hydration from the persisted task-state table (platform/task-state),
+  // so completed-but-unseen conversations and in-progress grace periods survive
+  // an app restart instead of only living in this renderer-memory Map.
+  //
+  // Merge-only: never overwrites an entry already present locally, since by
+  // the time this resolves the user may already have generated fresher local
+  // state (e.g. selected a conversation) that must not be clobbered.
+  loadPersistedTaskState: async () => {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const res = await api.taskListState()
+      if (res.success) {
+        const { unseenCompletions: fetched, pulseReadAt: fetchedRead } = splitTaskStateRows((res.data ?? []) as TaskStateRow[])
+
+        set((state) => {
+          const unseenCompletions = new Map(state.unseenCompletions)
+          const pulseReadAt = new Map(state.pulseReadAt)
+          for (const [id, info] of fetched) {
+            if (!unseenCompletions.has(id) && !pulseReadAt.has(id)) unseenCompletions.set(id, info)
+          }
+          for (const [id, info] of fetchedRead) {
+            if (!unseenCompletions.has(id) && !pulseReadAt.has(id)) pulseReadAt.set(id, info)
+          }
+          return { unseenCompletions, pulseReadAt }
+        })
+        // Purges any rows that already expired while the app was closed, and
+        // (re)schedules the timer for the rest — same self-healing pass the
+        // 60s in-session timer already runs on every tick.
+        get().cleanupPulseReadAt()
+        return
+      }
+      await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)))
+    }
+    console.error('[ChatStore] loadPersistedTaskState: giving up after 5 attempts')
+  },
+
+  // Full resync triggered by a `task:state_changed` push — see internal.ts
+  // for why this replaces rather than merges.
+  syncPersistedTaskState: async () => {
+    const res = await api.taskListState()
+    if (!res.success) return
+    const { unseenCompletions, pulseReadAt } = splitTaskStateRows((res.data ?? []) as TaskStateRow[])
+    set({ unseenCompletions, pulseReadAt })
+    get().cleanupPulseReadAt()
   },
 
   // Reset a specific session to empty state (e.g., clear app chat, before new send)

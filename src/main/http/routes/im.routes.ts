@@ -14,6 +14,7 @@ import {
   getImChannelManager,
   getImSessionRegistry,
   getServiceConfig,
+  renameChatSession,
   saveIlinkToken,
   wecomGenerateScode,
   wecomPollResult,
@@ -221,6 +222,37 @@ export function registerImRoutes(app: Express): void {
     }
   })
 
+  // POST /api/im-channels/set-instance-app — rebind an instance to a digital human
+  app.post('/api/im-channels/set-instance-app', async (req: Request, res: Response) => {
+    try {
+      const { setInstanceApp } = await import('../../apps/runtime/im-channels/binding')
+      const { instanceId, appId } = req.body ?? {}
+      res.json(setInstanceApp(String(instanceId ?? ''), String(appId ?? '')))
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/im-channels/create-instance — add an instance already bound to a digital human
+  app.post('/api/im-channels/create-instance', async (req: Request, res: Response) => {
+    try {
+      const { createInstance } = await import('../../apps/runtime/im-channels/binding')
+      res.json(createInstance(req.body?.instance))
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // POST /api/im-channels/unbind-instance — detach an instance from its digital human
+  app.post('/api/im-channels/unbind-instance', async (req: Request, res: Response) => {
+    try {
+      const { unbindInstance } = await import('../../apps/runtime/im-channels/binding')
+      res.json(unbindInstance(String(req.body?.instanceId ?? '')))
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // GET /api/im-channels/permission-defaults — product-level permission defaults
   app.get('/api/im-channels/permission-defaults', async (req: Request, res: Response) => {
     try {
@@ -400,19 +432,13 @@ export function registerImRoutes(app: Express): void {
   // POST /api/im-sessions/set-custom-name — set custom display name for a session
   app.post('/api/im-sessions/set-custom-name', async (req: Request, res: Response) => {
     try {
-      const registry = getImSessionRegistry()
-      if (!registry) {
-        res.status(503).json({ success: false, error: 'IM session registry not initialized' })
-        return
-      }
       const { appId, channel, chatId, name } = req.body as {
         appId: string
         channel: string
         chatId: string
         name: string
       }
-      const updated = registry.setCustomName(appId, channel, chatId, name)
-      if (!updated) {
+      if (!renameChatSession(appId, channel, chatId, name)) {
         res.status(404).json({ success: false, error: 'Session not found' })
         return
       }

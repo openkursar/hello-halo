@@ -57,10 +57,11 @@ const { registry, createLocalSession } = vi.hoisted(() => {
     displayName: '',
     proactive: false,
     lastActiveAt: 0,
+    messageCount: 0,
   }))
   return {
     createLocalSession: _createLocalSession,
-    registry: { createLocalSession: _createLocalSession },
+    registry: { createLocalSession: _createLocalSession, resetActivity: vi.fn() },
   }
 })
 

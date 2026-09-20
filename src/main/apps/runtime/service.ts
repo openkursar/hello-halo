@@ -26,6 +26,7 @@ import type {
   AppRuntimeDeps,
   ActivationState,
   AutomationAppState,
+  AppOverviewEntry,
   AppRunResult,
   AppRunStartInfo,
   TriggerContext,
@@ -35,6 +36,9 @@ import type {
   PendingDecisionQuery,
   ActivityEntry,
   AutomationRun,
+  AutomationRunWithSummary,
+  RunQueryOptions,
+  RunStats,
   RunStartedHandler,
   RunFinishedHandler,
   RunStartedEvent,
@@ -557,6 +561,17 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
         // run (after DB row insertion, before AI session build). This keeps
         // the started/finished event pair semantically meaningful for
         // dashboards that count in-flight runs.
+        //
+        // Also re-broadcast app status here: the broadcast above (line ~394)
+        // fires before this run's DB row exists, so getAppState()'s
+        // runningRunId lookup (keyed off the latest DB run) still points at
+        // the *previous* run and comes back empty. The Activity Thread's
+        // live "Working..." card requires both status:'running' AND
+        // runningRunId, so without this second broadcast it never appears —
+        // the UI only catches up once the run finishes and the finally-block
+        // broadcast fires. Continue/escalation-followup don't need this
+        // because they reopen an existing DB row (with the same runId)
+        // before their first broadcast.
         onRunStarted: ({ runId, sessionKey, startedAt }) => {
           executingRunId = runId
           activeRunControllers.set(runId, abortController)
@@ -567,6 +582,7 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
             triggerType: trigger.type,
             startedAt,
           })
+          broadcastAppStatus(app.id)
           options?.onStarted?.({ runId, sessionKey, startedAt })
         },
       })
@@ -1246,7 +1262,9 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
       const counts = store.getDecisionCounts(appId)
       const automaticEnabled = app.status === 'active' || app.status === 'waiting_user'
       status = isRunning ? 'running' : isQueued || counts.continuations > 0 ? 'queued'
-        : counts.pending > 0 ? 'waiting_user' : automaticEnabled ? 'idle' : app.status === 'paused' ? 'paused' : 'error'
+        : counts.pending > 0 ? 'waiting_user' : app.status === 'needs_login' ? 'needs_login'
+        : automaticEnabled ? 'idle' : app.status === 'paused' ? 'paused' : 'error'
+
       const state: AutomationAppState = {
         status,
         automaticEnabled,
@@ -1467,6 +1485,35 @@ export function createAppRuntimeService(deps: AppRuntimeDeps): AppRuntimeService
 
     getRunsForApp(appId: string, limit?: number): AutomationRun[] {
       return store.getRunsForApp(appId, limit)
+    },
+
+    getRunsForAppWithSummary(appId: string, options?: RunQueryOptions): AutomationRunWithSummary[] {
+      return store.getRunsForAppWithSummary(appId, options)
+    },
+
+    getRunStats(appId: string, window?: number): RunStats {
+      return store.getRunStats(appId, window)
+    },
+
+    getOverview(spaceId?: string): AppOverviewEntry[] {
+      const filter = spaceId !== undefined ? { spaceId, type: 'automation' as const } : { type: 'automation' as const }
+      const apps = appManager.listApps(filter).filter(a => a.status !== 'uninstalled')
+
+      return apps.map((app): AppOverviewEntry => {
+        const state = service.getAppState(app.id)
+
+        const latestEntry = store.getLatestOutputEntry(app.id)
+        const latestSummary = latestEntry
+          ? { type: latestEntry.type, summary: latestEntry.content.summary, ts: latestEntry.ts }
+          : undefined
+
+        return {
+          appId: app.id,
+          state,
+          latestSummary,
+          recentRunStatuses: store.getRecentRunStatuses(app.id),
+        }
+      })
     },
 
     // ── Lifecycle ───────────────────────────────────

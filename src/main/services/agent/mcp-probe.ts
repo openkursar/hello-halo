@@ -169,6 +169,7 @@ function statusPatchFromResult(result: McpProbeResult): McpProbeStatusPatch {
     ...(result.tools ? { tools: result.tools } : {}),
     ...(result.serverInfo ? { serverInfo: result.serverInfo } : {}),
     ...(result.errorDetail ? { errorDetail: result.errorDetail } : {}),
+    latencyMs: result.latencyMs,
     lastCheckedAt: Date.now()
   }
 }

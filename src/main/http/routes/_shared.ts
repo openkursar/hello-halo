@@ -13,6 +13,7 @@ import { Readable } from 'stream'
 import * as agentController from '../../controllers/agent.controller'
 import * as spaceController from '../../controllers/space.controller'
 import * as conversationController from '../../controllers/conversation.controller'
+import * as taskController from '../../controllers/task.controller'
 import * as configController from '../../controllers/config.controller'
 import * as tlonController from '../../controllers/tlon.controller'
 import { getEnabledAuthProviderConfigs, getAISourceManager } from '../../services/ai-sources'
@@ -38,7 +39,7 @@ import { getSpace, getAllSpacePaths } from '../../services/space.service'
 import { getTlonRoot } from '../../services/tlon'
 import { getAppManager } from '../../apps/manager'
 import { AppAlreadyInstalledError, McpCommandBlockedError } from '../../apps/manager/errors'
-import { getAppRuntime, getImChannelManager, sendAppChatMessage, stopAppChat, stopAppChatConversation, isAppChatGenerating, isAppChatConversationGenerating, loadAppChatMessages, loadImChatMessages, loadChatMessagesForConversation, getAppChatSessionState, getAppChatConversationId, clearAppChat, clearImSession, stopImSession, restartAppChat, createNativeChatSession, forkNativeChatSession, deleteNativeChatSession, dispatchInboundMessage } from '../../apps/runtime'
+import { getAppRuntime, getImChannelManager, sendAppChatMessage, stopAppChat, stopAppChatConversation, isAppChatGenerating, isAppChatConversationGenerating, loadAppChatMessages, loadImChatMessages, loadChatMessagesForConversation, getAppChatSessionState, getAppChatConversationId, clearAppChat, clearImSession, stopImSession, restartAppChat, createNativeChatSession, forkNativeChatSession, deleteNativeChatSession, renameChatSession, dispatchInboundMessage } from '../../apps/runtime'
 import { buildDefaultAssistantSpec } from '../../apps/runtime/im-channels/wecom-bot-default-spec'
 import type { AppListFilter, UninstallOptions, InstalledApp } from '../../apps/manager'
 import type { ActivityQueryOptions, EscalationResponse, AppChatRequest } from '../../apps/runtime'
@@ -231,6 +232,7 @@ export {
   clearAllTokenCaches,
   clearAppChat,
   clearImSession,
+  renameChatSession,
   createNativeChatSession,
   forkNativeChatSession,
   deleteNativeChatSession,
@@ -300,6 +302,7 @@ export {
   statSync,
   stopAppChat,
   storeController,
+  taskController,
   testChannel,
   tlonController,
   trashArtifact,

@@ -16,7 +16,7 @@ import { Package, Loader2 } from 'lucide-react'
 
 /**
  * `embedded` drops the grid's own outer padding for use inside a discover
- * section that already provides `px-4 pt-4` + a section label, so the
+ * section that already provides `px-6 sm:px-10 pt-4` + a section label, so the
  * title-to-cards spacing matches the other discover blocks.
  */
 export function StoreGrid({ embedded = false }: { embedded?: boolean }) {
@@ -47,7 +47,7 @@ export function StoreGrid({ embedded = false }: { embedded?: boolean }) {
 
   return (
     <div className="flex flex-col">
-      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 ${embedded ? '' : 'px-4 pb-4'}`}>
+      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 ${embedded ? '' : 'px-6 sm:px-10 pb-4'}`}>
         {storeApps.map(entry => (
           <StoreCard
             key={entry.slug}

@@ -268,7 +268,7 @@ function formatInstallError(
   if (err instanceof AppApiError && err.code === 'ALREADY_INSTALLED') {
     return context === 'skill'
       ? t('A skill with the same name already exists. Uninstall it first or rename your skill before retrying.')
-      : t('A digital human with the same name already exists in this space. Uninstall it first or rename your digital human before retrying.')
+      : t('A digital human with the same name already exists in this workspace. Uninstall it first or rename your digital human before retrying.')
   }
   if (err instanceof Error) return err.message
   return t('Installation failed')
@@ -719,7 +719,7 @@ export function AppInstallDialog({ onClose, onInstalled }: AppInstallDialogProps
               <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-primary/5 border border-primary/10">
                 <Sparkles className="w-3.5 h-3.5 text-primary mt-0.5 flex-shrink-0" />
                 <p className="text-xs text-muted-foreground">
-                  {t('You can also tell AI to create one for you through natural language in any space chat.')}
+                  {t('You can also tell AI to create one for you through natural language in any workspace chat.')}
                 </p>
               </div>
 
@@ -860,7 +860,7 @@ export function AppInstallDialog({ onClose, onInstalled }: AppInstallDialogProps
                 onChange={e => setSelectedSpaceId(e.target.value)}
                 className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
               >
-                <option value="" disabled>{t('Select a space')}</option>
+                <option value="" disabled>{t('Select a workspace')}</option>
                 {allSpaces.map(s => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
@@ -888,7 +888,7 @@ export function AppInstallDialog({ onClose, onInstalled }: AppInstallDialogProps
                   }`}
                 >
                   <FolderOpen className="w-3.5 h-3.5" />
-                  <span>{t('New Space')}</span>
+                  <span>{t('New Workspace')}</span>
                   <ChevronDown
                     className={`w-3 h-3 transition-transform duration-200 ${showCreateSpaceForm ? 'rotate-180' : ''}`}
                   />
@@ -1153,7 +1153,7 @@ function ImportTab({
             onChange={e => onSelectedSpaceChange(e.target.value)}
             className="w-full px-3 py-2 text-sm bg-secondary border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
           >
-            <option value="" disabled>{t('Select a space')}</option>
+            <option value="" disabled>{t('Select a workspace')}</option>
             {allSpaces.map(s => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}

@@ -15,6 +15,7 @@ import { api } from '../../api'
 import { useTlonStore } from '../../stores/tlon.store'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
 import { IngestProgress } from './IngestProgress'
+import { useCanvasStore } from '../../stores/canvas.store'
 import {
   FileText,
   CheckCircle2,
@@ -28,6 +29,7 @@ import {
   Sparkles,
   Loader2,
   ChevronDown,
+  Eye,
 } from 'lucide-react'
 import type { KnowledgeBaseEntry, RawFileStatus } from '../../../shared/types/tlon'
 
@@ -256,8 +258,22 @@ function FileRow({
 }) {
   const { t } = useTranslation()
   const reason = stateReason(file, t)
+  const { openFile } = useCanvasStore()
+  const isLearned = file.state === 'learned'
+
+  const handleClick = () => {
+    if (isLearned) {
+      openFile(file.openPath, file.name)
+    }
+  }
+
   return (
-    <div className="group flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card">
+    <div
+      onClick={handleClick}
+      className={`group flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card ${
+        isLearned ? 'cursor-pointer hover:bg-secondary transition-colors' : ''
+      }`}
+    >
       <StatusIcon file={file} />
       <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
       <div className="min-w-0 flex-1">
@@ -280,6 +296,9 @@ function FileRow({
       <span className="text-[11px] text-muted-foreground tabular-nums flex-shrink-0">
         {formatSize(file.size)}
       </span>
+      {isLearned && (
+        <Eye className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+      )}
       {file.source === 'linked' ? (
         // Watched-folder files live outside the KB — remove the folder in
         // Settings instead of deleting individual files here.
@@ -291,7 +310,7 @@ function FileRow({
         </span>
       ) : (
         <button
-          onClick={() => onRemove(file)}
+          onClick={(e) => { e.stopPropagation(); onRemove(file) }}
           className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/20 transition-all flex-shrink-0"
           title={t('Remove')}
         >

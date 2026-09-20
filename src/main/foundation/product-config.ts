@@ -12,7 +12,7 @@
  * `services/security-policy.ts`; both read their slice from here.
  */
 
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { app } from 'electron'
 import { type AuthProviderConfig } from '../../shared/types'
@@ -409,6 +409,25 @@ export interface ProductConfig {
   federation?: {
     gatewayUrl?: string
   }
+
+  /**
+   * Custom system tray icon directory (optional), relative to product.json
+   * (same resolution rule as `authProviders[].path` — see
+   * `resolveProviderPath` in auth-loader.ts). Lets a brand build ship its
+   * own tray icon set without the core tray code knowing any vendor names.
+   * Omitted → falls back to the built-in `resources/tray`.
+   */
+  trayIconDir?: string
+
+  /**
+   * Path to the macOS (1024px, Apple safe-area) app icon PNG, relative to
+   * product.json. Only used to preview the correct Dock icon in unpackaged
+   * dev builds — packaged builds get their icon baked in via electron-builder
+   * (`mac.icon` in package.json#build / the vendor's electron-builder overlay)
+   * and ignore this. Omitted → falls back to the built-in
+   * `resources/icon-macos-1024.png`.
+   */
+  macIcon?: string
 }
 
 // ============================================================================
@@ -582,6 +601,35 @@ export function getProductFederationGatewayUrl(): string | undefined {
  */
 export function getAnalyticsConfig(): ProductConfig['analytics'] | undefined {
   return loadProductConfig().analytics
+}
+
+/**
+ * Resolve the system tray icon directory for the active build.
+ *
+ * `trayIconDir`, when set, is resolved relative to product.json's own
+ * directory (same rule `resolveProviderPath` uses for `authProviders[].path`)
+ * so it works both unpacked (dev) and inside app.asar (packaged). Falls back
+ * to the built-in `resources/tray` when the field is absent.
+ */
+export function getTrayIconDir(): string {
+  const configured = loadProductConfig().trayIconDir?.trim()
+  const configDir = dirname(getProductConfigPath())
+  if (!configured) return join(configDir, 'resources', 'tray')
+  const cleanPath = configured.startsWith('./') ? configured.slice(2) : configured
+  return join(configDir, cleanPath)
+}
+
+/**
+ * Resolve the macOS app icon path used to preview the Dock icon in
+ * unpackaged dev builds (see `macIcon` on ProductConfig). Same resolution
+ * rule as `getTrayIconDir`.
+ */
+export function getMacIconPath(): string {
+  const configured = loadProductConfig().macIcon?.trim()
+  const configDir = dirname(getProductConfigPath())
+  if (!configured) return join(configDir, 'resources', 'icon-macos-1024.png')
+  const cleanPath = configured.startsWith('./') ? configured.slice(2) : configured
+  return join(configDir, cleanPath)
 }
 
 /**

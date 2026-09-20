@@ -23,6 +23,7 @@ import { api } from '../../api'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { getCapabilityDraft, saveCapabilityDraft, clearCapabilityDraft } from '../../stores/capability-drafts'
 import type { McpServerConfig } from '../../../shared/apps/spec-types'
+import { GLOBAL_SCOPE } from '../../../shared/apps/scope'
 import {
   internalMcpServerToJsonConfig,
   keyValueLinesToRecord,
@@ -30,8 +31,6 @@ import {
   recordToKeyValueLines,
   type NamedMcpServerConfig,
 } from '../../utils/mcpConfigCompat'
-
-const GLOBAL_SCOPE = '__global__'
 
 type AddType = 'mcp' | 'skill' | 'file'
 

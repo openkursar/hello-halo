@@ -86,7 +86,7 @@ export function StoreUpdateDialog({
     {
       Icon: Copy,
       title: t('Keep current, install as a new copy'),
-      description: t('Installs the new version as a separate instance — pick a different space so the current one is left untouched.'),
+      description: t('Installs the new version as a separate instance — pick a different workspace so the current one is left untouched.'),
       onClick: onInstallCopy,
       accent: 'muted',
     },

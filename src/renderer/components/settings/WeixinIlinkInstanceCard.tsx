@@ -49,6 +49,8 @@ export interface WeixinIlinkInstanceCardProps {
   isExpanded: boolean
   onToggle: () => void
   onChange: (instance: ImChannelInstanceConfig) => void
+  /** Rebinding goes through main so its validation applies to both binding surfaces. */
+  onRebind: (appId: string) => void
   onDelete: () => void
 }
 
@@ -89,6 +91,7 @@ export function WeixinIlinkInstanceCard({
   isExpanded,
   onToggle,
   onChange,
+  onRebind,
   onDelete,
 }: WeixinIlinkInstanceCardProps) {
   const { t } = useTranslation()
@@ -205,9 +208,12 @@ export function WeixinIlinkInstanceCard({
     })
   }, [stopPolling, instance])
 
+  // Same split as MessageChannelsSection: a digital-human target is validated by
+  // main's rebind; a team target has no validator yet and takes a config write.
   const handleTargetChange = useCallback((target: ChannelBackendValue) => {
-    onChange({ ...instance, ...target })
-  }, [instance, onChange])
+    if (target.teamId) onChange({ ...instance, ...target })
+    else onRebind(target.appId)
+  }, [instance, onChange, onRebind])
 
   const statusDot = !isEnabled
     ? 'bg-muted-foreground/30'

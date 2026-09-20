@@ -20,6 +20,7 @@ import { createConversationsSlice } from './chat/conversations'
 import { createMessagingSlice } from './chat/messaging'
 import { createAgentEventsSlice } from './chat/agent-events'
 import { createSessionSlice } from './chat/session'
+import { createAppChatSelectionSlice } from './chat/app-chat-selection'
 
 export const useChatStore = create<ChatState>((set, get) => ({
   spaceStates: new Map<string, SpaceState>(),
@@ -30,10 +31,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pulseReadAt: new Map<string, { readAt: number; originalStatus: 'completed-unseen' | 'error'; spaceId: string; title: string }>(),
   currentSpaceId: null,
   pendingPulseNavigation: null,
+  pendingAppChatNavigation: null,
   pendingComposerInput: null,
   artifacts: [],
   isLoading: false,
   isLoadingConversation: false,
+  composerDrafts: new Map<string, string>(),
   _pulseItems: [],
   _pulseCount: 0,
 
@@ -42,6 +45,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   ...createMessagingSlice(set, get),
   ...createAgentEventsSlice(set, get),
   ...createSessionSlice(set, get),
+  ...createAppChatSelectionSlice(set, get),
 }))
 
 // ==========================================
@@ -78,17 +82,21 @@ function _computePulseItems(state: ChatState): PulseItem[] {
     return spaceId === 'halo-temp' ? 'Halo' : spaceId
   }
 
+  const findMeta = (conversationId: string): ConversationMeta | undefined => {
+    for (const [, ss] of state.spaceStates) {
+      const meta = ss.conversations.find(c => c.id === conversationId)
+      if (meta) return meta
+    }
+    return undefined
+  }
+
   // 1. Active sessions
   for (const [conversationId, session] of state.sessions) {
     const hasUnseen = state.unseenCompletions.has(conversationId)
     const status = deriveTaskStatus(session, hasUnseen)
     if (status === 'idle') continue
 
-    let meta: ConversationMeta | undefined
-    for (const [, ss] of state.spaceStates) {
-      meta = ss.conversations.find(c => c.id === conversationId)
-      if (meta) break
-    }
+    const meta = findMeta(conversationId)
     if (!meta) continue
 
     items.push({
@@ -98,7 +106,8 @@ function _computePulseItems(state: ChatState): PulseItem[] {
       title: meta.title,
       status,
       starred: !!meta.starred,
-      updatedAt: meta.updatedAt
+      updatedAt: meta.updatedAt,
+      preview: meta.preview
     })
     addedIds.add(conversationId)
   }
@@ -106,11 +115,7 @@ function _computePulseItems(state: ChatState): PulseItem[] {
   // 2. Unseen completions
   for (const [conversationId, info] of state.unseenCompletions) {
     if (addedIds.has(conversationId)) continue
-    let meta: ConversationMeta | undefined
-    for (const [, ss] of state.spaceStates) {
-      meta = ss.conversations.find(c => c.id === conversationId)
-      if (meta) break
-    }
+    const meta = findMeta(conversationId)
     items.push({
       conversationId,
       spaceId: info.spaceId,
@@ -118,7 +123,8 @@ function _computePulseItems(state: ChatState): PulseItem[] {
       title: meta?.title || info.title,
       status: 'completed-unseen',
       starred: !!meta?.starred,
-      updatedAt: meta?.updatedAt || new Date().toISOString()
+      updatedAt: meta?.updatedAt || new Date().toISOString(),
+      preview: meta?.preview
     })
     addedIds.add(conversationId)
   }
@@ -134,17 +140,18 @@ function _computePulseItems(state: ChatState): PulseItem[] {
         title: conv.title,
         status: 'idle',
         starred: true,
-        updatedAt: conv.updatedAt
+        updatedAt: conv.updatedAt,
+        preview: conv.preview
       })
       addedIds.add(conv.id)
     }
   }
 
-  // 4. Read items in grace period
+  // 4. Read items in grace period (kept items never expire)
   const now = Date.now()
   for (const [conversationId, info] of state.pulseReadAt) {
     if (addedIds.has(conversationId)) continue
-    if (now - info.readAt >= PULSE_READ_GRACE_PERIOD_MS) continue
+    if (!info.kept && now - info.readAt >= PULSE_READ_GRACE_PERIOD_MS) continue
     items.push({
       conversationId,
       spaceId: info.spaceId,
@@ -153,7 +160,9 @@ function _computePulseItems(state: ChatState): PulseItem[] {
       status: info.originalStatus,
       starred: false,
       updatedAt: new Date(info.readAt).toISOString(),
-      readAt: info.readAt
+      readAt: info.readAt,
+      kept: info.kept,
+      preview: findMeta(conversationId)?.preview
     })
     addedIds.add(conversationId)
   }
@@ -210,7 +219,8 @@ function _computePulseCount(state: ChatState): number {
 
   const now = Date.now()
   for (const [conversationId, info] of state.pulseReadAt) {
-    if (!countedIds.has(conversationId) && now - info.readAt < PULSE_READ_GRACE_PERIOD_MS) {
+    if (countedIds.has(conversationId)) continue
+    if (info.kept || now - info.readAt < PULSE_READ_GRACE_PERIOD_MS) {
       count++
       countedIds.add(conversationId)
     }

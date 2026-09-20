@@ -147,5 +147,8 @@ export const MODULE: RouteModuleMeta = {
       impact: 'reversible',
       notes: '404 if no matching session exists yet.',
     },
+    'POST /api/im-channels/set-instance-app': { expose: 'internal' },
+    'POST /api/im-channels/create-instance': { expose: 'internal' },
+    'POST /api/im-channels/unbind-instance': { expose: 'internal' },
   },
 }

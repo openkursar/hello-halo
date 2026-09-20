@@ -5,13 +5,29 @@
 import { create } from 'zustand'
 import { api } from '../api'
 import { useChatStore } from './chat.store'
-import type { Space, CreateSpaceInput, SpacePreferences } from '../types'
+import type { Space, CreateSpaceInput, SpacePreferences, SpaceSummary, ArtifactRailTab } from '../types'
+
+/** A summary is a filesystem scan per workspace; the selector dropdown asks
+ * for one every time it opens, so repeat opens reuse the last result. */
+const SUMMARY_TTL_MS = 30_000
+let lastSummariesLoad = 0
 
 interface SpaceState {
   // Spaces data
   haloSpace: Space | null
   spaces: Space[]
   currentSpace: Space | null
+
+  // Asset counts per workspace, keyed by spaceId. Loaded on demand by the
+  // surfaces that show them (management cards, selector dropdown) — building
+  // them costs a filesystem scan per workspace.
+  summaries: Record<string, SpaceSummary>
+  summariesLoading: boolean
+
+  /** One-shot: a workspace card's asset chip asked to land on a specific
+   * rail tab. SpacePage consumes and clears this after switching space. */
+  pendingArtifactRailTab: ArtifactRailTab | null
+  setPendingArtifactRailTab: (tab: ArtifactRailTab | null) => void
 
   // Loading states
   isLoading: boolean
@@ -21,11 +37,27 @@ interface SpaceState {
   loadSpaces: () => Promise<void>
   loadHaloSpace: () => Promise<void>
   setCurrentSpace: (space: Space | null) => void
+  /**
+   * Pick the space a caller with no space context should land on: the real
+   * space with the most recent activity, or halo-temp if none exist yet.
+   * Loads spaces/haloSpace first if needed. Used at startup and whenever
+   * `currentSpace` is cleared out from under a caller (e.g. deleting the
+   * active space) — kept here because the selection rule depends on space
+   * domain knowledge (halo-temp is excluded from the activity comparison
+   * since it re-stamps `updatedAt` to "now" every session; `listSpaces()`
+   * sorts by user-defined `sortOrder` once any space has one, so the first
+   * array entry is not reliably "most recently used").
+   */
+  selectDefaultSpace: () => Promise<Space | null>
   createSpace: (input: CreateSpaceInput) => Promise<Space | null>
-  updateSpace: (spaceId: string, updates: { name?: string; icon?: string }) => Promise<Space | null>
+  updateSpace: (spaceId: string, updates: { name?: string; icon?: string; color?: string }) => Promise<Space | null>
   deleteSpace: (spaceId: string) => Promise<boolean>
+  /** Remove an unreachable space's registry entry — does not touch disk. */
+  forgetSpace: (spaceId: string) => Promise<boolean>
   openSpaceFolder: (spaceId: string) => Promise<void>
   refreshCurrentSpace: () => Promise<void>
+  /** Reuses the last result within SUMMARY_TTL_MS unless `force`. */
+  loadSpaceSummaries: (force?: boolean) => Promise<void>
 
   // Preferences actions
   updateSpacePreferences: (spaceId: string, preferences: Partial<SpacePreferences>) => Promise<void>
@@ -40,6 +72,10 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
   haloSpace: null,
   spaces: [],
   currentSpace: null,
+  summaries: {},
+  summariesLoading: false,
+  pendingArtifactRailTab: null,
+  setPendingArtifactRailTab: (tab) => set({ pendingArtifactRailTab: tab }),
   isLoading: false,
   error: null,
 
@@ -84,6 +120,19 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
   // Set current space
   setCurrentSpace: (space) => {
     set({ currentSpace: space })
+  },
+
+  selectDefaultSpace: async () => {
+    await get().loadSpaces()
+    const { spaces, haloSpace } = get()
+
+    if (spaces.length === 0) return haloSpace
+
+    return spaces.reduce((latest, s) => {
+      const sTime = new Date(s.lastActiveAt || s.updatedAt).getTime()
+      const latestTime = new Date(latest.lastActiveAt || latest.updatedAt).getTime()
+      return sTime > latestTime ? s : latest
+    })
   },
 
   // Create new space
@@ -157,10 +206,15 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
           spaces: state.spaces.filter((s) => s.id !== spaceId)
         }))
 
-        // Clear current space if it was deleted
+        // If the deleted space was active, fall back to another space
+        // immediately rather than leaving `currentSpace` null — with no
+        // HomePage to escape to, that would strand the user on a
+        // permanent "no space selected" screen instead of just this tab.
         const currentSpace = get().currentSpace
         if (currentSpace?.id === spaceId) {
           set({ currentSpace: null })
+          const fallback = await get().selectDefaultSpace()
+          if (fallback) set({ currentSpace: fallback })
         }
 
         // Clean up chat store state for the deleted space
@@ -173,6 +227,26 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
       return false
     } catch (error) {
       console.error('Failed to delete space:', error)
+      return false
+    }
+  },
+
+  // Remove an unreachable space's registry entry (does not touch disk)
+  forgetSpace: async (spaceId) => {
+    try {
+      const response = await api.forgetSpace(spaceId)
+
+      if (response.success) {
+        set((state) => ({
+          spaces: state.spaces.filter((s) => s.id !== spaceId)
+        }))
+        useChatStore.getState().resetSpace(spaceId)
+        return true
+      }
+
+      return false
+    } catch (error) {
+      console.error('Failed to forget space:', error)
       return false
     }
   },
@@ -291,6 +365,27 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     } catch (error) {
       console.error('[SpaceStore] reorderSpaces error:', error)
       set({ spaces: prevSpaces, error: 'Failed to reorder spaces' })
+    }
+  },
+
+  loadSpaceSummaries: async (force = false) => {
+    const now = Date.now()
+    if (!force && now - lastSummariesLoad < SUMMARY_TTL_MS) return
+    lastSummariesLoad = now
+    try {
+      set({ summariesLoading: true })
+      const response = await api.listSpaceSummaries()
+      if (response.success && Array.isArray(response.data)) {
+        const summaries: Record<string, SpaceSummary> = {}
+        for (const summary of response.data as SpaceSummary[]) {
+          summaries[summary.spaceId] = summary
+        }
+        set({ summaries })
+      }
+    } catch (error) {
+      console.error('[SpaceStore] loadSpaceSummaries error:', error)
+    } finally {
+      set({ summariesLoading: false })
     }
   }
 }))

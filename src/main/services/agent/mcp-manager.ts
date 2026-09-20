@@ -150,6 +150,7 @@ export interface McpProbeStatusPatch {
   serverInfo?: McpServerStatusInfo['serverInfo']
   errorDetail?: string
   lastCheckedAt?: number
+  latencyMs?: number
 }
 
 /**

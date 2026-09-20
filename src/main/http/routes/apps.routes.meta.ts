@@ -420,5 +420,10 @@ export const MODULE: RouteModuleMeta = {
       ].join('\n'),
       impact: 'irreversible',
     },
+    'GET /api/apps/overview': { expose: 'internal' },
+    'GET /api/spaces/:spaceId/available-skills': { expose: 'internal' },
+    'GET /api/spaces/:spaceId/effective-mcp-apps': { expose: 'internal' },
+    'GET /api/apps/:appId/runs': { expose: 'internal' },
+    'GET /api/apps/:appId/run-stats': { expose: 'internal' },
   },
 }

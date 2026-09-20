@@ -108,7 +108,7 @@ net.setDefaultAutoSelectFamily(false)
 // Executed after page load to avoid blocking startup
 // Note: fix-path is ESM-only, loaded dynamically to support both CJS and ESM builds
 
-import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, Menu, crashReporter } from 'electron'
+import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, Menu, crashReporter, nativeImage } from 'electron'
 import open from 'open'
 
 // GPU compatibility: Disable hardware acceleration on Windows to prevent blank window issues
@@ -132,7 +132,7 @@ app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
 // Must be called before app.whenReady() and requestSingleInstanceLock() so that
 // each build variant (e.g. Halo vs Halo-Enterprise) uses its own userData directory.
 // This isolates cookies, sessions, localStorage, Claude SDK config, etc.
-import { getDataFolderName, DEFAULT_DATA_FOLDER_NAME } from './foundation/product-config'
+import { getDataFolderName, DEFAULT_DATA_FOLDER_NAME, getMacIconPath } from './foundation/product-config'
 import { isHostnameTrustedForCertificates } from './services/browser-policy.service'
 import { join as joinPath } from 'path'
 import { isolateLogPath, logFatal } from './foundation/logging'
@@ -419,15 +419,28 @@ function createWindow(): void {
     // macOS: hiddenInset for traffic lights in content area
     // Windows/Linux: hidden + titleBarOverlay for native buttons overlay
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
-    // Fine-tuned for visual alignment with 40px header
-    trafficLightPosition: isMac ? { x: 15, y: 11 } : undefined,
-    // Windows/Linux: native window controls overlay in content area
+    // Vertically centered on the dedicated clearance strip rendered above
+    // the whole NavRail+Header row (MAC_TRAFFIC_LIGHT_CLEARANCE_PX in
+    // App.tsx). y is the top of the traffic-light button group, not its
+    // center — the true group height isn't documented/queryable, so this is
+    // tuned empirically rather than derived from a formula. That strip (not
+    // NavRail) compensates for zoom via --display-scale.
+    trafficLightPosition: isMac ? { x: 8, y: 6 } : undefined,
+    // Windows/Linux: native window controls overlay in content area.
+    // Matches globals.css's dark-theme `--background`/`--foreground`
+    // (the default theme) exactly, for the brief window before the renderer
+    // loads and calls setTitleBarOverlay with the live (possibly light)
+    // theme's actual tokens — see App.tsx's applyTheme.
     titleBarOverlay: !isMac ? {
-      color: '#0a0a0a',
-      symbolColor: '#ffffff',
-      height: 40
+      color: '#0c0e12',
+      symbolColor: '#e7e9ee',
+      // One pixel short of Header's actual 48px height (h-12): tall enough
+      // to vertically center the caption buttons in it, but leaves the
+      // header's own 1px bottom border un-overpainted by the overlay's
+      // opaque fill so it doesn't visually vanish under the buttons.
+      height: 47
     } : undefined,
-    backgroundColor: '#0a0a0a',
+    backgroundColor: '#0c0e12',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
@@ -543,6 +556,14 @@ app.whenReady().then(async () => {
 
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.halo.app')
+
+  // Preview the brand-correct Dock icon in unpackaged dev builds. Packaged
+  // builds get their icon baked into the .app by electron-builder and don't
+  // need this — without it, dev mode just shows Electron's default icon.
+  if (!app.isPackaged && process.platform === 'darwin') {
+    const icon = nativeImage.createFromPath(getMacIconPath())
+    if (!icon.isEmpty()) app.dock?.setIcon(icon)
+  }
 
   // Register custom protocols (halo-file://, etc.)
   registerProtocols()

@@ -48,7 +48,8 @@ export interface RequestHandlerOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
-const CLAUDE_CODE_USER_AGENT = 'claude-cli/2.1.278 (external, cli)'
+// Some Anthropic models gate access on the reported Claude Code version.
+const CLAUDE_CODE_COMPAT_USER_AGENT = 'claude-cli/2.1.278 (external, cli)'
 
 /**
  * Anthropic error type to HTTP status code mapping
@@ -156,6 +157,13 @@ function linkAbortSignal(controller: AbortController, signal?: AbortSignal): voi
   signal.addEventListener('abort', () => controller.abort(), { once: true })
 }
 
+function getHeaderValue(
+  headers: Record<string, string> | undefined,
+  name: string
+): string | undefined {
+  return Object.entries(headers || {}).find(([key]) => key.toLowerCase() === name)?.[1]
+}
+
 /**
  * Make upstream request with OpenAI-style Authorization header
  */
@@ -244,8 +252,8 @@ async function fetchAnthropicUpstream(
     // management, etc.) and the provider adds its own (oauth, interleaved-
     // thinking). Both must be present — overwriting drops one side's betas,
     // causing API rejections.
-    const sdkBeta = Object.entries(sdkHeaders || {}).find(([k]) => k.toLowerCase() === 'anthropic-beta')?.[1]
-    const customBeta = Object.entries(customHeaders || {}).find(([k]) => k.toLowerCase() === 'anthropic-beta')?.[1]
+    const sdkBeta = getHeaderValue(sdkHeaders, 'anthropic-beta')
+    const customBeta = getHeaderValue(customHeaders, 'anthropic-beta')
     let mergedBeta: string | undefined
     if (sdkBeta && customBeta) {
       const seen = new Set<string>()
@@ -271,27 +279,22 @@ async function fetchAnthropicUpstream(
       ...(!hasAuthHeader && apiKey && { 'x-api-key': apiKey }),
     }
 
-    // Deduplicate content-type: sdkHeaders (lowercase from Express) and customHeaders
-    // (user-defined, any casing) may both contain content-type. When a plain object
-    // with two differently-cased keys like 'content-type' and 'Content-Type' is passed
-    // to fetch, undici normalizes both to the same header and joins the values with
-    // ", " — producing "application/json, application/json" which upstream APIs reject.
-    const contentTypeValue = Object.entries(headers).find(
-      ([k]) => k.toLowerCase() === 'content-type'
-    )?.[1]
+    // Provider headers explicitly override SDK headers. Remove every casing variant
+    // before restoring one canonical key, otherwise undici joins duplicate values.
+    const contentTypeValue = getHeaderValue(customHeaders, 'content-type')
+      ?? getHeaderValue(sdkHeaders, 'content-type')
+    const userAgentValue = getHeaderValue(customHeaders, 'user-agent')
+      ?? getHeaderValue(sdkHeaders, 'user-agent')
     for (const key of Object.keys(headers)) {
-      if (key.toLowerCase() === 'content-type') {
+      const normalizedKey = key.toLowerCase()
+      if (normalizedKey === 'content-type' || normalizedKey === 'user-agent') {
         delete headers[key]
       }
     }
     headers['content-type'] = contentTypeValue || 'application/json'
-
-    for (const key of Object.keys(headers)) {
-      if (key.toLowerCase() === 'user-agent') {
-        delete headers[key]
-      }
-    }
-    headers['user-agent'] = CLAUDE_CODE_USER_AGENT
+    headers['user-agent'] = userAgentValue && !userAgentValue.startsWith('claude-cli/')
+      ? userAgentValue
+      : CLAUDE_CODE_COMPAT_USER_AGENT
 
     return await proxyFetch(targetUrl, {
       method: 'POST',

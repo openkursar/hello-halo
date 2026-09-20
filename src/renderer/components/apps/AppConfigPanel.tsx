@@ -30,6 +30,7 @@ import { AppCapabilitiesSection } from './AppCapabilitiesSection'
 import { AppMcpDepsSection } from './AppMcpDepsSection'
 import { AppSkillsSection } from './AppSkillsSection'
 import { DefaultWorkspaceSection } from './DefaultWorkspaceSection'
+import { AppBotBindingSection } from './AppBotBindingSection'
 import { AppKnowledgeSection } from './AppKnowledgeSection'
 import { appTypeLabel } from './appTypeUtils'
 import { sanitizeCommandName } from './skill-import-utils'
@@ -587,6 +588,7 @@ function SettingsTab({ app, appId, spaceName, t, onRequireRestart }: SettingsTab
           <AppMcpDepsSection app={app} appId={appId} onRequireRestart={onRequireRestart} />
           <AppSkillsSection appId={appId} spaceId={app.spaceId} />
           <AppKnowledgeSection appId={appId} />
+          <AppBotBindingSection appId={appId} appName={resolvedSpec.name} spaceId={app.spaceId} />
         </>
       )}
 

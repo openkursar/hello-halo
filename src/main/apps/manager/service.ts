@@ -41,7 +41,7 @@ import {
   McpCommandBlockedError,
 } from './errors'
 import { isMcpCommandBlocked } from '../../services/security-policy'
-import { seedAppKnowledgeBases } from '../../services/tlon'
+import { seedAppKnowledgeBases, unbindAppFromAllKBs } from '../../services/tlon'
 import type { McpAppChange } from '../../services/app-bridge'
 import { syncSkillToFilesystem, removeSkillFromFilesystem } from './skill-sync'
 import { withSkillMdName } from '../../../shared/skill-frontmatter'
@@ -604,6 +604,11 @@ export function createAppManagerService(deps: AppManagerDeps): AppManagerService
       if (app.spec.type === 'skill') {
         removeSkillFromFilesystem(app, getSpacePath)
       }
+
+      // The row is gone after this, so any KB still bound to it would be a
+      // dangling reference. Only done here (not on soft uninstall) — see
+      // unbindAppFromAllKBs's doc comment.
+      unbindAppFromAllKBs(appId)
 
       // Hard-delete the database record
       store.delete(appId)

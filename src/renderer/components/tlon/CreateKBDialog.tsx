@@ -77,7 +77,7 @@ export function CreateKBDialog({ onClose, onCreated }: CreateKBDialogProps) {
         {allSpaces.length > 0 && (
           <div className="mb-6">
             <label className="block text-sm text-muted-foreground mb-2">
-              {t('Connect to spaces (optional)')}
+              {t('Connect to workspaces (optional)')}
             </label>
             <div className="flex flex-wrap gap-2">
               {allSpaces.map(space => {

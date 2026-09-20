@@ -485,6 +485,7 @@ export function onEvent(channel: string, callback: (data: unknown) => void): () 
       'tlon:ingest-progress': 'onTlonIngestProgress',
       'store:sync-status-changed': 'onStoreSyncStatusChanged',
       'store:upgrade-available': 'onStoreUpgradeAvailable',
+      'task:state_changed': 'onTaskStateChanged',
     }
 
     const method = methodMap[channel]

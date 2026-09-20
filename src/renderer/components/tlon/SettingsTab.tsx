@@ -1,16 +1,32 @@
 /**
- * SettingsTab — rename/icon/status, connected spaces, watched folders, delete.
+ * SettingsTab — knowledge base settings.
  *
- * Friendly terms: bound spaces are "Connected", linked dirs are "Watched folders".
+ * Sections: Details · Connected spaces · Mounted digital humans (new) ·
+ * Default setting (new) · Watched folders · Learning controls · Danger zone.
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useTranslation } from '../../i18n'
 import { api } from '../../api'
 import { useTlonStore } from '../../stores/tlon.store'
 import { useSpaceStore } from '../../stores/space.store'
+import { useAppsStore } from '../../stores/apps.store'
+import { useAppStore } from '../../stores/app.store'
+import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useConfirmDialog } from '../../hooks/useConfirmDialog'
-import { Trash2, FolderPlus, FolderOpen, X, Check, Pause, Play, RefreshCw } from 'lucide-react'
+import {
+  Trash2,
+  FolderPlus,
+  FolderOpen,
+  X,
+  Check,
+  Pause,
+  Play,
+  RefreshCw,
+  ExternalLink,
+  ToggleLeft,
+  ToggleRight,
+} from 'lucide-react'
 import type { KnowledgeBaseEntry } from '../../../shared/types/tlon'
 
 interface SettingsTabProps {
@@ -28,17 +44,25 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
   const unbindSpace = useTlonStore(s => s.unbindSpace)
   const addLinkedDir = useTlonStore(s => s.addLinkedDir)
   const removeLinkedDir = useTlonStore(s => s.removeLinkedDir)
+  const setDefaultKB = useTlonStore(s => s.setDefaultKB)
 
   const haloSpace = useSpaceStore(s => s.haloSpace)
   const spaces = useSpaceStore(s => s.spaces)
   const loadSpaces = useSpaceStore(s => s.loadSpaces)
+
+  // Digital humans data
+  const apps = useAppsStore(s => s.apps)
+  const loadApps = useAppsStore(s => s.loadApps)
+  const navigate = useAppStore(s => s.navigate)
+  const setInitialAppId = useAppsPageStore(s => s.setInitialAppId)
 
   const [name, setName] = useState(kb.name)
   const [description, setDescription] = useState(kb.description)
 
   useEffect(() => {
     loadSpaces()
-  }, [loadSpaces])
+    loadApps()
+  }, [loadSpaces, loadApps])
 
   useEffect(() => {
     setName(kb.name)
@@ -48,6 +72,12 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
   const allSpaces = [...(haloSpace ? [haloSpace] : []), ...spaces]
   const dirty = name.trim() !== kb.name || description !== kb.description
   const isPaused = kb.status === 'paused'
+
+  // Filter mounted digital humans: only show installed ones
+  const mountedApps = useMemo(() => {
+    if (!kb.appIds?.length) return []
+    return apps.filter(a => kb.appIds!.includes(a.id))
+  }, [kb.appIds, apps])
 
   const handleSave = async () => {
     if (!name.trim()) return
@@ -91,6 +121,18 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
     }
   }
 
+  const handleNavigateToApp = (appId: string) => {
+    // Same deep-link mechanism as notification/toast navigation (see
+    // App.tsx's onAppNavigate/onNotificationToast handlers): AppsPage picks
+    // up initialAppId once its app list has loaded and selects it directly.
+    setInitialAppId(appId)
+    navigate('apps')
+  }
+
+  const handleToggleDefault = async () => {
+    await setDefaultKB(kb.isDefault ? null : kb.id)
+  }
+
   return (
     <div className="p-3 sm:p-4 space-y-6 max-w-2xl">
       {/* Identity */}
@@ -131,9 +173,9 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
 
       {/* Connected spaces */}
       <section className="space-y-2">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{t('Connected spaces')}</h4>
+        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{t('Connected workspaces')}</h4>
         <p className="text-xs text-muted-foreground">
-          {t('Connected spaces can use this knowledge base in their conversations.')}
+          {t('Connected workspaces can use this knowledge base in their conversations.')}
         </p>
         <div className="flex flex-wrap gap-2">
           {allSpaces.map(space => {
@@ -154,9 +196,59 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
             )
           })}
           {allSpaces.length === 0 && (
-            <span className="text-xs text-muted-foreground">{t('No spaces available.')}</span>
+            <span className="text-xs text-muted-foreground">{t('No workspaces available.')}</span>
           )}
         </div>
+      </section>
+
+      {/* Mounted digital humans — read-only + navigate */}
+      {mountedApps.length > 0 && (
+        <section className="space-y-2">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{t('Mounted digital humans')}</h4>
+          <p className="text-xs text-muted-foreground">
+            {t('These digital humans use this knowledge base. Go to their settings to manage attachments.')}
+          </p>
+          <div className="space-y-1">
+            {mountedApps.map(app => (
+              <button
+                key={app.id}
+                onClick={() => handleNavigateToApp(app.id)}
+                className="group w-full flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card hover:bg-secondary transition-colors text-left"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">
+                    {app.spec?.name || app.specId || app.id}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {app.status === 'paused' ? t('Paused') : t('Enabled')}
+                  </p>
+                </div>
+                <ExternalLink className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Default setting */}
+      <section className="space-y-2">
+        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{t('Default setting')}</h4>
+        <button
+          onClick={handleToggleDefault}
+          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card hover:bg-secondary transition-colors text-sm"
+        >
+          {kb.isDefault
+            ? <ToggleRight className="w-5 h-5 text-primary" />
+            : <ToggleLeft className="w-5 h-5 text-muted-foreground" />
+          }
+          {kb.isDefault
+            ? t('This is the default knowledge base')
+            : t('Set as default knowledge base')
+          }
+        </button>
+        <p className="text-xs text-muted-foreground">
+          {t('The default knowledge base is automatically loaded in all new conversations.')}
+        </p>
       </section>
 
       {/* Watched folders */}
@@ -206,7 +298,7 @@ export function SettingsTab({ kb, onDeleted }: SettingsTabProps) {
         </div>
       </section>
 
-      {/* Status + delete */}
+      {/* Status + maintenance */}
       <section className="space-y-3 pt-2 border-t border-border">
         <button
           onClick={() => updateKB(kb.id, { status: isPaused ? 'active' : 'paused' })}

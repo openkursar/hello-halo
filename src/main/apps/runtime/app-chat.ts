@@ -123,7 +123,7 @@ import { createReportToolServer, type ReportToolContext } from './report-tool'
 // Key builders live in shared/ so the renderer can import them without
 // depending on main-process modules.
 import { getAppChatConversationId, buildImSessionKey, buildTeamSessionKey, parseTeamSessionKey, buildLocalSessionKey, parseAppChatKey } from '../../../shared/apps/im-keys'
-import { classifySessionSource, LOCAL_SESSION_CHANNEL } from '../../../shared/types/im-channel'
+import { classifySessionSource, LOCAL_SESSION_CHANNEL, NATIVE_SESSION_CHANNEL, NATIVE_DEFAULT_CHAT_ID } from '../../../shared/types/im-channel'
 import type { ImSessionRecord } from '../../../shared/types/im-channel'
 import { sendToRenderer } from '../../foundation/window.service'
 import { broadcastToAll } from '../../http/websocket'
@@ -254,38 +254,43 @@ export function deriveRunId(conversationId: string, appId: string): string {
  */
 const scopedContexts = new Map<string, BrowserContext>()
 
+/** Registry coordinates (channel/chatId/chatType) a conversationId maps to. */
+interface SessionRegistryTarget {
+  channel: string
+  chatId: string
+  chatType: 'direct' | 'group'
+}
+
 /**
- * Register an external (HTTP) app-chat session so it shows in the conversation
- * list and is readable via the same HTTP path as IM sessions.
- *
- * IM sessions are skipped: dispatch-inbound already registers them with a live
- * instanceId, and re-registering here with an empty instanceId would clobber
- * that binding and break IM push. Native chat keys parse to null and are ignored.
+ * Resolve the registry coordinates for a conversationId, including the native
+ * default session (the 2-segment "app-chat:{appId}" key that
+ * {@link parseAppChatKey} deliberately returns null for). Returns null for
+ * keys that don't belong to this app at all.
  */
-function registerExternalChatSession(
-  conversationId: string,
-  appId: string,
-  opts?: { displayName?: string; lastSender?: string; lastMessage?: string }
-): void {
+function resolveSessionRegistryTarget(conversationId: string, appId: string): SessionRegistryTarget | null {
+  if (conversationId === getAppChatConversationId(appId)) {
+    return { channel: NATIVE_SESSION_CHANNEL, chatId: NATIVE_DEFAULT_CHAT_ID, chatType: 'direct' }
+  }
   const parsed = parseAppChatKey(conversationId)
-  if (!parsed || parsed.appId !== appId) return
-  if (classifySessionSource(parsed.channel) === 'im') return
+  if (!parsed || parsed.appId !== appId) return null
+  return { channel: parsed.channel, chatId: parsed.chatId, chatType: parsed.chatType }
+}
 
-  const registry = getImSessionRegistry()
-  if (!registry) return
-
-  registry.register(appId, parsed.channel, parsed.chatId, parsed.chatType, '', {
-    displayName: opts?.displayName,
-    lastSender: opts?.lastSender,
-    lastMessage: opts?.lastMessage,
-  })
-
-  // Notify desktop + remote clients so the session panel refreshes in real time.
+/**
+ * Notify desktop + remote clients that a session's registry summary changed,
+ * so any conversation-list UI subscribed to `app:im-session-updated` refreshes
+ * in real time instead of waiting for its fallback poll.
+ */
+function emitSessionUpdated(
+  appId: string,
+  target: SessionRegistryTarget,
+  opts?: { lastMessage?: string; lastSender?: string }
+): void {
   const sessionEvent = {
     appId,
-    channel: parsed.channel,
-    chatId: parsed.chatId,
-    chatType: parsed.chatType,
+    channel: target.channel,
+    chatId: target.chatId,
+    chatType: target.chatType,
     instanceId: '',
     lastMessage: opts?.lastMessage !== undefined ? truncateUtf16Safe(opts.lastMessage, 50) : undefined,
     lastSender: opts?.lastSender,
@@ -311,6 +316,39 @@ async function buildSessionMemoryPreamble(scope: MemoryCallerScope, appId: strin
     console.error(`[AppChat][${appId}] Memory snapshot failed, continuing without it:`, err)
     return ''
   }
+}
+
+/**
+ * Register or refresh an app-chat session's registry record so it carries a
+ * message-activity summary (lastMessage/lastActiveAt/messageCount) for the
+ * conversation list, without the caller loading the full JSONL transcript.
+ *
+ * IM sessions are skipped: dispatch-inbound already registers them with a live
+ * instanceId, and re-registering here with an empty instanceId would clobber
+ * that binding and break IM push. The native default session is registered
+ * under a synthetic {@link NATIVE_SESSION_CHANNEL} coordinate (see
+ * {@link resolveSessionRegistryTarget}) purely for this summary — it has no
+ * channel adapter and is never pushable.
+ */
+function registerExternalChatSession(
+  conversationId: string,
+  appId: string,
+  opts?: { displayName?: string; lastSender?: string; lastMessage?: string }
+): void {
+  const target = resolveSessionRegistryTarget(conversationId, appId)
+  if (!target) return
+  if (classifySessionSource(target.channel) === 'im') return
+
+  const registry = getImSessionRegistry()
+  if (!registry) return
+
+  registry.register(appId, target.channel, target.chatId, target.chatType, '', {
+    displayName: opts?.displayName,
+    lastSender: opts?.lastSender,
+    lastMessage: opts?.lastMessage,
+  })
+
+  emitSessionUpdated(appId, target, { lastMessage: opts?.lastMessage, lastSender: opts?.lastSender })
 }
 
 // ============================================
@@ -1234,6 +1272,7 @@ export function cleanupAppChatBrowserContext(appId: string): void {
  * 3. Destroy scoped browser context (if any)
  * 4. Empty the JSONL persistence file
  * 5. Drop the sink so the next message starts with a fresh transcript writer
+ * 6. Zero the registry's message-activity summary, if any
  *
  * Idempotent: safe to call even if the session doesn't exist.
  */
@@ -1285,6 +1324,15 @@ async function clearSessionByConversationId(
   // 5. Drop the sink. Its rounds were already settled when closeV2Session
   //    stopped the consumer; the next message builds a fresh one.
   disposeAppChatSink(conversationId)
+
+  // 6. Zero the registry's activity summary so the conversation list preview
+  //    matches the now-empty transcript (no-op if the session was never
+  //    registered — e.g. a default session that never received a message).
+  const target = resolveSessionRegistryTarget(conversationId, appId)
+  if (target) {
+    getImSessionRegistry()?.resetActivity(appId, target.channel, target.chatId)
+    emitSessionUpdated(appId, target, {})
+  }
 }
 
 /**
@@ -1316,6 +1364,24 @@ export async function clearAppChat(appId: string, spaceId: string, conversationI
   }
   await clearSessionByConversationId(convId, appId, spaceId)
   console.log(`[AppChat][${appId}] Chat history cleared: ${convId}`)
+}
+
+/**
+ * Rename a session and notify listeners. Lives here rather than in the IPC/HTTP
+ * handlers so both transports emit the update event — a rename that only the
+ * calling client learns about leaves every other surface showing the old name
+ * until its next poll.
+ *
+ * @returns false when the session isn't registered.
+ */
+export function renameChatSession(appId: string, channel: string, chatId: string, name: string): boolean {
+  const registry = getImSessionRegistry()
+  if (!registry) return false
+  if (!registry.setCustomName(appId, channel, chatId, name)) return false
+
+  const session = registry.findSession(appId, channel, chatId)
+  emitSessionUpdated(appId, { channel, chatId, chatType: session?.chatType ?? 'direct' }, {})
+  return true
 }
 
 // ============================================
@@ -1531,6 +1597,7 @@ export function createNativeChatSession(appId: string): NativeSessionResult {
   const conversationId = buildLocalSessionKey(appId, sessionUuid)
   resolveChatEnvironment(app, manager, store, conversationId)
   const record = registry.createLocalSession(appId, sessionUuid)
+  emitSessionUpdated(appId, { channel: LOCAL_SESSION_CHANNEL, chatId: sessionUuid, chatType: 'direct' }, {})
   console.log(`[AppChat][${appId}] Native local session created: ${conversationId}`)
   return { conversationId, record }
 }
@@ -1597,6 +1664,7 @@ export function forkNativeChatSession(
     pendingResumeSessionId: sourceSdkSessionId,
   })
 
+  emitSessionUpdated(appId, { channel: LOCAL_SESSION_CHANNEL, chatId: sessionUuid, chatType: 'direct' }, {})
   console.log(
     `[AppChat][${appId}] Forked native local session ${conversationId} from ${sourceConversationId} ` +
     `(transcript ${copied ? 'copied' : 'absent'}, resume ${sourceSdkSessionId ? 'seeded' : 'none'})`
@@ -1622,5 +1690,6 @@ export async function deleteNativeChatSession(
 
   await clearSessionByConversationId(conversationId, appId, spaceId)
   getImSessionRegistry()?.removeSession(appId, parsed.channel, parsed.chatId)
+  emitSessionUpdated(appId, { channel: parsed.channel, chatId: parsed.chatId, chatType: parsed.chatType }, {})
   console.log(`[AppChat][${appId}] Native local session deleted: ${conversationId}`)
 }

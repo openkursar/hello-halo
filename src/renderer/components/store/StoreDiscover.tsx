@@ -78,7 +78,7 @@ function FeaturedCard({ entry, onSelect }: { entry: RegistryEntry; onSelect: () 
       tabIndex={0}
       onClick={onSelect}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect() } }}
-      className="flex flex-col gap-2.5 w-full p-4 rounded-[10px] border border-border/60 bg-background text-left cursor-pointer transition-all hover:border-border hover:shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
+      className="flex flex-col gap-2.5 w-full p-4 rounded-[10px] border border-border/60 bg-card text-left cursor-pointer transition-all hover:border-border hover:shadow-sm focus:outline-none focus:ring-1 focus:ring-primary"
     >
       <div className="flex items-center gap-2.5 min-w-0">
         <AppTypeIcon type={entry.type} icon={entry.icon} name={name} size="sm" />
@@ -109,7 +109,7 @@ function CollectionCard({ collection }: { collection: ResolvedCollection }) {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="flex flex-col gap-2.5 p-4 rounded-[10px] border border-border/60 bg-background text-left transition-all hover:border-border hover:shadow-sm"
+        className="flex flex-col gap-2.5 p-4 rounded-[10px] border border-border/60 bg-card text-left transition-all hover:border-border hover:shadow-sm"
       >
         <div>
           {collection.label && (
@@ -219,7 +219,7 @@ function SectionBody({ node, padded }: { node: ResolvedDiscoverNode; padded?: bo
   }, [isCatalog, node.entries, node.hasMore, seedStoreApps])
 
   const wrap = (content: ReactNode) =>
-    padded ? <section className="px-4 pt-4">{content}</section> : <>{content}</>
+    padded ? <section className="px-6 sm:px-10 pt-4">{content}</section> : <>{content}</>
 
   if (node.type === 'catalog') {
     return wrap(
@@ -272,7 +272,7 @@ function DiscoverRow({ node }: { node: ResolvedDiscoverNode }) {
   const children = node.children ?? []
   if (children.length === 0) return null
   return (
-    <section className="px-4 pt-4">
+    <section className="px-6 sm:px-10 pt-4">
       {title && <SectionLabel sub={subtitle}>{title}</SectionLabel>}
       <div className={`grid ${cols} gap-4`}>
         {children.map((child, i) => <SectionBody key={i} node={child} />)}
@@ -289,7 +289,7 @@ export function StoreDiscover() {
   if (!page) {
     return (
       <div className="flex flex-col pb-8">
-        <section className="px-4 pt-4">
+        <section className="px-6 sm:px-10 pt-4">
           <SectionLabel>{t('All Apps')}</SectionLabel>
           <StoreGrid embedded />
         </section>

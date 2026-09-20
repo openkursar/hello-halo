@@ -234,6 +234,22 @@ export function registerAppsRoutes(app: Express): void {
     res.status(status).json(result)
   })
 
+  // GET /api/apps/overview — batched card-wall first paint (state + latest
+  // summary + recent runs per automation App). Registered before the
+  // single-segment /api/apps/:appId route below so "overview" is never
+  // captured as an appId.
+  app.get('/api/apps/overview', async (req: Request, res: Response) => {
+    try {
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      const spaceId = typeof req.query.spaceId === 'string' ? req.query.spaceId : undefined
+      const overview = runtime.getOverview(spaceId)
+      res.json({ success: true, data: overview })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
   // GET /api/apps/:appId — get a single App
   app.get('/api/apps/:appId', async (req: Request, res: Response) => {
     try {
@@ -267,6 +283,38 @@ export function registerAppsRoutes(app: Express): void {
         return
       }
       res.json({ success: true, data: listAvailableSkills(appData.spaceId) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/spaces/:spaceId/available-skills — same disk scan, keyed by space
+  // directly (space resource rail has a space, not a digital human, in hand).
+  app.get('/api/spaces/:spaceId/available-skills', async (req: Request, res: Response) => {
+    try {
+      const { spaceId } = req.params
+      if (!spaceId) {
+        res.status(400).json({ success: false, error: 'Missing spaceId' })
+        return
+      }
+      res.json({ success: true, data: listAvailableSkills(spaceId) })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/spaces/:spaceId/effective-mcp-apps — space-scoped ∪ global MCP
+  // apps, for read-only display (not one digital human's declared deps).
+  app.get('/api/spaces/:spaceId/effective-mcp-apps', async (req: Request, res: Response) => {
+    try {
+      const { spaceId } = req.params
+      if (!spaceId) {
+        res.status(400).json({ success: false, error: 'Missing spaceId' })
+        return
+      }
+      const manager = getManagerOrFail(res)
+      if (!manager) return
+      res.json({ success: true, data: manager.listEffectiveMcpApps(spaceId) })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }
@@ -515,6 +563,44 @@ export function registerAppsRoutes(app: Express): void {
       if (typeof req.query.epochId === 'string') options.epochId = req.query.epochId
       const entries = runtime.getActivityEntries(appId, options)
       res.json({ success: true, data: entries })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/runs — run history, with each run's last activity summary
+  app.get('/api/apps/:appId/runs', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      const options: { limit?: number; offset?: number } = {}
+      if (req.query.limit) options.limit = Number(req.query.limit)
+      if (req.query.offset) options.offset = Number(req.query.offset)
+      const runs = runtime.getRunsForAppWithSummary(appId, options)
+      res.json({ success: true, data: runs })
+    } catch (error) {
+      res.json({ success: false, error: (error as Error).message })
+    }
+  })
+
+  // GET /api/apps/:appId/run-stats — aggregate outcome/token/duration stats
+  app.get('/api/apps/:appId/run-stats', async (req: Request, res: Response) => {
+    try {
+      const { appId } = req.params
+      if (!appId) {
+        res.status(400).json({ success: false, error: 'Missing appId' })
+        return
+      }
+      const runtime = getRuntimeOrFail(res)
+      if (!runtime) return
+      const window = req.query.window ? Number(req.query.window) : undefined
+      const stats = runtime.getRunStats(appId, window)
+      res.json({ success: true, data: stats })
     } catch (error) {
       res.json({ success: false, error: (error as Error).message })
     }

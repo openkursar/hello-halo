@@ -58,6 +58,7 @@ import { initBackground, shutdownBackground, getBackgroundService, setDaemonStea
 import { injectStealthScripts } from '../services/stealth'
 import { initStore, shutdownStore } from '../platform/store'
 import type { DatabaseManager } from '../platform/store'
+import { initTaskState } from '../platform/task-state'
 import { initScheduler, shutdownScheduler } from '../platform/scheduler'
 import { initMemory } from '../platform/memory'
 import { setMemorySdk } from '../platform/memory/sdk'
@@ -87,6 +88,7 @@ import { runStartupSnapshot } from '../services/analytics/snapshot'
 import { analytics } from '../services/analytics/analytics.service'
 import { registerAppHandlers } from '../ipc/app'
 import { registerTeamIpc } from '../ipc/team'
+import { registerTaskHandlers } from '../ipc/task'
 import { registerAnalyticsHandlers } from '../ipc/analytics'
 import { registerNotificationChannelHandlers } from '../ipc/notification-channels'
 import { registerWecomBotHandlers } from '../ipc/wecom-bot'
@@ -121,6 +123,7 @@ let platformDb: DatabaseManager | null = null
 let disposeRelayCapture: { dispose(): void } | null = null
 let flushRelayCapture: (() => void) | null = null
 let onSystemResume: (() => void) | null = null
+let taskStateService: Awaited<ReturnType<typeof initTaskState>> | null = null
 
 /**
  * Initialize platform (store, scheduler, memory) and apps
@@ -149,6 +152,7 @@ async function initPlatformAndApps(): Promise<void> {
   // Note: SDK is initialized earlier in index.ts (before essential services)
   const db = await initStore()
   platformDb = db
+  taskStateService = await initTaskState({ db })
 
   // ── Phase 1: Platform services (parallel) ───────────────────────────────
   // Dispatch-layer concurrency cap for the scheduler. The runtime execution
@@ -1345,6 +1349,8 @@ export function initializeExtendedServices(): void {
 
   // Digital Team IPC handlers (team:list, team:create, team:run, etc.)
   registerTeamIpc()
+  // Task panel bookkeeping IPC handlers (task:list-state, task:mark-read, etc.)
+  registerTaskHandlers()
 
   // Notification channel IPC handlers (notify-channels:test, etc.)
   registerNotificationChannelHandlers()
@@ -1476,6 +1482,8 @@ export async function cleanupExtendedServices(): Promise<void> {
   await shutdownScheduler().catch(err => console.error('[Bootstrap] Scheduler shutdown error:', err))
 
   // Platform: Close database connections
+  taskStateService?.dispose()
+  taskStateService = null
   if (platformDb) {
     await shutdownStore(platformDb).catch(err => console.error('[Bootstrap] Store shutdown error:', err))
     platformDb = null

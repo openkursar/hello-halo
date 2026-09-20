@@ -27,27 +27,42 @@
    ============================================ */
 
 :root {
-  /* Dark theme (default) */
-  --background: 0 0% 4%;
-  --foreground: 0 0% 98%;
-  --card: 0 0% 7%;
-  --card-foreground: 0 0% 98%;
-  --popover: 0 0% 7%;
-  --popover-foreground: 0 0% 98%;
+  /* Dark theme (default). Neutrals carry a cool (blue-adjacent, H~220) tint
+     rather than pure gray — matched to the prototype's own token values. */
+  --background: 220 20% 6%;
+  --foreground: 223 17% 92%;
+  --card: 220 18% 10%;
+  --card-foreground: 223 17% 92%;
+  --popover: 220 18% 10%;
+  --popover-foreground: 223 17% 92%;
   --primary: 217 91% 60%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 0 0% 15%;
-  --secondary-foreground: 0 0% 98%;
-  --muted: 0 0% 15%;
-  --muted-foreground: 0 0% 64%;
+  --primary-hover: 221 83% 53%;
+  --secondary: 220 19% 13%;
+  --secondary-foreground: 223 17% 92%;
+  --muted: 220 19% 13%;
+  --muted-foreground: 217 12% 65%;
+  /* Tertiary text. Lightened from the prototype's 46% — that value scores 4.00
+     against --background and 3.71 against --card, below WCAG AA for the 10–12px
+     labels this token is used on. 52% clears 4.5 on both surfaces. */
+  --subtle-foreground: 220 9% 52%;
   --accent: 217 91% 60%;
   --accent-foreground: 0 0% 100%;
+  --accent-on-dark: 212 96% 78%;
+  --surface-hover: 222 17% 15%;
   --destructive: 0 62% 50%;
   --destructive-foreground: 0 0% 98%;
-  --border: 0 0% 20%;
-  --input: 0 0% 15%;
+  --border: 220 15% 16%;
+  --input: 220 19% 13%;
   --ring: 217 91% 60%;
   --radius: 0.75rem;
+
+  --shadow-soft: 0 12px 32px -12px rgba(0, 0, 0, .55);
+  --shadow-pop: 0 20px 48px -16px rgba(0, 0, 0, .7);
+  --dur-fast: 120ms;
+  --dur: 160ms;
+  --dur-slow: 240ms;
+  --ease: cubic-bezier(.2, .6, .2, 1);
 
   /* Halo brand colors */
   --halo-glow: 217 91% 60%;
@@ -67,25 +82,36 @@
 
 /* Light theme */
 .light {
-  --background: 0 0% 100%;
-  --foreground: 0 0% 9%;
-  --card: 0 0% 98%;
-  --card-foreground: 0 0% 9%;
+  --background: 220 23% 97%;
+  --foreground: 222 15% 13%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 15% 13%;
   --popover: 0 0% 100%;
-  --popover-foreground: 0 0% 9%;
+  --popover-foreground: 222 15% 13%;
   --primary: 217 91% 55%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 0 0% 94%;
-  --secondary-foreground: 0 0% 20%;
-  --muted: 0 0% 94%;
-  --muted-foreground: 0 0% 45%;
+  --primary-hover: 221 83% 48%;
+  --secondary: 225 18% 96%;
+  --secondary-foreground: 222 15% 13%;
+  --muted: 225 18% 96%;
+  --muted-foreground: 218 9% 39%;
+  /* Darkened from the prototype's 58%, which scores only 2.98 against
+     --background — see the dark-theme note above. 46% clears 4.5. */
+  --subtle-foreground: 221 10% 46%;
   --accent: 217 91% 55%;
   --accent-foreground: 0 0% 100%;
+  /* Falls back to --primary in light mode, matching the prototype's
+     `[data-theme="light"]` override of the same on-dark-only accent text. */
+  --accent-on-dark: 217 91% 55%;
+  --surface-hover: 220 19% 94%;
   --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 100%;
-  --border: 0 0% 90%;
-  --input: 0 0% 94%;
+  --border: 220 14% 91%;
+  --input: 225 18% 96%;
   --ring: 217 91% 55%;
+
+  --shadow-soft: 0 12px 32px -14px rgba(20, 24, 40, .14);
+  --shadow-pop: 0 20px 48px -18px rgba(20, 24, 40, .22);
 
   /* Halo brand colors (adjusted for light) */
   --halo-glow: 217 91% 55%;
@@ -113,7 +139,7 @@ html.light {
 body {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
@@ -189,6 +215,12 @@ body {
 }
 
 ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Where both scrollbars meet. Left unstyled it falls back to the UA's opaque
+   square, which reads as a stray light dot on any dark surface. */
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 
@@ -435,6 +467,25 @@ body {
   animation: slide-down 0.2s ease-out;
 }
 
+/* Prototype `fadeUp` (`.empty`/`.thread`/`.task-panel`, all opacity 0→1 +
+   translateY 8px→0) — a subtler, shorter entrance than the slide-in-* set
+   above, meant for content that should feel like it settles into place
+   rather than travels in from an edge. */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 0.2s ease-out;
+}
+
 @keyframes slide-in-top {
   from {
     opacity: 0;
@@ -506,6 +557,44 @@ body {
 
 .animate-scale-in {
   animation: scale-in 0.2s ease-out;
+}
+
+/* Popover entrance — prototype's `.pop`: fade + slight drop, not a scale.
+   Kept separate from scale-in above so this doesn't change that shared
+   modal animation's other consumers. */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-pop-in {
+  animation: pop-in var(--dur) var(--ease);
+}
+
+/* Pulse "seen" item grace-period countdown (PulseList) — the bar drains
+   over the 60s removal window, the label pulses to signal "about to go". */
+@keyframes countdown {
+  from { width: 100%; }
+  to { width: 0; }
+}
+
+.animate-countdown {
+  animation: countdown 60s linear forwards;
+}
+
+@keyframes fadehint {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+.animate-fadehint {
+  animation: fadehint 1.8s var(--ease) infinite;
 }
 
 /* Progress bar animation */
@@ -724,6 +813,27 @@ body {
   animation: tab-appear 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+/* Users who ask the OS to reduce motion get transitions and entrance animations
+ * collapsed to near-zero. Spinners are exempted below: they are the only signal
+ * that work is in progress, so they keep rotating at a slower rate rather than
+ * freezing on an arbitrary frame. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-spin,
+  .halo-spin {
+    animation-duration: 2.5s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
 /* ============================================
    Tool Card States
    ============================================ */
@@ -789,13 +899,27 @@ body {
   color: hsl(var(--muted-foreground));
 }
 
+/* Brand mark — dark/light SVG pair swapped by the .light class, same
+   convention as .login-hero above. Renders the dark-theme asset by default
+   (root has no class in dark mode); .light flips which one is visible. */
+.brand-mark-light {
+  display: none;
+}
+
+.light .brand-mark-dark {
+  display: none;
+}
+
+.light .brand-mark-light {
+  display: inline-block;
+}
+
 /* ============================================
    Message Styles
    ============================================ */
 
 .message-user {
-  background: linear-gradient(135deg, hsl(var(--primary) / 0.2), hsl(var(--primary) / 0.1));
-  border: 1px solid hsl(var(--primary) / 0.3);
+  background: hsl(var(--secondary));
 }
 
 .message-assistant {
@@ -902,7 +1026,7 @@ body {
   background: hsl(var(--background));
   border: 1px solid hsl(var(--border));
   border-radius: var(--radius);
-  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-family: 'SF Mono', 'Fira Code', ui-monospace, Consolas, monospace;
   font-size: 0.875rem;
   line-height: 1.5;
 }
@@ -1078,6 +1202,20 @@ body {
   opacity: 1;
 }
 
+/* Code editor in edit mode (prototype: `.canvas.editing .cc-code`) — tints
+   the editor to signal it's now writable. CodeMirror's own theme paints
+   `.cm-editor`'s background opaque, so it must be overridden here (higher
+   specificity than CodeMirror's single-class rule) for the wrapper's tint
+   to show through. */
+.codemirror-container.is-editing {
+  background-color: hsl(var(--primary) / 0.12);
+  box-shadow: inset 0 0 0 2px hsl(var(--primary) / 0.18);
+}
+
+.codemirror-container.is-editing .cm-editor {
+  background-color: transparent;
+}
+
 /* ============================================
    Pulse - Task Status Indicators
    ============================================ */
@@ -1202,8 +1340,8 @@ body {
   width: 1px;
   background: linear-gradient(
     to bottom,
-    hsl(var(--border) / 0.6),
-    hsl(var(--border) / 0.2)
+    hsl(var(--border)),
+    hsl(var(--border) / 0.5)
   );
 }
 

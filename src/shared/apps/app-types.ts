@@ -253,6 +253,52 @@ export interface ActivityEntry {
   continuation?: EscalationContinuation
 }
 
+/** What caused a run to execute */
+export type TriggerType = 'schedule' | 'event' | 'manual' | 'escalation_followup' | 'continue_followup'
+
+/** Status of a single automation run */
+export type RunStatus = 'running' | 'ok' | 'error' | 'skipped' | 'waiting_user'
+
+/** Persistent record of an automation run */
+export interface AutomationRun {
+  runId: string
+  appId: string
+  sessionKey: string
+  status: RunStatus
+  triggerType: TriggerType
+  triggerData?: Record<string, unknown>
+  startedAt: number
+  finishedAt?: number
+  durationMs?: number
+  tokensUsed?: number
+  errorMessage?: string
+  sessionId?: string
+}
+
+/**
+ * An AutomationRun with its last activity entry's summary attached — for the
+ * run-history list. Falls back to `errorMessage` when `status === 'error'`.
+ */
+export interface AutomationRunWithSummary extends AutomationRun {
+  summary?: string
+}
+
+/** Aggregate run outcomes over a recent window, for the digital-human overview. */
+export interface RunStats {
+  total: number
+  ok: number
+  error: number
+  skipped: number
+  totalTokens: number
+  avgDurationMs: number
+}
+
+/** Options for querying run history */
+export interface RunQueryOptions {
+  limit?: number
+  offset?: number
+}
+
 /** Real-time state of an automation App (for UI display) */
 export interface AutomationAppState {
   automaticEnabled?: boolean
@@ -266,9 +312,10 @@ export interface AutomationAppState {
    * - idle:         Active and scheduled, no run in progress
    * - paused:       User paused the app; subscriptions inactive
    * - waiting_user: AI escalated; awaiting user decision
+   * - needs_login:  AI Browser detected expired login session
    * - error:        Consecutive failures hit threshold; auto-disabled
    */
-  status: 'running' | 'queued' | 'idle' | 'paused' | 'waiting_user' | 'error'
+  status: 'running' | 'queued' | 'idle' | 'paused' | 'waiting_user' | 'needs_login' | 'error'
   nextRunAtMs?: number
   runningAtMs?: number
   /** Run ID of the currently executing run (only set when status === 'running') */
@@ -281,6 +328,16 @@ export interface AutomationAppState {
   lastDurationMs?: number
   consecutiveErrors?: number
   pendingEscalationId?: string
+}
+
+/** Per-app snapshot for the digital-human card wall's batched first paint. */
+export interface AppOverviewEntry {
+  appId: string
+  state: AutomationAppState
+  /** Most recent run_complete/output activity entry, if any. */
+  latestSummary?: { type: ActivityEntryType; summary: string; ts: number }
+  /** Most recent run statuses, oldest first, capped at 7. */
+  recentRunStatuses: RunStatus[]
 }
 
 export interface PendingDecisionQuery {
@@ -385,6 +442,18 @@ export function resolvePermission(
   if (app.permissions.granted.includes(permission)) return true
   if (app.spec.permissions?.includes(permission)) return true
   return defaultValue
+}
+
+/**
+ * Whether the app was installed by the built-in loader (bundled with the
+ * application binary) rather than by the user. Built-in apps are re-synced
+ * from disk on every launch and are protected from permanent deletion
+ * (deleteApp rejects with BuiltinAppProtectedError) — UI delete actions must
+ * be gated on this check before the user clicks. The marker lives on
+ * spec.store.install_source so it survives SQLite and IPC round-trips.
+ */
+export function isBuiltinApp(app: Pick<InstalledApp, 'spec'>): boolean {
+  return app.spec.store?.install_source === 'builtin'
 }
 
 /**

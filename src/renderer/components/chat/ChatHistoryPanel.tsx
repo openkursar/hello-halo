@@ -58,7 +58,7 @@ export function ChatHistoryPanel() {
     return spaceState?.currentConversationId ?? undefined
   })
   const currentSpace = useSpaceStore(state => state.currentSpace)
-  const spaceName = currentSpace?.isTemp ? t('Halo Space') : (currentSpace?.name ?? '')
+  const spaceName = currentSpace?.isTemp ? t('Halo Workspace') : (currentSpace?.name ?? '')
 
   // Single batch subscription for all conversation statuses (replaces N individual hooks)
   const conversationStatuses = useAllConversationStatuses()
@@ -71,7 +71,7 @@ export function ChatHistoryPanel() {
   const panelRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const editContainerRef = useRef<HTMLDivElement>(null)
-  const editInputRef = useRef<HTMLInputElement>(null)
+  const editInputRef = useRef<HTMLInputElement | null>(null)
   const focusedEditingIdRef = useRef<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 

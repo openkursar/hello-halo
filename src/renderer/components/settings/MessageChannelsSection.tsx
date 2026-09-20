@@ -408,6 +408,8 @@ interface InstanceCardProps {
   isExpanded: boolean
   onToggle: () => void
   onChange: (instance: ImChannelInstanceConfig) => void
+  /** Rebinding goes through main so its validation applies to both binding surfaces. */
+  onRebind: (appId: string) => void
   onDelete: () => void
   onReconnect: () => void
   /** Warning message when this instance's Bot ID conflicts with another instance */
@@ -424,6 +426,7 @@ function InstanceCard({
   isExpanded,
   onToggle,
   onChange,
+  onRebind,
   onDelete,
   onReconnect,
   duplicateWarning,
@@ -512,7 +515,11 @@ function InstanceCard({
   const handleTargetChange = (target: ChannelBackendValue) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     setDraft(null)
-    onChange({ ...instance, ...target })
+    // A digital-human target goes through main's rebind, which rejects a target
+    // that would silently swallow inbound messages. A team target has no such
+    // validator yet, so it takes the plain config write.
+    if (target.teamId) onChange({ ...instance, ...target })
+    else onRebind(target.appId)
   }
 
   const handleStreamingChange = () => {
@@ -1260,7 +1267,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
   }, [setConfig])
 
   // ── IM Channel instances from config ────────────────────────────
-  const instances = config?.imChannels?.instances ?? []
+  const instances: ImChannelInstanceConfig[] = config?.imChannels?.instances ?? []
 
   const saveInstances = useCallback(async (newInstances: ImChannelInstanceConfig[]) => {
     if (!config) return
@@ -1298,6 +1305,19 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
     const newInstances = instances.map(i => i.id === updated.id ? updated : i)
     saveInstances(newInstances)
   }, [instances, saveInstances])
+
+  // Rebinding is owned by main (see im-channels/binding.ts): it validates the
+  // target and re-applies the connection, which a plain config write cannot do.
+  const handleRebindInstance = useCallback(async (instanceId: string, appId: string) => {
+    if (!config) return
+    const res = await api.imChannelsSetInstanceApp(instanceId, appId)
+    if (!res.success) {
+      console.error('[MessageChannels] rebind failed:', res.error)
+      return
+    }
+    const patched = instances.map(i => i.id === instanceId ? { ...i, appId } : i)
+    setConfig({ ...config, imChannels: { ...config.imChannels, instances: patched } } as HaloConfig)
+  }, [config, instances, setConfig])
 
   const handleAddInstance = useCallback(() => {
     // Apply product-level permission defaults for new instances
@@ -1538,6 +1558,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                   isExpanded={expandedInstances.has(inst.id)}
                   onToggle={() => toggleInstanceExpanded(inst.id)}
                   onChange={handleInstanceChange}
+                  onRebind={(appId) => handleRebindInstance(inst.id, appId)}
                   onDelete={() => handleDeleteInstance(inst.id)}
                 />
               ))}
@@ -1603,6 +1624,7 @@ export function MessageChannelsSection({ config, setConfig }: MessageChannelsSec
                   isExpanded={expandedInstances.has(inst.id)}
                   onToggle={() => toggleInstanceExpanded(inst.id)}
                   onChange={handleInstanceChange}
+                  onRebind={(appId) => handleRebindInstance(inst.id, appId)}
                   onDelete={() => handleDeleteInstance(inst.id)}
                   onReconnect={() => handleReconnectInstance(inst.id)}
                   duplicateWarning={getDuplicateWarning(inst, instances)}

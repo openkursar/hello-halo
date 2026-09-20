@@ -40,6 +40,7 @@ import {
 import { Switch } from '../ui/Switch'
 import { Popover, PopoverTrigger, PopoverContent } from '../ui/Popover'
 import { parse as parseYaml } from 'yaml'
+import { useAppStore } from '../../stores/app.store'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useNotificationStore } from '../../stores/notification.store'
@@ -205,8 +206,9 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
   const apps = useAppsStore(s => s.apps)
   const showToast = useNotificationStore(s => s.show)
   // Post-publish "View" jumps to My Publications so the creator can see the
-  // freshly-listed entry.
-  const setCurrentTab = useAppsPageStore(s => s.setCurrentTab)
+  // freshly-listed entry. This dialog can be opened from outside StorePage
+  // (e.g. AppsPage), so "jump" means a real navigation, not just a tab set.
+  const navigate = useAppStore(s => s.navigate)
   const setStoreMineOpen = useAppsPageStore(s => s.setStoreMineOpen)
 
   // Fields flagged by a failed submit; cleared as the user fills each one.
@@ -843,9 +845,9 @@ export function ShareToStoreDialog({ onClose, initialType, initialAppId, entry, 
   // creator lands on the freshly-listed entry.
   const handleViewPublished = useCallback(() => {
     onClose()
-    setCurrentTab('store')
+    navigate('store')
     setStoreMineOpen(true)
-  }, [onClose, setCurrentTab, setStoreMineOpen])
+  }, [onClose, navigate, setStoreMineOpen])
 
   // Session expired during publish: re-authenticate, then resubmit the form
   // (still fully populated — the draft was never dropped) in one tap.

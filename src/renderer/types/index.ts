@@ -263,6 +263,8 @@ export interface McpServerStatus {
   errorDetail?: string;
   /** Epoch ms of the last probe/SDK report that produced this entry */
   lastCheckedAt?: number;
+  /** Round-trip time of the last native probe, in milliseconds. */
+  latencyMs?: number;
 }
 
 export interface NotificationConfig {
@@ -271,9 +273,7 @@ export interface NotificationConfig {
 
 // Global layout preferences (panel sizes and visibility)
 export interface LayoutConfig {
-  sidebarOpen?: boolean;                 // Whether conversation list sidebar is open
   sidebarWidth?: number;                 // Conversation list sidebar width (px)
-  sidebarTopSectionHeight?: number;      // Height of the top conversation sidebar section (px)
   artifactRailWidth?: number;            // Artifact rail panel width (px)
 }
 
@@ -338,6 +338,10 @@ export interface Space {
   id: string;
   name: string;
   icon: string;
+  /** One of SPACE_COLOR_IDS — tints the letter avatar shown in SpaceSelector.
+   * Absent on spaces created before this field existed; the avatar falls back
+   * to a hash-derived color from the same palette in that case. */
+  color?: string;
   path: string;
   isTemp: boolean;
   createdAt: string;
@@ -349,9 +353,25 @@ export interface Space {
   sortOrder?: number;  // User-defined display order (lower = earlier); absent on legacy spaces
 }
 
+// Per-space asset counts for the workspace management page's cards.
+// `skillCount`/`mcpCount` are installed-in-this-space only; the matching
+// `global*Count` covers global items also usable here (see main's
+// space.controller.ts buildSpaceSummary for the exact split).
+export interface SpaceSummary {
+  spaceId: string;
+  fileCount: number;
+  digitalHumanCount: number;
+  skillCount: number;
+  mcpCount: number;
+  globalSkillCount: number;
+  globalMcpCount: number;
+  conversationCount: number;
+}
+
 export interface CreateSpaceInput {
   name: string;
   icon: string;
+  color?: string;
   customPath?: string;
 }
 
@@ -393,12 +413,77 @@ export interface PulseItem {
   status: TaskStatus;
   starred: boolean;
   updatedAt: string;
+  /** ConversationMeta.preview — last message, truncated. */
+  preview?: string;
   /** Timestamp when user viewed this item; present = item is in grace period before removal */
   readAt?: number;
+  /** User clicked "Keep" — exempt from the grace-period auto-removal timer */
+  kept?: boolean;
+}
+
+/** A pulse item's read-grace-period bookkeeping (chat.store's `pulseReadAt` map value). */
+export interface PulseReadInfo {
+  readAt: number;
+  originalStatus: 'completed-unseen' | 'error';
+  spaceId: string;
+  title: string;
+  /** User clicked "Keep" — exempt from the grace-period auto-removal timer */
+  kept?: boolean;
 }
 
 /** Grace period for read pulse items before removal (milliseconds) */
 export const PULSE_READ_GRACE_PERIOD_MS = 60_000
+
+// ============================================
+// Task Panel Types (aggregated conversations + automation apps)
+// ============================================
+
+/**
+ * Status of a task-panel entry, independent of its source. Distinct from
+ * `TaskStatus` above — that type is conversation-specific and shared by
+ * TaskStatusDot/ConversationList/ChatHistoryPanel; renaming it to fold in
+ * automation apps would ripple through all of those. The task-panel
+ * aggregation layer (stores/task.store.ts) maps both `TaskStatus` and
+ * automation run status onto this one.
+ */
+export type TaskItemStatus = 'running' | 'waiting' | 'completed-unseen' | 'error' | 'idle';
+
+export type TaskSource = 'conversation' | 'automation';
+
+/** A single entry in the task panel, aggregated from conversations and automation apps. */
+export interface TaskItem {
+  /** Globally unique: `conv:<conversationId>` or `app:<appId>` */
+  key: string;
+  source: TaskSource;
+  status: TaskItemStatus;
+
+  title: string;
+  /** Secondary line after the space name, e.g. "Waiting for your answer". */
+  detail: string;
+
+  spaceId: string | null;
+  spaceName: string;
+
+  /** Sort key and elapsed-time fallback. */
+  updatedAt: number;
+  /** When the running task started; drives the elapsed-time display. */
+  startedAt?: number;
+
+  /** Present when source === 'conversation'. */
+  conversationId?: string;
+  starred?: boolean;
+  /** Timestamp when user viewed this item; present = item is in grace period before removal. */
+  readAt?: number;
+  /** User clicked "Keep" — exempt from the grace-period auto-removal timer. */
+  kept?: boolean;
+
+  /** Present when source === 'automation'. */
+  appId?: string;
+  /** Seeds AutomationAvatar — must match the app's `spec.name` for a consistent face. */
+  appName?: string;
+  escalationId?: string;
+  runId?: string;
+}
 
 // Full conversation with messages
 // Loaded on-demand when selecting a conversation
@@ -808,7 +893,12 @@ export type AgentEvent =
 // App State Types
 // ============================================
 
-export type AppView = 'splash' | 'gitBashSetup' | 'setup' | 'home' | 'space' | 'settings' | 'apps' | 'tlon' | 'serverConnect' | 'serverList';
+export type AppView = 'splash' | 'gitBashSetup' | 'setup' | 'space' | 'settings' | 'apps' | 'tlon' | 'store' | 'spaces' | 'serverConnect' | 'serverList';
+
+// ArtifactRail's tab strip — shared with space.store's `pendingArtifactRailTab`
+// (the workspace management page's asset chips request a tab from outside
+// the rail component itself, see SpacePage/ArtifactRail).
+export type ArtifactRailTab = 'files' | 'digital-humans' | 'skill' | 'mcp';
 
 export interface AppState {
   view: AppView;
@@ -884,16 +974,9 @@ export function getConfigCurrentModelName(config: HaloConfig): string {
   return getCurrentModelName(config.aiSources);
 }
 
-// Icon options for spaces (using icon IDs that map to Lucide icons)
-export const SPACE_ICONS = [
-  'folder', 'code', 'globe', 'chart', 'file-text', 'palette',
-  'gamepad', 'wrench', 'smartphone', 'lightbulb', 'rocket', 'star'
-] as const;
-
-export type SpaceIconId = typeof SPACE_ICONS[number];
-
-// Default space icon
-export const DEFAULT_SPACE_ICON: SpaceIconId = 'folder';
+// Sent as Space.icon on creation — the backend field is still required, but
+// nothing renders a per-space icon anymore (see CreateSpaceForm.tsx).
+export const DEFAULT_SPACE_ICON = 'folder';
 
 // File type to icon ID mapping (maps to Lucide icon names)
 export const FILE_ICON_IDS: Record<string, string> = {

@@ -88,11 +88,15 @@ export function ImSessionsSection({ appId, appName, compact }: ImSessionsSection
     try {
       const result = await api.imSessionsList(appId) as { success: boolean; data?: ImSessionRecord[] }
       if (result.success && result.data) {
-        setSessions(result.data)
+        // 'native' records exist only so the main conversation board can read
+        // a message-activity summary for the app's own default chat — they
+        // are not an external session and don't belong in this management view.
+        const filtered = result.data.filter(s => s.source !== 'native')
+        setSessions(filtered)
 
         // In global mode, fetch app names for display
-        if (isGlobalMode && result.data.length > 0) {
-          const uniqueAppIds = [...new Set(result.data.map(s => s.appId))]
+        if (isGlobalMode && filtered.length > 0) {
+          const uniqueAppIds = [...new Set(filtered.map(s => s.appId))]
           const names: Record<string, string> = {}
           await Promise.all(
             uniqueAppIds.map(async (id) => {

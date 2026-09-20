@@ -6,6 +6,7 @@
  */
 
 import type { AppSpec, AppType } from '../spec'
+import { isBuiltinApp } from '../../../shared/apps/app-types'
 
 // ============================================
 // App Status
@@ -197,12 +198,10 @@ export interface DeleteAppOptions {
  *   - are protected from permanent deletion (deleteApp is rejected)
  *   - honor user pause / soft-uninstall persistently across boots
  *
- * The marker lives on `spec.store.install_source === 'builtin'` so it survives
- * round-trips through SQLite (spec_json column) and IPC.
+ * Re-exported from shared/apps/app-types so renderer and main share one
+ * implementation of the `install_source === 'builtin'` check.
  */
-export function isBuiltinApp(app: InstalledApp): boolean {
-  return app.spec.store?.install_source === 'builtin'
-}
+export { isBuiltinApp }
 
 /**
  * App Manager Service -- lifecycle management for installed Apps.

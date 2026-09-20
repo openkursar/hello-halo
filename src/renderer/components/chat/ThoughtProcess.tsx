@@ -442,21 +442,27 @@ export function ThoughtProcess({ thoughts, isThinking }: ThoughtProcessProps) {
 
   return (
     <div className="animate-fade-in mb-4">
+      {/* `bg-card/80` in every state: fully translucent tints (the old
+          `bg-card/30`) were indistinguishable from `--background` in the
+          light theme, a percent of lightness apart — but fully opaque reads
+          identical to the reply bubble right below it. 80% keeps it visibly
+          lighter than the page while still reading as its own layer, not
+          the reply. State rides on the border. */}
       <div
         className={`
-          relative rounded-xl border overflow-hidden transition-all duration-300
+          relative rounded-xl border overflow-hidden transition-all duration-300 bg-card/80
           ${isThinking
-            ? 'border-primary/40 bg-primary/5'
+            ? 'border-primary/40'
             : errorCount > 0
-              ? 'border-destructive/30 bg-destructive/5'
-              : 'border-border/50 bg-card/30'
+              ? 'border-destructive/40'
+              : 'border-border/50'
           }
         `}
       >
         {/* Header */}
         <button
           onClick={() => setIsExpanded(!isExpanded)}
-          className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/5 transition-colors"
+          className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-secondary/60 transition-colors"
         >
           {/* Status indicator */}
           {isThinking ? (

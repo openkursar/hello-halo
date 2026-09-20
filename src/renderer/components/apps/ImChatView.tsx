@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Loader2, AlertCircle, Radio, Eraser, Square, ArrowRightToLine } from 'lucide-react'
+import { Loader2, AlertCircle, Radio, Eraser, Square } from 'lucide-react'
 import { api } from '../../api'
 import { useChatStore } from '../../stores/chat.store'
 import { useTeamStore } from '../../stores/team.store'
@@ -32,13 +32,15 @@ interface ImChatViewProps {
   appId: string
   spaceId: string
   session: ImSessionRecord
-  /** Incrementing key to trigger message reload after external clear (e.g., from ImSessionPanel) */
+  /** Incrementing key to trigger message reload after an external clear action. */
   clearKey?: number
+  /** Rendered at the right edge of the read-only bar — the one action that applies to this conversation (fork to client). */
+  footerAction?: React.ReactNode
 }
 
 type LoadState = 'loading' | 'loaded' | 'error' | 'empty'
 
-export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProps) {
+export function ImChatView({ appId, spaceId, session, clearKey, footerAction }: ImChatViewProps) {
   const { t } = useTranslation()
 
   const conversationId = buildImSessionKey(appId, session.channel, session.chatType, session.chatId)
@@ -196,28 +198,6 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
     }
   }, [appId, spaceId, session.channel, session.chatType, session.chatId, conversationId, resetSession])
 
-  // ── Continue in client: fork this session into a native local chat ──
-  // Only offered when the active engine can branch a session to a new id
-  // (sessionFork capability). Forks the full context into a client session and
-  // navigates to it, leaving this IM session untouched.
-  const capabilities = useEngineCapabilities()
-  const canFork = !!capabilities?.features.sessionFork
-  const selectImSession = useAppsPageStore(s => s.selectImSession)
-  const fetchImSessions = useAppsPageStore(s => s.fetchImSessions)
-
-  const handleForkToClient = useCallback(async () => {
-    try {
-      const res = await api.appSessionFork(appId, spaceId, conversationId)
-      if (res.success && res.data) {
-        const record = (res.data as { record: ImSessionRecord }).record
-        await fetchImSessions(appId)
-        selectImSession(record)
-      }
-    } catch (err) {
-      console.error('[ImChatView] Continue in client error:', err)
-    }
-  }, [appId, spaceId, conversationId, fetchImSessions, selectImSession])
-
   const displayName = getImSessionDisplayName(session)
   const channelLabel = CHANNEL_LABELS[session.channel] ?? session.channel
   const chatTypeLabel = session.chatType === 'group' ? t('Group') : t('Direct')
@@ -319,23 +299,16 @@ export function ImChatView({ appId, spaceId, session, clearKey }: ImChatViewProp
         />
       </div>
 
-      {/* Styled like a disabled composer so it occupies the input slot. */}
+      {/* Styled like a disabled composer so it occupies the input slot.
+          footerAction is the one action that applies to this conversation
+          (fork to client) — owned by the caller, not this view. */}
       {(messages.length > 0 || hasStreamingContent) && (
-        <div className="flex-shrink-0 px-3 py-2.5 sm:px-4">
+        <div className="flex-shrink-0 px-4 sm:px-10 py-2.5">
           <div className="flex items-center gap-2 rounded-2xl border border-border bg-muted/40 px-3 py-2">
             <span className="flex-1 min-w-0 truncate text-xs text-muted-foreground">
               {t('Read-only IM session · copy the context to continue in a client chat')}
             </span>
-            {canFork && (
-              <button
-                onClick={handleForkToClient}
-                className="flex-shrink-0 flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
-                title={t('Continue this conversation in a client chat')}
-              >
-                <span>{t('Continue in client')}</span>
-                <ArrowRightToLine className="w-3.5 h-3.5" />
-              </button>
-            )}
+            {footerAction}
           </div>
         </div>
       )}
@@ -369,7 +342,7 @@ function ImChatInfoBar({ name, channel, chatType, source, isGenerating, hasMessa
     ? t('Read-only · Interact via API')
     : t('Read-only · Interact via IM channel')
   return (
-    <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-muted/30 flex-shrink-0">
+    <div className="flex items-center gap-2 px-4 sm:px-10 py-2 border-b border-border bg-muted/30 flex-shrink-0">
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <span className="text-sm font-medium truncate">{name}</span>
         <span className="text-[11px] text-muted-foreground">

@@ -232,7 +232,7 @@ export function StoreMine() {
           ) : (
             <section>
               <SectionLabel>{t('My Publications')}</SectionLabel>
-              <div className="overflow-x-auto rounded-[10px] border border-border/60 bg-background">
+              <div className="overflow-x-auto rounded-[10px] border border-border/60 bg-card">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left text-xs text-muted-foreground border-b border-border/60">

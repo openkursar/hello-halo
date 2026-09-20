@@ -21,7 +21,7 @@ export function StoreUpdatable() {
       <div className="mb-3">
         <h2 className="text-[13px] font-semibold tracking-[0.5px] text-foreground">{t('Apps to update')}</h2>
       </div>
-      <div className="overflow-x-auto rounded-[10px] border border-border/60 bg-background">
+      <div className="overflow-x-auto rounded-[10px] border border-border/60 bg-card">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-muted-foreground border-b border-border/60">

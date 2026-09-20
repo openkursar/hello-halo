@@ -12,17 +12,22 @@
 
 import { create } from 'zustand'
 import { mergeActivityEntries, isPendingDecision } from '../utils/people-model'
+import { useMemo } from 'react'
 import { api } from '../api'
+import i18n from '../i18n'
 import { useNotificationStore } from './notification.store'
+import { BUILTIN_MCP_SERVER_IDS } from '../../shared/apps/builtin-mcp'
 import type {
   InstalledApp,
   AppStatus,
   AutomationAppState,
+  AppOverviewEntry,
   ActivityEntry,
   ActivityQueryOptions,
   EscalationAnswerPayload,
 } from '../../shared/apps/app-types'
 import type { AppSpec } from '../../shared/apps/spec-types'
+import type { ScheduleValue, TaskItem, TaskItemStatus } from '../types'
 
 // ============================================
 // Typed error for App install/import failures
@@ -73,12 +78,45 @@ interface AppsState {
   activityErrors: Record<string, boolean>
   summariesError: boolean
   hasFullList: boolean
+  /**
+   * Card-wall batch data per automation app (latest output summary + recent
+   * run statuses). Populated by `loadOverview`; `appStates` above stays the
+   * single source for `AutomationAppState` itself (also filled by this call).
+   */
+  overview: Record<string, AppOverviewEntry>
   isLoading: boolean
   error: string | null
+
+  /**
+   * Derived: automation apps that belong in the task panel (running, queued,
+   * waiting on the user, errored, or needing re-login). Pre-computed by the
+   * fingerprint-gated subscriber below, not recalculated on every store
+   * update — see chat.store's `_pulseItems` for the same pattern.
+   */
+  _automationTaskItems: TaskItem[]
 
   // ── App List Management ───────────────────
   loadApps: (spaceId?: string) => Promise<void>
   refreshApp: (appId: string) => Promise<void>
+
+  /**
+   * Cold-start loader for the task panel: loads every installed app plus
+   * the runtime state of each automation app, so running/waiting/errored
+   * digital humans are visible immediately after launch instead of only
+   * after the user opens the Apps page (which is what previously triggered
+   * `loadApps`/`loadAppState`). Also prefetches activity for apps awaiting
+   * the user so their escalation question is available right away.
+   * Fire-and-forget; call during extended startup, not the essential path.
+   */
+  loadAutomationTaskState: () => Promise<void>
+
+  /**
+   * Batched card-wall first paint: one `app:get-overview` call fills
+   * `appStates` and `overview` for every automation app (optionally scoped to
+   * one space), then prefetches activity for any app awaiting the user so its
+   * escalation question is available without a second round trip.
+   */
+  loadOverview: (spaceId?: string) => Promise<void>
 
   // ── App Lifecycle ─────────────────────────
   installApp: (spaceId: string | null, spec: AppSpec, userConfig?: Record<string, unknown>) => Promise<string | null>
@@ -175,8 +213,10 @@ export const useAppsStore = create<AppsState>((set, get) => ({
   activityErrors: {},
   summariesError: false,
   hasFullList: false,
+  overview: {},
   isLoading: false,
   error: null,
+  _automationTaskItems: [],
 
   // ── App List Management ───────────────────
 
@@ -209,6 +249,23 @@ export const useAppsStore = create<AppsState>((set, get) => ({
     } catch (err) {
       console.error('[AppsStore] refreshApp error:', err)
     }
+  },
+
+  loadAutomationTaskState: async () => {
+    // `enterApp()` fires as soon as bootstrap:extended-ready arrives, which
+    // is sent synchronously and does not wait for initPlatformAndApps() (the
+    // async chain that brings up the App Manager) to finish — so the first
+    // loadApps() call here routinely loses this race and comes back with the
+    // NOT_INITIALIZED error, apps left empty. Retry with backoff instead of
+    // giving up after one attempt, which would silently defeat the whole
+    // point of this cold-start loader.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await get().loadApps()
+      if (!get().error) break
+      await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)))
+    }
+
+    await get().loadOverview()
   },
 
   // ── App Lifecycle ─────────────────────────
@@ -402,6 +459,34 @@ export const useAppsStore = create<AppsState>((set, get) => ({
     }
   },
 
+  loadOverview: async (spaceId) => {
+    try {
+      const res = await api.appGetOverview(spaceId)
+      if (!res.success || !res.data) return
+      const entries = res.data as AppOverviewEntry[]
+
+      set(state => {
+        const appStates = { ...state.appStates }
+        const overview = { ...state.overview }
+        for (const entry of entries) {
+          appStates[entry.appId] = entry.state
+          overview[entry.appId] = entry
+        }
+        return { appStates, overview }
+      })
+
+      // Escalation question text lives on the activity entry, not the status
+      // event — prefetch it so a waiting_user app doesn't render with a blank
+      // subtitle until the user opens it.
+      const waitingAppIds = entries
+        .filter(e => e.state.status === 'waiting_user')
+        .map(e => e.appId)
+      await Promise.all(waitingAppIds.map(appId => get().loadActivity(appId, { limit: 10 })))
+    } catch (err) {
+      console.error('[AppsStore] loadOverview error:', err)
+    }
+  },
+
   // ── Activity Feed ─────────────────────────
 
   loadActivity: async (appId, options) => {
@@ -585,7 +670,6 @@ export const useAppsStore = create<AppsState>((set, get) => ({
       const res = await api.appExportSpec(appId)
       if (res.success && res.data) {
         const { yaml, filename } = res.data as { yaml: string; filename: string }
-        // Trigger browser file download
         const blob = new Blob([yaml], { type: 'text/yaml;charset=utf-8' })
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
@@ -664,6 +748,9 @@ export const useAppsStore = create<AppsState>((set, get) => ({
         case 'waiting_user':
           appStatus = 'waiting_user'
           break
+        case 'needs_login':
+          appStatus = 'needs_login'
+          break
         case 'error':
           appStatus = 'error'
           break
@@ -710,3 +797,147 @@ export const useAppsStore = create<AppsState>((set, get) => ({
     // Lifecycle state remains authoritative even while requests are pending.
   },
 }))
+
+// ==========================================
+// Derived Automation Task Items — recalculates only when a field that
+// affects task-panel membership changes (mirrors chat.store's fingerprint-
+// gated `_pulseItems`). `appStates`/`activityEntries` also receive
+// high-frequency, task-irrelevant writes (activity feed pagination, etc.),
+// so a plain selector would recompute the merged list far more than needed.
+// ==========================================
+
+const AUTOMATION_TASK_STATUSES: Record<AutomationAppState['status'], TaskItemStatus | null> = {
+  running: 'running',
+  queued: 'running',
+  waiting_user: 'waiting',
+  needs_login: 'waiting',
+  error: 'error',
+  idle: null,
+  paused: null,
+}
+
+function _computeAutomationTaskItems(state: AppsState): TaskItem[] {
+  const items: TaskItem[] = []
+
+  for (const app of state.apps) {
+    if (app.spec.type !== 'automation' || app.status === 'uninstalled') continue
+
+    const runtime = state.appStates[app.id]
+    const status = runtime ? AUTOMATION_TASK_STATUSES[runtime.status] : null
+    if (!status || !runtime) continue
+
+    let detail: string
+    switch (runtime.status) {
+      case 'needs_login':
+        detail = i18n.t('Login expired, needs to sign in again')
+        break
+      case 'waiting_user': {
+        const entry = app.pendingEscalationId
+          ? state.activityEntries[app.id]?.find(e => e.id === app.pendingEscalationId)
+          : undefined
+        detail = entry?.content.question || i18n.t('Waiting for your input')
+        break
+      }
+      case 'error':
+        detail = runtime.lastError || i18n.t('Repeated failures, paused')
+        break
+      case 'queued':
+        detail = i18n.t('Queued')
+        break
+      default:
+        detail = i18n.t('Running')
+    }
+
+    items.push({
+      key: `app:${app.id}`,
+      source: 'automation',
+      status,
+      title: app.spec.name,
+      detail,
+      spaceId: app.spaceId,
+      // Sentinel: task.store resolves this to a display name (or the
+      // "Global" label for spaceId === null) — see task.store.ts.
+      spaceName: app.spaceId ?? '',
+      updatedAt: runtime.lastRunAtMs ?? app.installedAt,
+      startedAt: runtime.runningAtMs,
+      appId: app.id,
+      appName: app.spec.name,
+      escalationId: app.pendingEscalationId,
+      runId: runtime.runningRunId,
+    })
+  }
+
+  return items
+}
+
+function _extractAutomationTaskFingerprint(state: AppsState): string {
+  const parts: string[] = []
+  for (const app of state.apps) {
+    if (app.spec.type !== 'automation' || app.status === 'uninstalled') continue
+    const runtime = state.appStates[app.id]
+    if (!runtime || !AUTOMATION_TASK_STATUSES[runtime.status]) continue
+
+    let questionPart = ''
+    if (runtime.status === 'waiting_user' && app.pendingEscalationId) {
+      const entry = state.activityEntries[app.id]?.find(e => e.id === app.pendingEscalationId)
+      questionPart = entry?.content.question ?? ''
+    }
+    parts.push(`${app.id}:${runtime.status}:${runtime.runningAtMs ?? ''}:${runtime.lastError ?? ''}:${questionPart}`)
+  }
+  parts.sort()
+  // Prefix with the total app count so install/uninstall of an app with no
+  // task-relevant status still invalidates the fingerprint.
+  return `${state.apps.length}|${parts.join('|')}`
+}
+
+let _prevAutomationTaskFingerprint = ''
+
+useAppsStore.subscribe((state) => {
+  const fingerprint = _extractAutomationTaskFingerprint(state)
+  if (fingerprint === _prevAutomationTaskFingerprint) return
+  _prevAutomationTaskFingerprint = fingerprint
+  useAppsStore.setState({ _automationTaskItems: _computeAutomationTaskItems(state) })
+})
+
+/** Selector: automation apps that belong in the task panel (pre-computed, see above). */
+export function useAutomationTaskItems(): TaskItem[] {
+  return useAppsStore(state => state._automationTaskItems)
+}
+
+// ============================================
+// MCP Dependents (reverse lookup)
+// ============================================
+
+/** A digital human that declares a dependency on a given MCP server. */
+export interface McpDependent {
+  appId: string
+  name: string
+  /** Per-app switch (requires.mcps[].enabled). Absent flag means enabled. */
+  enabled: boolean
+}
+
+/**
+ * Reverse index: MCP specId -> digital humans that declare it in
+ * `requires.mcps`. There is no stored reverse index — this derives it from
+ * the already-loaded `apps` array on every render where it's used, which is
+ * cheap (installed-app counts are small) and avoids a second source of truth.
+ * Built-in capability ids (ai-browser, web-search, ...) are excluded; they
+ * are injected automatically and never read as an installable MCP dependency.
+ */
+export function useMcpDependents(): Record<string, McpDependent[]> {
+  const apps = useAppsStore(state => state.apps)
+  return useMemo(() => {
+    const result: Record<string, McpDependent[]> = {}
+    for (const app of apps) {
+      if (app.spec.type !== 'automation' || app.status === 'uninstalled') continue
+      const deps = app.spec.requires?.mcps
+      if (!deps) continue
+      for (const dep of deps) {
+        if (BUILTIN_MCP_SERVER_IDS.has(dep.id)) continue
+        const list = result[dep.id] ?? (result[dep.id] = [])
+        list.push({ appId: app.id, name: app.spec.name, enabled: dep.enabled !== false })
+      }
+    }
+    return result
+  }, [apps])
+}

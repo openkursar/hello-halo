@@ -29,6 +29,7 @@ export const spaceApi = {
   createSpace: async (input: {
     name: string
     icon: string
+    color?: string
     customPath?: string
   }): Promise<ApiResponse> => {
     if (isElectron()) {
@@ -77,7 +78,7 @@ export const spaceApi = {
 
   updateSpace: async (
     spaceId: string,
-    updates: { name?: string; icon?: string }
+    updates: { name?: string; icon?: string; color?: string }
   ): Promise<ApiResponse> => {
     if (isElectron()) {
       return window.halo.updateSpace(spaceId, updates)
@@ -115,6 +116,23 @@ export const spaceApi = {
       return window.halo.reorderSpaces(spaceIds)
     }
     return httpRequest('PUT', '/api/spaces/reorder', { spaceIds })
+  },
+
+  // Per-space asset counts (files/digital humans/skills/MCP) for the
+  // workspace management page's cards
+  listSpaceSummaries: async (): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.listSpaceSummaries()
+    }
+    return httpRequest('GET', '/api/spaces/summaries')
+  },
+
+  // Remove an unreachable space's registry entry (does not touch disk)
+  forgetSpace: async (spaceId: string): Promise<ApiResponse> => {
+    if (isElectron()) {
+      return window.halo.forgetSpace(spaceId)
+    }
+    return httpRequest('POST', `/api/spaces/${spaceId}/forget`)
   },
 
 }

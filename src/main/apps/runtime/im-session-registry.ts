@@ -106,6 +106,7 @@ export class ImSessionRegistry {
       existing.instanceId = instanceId // Always update to latest instance
       const archiveChanged = existing.teamContext?.epochId !== opts?.teamContext?.epochId || existing.teamContext?.teamId !== opts?.teamContext?.teamId
       existing.teamContext = opts?.teamContext
+      existing.messageCount = (existing.messageCount ?? 0) + 1
       if (opts?.lastSender !== undefined) existing.lastSender = opts.lastSender
       if (opts?.lastMessage !== undefined) existing.lastMessage = truncateUtf16Safe(opts.lastMessage, 50)
       this.requestPersist(archiveChanged)
@@ -124,6 +125,7 @@ export class ImSessionRegistry {
         lastActiveAt: Date.now(),
         lastSender: opts?.lastSender,
         lastMessage: opts?.lastMessage !== undefined ? truncateUtf16Safe(opts.lastMessage, 50) : undefined,
+        messageCount: 1,
       })
       // Bound HTTP-source growth before the new record is durably persisted.
       if (source === 'http') {
@@ -168,6 +170,7 @@ export class ImSessionRegistry {
       lastActiveAt: Date.now(),
       forkOrigin: opts?.forkOrigin,
       pendingResumeSessionId: opts?.pendingResumeSessionId,
+      messageCount: 0,
     }
     this.sessions.set(key, record)
     this.requestPersist(true)
@@ -196,6 +199,22 @@ export class ImSessionRegistry {
       delete session.pendingResumeSessionId
       this.requestPersist(true)
     }
+  }
+
+  /**
+   * Reset a session's message-activity summary after its transcript has been
+   * wiped (see app-chat.ts's clearSessionByConversationId, shared by
+   * clearAppChat/clearImSession/deleteNativeChatSession's own removal path).
+   * Identity fields (displayName/customName/proactive/forkOrigin/...) are left
+   * untouched — only lastMessage/messageCount are zeroed so a conversation-list
+   * preview matches the now-empty transcript. No-op for unknown sessions.
+   */
+  resetActivity(appId: string, channel: string, chatId: string): void {
+    const session = this.sessions.get(this.buildKey(appId, channel, chatId))
+    if (!session) return
+    session.lastMessage = undefined
+    session.messageCount = 0
+    this.requestPersist(true)
   }
 
   /**

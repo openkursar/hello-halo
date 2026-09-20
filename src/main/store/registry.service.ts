@@ -527,9 +527,12 @@ export async function installFromStore(
 
   const { entry, registryId } = found
 
+  // Read before the guard: the negative branch narrows `entry` to never,
+  // which would take `format` with it.
+  const entryFormat = String(entry.format)
   if (!isBundleFormat(entry)) {
     throw new Error(
-      `This app uses legacy package format "${String(entry.format)}". Bundle packages are required in this build.`
+      `This app uses legacy package format "${entryFormat}". Bundle packages are required in this build.`
     )
   }
 
@@ -574,7 +577,15 @@ export async function installFromStore(
           .map(dep => ({ id: dep.id, files: dep.files }))
 
         if (bundledDeps.length > 0) {
-          bundledSkillSpecs = await adapter.fetchBundledSkills(registry, entry, bundledDeps)
+          const fetched = await adapter.fetchBundledSkills(registry, entry, bundledDeps)
+          // Distinct from 'store': the user never chose this skill independently —
+          // it exists because specWithStore declared it as a dependency.
+          bundledSkillSpecs = new Map(
+            Array.from(fetched, ([id, skillSpec]) => [id, {
+              ...skillSpec,
+              store: { tags: [], ...(skillSpec.store ?? {}), install_source: 'bundled' as const },
+            }])
+          )
         }
       }
 
@@ -744,7 +755,7 @@ export async function installRequiredSkills(
  * all data needed to render the detail page (name, description, tags, etc.).
  */
 function buildPreviewSpec(entry: RegistryEntry, registryId: string): AppSpec {
-  const store = { slug: entry.slug, registry_id: registryId }
+  const store = { tags: [], slug: entry.slug, registry_id: registryId }
   const requires = (entry.requires_mcps?.length || entry.requires_skills?.length)
     ? {
         mcps: entry.requires_mcps?.map(id => ({ id })),
@@ -1077,7 +1088,7 @@ export function updateRegistryAdapterConfig(
 export function loadConfig(): RegistryServiceConfig {
   try {
     const haloConfig = getConfig()
-    const storeConfig = (haloConfig as Record<string, unknown>)[CONFIG_KEY] as Record<string, unknown> | undefined
+    const storeConfig = (haloConfig as unknown as Record<string, unknown>)[CONFIG_KEY] as Record<string, unknown> | undefined
 
     if (!storeConfig) {
       return {
@@ -1421,9 +1432,11 @@ function withInstallStoreMetadata(spec: AppSpec, slug: string, registryId: strin
   return {
     ...spec,
     store: {
+      tags: [],
       ...(spec.store ?? {}),
       slug: spec.store?.slug ?? slug,
       registry_id: registryId,
+      install_source: spec.store?.install_source ?? 'store',
     },
   }
 }

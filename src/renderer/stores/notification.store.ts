@@ -10,7 +10,6 @@
  * - Future: any module can push toasts via store actions
  *
  * Design:
- * - Visual style matches the existing UpdateNotification component
  * - Each toast auto-dismisses after a configurable duration
  * - Toasts stack from bottom-right, newest at the bottom
  */

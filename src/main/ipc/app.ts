@@ -17,6 +17,9 @@
  *   app:trigger            Manually trigger a run
  *   app:get-state          Get real-time automation state
  *   app:get-activity       Get activity log entries for an App
+ *   app:get-runs           Get run history for an App, with each run's last activity summary
+ *   app:get-run-stats      Get aggregate outcome/token/duration stats over an App's recent runs
+ *   app:get-overview       Batched card-wall first paint: state + latest summary + recent runs per App
  *   app:respond-escalation Respond to a pending user escalation
  *   app:update-config      Update App user configuration
  *   app:update-frequency   Update subscription frequency override
@@ -73,7 +76,7 @@ import {
 } from '../apps/runtime'
 import type { AppSpec } from '../apps/spec'
 import type { AppListFilter, UninstallOptions, UpgradeStrategy } from '../apps/manager'
-import type { ActivityQueryOptions, EscalationResponse, AppChatRequest } from '../apps/runtime'
+import type { ActivityQueryOptions, RunQueryOptions, EscalationResponse, AppChatRequest } from '../apps/runtime'
 import { getSpace } from '../services/space.service'
 import { broadcastToAll } from '../http/websocket'
 import * as appController from '../controllers/app.controller'
@@ -390,6 +393,48 @@ export function registerAppHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:get-activity error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:get-runs ─────────────────────────────────────────────────────────
+    appGetRuns: async (input: { appId: string; options?: RunQueryOptions }) => {
+      try {
+        const r = requireRuntime()
+        if (!r.success) return r
+        const runs = r.runtime.getRunsForAppWithSummary(input.appId, input.options)
+        return { success: true, data: runs }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:get-runs error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:get-run-stats ────────────────────────────────────────────────────
+    appGetRunStats: async (input: { appId: string; window?: number }) => {
+      try {
+        const r = requireRuntime()
+        if (!r.success) return r
+        const stats = r.runtime.getRunStats(input.appId, input.window)
+        return { success: true, data: stats }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:get-run-stats error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:get-overview ─────────────────────────────────────────────────────
+    appGetOverview: async (input?: { spaceId?: string }) => {
+      try {
+        const r = requireRuntime()
+        if (!r.success) return r
+        const overview = r.runtime.getOverview(input?.spaceId)
+        return { success: true, data: overview }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:get-overview error:', err.message)
         return { success: false, error: err.message }
       }
     },
@@ -902,6 +947,35 @@ export function registerAppHandlers(): void {
       } catch (error: unknown) {
         const err = error as Error
         console.error('[AppIPC] app:list-available-skills error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:list-available-skills-for-space ─────────────────────────────────
+    // Same disk-scan as above, keyed directly by spaceId — for surfaces (the
+    // space resource rail) that have a space, not a digital human, in hand.
+    appListAvailableSkillsForSpace: async (spaceId: string) => {
+      try {
+        return { success: true, data: listAvailableSkills(spaceId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:list-available-skills-for-space error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ── app:list-effective-mcp-apps ──────────────────────────────────────────
+    // Space-scoped ∪ global MCP apps (space overrides global), for read-only
+    // display in the space resource rail — not the "declared dependencies of
+    // one digital human" list AppMcpDepsSection shows.
+    appListEffectiveMcpApps: async (spaceId: string) => {
+      try {
+        const r = requireManager()
+        if (!r.success) return r
+        return { success: true, data: r.manager.listEffectiveMcpApps(spaceId) }
+      } catch (error: unknown) {
+        const err = error as Error
+        console.error('[AppIPC] app:list-effective-mcp-apps error:', err.message)
         return { success: false, error: err.message }
       }
     },

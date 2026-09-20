@@ -38,6 +38,7 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
           pendingQuestion: null,
           queuedMessages: [],
           turnId: (prevSession?.turnId ?? 0) + 1,
+          turnStartedAt: Date.now(),
         })
         return { sessions: newSessions }
       })
@@ -141,7 +142,7 @@ export const createMessagingSlice: ChatSlice<'sendMessage' | 'stopGeneration' | 
   stopGeneration: async (conversationId?: string) => {
     const targetId = conversationId || get().getCurrentSpaceState().currentConversationId
     try {
-      await api.stopGeneration(targetId)
+      await api.stopGeneration(targetId ?? undefined)
 
       if (targetId) get().markSessionStopped(targetId)
     } catch (error) {

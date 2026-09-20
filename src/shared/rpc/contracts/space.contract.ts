@@ -17,4 +17,6 @@ export const spaceRpc = {
   updateSpacePreferences: rawRpcMethod('space:update-preferences'),
   getSpacePreferences: rawRpcMethod('space:get-preferences'),
   reorderSpaces: rawRpcMethod('space:reorder'),
+  listSpaceSummaries: rawRpcMethod('space:list-summaries'),
+  forgetSpace: rawRpcMethod('space:forget'),
 }

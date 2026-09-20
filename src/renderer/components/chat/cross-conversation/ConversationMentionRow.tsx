@@ -7,7 +7,7 @@
 import { MessageSquare } from 'lucide-react'
 import { TaskStatusDot } from '../../pulse'
 import { useTranslation } from '../../../i18n'
-import { formatTimeAgo } from '../../../utils/time'
+import { formatTimeAgo } from '../../../utils/format-time'
 import type { ConversationMentionCandidate } from './useConversationMentionCandidates'
 
 interface ConversationMentionRowProps {

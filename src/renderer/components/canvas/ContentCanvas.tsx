@@ -155,8 +155,10 @@ export function ContentCanvas({ className = '' }: ContentCanvasProps) {
       {/* Tab bar - VS Code style */}
       <CanvasTabBar />
 
-      {/* Content area - bg-card matches active tab for visual continuity */}
-      <div className="flex-1 min-h-0 overflow-hidden bg-card">
+      {/* Content area - bg-background matches the active tab (see canvas-tabs.css
+          .canvas-tab.active) for visual continuity, and the prototype's own
+          `.canvas{background:var(--bg)}`. */}
+      <div className="flex-1 min-h-0 overflow-hidden bg-background">
         {activeTab ? (
           <TabContent
             tab={activeTab}
@@ -296,6 +298,7 @@ function TabContent({ tab, onScrollChange, onContentChange, onSaveComplete, onEd
  * Empty State - Shown when no tabs are open
  */
 function EmptyState() {
+  const { t } = useTranslation()
   return (
     <div className="flex items-center justify-center h-full">
       <div className="text-center max-w-md px-4">

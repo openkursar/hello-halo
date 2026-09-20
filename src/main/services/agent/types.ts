@@ -338,6 +338,8 @@ export interface McpServerStatusInfo {
   errorDetail?: string
   /** Epoch ms of the last probe/SDK report that produced this entry */
   lastCheckedAt?: number
+  /** Round-trip time of the last native probe, in milliseconds. */
+  latencyMs?: number
 }
 
 // ============================================

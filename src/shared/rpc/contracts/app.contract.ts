@@ -33,6 +33,9 @@ export const appRpc = {
   appGetActivity: rawRpcMethod('app:get-activity'),
   appGetActivityEntry: rawRpcMethod('app:get-activity-entry'),
   appGetSession: rawRpcMethod('app:get-session'),
+  appGetRuns: rawRpcMethod('app:get-runs'),
+  appGetRunStats: rawRpcMethod('app:get-run-stats'),
+  appGetOverview: rawRpcMethod('app:get-overview'),
   appRespondEscalation: rawRpcMethod('app:respond-escalation'),
   appContinueRun: rawRpcMethod('app:continue-run'),
   appInjectRun: rawRpcMethod('app:inject-run'),
@@ -51,6 +54,8 @@ export const appRpc = {
   // Romanization lives in main so its dictionary stays out of the renderer bundle.
   appDeriveSkillCommandName: rawRpcMethod('app:derive-skill-command-name'),
   appListAvailableSkills: rawRpcMethod('app:list-available-skills'),
+  appListAvailableSkillsForSpace: rawRpcMethod('app:list-available-skills-for-space'),
+  appListEffectiveMcpApps: rawRpcMethod('app:list-effective-mcp-apps'),
   appGetDataPath: rawRpcMethod('app:get-data-path'),
   appOpenDataFolder: rawRpcMethod('app:open-data-folder'),
   appClearMemory: rawRpcMethod('app:clear-memory'),

@@ -49,6 +49,13 @@ export interface MessageRowProps {
 
   /** Additional className for the outer wrapper (e.g., width constraints from Virtuoso) */
   className?: string
+
+  /**
+   * Reply-sender name, resolved by the caller (MessageList) from
+   * conversationId — the digital human's name for app-chat, "Halo" otherwise.
+   * Only meaningful for assistant messages; pass undefined for user messages.
+   */
+  senderName?: string
 }
 
 export const MessageRow = memo(function MessageRow({
@@ -61,6 +68,7 @@ export const MessageRow = memo(function MessageRow({
   hideBrowserViewButton = false,
   injectionMessages,
   className = '',
+  senderName,
 }: MessageRowProps) {
   // System-sourced rows are routed before the bubble branches below: MessageItem
   // only distinguishes user from assistant, so anything reaching it would be
@@ -84,11 +92,18 @@ export const MessageRow = memo(function MessageRow({
   const hasInlineThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0
   const hasSeparatedThoughts = message.thoughts === null && !!message.thoughtsSummary
 
+  // Reply-sender label — plain text, always the topmost element of
+  // the reply (above thoughts, above the bubble), assistant messages only.
+  const senderLabel = message.role === 'assistant' && senderName ? (
+    <div className="mb-1 text-xs font-medium text-muted-foreground">{senderName}</div>
+  ) : null
+
   // Assistant messages with thoughts: show collapsed thoughts above message bubble
   if (message.role === 'assistant' && (hasInlineThoughts || hasSeparatedThoughts)) {
     return (
-      <div className={`flex justify-start pb-4 ${className}`}>
+      <div className={`flex justify-start pb-5 ${className}`}>
         <div className="w-[85%]">
+          {senderLabel}
           {hasInlineThoughts ? (
             <CollapsedThoughtProcess
               thoughts={message.thoughts as Thought[]}
@@ -140,9 +155,10 @@ export const MessageRow = memo(function MessageRow({
   const hasInjections = injectionMessages && injectionMessages.length > 0
   if (message.role === 'assistant' && hasInjections) {
     return (
-      <div className={`pb-4 ${className}`}>
+      <div className={`pb-5 ${className}`}>
         <div className="flex justify-start">
           <div className="w-[85%]">
+            {senderLabel}
             <MessageItem
               message={message}
               previousCost={previousCost}
@@ -157,7 +173,8 @@ export const MessageRow = memo(function MessageRow({
   }
 
   return (
-    <div className={`pb-4 ${className}`}>
+    <div className={`pb-5 ${className}`}>
+      {senderLabel}
       <MessageItem
         message={message}
         previousCost={previousCost}

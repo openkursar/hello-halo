@@ -25,17 +25,18 @@ import { ArtifactRail } from '../components/artifact/ArtifactRail'
 import { ConversationList } from '../components/chat/ConversationList'
 import { ChatHistoryPanel } from '../components/chat/ChatHistoryPanel'
 import { Header } from '../components/layout/Header'
-import { SidebarToggle } from '../components/layout/SidebarToggle'
 import { SpaceSelector } from '../components/layout/SpaceSelector'
 import { ModelSelector } from '../components/layout/ModelSelector'
 import { QuotaPill } from '../components/layout/QuotaPill'
 import { MobileOverflowMenu } from '../components/layout/MobileOverflowMenu'
+import { HeaderMoreMenu } from '../components/layout/HeaderMoreMenu'
 import { ContentCanvas, TerminalCloseGuard } from '../components/canvas'
 import { GitBashWarningBanner } from '../components/setup/GitBashWarningBanner'
 import { api } from '../api'
 import { useLayoutPreferences } from '../hooks/useLayoutPreferences'
+import { useConversationTouchedFiles } from '../hooks/useConversationTouchedFiles'
 import { useWindowMaximize } from '../components/canvas/viewers/useWindowMaximize'
-import { X, MessageSquare } from 'lucide-react'
+import { X, MessageSquare, Folder } from 'lucide-react'
 import { SearchIcon } from '../components/search/SearchIcon'
 import { useSearchShortcuts } from '../hooks/useSearchShortcuts'
 import { useTranslation } from '../i18n'
@@ -57,11 +58,9 @@ export function SpacePage() {
   const { t } = useTranslation()
 
   // Precise selectors — only subscribe to what SpacePage needs for layout orchestration
-  const setView = useAppStore(state => state.setView)
   const mockBashMode = useAppStore(state => state.mockBashMode)
   const gitBashInstallProgress = useAppStore(state => state.gitBashInstallProgress)
   const startGitBashInstall = useAppStore(state => state.startGitBashInstall)
-  const sidebarOpenConfig = useAppStore(state => state.config?.layout?.sidebarOpen)
   const artifactRailWidthConfig = useAppStore(state => state.config?.layout?.artifactRailWidth)
 
   // Active source id for the header quota pill (string identity → re-renders
@@ -81,19 +80,14 @@ export function SpacePage() {
     return (spaceState?.conversations?.length ?? 0) > 0
   })
 
-  // Show conversation list (persisted globally in config)
-  const [showConversationList, setShowConversationList] = useState(
-    sidebarOpenConfig ?? false
-  )
-
-  // Sync sidebar state when config loads asynchronously
-  const sidebarOpenInitialized = useRef(false)
-  useEffect(() => {
-    if (sidebarOpenConfig !== undefined && !sidebarOpenInitialized.current) {
-      setShowConversationList(sidebarOpenConfig)
-      sidebarOpenInitialized.current = true
-    }
-  }, [sidebarOpenConfig])
+  // Header center title (prototype `.header-title`) — current conversation's
+  // name, hidden on mobile like the prototype (`.header-title{display:none}`
+  // under its 720px breakpoint).
+  const currentConversationTitle = useChatStore(state => {
+    const conversationId = state.getCurrentSpaceState().currentConversationId
+    return conversationId ? state.conversationCache.get(conversationId)?.title : undefined
+  })
+  const currentConversationId = useChatStore(state => state.getCurrentSpaceState().currentConversationId)
 
   // Canvas state - use precise selectors to minimize re-renders
   const isCanvasOpen = useCanvasIsOpen()
@@ -219,6 +213,17 @@ export function SpacePage() {
       const store = useChatStore.getState()
       const spaceState = store.getSpaceState(currentSpace.id)
 
+      // Consume pending digital-human navigation (cross-space jump from the
+      // detail page's "Chat" button or the resource rail's hover action).
+      // Checked before the regular Pulse nav — the two are mutually exclusive
+      // per triggering action, so order between them doesn't matter in practice.
+      const pendingAppChatNav = store.pendingAppChatNavigation
+      if (pendingAppChatNav) {
+        useChatStore.setState({ pendingAppChatNavigation: null })
+        useChatStore.getState().selectAppChatConversation(currentSpace.id, pendingAppChatNav.appId, pendingAppChatNav.conversationId)
+        return
+      }
+
       // Consume pending Pulse navigation (cross-space jump from PulseList)
       const pendingNav = store.pendingPulseNavigation
       if (pendingNav) {
@@ -237,13 +242,6 @@ export function SpacePage() {
 
     initSpace()
   }, [currentSpace?.id]) // Only re-run when space ID changes
-
-  // Toggle conversation list sidebar with global persistence
-  const handleToggleConversationList = useCallback(() => {
-    const newValue = !showConversationList
-    setShowConversationList(newValue)
-    persistLayout({ sidebarOpen: newValue })
-  }, [showConversationList])
 
   // Persist artifact rail width on drag end
   const handleArtifactRailWidthChange = useCallback((width: number) => {
@@ -285,6 +283,35 @@ export function SpacePage() {
     prevMaximizedRef.current = isCanvasMaximized
   }, [isCanvasMaximized, effectiveRailExpanded, setRailExpanded, isMobile])
 
+  // Auto-open the artifact rail the moment the AI writes or edits a file in
+  // the conversation you're actively watching, so a closed rail doesn't
+  // hide the fact that local files just changed. Scoped to growth *within*
+  // the same conversation — switching to a different (or brand-new) one
+  // just resyncs the baseline below, it never forces the rail open, since
+  // that conversation's changes aren't new right now.
+  const touchedFiles = useConversationTouchedFiles()
+  const touchedFilesBaselineRef = useRef({ conversationId: currentConversationId, size: touchedFiles.size })
+
+  useEffect(() => {
+    const baseline = touchedFilesBaselineRef.current
+    const sameConversation = baseline.conversationId === currentConversationId
+    if (sameConversation && touchedFiles.size > baseline.size && !effectiveRailExpanded) {
+      setRailExpanded(true)
+    }
+    touchedFilesBaselineRef.current = { conversationId: currentConversationId, size: touchedFiles.size }
+  }, [touchedFiles, currentConversationId, effectiveRailExpanded, setRailExpanded])
+
+  // Consume a workspace card's asset-chip request (space.store's
+  // pendingArtifactRailTab, set by SpacesPage before switching here) — force
+  // the rail open on the requested tab, then clear so a later manual
+  // collapse doesn't get silently re-opened by a stale pending value.
+  const pendingArtifactRailTab = useSpaceStore(state => state.pendingArtifactRailTab)
+  useEffect(() => {
+    if (!pendingArtifactRailTab) return
+    setRailExpanded(true)
+    useSpaceStore.getState().setPendingArtifactRailTab(null)
+  }, [pendingArtifactRailTab, setRailExpanded])
+
   // Listen for exit-maximized event from overlay
   useEffect(() => {
     const cleanup = api.onCanvasExitMaximized(() => {
@@ -300,17 +327,10 @@ export function SpacePage() {
     onSearch: (scope) => openSearch(scope)
   })
 
-  // Handle new conversation (still needed for header button)
-  const handleNewConversation = useCallback(async () => {
-    if (currentSpace) {
-      await useChatStore.getState().createConversation(currentSpace.id)
-    }
-  }, [currentSpace])
-
   if (!currentSpace) {
     return (
       <div className="h-full w-full flex items-center justify-center">
-        <p className="text-muted-foreground">{t('No space selected')}</p>
+        <p className="text-muted-foreground">{t('No workspace selected')}</p>
       </div>
     )
   }
@@ -328,28 +348,24 @@ export function SpacePage() {
         Show/hide is controlled by api.showChatCapsuleOverlay() / api.hideChatCapsuleOverlay()
       */}
 
-      {/* Header - replaced with drag region spacer when maximized (for macOS traffic lights) */}
-      {isCanvasMaximized ? (
-        <div
-          className="h-11 flex-shrink-0 bg-background"
-          style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
-        />
-      ) : (
+      {/* Header — hidden (bare drag strip) when the canvas is maximized, since
+          there's no chrome to show and the strip still needs to be draggable
+          and clear the macOS traffic lights. */}
       <Header
+        hidden={isCanvasMaximized}
+        title={!isMobile ? currentConversationTitle : undefined}
         left={
           <>
-            {/* Back button */}
-            <button
-              onClick={() => setView('home')}
-              className="p-1.5 hover:bg-secondary rounded-lg transition-colors"
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
-
-            {/* Space Selector - dropdown for switching spaces (includes icon + name + back) */}
+            {/* Space Selector - dropdown for switching spaces (includes icon + name + "Manage Spaces") */}
             <SpaceSelector />
+
+            {/* Global search — prototype `.hsearch` sits directly after the
+                space selector, on the left, not grouped with the right-side
+                quota/model/rail icons. Hidden on mobile (reachable via the
+                overflow menu instead). */}
+            <div className="hidden sm:block">
+              <SearchIcon onClick={openSearch} isInSpace={true} />
+            </div>
 
             {/* Mobile: Chat History Panel as bottom sheet */}
             {isMobile && hasConversations && (
@@ -361,23 +377,6 @@ export function SpacePage() {
         }
         right={
           <>
-            {/* New conversation button */}
-            <button
-              onClick={handleNewConversation}
-              className="flex items-center gap-1.5 px-2.5 py-1 text-sm hover:bg-secondary rounded-lg transition-colors"
-              title={t('New conversation')}
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              <span className="hidden sm:inline">{t('New conversation')}</span>
-            </button>
-
-            {/* Search Icon - hidden on mobile (in overflow menu) */}
-            <div className="hidden sm:block">
-              <SearchIcon onClick={openSearch} isInSpace={true} />
-            </div>
-
             {/* Metered quota — renders only when the active source reports it */}
             <QuotaPill sourceId={currentSourceId} />
 
@@ -386,23 +385,33 @@ export function SpacePage() {
               <ModelSelector />
             </div>
 
+            {/* Space resources rail toggle - desktop only; mobile reaches the
+                rail via its own floating trigger button. Prototype `#railBtn`
+                is a folder glyph (Files/Skill/MCP = "space resources"), not a
+                generic panel icon — and `.icon-btn`: 32×32, rounded-sm(8px),
+                17×17 icon, active state tints when the rail is open. */}
+            <div className="hidden sm:block">
+              <button
+                onClick={() => setRailExpanded(!effectiveRailExpanded)}
+                className={`w-8 h-8 rounded-sm flex items-center justify-center transition-colors ease-halo ${
+                  effectiveRailExpanded
+                    ? 'bg-primary/[0.12] text-accent-on-dark'
+                    : 'text-subtle-foreground hover:bg-secondary hover:text-foreground'
+                }`}
+                title={effectiveRailExpanded ? t('Close workspace resources') : t('Open workspace resources')}
+                aria-pressed={effectiveRailExpanded}
+              >
+                <Folder className="w-[17px] h-[17px]" strokeWidth={1.8} />
+              </button>
+            </div>
+
+            <HeaderMoreMenu />
+
             {/* Mobile: overflow menu collapses model/search/settings */}
             <MobileOverflowMenu onSearch={() => openSearch('space')} />
-
-            <button
-              onClick={() => setView('settings')}
-              className="hidden sm:block p-1.5 hover:bg-secondary rounded-lg transition-colors"
-              title={t('Settings')}
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </button>
           </>
         }
       />
-      )}
 
       {/* Git Bash Warning Banner - Windows only, when in mock mode */}
       {mockBashMode && !isCanvasMaximized && (
@@ -414,14 +423,12 @@ export function SpacePage() {
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Conversation list sidebar - CSS hidden when collapsed or maximized, unmounted on mobile */}
-        {!isMobile && (
-          <div style={{ display: showConversationList && !isCanvasMaximized ? 'flex' : 'none' }}>
-            <ConversationList
-              onClose={handleToggleConversationList}
-              visible={showConversationList && !isCanvasMaximized}
-            />
-          </div>
+        {/* Conversation list sidebar - always visible on desktop (prototype has
+            no "fully hidden" state, only the canvas-open narrow one); width
+            drag-resize and the canvas-open collapse still apply. Unmounted
+            when the canvas is maximized (matches the chat view) or on mobile. */}
+        {!isMobile && !isCanvasMaximized && (
+          <ConversationList collapsed={isCanvasOpen} />
         )}
 
         {/* Desktop Layout */}
@@ -443,16 +450,6 @@ export function SpacePage() {
                 }}
               >
                 <ChatView isCompact={isCanvasOpen} />
-
-                {/* Floating sidebar toggle - shows when sidebar is closed */}
-                {!showConversationList && (
-                  <div className="absolute top-2 left-0 z-10">
-                    <SidebarToggle
-                      isOpen={false}
-                      onToggle={handleToggleConversationList}
-                    />
-                  </div>
-                )}
 
                 {/* Drag handle for chat width - only when canvas is open */}
                 {isCanvasOpen && (
@@ -490,12 +487,17 @@ export function SpacePage() {
           </div>
         )}
 
-        {/* Artifact rail - auto-collapses when maximized via useEffect above */}
-        {/* Smart collapse: collapses when canvas is open, respects user preference */}
+        {/* Artifact rail - defaults collapsed and auto-opens when the
+            conversation writes/edits files, or a workspace card's asset chip
+            asks for a specific tab (both effects above); otherwise follows
+            the user's own toggle, persisted per space. Only exception:
+            forced closed while the canvas is maximized (see useEffect
+            above), restoring on exit. */}
         {!isMobile && (
           <ArtifactRail
             externalExpanded={effectiveRailExpanded}
             onExpandedChange={setRailExpanded}
+            initialTab={pendingArtifactRailTab ?? undefined}
             initialWidth={artifactRailWidthConfig}
             onWidthChange={handleArtifactRailWidthChange}
           />

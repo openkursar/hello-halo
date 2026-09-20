@@ -25,8 +25,11 @@ import { useTerminalToolCalls, type TerminalToolCall } from './useTerminalToolCa
 import { CompactNotice } from './CompactNotice'
 import { InterruptedBubble } from './InterruptedBubble'
 import type { Message, Thought, CompactInfo, AgentErrorType, PendingQuestion } from '../../types'
-import { useTranslation } from '../../i18n'
+import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { useChatStore } from '../../stores/chat.store'
+import { useAppsStore } from '../../stores/apps.store'
+import { isAppChatKey } from '../../../shared/apps/im-keys'
+import { resolveSpecI18n } from '../../utils/spec-i18n'
 
 export interface MessageListProps {
   /**
@@ -82,9 +85,12 @@ export interface MessageListProps {
 }
 
 /** Handle exposed to parent for scroll control */
+/** Virtuoso supports 'auto' and 'smooth' only — 'instant' is not scrollable by it. */
+type ScrollMotion = 'auto' | 'smooth'
+
 export interface MessageListHandle {
-  scrollToIndex: (index: number, behavior?: ScrollBehavior) => void
-  scrollToBottom: (behavior?: ScrollBehavior) => void
+  scrollToIndex: (index: number, behavior?: ScrollMotion) => void
+  scrollToBottom: (behavior?: ScrollMotion) => void
 }
 
 /**
@@ -108,10 +114,12 @@ function StreamingFooterContent({
   conversationId,
   showBrowserViewButton,
   revisionRef,
+  senderName,
 }: {
   conversationId: string
   showBrowserViewButton: boolean
   revisionRef: React.RefObject<StreamingRevision>
+  senderName?: string
 }) {
   // Subscribe to this conversation's session so the footer re-renders when
   // thoughts/streaming/queued update. Data is read from the ref (always fresh);
@@ -136,6 +144,7 @@ function StreamingFooterContent({
       pendingQuestion={rev.pendingQuestion}
       onAnswerQuestion={rev.onAnswerQuestion}
       queuedMessages={queuedMessages}
+      senderName={senderName}
     />
   )
 }
@@ -164,6 +173,20 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   footerExtra,
 }, ref) {
   const { t } = useTranslation()
+
+  // Reply-sender name — derived from conversationId, not stored on
+  // the message. Not app-chat → "Halo"; app-chat → the digital human's own
+  // resolved display name (falls back to appId while the apps list hasn't
+  // loaded yet, mirroring DigitalHumansTab's own fallback).
+  const apps = useAppsStore(s => s.apps)
+  const senderName = useMemo(() => {
+    if (!conversationId || !isAppChatKey(conversationId)) return t('Halo')
+    const appId = conversationId.split(':')[1]
+    const app = apps.find(a => a.id === appId)
+    if (!app) return appId
+    return resolveSpecI18n(app.spec, getCurrentLanguage()).name || appId
+  }, [conversationId, apps, t])
+
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   // Native DOM scroll container — captured via Virtuoso's scrollerRef prop
   const scrollerRef = useRef<HTMLElement | null>(null)
@@ -177,10 +200,10 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   // Expose scroll control to parent (ChatView)
   useImperativeHandle(ref, () => ({
-    scrollToIndex: (index: number, behavior: ScrollBehavior = 'smooth') => {
+    scrollToIndex: (index: number, behavior: ScrollMotion = 'smooth') => {
       virtuosoRef.current?.scrollToIndex({ index, behavior, align: 'center' })
     },
-    scrollToBottom: (behavior: ScrollBehavior = 'smooth') => {
+    scrollToBottom: (behavior: ScrollMotion = 'smooth') => {
       const el = scrollerRef.current
       if (el) {
         el.scrollTo({ top: el.scrollHeight, behavior })
@@ -283,7 +306,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
 
   // Content width class — applied per-item so Virtuoso scroll container stays full-width
   // (keeps scrollbar at the window edge, not next to message bubbles)
-  const contentWidthClass = isCompact ? 'max-w-full' : 'max-w-3xl mx-auto'
+  const contentWidthClass = isCompact ? 'max-w-full' : 'max-w-[720px] mx-auto'
 
   // Render a single message item (called by Virtuoso)
   const itemContent = useCallback((index: number, message: Message) => {
@@ -303,9 +326,10 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         hideBrowserViewButton={hideBrowserViewButton}
         injectionMessages={injectionMap.get(message.id)}
         className={contentWidthClass}
+        senderName={message.role === 'assistant' ? senderName : undefined}
       />
     )
-  }, [previousCostMap, thoughtsLoader, hideBrowserViewButton, defaultThoughtsExpanded, defaultThoughtsMaximized, injectionMap, contentWidthClass])
+  }, [previousCostMap, thoughtsLoader, hideBrowserViewButton, defaultThoughtsExpanded, defaultThoughtsMaximized, injectionMap, contentWidthClass, senderName])
 
   // Ref for onContinue — keeps Footer callback stable when parent re-renders
   const onContinueRef = useRef(onContinue)
@@ -340,6 +364,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             conversationId={conversationId}
             showBrowserViewButton={!hideBrowserViewButton}
             revisionRef={streamingRevisionRef}
+            senderName={senderName}
           />
         )}
 
@@ -388,6 +413,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     error, errorType,
     compactInfo, t, contentWidthClass,
     conversationId, hideBrowserViewButton, footerExtra,
+    senderName,
   ])
 
   // Top padding spacer — matches original py-6

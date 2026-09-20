@@ -110,6 +110,26 @@ export interface AutomationRun {
   sessionId?: string
 }
 
+/**
+ * An AutomationRun with its last activity entry's summary attached — for the
+ * run-history list, which needs "what did this run produce" without an N+1
+ * query per row. `summary` is joined from the run's most recent activity_entries
+ * row of any type; the caller falls back to `errorMessage` when `status === 'error'`.
+ */
+export interface AutomationRunWithSummary extends AutomationRun {
+  summary?: string
+}
+
+/** Aggregate run outcomes over a recent window, for the digital-human overview. */
+export interface RunStats {
+  total: number
+  ok: number
+  error: number
+  skipped: number
+  totalTokens: number
+  avgDurationMs: number
+}
+
 // ============================================
 // Activity Entries
 // ============================================
@@ -120,9 +140,25 @@ export type {
   ActivityQueryOptions, EscalationContinuation, PendingDecisionQuery,
 } from '../../../shared/apps/app-types'
 import type {
-  ActivityEntry, ActivityQueryOptions, PendingDecisionQuery, AutomationAppState, EscalationQuestion,
-  EscalationResponse,
+  ActivityEntry, ActivityEntryType, ActivityQueryOptions, PendingDecisionQuery, AutomationAppState,
+  EscalationQuestion, EscalationResponse,
 } from '../../../shared/apps/app-types'
+
+/** Options for querying run history */
+export interface RunQueryOptions {
+  limit?: number
+  offset?: number
+}
+
+/** Per-app snapshot for the digital-human card wall's batched first paint. */
+export interface AppOverviewEntry {
+  appId: string
+  state: AutomationAppState
+  /** Most recent run_complete/output activity entry, if any. */
+  latestSummary?: { type: ActivityEntryType; summary: string; ts: number }
+  /** Most recent run statuses, oldest first, capped at 7. */
+  recentRunStatuses: RunStatus[]
+}
 
 // ============================================
 // Internal Activation State
@@ -326,6 +362,19 @@ export interface AppRuntimeService {
 
   /** Get runs for an App */
   getRunsForApp(appId: string, limit?: number): AutomationRun[]
+
+  /** Get runs for an App with each row's last activity summary attached, for the run-history list. */
+  getRunsForAppWithSummary(appId: string, options?: RunQueryOptions): AutomationRunWithSummary[]
+
+  /** Aggregate outcome/token/duration stats over an App's most recent runs (default window: 30). */
+  getRunStats(appId: string, window?: number): RunStats
+
+  /**
+   * Batched first-paint data for the digital-human card wall: runtime state,
+   * latest output summary, and recent run statuses for every automation App
+   * (optionally scoped to one space), in a single call.
+   */
+  getOverview(spaceId?: string): AppOverviewEntry[]
 
   // ── Lifecycle ───────────────────────────────
 

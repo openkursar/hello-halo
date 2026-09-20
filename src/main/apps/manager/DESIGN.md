@@ -289,6 +289,13 @@ seeded reinstalls as a no-op.
 `active` — a paused or errored app resumes into a normal run, and filtering
 to `active` would strand it.
 
+**Symmetric cleanup on permanent delete**: `deleteApp()` calls
+`unbindAppFromAllKBs(appId)` so a hard-deleted app's row disappearing does
+not leave dangling `appIds` on any KB. Soft `uninstall()` does not call it —
+that transition is reversible and, per the one-shot seed flag above, a
+reinstalled app never gets re-seeded, so unbinding there would strand a
+reinstalled app without its knowledge bases.
+
 ---
 
 ## 3. SQLite Schema

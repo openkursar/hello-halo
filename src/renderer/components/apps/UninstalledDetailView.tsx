@@ -6,17 +6,28 @@
  */
 
 import { useState } from 'react'
-import { RotateCcw, Trash2, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, RotateCcw, Trash2, AlertTriangle } from 'lucide-react'
 import { useAppsStore } from '../../stores/apps.store'
 import { useAppsPageStore } from '../../stores/apps-page.store'
 import { useTranslation, getCurrentLanguage } from '../../i18n'
 import { resolveSpecI18n } from '../../utils/spec-i18n'
+import { isBuiltinApp } from '../../../shared/apps/app-types'
 import { appTypeLabel } from './appTypeUtils'
+import type { AppType } from '../../../shared/apps/spec-types'
 
 interface UninstalledDetailViewProps {
   appId: string
   /** Space name to display */
   spaceName?: string
+}
+
+/** Same source strings as each type's own list tab / detail-page back button. */
+function backLabelForType(type: AppType, t: (s: string) => string): string {
+  switch (type) {
+    case 'skill': return t('My Skills')
+    case 'mcp':   return t('My MCP')
+    default:      return t('My Digital Humans')
+  }
 }
 
 export function UninstalledDetailView({ appId, spaceName }: UninstalledDetailViewProps) {
@@ -32,6 +43,10 @@ export function UninstalledDetailView({ appId, spaceName }: UninstalledDetailVie
   if (!app) return null
 
   const { name, description } = resolveSpecI18n(app.spec, getCurrentLanguage())
+  // Built-in apps are protected at the manager layer (BuiltinAppProtectedError);
+  // hiding the delete action up front avoids an error the user can only
+  // discover by clicking.
+  const builtinProtected = isBuiltinApp(app)
 
   // Format the uninstalled date
   const uninstalledDate = app.uninstalledAt
@@ -64,8 +79,18 @@ export function UninstalledDetailView({ appId, spaceName }: UninstalledDetailVie
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="max-w-lg mx-auto space-y-6">
+    <div className="flex-1 overflow-y-auto">
+      <div className="px-4 sm:px-10 pt-6">
+        <button
+          onClick={clearSelection}
+          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          {backLabelForType(app.spec.type, t)}
+        </button>
+      </div>
+
+      <div className="max-w-lg mx-auto px-4 sm:px-10 py-6 space-y-6">
         {/* App identity */}
         <div className="text-center">
           <h2 className="text-lg font-semibold text-foreground">{name}</h2>
@@ -108,10 +133,18 @@ export function UninstalledDetailView({ appId, spaceName }: UninstalledDetailVie
           </button>
 
           {/* Delete permanently */}
-          {showDeleteConfirm ? (
-            <div className="p-3 border border-red-400/30 rounded-lg space-y-2">
+          {builtinProtected ? (
+            <div
+              title={t('Built-in apps are bundled with Halo and cannot be deleted permanently')}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm text-muted-foreground/60 border border-border/50 rounded-lg cursor-not-allowed select-none"
+            >
+              <Trash2 className="w-4 h-4" />
+              {t('Delete Permanently')}
+            </div>
+          ) : showDeleteConfirm ? (
+            <div className="p-3 border border-halo-error/30 rounded-lg space-y-2">
               <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+                <AlertTriangle className="w-4 h-4 text-halo-error flex-shrink-0 mt-0.5" />
                 <p className="text-sm text-muted-foreground">
                   {t('This will permanently delete the app and all its data. This action cannot be undone.')}
                 </p>
@@ -120,7 +153,7 @@ export function UninstalledDetailView({ appId, spaceName }: UninstalledDetailVie
                 <button
                   onClick={handleDelete}
                   disabled={isDeleting}
-                  className="px-3 py-1.5 text-sm text-red-400 hover:text-red-300 border border-red-400/30 hover:border-red-400/60 rounded-lg transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 text-sm text-halo-error hover:text-halo-error/80 border border-halo-error/30 hover:border-halo-error/60 rounded-lg transition-colors disabled:opacity-50"
                 >
                   {isDeleting ? t('Deleting...') : t('Yes, Delete Permanently')}
                 </button>
@@ -135,7 +168,7 @@ export function UninstalledDetailView({ appId, spaceName }: UninstalledDetailVie
           ) : (
             <button
               onClick={() => setShowDeleteConfirm(true)}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm text-red-400 hover:text-red-300 border border-red-400/30 hover:border-red-400/60 rounded-lg transition-colors"
+              className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm text-halo-error hover:text-halo-error/80 border border-halo-error/30 hover:border-halo-error/60 rounded-lg transition-colors"
             >
               <Trash2 className="w-4 h-4" />
               {t('Delete Permanently')}

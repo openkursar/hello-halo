@@ -8,7 +8,7 @@
  */
 import { create } from 'zustand'
 import { api } from '../../api'
-import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, CanvasContext, AgentErrorType, PendingQuestion, Question, TaskStatus, PulseItem, TaskProgress } from '../../types'
+import type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, CanvasContext, AgentErrorType, PendingQuestion, Question, TaskStatus, PulseItem, PulseReadInfo, TaskProgress } from '../../types'
 import type { SessionInitInfo } from '../../types/slash-command'
 import { PULSE_READ_GRACE_PERIOD_MS } from '../../types'
 import { canvasLifecycle } from '../../services/canvas-lifecycle'
@@ -23,6 +23,17 @@ export const CONVERSATION_CACHE_SIZE = 10
 export interface SpaceState {
   conversations: ConversationMeta[]  // Lightweight metadata, no messages
   currentConversationId: string | null
+  /**
+   * The digital-human conversation currently active in this space's input,
+   * if any. Independent of `currentConversationId` — selecting a digital
+   * human does not change it,
+   * so the last regular conversation is preserved and is exactly where
+   * `clearAppChatSelection` lands when the user switches back to Halo.
+   * Optional (not just null) so every pre-existing SpaceState object
+   * literal across this store doesn't need to be touched; absent reads the
+   * same as null.
+   */
+  selectedAppChat?: { appId: string; conversationId: string } | null
 }
 
 // Per-session runtime state (isolated per conversation, persists across space switches)
@@ -46,6 +57,10 @@ export interface SessionState {
   // Monotonically increasing turn counter — used to detect stale handleAgentComplete callbacks.
   // Incremented by sendMessage() and handleAgentTurnStart(); checked by handleAgentComplete().
   turnId: number
+  // Wall-clock start of the current turn, set by sendMessage()/handleAgentTurnStart().
+  // Task panel elapsed-time display reads this instead of approximating from
+  // conversation metadata (which only updates once the turn completes).
+  turnStartedAt?: number
 }
 
 // Create empty session state
@@ -66,6 +81,7 @@ export function createEmptySessionState(): SessionState {
     turnId: 0,
   }
 }
+
 
 // Create empty space state
 export function createEmptySpaceState(): SpaceState {
@@ -95,8 +111,7 @@ export interface ChatState {
   unseenCompletions: Map<string, { spaceId: string; title: string }>
 
   // Pulse: tracks read timestamps for grace period display (60s before removal)
-  // Map<conversationId, { readAt: number; originalStatus: 'completed-unseen' | 'error'; spaceId: string; title: string }>
-  pulseReadAt: Map<string, { readAt: number; originalStatus: 'completed-unseen' | 'error'; spaceId: string; title: string }>
+  pulseReadAt: Map<string, PulseReadInfo>
 
   // Current space pointer
   currentSpaceId: string | null
@@ -104,9 +119,29 @@ export interface ChatState {
   // Pulse: pending cross-space navigation target (set by navigateToConversation, consumed by SpacePage init)
   pendingPulseNavigation: string | null
 
+  // Digital-human equivalent of pendingPulseNavigation (set by navigateToAppChat,
+  // consumed by SpacePage init) — R8's detail-page "Chat" button and the
+  // resource rail's hover action both cross spaces via this flag.
+  pendingAppChatNavigation: { appId: string; conversationId: string } | null
+
   // Text to pre-fill into a space's composer on arrival (e.g. a skill's slash
   // command from the store's "Use" action). Consumed once by InputArea.
-  pendingComposerInput: { spaceId: string; text: string } | null
+  //
+  // `slashPreview`, when set, is shown in the slash-command menu instead of
+  // whatever the *session's* live command list happens to contain. That list
+  // (SessionInitInfo.skills) only exists once a conversation session has
+  // actually started, and only lists whatever skills the SDK loaded for that
+  // particular session — neither of which the composer-fill sources (a skill
+  // row click, the store's "Use" button) depend on: they already know the
+  // skill is real from their own data (disk-discovery / the app spec), so
+  // there's nothing to validate against the session for. Without this, a
+  // skill filled into a brand-new empty conversation (no session yet) would
+  // never show the confirmation menu at all.
+  pendingComposerInput: {
+    spaceId: string
+    text: string
+    slashPreview?: { command: string; label: string; description?: string }
+  } | null
 
   // Artifacts (per space)
   artifacts: Artifact[]
@@ -114,6 +149,25 @@ export interface ChatState {
   // Loading
   isLoading: boolean
   isLoadingConversation: boolean  // Loading full conversation
+
+  // In-memory (non-persisted) composer draft per conversationId — switching
+  // the input's digital-human selector stashes/restores each link's unsent
+  // text. Keyed by conversationId so it works uniformly for space and
+  // app-chat conversations; intentionally not persisted (session-scoped only).
+  composerDrafts: Map<string, string>
+  getComposerDraft: (conversationId: string) => string
+  setComposerDraft: (conversationId: string, text: string) => void
+  clearComposerDraft: (conversationId: string) => void
+
+  // Digital-human selection for the main conversation board's input.
+  // See SpaceState.selectedAppChat for the field this manages.
+  selectAppChatConversation: (spaceId: string, appId: string, conversationId: string) => void
+  /**
+   * Switch back to the normal (Halo) link. Lands on the space's last active
+   * regular conversation (`currentConversationId`, untouched by selection —
+   * see SpaceState.selectedAppChat); creates a fresh one if there wasn't one.
+   */
+  clearAppChatSelection: (spaceId: string) => Promise<void>
 
   // Computed getters
   getCurrentSpaceState: () => SpaceState
@@ -183,8 +237,21 @@ export interface ChatState {
   // Thoughts lazy loading
   loadMessageThoughts: (spaceId: string, conversationId: string, messageId: string) => Promise<Thought[]>
 
-  // Pulse cleanup
+  // Pulse cleanup + grace-period item actions (Keep / Remove — see PulseList)
   cleanupPulseReadAt: () => void
+  keepPulseItem: (conversationId: string) => void
+  removePulseItem: (conversationId: string) => void
+
+  // Cold-start hydration from the main-process task-state table (survives
+  // restart — see platform/task-state). Merge-only: never overwrites an
+  // entry the renderer has already written locally since launch.
+  loadPersistedTaskState: () => Promise<void>
+
+  // Full resync in response to a `task:state_changed` push (another client
+  // kept/removed/read an item, or the server's expiry sweep ran). Unlike
+  // loadPersistedTaskState this replaces the maps outright, since the whole
+  // point here is to reflect a change this client didn't make itself.
+  syncPersistedTaskState: () => Promise<void>
 
   // Derived pulse state (cached, recalculated only when pulse-relevant fields change)
   _pulseItems: PulseItem[]
@@ -207,7 +274,7 @@ export const EMPTY_SPACE_STATE: SpaceState = createEmptySpaceState()
 // ---- re-exports for slices ----
 export { api, canvasLifecycle, PULSE_READ_GRACE_PERIOD_MS }
 export type { SessionInitInfo }
-export type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, CanvasContext, AgentErrorType, PendingQuestion, Question, TaskStatus, PulseItem, TaskProgress }
+export type { Conversation, ConversationMeta, Message, ToolCall, Artifact, Thought, AgentEventBase, ImageAttachment, CompactInfo, CanvasContext, AgentErrorType, PendingQuestion, Question, TaskStatus, PulseItem, PulseReadInfo, TaskProgress }
 
 // ---- slice creator types: each slice receives the store's set/get and
 // returns its subset of ChatState; get() sees the full store for cross-slice calls.

@@ -230,7 +230,7 @@ export function SessionDetailView({ appId, runId }: SessionDetailViewProps) {
       )}
 
       <div className="flex-1 relative overflow-hidden">
-        <div className="h-full px-4">
+        <div className="h-full px-4 sm:px-10">
           <MessageList
             key={runId}
             ref={messageListRef}

@@ -8,6 +8,7 @@
 import type Database from 'better-sqlite3'
 import type {
   AutomationRun,
+  AutomationRunWithSummary,
   ExecutionEnvironment,
   EscalationContinuation,
   ActivityEntry,
@@ -16,6 +17,8 @@ import type {
   ActivityQueryOptions,
   PendingDecisionQuery,
   EscalationResponse,
+  RunQueryOptions,
+  RunStats,
   RunStatus,
   TriggerType,
 } from './types'
@@ -38,6 +41,19 @@ interface RunRow {
   error_message: string | null
   session_id: string | null
   environment_json: string | null
+}
+
+interface RunRowWithSummary extends RunRow {
+  last_entry_content_json: string | null
+}
+
+interface RunStatsRow {
+  total: number
+  ok: number
+  error: number
+  skipped: number
+  totalTokens: number | null
+  avgDurationMs: number | null
 }
 
 interface EntryRow {
@@ -70,6 +86,17 @@ function rowToRun(row: RunRow): AutomationRun {
     errorMessage: row.error_message ?? undefined,
     sessionId: row.session_id ?? undefined,
     environment: row.environment_json ? JSON.parse(row.environment_json) : undefined,
+  }
+}
+
+function rowToRunWithSummary(row: RunRowWithSummary): AutomationRunWithSummary {
+  const run = rowToRun(row)
+  if (!row.last_entry_content_json) return run
+  try {
+    const content = JSON.parse(row.last_entry_content_json) as ActivityEntryContent
+    return { ...run, summary: content.summary }
+  } catch {
+    return run
   }
 }
 
@@ -108,6 +135,10 @@ export class ActivityStore {
   private readonly stmtInsertRun: Database.Statement
   private readonly stmtGetRun: Database.Statement
   private readonly stmtGetRunsForApp: Database.Statement
+  private readonly stmtGetRunsForAppWithSummary: Database.Statement
+  private readonly stmtGetRunStats: Database.Statement
+  private readonly stmtGetRecentRunStatuses: Database.Statement
+  private readonly stmtGetLatestOutputEntry: Database.Statement
   private readonly stmtUpdateRunStatus: Database.Statement
   private readonly stmtUpdateRunComplete: Database.Statement
   private readonly stmtInsertEntry: Database.Statement
@@ -139,6 +170,47 @@ export class ActivityStore {
 
     this.stmtGetRunsForApp = db.prepare(`
       SELECT * FROM automation_runs WHERE app_id = ? ORDER BY started_at DESC LIMIT ?
+    `)
+
+    // Correlated subquery pulls each run's most recent activity entry (any
+    // type) — the run-history list's "what happened" column. Uses idx_entries_run.
+    this.stmtGetRunsForAppWithSummary = db.prepare(`
+      SELECT r.*,
+        (SELECT e.content_json FROM activity_entries e
+         WHERE e.run_id = r.run_id ORDER BY e.ts DESC LIMIT 1) AS last_entry_content_json
+      FROM automation_runs r
+      WHERE r.app_id = ?
+      ORDER BY r.started_at DESC
+      LIMIT ? OFFSET ?
+    `)
+
+    // Aggregates over the most recent `window` runs (by recency, not a time range).
+    this.stmtGetRunStats = db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok,
+        SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error,
+        SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped,
+        SUM(COALESCE(tokens_used, 0)) AS totalTokens,
+        AVG(duration_ms) AS avgDurationMs
+      FROM (
+        SELECT * FROM automation_runs WHERE app_id = ? ORDER BY started_at DESC LIMIT ?
+      ) AS recent
+    `)
+
+    // Lean projection (status only) for the overview's recent-run dot strip —
+    // avoids hydrating full run rows across every automation app on cold start.
+    this.stmtGetRecentRunStatuses = db.prepare(`
+      SELECT status FROM automation_runs WHERE app_id = ? ORDER BY started_at DESC LIMIT ?
+    `)
+
+    // Most recent run_complete/output entry — the overview card's "latest
+    // output" line. Deliberately excludes run_error/milestone/escalation:
+    // those are surfaced through AutomationAppState.lastError / pendingEscalationId.
+    this.stmtGetLatestOutputEntry = db.prepare(`
+      SELECT * FROM activity_entries
+      WHERE app_id = ? AND type IN ('run_complete', 'output')
+      ORDER BY ts DESC LIMIT 1
     `)
 
     this.stmtUpdateRunStatus = db.prepare(`
@@ -248,6 +320,39 @@ export class ActivityStore {
   getRunsForApp(appId: string, limit = 50): AutomationRun[] {
     const rows = this.stmtGetRunsForApp.all(appId, limit) as RunRow[]
     return rows.map(rowToRun)
+  }
+
+  /** Get runs for an App with each row's last activity summary attached. */
+  getRunsForAppWithSummary(appId: string, options?: RunQueryOptions): AutomationRunWithSummary[] {
+    const limit = options?.limit ?? 20
+    const offset = options?.offset ?? 0
+    const rows = this.stmtGetRunsForAppWithSummary.all(appId, limit, offset) as RunRowWithSummary[]
+    return rows.map(rowToRunWithSummary)
+  }
+
+  /** Aggregate outcome/token/duration stats over an App's most recent runs. */
+  getRunStats(appId: string, window = 30): RunStats {
+    const row = this.stmtGetRunStats.get(appId, window) as RunStatsRow
+    return {
+      total: row.total,
+      ok: row.ok,
+      error: row.error,
+      skipped: row.skipped,
+      totalTokens: row.totalTokens ?? 0,
+      avgDurationMs: row.avgDurationMs ?? 0,
+    }
+  }
+
+  /** Get an App's most recent run statuses, oldest first. */
+  getRecentRunStatuses(appId: string, limit = 7): RunStatus[] {
+    const rows = this.stmtGetRecentRunStatuses.all(appId, limit) as { status: string }[]
+    return rows.map(r => r.status as RunStatus).reverse()
+  }
+
+  /** Get an App's most recent run_complete/output activity entry, if any. */
+  getLatestOutputEntry(appId: string): ActivityEntry | null {
+    const row = this.stmtGetLatestOutputEntry.get(appId) as EntryRow | undefined
+    return row ? rowToEntry(row) : null
   }
 
   /** Update run status (without completion data) */

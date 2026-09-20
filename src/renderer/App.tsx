@@ -1,4 +1,3 @@
-import { openWorkNotification, type WorkNavigationTarget } from './utils/people-navigation'
 /**		      	    				  	  	  	 		 		       	 	 	         	 	    					 
  * Halo - Main App Component
  */
@@ -13,8 +12,6 @@ import { initPerfStoreListeners } from './stores/perf.store'
 import { useSpaceStore } from './stores/space.store'
 import { useSearchStore } from './stores/search.store'
 import { useAppsStore } from './stores/apps.store'
-import { useTeamStore } from './stores/team.store'
-import type { TeamUpdatedEvent, TeamBlackboardEvent, TeamMessageEvent, TeamPresenceEvent, TeamOfficeStatusEvent } from '../shared/apps/team-types'
 import { useAppsPageStore } from './stores/apps-page.store'
 import { useToolsetsStore, type ToolsetsChangedEvent, type ToolsetsRequestedEvent } from './stores/toolsets.store'
 import { useTlonStore } from './stores/tlon.store'
@@ -33,6 +30,10 @@ import { OnboardingOverlay } from './components/onboarding'
 import { UpdateNotification } from './components/updater/UpdateNotification'
 import { NotificationToast } from './components/notification/NotificationToast'
 import { CredentialAlertBanner } from './components/settings/CredentialAlertBanner'
+import { NavRail } from './components/layout/NavRail'
+import { HeaderShell, usePlatform } from './components/layout/Header'
+import { TaskPanel } from './components/layout/TaskPanel'
+import { useTaskPanelStore } from './stores/taskPanel.store'
 import { useNotificationStore } from './stores/notification.store'
 import { api } from './api'
 import { syncStatusBarStyle } from './api/safe-area'
@@ -40,19 +41,27 @@ import { isCapacitor, isElectron, onEvent } from './api/transport'
 import { useTelemetry } from './hooks/useTelemetry'
 import type { WsConnectionState } from './api/transport'
 import { useTranslation } from './i18n'
-import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, Question, McpServerStatus } from './types'
+import type { AgentEventBase, Thought, ToolCall, HaloConfig, AgentErrorType, Question, McpServerStatus, AppView } from './types'
 import type { SessionInitInfo } from './types/slash-command'
 import type { IngestProgressEvent } from '../shared/types/tlon'
 import type { ToastPayload } from '../shared/types/notification'
 import { hasAnyAISource } from './types'
+import { openWorkNotification, type WorkNavigationTarget } from './utils/people-navigation'
+import { useTeamStore } from './stores/team.store'
+import type { TeamUpdatedEvent, TeamBlackboardEvent, TeamMessageEvent, TeamPresenceEvent, TeamOfficeStatusEvent } from '../shared/apps/team-types'
 
 // Lazy load heavy page components for better initial load performance
 // These pages contain complex components (chat, markdown, code highlighting, etc.)
-const HomePage = lazy(() => import('./pages/HomePage').then(m => ({ default: m.HomePage })))
 const SpacePage = lazy(() => import('./pages/SpacePage').then(m => ({ default: m.SpacePage })))
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
 const AppsPage = lazy(() => import('./pages/AppsPage').then(m => ({ default: m.AppsPage })))
 const TlonPage = lazy(() => import('./pages/TlonPage').then(m => ({ default: m.TlonPage })))
+const StorePage = lazy(() => import('./pages/StorePage').then(m => ({ default: m.StorePage })))
+const SpacesPage = lazy(() => import('./pages/SpacesPage').then(m => ({ default: m.SpacesPage })))
+
+// Views that render inside the persistent shell (rail visible). Pre-app
+// screens (splash/setup/server connect/...) render full-bleed without it.
+const RAIL_VIEWS: AppView[] = ['space', 'settings', 'apps', 'tlon', 'store', 'spaces']
 
 // Page loading fallback - minimal spinner that matches app style
 function PageLoader() {
@@ -66,10 +75,24 @@ function PageLoader() {
   )
 }
 
-// Theme colors for titleBarOverlay
-const THEME_COLORS = {
-  light: { color: '#ffffff', symbolColor: '#1a1a1a' },
-  dark: { color: '#0a0a0a', symbolColor: '#ffffff' }
+/**
+ * Resolves an HSL CSS variable (e.g. "220 20% 6%", the format every color
+ * token in globals.css uses) to a hex string. Electron's titleBarOverlay
+ * (Windows/Linux) needs a literal opaque color — it can't read CSS
+ * variables from the main process — so this reads the same `--background`/
+ * `--foreground` the header itself renders with, instead of a hand-picked
+ * hex that can silently drift from the actual token values.
+ */
+function cssHslVarToHex(varName: string): string {
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(varName).trim()
+  const [h, s, l] = raw.split(/\s+/).map(v => parseFloat(v))
+  const a = (s / 100) * Math.min(l / 100, 1 - l / 100)
+  const channel = (n: number) => {
+    const k = (n + h / 30) % 12
+    const v = l / 100 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))
+    return Math.round(255 * v).toString(16).padStart(2, '0')
+  }
+  return `#${channel(0)}${channel(8)}${channel(4)}`
 }
 
 // Apply theme to document and sync to localStorage (for anti-flash on reload)
@@ -90,16 +113,28 @@ function applyTheme(theme: 'light' | 'dark' | 'system') {
     root.classList.toggle('light', theme === 'light')
   }
 
-  // Update titleBarOverlay colors (Windows/Linux only)
-  const colors = isDark ? THEME_COLORS.dark : THEME_COLORS.light
-  api.setTitleBarOverlay(colors).catch(() => {
+  // Update titleBarOverlay colors (Windows/Linux only) — read back the
+  // header's own tokens now that .light was just toggled above, so the
+  // overlay matches the header exactly in both themes.
+  api.setTitleBarOverlay({
+    color: cssHslVarToHex('--background'),
+    symbolColor: cssHslVarToHex('--foreground')
+  }).catch(() => {
     // Ignore errors - may not be supported on current platform
   })
 }
 
+// The traffic-light button group's real height isn't documented or
+// queryable — 28px turned out too tight to fit it with any breathing room
+// top and bottom (see main/index.ts trafficLightPosition), so this is a
+// looser, empirically-adjusted value rather than a tightly computed one.
+const MAC_TRAFFIC_LIGHT_CLEARANCE_PX = 30
+
 export default function App() {
   const { t } = useTranslation()
-  const { view, config, initialize, setMcpStatus, setView, setConfig, completeDeferredGitBashCheck } = useAppStore()
+  const { view, config, initialize, setMcpStatus, navigate, enterApp, setConfig, completeDeferredGitBashCheck } = useAppStore()
+  const isTaskPanelOpen = useTaskPanelStore(s => s.isOpen)
+  const platform = usePlatform()
   const {
     handleAgentMessage,
     handleAgentToolCall,
@@ -164,10 +199,10 @@ export default function App() {
         const { servers } = useServerStore.getState()
         if (servers.length > 0) {
           console.log('[App] Capacitor: servers exist but no active, showing server list')
-          setView('serverList')
+          navigate('serverList')
         } else {
           console.log('[App] Capacitor: no servers, showing ServerConnect')
-          setView('serverConnect')
+          navigate('serverConnect')
         }
       }
       return
@@ -231,7 +266,7 @@ export default function App() {
       unsubscribe()
       clearTimeout(fallbackTimeout)
     }
-  }, [initialize, initializeOnboarding, completeDeferredGitBashCheck, setView])
+  }, [initialize, initializeOnboarding, completeDeferredGitBashCheck, navigate])
 
   // Theme switching
   useEffect(() => {
@@ -288,12 +323,12 @@ export default function App() {
       api.disconnectWebSocket()
       useServerStore.getState().clearActive()
       const { servers } = useServerStore.getState()
-      setView(servers.length > 0 ? 'serverList' : 'serverConnect')
+      navigate(servers.length > 0 ? 'serverList' : 'serverConnect')
     }
 
     window.addEventListener('halo:auth-expired', handleAuthExpired)
     return () => window.removeEventListener('halo:auth-expired', handleAuthExpired)
-  }, [setView])
+  }, [navigate])
 
   // Capacitor: notification bridge — push local notifications when app is backgrounded
   useEffect(() => {
@@ -465,16 +500,16 @@ export default function App() {
 
       const listenerPromise = CapApp.addListener('backButton', () => {
         const currentView = useAppStore.getState().view
-        if (currentView === 'settings' || currentView === 'apps') {
-          useAppStore.getState().goBack()
+        if (currentView === 'settings' || currentView === 'apps' || currentView === 'tlon') {
+          useAppStore.getState().navigateBack('space')
         } else if (currentView === 'serverConnect') {
           // Back from add-server → server list (if we have servers)
           const { servers } = useServerStore.getState()
           if (servers.length > 0) {
-            useAppStore.getState().setView('serverList')
+            useAppStore.getState().navigate('serverList')
           }
         }
-        // On home/space/serverList: don't exit — Android will minimize the app
+        // On space/serverList: don't exit — Android will minimize the app
       })
 
       removeListener = () => { listenerPromise.then(l => l.remove()) }
@@ -513,14 +548,14 @@ export default function App() {
 
   // Handle "Add Device" from ServerList (Capacitor)
   const handleAddServer = useCallback(() => {
-    setView('serverConnect')
-  }, [setView])
+    navigate('serverConnect')
+  }, [navigate])
 
   // Handle back from ServerConnect to ServerList (Capacitor)
   const handleServerConnectBack = useCallback(() => {
     api.clearServerUrl() // Clear pending URL
-    setView('serverList')
-  }, [setView])
+    navigate('serverList')
+  }, [navigate])
 
   // Initialize AI Browser IPC listeners for active view sync
   useEffect(() => {
@@ -665,17 +700,17 @@ export default function App() {
   // These run globally so events are captured even when AppsPage is not mounted
   useEffect(() => {
     console.log('[App] Registering app event listeners')
+
     void useAppsStore.getState().loadAllStates()
-
-    const unsubStatus = api.onAppStatusChanged((data) => {
-      const { appId, state } = data as { appId: string; state: unknown }
-      useAppsStore.getState().handleStatusChanged(appId, state as any)
-    })
-
     // Installs happen outside this window's control (an office provisioning its
     // lead, an App creating another App), so the cached list has to follow them.
     const unsubList = api.onAppListChanged(() => {
       useAppsStore.getState().handleListChanged()
+    })
+
+    const unsubStatus = api.onAppStatusChanged((data) => {
+      const { appId, state } = data as { appId: string; state: unknown }
+      useAppsStore.getState().handleStatusChanged(appId, state as any)
     })
 
     const unsubActivity = api.onAppActivityEntry((data) => {
@@ -690,26 +725,27 @@ export default function App() {
       useAppsStore.getState().handleNewEscalation(appId, entryId, question, choices)
     })
 
-    // Deep navigation: notification click → navigate to specific App's Activity Thread
+    // Deep navigation: a notification click lands on the exact piece of work it
+    // announced — which may be a team's, not this digital human's own.
     const unsubNavigate = api.onAppNavigate((data) => {
       const target = data as WorkNavigationTarget
       if (target.appId) void openWorkNotification(target)
     })
 
     return () => {
-      unsubStatus()
       unsubList()
+      unsubStatus()
       unsubActivity()
       unsubEscalation()
       unsubNavigate()
     }
-  }, [setInitialAppId, setView])
+  }, [setInitialAppId, navigate])
 
-  // Register Digital Team real-time event listeners (global, like app:* above)
-  // so team list/detail/flow signals stay live even when the team tab is unmounted.
+  // Digital Team real-time listeners (global, like app:* above) so team
+  // list/detail/flow signals stay live even when no team surface is mounted.
   useEffect(() => {
-    // Prime the team list so the sidebar AutomationBadge reflects running /
-    // waiting teams even before the team tab is opened.
+    // Prime the team list so anything that counts waiting/running teams is
+    // correct before a team surface is ever opened.
     void useTeamStore.getState().loadTeams()
 
     const unsubTeamUpdated = api.onTeamUpdated((data) => {
@@ -734,7 +770,7 @@ export default function App() {
       if (typeof link !== 'string' || !link) return
       useTeamStore.getState().setPendingInviteLink(link)
       useAppsPageStore.getState().setCurrentTab('team')
-      useAppStore.getState().setView('apps')
+      useAppStore.getState().navigate('apps')
     }
     const unsubTeamInviteLink = api.onTeamInviteLink((data) => {
       stageInvite((data as { link?: unknown } | null)?.link)
@@ -753,6 +789,17 @@ export default function App() {
       unsubTeamOfficeStatus()
       unsubTeamInviteLink()
     }
+  }, [])
+
+  // Task panel bookkeeping: another client (remote web, or this one) kept/
+  // removed/read an item, or the server's expiry sweep ran. Resync rather
+  // than trust any payload, since the event carries no data (see
+  // platform/task-state/service.ts's broadcast()).
+  useEffect(() => {
+    const unsubTaskState = api.onTaskStateChanged(() => {
+      useChatStore.getState().syncPersistedTaskState()
+    })
+    return () => unsubTaskState()
   }, [])
 
   // Register Tlon (knowledge base) real-time event listeners.
@@ -783,7 +830,6 @@ export default function App() {
   useEffect(() => {
     const unsub = api.onNotificationToast((data) => {
       const { id, title, body, bodyFormat, variant, duration, appId, action } = data as ToastPayload
-      const target = data as ToastPayload & WorkNavigationTarget
 
       // A declared link action wins over app deep-navigation: the sender asked
       // for a specific destination, which appId can only approximate.
@@ -793,7 +839,8 @@ export default function App() {
           ? {
             label: t('View'),
             onClick: () => {
-              void openWorkNotification(target)
+              setInitialAppId(appId)
+              navigate('apps')
             },
           }
           : undefined
@@ -809,7 +856,7 @@ export default function App() {
       })
     })
     return () => { unsub() }
-  }, [showToast, setInitialAppId, setView, t])
+  }, [showToast, setInitialAppId, navigate, t])
 
   // Handle search keyboard shortcuts with debouncing for navigation
   // Use ref to maintain debounce timer across renders
@@ -978,14 +1025,23 @@ export default function App() {
       // Show setup if first launch or no AI source configured
       // (modelConfigSkipped honors an explicit deferral from the first-run wizard)
       if (loadedConfig.isFirstLaunch || (!hasAnyAISource(loadedConfig.aiSources) && !loadedConfig.modelConfigSkipped)) {
-        setView('setup')
+        navigate('setup')
       } else {
-        setView('home')
+        await enterApp()
       }
     } else {
-      setView('setup')
+      navigate('setup')
     }
   }
+
+  // macOS traffic lights (trafficLightPosition in main/index.ts) sit above
+  // whatever renders at the window's top-left corner. Rather than widening
+  // NavRail itself to clear them (which shifts where the Header begins and
+  // stops the rail from matching the prototype's plain 56px width), a single
+  // full-width strip pinned above the whole NavRail+Header row reserves just
+  // enough height for the lights, in normal flow — NavRail and Header both
+  // start immediately below it, so nothing needs its own per-column clearance.
+  const isMacElectron = isElectron() && platform.isMac
 
   // Show reconnection banner for remote/Capacitor modes
   const showReconnectBanner = (api.isRemoteMode() || api.isCapacitorMode())
@@ -995,7 +1051,7 @@ export default function App() {
     && view !== 'splash'
 
   // Render based on current view
-  // Heavy pages (HomePage, SpacePage, SettingsPage) are lazy-loaded for better initial performance
+  // Heavy pages (SpacePage, SettingsPage, AppsPage, TlonPage) are lazy-loaded for better initial performance
   const renderView = () => {
     switch (view) {
       case 'splash':
@@ -1017,12 +1073,6 @@ export default function App() {
             onServerSelected={handleServerSelected}
             onAddServer={handleAddServer}
           />
-        )
-      case 'home':
-        return (
-          <Suspense fallback={<PageLoader />}>
-            <HomePage />
-          </Suspense>
         )
       case 'space':
         return (
@@ -1048,13 +1098,39 @@ export default function App() {
             <TlonPage />
           </Suspense>
         )
+      case 'store':
+        return (
+          <Suspense fallback={<PageLoader />}>
+            <StorePage />
+          </Suspense>
+        )
+      case 'spaces':
+        return (
+          <Suspense fallback={<PageLoader />}>
+            <SpacesPage />
+          </Suspense>
+        )
       default:
         return <SplashPage />
     }
   }
 
   return (
-    <div className="h-full w-full overflow-hidden bg-background">
+    <div className="h-full w-full overflow-hidden bg-background flex flex-col shadow-[inset_0_0_0_1px_var(--border)]">
+      {/* Own visible edge, independent of the OS compositor's window shadow —
+          some remote-desktop/VDI protocols suppress that shadow entirely,
+          leaving the window looking borderless. */}
+      {/* macOS traffic-light clearance — a single full-width strip above the
+          whole NavRail+Header row, instead of widening NavRail itself (which
+          would shift where Header begins and stop the rail matching the
+          prototype's plain 56px width). NavRail's own top spacer no longer
+          needs any platform-specific sizing because of this. */}
+      {isMacElectron && (
+        <div
+          className="w-full flex-shrink-0 border-b border-border drag-region"
+          style={{ height: `calc(${MAC_TRAFFIC_LIGHT_CLEARANCE_PX}px / var(--display-scale, 1))` }}
+        />
+      )}
       {/* WebSocket reconnection banner */}
       {showReconnectBanner && (
         <div className="fixed top-0 inset-x-0 z-50 flex items-center justify-center gap-2 py-1.5 bg-halo-warning/90 text-sm font-medium animate-slide-down safe-area-top"
@@ -1064,7 +1140,28 @@ export default function App() {
           <span className="text-foreground">{t('Reconnecting...')}</span>
         </div>
       )}
-      {renderView()}
+      <div className="flex-1 min-h-0 w-full flex overflow-hidden">
+        {RAIL_VIEWS.includes(view) ? (
+          <>
+            <NavRail />
+            {/* Docked on wide layouts (flex sibling, pushes content over);
+                TaskPanel renders itself as a bottom sheet instead on narrow
+                ones, where mounting position doesn't matter. */}
+            {isTaskPanelOpen && <TaskPanel />}
+            <div className="flex-1 min-w-0 h-full overflow-hidden flex flex-col">
+              <HeaderShell>
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  {renderView()}
+                </div>
+              </HeaderShell>
+            </div>
+          </>
+        ) : (
+          <div className="flex-1 min-w-0 h-full overflow-hidden">
+            {renderView()}
+          </div>
+        )}
+      </div>
       {/* Search panel - full screen edit mode */}
       <SearchPanel isOpen={isSearchOpen} onClose={closeSearch} />
       {/* Search highlight bar - floating navigation mode */}

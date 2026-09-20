@@ -24,6 +24,16 @@
       "pattern": "^[a-z][a-z0-9-]*$",
       "examples": ["halo", "halo-enterprise"]
     },
+    "trayIconDir": {
+      "type": "string",
+      "description": "Custom system tray icon directory, relative to product.json. Lets a brand build ship its own tray icon set (trayTemplate.png, trayTemplate@2x.png, tray-16.png, tray-16@2x.png, tray-24.png, tray-24@2x.png). Defaults to 'resources/tray' when omitted.",
+      "examples": ["./halo-local/my-brand/build/resources/tray"]
+    },
+    "macIcon": {
+      "type": "string",
+      "description": "Path to the macOS (1024px, Apple safe-area) app icon PNG, relative to product.json. Only used to preview the Dock icon in unpackaged dev builds; packaged builds get their icon from electron-builder's mac.icon config instead. Defaults to 'resources/icon-macos-1024.png' when omitted.",
+      "examples": ["./halo-local/my-brand/build/resources/icon-macos-1024.png"]
+    },
     "version": {
       "type": "string",
       "description": "Product version"

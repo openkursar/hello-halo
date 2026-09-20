@@ -14,6 +14,7 @@ import { useState, useCallback, useEffect, useMemo, createContext, useContext, u
 import { Tree, NodeRendererProps, TreeApi, CreateHandler, RenameHandler, DeleteHandler, MoveHandler, NodeApi } from 'react-arborist'
 import { api } from '../../api'
 import { useCanvasStore } from '../../stores/canvas.store'
+import { useConversationTouchedFiles, type TouchedFileStatus } from '../../hooks/useConversationTouchedFiles'
 import type { ArtifactTreeNode, ArtifactTreeUpdateEvent } from '../../types'
 import { FileIcon } from '../icons/ToolIcons'
 import { ChevronRight, ChevronDown, Download, Eye, Loader2, FilePlus, FolderPlus, Edit3, Trash2, FolderOpen, Copy, RefreshCw } from 'lucide-react'
@@ -28,6 +29,12 @@ import { copyToClipboard } from '../../utils/clipboard'
 // Context to pass openFile function to tree nodes without each node subscribing to store
 type OpenFileFn = (path: string, title?: string) => Promise<void>
 const OpenFileContext = createContext<OpenFileFn | null>(null)
+
+/** File path → whether the AI created (`Write`) or only edited (`Edit`) it in
+ * the currently active conversation (see useConversationTouchedFiles).
+ * Passed via context (not per-node store reads) for the same reason as
+ * `OpenFileContext`: avoid every virtualized row subscribing individually. */
+const TouchedFilesContext = createContext<Map<string, TouchedFileStatus> | null>(null)
 
 const isWebMode = api.isRemoteMode()
 
@@ -63,8 +70,9 @@ interface ArtifactTreeProps {
 const TREE_HEIGHT_OFFSET = 180
 
 // Row height for virtual scrolling (in pixels)
-// 26px provides comfortable spacing for file/folder names with icons
-const TREE_ROW_HEIGHT = 26
+// Matches the prototype's `.tree-item{padding:5px 8px}` with inherited 1.55
+// line-height at the 12px `.rail-body` font size: 5 + 12*1.55 + 5 ≈ 29px.
+const TREE_ROW_HEIGHT = 29
 
 function useTreeHeight() {
   const [height, setHeight] = useState(() => window.innerHeight - TREE_HEIGHT_OFFSET)
@@ -175,9 +183,11 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
     cleanup: cleanupFileOperations
   } = useFileOperations({ spaceId, workspaceRootRef })
 
+  const touchedFiles = useConversationTouchedFiles()
+
   // Whether the initial IPC load has completed (distinguishes "loading" from "truly empty")
   const [hasLoaded, setHasLoaded] = useState(false)
-  
+
   // Mutable tree data + path→node index (avoids full-tree immutable copies)
   const nodeIndex = useRef<Map<string, ArtifactTreeNode>>(new Map())
   const treeDataRef = useRef<ArtifactTreeNode[]>([])
@@ -619,6 +629,7 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
 
   return (
     <OpenFileContext.Provider value={openFile}>
+      <TouchedFilesContext.Provider value={touchedFiles}>
       <LazyLoadContext.Provider value={lazyLoadValue}>
         <div ref={containerRef} tabIndex={-1} className="flex flex-col h-full outline-none">
           {/* Override react-arborist focus-visible styles */}
@@ -634,34 +645,35 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
               <span className="text-[10px] text-muted-foreground/80 [.light_&]:text-muted-foreground uppercase tracking-wider">
                 {t('Files')}
               </span>
-              <div className="flex gap-1">
+              <div className="flex gap-0.5">
                 <button
                   onClick={handleNewFile}
-                  className="p-1 hover:bg-secondary/60 rounded transition-colors"
+                  className="w-7 h-7 flex items-center justify-center rounded-sm text-subtle-foreground transition-colors ease-halo hover:bg-secondary hover:text-foreground"
                   title={t('New File')}
                 >
-                  <FilePlus className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
+                  <FilePlus className="w-[15px] h-[15px]" strokeWidth={1.8} />
                 </button>
                 <button
                   onClick={handleNewFolder}
-                  className="p-1 hover:bg-secondary/60 rounded transition-colors"
+                  className="w-7 h-7 flex items-center justify-center rounded-sm text-subtle-foreground transition-colors ease-halo hover:bg-secondary hover:text-foreground"
                   title={t('New Folder')}
                 >
-                  <FolderPlus className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
+                  <FolderPlus className="w-[15px] h-[15px]" strokeWidth={1.8} />
                 </button>
                 <button
                   onClick={() => { api.reconcileArtifacts(spaceId) }}
-                  className="p-1 hover:bg-secondary/60 rounded transition-colors"
+                  className="w-7 h-7 flex items-center justify-center rounded-sm text-subtle-foreground transition-colors ease-halo hover:bg-secondary hover:text-foreground"
                   title={t('Refresh file tree')}
                 >
-                  <RefreshCw className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
+                  <RefreshCw className="w-[15px] h-[15px]" strokeWidth={1.8} />
                 </button>
               </div>
             </div>
           </div>
 
-          {/* Tree — uses window height based calculation */}
-          <div className="flex-1 overflow-hidden">
+          {/* Tree — uses window height based calculation. Horizontal inset (px-1.5)
+              plus paddingTop/Bottom match the prototype's `.rail-body{padding:8px 6px}`. */}
+          <div className="flex-1 overflow-hidden px-1.5">
             <Tree<ArtifactTreeNode>
               ref={treeRef}
               data={treeData}
@@ -671,8 +683,8 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
               indent={16}
               rowHeight={TREE_ROW_HEIGHT}
               overscanCount={5}
-              paddingTop={4}
-              paddingBottom={4}
+              paddingTop={8}
+              paddingBottom={8}
               disableDrag={false}
               disableDrop={false}
               disableEdit={false}
@@ -689,6 +701,7 @@ export function ArtifactTree({ spaceId }: ArtifactTreeProps) {
         {/* Confirmation dialog */}
         {DialogComponent}
       </LazyLoadContext.Provider>
+      </TouchedFilesContext.Provider>
     </OpenFileContext.Provider>
   )
 }
@@ -853,7 +866,7 @@ function EditingNode({ node, style, dragHandle, tree }: NodeRendererProps<Artifa
       style={style}
       className="flex flex-col pr-2 relative"
     >
-      <div className="flex items-center h-[26px]">
+      <div className="flex items-center h-[29px]">
         {/* Indent space */}
         <span className="w-4 h-4 flex-shrink-0" />
         
@@ -899,11 +912,13 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
   const { t } = useTranslation()
   const openFile = useContext(OpenFileContext)
   const lazyLoad = useContext(LazyLoadContext)
+  const touchedFiles = useContext(TouchedFilesContext)
   const data = node.data
   const isFolder = data.type === 'folder'
   const isLoading = lazyLoad?.loadingPaths.has(data.path) ?? false
   const dimmed = isDimmed(data.name)
   const canViewInCanvas = !isFolder && canOpenInCanvas(data.extension)
+  const touchedStatus = !isFolder ? touchedFiles?.get(data.path) : undefined
 
   // Handle folder toggle with lazy loading (must be before early return)
   const handleToggle = useCallback(async () => {
@@ -1035,7 +1050,7 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
   ]
 
   return (
-    <ContextMenu items={menuItems}>
+    <ContextMenu items={menuItems} className="h-full">
       <div
         ref={dragHandle}
         style={style}
@@ -1048,9 +1063,9 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
         onClick={handleClick}
         onDoubleClick={handleDoubleClickFile}
         className={`
-          group flex items-center h-full pr-2 cursor-pointer select-none
-          transition-colors duration-75
-          ${node.isSelected ? 'bg-primary/15' : 'hover:bg-secondary/60'}
+          group flex items-center gap-[7px] h-full pr-2 rounded-[6px] cursor-pointer select-none
+          transition-colors ease-halo
+          ${node.isSelected ? 'bg-primary/[0.12] text-accent-on-dark' : 'hover:bg-secondary hover:text-foreground'}
         `}
         title={canViewInCanvas
           ? t('Click to preview · double-click to open with system')
@@ -1069,15 +1084,18 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
           isLoading ? (
             <Loader2 className="w-3.5 h-3.5 text-primary animate-spin" />
           ) : node.isOpen ? (
-            <ChevronDown className="w-3.5 h-3.5 text-muted-foreground/70" />
+            <ChevronDown className="w-3.5 h-3.5 text-subtle-foreground" />
           ) : (
-            <ChevronRight className="w-3.5 h-3.5 text-muted-foreground/70" />
+            <ChevronRight className="w-3.5 h-3.5 text-subtle-foreground" />
           )
         ) : null}
       </span>
 
-      {/* File/folder icon */}
-      <span className={`w-4 h-4 flex items-center justify-center flex-shrink-0 mr-1.5 ${dimmed ? 'opacity-50' : ''}`}>
+      {/* File/folder icon — prototype `.tree-item .ic{width:15px;color:var(--text-3)}`.
+          Folders stay neutral gray (FileIcon's `text-muted-foreground`) rather
+          than the prototype's amber: the icon repeats on every folder row, so
+          color there reads as noise instead of information. */}
+      <span className={`w-[15px] h-[15px] flex items-center justify-center flex-shrink-0 ${dimmed ? 'opacity-50' : ''}`}>
         <FileIcon
           extension={data.extension}
           isFolder={isFolder}
@@ -1086,14 +1104,32 @@ function TreeNodeComponent({ node, style, dragHandle }: NodeRendererProps<Artifa
         />
       </span>
 
-      {/* File name */}
+      {/* File name — prototype inherits `.rail-body{font-size:12px}`; folders
+          are `.dir{font-weight:500;color:var(--text)}`, files are the plainer
+          `.tree-item{color:var(--text-2)}`. */}
       <span className={`
-        text-[13px] truncate flex-1
+        text-xs truncate flex-1
         ${isFolder ? 'font-medium' : ''}
-        ${dimmed ? 'text-muted-foreground/50' : (isFolder ? 'text-foreground/90' : 'text-foreground/80')}
+        ${node.isSelected
+          ? 'text-accent-on-dark'
+          : dimmed ? 'text-muted-foreground/50' : (isFolder ? 'text-foreground' : 'text-muted-foreground')}
       `}>
         {data.name}
       </span>
+
+      {/* AI-touched badge — prototype `.tree-item .tag`, scoped to what the
+          active conversation wrote/edited (see useConversationTouchedFiles),
+          not git status. Always visible (unlike the hover-only icons below):
+          it's state, not an action. */}
+      {touchedStatus && (
+        <span className={`text-[9px] leading-none px-[5px] py-0.5 rounded flex-shrink-0 ${
+          touchedStatus === 'created'
+            ? 'bg-halo-success/[0.14] text-halo-success'
+            : 'bg-primary/[0.12] text-accent-on-dark'
+        }`}>
+          {touchedStatus === 'created' ? t('NEW') : t('MOD')}
+        </span>
+      )}
 
       {/* Action icons — CSS-only visibility via group-hover, zero JS overhead */}
       {!isFolder && canViewInCanvas && (

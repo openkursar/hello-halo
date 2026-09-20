@@ -12,7 +12,7 @@
  * - Browser-native IntersectionObserver runs off main thread
  */
 
-import { useRef, useState, useEffect, type RefObject } from 'react'
+import { useRef, useState, useEffect, type MutableRefObject, type RefObject } from 'react'
 
 /**
  * @param rootMargin - Buffer around viewport to pre-load items (default '200px')
@@ -26,7 +26,7 @@ export function useLazyVisible(
   rootMargin = '200px',
   root?: RefObject<Element | null>,
   initialVisible = false,
-): [RefObject<HTMLDivElement | null>, boolean] {
+): [MutableRefObject<HTMLDivElement | null>, boolean] {
   const ref = useRef<HTMLDivElement | null>(null)
   const [isVisible, setIsVisible] = useState(initialVisible)
 

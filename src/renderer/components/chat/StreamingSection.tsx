@@ -55,6 +55,15 @@ export interface StreamingSectionProps {
 
   /** Messages queued for mid-turn injection (shown below StreamingBubble) */
   queuedMessages?: string[]
+
+  /**
+   * Reply-sender name — the digital-human's display name for an
+   * app-chat conversation, or "Halo" for a regular one. Resolved by the
+   * caller from conversationId, not stored on the message itself. Shown
+   * before the streaming reply starts producing text, since the name is
+   * known from the conversation, not the content.
+   */
+  senderName?: string
 }
 
 export function StreamingSection({
@@ -70,10 +79,15 @@ export function StreamingSection({
   onAnswerQuestion,
   className = '',
   queuedMessages = [],
+  senderName,
 }: StreamingSectionProps) {
   return (
     <div className={`flex justify-start animate-fade-in pb-4 ${className}`}>
       <div className="w-[85%] relative">
+        {senderName && (
+          <div className="mb-1 text-xs font-medium text-muted-foreground">{senderName}</div>
+        )}
+
         {/* Real-time thought process */}
         {(thoughts.length > 0 || isThinking) && (
           <ThoughtProcess thoughts={thoughts} isThinking={isThinking} />

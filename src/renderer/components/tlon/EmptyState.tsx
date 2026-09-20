@@ -15,7 +15,7 @@ export function EmptyState({ onCreate, hasKBs }: EmptyStateProps) {
   const { t } = useTranslation()
 
   const steps = [
-    { icon: Plus, title: t('Create a knowledge base'), desc: t('Give it a name and an icon.') },
+    { icon: Plus, title: t('Create a knowledge base'), desc: t('Give it a name and add your documents.') },
     { icon: FilePlus2, title: t('Add your files'), desc: t('Drop in text files or watch a folder.') },
     { icon: Sparkles, title: t('Let Halo learn'), desc: t('Halo turns your files into notes it can use in chat.') },
   ]

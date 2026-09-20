@@ -17,10 +17,11 @@ const buildMetaDefine = {
 export default defineConfig({
   main: {
     plugins: [
-      // Bundle @xterm/headless (pure-JS CommonJS) instead of externalizing it —
-      // its named exports are not reachable via ESM interop when left external.
-      // node-pty stays external (native addon).
-      externalizeDepsPlugin({ exclude: ['@xterm/headless'] })
+      // The main process builds to CommonJS because Electron 29's ESM loader rejects
+      // named imports from 'electron'. Bundle ESM-only packages (uuid, open,
+      // proxy-agent) that cannot be require()'d. @xterm/headless is also bundled
+      // for CJS-ESM interop. node-pty and better-sqlite3 stay external (native addons).
+      externalizeDepsPlugin({ exclude: ['@xterm/headless', '@electron-toolkit/utils', 'uuid', 'open', 'proxy-agent'] })
     ],
     build: {
       sourcemap: true,
@@ -34,8 +35,8 @@ export default defineConfig({
           'worker/pty-host/index': resolve(__dirname, 'src/worker/pty-host/index.ts')
         },
         output: {
-          format: 'es',
-          entryFileNames: '[name].mjs'
+          format: 'cjs',
+          entryFileNames: '[name].cjs'
         }
       }
     }
@@ -72,6 +73,18 @@ export default defineConfig({
           overlay: resolve(__dirname, 'src/renderer/overlay.html')
         }
       }
+    },
+    // App.tsx only reaches the page components through React.lazy()/dynamic
+    // import(), so Vite's initial esbuild dep scan (which starts from
+    // index.html and follows *static* imports) never sees the packages they
+    // pull in. The first navigation to one of them then triggers a runtime
+    // "missing dependency" re-optimization, which invalidates chunk hashes
+    // already in flight and surfaces as "Failed to fetch dynamically
+    // imported module" in the window. Listing the pages here makes the
+    // initial scan crawl into them too, so their deps are pre-bundled before
+    // the window ever loads.
+    optimizeDeps: {
+      entries: ['src/renderer/index.html', 'src/renderer/pages/*.tsx']
     },
     define: buildMetaDefine,
     plugins: [react()],

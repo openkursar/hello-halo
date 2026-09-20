@@ -105,6 +105,8 @@ export interface RawFileStatus {
   name: string
   /** Raw-relative path for `raw` sources; absolute path for `linked` sources. */
   path: string
+  /** Absolute path, safe to hand to readArtifactContent/openFile directly. */
+  openPath: string
   size: number
   learned: boolean
   state: 'learned' | 'pending' | 'no-text' | 'failed'

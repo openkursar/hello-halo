@@ -14,6 +14,7 @@ module.exports = {
         primary: {
           DEFAULT: 'hsl(var(--primary))',
           foreground: 'hsl(var(--primary-foreground))',
+          hover: 'hsl(var(--primary-hover))',
         },
         secondary: {
           DEFAULT: 'hsl(var(--secondary))',
@@ -39,6 +40,9 @@ module.exports = {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
+        'surface-hover': 'hsl(var(--surface-hover))',
+        'subtle-foreground': 'hsl(var(--subtle-foreground))',
+        'accent-on-dark': 'hsl(var(--accent-on-dark))',
         // Halo brand colors
         'halo-glow': 'hsl(var(--halo-glow))',
         'halo-success': 'hsl(var(--halo-success))',
@@ -53,6 +57,18 @@ module.exports = {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
+      },
+      boxShadow: {
+        soft: 'var(--shadow-soft)',
+        pop: 'var(--shadow-pop)',
+      },
+      transitionTimingFunction: {
+        halo: 'var(--ease)',
+      },
+      transitionDuration: {
+        fast: '120ms',
+        DEFAULT: '160ms',
+        slow: '240ms',
       },
       // GitHub-like typography customization
       typography: ({ theme }) => ({

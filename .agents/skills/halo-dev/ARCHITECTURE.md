@@ -174,10 +174,12 @@ src/
     ├── pages/                         # **All full-screen views** (one file per renderView case):
     │   │                              #   Convention: every case in App.tsx renderView()
     │   │                              #   must correspond to a file in pages/.
-    │   ├── HomePage.tsx               #   Main conversation view
     │   ├── SpacePage.tsx              #   Space/project view
+    │   ├── SpacesPage.tsx             #   Workspace management (cards; rename/delete/reorder)
     │   ├── SettingsPage.tsx           #   App settings
     │   ├── AppsPage.tsx              #   Digital humans management
+    │   ├── StorePage.tsx              #   Marketplace browse/detail
+    │   ├── TlonPage.tsx               #   Knowledge base management
     │   ├── SplashPage.tsx             #   Startup splash screen
     │   ├── SetupPage.tsx              #   First-time login flow
     │   ├── GitBashSetupPage.tsx       #   Windows Git Bash installer
